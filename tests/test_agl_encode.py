@@ -28,6 +28,7 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import ToJson
+from agm.agl.ir.program import ValueDescriptors
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.arguments import decode_param_value
 from agm.agl.runtime.serialize import (
@@ -119,13 +120,12 @@ def test_encode_plan_preserves_enum_tags_for_member_records() -> None:
         decl_node_id=problem_id,
     )
     table = type_table_for(item_def, choice_def, problem_def)
-    item_value = RecordValue(NominalId(item.decl_id), "Item", {"value": IntValue(7)})
+    item_value = RecordValue(NominalId(item.decl_id), {"value": IntValue(7)})
     choice_value = RecordValue(
         nominal=NominalId(choice_def.members[1].decl_id),
-        display_name="Choice::Many",
         fields={"items": ArrayValue([item_value])},
     )
-    problem_value = ExceptionValue(NominalId(problem.decl_id), "Problem", {"choice": choice_value})
+    problem_value = ExceptionValue(NominalId(problem.decl_id), {"choice": choice_value})
 
     assert value_to_json_obj(choice_value) == {"items": [{"value": 7}]}
     assert encode_value(build_encode_plan(choice, table), choice_value) == {
@@ -165,9 +165,7 @@ def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
     enum = EncodePlan(
         EnumEncode(NominalId(1), (VariantEncode("Member", "Member", NominalId(2), ()),))
     )
-    assert encode_value(
-        enum, RecordValue(nominal=NominalId(2), display_name=f"{'E'}::{'Member'}", fields={})
-    ) == {"$case": "Member"}
+    assert encode_value(enum, RecordValue(nominal=NominalId(2), fields={})) == {"$case": "Member"}
 
 
 def test_to_json_coercion_uses_the_static_scalar_encoder() -> None:
@@ -185,6 +183,7 @@ def test_to_json_recipe_requires_the_lowered_encode_plan() -> None:
                 target_label="json",
             ),
             IntValue(1),
+            ValueDescriptors(nominals={}, functions={}),
         )
 
 
@@ -196,12 +195,12 @@ def test_encode_plan_reports_malformed_static_plans() -> None:
         (ArrayEncode(scalar), IntValue(1)),
         (DictEncode(scalar), IntValue(1)),
         (RecordEncode(NominalId(1), ()), IntValue(1)),
-        (RecordEncode(NominalId(1), ()), RecordValue(NominalId(2), "Other", {})),
+        (RecordEncode(NominalId(1), ()), RecordValue(NominalId(2), {})),
         (ExceptionEncode(NominalId(1), ()), IntValue(1)),
-        (ExceptionEncode(NominalId(1), ()), ExceptionValue(NominalId(2), "Other", {})),
-        (enum, RecordValue(nominal=NominalId(1), display_name=f"{'E'}::{'Other'}", fields={})),
-        (enum, RecordValue(nominal=NominalId(1), display_name=f"{'E'}::{'Other'}", fields={})),
-        (enum, RecordValue(nominal=NominalId(3), display_name=f"{'Other'}::{'Member'}", fields={})),
+        (ExceptionEncode(NominalId(1), ()), ExceptionValue(NominalId(2), {})),
+        (enum, RecordValue(nominal=NominalId(1), fields={})),
+        (enum, RecordValue(nominal=NominalId(1), fields={})),
+        (enum, RecordValue(nominal=NominalId(3), fields={})),
         (enum, IntValue(1)),
     )
     for schema, value in cases:
@@ -242,7 +241,7 @@ def test_encode_plan_binds_definition_parameters_at_each_reference() -> None:
         ),
     )
     value = RecordValue(
-        pair, "Pair", {"first": IntValue(1), "second": ArrayValue([IntValue(2), IntValue(3)])}
+        pair, {"first": IntValue(1), "second": ArrayValue([IntValue(2), IntValue(3)])}
     )
 
     assert encode_value(plan, value) == {"first": 1, "second": [2, 3]}
@@ -264,12 +263,12 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
         (DictEncode(TypeParameterEncode(0)), DictValue({"n": IntValue(5)}), {"n": 5}),
         (
             RecordEncode(record, (FieldEncode("value", "value", TypeParameterEncode(0)),)),
-            RecordValue(record, "Record", {"value": IntValue(1)}),
+            RecordValue(record, {"value": IntValue(1)}),
             {"value": 1},
         ),
         (
             ExceptionEncode(exception, (FieldEncode("value", "value", TypeParameterEncode(0)),)),
-            ExceptionValue(exception, "Problem", {"value": IntValue(2)}),
+            ExceptionValue(exception, {"value": IntValue(2)}),
             {"value": 2},
         ),
         (
@@ -284,7 +283,7 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
                     ),
                 ),
             ),
-            RecordValue(member, "Case", {"value": IntValue(3)}),
+            RecordValue(member, {"value": IntValue(3)}),
             {"$case": "Case", "value": 3},
         ),
         (RefEncode("Inner", (TypeParameterEncode(0),)), IntValue(6), 6),
@@ -304,9 +303,7 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
                 ),
             ),
         )
-        assert encode_value(plan, RecordValue(outer, "Outer", {"held": value})) == {
-            "held": expected
-        }
+        assert encode_value(plan, RecordValue(outer, {"held": value})) == {"held": expected}
 
 
 def test_encode_plan_reports_malformed_parameterized_plans() -> None:
@@ -344,11 +341,10 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
         decl_node_id=tree_id,
     )
     table = type_table_for(leaf_def, box_def, choice_def, envelope_def, tree_def)
-    leaf_value = RecordValue(NominalId(leaf.decl_id), "Leaf", {})
-    box_value = RecordValue(NominalId(box.decl_id), "Box", {"item": leaf_value})
+    leaf_value = RecordValue(NominalId(leaf.decl_id), {})
+    box_value = RecordValue(NominalId(box.decl_id), {"item": leaf_value})
     one_value = RecordValue(
         nominal=NominalId(choice_def.members[1].decl_id),
-        display_name=f"{'Choice'}::{'One'}",
         fields={"box": box_value},
     )
     cases: tuple[tuple[object, object, str], ...] = (
@@ -357,7 +353,6 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
             choice,
             RecordValue(
                 nominal=NominalId(choice_def.members[0].decl_id),
-                display_name=f"{'Choice'}::{'Empty'}",
                 fields={},
             ),
             '{"$case": "Empty"}',
@@ -369,7 +364,7 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
         ),
         (
             envelope,
-            RecordValue(NominalId(envelope.decl_id), "Envelope", {"choice": one_value}),
+            RecordValue(NominalId(envelope.decl_id), {"choice": one_value}),
             '{"choice": {"$case": "One", "box": {"item": {}}}}',
         ),
         (
@@ -378,7 +373,6 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
                 [
                     RecordValue(
                         nominal=NominalId(choice_def.members[0].decl_id),
-                        display_name=f"{'Choice'}::{'Empty'}",
                         fields={},
                     ),
                     one_value,
@@ -395,7 +389,6 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
             choice,
             RecordValue(
                 nominal=NominalId(choice_def.members[2].decl_id),
-                display_name=f"{'Choice'}::{'Many'}",
                 fields={"boxes": ArrayValue([box_value])},
             ),
             '{"$case": "Many", "boxes": [{"item": {}}]}',
@@ -404,10 +397,9 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
             tree,
             RecordValue(
                 NominalId(tree.decl_id),
-                "Tree",
                 {
                     "children": ArrayValue(
-                        [RecordValue(NominalId(tree.decl_id), "Tree", {"children": ArrayValue([])})]
+                        [RecordValue(NominalId(tree.decl_id), {"children": ArrayValue([])})]
                     )
                 },
             ),
@@ -566,13 +558,12 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
             ),
         ),
     )
-    shared = RecordValue(member, "other::name", {"value": IntValue(7)})
+    shared = RecordValue(member, {"value": IntValue(7)})
 
     assert encode_value(
         plan,
         RecordValue(
             envelope,
-            "Envelope",
             {
                 "plain": shared,
                 "selected": shared,
@@ -591,11 +582,11 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
 def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
     from agm.agl.semantics.cycles import AglCyclicValue
 
-    record = RecordValue(NominalId(1), "Node", {})
+    record = RecordValue(NominalId(1), {})
     record.fields["next"] = record
-    exception = ExceptionValue(NominalId(2), "Problem", {})
+    exception = ExceptionValue(NominalId(2), {})
     exception.fields["cause"] = exception
-    member = RecordValue(NominalId(4), "Link::Cell", {})
+    member = RecordValue(NominalId(4), {})
     member.fields["next"] = member
 
     plans = (
@@ -662,8 +653,8 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
 def test_encode_plan_allows_a_record_diamond() -> None:
     leaf = NominalId(1)
     pair = NominalId(2)
-    shared = RecordValue(leaf, "Leaf", {"value": IntValue(1)})
-    value = RecordValue(pair, "Pair", {"left": shared, "right": shared})
+    shared = RecordValue(leaf, {"value": IntValue(1)})
+    value = RecordValue(pair, {"left": shared, "right": shared})
     plan = EncodePlan(
         RecordEncode(
             pair,
@@ -711,7 +702,7 @@ def test_template_encode_plan_uses_renamed_field() -> None:
         decl_node_id=decl_id,
     )
     table = type_table_for(box_def)
-    value = RecordValue(NominalId(decl_id), "Box", {"value": IntValue(9)})
+    value = RecordValue(NominalId(decl_id), {"value": IntValue(9)})
 
     plan = _build_template_encode_plan(box, table)
 
@@ -757,10 +748,9 @@ def test_encode_plan_handles_recursive_containers() -> None:
     )
     value = RecordValue(
         NominalId(recursive_id),
-        "Recursive",
         {
             "children": ArrayValue(
-                [RecordValue(NominalId(recursive_id), "Recursive", {"children": ArrayValue([])})]
+                [RecordValue(NominalId(recursive_id), {"children": ArrayValue([])})]
             )
         },
     )
@@ -783,7 +773,7 @@ def test_encode_plan_uses_effective_json_name_diverging_from_value_to_json_obj()
         field_external_names=(("value", ExternalName(json_name="val")),),
         decl_node_id=decl_id,
     )
-    value = RecordValue(NominalId(decl_id), "Renamed", {"value": IntValue(3)})
+    value = RecordValue(NominalId(decl_id), {"value": IntValue(3)})
 
     plan = build_encode_plan(renamed, type_table_for(renamed_def))
 
@@ -810,7 +800,7 @@ def test_encode_plan_uses_member_external_name_as_case_tag() -> None:
         kind="enum", name="Choice", module_id=ENTRY_ID, members=(member,), decl_node_id=enum_id
     )
     table = type_table_for(member_def, choice_def)
-    value = RecordValue(NominalId(member_id), "Choice::One", {})
+    value = RecordValue(NominalId(member_id), {})
 
     plan = build_encode_plan(choice, table)
 
@@ -829,7 +819,7 @@ def test_encode_plan_json_name_overrides_name_for_field() -> None:
         field_external_names=(("value", ExternalName(name="alt", json_name="val")),),
         decl_node_id=decl_id,
     )
-    value = RecordValue(NominalId(decl_id), "Renamed", {"value": IntValue(3)})
+    value = RecordValue(NominalId(decl_id), {"value": IntValue(3)})
 
     plan = build_encode_plan(renamed, type_table_for(renamed_def))
 
@@ -857,7 +847,7 @@ def test_encode_plan_flattens_renamed_field_from_exception_base_chain() -> None:
         decl_node_id=derived_id,
     )
     table = type_table_for(base_def, derived_def)
-    value = ExceptionValue(NominalId(derived_id), "Derived", {"code": IntValue(4)})
+    value = ExceptionValue(NominalId(derived_id), {"code": IntValue(4)})
 
     plan = build_encode_plan(derived, table)
 
@@ -877,7 +867,7 @@ def test_encode_plan_renames_field_in_generic_record() -> None:
         field_external_names=(("value", ExternalName(json_name="payload")),),
         decl_node_id=decl_id,
     )
-    value = RecordValue(NominalId(decl_id), "Box", {"value": IntValue(9)})
+    value = RecordValue(NominalId(decl_id), {"value": IntValue(9)})
 
     plan = build_encode_plan(box, type_table_for(box_def))
 
@@ -898,10 +888,9 @@ def test_encode_plan_renames_field_in_recursive_hoisted_type() -> None:
     )
     value = RecordValue(
         NominalId(recursive_id),
-        "Recursive",
         {
             "children": ArrayValue(
-                [RecordValue(NominalId(recursive_id), "Recursive", {"children": ArrayValue([])})]
+                [RecordValue(NominalId(recursive_id), {"children": ArrayValue([])})]
             )
         },
     )

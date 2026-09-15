@@ -110,7 +110,7 @@ assign_target ::= qualifier_chain? name
 ```
 
 A bare `:=` (no index) rebinds the nearest visible **mutable** binding, has
-type `unit`, and returns `void`. It never creates a binding. The expected
+type `unit`, and returns `()`. It never creates a binding. The expected
 type of the right-hand side is the declared type of the binding being
 updated. `qualifier_chain? name` is the same qualifier syntax a read uses, so
 a scoped `var`'s path (`A::count := 1`) is a valid target exactly as a scoped

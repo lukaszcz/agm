@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors, VariantDescriptor
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.boundary import (
     AglArrayView,
@@ -45,6 +46,11 @@ from tests.agl.ir_harness import (
     evaluate_ir_with_externs,
     nominal_id_for,
 )
+
+#: An empty descriptor view for tests that build or encode a boundary value
+#: without a real compiled program behind it -- rendering shows no display
+#: spellings, which none of these tests check.
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
 
 
 class TestValueDirectedBoundary:
@@ -87,8 +93,8 @@ class TestValueDirectedBoundary:
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         agent = result["result"]
         assert isinstance(agent, RecordValue)
-        assert agent.display_name == "Agent::AgentCommand"
-        assert agent.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        executable, _ = _prepare_extern_program(source, companion, tmp_path)
+        assert agent.nominal == nominal_id_for(executable, "Agent::AgentCommand")
         assert agent.fields == {"command": TextValue("runner")}
 
     def test_bare_python_container_is_not_an_agl_value(self, tmp_path: Path) -> None:
@@ -170,8 +176,8 @@ class TestValueDirectedBoundary:
         inner = nominal_id_for(executable, "Inner")
         assert result["xs"] == ArrayValue(
             [
-                RecordValue(inner, "Inner", {"x": IntValue(5)}),
-                RecordValue(inner, "Inner", {"x": IntValue(6)}),
+                RecordValue(inner, {"x": IntValue(5)}),
+                RecordValue(inner, {"x": IntValue(6)}),
             ]
         )
 
@@ -318,20 +324,20 @@ class TestValueDirectedBoundary:
 
 
 def test_array_view_slice_getitem_returns_encoded_elements() -> None:
-    view = AglArrayView(ArrayValue([IntValue(3), IntValue(1), IntValue(2)]))
+    view = AglArrayView(ArrayValue([IntValue(3), IntValue(1), IntValue(2)]), _NO_DESCRIPTORS)
 
     assert view[1:] == [1, 2]
 
 
 def test_array_view_index_getitem_returns_the_encoded_element() -> None:
-    view = AglArrayView(ArrayValue([IntValue(3), IntValue(1), IntValue(2)]))
+    view = AglArrayView(ArrayValue([IntValue(3), IntValue(1), IntValue(2)]), _NO_DESCRIPTORS)
 
     assert view[0] == 3
 
 
 def test_array_view_slice_setitem_replaces_a_range_of_elements() -> None:
     array_value = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view[1:] = [4, 5]
 
@@ -339,14 +345,14 @@ def test_array_view_slice_setitem_replaces_a_range_of_elements() -> None:
 
 
 def test_array_view_index_setitem_with_an_undecodable_value_raises() -> None:
-    view = AglArrayView(ArrayValue([IntValue(1)]))
+    view = AglArrayView(ArrayValue([IntValue(1)]), _NO_DESCRIPTORS)
 
     with pytest.raises(BoundaryTypeError):
         view[0] = object()
 
 
 def test_array_view_slice_setitem_with_a_non_iterable_value_raises_type_error() -> None:
-    view = AglArrayView(ArrayValue([IntValue(1)]))
+    view = AglArrayView(ArrayValue([IntValue(1)]), _NO_DESCRIPTORS)
 
     with pytest.raises(TypeError):
         view[0:1] = object()
@@ -354,7 +360,7 @@ def test_array_view_slice_setitem_with_a_non_iterable_value_raises_type_error() 
 
 def test_array_view_slice_delitem_removes_a_range_of_elements() -> None:
     array_value = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     del view[1:2]
 
@@ -363,7 +369,7 @@ def test_array_view_slice_delitem_removes_a_range_of_elements() -> None:
 
 def test_array_view_insert_adds_an_element_at_a_position() -> None:
     array_value = ArrayValue([IntValue(1), IntValue(3)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view.insert(1, 2)
 
@@ -371,7 +377,7 @@ def test_array_view_insert_adds_an_element_at_a_position() -> None:
 
 
 def test_array_view_insert_with_an_undecodable_value_raises() -> None:
-    view = AglArrayView(ArrayValue([]))
+    view = AglArrayView(ArrayValue([]), _NO_DESCRIPTORS)
 
     with pytest.raises(BoundaryTypeError):
         view.insert(0, object())
@@ -379,7 +385,7 @@ def test_array_view_insert_with_an_undecodable_value_raises() -> None:
 
 def test_array_view_append_adds_an_element_at_the_end() -> None:
     array_value = ArrayValue([IntValue(1)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view.append(2)
 
@@ -388,7 +394,7 @@ def test_array_view_append_adds_an_element_at_the_end() -> None:
 
 def test_array_view_extend_appends_the_given_values() -> None:
     array_value = ArrayValue([IntValue(1)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view.extend([2, 3])
 
@@ -397,7 +403,7 @@ def test_array_view_extend_appends_the_given_values() -> None:
 
 def test_array_view_reverse_reverses_the_element_order() -> None:
     array_value = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view.reverse()
 
@@ -406,7 +412,7 @@ def test_array_view_reverse_reverses_the_element_order() -> None:
 
 def test_array_view_sort_orders_elements_ascending_by_default() -> None:
     array_value = ArrayValue([IntValue(3), IntValue(1), IntValue(2)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view.sort()
 
@@ -414,29 +420,29 @@ def test_array_view_sort_orders_elements_ascending_by_default() -> None:
 
 
 def test_array_view_iteration_yields_encoded_elements() -> None:
-    view = AglArrayView(ArrayValue([IntValue(1), IntValue(2)]))
+    view = AglArrayView(ArrayValue([IntValue(1), IntValue(2)]), _NO_DESCRIPTORS)
 
     assert list(view) == [1, 2]
 
 
 def test_array_view_contains_returns_true_for_a_present_value() -> None:
-    view = AglArrayView(ArrayValue([IntValue(1), IntValue(2)]))
+    view = AglArrayView(ArrayValue([IntValue(1), IntValue(2)]), _NO_DESCRIPTORS)
 
     assert 2 in view
 
 
 def test_array_view_index_uses_agl_equality_for_nested_arrays_and_json() -> None:
-    nested = AglArrayView(ArrayValue([ArrayValue([IntValue(1)])]))
-    json_values = AglArrayView(ArrayValue([JsonValue([True]), JsonValue([1])]))
+    nested = AglArrayView(ArrayValue([ArrayValue([IntValue(1)])]), _NO_DESCRIPTORS)
+    json_values = AglArrayView(ArrayValue([JsonValue([True]), JsonValue([1])]), _NO_DESCRIPTORS)
 
-    assert nested.index(AglArrayView(ArrayValue([IntValue(1)]))) == 0
+    assert nested.index(AglArrayView(ArrayValue([IntValue(1)]), _NO_DESCRIPTORS)) == 0
     assert json_values.index(AglJson([1])) == 1
     assert json_values.index(AglJson([1]), -1) == 1
     assert json_values.index(AglJson([True]), 0, -1) == 0
 
 
 def test_array_view_clear_empties_the_array() -> None:
-    view = AglArrayView(ArrayValue([IntValue(1)]))
+    view = AglArrayView(ArrayValue([IntValue(1)]), _NO_DESCRIPTORS)
 
     view.clear()
 
@@ -444,7 +450,7 @@ def test_array_view_clear_empties_the_array() -> None:
 
 
 def test_array_view_is_not_equal_to_a_non_view_object() -> None:
-    view = AglArrayView(ArrayValue([]))
+    view = AglArrayView(ArrayValue([]), _NO_DESCRIPTORS)
 
     assert view != object()
 
@@ -452,52 +458,54 @@ def test_array_view_is_not_equal_to_a_non_view_object() -> None:
 def test_array_views_over_the_same_container_compare_equal_and_hash_alike() -> None:
     array_value = ArrayValue([IntValue(1)])
 
-    assert AglArrayView(array_value) == AglArrayView(array_value)
-    assert hash(AglArrayView(array_value)) == hash(AglArrayView(array_value))
+    assert AglArrayView(array_value, _NO_DESCRIPTORS) == AglArrayView(array_value, _NO_DESCRIPTORS)
+    assert hash(AglArrayView(array_value, _NO_DESCRIPTORS)) == hash(
+        AglArrayView(array_value, _NO_DESCRIPTORS)
+    )
 
 
 def test_array_view_repr_matches_the_rendered_agl_value() -> None:
     array_value = ArrayValue([IntValue(1), IntValue(2)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
-    assert repr(view) == render_value(array_value)
+    assert repr(view) == render_value(array_value, _NO_DESCRIPTORS)
 
 
 def test_dict_view_getitem_returns_the_encoded_value() -> None:
-    view = AglDictView(DictValue({"one": IntValue(1)}))
+    view = AglDictView(DictValue({"one": IntValue(1)}), _NO_DESCRIPTORS)
 
     assert view["one"] == 1
 
 
 def test_dict_view_contains_checks_key_membership() -> None:
-    view = AglDictView(DictValue({"two": IntValue(2)}))
+    view = AglDictView(DictValue({"two": IntValue(2)}), _NO_DESCRIPTORS)
 
     assert "two" in view
 
 
 def test_dict_view_setitem_with_a_non_string_key_raises_type_error() -> None:
-    view = AglDictView(DictValue())
+    view = AglDictView(DictValue(), _NO_DESCRIPTORS)
 
     with pytest.raises(TypeError):
         view[1] = 1
 
 
 def test_dict_view_setitem_with_an_undecodable_value_raises() -> None:
-    view = AglDictView(DictValue())
+    view = AglDictView(DictValue(), _NO_DESCRIPTORS)
 
     with pytest.raises(BoundaryTypeError):
         view["bad"] = object()
 
 
 def test_dict_view_popitem_removes_and_returns_the_last_entry() -> None:
-    view = AglDictView(DictValue({"one": IntValue(1), "two": IntValue(2)}))
+    view = AglDictView(DictValue({"one": IntValue(1), "two": IntValue(2)}), _NO_DESCRIPTORS)
 
     assert view.popitem() == ("two", 2)
 
 
 def test_dict_view_delitem_removes_an_entry() -> None:
     dict_value = DictValue({"one": IntValue(1), "two": IntValue(2)})
-    view = AglDictView(dict_value)
+    view = AglDictView(dict_value, _NO_DESCRIPTORS)
 
     del view["one"]
 
@@ -505,7 +513,7 @@ def test_dict_view_delitem_removes_an_entry() -> None:
 
 
 def test_dict_view_clear_empties_the_mapping() -> None:
-    view = AglDictView(DictValue({"one": IntValue(1)}))
+    view = AglDictView(DictValue({"one": IntValue(1)}), _NO_DESCRIPTORS)
 
     view.clear()
 
@@ -514,7 +522,7 @@ def test_dict_view_clear_empties_the_mapping() -> None:
 
 
 def test_dict_view_is_not_equal_to_a_non_view_object() -> None:
-    view = AglDictView(DictValue())
+    view = AglDictView(DictValue(), _NO_DESCRIPTORS)
 
     assert view != object()
 
@@ -522,20 +530,22 @@ def test_dict_view_is_not_equal_to_a_non_view_object() -> None:
 def test_dict_views_over_the_same_container_compare_equal_and_hash_alike() -> None:
     dict_value = DictValue({"one": IntValue(1)})
 
-    assert AglDictView(dict_value) == AglDictView(dict_value)
-    assert hash(AglDictView(dict_value)) == hash(AglDictView(dict_value))
+    assert AglDictView(dict_value, _NO_DESCRIPTORS) == AglDictView(dict_value, _NO_DESCRIPTORS)
+    assert hash(AglDictView(dict_value, _NO_DESCRIPTORS)) == hash(
+        AglDictView(dict_value, _NO_DESCRIPTORS)
+    )
 
 
 def test_dict_view_repr_matches_the_rendered_agl_value() -> None:
     dict_value = DictValue({"one": IntValue(1)})
-    view = AglDictView(dict_value)
+    view = AglDictView(dict_value, _NO_DESCRIPTORS)
 
-    assert repr(view) == render_value(dict_value)
+    assert repr(view) == render_value(dict_value, _NO_DESCRIPTORS)
 
 
 def test_array_extend_growing_from_itself_terminates() -> None:
     array_value = ArrayValue([IntValue(1), IntValue(2)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view.extend(view)
 
@@ -544,7 +554,7 @@ def test_array_extend_growing_from_itself_terminates() -> None:
 
 def test_array_extend_does_not_partially_mutate_on_a_bad_element() -> None:
     array_value = ArrayValue([IntValue(1)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     with pytest.raises(BoundaryTypeError):
         view.extend([2, 3.5, 4])
@@ -554,7 +564,7 @@ def test_array_extend_does_not_partially_mutate_on_a_bad_element() -> None:
 
 def test_array_sort_accepts_a_key_function() -> None:
     array_value = ArrayValue([TextValue("ccc"), TextValue("a"), TextValue("bb")])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view.sort(key=len)
 
@@ -563,7 +573,7 @@ def test_array_sort_accepts_a_key_function() -> None:
 
 def test_array_sort_without_a_key_still_sorts_by_encoded_value() -> None:
     array_value = ArrayValue([IntValue(3), IntValue(1), IntValue(2)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view.sort(reverse=True)
 
@@ -572,7 +582,7 @@ def test_array_sort_without_a_key_still_sorts_by_encoded_value() -> None:
 
 def test_array_sort_in_reverse_preserves_equal_key_order() -> None:
     array_value = ArrayValue([TextValue("first"), TextValue("second"), TextValue("third")])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     view.sort(key=lambda _: 0, reverse=True)
 
@@ -581,7 +591,7 @@ def test_array_sort_in_reverse_preserves_equal_key_order() -> None:
 
 def test_array_contains_returns_false_for_an_undecodable_probe() -> None:
     array_value = ArrayValue([IntValue(1)])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     assert object() not in view
 
@@ -657,52 +667,56 @@ def _synthesize_problem_class() -> tuple[NominalId, type[object]]:
 
 
 def test_unit_value_round_trips_through_the_boundary() -> None:
-    assert encode_boundary_value(UNIT_VALUE) is None
+    assert encode_boundary_value(UNIT_VALUE, _NO_DESCRIPTORS) is None
     assert decode_boundary_value(None) == UNIT_VALUE
 
 
 def test_bool_value_round_trips_through_the_boundary() -> None:
-    assert encode_boundary_value(BoolValue(True)) is True
+    assert encode_boundary_value(BoolValue(True), _NO_DESCRIPTORS) is True
     assert decode_boundary_value(True) == BoolValue(True)
 
 
 def test_int_value_round_trips_through_the_boundary() -> None:
-    assert encode_boundary_value(IntValue(1)) == 1
+    assert encode_boundary_value(IntValue(1), _NO_DESCRIPTORS) == 1
     assert decode_boundary_value(1) == IntValue(1)
 
 
 def test_decimal_value_round_trips_through_the_boundary() -> None:
-    assert encode_boundary_value(DecimalValue(Decimal("1.5"))) == Decimal("1.5")
+    assert encode_boundary_value(DecimalValue(Decimal("1.5")), _NO_DESCRIPTORS) == Decimal("1.5")
     assert decode_boundary_value(Decimal("1.5")) == DecimalValue(Decimal("1.5"))
 
 
 def test_text_value_round_trips_through_the_boundary() -> None:
-    assert encode_boundary_value(TextValue("x")) == "x"
+    assert encode_boundary_value(TextValue("x"), _NO_DESCRIPTORS) == "x"
     assert decode_boundary_value("x") == TextValue("x")
 
 
 def test_encode_boundary_value_wraps_json_in_an_agl_json_object() -> None:
-    assert encode_boundary_value(JsonValue(None)) == AglJson(None)
+    assert encode_boundary_value(JsonValue(None), _NO_DESCRIPTORS) == AglJson(None)
 
 
 def test_encode_boundary_value_wraps_array_in_a_live_array_view() -> None:
-    assert isinstance(encode_boundary_value(ArrayValue([IntValue(1)])), AglArrayView)
+    assert isinstance(
+        encode_boundary_value(ArrayValue([IntValue(1)]), _NO_DESCRIPTORS), AglArrayView
+    )
 
 
 def test_encode_boundary_value_wraps_dict_in_a_live_dict_view() -> None:
-    assert isinstance(encode_boundary_value(DictValue({"x": IntValue(1)})), AglDictView)
+    assert isinstance(
+        encode_boundary_value(DictValue({"x": IntValue(1)}), _NO_DESCRIPTORS), AglDictView
+    )
 
 
 def test_decode_boundary_value_returns_the_array_views_wrapped_value() -> None:
     array_value = ArrayValue([])
-    view = AglArrayView(array_value)
+    view = AglArrayView(array_value, _NO_DESCRIPTORS)
 
     assert decode_boundary_value(view) is array_value
 
 
 def test_decode_boundary_value_returns_the_dict_views_wrapped_value() -> None:
     dict_value = DictValue()
-    view = AglDictView(dict_value)
+    view = AglDictView(dict_value, _NO_DESCRIPTORS)
 
     assert decode_boundary_value(view) is dict_value
 
@@ -720,12 +734,31 @@ def test_encode_boundary_value_rejects_an_unregistered_nominal() -> None:
     _synthesize_choice_classes()
     _synthesize_problem_class()
     with pytest.raises(BoundaryViolation):
-        encode_boundary_value(RecordValue(_UNREGISTERED_NOMINAL, "Missing", {}))
+        encode_boundary_value(RecordValue(_UNREGISTERED_NOMINAL, {}), _NO_DESCRIPTORS)
+
+
+def test_encode_boundary_value_names_a_known_but_unsynthesized_nominal_in_its_message() -> None:
+    """A descriptor view can name the nominal even when no class was ever synthesized for it."""
+    known_descriptors = ValueDescriptors(
+        nominals={
+            _UNREGISTERED_NOMINAL: NominalDescriptor(
+                nominal=_UNREGISTERED_NOMINAL,
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Ghost",
+                kind=NominalKind.RECORD,
+                fields=(),
+            )
+        },
+        functions={},
+    )
+    with pytest.raises(BoundaryViolation, match="Ghost"):
+        encode_boundary_value(RecordValue(_UNREGISTERED_NOMINAL, {}), known_descriptors)
 
 
 def test_encode_boundary_value_rejects_a_constructor_value() -> None:
     with pytest.raises(BoundaryViolation):
-        encode_boundary_value(ConstructorValue(_fresh_nominal(), "Choice"))
+        encode_boundary_value(ConstructorValue(_fresh_nominal()), _NO_DESCRIPTORS)
 
 
 def test_decode_boundary_value_rejects_an_unsupported_python_object() -> None:
@@ -738,7 +771,7 @@ def test_synthesized_record_round_trips_through_decode() -> None:
 
     box = box_cls(value=1)
 
-    assert decode_boundary_value(box) == RecordValue(nominal, "Box", {"value": IntValue(1)})
+    assert decode_boundary_value(box) == RecordValue(nominal, {"value": IntValue(1)})
 
 
 def test_synthesized_record_instances_are_immutable() -> None:
@@ -811,7 +844,6 @@ def test_synthesized_enum_variant_round_trips_through_decode() -> None:
 
     assert decode_boundary_value(some) == RecordValue(
         nominal=getattr(choice_cls.Some, "_agl_nominal"),
-        display_name="Choice::Some",
         fields={"value": IntValue(2)},
     )
 
@@ -822,9 +854,9 @@ def test_encoding_an_enum_value_produces_the_matching_variant_class() -> None:
     encoded = encode_boundary_value(
         RecordValue(
             nominal=getattr(getattr(choice_cls, "None"), "_agl_nominal"),
-            display_name="Choice::None",
             fields={},
-        )
+        ),
+        _NO_DESCRIPTORS,
     )
 
     assert isinstance(encoded, getattr(choice_cls, "None"))
@@ -835,9 +867,7 @@ def test_synthesized_exception_round_trips_through_decode() -> None:
 
     problem = problem_cls(detail="bad")
 
-    assert decode_boundary_value(problem) == ExceptionValue(
-        nominal, "Problem", {"detail": TextValue("bad")}
-    )
+    assert decode_boundary_value(problem) == ExceptionValue(nominal, {"detail": TextValue("bad")})
 
 
 def test_json_payload_accepts_every_scalar_json_shape() -> None:
@@ -864,7 +894,7 @@ def test_json_payload_crosses_the_boundary_without_copying() -> None:
 def test_json_value_encodes_to_its_own_payload_without_copying() -> None:
     value = JsonValue([1, 2])
 
-    encoded = encode_boundary_value(value)
+    encoded = encode_boundary_value(value, _NO_DESCRIPTORS)
 
     assert isinstance(encoded, AglJson)
     assert encoded.value is value.raw
@@ -887,7 +917,6 @@ def test_synthesized_nominals_support_non_python_field_names() -> None:
     assert prompt.count == 3
     assert decode_boundary_value(prompt) == RecordValue(
         nominal,
-        "Prompt",
         {"ask-prompt": TextValue("continue"), "count": IntValue(3)},
     )
 
@@ -940,11 +969,11 @@ def test_shared_immutable_record_graph_stays_shared_across_the_boundary() -> Non
         ),
     )
     synthesize_nominal_classes(descriptors)
-    value: RecordValue = RecordValue(leaf, "Leaf")
+    value: RecordValue = RecordValue(leaf, {})
     for _ in range(12):
-        value = RecordValue(branch, "Branch", {"left": value, "right": value})
+        value = RecordValue(branch, {"left": value, "right": value})
 
-    encoded = encode_boundary_value(value)
+    encoded = encode_boundary_value(value, _NO_DESCRIPTORS)
 
     encoded_nodes = [encoded]
     for _ in range(12):
@@ -965,7 +994,7 @@ def test_shared_immutable_record_graph_stays_shared_across_the_boundary() -> Non
         decoded_nodes.append(left)
     assert len({id(node) for node in decoded_nodes}) == 13
 
-    separately_encoded = encode_boundary_value(value)
+    separately_encoded = encode_boundary_value(value, _NO_DESCRIPTORS)
     separately_decoded = decode_boundary_value(encoded)
     assert separately_encoded is not encoded
     assert separately_decoded is not decoded
@@ -1065,7 +1094,8 @@ def test_referenced_member_decodes_with_its_own_scope_and_display_name() -> None
 
     assert classes[record] is classes[enum].Go
     assert not issubclass(classes[enum].Go, classes[enum])
-    assert decode_boundary_value(instance) == RecordValue(record, "M::Go", {"amount": IntValue(5)})
+    assert decode_boundary_value(instance) == RecordValue(record, {"amount": IntValue(5)})
+    assert getattr(classes[enum].Go, "_agl_descriptor").display_name == "M::Go"
 
 
 def test_enum_variant_built_without_its_own_descriptor_gets_a_scoped_display_name() -> None:
@@ -1088,9 +1118,8 @@ def test_enum_variant_built_without_its_own_descriptor_gets_a_scoped_display_nam
     classes = synthesize_nominal_classes((descriptor,))
     instance = classes[nominal].Some(value=1)
 
-    assert decode_boundary_value(instance) == RecordValue(
-        some, "Choice::Some", {"value": IntValue(1)}
-    )
+    assert decode_boundary_value(instance) == RecordValue(some, {"value": IntValue(1)})
+    assert getattr(classes[nominal].Some, "_agl_descriptor").display_name == "Choice::Some"
 
 
 def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
@@ -1115,7 +1144,7 @@ def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
                 kind=NominalKind.RECORD,
                 fields=("right",),
             ),
-        }
+        },
     )
 
     agl = registry._agl_module()
@@ -1156,7 +1185,7 @@ def test_companion_namespace_resolves_a_shared_name_path_to_the_current_bearer()
                 fields=("old",),
                 bears_name_path=False,
             ),
-        }
+        },
     )
 
     agl = registry._agl_module()
@@ -1234,9 +1263,13 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_ol
     registry.set_nominals({old_nominal: old_superseded, new_nominal: new})
 
     assert registry._nominal_classes[old_nominal] is before
-    assert registry.invoke("make", registry.resolve(ENTRY_ID, "make"), ()) == RecordValue(
-        old_nominal, "Box", {"old": IntValue(2)}
-    )
+    assert registry.invoke(
+        "make",
+        registry.resolve(ENTRY_ID, "make"),
+        (),
+        nominals=NO_BUILTIN_DECLARATIONS,
+        descriptors=_NO_DESCRIPTORS,
+    ) == RecordValue(old_nominal, {"old": IntValue(2)})
 
     agl = registry._agl_module()
     assert agl.Box is registry._nominal_classes[new_nominal]
@@ -1266,14 +1299,18 @@ def test_stashed_view_with_nominal_elements_decodes_outside_any_call(tmp_path: P
     module = registry.load_companion(ENTRY_ID, companion)
     inner = registry._nominal_classes[nominal](x=1)
     array_value = ArrayValue([decode_boundary_value(inner)])
-    registry.invoke("stash", registry.resolve(ENTRY_ID, "stash"), [array_value])
+    registry.invoke(
+        "stash",
+        registry.resolve(ENTRY_ID, "stash"),
+        [array_value],
+        nominals=NO_BUILTIN_DECLARATIONS,
+        descriptors=_NO_DESCRIPTORS,
+    )
 
     # Read the stashed view's nominal element completely outside any `invoke`
     # call, exactly as a companion callback running later would.
     read_directly = module.read_stashed
-    assert decode_boundary_value(read_directly()) == RecordValue(
-        nominal, "Inner", {"x": IntValue(1)}
-    )
+    assert decode_boundary_value(read_directly()) == RecordValue(nominal, {"x": IntValue(1)})
 
 
 def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
@@ -1292,6 +1329,12 @@ def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
     del broken._agl_values["value"]
 
     with pytest.raises(AglRaise) as excinfo:
-        registry.invoke("broken", lambda: broken, ())
+        registry.invoke(
+            "broken",
+            lambda: broken,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        )
 
     assert excinfo.value.exc.fields["python-type"] == TextValue("KeyError")

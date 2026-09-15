@@ -22,6 +22,8 @@ Engine settings (`default-agent`, `log`, `log-file`, `strict-json`, `timeout`) a
 
 `--default-agent` and config `default-agent` decode like every other engine key into a typed seed (`cli_support/engine_seeds.py`), through `host_text_to_json`'s Agent dispatch; a decode failure exits before loading, and the interpreter checks the winning value is dispatchable at construction, independent of `std/config`. A program parameter or CLI flag whose checked type is the standard `Agent` goes through the identical `host_text_to_json` dispatch; user enums named `Agent` retain ordinary JSON/value-syntax decoding with no shorthand or command fallback (`EnumDecode.host_agent` distinguishes the two).
 
+An enum-backed engine setting (kind `AGENT` or `OPTION_TEXT` in `config/engine_keys.py`) is restamped between the reserved fallback identity and the running program's own nominal identity in the interpreter, on both a seed's way in and a persisted value's way out; the REPL persists a setting in reserved identity, since it outlives any one program.
+
 ## Diagnostics and Recursion
 
 All passes report through `agl/diagnostics.py`; scope and typecheck diagnostics carry a phase tag. `agl/recursion.py` is the boundary that turns stack exhaustion on over-deep source into an ordinary pre-execution diagnostic; the pipeline and the REPL apply it around every pass they drive.

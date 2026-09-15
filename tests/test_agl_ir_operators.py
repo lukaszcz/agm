@@ -19,7 +19,12 @@ from agm.agl.semantics.values import (
     IntValue,
     TextValue,
 )
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
+from tests.agl.ir_harness import (
+    evaluate_ir,
+    evaluate_ir_raises,
+    lower_inline_ir,
+    nominal_id_for,
+)
 
 # ---------------------------------------------------------------------------
 # Arithmetic: int + int → int
@@ -120,7 +125,7 @@ def test_div_decimal_decimal() -> None:
 def test_div_by_zero_raises() -> None:
     source = "let x: decimal = 1 / 0\n()"
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.display_name == "ArithmeticError"
+    assert ir_exc.nominal == nominal_id_for(lower_inline_ir(source), "ArithmeticError")
     assert ir_exc.fields["message"] == TextValue("Division by zero")
 
 

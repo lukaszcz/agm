@@ -79,11 +79,10 @@ aliases, and `def` functions can declare type parameters. See
 ### `unit`
 
 `unit` is the type of expressions that exist only for their side effect and
-produce no meaningful value. The printable unit value is written `()` — the
-empty argument list. Statement-like expressions return `void`, which has type
-`unit`, compares equal to `()`, and is not echoed by the REPL. Side-effecting
-expressions such as `print(…)`, `:=`, an `if` without an `else` branch, and
-loops all have type `unit`.
+produce no meaningful value. Its only value is written `()` — the empty
+argument list. Side-effecting expressions such as `print(…)`, `:=`, an `if`
+without an `else` branch, and loops all have type `unit` and evaluate to
+`()`.
 
 ```agl
 program def main() -> unit =
@@ -91,9 +90,11 @@ program def main() -> unit =
 ```
 
 `unit` cannot be JSON-encoded or stored in a `json` slot; it renders and
-interpolates as `()` — or `void` for the value produced by statement-like
-effects. The literal `()` is both the unit value and the empty argument list
-of a zero-argument call — the two are syntactically unified.
+interpolates as `()`. The literal `()` is both the unit value and the empty
+argument list of a zero-argument call — the two are syntactically unified.
+In the REPL, an expression or binding entry whose type is `unit` echoes
+nothing by default
+([`agm repl` evaluation notes](../../commands/agl.md#evaluation-notes)).
 
 ### `text`
 

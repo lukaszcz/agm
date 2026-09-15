@@ -83,16 +83,6 @@ def test_unit_value_singleton() -> None:
     assert UNIT_VALUE == UnitValue()
 
 
-def test_void_unit_equals_printable_unit() -> None:
-    """Printable unit and void compare equal; only REPL printability differs."""
-    from agm.agl.semantics.values import UNIT_VALUE, VOID_VALUE, UnitValue
-
-    assert UNIT_VALUE == VOID_VALUE
-    assert UnitValue(printable_in_repl=True) == UnitValue(printable_in_repl=False)
-    assert UNIT_VALUE.printable_in_repl is True
-    assert VOID_VALUE.printable_in_repl is False
-
-
 # ---------------------------------------------------------------------------
 # JsonValue eq/hash invariants
 # ---------------------------------------------------------------------------
@@ -221,11 +211,10 @@ def test_values_equal_diamond_short_circuit_bounded_calls(
 
     nominal = NominalId(1)
     depth = 32
-    node: RecordValue = RecordValue(nominal=nominal, display_name="T", fields={"tag": IntValue(0)})
+    node: RecordValue = RecordValue(nominal=nominal, fields={"tag": IntValue(0)})
     for i in range(1, depth + 1):
         node = RecordValue(
             nominal=nominal,
-            display_name="T",
             fields={"a": node, "b": node, "tag": IntValue(i)},
         )
 
@@ -272,53 +261,42 @@ def test_dict_value_eq_terminates_on_cyclic_dicts() -> None:
 def test_record_value_eq() -> None:
     """RecordValue equality considers nominal identity and fields.
 
-    Two records with same nominal+fields but different display_name are equal;
-    a record naming a different declaration is NOT equal, whether or not the
-    two declarations are displayed under the same spelling.
+    A record naming a different declaration is NOT equal, whether or not the
+    two declarations render under the same spelling.
     """
     from agm.agl.semantics.values import IntValue, NominalId, RecordValue
 
     nom_a = NominalId(1)
     nom_b = NominalId(2)
-    nom_c = NominalId(3)
 
-    r1 = RecordValue(nominal=nom_a, display_name="Foo", fields={"x": IntValue(1)})
-    r2 = RecordValue(nominal=nom_a, display_name="Foo", fields={"x": IntValue(1)})
-    # Same nominal + fields, different display_name → still equal (display_name excluded from eq).
-    r_diff_display = RecordValue(nominal=nom_a, display_name="AliasName", fields={"x": IntValue(1)})
-    # Another declaration displayed under the same spelling → not equal.
-    r3 = RecordValue(nominal=nom_b, display_name="Foo", fields={"x": IntValue(1)})
-    # Another declaration displayed under a different spelling → not equal.
-    r4 = RecordValue(nominal=nom_c, display_name="Bar", fields={"x": IntValue(1)})
+    r1 = RecordValue(nominal=nom_a, fields={"x": IntValue(1)})
+    r2 = RecordValue(nominal=nom_a, fields={"x": IntValue(1)})
+    # Another declaration → not equal.
+    r3 = RecordValue(nominal=nom_b, fields={"x": IntValue(1)})
     # Same nominal, different fields → not equal.
-    r5 = RecordValue(nominal=nom_a, display_name="Foo", fields={"x": IntValue(2)})
+    r5 = RecordValue(nominal=nom_a, fields={"x": IntValue(2)})
 
     assert r1 == r2
-    assert r1 == r_diff_display  # display_name excluded from eq
-    assert r1 != r3  # different declaration, same spelling
-    assert r1 != r4  # different declaration, different spelling
+    assert r1 != r3  # different declaration
     assert r1 != r5  # different fields
 
 
 def test_constructor_value_eq_and_hash() -> None:
-    """ConstructorValue equality considers its record nominal; display_name is excluded."""
+    """ConstructorValue equality considers its record nominal."""
     from agm.agl.semantics.values import ConstructorValue, NominalId
 
     nom_a = NominalId(1)
     nom_b = NominalId(2)
 
-    c1 = ConstructorValue(nominal=nom_a, display_name="Box")
-    c2 = ConstructorValue(nominal=nom_a, display_name="Box")
-    # Same nominal, different display_name → still equal.
-    c_diff_display = ConstructorValue(nominal=nom_a, display_name="Alias")
-    # Another declaration displayed under the same spelling → not equal.
-    c3 = ConstructorValue(nominal=nom_b, display_name="Box")
+    c1 = ConstructorValue(nominal=nom_a)
+    c2 = ConstructorValue(nominal=nom_a)
+    # Another declaration → not equal.
+    c3 = ConstructorValue(nominal=nom_b)
     # A repeated value with the same identity remains equal.
-    c4 = ConstructorValue(nominal=nom_a, display_name="Box")
+    c4 = ConstructorValue(nominal=nom_a)
 
     assert c1 == c2
     assert hash(c1) == hash(c2)
-    assert c1 == c_diff_display  # display_name excluded from eq
     assert c1 != c3  # different declaration
     assert c1 == c4
 
@@ -328,8 +306,8 @@ def test_record_value_eq_with_json_payload() -> None:
     from agm.agl.semantics.values import JsonValue, NominalId, RecordValue
 
     nom = NominalId(1)
-    r1 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(1)})
-    r2 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(decimal.Decimal("1"))})
+    r1 = RecordValue(nominal=nom, fields={"v": JsonValue(1)})
+    r2 = RecordValue(nominal=nom, fields={"v": JsonValue(decimal.Decimal("1"))})
     # JsonValue(1) == JsonValue(Decimal("1")), so records are equal.
     assert r1 == r2
 
@@ -340,31 +318,21 @@ def test_record_value_eq_with_json_payload() -> None:
 
 
 def test_enum_value_eq() -> None:
-    """RecordValue equality considers member nominal identity and fields.
-
-    display_name is excluded from eq.
-    """
+    """RecordValue equality considers member nominal identity and fields."""
     from agm.agl.semantics.values import NominalId, RecordValue
 
     nom_color = NominalId(1)
     nom_shape = NominalId(2)
-    nom_color_other = NominalId(3)
 
-    e1 = RecordValue(nominal=nom_color, display_name=f"{'Color'}::{'Red'}", fields={})
-    e2 = RecordValue(nominal=nom_color, display_name=f"{'Color'}::{'Red'}", fields={})
-    # Same member nominal and fields, different display_name → equal.
-    e_diff_disp = RecordValue(nominal=nom_color, display_name=f"{'MyColor'}::{'Red'}", fields={})
+    e1 = RecordValue(nominal=nom_color, fields={})
+    e2 = RecordValue(nominal=nom_color, fields={})
     # Distinct member nominals are not equal.
-    e3 = RecordValue(nominal=nom_shape, display_name=f"{'Color'}::{'Blue'}", fields={})
-    # Another declaration displayed under a different spelling → not equal.
-    e4 = RecordValue(nominal=nom_color_other, display_name=f"{'Shape'}::{'Red'}", fields={})
-    # A repeated member nominal with a different display spelling remains equal.
-    e5 = RecordValue(nominal=nom_color, display_name=f"{'Color'}::{'Red'}", fields={})
+    e3 = RecordValue(nominal=nom_shape, fields={})
+    # A repeated member nominal remains equal.
+    e5 = RecordValue(nominal=nom_color, fields={})
 
     assert e1 == e2
-    assert e1 == e_diff_disp
     assert e1 != e3
-    assert e1 != e4
     assert e1 == e5
 
 
@@ -374,35 +342,19 @@ def test_enum_value_eq() -> None:
 
 
 def test_exception_value_eq() -> None:
-    """ExceptionValue equality considers nominal identity and fields.
-
-    display_name is excluded from eq.
-    """
+    """ExceptionValue equality considers nominal identity and fields."""
     from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
 
     nom_err = NominalId(1)
     nom_err2 = NominalId(2)
-    nom_err_other = NominalId(3)
 
-    ex1 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
-    ex2 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
-    # Same nominal+fields, different display_name → equal.
-    ex_diff_disp = ExceptionValue(
-        nominal=nom_err, display_name="ErrAlias", fields={"message": TextValue("oops")}
-    )
-    # Another declaration displayed under a different spelling → not equal.
-    ex3 = ExceptionValue(
-        nominal=nom_err2, display_name="Err2", fields={"message": TextValue("oops")}
-    )
-    # Another declaration displayed under the same spelling → not equal.
-    ex4 = ExceptionValue(
-        nominal=nom_err_other, display_name="Err", fields={"message": TextValue("oops")}
-    )
+    ex1 = ExceptionValue(nominal=nom_err, fields={"message": TextValue("oops")})
+    ex2 = ExceptionValue(nominal=nom_err, fields={"message": TextValue("oops")})
+    # Another declaration → not equal.
+    ex3 = ExceptionValue(nominal=nom_err2, fields={"message": TextValue("oops")})
 
     assert ex1 == ex2
-    assert ex1 == ex_diff_disp
     assert ex1 != ex3
-    assert ex1 != ex4
 
 
 def test_builtin_exception_value_uses_std_core_id() -> None:
@@ -412,11 +364,9 @@ def test_builtin_exception_value_uses_std_core_id() -> None:
 
     exc = ExceptionValue(
         nominal=NominalId(require_reserved_nominal_id("AgentParseError")),
-        display_name="AgentParseError",
         fields={"message": TextValue("fail")},
     )
     assert exc.nominal == NominalId(require_reserved_nominal_id("AgentParseError"))
-    assert exc.display_name == "AgentParseError"
 
 
 # ---------------------------------------------------------------------------
@@ -490,11 +440,10 @@ def test_array_dict_record_enum_exception_hash_raises() -> None:
     values: tuple[object, ...] = (
         ArrayValue(elements=[IntValue(1)]),
         DictValue(entries={"a": IntValue(1)}),
-        RecordValue(nominal=nom, display_name="Foo", fields={"x": IntValue(1)}),
-        RecordValue(nominal=nom, display_name=f"{'Foo'}::{'Bar'}", fields={}),
+        RecordValue(nominal=nom, fields={"x": IntValue(1)}),
+        RecordValue(nominal=nom, fields={}),
         ExceptionValue(
             nominal=NominalId(2),
-            display_name="Err",
             fields={"message": TextValue("oops")},
         ),
     )

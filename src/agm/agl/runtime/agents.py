@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agm.agent.transport import AgentCallInfo, stderr_tail
+from agm.agl.ir.builtin_nominals import BuiltinNominals, resolve_standard_member_name
 from agm.agl.runtime.request import AgentCallHostError, AgentRequest, AgentResponse
-from agm.agl.semantics.types import terminal_name
-from agm.agl.semantics.values import RecordValue, TextValue
+from agm.agl.semantics.values import RecordValue, TextValue, Value
 from agm.core.env import clone_env
 
 if TYPE_CHECKING:
@@ -79,7 +79,22 @@ def _run_request(
     )
 
 
-def agent_spec_type(value: RecordValue) -> "type[AgentSpec]":
+def agent_member_name(value: RecordValue, nominals: BuiltinNominals) -> str:
+    """Return the bare ``Agent`` member name (e.g. ``"AgentClaude"``) *value* projects onto.
+
+    Dispatch is by nominal identity, resolved through *nominals* (an ``Agent``
+    member's ``NominalId`` is program-specific), never by a name read off the
+    value itself.
+    """
+    from agm.agent.spec import AGENT_SPECS
+
+    name = resolve_standard_member_name(value.nominal, "Agent", AGENT_SPECS, nominals)
+    if name is None:
+        raise ValueError("value is not a recognized Agent member")
+    return name
+
+
+def agent_spec_type(value: RecordValue, nominals: BuiltinNominals) -> type[AgentSpec]:
     """Resolve the host specification class an ``Agent`` member is projected onto.
 
     The single seam through which AgL asks what kind of agent a value is, so no
@@ -87,17 +102,27 @@ def agent_spec_type(value: RecordValue) -> "type[AgentSpec]":
     """
     from agm.agent.spec import AGENT_SPECS
 
-    member_name = terminal_name(value.display_name)
-    spec_cls = AGENT_SPECS.get(member_name)
-    if spec_cls is None:
-        raise ValueError(f"unsupported Agent member: {member_name}")
-    return spec_cls
+    return AGENT_SPECS[agent_member_name(value, nominals)]
 
 
-def decode_agent_value(value: RecordValue) -> "AgentSpec":
+def decode_agent_value(value: RecordValue, nominals: BuiltinNominals) -> AgentSpec:
     """Decode an ``Agent`` member record into its host-side specification."""
-    spec_cls = agent_spec_type(value)
+    spec_cls = agent_spec_type(value, nominals)
     return spec_cls(*(_text_field(value, name) for name in spec_cls.PAYLOAD_FIELDS))
+
+
+def agent_value(spec: AgentSpec, nominals: BuiltinNominals) -> RecordValue:
+    """Encode a host agent specification back into its ``Agent`` member value.
+
+    The inverse of :func:`decode_agent_value`, used where a host hands a spec
+    it already holds back to AgL (e.g. a default session's snapshot agent).
+    """
+    declared = nominals.resolve_standard_member("Agent", type(spec).__name__)
+    fields: dict[str, Value] = {
+        name: TextValue(value)
+        for name, value in zip(type(spec).PAYLOAD_FIELDS, spec.payload_values(), strict=True)
+    }
+    return RecordValue(nominal=declared.nominal, fields=fields)
 
 
 def _text_field(value: RecordValue, name: str) -> str:
@@ -111,8 +136,8 @@ def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
     """Return a dispatcher which builds an invocation from ``request.agent``."""
 
     def dispatch(request: AgentRequest) -> AgentResponse:
+        spec = request.agent
         try:
-            spec = decode_agent_value(request.agent)
             command = spec.argv()
         except ValueError as exc:
             raise AgentCallHostError(
@@ -123,7 +148,7 @@ def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
     return dispatch
 
 
-def _spec_delivery(spec: "AgentSpec") -> "PromptDelivery":
+def _spec_delivery(spec: AgentSpec) -> "PromptDelivery":
     """Return how *spec* wants its rendered prompt delivered."""
     from agm.agent.runner import PromptDelivery
 

@@ -59,6 +59,16 @@ def _lower(source: str) -> ExecutableProgram:
     return lower_inline_ir(source, caps=caps)
 
 
+def _nominal_id(source: str, display_name: str) -> NominalId:
+    """NominalId a fresh lowering of *source* assigns to *display_name*.
+
+    ``evaluate_ir`` doesn't return its program, so a test asserting a runtime
+    value's identity re-lowers the same source (deterministic) and looks the
+    id up via ``nominal_id_for``.
+    """
+    return nominal_id_for(lower_inline_ir(source), display_name)
+
+
 # ---------------------------------------------------------------------------
 # IR evaluation tests — record construction
 # ---------------------------------------------------------------------------
@@ -78,9 +88,7 @@ let p = Point(x = 3, y = 4)
     assert isinstance(p, RecordValue)
     assert p.fields["x"] == IntValue(3)
     assert p.fields["y"] == IntValue(4)
-    assert p.display_name == "Point"
-    prog = lower_inline_ir(source)
-    assert p.nominal == nominal_id_for(prog, "Point")
+    assert p.nominal == _nominal_id(source, "Point")
 
 
 def test_record_field_coercion_int_to_decimal() -> None:
@@ -148,7 +156,7 @@ let c = Color::Red()
     ir = evaluate_ir(source)
     c = ir["c"]
     assert isinstance(c, RecordValue)
-    assert c.display_name == "Color::Red"
+    assert c.nominal == _nominal_id(source, "Color::Red")
     assert c.fields == {}
 
 
@@ -162,7 +170,8 @@ let s = Shape::Circle(radius = 3.0)
     ir = evaluate_ir(source)
     s = ir["s"]
     assert isinstance(s, RecordValue)
-    assert s.display_name == "Shape::Circle"
+    prog = lower_inline_ir(source)
+    assert s.nominal == nominal_id_for(prog, "Shape::Circle")
     assert s.fields["radius"] == DecimalValue(decimal.Decimal("3.0"))
 
 
@@ -336,7 +345,8 @@ let mk = Pt
     ir = evaluate_ir(source)
     mk = ir["mk"]
     assert isinstance(mk, ConstructorValue), f"ir: {mk!r}"
-    assert mk.display_name == "Pt"
+    prog = lower_inline_ir(source)
+    assert mk.nominal == nominal_id_for(prog, "Pt")
 
 
 def test_first_class_enum_constructor_ref_nullary_gives_enum_value() -> None:
@@ -353,7 +363,8 @@ let mk = Color::Red
     ir = evaluate_ir(source)
     mk = ir["mk"]
     assert isinstance(mk, RecordValue), f"ir: {mk!r}"
-    assert mk.display_name == "Color::Red"
+    prog = lower_inline_ir(source)
+    assert mk.nominal == nominal_id_for(prog, "Color::Red")
 
 
 def test_first_class_enum_constructor_ref_with_fields_gives_constructor_value() -> None:
@@ -372,7 +383,8 @@ let mk = Shape::Circle
     ir = evaluate_ir(source)
     mk = ir["mk"]
     assert isinstance(mk, ConstructorValue), f"ir: {mk!r}"
-    assert mk.display_name == "Shape::Circle"
+    prog = lower_inline_ir(source)
+    assert mk.nominal == nominal_id_for(prog, "Shape::Circle")
 
 
 def test_bare_payload_constructor_type_apply_is_callable_value() -> None:
@@ -388,10 +400,11 @@ let v = mk(7)
     ir = evaluate_ir(source)
     mk = ir["mk"]
     assert isinstance(mk, ConstructorValue)
-    assert mk.display_name == "Option::some"
+    prog = lower_inline_ir(source)
+    assert mk.nominal == nominal_id_for(prog, "Option::some")
     v = ir["v"]
     assert isinstance(v, RecordValue)
-    assert v.display_name == "Option::some" and v.fields["value"] == IntValue(7)
+    assert v.nominal == nominal_id_for(prog, "Option::some") and v.fields["value"] == IntValue(7)
 
 
 def test_direct_nullary_constructor_owner_type_apply_constructs_member_value() -> None:
@@ -406,7 +419,8 @@ let z = none::[int]
     ir = evaluate_ir(source)
     z = ir["z"]
     assert isinstance(z, RecordValue)
-    assert z.display_name == "Option::none"
+    prog = lower_inline_ir(source)
+    assert z.nominal == nominal_id_for(prog, "Option::none")
 
 
 def test_owner_applied_constructor_value_is_callable_or_constructed() -> None:
@@ -423,9 +437,14 @@ let z = Option[int]::none
     ir = evaluate_ir(source)
     mk = ir["mk"]
     assert isinstance(mk, ConstructorValue)
-    assert mk.display_name == "Option::some"
-    assert isinstance(ir["v"], RecordValue) and ir["v"].display_name == "Option::some"
-    assert isinstance(ir["z"], RecordValue) and ir["z"].display_name == "Option::none"
+    prog = lower_inline_ir(source)
+    assert mk.nominal == nominal_id_for(prog, "Option::some")
+    assert isinstance(ir["v"], RecordValue) and ir["v"].nominal == nominal_id_for(
+        prog, "Option::some"
+    )
+    assert isinstance(ir["z"], RecordValue) and ir["z"].nominal == nominal_id_for(
+        prog, "Option::none"
+    )
 
 
 def test_owner_applied_partial_constructor_substitutes_captured_member_arguments() -> None:
@@ -441,7 +460,9 @@ let value = make-ok(7)
     ir = evaluate_ir(source)
     value = ir["value"]
     assert isinstance(value, RecordValue)
-    assert value.display_name == "Outcome::ok" and value.fields["value"] == IntValue(7)
+    prog = lower_inline_ir(source)
+    assert value.nominal == nominal_id_for(prog, "Outcome::ok")
+    assert value.fields["value"] == IntValue(7)
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +487,7 @@ let p = Point(x = 3, y = 4)
             let_root_capture(node).value, IrMakeRecord
         ):
             mr = let_root_capture(node).value
-            assert mr.display_name == "Point"
+            assert mr.nominal == nominal_id_for(prog, "Point")
             assert prog.nominals[mr.nominal].declared_name == "Point"
             assert len(mr.fields) == 2
             assert mr.fields[0][0] == "x"
@@ -490,7 +511,7 @@ let c = Color::Red()
             let_root_capture(node).value, IrMakeRecord
         ):
             me = let_root_capture(node).value
-            assert me.display_name == "Color::Red"
+            assert me.nominal == nominal_id_for(prog, "Color::Red")
             assert me.fields == ()
             found = True
     assert found, "Expected IrBind(value=IrMakeRecord) in initializers"
@@ -510,7 +531,7 @@ let e = ArithmeticError(message = "oops", operation = "/")
             let_root_capture(node).value, IrMakeException
         ):
             me = let_root_capture(node).value
-            assert me.display_name == "ArithmeticError"
+            assert me.nominal == nominal_id_for(prog, "ArithmeticError")
             assert [name for name, _ in me.fields] == ["message", "operation"]
             found = True
     assert found, "Expected IrBind(value=IrMakeException) in initializers"
@@ -561,7 +582,7 @@ let mk = Pt
             let_root_capture(node).value, IrMakeConstructor
         ):
             mc = let_root_capture(node).value
-            assert mc.display_name == "Pt"
+            assert mc.nominal == nominal_id_for(prog, "Pt")
             assert prog.nominals[mc.nominal].declared_name == "Pt"
             found = True
     assert found, "Expected IrBind(value=IrMakeConstructor) in initializers"
@@ -672,7 +693,6 @@ def test_validate_rejects_ir_make_record_with_unknown_nominal() -> None:
     node = IrMakeRecord(
         location=loc,
         nominal=unknown_nominal,
-        display_name="Ghost",
         fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
@@ -714,7 +734,6 @@ def test_validate_accepts_enum_member_ir_make_record() -> None:
     node = IrMakeRecord(
         location=loc,
         nominal=NominalId(2),
-        display_name="Color::Red",
         fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
@@ -806,7 +825,6 @@ def test_validate_accepts_valid_ir_make_record() -> None:
     node = IrMakeRecord(
         location=loc,
         nominal=nominal_id,
-        display_name="Pt",
         fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
@@ -869,9 +887,9 @@ def test_ir_make_record_node_frozen() -> None:
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
     nom = NominalId(1)
-    node = IrMakeRecord(location=loc, nominal=nom, display_name="Pt", fields=())
+    node = IrMakeRecord(location=loc, nominal=nom, fields=())
     with pytest.raises(dataclasses.FrozenInstanceError):
-        setattr(node, "display_name", "Other")
+        setattr(node, "nominal", NominalId(2))
 
 
 # ---------------------------------------------------------------------------
@@ -894,7 +912,6 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_record() -> None:
     node = IrMakeRecord(
         location=loc,
         nominal=NominalId(1),
-        display_name="Ghost",
         fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
@@ -928,7 +945,6 @@ def test_validate_non_deep_accepts_unknown_nominal_in_member_ir_make_record() ->
     node = IrMakeRecord(
         location=loc,
         nominal=member_nominal,
-        display_name="Choice::first",
         fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
@@ -965,7 +981,6 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_exception() -> Non
     node = IrMakeException(
         location=loc,
         nominal=NominalId(1),
-        display_name="Ghost",
         fields=(),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
@@ -991,7 +1006,6 @@ def test_validate_non_deep_accepts_ir_make_constructor_with_unknown_nominal() ->
     node = IrMakeConstructor(
         location=loc,
         nominal=NominalId(1),
-        display_name="Ghost",
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
 
@@ -1019,7 +1033,7 @@ def test_validate_accepts_ir_make_constructor_for_a_record() -> None:
         modules={
             ENTRY_ID: ExecutableModule(
                 module_id=ENTRY_ID,
-                initializers=(IrMakeConstructor(loc, nominal, "Point"),),
+                initializers=(IrMakeConstructor(loc, nominal),),
             )
         },
         symbols={},

@@ -339,7 +339,7 @@ def test_disabled_validation_accepts_a_set_nominals_re_registration_with_a_diffe
                 kind=NominalKind.RECORD,
                 fields=("value",),
             )
-        }
+        },
     )
 
     registry.set_nominals(
@@ -352,7 +352,7 @@ def test_disabled_validation_accepts_a_set_nominals_re_registration_with_a_diffe
                 kind=NominalKind.RECORD,
                 fields=("other",),
             )
-        }
+        },
     )
 
     assert registry._nominal_classes[nominal]._agl_fields == ("value",)
@@ -372,7 +372,7 @@ def test_enabled_validation_rejects_a_conflicting_set_nominals_re_registration()
                 kind=NominalKind.RECORD,
                 fields=("value",),
             )
-        }
+        },
     )
 
     with pytest.raises(AssertionError, match="different shape"):
@@ -386,7 +386,7 @@ def test_enabled_validation_rejects_a_conflicting_set_nominals_re_registration()
                     kind=NominalKind.RECORD,
                     fields=("other",),
                 )
-            }
+            },
         )
 
 

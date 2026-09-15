@@ -46,10 +46,8 @@ null          # json
 "text %{x}"   # template (type text; see Strings and interpolation)
 ```
 
-The unit literal `()` is the printable unit value. `void` is the same unit
-value with REPL echo suppressed; it compares equal to `()`. `()` is also the
-empty argument list of a zero-argument call — the two are syntactically
-unified.
+The unit literal `()` is the unit value. `()` is also the empty argument list
+of a zero-argument call — the two are syntactically unified.
 
 ### Array literals
 
@@ -549,7 +547,7 @@ application with placeholder arguments, see [Functions](functions.md). For
 
 `print` is a built-in function that accepts one argument of any type, writes
 its rendered value (followed by a newline) to the host's standard output, and
-returns `void`. It renders with `pretty = false` and `quote-strings = false`:
+returns `()`. It renders with `pretty = false` and `quote-strings = false`:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -863,21 +861,20 @@ effect, not their value:
 
 | Form | Type | Notes |
 |------|------|-------|
-| `print(e)` | `unit` | writes to stdout and returns `void` |
-| `x := e` | `unit` | mutates `x` and returns `void` |
-| `if c => body` (no `else`) | `unit` | branch body must be `unit`; returns `void` |
-| loop expressions | `unit` | loops run for effect and return `void` |
+| `print(e)` | `unit` | writes to stdout and returns `()` |
+| `x := e` | `unit` | mutates `x` and returns `()` |
+| `if c => body` (no `else`) | `unit` | branch body must be `unit`; returns `()` |
+| loop expressions | `unit` | loops run for effect and return `()` |
 | `return` | bottom expression returning `()` | valid only in a `unit` function |
-| `()` | `unit` | the printable unit literal |
+| `()` | `unit` | the unit literal |
 
 An `if` without `else` always has type `unit`, and each branch body must also
-have type `unit`. A loop likewise has type `unit` and returns `void`; a `case`
+have type `unit`. A loop likewise has type `unit` and returns `()`; a `case`
 has the common type of its branch bodies.
 
 `unit` values may appear anywhere in a block, including as the final
 expression. A function declared `-> unit` has its body checked against
-`unit`. In the REPL, a final `void` result is not echoed; a final explicit
-`()` is echoed as `()`. `print(void)` still prints `void`.
+`unit`.
 
 ## `let` and `var` as expressions
 

@@ -25,6 +25,17 @@ from agm.agl.ir.ids import Location
 from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 
 
+def exception_message(exc: ExceptionValue) -> str:
+    """Return *exc*'s ``message`` field text, or ``""`` when it is absent or not text.
+
+    Shared by ``AglRaise`` and ``agm.agl.runtime.boundary.AglException`` so a
+    Python-side ``str()`` of a propagating AgL exception is the same in both
+    directions of the FFI boundary.
+    """
+    message = exc.fields.get("message")
+    return message.value if isinstance(message, TextValue) else ""
+
+
 def make_builtin_exception(
     type_name: str,
     message: str,
@@ -34,21 +45,17 @@ def make_builtin_exception(
 ) -> ExceptionValue:
     """Create an ``ExceptionValue`` for a built-in exception type.
 
-    The exception's identity and spelling both come from
-    ``nominals.resolve(type_name)`` — the caller's built-in nominal table —
-    so the value carries the identity and the declared spelling that table
-    resolves for *type_name* rather than hardcoded ones, and a scoped
-    declaration reports its own spelling instead of the bare name.
-    *fields* maps the declared AgL field names beyond ``message`` to their values.
+    The exception's identity comes from ``nominals.resolve(type_name).nominal``
+    — the caller's built-in nominal table — so the value carries the identity
+    that table resolves for *type_name* rather than a hardcoded one; its
+    display spelling is looked up from the program's descriptor table when
+    rendered, never stored on the value. *fields* maps the declared AgL field
+    names beyond ``message`` to their values.
     """
     all_fields: dict[str, Value] = {"message": TextValue(message)}
     all_fields.update(fields or {})
     declared = nominals.resolve(type_name)
-    return ExceptionValue(
-        nominal=declared.nominal,
-        display_name=declared.display_name,
-        fields=all_fields,
-    )
+    return ExceptionValue(nominal=declared.nominal, fields=all_fields)
 
 
 class AglRaise(Exception):
@@ -65,6 +72,6 @@ class AglRaise(Exception):
     """
 
     def __init__(self, exc: ExceptionValue, *, span: Location | None = None) -> None:
-        super().__init__(exc.display_name)
+        super().__init__(exception_message(exc))
         self.exc = exc
         self.span = span

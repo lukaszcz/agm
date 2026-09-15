@@ -9,6 +9,7 @@ import click
 import pytest
 
 from agm.agl.attributes import ProgramOptionSpec
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.arguments import OptionSome, decode_param_value
@@ -852,16 +853,36 @@ _DECODE_SEAM_CASES: tuple[tuple[str, Type, tuple[str, ...], Value], ...] = (
     ),
     ("verbose", BoolType(), ("--verbose",), BoolValue(True)),
     ("verbose", BoolType(), ("--no-verbose",), BoolValue(False)),
-    ("region", _option_type(TextType()), ("--region", "eu"), some_value(TextValue("eu"))),
-    ("count", _option_type(IntType()), ("--count", "5"), some_value(IntValue(5))),
-    ("flag", _option_type(BoolType()), ("--flag", "true"), some_value(BoolValue(True))),
+    (
+        "region",
+        _option_type(TextType()),
+        ("--region", "eu"),
+        some_value(TextValue("eu"), nominals=NO_BUILTIN_DECLARATIONS),
+    ),
+    (
+        "count",
+        _option_type(IntType()),
+        ("--count", "5"),
+        some_value(IntValue(5), nominals=NO_BUILTIN_DECLARATIONS),
+    ),
+    (
+        "flag",
+        _option_type(BoolType()),
+        ("--flag", "true"),
+        some_value(BoolValue(True), nominals=NO_BUILTIN_DECLARATIONS),
+    ),
     (
         "nested",
         _option_type(_option_type(IntType())),
         ("--nested", '{"$case": "None"}'),
-        some_value(none_value()),
+        some_value(none_value(nominals=NO_BUILTIN_DECLARATIONS), nominals=NO_BUILTIN_DECLARATIONS),
     ),
-    ("region", _option_type(TextType()), ("--no-region",), none_value()),
+    (
+        "region",
+        _option_type(TextType()),
+        ("--no-region",),
+        none_value(nominals=NO_BUILTIN_DECLARATIONS),
+    ),
 )
 
 

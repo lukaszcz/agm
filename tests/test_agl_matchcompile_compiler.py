@@ -415,16 +415,13 @@ def _nested_pair_value(
     bit_members = type_table.enum_member_names(bit_type)
     return RecordValue(
         nominal=NominalId(type_table.enum_member_names(pair_type)["pair"].decl_id),
-        display_name=f"{pair_type.name}::{'pair'}",
         fields={
             "left": RecordValue(
                 nominal=NominalId(bit_members[left].decl_id),
-                display_name=f"{bit_type.name}::{left}",
                 fields={},
             ),
             "right": RecordValue(
                 nominal=NominalId(bit_members[right].decl_id),
-                display_name=f"{bit_type.name}::{right}",
                 fields={},
             ),
         },
@@ -766,12 +763,10 @@ def test_qba_reordering_preserves_source_priority_for_every_pair_value() -> None
     )
     root = cast(DecisionDecompose, compiled.root)
     pair = cast(NominalConstructor, root.constructor)
-    enum_type = cast(EnumType, compiled.normalized.root.type)
 
     for left, right in itertools.product((False, True), repeat=2):
         value = RecordValue(
             nominal=NominalId(pair.record_type.decl_id),
-            display_name=f"{enum_type.name}::{pair.terminal_name}",
             fields={"left": BoolValue(left), "right": BoolValue(right)},
         )
         assert _decision_action(compiled, value) == reference_action(case, checked, value)
@@ -795,17 +790,14 @@ def test_decision_oracle_distinguishes_same_named_enum_members() -> None:
     right_type = cast(EnumType, pair.fields[1].type)
     foreign_left = RecordValue(
         nominal=NominalId(right_type.decl_id),
-        display_name=f"{right_type.name}::{'same'}",
         fields={"payload": BoolValue(False)},
     )
     subject = RecordValue(
         nominal=NominalId(pair_type.decl_id),
-        display_name=f"{pair_type.name}::{pair.terminal_name}",
         fields={
             "left": foreign_left,
             "right": RecordValue(
                 nominal=NominalId(right_type.decl_id),
-                display_name=f"{right_type.name}::{'same'}",
                 fields={"payload": BoolValue(False)},
             ),
         },
@@ -855,7 +847,6 @@ def test_generated_finite_matrices_match_reference_reachability_and_failure(
         for left, right in itertools.product((False, True), repeat=2):
             value = RecordValue(
                 nominal=pair_nominal,
-                display_name=f"{pair_type.name}::{'pair'}",
                 fields={"left": BoolValue(left), "right": BoolValue(right)},
             )
             expected = reference_action(case, checked, value)
@@ -935,7 +926,6 @@ def test_generated_nested_multi_column_matrices_match_the_reference(leading_row:
                 nominal=NominalId(
                     checked.type_env.type_table.enum_member_names(pair_type)["missing"].decl_id
                 ),
-                display_name=f"{pair_type.name}::{'missing'}",
                 fields={},
             ),
         )

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import SymbolId
-from agm.agl.ir.program import ExecutableProgram
+from agm.agl.ir.program import ExecutableProgram, ValueDescriptors
 from agm.agl.lower.lowerer import InitializerOrigin, _LinkState
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import ModuleId
@@ -56,6 +56,16 @@ class LinkImage:
     def symbol_for_decl(self, decl_node_id: int) -> SymbolId | None:
         """Return the persistent symbol allocated for an AST declaration."""
         return self._state.decl_to_sym.get(decl_node_id)
+
+    def descriptors(self) -> ValueDescriptors:
+        """Return the accumulated nominal/function descriptor view for rendering.
+
+        Reflects every declaration promoted so far this session -- the same
+        cumulative tables a fresh entry's own ``ExecutableProgram`` carries --
+        so a live value read back from a persisted frame (e.g. ``:bindings``)
+        renders correctly regardless of which entry produced it.
+        """
+        return ValueDescriptors(nominals=self._state.nominals, functions=self._state.functions)
 
     def mark_linked(self, module_ids: "Iterable[ModuleId]") -> None:
         """Record initialized library modules as persistently linked.

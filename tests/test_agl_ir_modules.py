@@ -259,9 +259,7 @@ box
     result = evaluate_ir(source)
     program = lower_inline_ir(source)
 
-    assert result["box"] == RecordValue(
-        nominal_id_for(program, "Box"), "Box", {"value": IntValue(1)}
-    )
+    assert result["box"] == RecordValue(nominal_id_for(program, "Box"), {"value": IntValue(1)})
 
 
 def test_imported_alias_constructor_value_lowers(tmp_path: Path) -> None:
@@ -276,9 +274,7 @@ box
     checked = _checked(entry_source, modules, tmp_path)
     program = lower_program(_compiled_checked(checked))
 
-    assert result["box"] == RecordValue(
-        nominal_id_for(program, "Box"), "Box", {"value": IntValue(1)}
-    )
+    assert result["box"] == RecordValue(nominal_id_for(program, "Box"), {"value": IntValue(1)})
 
 
 def test_scoped_linked_calls_use_function_handles_and_validate(tmp_path: Path) -> None:
@@ -377,7 +373,8 @@ let is-red = case c of
     | _ => false
 ()
 """
-    r = evaluate_ir_graph(entry_source, {"shapes": shapes_source}, tmp_path)
+    modules = {"shapes": shapes_source}
+    r = evaluate_ir_graph(entry_source, modules, tmp_path)
     assert r["px"] == IntValue(1)
     assert r["is-red"] == BoolValue(True)
     p = r["p"]
@@ -386,7 +383,9 @@ let is-red = case c of
     assert p.fields["y"] == IntValue(2)
     c = r["c"]
     assert isinstance(c, RecordValue)
-    assert c.display_name.rsplit("::", maxsplit=1)[-1] == "Red"
+    checked = _checked(entry_source, modules, tmp_path)
+    program = lower_program(_compiled_checked(checked))
+    assert c.nominal == nominal_id_for(program, "Color::Red")
 
 
 def test_same_named_types_in_two_modules(tmp_path: Path) -> None:
@@ -430,8 +429,11 @@ import mathlib
 let result = mathlib::safe-div(10, 0)
 ()
 """
-    exc = evaluate_ir_graph_raises(entry_source, {"mathlib": mathlib_source}, tmp_path)
-    assert exc.display_name == "ArithmeticError"
+    modules = {"mathlib": mathlib_source}
+    exc = evaluate_ir_graph_raises(entry_source, modules, tmp_path)
+    checked = _checked(entry_source, modules, tmp_path)
+    program = lower_program(_compiled_checked(checked))
+    assert exc.nominal == nominal_id_for(program, "ArithmeticError")
 
 
 def test_wildcard_imported_nullary_enum_as_value(tmp_path: Path) -> None:
@@ -452,8 +454,11 @@ let is-running = case s of
     | Done => false
 ()
 """
-    r = evaluate_ir_graph(entry_source, {"status": status_source}, tmp_path)
+    modules = {"status": status_source}
+    r = evaluate_ir_graph(entry_source, modules, tmp_path)
     assert r["is-running"] == BoolValue(True)
     s = r["s"]
     assert isinstance(s, RecordValue)
-    assert s.display_name.rsplit("::", maxsplit=1)[-1] == "Running"
+    checked = _checked(entry_source, modules, tmp_path)
+    program = lower_program(_compiled_checked(checked))
+    assert s.nominal == nominal_id_for(program, "Status::Running")

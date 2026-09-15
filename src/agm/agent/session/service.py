@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING, NoReturn, TypeVar
 from uuid import uuid4
 
 if TYPE_CHECKING:
+    from agm.agent.spec import AgentSpec
     from agm.agl.runtime.request import AgentRequest, AgentResponse
     from agm.agl.runtime.sessions import SessionSnapshot
     from agm.agl.runtime.sessions import SessionStats as AglSessionStats
-    from agm.agl.semantics.values import RecordValue
 
 from agm.agent.session.protocol import (
     SessionAgentError as AgentSessionAgentError,
@@ -37,7 +37,7 @@ SessionBackendFactory = Callable[[object, str], SessionBackend]
 class _HostSession:
     """The AgL-facing identity this host retains for one opaque handle."""
 
-    agent: "RecordValue"
+    agent: "AgentSpec"
     transport: str
     ephemeral: bool = False
 
@@ -49,13 +49,13 @@ class AglSessionHost:
         self._service = service
         self._sessions: dict[str, _HostSession] = {}
 
-    def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+    def open(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str:
         handle = self._open(agent, transport, name=name)
         self._sessions[handle] = _HostSession(agent, transport)
         return handle
 
     def open_ephemeral(
-        self, agent: RecordValue, transport: str, *, single_prompt: bool = False
+        self, agent: "AgentSpec", transport: str, *, single_prompt: bool = False
     ) -> str:
         """Open one short-lived session for an AgL ask lifecycle."""
         handle = self._open(agent, transport, ephemeral=True, single_prompt=single_prompt)
@@ -64,14 +64,13 @@ class AglSessionHost:
 
     def with_ephemeral(
         self,
-        agent: RecordValue,
+        agent: "AgentSpec",
         transport: str,
         action: Callable[[str], _T],
         *,
         single_prompt: bool = False,
     ) -> _T:
         """Run *action* in one ephemeral session and release it afterward."""
-        spec = self._agent_spec(agent)
 
         def register(handle: str) -> _T:
             self._sessions[handle] = _HostSession(agent, transport, ephemeral=True)
@@ -79,7 +78,7 @@ class AglSessionHost:
 
         return self._call_host(
             lambda: self._service.with_ephemeral(
-                spec,
+                agent,
                 transport.lower(),
                 register,
                 on_closed=self._retire_ephemeral,
@@ -89,24 +88,25 @@ class AglSessionHost:
 
     def _open(
         self,
-        agent: RecordValue,
+        agent: "AgentSpec",
         transport: str,
         *,
         name: str = "",
         ephemeral: bool = False,
         single_prompt: bool = False,
     ) -> str:
-        spec = self._agent_spec(agent)
         return self._call_host(
             lambda: self._service.open(
-                spec, transport.lower(), name=name, ephemeral=ephemeral, single_prompt=single_prompt
+                agent,
+                transport.lower(),
+                name=name,
+                ephemeral=ephemeral,
+                single_prompt=single_prompt,
             )
         )
 
-    def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
-        handle = self._call_host(
-            lambda: self._service.default(self._agent_spec(agent), transport.lower(), name=name)
-        )
+    def default(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str:
+        handle = self._call_host(lambda: self._service.default(agent, transport.lower(), name=name))
         self._sessions.setdefault(handle, _HostSession(agent, transport))
         return handle
 
@@ -198,20 +198,6 @@ class AglSessionHost:
             return self._sessions[handle]
         except KeyError:
             raise AglSessionHostError("unknown session", operation) from None
-
-    @staticmethod
-    def _agent_spec(agent: object) -> object:
-        from agm.agl.runtime.agents import decode_agent_value
-        from agm.agl.semantics.values import RecordValue
-
-        if not isinstance(agent, RecordValue):
-            raise TypeError(f"session agent must be an RecordValue, got {type(agent).__name__}")
-        try:
-            return decode_agent_value(agent)
-        except ValueError as error:
-            from agm.agl.runtime.sessions import SessionAgentError
-
-            raise SessionAgentError(str(error), "open") from error
 
     @staticmethod
     def _raise_host_error(error: SessionHostError) -> NoReturn:

@@ -7,13 +7,16 @@ from typing import Protocol, cast
 
 import pytest
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.ids import FunctionId, NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind
+from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.boundary import AglException
 from agm.agl.runtime.externs import AglCallableProxy, ExternCallWindow, ExternRegistry
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import ExceptionValue, IrClosureValue, TextValue, Value
+
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
 
 
 class _NominalConstructor(Protocol):
@@ -23,7 +26,6 @@ class _NominalConstructor(Protocol):
 def _problem() -> ExceptionValue:
     return ExceptionValue(
         NominalId(9_000_001),
-        "Problem",
         {"message": TextValue("callback"), "detail": TextValue("original")},
     )
 
@@ -52,7 +54,13 @@ def test_callback_exception_returns_as_the_same_agl_exception_value() -> None:
         return callback()
 
     with window.active(), pytest.raises(AglRaise) as excinfo:
-        registry.invoke("invoke", invoke_callback, ())
+        registry.invoke(
+            "invoke",
+            invoke_callback,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        )
 
     assert excinfo.value.exc is problem
 
@@ -71,7 +79,13 @@ def test_companion_can_catch_and_reraise_a_callback_exception_transparently() ->
             raise error
 
     with window.active(), pytest.raises(AglRaise) as excinfo:
-        registry.invoke("catch_and_reraise", catch_and_reraise, ())
+        registry.invoke(
+            "catch_and_reraise",
+            catch_and_reraise,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        )
 
     assert excinfo.value.exc is problem
 
@@ -89,7 +103,7 @@ def test_companion_can_raise_a_synthesized_exception_through_the_carrier() -> No
                 kind=NominalKind.EXCEPTION,
                 fields=("message", "detail"),
             )
-        }
+        },
     )
     problem_class = cast(_NominalConstructor, registry._nominal_classes[problem_id])
 
@@ -98,11 +112,16 @@ def test_companion_can_raise_a_synthesized_exception_through_the_carrier() -> No
         raise AglException(problem_class(message="companion", detail="initiated"))
 
     with pytest.raises(AglRaise) as excinfo:
-        registry.invoke("raise_problem", raise_problem, ())
+        registry.invoke(
+            "raise_problem",
+            raise_problem,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        )
 
     assert excinfo.value.exc == ExceptionValue(
         problem_id,
-        "Problem",
         {"message": TextValue("companion"), "detail": TextValue("initiated")},
     )
 
@@ -129,7 +148,7 @@ def test_carrier_name_is_reserved_when_an_agl_exception_uses_it(tmp_path: Path) 
                 kind=NominalKind.EXCEPTION,
                 fields=("message",),
             )
-        }
+        },
     )
     companion = tmp_path / "companion.py"
     companion.write_text(
@@ -140,11 +159,15 @@ def test_carrier_name_is_reserved_when_an_agl_exception_uses_it(tmp_path: Path) 
     module = registry.load_companion(ENTRY_ID, companion)
 
     with pytest.raises(AglRaise) as excinfo:
-        registry.invoke("raise_named_exception", module.raise_named_exception, ())
+        registry.invoke(
+            "raise_named_exception",
+            module.raise_named_exception,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        )
 
-    assert excinfo.value.exc == ExceptionValue(
-        exception_id, "AglException", {"message": TextValue("companion")}
-    )
+    assert excinfo.value.exc == ExceptionValue(exception_id, {"message": TextValue("companion")})
 
 
 def test_ordinary_python_exceptions_become_extern_error_and_base_exceptions_propagate() -> None:
@@ -159,9 +182,28 @@ def test_ordinary_python_exceptions_become_extern_error_and_base_exceptions_prop
         raise KeyboardInterrupt
 
     with pytest.raises(AglRaise) as ordinary:
-        registry.invoke("ordinary", raise_ordinary, ())
-    assert ordinary.value.exc.display_name == "ExternError"
+        registry.invoke(
+            "ordinary",
+            raise_ordinary,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        )
+    assert ordinary.value.exc.nominal == NO_BUILTIN_DECLARATIONS.resolve("ExternError").nominal
     assert ordinary.value.exc.fields["python-type"] == TextValue("RuntimeError")
 
     with pytest.raises(KeyboardInterrupt):
-        registry.invoke("interrupt", raise_interrupt, ())
+        registry.invoke(
+            "interrupt",
+            raise_interrupt,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        )
+
+
+def test_str_of_agl_exception_is_the_message() -> None:
+    """A companion's ``str(AglException(...))`` is the AgL exception's message."""
+    problem = _problem()
+
+    assert str(AglException(problem)) == "callback"

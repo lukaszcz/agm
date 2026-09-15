@@ -49,7 +49,7 @@ def _toml_companion() -> _TomlCompanion:
                 kind=NominalKind.EXCEPTION,
                 fields=("message",),
             ),
-        }
+        },
     )
     module: ModuleType = registry.load_companion(_TOML_MODULE, _STDLIB_ROOT / "src" / "toml.py")
     return cast(_TomlCompanion, module)

@@ -488,7 +488,6 @@ def agent_value(variant: str, **fields: str) -> RecordValue:
     )
     return RecordValue(
         nominal=member_nominal,
-        display_name=f"{'Agent'}::{variant}",
         fields={name: TextValue(value) for name, value in fields.items()},
     )
 

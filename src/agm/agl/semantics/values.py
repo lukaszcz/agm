@@ -145,17 +145,10 @@ class JsonValue:
 
 @dataclass(frozen=True, slots=True)
 class UnitValue:
-    """The ``unit`` value, with REPL printability metadata.
-
-    ``void`` and ``()`` compare equal; only the REPL echo policy observes
-    ``printable_in_repl``.
-    """
-
-    printable_in_repl: bool = field(default=True, compare=False)
+    """The ``unit`` value: a singleton with no data. Always renders ``()``."""
 
 
 UNIT_VALUE: UnitValue = UnitValue()
-VOID_VALUE: UnitValue = UnitValue(printable_in_repl=False)
 
 
 # ---------------------------------------------------------------------------
@@ -172,13 +165,11 @@ class ConstructorValue:
     result type; type arguments are erased — never represented at runtime. It
     is not renderable or comparable by the language.
 
-    ``nominal`` is the opaque ``NominalId`` of the record type and
-    ``display_name`` is its user-facing name for rendering. Equality and hash
-    are by ``nominal``; ``display_name`` is excluded as rendering metadata.
+    ``nominal`` is the opaque ``NominalId`` of the record type; its display
+    spelling is looked up from the program's descriptor table when needed.
     """
 
     nominal: NominalId
-    display_name: str = field(compare=False, hash=False)
 
 
 # ---------------------------------------------------------------------------
@@ -239,20 +230,17 @@ class DictValue:
 class RecordValue:
     """A record-typed value.
 
-    ``nominal`` is the opaque ``NominalId`` — the identity
-    key.  ``display_name`` is the user-facing name for rendering and
-    diagnostics; it is excluded from equality.  ``fields`` holds
-    the record's field values.
+    ``nominal`` is the opaque ``NominalId`` — the identity key; its display
+    spelling for rendering and diagnostics is looked up from the program's
+    descriptor table, never stored on the value.  ``fields`` holds the
+    record's field values.
 
-    Equality is by ``(nominal, fields)``; ``display_name`` is
-    excluded (rendering metadata only, mirroring how ``RecordType`` excludes
-    ``fields`` from its own equality). Unhashable: ``fields`` may hold a
+    Equality is by ``(nominal, fields)``. Unhashable: ``fields`` may hold a
     mutable array or dict, so a stable hash is impossible. Delegates to
     :func:`values_equal` (cycle-safe, co-inductive) — see :class:`ArrayValue`.
     """
 
     nominal: NominalId
-    display_name: str
     fields: dict[str, Value] = field(default_factory=dict)
 
     def __eq__(self, other: object) -> bool:
@@ -265,24 +253,22 @@ class RecordValue:
 class ExceptionValue:
     """A built-in AgL exception value.
 
-    ``nominal`` is the opaque ``NominalId`` — the identity
-    key.  A built-in exception a program declares nothing of its own for uses
-    its reserved identity (see ``ir.reserved_nominals``) — the shipped
-    standard library's own identity; one the program redeclares as its own
-    ``builtin exception`` uses that declaration's identity instead.
-    ``display_name`` is the user-facing exception class name (e.g.
-    ``"AgentParseError"``); it is excluded from equality.
+    ``nominal`` is the opaque ``NominalId`` — the identity key.  A built-in
+    exception a program declares nothing of its own for uses its reserved
+    identity (see ``ir.reserved_nominals``) — the shipped standard library's
+    own identity; one the program redeclares as its own ``builtin exception``
+    uses that declaration's identity instead. Its display spelling (e.g.
+    ``"AgentParseError"``) is looked up from the program's descriptor table,
+    never stored on the value.
     ``fields`` maps the exception's declared field names to their values.
     The ``"message"`` field is always present (base ``Exception`` contract).
 
-    Equality is by ``(nominal, fields)``; ``display_name`` is
-    excluded (rendering metadata only). Unhashable: ``fields`` may hold a
+    Equality is by ``(nominal, fields)``. Unhashable: ``fields`` may hold a
     mutable array or dict, so a stable hash is impossible. Delegates to
     :func:`values_equal` (cycle-safe, co-inductive) — see :class:`ArrayValue`.
     """
 
     nominal: NominalId
-    display_name: str
     fields: dict[str, Value] = field(default_factory=dict)
 
     def __eq__(self, other: object) -> bool:
@@ -414,13 +400,15 @@ def _fields_equal(
 
 @dataclass(frozen=True, slots=True)
 class IrClosureValue:
-    """An IR closure: function_id plus its captured environment."""
+    """An IR closure: function_id plus its captured environment.
+
+    Its signature labels and arity are looked up from the program's
+    ``FunctionDescriptor`` table by ``function_id`` when rendering, never
+    stored on the value.
+    """
 
     function_id: FunctionId
     captures: tuple[tuple[SymbolId, Slot], ...]
-    param_labels: tuple[str, ...] = ()
-    arity: int = 0
-    result_label: str = "?"
 
     def __eq__(self, other: object) -> bool:
         return self is other
@@ -502,7 +490,6 @@ Frame = dict[SymbolId, Slot]
 
 __all__ = [
     "UNIT_VALUE",
-    "VOID_VALUE",
     "ArrayValue",
     "BoolValue",
     "Cell",

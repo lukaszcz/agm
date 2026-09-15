@@ -600,6 +600,7 @@ class EntryPipeline:
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
+        from agm.agl.ir.program import ValueDescriptors
         from agm.agl.lower import lower_repl_program
         from agm.agl.pipeline import _wire_extern_registry, exception_value_to_run_error
         from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
@@ -649,6 +650,7 @@ class EntryPipeline:
             registry=host_env.extern_registry,
             companion_paths=companion_paths,
             nominals=lowered.program.nominals,
+            functions=lowered.program.functions,
         )
         if extern_diagnostics:
             # A pre-execution rejection: nothing ran and nothing promoted, but
@@ -701,6 +703,7 @@ class EntryPipeline:
         except AglRaise as exc:
             error = exception_value_to_run_error(
                 exc.exc,
+                nominals=lowered.program.nominals,
                 span=exc.span,
                 exception_field_encodes=lowered.program.exception_field_encodes,
             )
@@ -884,6 +887,7 @@ class EntryPipeline:
         except AglRaise as exc:
             error = exception_value_to_run_error(
                 exc.exc,
+                nominals=lowered.program.nominals,
                 span=exc.span,
                 exception_field_encodes=lowered.program.exception_field_encodes,
             )
@@ -958,6 +962,7 @@ class EntryPipeline:
             trace_path=self._ctx._trace_path,
             quote_strings=self._ctx._quote_strings_for_entry(orig_program),
             type_table=checked.type_env.type_table,
+            descriptors=ValueDescriptors.from_program(lowered.program),
         )
 
     def _retained_preamble(

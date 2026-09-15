@@ -54,7 +54,7 @@ def _text_companion() -> _TextCompanion:
                 fields=("message", "index", "length"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
-        }
+        },
     )
     module: ModuleType = registry.load_companion(_TEXT_MODULE, _STDLIB_ROOT / "src" / "text.py")
     return cast(_TextCompanion, module)
@@ -68,7 +68,7 @@ def test_text_companion_uses_unicode_code_points_and_option_search() -> None:
     )
     assert companion.index_of("banana", "na") == 2
     assert decode_boundary_value(companion.index_of_option("banana", "zz")) == RecordValue(
-        _OPTION_NONE, "Option::None", {}
+        _OPTION_NONE, {}
     )
 
     with pytest.raises(AglException) as exc_info:

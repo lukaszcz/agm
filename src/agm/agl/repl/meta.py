@@ -39,6 +39,8 @@ class MetaContext:
     ``session``     — the live :class:`ReplSession` (handlers query/mutate it).
     ``echo``        — whether successful entries are echoed; the loop reads this
                       live, so ``:set echo on|off`` toggles it by mutation.
+    ``echo_unit``   — whether a ``unit``-typed expression/binding entry also
+                      echoes; off by default, toggled by ``:set echo-unit on|off``.
     ``quit``        — set ``True`` by a handler to ask the loop to exit.
     ``theme``       — current highlight theme name; mutated by ``:theme`` so the
                       loop can update the ``PromptSession`` style live.
@@ -46,6 +48,7 @@ class MetaContext:
 
     session: "ReplSession"
     echo: bool = True
+    echo_unit: bool = False
     quit: bool = False
     theme: str = "auto"
 
@@ -54,12 +57,25 @@ class MetaContext:
 class MetaOutcome:
     """Structured result of dispatching one meta-command.
 
-    ``text``  — text the loop should print (``None`` → print nothing).
-    ``quit``  — whether the loop should exit after this command.
+    ``text``           — text the loop should print (``None`` → print nothing).
+    ``quit``           — whether the loop should exit after this command.
+    ``setting_change``— ``(key, value)`` for a persisted REPL setting an
+                      explicit command just targeted (the TOML key and its new
+                      value: ``"theme"``/str, ``"echo"``/bool,
+                      ``"echo-unit"``/bool), or ``None`` when the command
+                      neither set nor queried one (a bare ``:theme`` query, an
+                      unknown theme, a malformed ``:set``). Set unconditionally
+                      by an explicit ``:set``/``:theme`` even when the target
+                      value already matches the live session state, so the
+                      persisted setting always tracks what was explicitly
+                      requested. The loop forwards this to ``on_setting_change``
+                      so the front end can apply it live (theme) and the
+                      command layer can persist it.
     """
 
     text: str | None = None
     quit: bool = False
+    setting_change: tuple[str, "str | bool"] | None = None
 
 
 # A handler receives the argument string (everything after the command word,
@@ -127,35 +143,48 @@ def _handle_bindings(arg: str, ctx: MetaContext) -> MetaOutcome:
     bindings = ctx.session.bindings()
     if not bindings:
         return MetaOutcome(text="No bindings.")
-    lines = [format_typed_value(name, typ, value) for name, typ, value in bindings]
+    descriptors = ctx.session.descriptors()
+    lines = [format_typed_value(name, typ, value, descriptors) for name, typ, value in bindings]
     return MetaOutcome(text="\n".join(lines))
 
 
+_SET_USAGE = "usage: :set echo|echo-unit on|off"
+
+# Every ``:set``-able boolean setting: the ``:set`` word, which is also the
+# persisted ``[repl]`` TOML key.  Parsing is table-driven over this set;
+# ``_set_bool_setting`` applies the named one explicitly (``getattr``/
+# ``setattr`` would type as ``Any`` under strict mypy).
+_BOOL_SETTINGS: frozenset[str] = frozenset({"echo", "echo-unit"})
+
+
+def _set_bool_setting(ctx: MetaContext, key: str, value: bool) -> None:
+    """Set *ctx*'s ``key`` boolean setting to *value*."""
+    if key == "echo":
+        ctx.echo = value
+    else:
+        ctx.echo_unit = value
+
+
 def _handle_set(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:set echo on|off`` — toggle result echoing.
+    """``:set echo|echo-unit on|off`` — toggle a boolean REPL setting.
 
-    Only ``echo on|off`` is supported.  There is no ``:set name=value`` form:
-    the REPL has no entry function, so there are no external inputs to seed.
+    Table-driven over :data:`_BOOL_SETTINGS` so every setting shares one parse
+    path.  There is no ``:set name=value`` form: the REPL has no entry
+    function, so there are no external inputs to seed.  Always reports the
+    change via ``MetaOutcome.setting_change`` so the loop persists it, even
+    when the requested value already matches the live session state (e.g.
+    ``--quiet`` already forced ``echo`` off for this session): the command was
+    explicit, so its target value is what gets saved, not whatever no-op it
+    was on the running session.
     """
-    echo_outcome = _try_set_echo(arg, ctx)
-    if echo_outcome is not None:
-        return echo_outcome
-    return MetaOutcome(text="usage: :set echo on|off")
-
-
-def _try_set_echo(arg: str, ctx: MetaContext) -> MetaOutcome | None:
-    """Handle the ``:set echo on|off`` special case, or ``None`` if not that form."""
     parts = arg.split()
-    if len(parts) != 2 or parts[0] != "echo":
-        return None
-    state = parts[1]
-    if state == "on":
-        ctx.echo = True
-        return MetaOutcome(text="Echo on.")
-    if state == "off":
-        ctx.echo = False
-        return MetaOutcome(text="Echo off.")
-    return MetaOutcome(text="usage: :set echo on|off")
+    if len(parts) == 2 and parts[0] in _BOOL_SETTINGS and parts[1] in ("on", "off"):
+        key = parts[0]
+        value = parts[1] == "on"
+        _set_bool_setting(ctx, key, value)
+        state = "on" if value else "off"
+        return MetaOutcome(text=f"{key.capitalize()} {state}.", setting_change=(key, value))
+    return MetaOutcome(text=_SET_USAGE)
 
 
 def _handle_load(arg: str, ctx: MetaContext) -> MetaOutcome:
@@ -181,7 +210,10 @@ def _handle_load(arg: str, ctx: MetaContext) -> MetaOutcome:
     rendered = [
         text
         for r in results
-        if (text := render_entry_result(r, echo=ctx.echo, check_only=False)) is not None
+        if (
+            text := render_entry_result(r, echo=ctx.echo, echo_unit=ctx.echo_unit, check_only=False)
+        )
+        is not None
     ]
     return MetaOutcome(text="\n".join(rendered) if rendered else None)
 
@@ -205,10 +237,12 @@ def _handle_save(arg: str, ctx: MetaContext) -> MetaOutcome:
 def _handle_theme(arg: str, ctx: MetaContext) -> MetaOutcome:
     """``:theme [dark|light|auto]`` — show or switch the syntax-highlighting theme.
 
-    With no argument, prints the current theme name.  With an argument, switches
-    to the named theme; the console loop observes the change and updates the
-    ``PromptSession`` style live, then persists the choice via its
-    ``on_theme_save`` callback.
+    With no argument, prints the current theme name.  With an argument, always
+    switches to the named theme and reports it via ``MetaOutcome.setting_change``,
+    even when it already matches the active theme: the loop forwards it to
+    ``on_setting_change``, which updates the ``PromptSession`` style live and
+    persists the choice -- an explicit ``:theme`` always saves its target, not
+    whatever no-op it was on the running session.
     """
     arg = arg.strip()
     if not arg:
@@ -217,7 +251,7 @@ def _handle_theme(arg: str, ctx: MetaContext) -> MetaOutcome:
         names = ", ".join(THEME_NAMES)
         return MetaOutcome(text=f"Unknown theme {arg!r}. Available: {names}.")
     ctx.theme = arg
-    return MetaOutcome(text=f"Theme set to {arg!r}.")
+    return MetaOutcome(text=f"Theme set to {arg!r}.", setting_change=("theme", arg))
 
 
 # Registry: the authoritative table of built-in meta-commands. Extensions append to
@@ -257,8 +291,8 @@ _COMMANDS: list[MetaCommand] = [
     ),
     MetaCommand(
         names=("set",),
-        usage=":set echo on|off",
-        summary="Toggle result echoing.",
+        usage=":set echo|echo-unit on|off",
+        summary="Toggle result echoing or unit-entry echoing.",
         handler=_handle_set,
     ),
     MetaCommand(

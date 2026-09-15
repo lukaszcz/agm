@@ -56,12 +56,12 @@ def _run_program(
         else prepare_inline_command(entry_source, roots=roots)
     )
     if agents:
-        from agm.agl.semantics.values import TextValue
+        from agm.agent.spec import AgentCommand
 
         def dispatch(request: Any) -> str:
-            command = request.agent.fields["command"]
-            assert isinstance(command, TextValue)
-            return agents[command.value](request)
+            spec = request.agent
+            assert isinstance(spec, AgentCommand)
+            return agents[spec.command](request)
 
         rt = PipelineDriver(agent_dispatcher=dispatch)
     else:

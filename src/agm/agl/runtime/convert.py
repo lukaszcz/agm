@@ -249,7 +249,7 @@ def decode_value(
                     raise ValueError(f"Dict key must be string, got {type(k).__name__}")
                 entries[k] = decode_value(value_schema, v, defs)
             return DictValue(entries=entries)
-        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
+        case RecordDecode(nominal=nominal, fields=fields):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for record, got {type(obj).__name__}")
             record_fields: dict[str, Value] = {}
@@ -259,7 +259,7 @@ def decode_value(
                 record_fields[rfield.name] = decode_value(
                     rfield.schema, obj[rfield.json_name], defs
                 )
-            return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
+            return RecordValue(nominal=nominal, fields=record_fields)
         case EnumDecode(display_name=display_name, variants=variants):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
@@ -279,11 +279,7 @@ def decode_value(
                         f"Enum variant {case_val!r} is missing field {vfield.json_name!r}"
                     )
                 payload[vfield.name] = decode_value(vfield.schema, obj[vfield.json_name], defs)
-            return RecordValue(
-                nominal=variant.nominal,
-                display_name=variant.display_name,
-                fields=payload,
-            )
+            return RecordValue(nominal=variant.nominal, fields=payload)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 

@@ -57,7 +57,7 @@ def _array_companion() -> _ArrayCompanion:
                 kind=NominalKind.RECORD,
                 fields=("first", "second"),
             ),
-        }
+        },
     )
     module: ModuleType = registry.load_companion(_ARRAY_MODULE, _STDLIB_ROOT / "src" / "array.py")
     return cast(_ArrayCompanion, module)
@@ -97,7 +97,7 @@ def test_array_search_raises_for_an_absent_value_and_options_it_separately() -> 
 
     assert companion.index_of(values, 2) == 1
     assert decode_boundary_value(companion.index_of_option(values, 9)) == RecordValue(
-        _OPTION_NONE, "Option::None", {}
+        _OPTION_NONE, {}
     )
 
     with pytest.raises(AglException) as exc_info:

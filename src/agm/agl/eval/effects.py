@@ -13,6 +13,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import ContextManager, NoReturn, Protocol, assert_never, cast
 
+from agm.agent.spec import AgentSpec, SessionTransport
+from agm.agl.ir.builtin_nominals import resolve_standard_member_name
 from agm.agl.ir.ids import ContractId, Location
 from agm.agl.ir.nodes import (
     IrAsk,
@@ -25,9 +27,14 @@ from agm.agl.ir.nodes import (
     IrSessionOpen,
     IrSessionOpKind,
 )
-from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
+from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody, ValueDescriptors
 from agm.agl.modules.ids import ModuleId
-from agm.agl.runtime.agents import AgentFn
+from agm.agl.runtime.agents import (
+    AgentFn,
+    agent_member_name,
+    decode_agent_value,
+)
+from agm.agl.runtime.agents import agent_value as encode_agent_value
 from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
 from agm.agl.runtime.externs import ExternRegistry, ExternRuntimeState
@@ -58,9 +65,8 @@ from agm.agl.runtime.trace import TraceStore
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
-from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import (
-    VOID_VALUE,
+    UNIT_VALUE,
     BoolValue,
     DecimalValue,
     DictValue,
@@ -83,6 +89,7 @@ class EffectCtx(Protocol):
     """The minimal IrInterpreter surface the effect handlers need."""
 
     _program: ExecutableProgram
+    _descriptors: ValueDescriptors
     _trace: TraceStore
     _agent_dispatcher: AgentFn | None
     _session_host: SessionHost
@@ -118,6 +125,9 @@ class EffectHandlers:
     def __init__(self, ctx: EffectCtx) -> None:
         self._ctx = ctx
 
+    def _descriptors(self) -> ValueDescriptors:
+        return self._ctx._descriptors
+
     def _text_of(self, value: Value) -> str:
         """Return the prompt/command text *value* stands for.
 
@@ -130,7 +140,7 @@ class EffectHandlers:
         if isinstance(value, TextValue):
             return value.value
         try:
-            return render_value(value)
+            return render_value(value, self._descriptors())
         except AglCyclicValue as exc:
             raise cyclic_value_raise(nominals=self._ctx._program.builtin_nominals) from exc
 
@@ -158,6 +168,7 @@ class EffectHandlers:
                 fn,
                 args,
                 nominals=self._ctx._program.builtin_nominals,
+                descriptors=self._descriptors(),
                 function_encoder=self._ctx._make_extern_callable_proxy,
                 runtime_state=self._ctx._extern_runtime_state,
             )
@@ -166,13 +177,15 @@ class EffectHandlers:
     # Agent call helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _agent_trace_value(agent: RecordValue) -> dict[str, object]:
+    def _agent_trace_value(self, agent: RecordValue) -> dict[str, object]:
         """Return the agent variant and payload without re-decoding it."""
+        descriptors = self._descriptors()
         return {
-            "variant": terminal_name(agent.display_name),
+            "variant": agent_member_name(agent, self._ctx._program.builtin_nominals),
             "payload": {
-                name: value.value if isinstance(value, TextValue) else render_value(value)
+                name: value.value
+                if isinstance(value, TextValue)
+                else render_value(value, descriptors)
                 for name, value in agent.fields.items()
             },
         }
@@ -180,11 +193,10 @@ class EffectHandlers:
     def _raise_agent_call_error(self, agent: RecordValue, error: AgentCallHostError) -> NoReturn:
         """Convert a transport failure after it was recorded in the trace."""
         declared = self._ctx._program.builtin_nominals.resolve("AgentCallError")
-        agent_label = render_value(agent)
+        agent_label = render_value(agent, self._descriptors())
         raise AglRaise(
             ExceptionValue(
                 nominal=declared.nominal,
-                display_name=declared.display_name,
                 fields={
                     "message": TextValue(
                         f"Agent {agent_label!r} failed: {error.cause}"
@@ -327,22 +339,29 @@ class EffectHandlers:
         )
         return output_contract, json_schema
 
+    _SESSION_TRANSPORT_MEMBERS = tuple(member.value for member in SessionTransport)
+
+    def _transport_name(self, value: RecordValue) -> str:
+        """Return the bare ``SessionTransport`` member name *value* projects onto."""
+        name = resolve_standard_member_name(
+            value.nominal,
+            "SessionTransport",
+            self._SESSION_TRANSPORT_MEMBERS,
+            self._ctx._program.builtin_nominals,
+        )
+        assert name is not None
+        return name
+
     def _session_value(self, handle: str, agent: RecordValue, transport: str) -> RecordValue:
-        declared = self._ctx._program.builtin_nominals.resolve("Session")
+        nominals = self._ctx._program.builtin_nominals
+        declared = nominals.resolve("Session")
         return RecordValue(
             nominal=declared.nominal,
-            display_name=declared.display_name,
             fields={
                 "id": TextValue(handle),
                 "agent": agent,
                 "transport": RecordValue(
-                    nominal=(
-                        transport_member
-                        := self._ctx._program.builtin_nominals.resolve_standard_member(
-                            "SessionTransport", transport
-                        )
-                    ).nominal,
-                    display_name=transport_member.display_name,
+                    nominal=nominals.resolve_standard_member("SessionTransport", transport).nominal,
                     fields={},
                 ),
             },
@@ -354,24 +373,47 @@ class EffectHandlers:
         return (
             cast(TextValue, session.fields["id"]).value,
             cast(RecordValue, session.fields["agent"]),
-            terminal_name(cast(RecordValue, session.fields["transport"]).display_name),
+            self._transport_name(cast(RecordValue, session.fields["transport"])),
         )
 
-    def _resolve_session_transport(self, agent: RecordValue, transport: Value | None) -> str:
+    def _decode_agent_spec(self, agent: RecordValue) -> AgentSpec:
+        """Decode *agent* into its host specification, or raise ``SessionAgentError``.
+
+        The interpreter decodes an ``Agent`` value to its host specification
+        exactly once, here, before any session host sees it; an invalid value
+        surfaces as the same AgL-visible ``SessionAgentError`` a session
+        ``open`` reports.
+        """
+        try:
+            return decode_agent_value(agent, self._ctx._program.builtin_nominals)
+        except ValueError as error:
+            raise SessionAgentError(str(error), "open") from error
+
+    def _resolve_session_transport(self, spec: AgentSpec, transport: Value | None) -> str:
+        """Resolve the transport for an already-decoded *spec*.
+
+        Never decodes: the caller decodes the agent value exactly once, and
+        hands the resulting spec here whether or not *transport* was selected.
+        """
         selected = None if transport is None else cast(RecordValue, transport)
-        if selected is None or terminal_name(selected.display_name) == "None":
-            return default_session_transport(agent)
-        return terminal_name(cast(RecordValue, selected.fields["value"]).display_name)
+        nominals = self._ctx._program.builtin_nominals
+        if (
+            selected is None
+            or resolve_standard_member_name(selected.nominal, "Option", ("None",), nominals)
+            is not None
+        ):
+            return default_session_transport(spec)
+        return self._transport_name(cast(RecordValue, selected.fields["value"]))
 
     def eval_ir_session_open(self, node: IrSessionOpen) -> Value:
         """Open a host-backed session and mint its opaque AgL record."""
         agent = cast(RecordValue, self._ctx._eval(node.agent))
-        transport = self._resolve_session_transport(
-            agent, None if node.transport is None else self._ctx._eval(node.transport)
-        )
+        transport_value = None if node.transport is None else self._ctx._eval(node.transport)
         name = self._text_of(self._ctx._eval(node.name))
         try:
-            handle = self._ctx._session_host.open(agent, transport, name=name)
+            spec = self._decode_agent_spec(agent)
+            transport = self._resolve_session_transport(spec, transport_value)
+            handle = self._ctx._session_host.open(spec, transport, name=name)
         except SessionHostError as error:
             self._session_error(error)
         return self._session_value(handle, agent, transport)
@@ -379,14 +421,18 @@ class EffectHandlers:
     def eval_ir_session_default(self, _node: IrSessionDefault, default_agent: Value) -> Value:
         """Lazily obtain the session whose agent is current at first use."""
         agent = cast(RecordValue, default_agent)
-        transport = self._resolve_session_transport(agent, None)
         try:
+            spec = self._decode_agent_spec(agent)
+            transport = self._resolve_session_transport(spec, None)
             host = self._ctx._session_host
-            handle = host.default(agent, transport)
+            handle = host.default(spec, transport)
             snapshot = host.snapshot(handle)
         except SessionHostError as error:
             self._session_error(error)
-        return self._session_value(handle, snapshot.agent, snapshot.transport)
+        nominals = self._ctx._program.builtin_nominals
+        return self._session_value(
+            handle, encode_agent_value(snapshot.agent, nominals), snapshot.transport
+        )
 
     def _dispatch_session_agent(
         self,
@@ -394,6 +440,7 @@ class EffectHandlers:
         request: AgentRequest,
         node: IrAsk | IrSessionAsk,
         *,
+        agent_value: RecordValue,
         max_attempts: int,
         target_type: str,
         codec: str,
@@ -402,7 +449,7 @@ class EffectHandlers:
     ) -> str:
         """Trace, dispatch, and map one request sent through a session."""
         self._ctx._trace.agent_request(
-            agent=self._agent_trace_value(request.agent),
+            agent=self._agent_trace_value(agent_value),
             attempt=request.attempt,
             max_attempts=max_attempts,
             prompt=request.prompt,
@@ -434,7 +481,7 @@ class EffectHandlers:
                 ok=False, cause=error.cause, call_info=call_info, span=node.location
             )
             self._raise_agent_call_error(
-                request.agent,
+                agent_value,
                 AgentCallHostError(
                     cause=error.cause,
                     exit_code=error.exit_code,
@@ -447,7 +494,7 @@ class EffectHandlers:
             self._session_error(error)
         except KeyboardInterrupt as error:
             cancelled = AgentCancelled(
-                render_value(request.agent), "interrupted", span=node.location
+                render_value(agent_value, self._descriptors()), "interrupted", span=node.location
             )
             self._ctx._trace.agent_response(
                 ok=False, cancelled=True, reason=cancelled.reason, span=node.location
@@ -476,11 +523,16 @@ class EffectHandlers:
         once the call completes or fails.
         """
         contract = self._ctx._program.contracts[contract_id]
-        transport = self._resolve_session_transport(agent, None)
+        try:
+            spec = self._decode_agent_spec(agent)
+        except SessionAgentError as error:
+            self._invalid_agent_error(agent, error)
+        transport = self._resolve_session_transport(spec, None)
 
         def ask_in_session(handle: str) -> Value:
             return self._eval_session_ask_attempts(
                 agent=agent,
+                spec=spec,
                 prompt=prompt,
                 contract_id=contract_id,
                 max_attempts=max_attempts,
@@ -490,6 +542,7 @@ class EffectHandlers:
                     handle,
                     request,
                     node,
+                    agent_value=agent,
                     max_attempts=max_attempts,
                     target_type=contract.target_type_label,
                     codec=contract.codec_name,
@@ -501,7 +554,7 @@ class EffectHandlers:
         try:
             return with_ephemeral_session(
                 self._ctx._session_host,
-                agent,
+                spec,
                 transport,
                 ask_in_session,
                 single_prompt=max_attempts == 1,
@@ -517,8 +570,13 @@ class EffectHandlers:
         prompt = self._text_of(self._ctx._eval(node.prompt))
         contract = self._ctx._program.contracts[node.contract_id]
         output_contract, json_schema = self._contract_carriers(node.contract_id)
+        try:
+            spec = self._decode_agent_spec(agent)
+        except SessionHostError as error:
+            self._session_error(error)
         return self._eval_session_ask_attempts(
             agent=agent,
+            spec=spec,
             prompt=prompt,
             contract_id=node.contract_id,
             max_attempts=node.max_attempts,
@@ -528,6 +586,7 @@ class EffectHandlers:
                 handle,
                 request,
                 node,
+                agent_value=agent,
                 max_attempts=node.max_attempts,
                 target_type=contract.target_type_label,
                 codec=contract.codec_name,
@@ -547,6 +606,7 @@ class EffectHandlers:
         self,
         *,
         agent: RecordValue,
+        spec: AgentSpec,
         prompt: str,
         contract_id: ContractId,
         max_attempts: int,
@@ -565,7 +625,7 @@ class EffectHandlers:
 
         for attempt in range(max_attempts):
             request = AgentRequest(
-                agent=agent,
+                agent=spec,
                 prompt=prompt,
                 attempt=attempt,
                 previous_invalid_output=last_raw,
@@ -575,7 +635,7 @@ class EffectHandlers:
             request.prompt = self._compose_session_prompt(request)
             raw = dispatch(request)
             if contract.is_unit:
-                return VOID_VALUE
+                return UNIT_VALUE
             result = self._ctx._parse_host_output(
                 raw, contract_id, effective_strict=effective_strict
             )
@@ -595,7 +655,7 @@ class EffectHandlers:
 
         self._raise_agent_parse_error(
             message=(
-                f"Agent {render_value(agent)!r} failed to produce a valid "
+                f"Agent {render_value(agent, self._descriptors())!r} failed to produce a valid "
                 f"{contract.target_type_label} after {max_attempts} attempt(s). "
                 f"Last output: {last_raw!r}"
             ),
@@ -630,7 +690,6 @@ class EffectHandlers:
                     declared = self._ctx._program.builtin_nominals.resolve("SessionStats")
                     return RecordValue(
                         nominal=declared.nominal,
-                        display_name=declared.display_name,
                         fields={
                             "input-tokens": IntValue(stats.input_tokens),
                             "output-tokens": IntValue(stats.output_tokens),
@@ -640,7 +699,7 @@ class EffectHandlers:
                     )
                 case _ as unreachable:  # pragma: no cover
                     assert_never(unreachable)
-            return VOID_VALUE
+            return UNIT_VALUE
         except SessionHostError as error:
             self._session_error(error)
 
@@ -662,11 +721,10 @@ class EffectHandlers:
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
         contract = self._ctx._program.contracts[contract_id]
-        agent_request = self._ctx._program.builtin_nominals.resolve("AgentRequest")
         nominals = self._ctx._program.builtin_nominals
+        agent_request = nominals.resolve("AgentRequest")
         return RecordValue(
             nominal=agent_request.nominal,
-            display_name=agent_request.display_name,
             fields={
                 "agent": agent_value,
                 "prompt": TextValue(prompt_text),
@@ -849,12 +907,13 @@ class EffectHandlers:
         for name, value in vars_value.entries.items():
             assert isinstance(value, TextValue)
             env[name] = value.value
+        nominals = self._ctx._program.builtin_nominals
         cwd_value = self._ctx._eval(cwd_expr)
         assert isinstance(cwd_value, RecordValue)
-        cwd_text = option_text(cwd_value, nominals=self._ctx._program.builtin_nominals)
+        cwd_text = option_text(cwd_value, nominals=nominals)
         timeout_value = self._ctx._eval(timeout_expr)
         assert isinstance(timeout_value, RecordValue)
-        timeout_text = option_text(timeout_value, nominals=self._ctx._program.builtin_nominals)
+        timeout_text = option_text(timeout_value, nominals=nominals)
         if timeout_text is None:
             timeout = None
         else:
@@ -862,11 +921,7 @@ class EffectHandlers:
                 timeout = parse_timeout(timeout_text)
             except ValueError as exc:
                 raise AglRaise(
-                    _make_exc_value(
-                        "TypeError",
-                        f"invalid timeout: {exc}",
-                        nominals=self._ctx._program.builtin_nominals,
-                    )
+                    _make_exc_value("TypeError", f"invalid timeout: {exc}", nominals=nominals)
                 ) from exc
         cwd = None if cwd_text is None else Path(cwd_text)
 
@@ -878,10 +933,9 @@ class EffectHandlers:
         # 3. Structured exec: return ExecResult regardless of exit code
         if contract.structured_exec:
             actual_exit_code = returncode if returncode is not None else 0
-            exec_result = self._ctx._program.builtin_nominals.resolve("ExecResult")
+            exec_result = nominals.resolve("ExecResult")
             return RecordValue(
                 nominal=exec_result.nominal,
-                display_name=exec_result.display_name,
                 fields={
                     "stdout": TextValue(stdout.rstrip("\n")),
                     "exit-code": IntValue(actual_exit_code),
@@ -902,7 +956,7 @@ class EffectHandlers:
 
         # 5. Unit contract: successful output is deliberately discarded.
         if contract.is_unit:
-            return VOID_VALUE
+            return UNIT_VALUE
 
         # 6. Text codec: return stdout directly
         captured = stdout.rstrip("\n")
@@ -926,7 +980,7 @@ class EffectHandlers:
                         _make_exc_value(
                             "ExecError",
                             f"Shell command exited with code {rc2}: {cmd!r}",
-                            nominals=self._ctx._program.builtin_nominals,
+                            nominals=nominals,
                             fields={
                                 "command": TextValue(cmd),
                                 "exit-code": IntValue(rc2),

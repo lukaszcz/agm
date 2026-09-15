@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.ids import SymbolId
+    from agm.agl.ir.program import ValueDescriptors
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
@@ -199,6 +200,7 @@ class ReplSession:
         package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
     ) -> None:
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
         from agm.agl.lower import LinkImage
         from agm.agl.pipeline import PipelineDriver
         from agm.agl.runtime.option import some_value
@@ -242,7 +244,9 @@ class ReplSession:
                     self._builtin_var_seed[key] = value
         self._builtin_var_values = dict(self._builtin_var_seed)
         if "timeout" not in self._engine_seed and shell_exec_timeout is not None:
-            self._engine_seed["timeout"] = some_value(TextValue(format_timeout(shell_exec_timeout)))
+            self._engine_seed["timeout"] = some_value(
+                TextValue(format_timeout(shell_exec_timeout)), nominals=NO_BUILTIN_DECLARATIONS
+            )
         # shell-exec-timeout is backed by a plain scalar rather than derived on
         # every read from ``_current`` (unlike ``_default_strict_json`` below):
         # the interpreter already parses its own authoritative float from the
@@ -863,12 +867,16 @@ class ReplSession:
         """Unwrap a ``timeout`` register value (``Option[text]``) into seconds, or ``None``.
 
         ``None`` covers both an absent register and an explicit ``None``
-        variant (a host or declared "no timeout" control).
+        variant (a host or declared "no timeout" control). ``seed`` always
+        carries the reserved fallback ``Option`` identity (see
+        :meth:`_engine_snapshot`), so no program-specific nominal table is
+        needed to recognize its variant.
         """
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
         from agm.agl.runtime.option import option_text
         from agm.core.parse import parse_timeout
 
-        raw = None if seed is None else option_text(seed)
+        raw = None if seed is None else option_text(seed, nominals=NO_BUILTIN_DECLARATIONS)
         return None if raw is None else parse_timeout(raw)
 
     def _seeded_timeout_seconds(self) -> float | None:
@@ -897,6 +905,12 @@ class ReplSession:
         whatever the entry wrote too) -- the one place that converts the
         interpreter's own native-typed fields into the ``Value`` shape the
         seed and current-value maps share.
+
+        ``interp.builtin_host_settings``/``interp.timeout_setting`` already
+        carry the reserved fallback identity for any ``Option``/``Agent``-backed
+        key: these maps outlive *interp*'s own compiled program -- across
+        entries, across :meth:`reset` -- so the REPL never needs that
+        program's own nominal table to recognize such a value.
         """
         from agm.agl.semantics.values import BoolValue
 
@@ -1718,6 +1732,16 @@ class ReplSession:
     # ------------------------------------------------------------------
     # Introspection
     # ------------------------------------------------------------------
+
+    def descriptors(self) -> "ValueDescriptors":
+        """Return the descriptor view for rendering a live value from this session.
+
+        Reflects every declaration promoted so far -- the cumulative tables a
+        fresh entry's own ``ExecutableProgram`` carries too -- so it renders a
+        value correctly regardless of which entry produced it (used by
+        ``:bindings`` and any other introspection over already-promoted state).
+        """
+        return self._link_image.descriptors()
 
     def bindings(self) -> list[tuple[str, "Type", "Value"]]:
         """Return promoted user bindings as (name, declared type, current value).

@@ -81,10 +81,10 @@ class NominalId:
     an AST node id, or a reserved id for a host-known type with no source
     declaration (see ``ir.reserved_nominals``). It carries no spelling or
     module of its own: a nominal's declaring module, scope path, and declared
-    name live on its ``NominalDescriptor`` (``ir.program``), and a runtime
-    value carries its own display spelling directly (``RecordValue``/
-    ``ExceptionValue.display_name``) rather than deriving it
-    from this id.
+    name live on its ``NominalDescriptor`` (``ir.program``). A runtime value
+    (``RecordValue``/``ExceptionValue``) carries only this id — its display
+    spelling is looked up from the program's descriptor table, never stored
+    on the value.
     """
 
     value: int

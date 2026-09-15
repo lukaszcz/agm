@@ -16,6 +16,7 @@ already, so rendering walks ``value.fields`` directly.
 
 from __future__ import annotations
 
+from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 from agm.agl.semantics.cycles import enter_value
 from agm.agl.semantics.values import (
@@ -59,9 +60,17 @@ def _shift_after_first(text: str, *, level: int) -> str:
     return "\n".join((lines[0], *(prefix + line for line in lines[1:])))
 
 
-def _render_child(value: Value, *, pretty: bool, level: int, active: "set[int] | None") -> str:
+def _render_child(
+    value: Value,
+    descriptors: ValueDescriptors,
+    *,
+    pretty: bool,
+    level: int,
+    active: "set[int] | None",
+) -> str:
     return _render(
         value,
+        descriptors,
         pretty=pretty,
         quote_strings=False,
         top_level=False,
@@ -123,6 +132,7 @@ def _render_function_signature(param_labels: tuple[str, ...], result_label: str)
 
 def _render(
     value: Value,
+    descriptors: ValueDescriptors,
     *,
     pretty: bool,
     quote_strings: bool,
@@ -136,19 +146,18 @@ def _render(
         return quote_text(value.value)
 
     if isinstance(value, UnitValue):
-        if not value.printable_in_repl:
-            return "void"
         return "()"
 
     if isinstance(value, (IntValue, DecimalValue, BoolValue)):
         return _scalar_text(value)
 
     if isinstance(value, ConstructorValue):
-        return f"<constructor {value.display_name}>"
+        return f"<constructor {descriptors.nominals[value.nominal].display_name}>"
 
     if isinstance(value, IrClosureValue):
-        param_labels = value.param_labels or ("?",) * value.arity
-        signature = _render_function_signature(param_labels, value.result_label)
+        function_desc = descriptors.functions[value.function_id]
+        param_labels = function_desc.param_labels or ("?",) * len(function_desc.params)
+        signature = _render_function_signature(param_labels, function_desc.result_label)
         return f"<function: {signature}>"
 
     if isinstance(value, JsonValue):
@@ -159,7 +168,7 @@ def _render(
         active = enter_value(id(value), active)
         try:
             items = [
-                _render_child(element, pretty=pretty, level=level + 1, active=active)
+                _render_child(element, descriptors, pretty=pretty, level=level + 1, active=active)
                 for element in value.elements
             ]
         finally:
@@ -169,53 +178,57 @@ def _render(
     if isinstance(value, DictValue):
         active = enter_value(id(value), active)
         try:
-            items = [
-                f"{quote_text(key)}: "
-                f"{_render_child(child, pretty=pretty, level=level + 1, active=active)}"
-                for key, child in value.entries.items()
-            ]
+            items = []
+            for key, child in value.entries.items():
+                rendered = _render_child(
+                    child, descriptors, pretty=pretty, level=level + 1, active=active
+                )
+                items.append(f"{quote_text(key)}: {rendered}")
         finally:
             active.discard(id(value))
         return _render_sequence("{", "}", items, level=level, pretty=pretty)
 
     if isinstance(value, (RecordValue, ExceptionValue)):
+        display_name = descriptors.nominals[value.nominal].display_name
         # A nullary constructor is an auto-value, so a fieldless record's bare
         # spelling round-trips as written: every fieldless record renders bare,
         # whether it is an enum member (`E::A`) or a standalone record (`Root`).
         # A fieldless exception keeps its parens, and neither can be part of a
         # cycle, so both answer before the guard is entered.
         if not value.fields:
-            return (
-                value.display_name if isinstance(value, RecordValue) else f"{value.display_name}()"
-            )
+            return display_name if isinstance(value, RecordValue) else f"{display_name}()"
         active = enter_value(id(value), active)
         try:
-            items = [
-                f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
-                for name, child in value.fields.items()
-            ]
+            items = []
+            for name, child in value.fields.items():
+                rendered = _render_child(
+                    child, descriptors, pretty=pretty, level=level + 1, active=active
+                )
+                items.append(f"{name} = {rendered}")
         finally:
             active.discard(id(value))
-        return _render_sequence(f"{value.display_name}(", ")", items, level=level, pretty=pretty)
+        return _render_sequence(f"{display_name}(", ")", items, level=level, pretty=pretty)
 
     raise RuntimeError(f"render: unhandled value type {type(value).__name__}")  # pragma: no cover
 
 
 def render_value(
     value: Value,
+    descriptors: ValueDescriptors,
     *,
     pretty: bool = False,
     quote_strings: bool = False,
 ) -> str:
-    """Render *value* to AgL text.
+    """Render *value* to AgL text, reading static spellings/labels from *descriptors*.
 
     ``pretty=False`` keeps output single-line where possible. ``pretty=True``
     expands structured values and JSON over multiple lines with two-space
     indentation. ``quote_strings`` only controls top-level ``text`` values;
-    nested text is always quoted.
+    nested text is always quoted. ``unit`` always renders ``()``.
     """
     return _render(
         value,
+        descriptors,
         pretty=pretty,
         quote_strings=quote_strings,
         top_level=True,

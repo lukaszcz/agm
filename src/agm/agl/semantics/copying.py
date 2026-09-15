@@ -129,15 +129,11 @@ def _copy_container(
         _update_fields(dict_shell.entries, value.entries, transform)
         return dict_shell
     if isinstance(value, RecordValue):
-        record_shell = RecordValue(
-            nominal=value.nominal, display_name=value.display_name, fields={}
-        )
+        record_shell = RecordValue(nominal=value.nominal, fields={})
         register(record_shell)
         _update_fields(record_shell.fields, value.fields, transform)
         return record_shell
-    exception_shell = ExceptionValue(
-        nominal=value.nominal, display_name=value.display_name, fields={}
-    )
+    exception_shell = ExceptionValue(nominal=value.nominal, fields={})
     register(exception_shell)
     _update_fields(exception_shell.fields, value.fields, transform)
     return exception_shell

@@ -18,7 +18,7 @@ that layer.
 from __future__ import annotations
 
 import types
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from agm.agl.ir.ids import NominalId
@@ -27,7 +27,12 @@ from agm.agl.ir.reserved_nominals import (
     require_reserved_nominal_id,
 )
 
-__all__ = ["NO_BUILTIN_DECLARATIONS", "BuiltinNominals", "DeclaredNominal"]
+__all__ = [
+    "NO_BUILTIN_DECLARATIONS",
+    "BuiltinNominals",
+    "DeclaredNominal",
+    "resolve_standard_member_name",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,3 +114,23 @@ NO_BUILTIN_DECLARATIONS = BuiltinNominals(
     members=types.MappingProxyType({}),
     standard_members=types.MappingProxyType({}),
 )
+
+
+def resolve_standard_member_name(
+    nominal: NominalId,
+    enum_name: str,
+    member_names: Iterable[str],
+    nominals: BuiltinNominals,
+) -> str | None:
+    """Return which of *member_names* on *enum_name* carries *nominal*'s identity.
+
+    Checks only *nominals*, the identity table of the program that produced
+    the value: a value in a different table's identity (e.g. a REPL-persisted
+    engine setting in the reserved fallback identity) is restamped onto
+    *nominals* before reaching here. Returns ``None`` when *nominal* matches
+    none of *member_names*.
+    """
+    for name in member_names:
+        if nominal == nominals.resolve_standard_member(enum_name, name).nominal:
+            return name
+    return None

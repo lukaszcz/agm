@@ -508,8 +508,7 @@ class IrIndexSet:
     container reference, which ``container`` supplies directly. Nesting
     (``m["a"]["b"] := v``) falls out for free: ``container`` is itself an
     ``IrIndex`` that reads the inner container by reference. Mutates the
-    container in place and evaluates to the non-printable unit, exactly as
-    ``IrAssign`` does.
+    container in place and evaluates to unit, exactly as ``IrAssign`` does.
     """
 
     location: Location
@@ -555,7 +554,6 @@ class IrMakeRecord:
     """IR record construction: ``RecordName(field: expr, ...)``.
 
     ``nominal`` — the ``NominalId`` of the record type.
-    ``display_name`` — user-facing type name.
     ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
         each ``expr`` is already coerced to the declared field type by the
         lowerer via ``lower_coerced``.
@@ -563,7 +561,6 @@ class IrMakeRecord:
 
     location: Location
     nominal: NominalId
-    display_name: str
     fields: "tuple[tuple[str, IrExpr], ...]"
 
 
@@ -576,14 +573,12 @@ class IrMakeException:
         program declares nothing of its own for, or the declaring
         declaration's own identity otherwise — a program-declared
         ``builtin exception`` included.
-    ``display_name`` — user-facing exception type name.
     ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
         each expression is coerced to the declared field type by the lowerer.
     """
 
     location: Location
     nominal: NominalId
-    display_name: str
     fields: "tuple[tuple[str, IrExpr], ...]"
 
 
@@ -591,14 +586,13 @@ class IrMakeException:
 class IrMakeConstructor:
     """IR first-class constructor reference.
 
-    Evaluates to a ``ConstructorValue(nominal, display_name)`` without
-    constructing the record. Used when a constructor is referenced as a value
-    (non-call position).
+    Evaluates to a ``ConstructorValue(nominal)`` without constructing the
+    record. Used when a constructor is referenced as a value (non-call
+    position).
     """
 
     location: Location
     nominal: NominalId
-    display_name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,11 +700,9 @@ class IrReturn:
 class IrCatchHandler:
     """A single catch handler in an ``IrTry`` node.
 
-    ``nominal`` identifies the exception type and ``display_name`` is rendering
-    metadata:
-    - ``nominal=None, display_name=None`` — catch-all (catches everything).
-    - ``nominal`` set, ``display_name`` set — specific exact match by
-      module-qualified ``ExceptionValue.nominal``.
+    ``nominal`` identifies the exception type: ``None`` is catch-all (catches
+    everything); set is a specific exact match by module-qualified
+    ``ExceptionValue.nominal``.
 
     ``symbol`` is the ``SymbolId`` of the binding variable when the handler
     declares one (``catch SomeError e => ...``); ``None`` otherwise.  The
@@ -721,7 +713,6 @@ class IrCatchHandler:
     """
 
     nominal: NominalId | None
-    display_name: str | None
     symbol: SymbolId | None
     body: "IrExpr"
 
@@ -1006,8 +997,7 @@ class IrPrint:
     """IR host-op: ``print(value)`` — render *value* and write a line to stdout.
 
     Evaluates ``value``, renders it with the default single-line, unquoted
-    options, then prints the rendered string. Returns the non-printable unit
-    value.
+    options, then prints the rendered string. Returns unit.
     """
 
     location: Location

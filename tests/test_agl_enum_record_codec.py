@@ -35,7 +35,12 @@ from agm.agl.type_schema import (
     derive_schema,
 )
 from tests._agl_helpers import enum_type, next_decl_id, record_type, type_table_for
-from tests.agl.ir_harness import evaluate_ir_raises_with_agents, evaluate_ir_with_agents
+from tests.agl.ir_harness import (
+    agent_caps,
+    evaluate_ir_raises_with_agents,
+    evaluate_ir_with_agents,
+    lower_inline_ir,
+)
 
 
 def _compact_json(value: object) -> str:
@@ -106,7 +111,7 @@ def test_inline_enum_wire_corpus_preserves_schema_and_value_bytes() -> None:
     cases: tuple[tuple[Type, Value, str, str], ...] = (
         (
             empty,
-            RecordValue(NominalId(empty_member.decl_id), "Empty::None", {}),
+            RecordValue(NominalId(empty_member.decl_id), {}),
             _wire(
                 '{"oneOf": [{"type": "object", "additionalProperties": false, ',
                 '"required": ["$case"], "properties": {"$case": {"const": "None"}}}]}',
@@ -117,7 +122,6 @@ def test_inline_enum_wire_corpus_preserves_schema_and_value_bytes() -> None:
             option,
             RecordValue(
                 NominalId(option_members["Some"].decl_id),
-                "Option::Some",
                 {"value": IntValue(3)},
             ),
             _wire(
@@ -133,7 +137,6 @@ def test_inline_enum_wire_corpus_preserves_schema_and_value_bytes() -> None:
             generic,
             RecordValue(
                 NominalId(generic_members["Item"].decl_id),
-                "Boxed::Item",
                 {"value": TextValue("text")},
             ),
             _wire(
@@ -149,11 +152,9 @@ def test_inline_enum_wire_corpus_preserves_schema_and_value_bytes() -> None:
             outer,
             RecordValue(
                 NominalId(outer_member.decl_id),
-                "Outer::Wrap",
                 {
                     "inner": RecordValue(
                         NominalId(inner_members["High"].decl_id),
-                        "Inner::High",
                         {"n": IntValue(8)},
                     )
                 },
@@ -173,10 +174,9 @@ def test_inline_enum_wire_corpus_preserves_schema_and_value_bytes() -> None:
             tree,
             RecordValue(
                 NominalId(tree_members["Node"].decl_id),
-                "Tree::Node",
                 {
                     "children": ArrayValue(
-                        [RecordValue(NominalId(tree_members["Leaf"].decl_id), "Tree::Leaf", {})]
+                        [RecordValue(NominalId(tree_members["Leaf"].decl_id), {})]
                     )
                 },
             ),
@@ -218,7 +218,7 @@ def test_record_and_enum_slots_keep_shared_members_distinct_on_the_wire() -> Non
         decl_node_id=rr_prime.decl_id,
     )
     table = type_table_for(shared_def, rr_def, rr_prime_def)
-    value = RecordValue(NominalId(shared.decl_id), "Shared", {"value": IntValue(7)})
+    value = RecordValue(NominalId(shared.decl_id), {"value": IntValue(7)})
 
     encoded_record = encode_value(build_encode_plan(shared, table), value)
     encoded_rr = encode_value(build_encode_plan(rr, table), value)
@@ -374,4 +374,5 @@ def test_mocked_agent_rejects_an_unknown_member_case() -> None:
 
     error = evaluate_ir_raises_with_agents(_AGENT_SOURCE, {"worker": [response]})
 
-    assert error.display_name == "AgentParseError"
+    program = lower_inline_ir(_AGENT_SOURCE, caps=agent_caps())
+    assert error.nominal == program.builtin_nominals.nominal("AgentParseError")

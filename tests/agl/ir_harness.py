@@ -29,7 +29,7 @@ from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ScopeNode
 from agm.agl.semantics.exceptions import AglRaise
-from agm.agl.semantics.values import ExceptionValue, TextValue, Value
+from agm.agl.semantics.values import ExceptionValue, Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
@@ -352,7 +352,7 @@ def _prepare_extern_program(
 
     executable = lower_inline_ir(source, caps=caps or extern_caps(), origin_path=entry_path)
     registry = ExternRegistry()
-    registry.set_nominals(executable.nominals)
+    registry.set_nominals(executable.nominals, functions=executable.functions)
     loaded: set[ModuleId] = set()
     for desc in executable.functions.values():
         if not isinstance(desc.impl, ExternFunctionBody) or desc.module_id in loaded:
@@ -542,12 +542,12 @@ def _make_scripted_registry(
     )
 
     def dispatch(request: AgentRequest) -> AgentResponse:
-        if request.agent.display_name.rsplit("::", maxsplit=1)[-1] != "AgentCommand":
+        from agm.agent.spec import AgentCommand
+
+        if not isinstance(request.agent, AgentCommand):
             assert default is not None
             return default(request)
-        command = request.agent.fields["command"]
-        assert isinstance(command, TextValue)
-        return named[command.value](request)
+        return named[request.agent.command](request)
 
     return dispatch
 

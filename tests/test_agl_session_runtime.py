@@ -7,7 +7,14 @@ from decimal import Decimal
 
 import pytest
 
-from agm.agent.spec import SessionTransport
+from agm.agent.spec import (
+    AgentClaude,
+    AgentCodex,
+    AgentCommand,
+    AgentPi,
+    AgentSpec,
+    SessionTransport,
+)
 from agm.agl import PipelineDriver
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime.request import (
@@ -27,19 +34,17 @@ from agm.agl.runtime.sessions import (
     default_session_transport,
     with_ephemeral_session,
 )
-from agm.agl.semantics.values import RecordValue
-from tests._agl_helpers import agent_value
 
 
 @dataclass
 class _Host:
-    handles: dict[str, tuple[RecordValue, str]] = field(default_factory=dict)
+    handles: dict[str, tuple[AgentSpec, str]] = field(default_factory=dict)
     prompts: dict[str, list[str]] = field(default_factory=dict)
     operations: list[tuple[str, str, str]] = field(default_factory=list)
     closed: set[str] = field(default_factory=set)
     default_handle: str | None = None
 
-    def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+    def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
         handle = f"s{len(self.handles) + 1}"
         self.handles[handle] = (agent, transport)
         self.prompts[handle] = []
@@ -47,12 +52,12 @@ class _Host:
         return handle
 
     def open_ephemeral(
-        self, agent: RecordValue, transport: str, *, single_prompt: bool = False
+        self, agent: AgentSpec, transport: str, *, single_prompt: bool = False
     ) -> str:
         del single_prompt
         return self.open(agent, transport)
 
-    def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+    def default(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
         if self.default_handle is None:
             self.default_handle = self.open(agent, transport, name=name)
         return self.default_handle
@@ -96,7 +101,7 @@ class _Host:
     def close_all(self) -> None:
         self.closed.update(self.handles)
 
-    def _live(self, handle: str, operation: str) -> tuple[RecordValue, str]:
+    def _live(self, handle: str, operation: str) -> tuple[AgentSpec, str]:
         if handle not in self.handles:
             raise SessionHostError("unknown session", operation)
         if handle in self.closed:
@@ -109,7 +114,7 @@ class _LifecycleHost(_Host):
     single_prompt_flags: list[bool] = field(default_factory=list)
 
     def with_ephemeral(
-        self, _agent: RecordValue, _transport: str, action: object, *, single_prompt: bool = False
+        self, _agent: AgentSpec, _transport: str, action: object, *, single_prompt: bool = False
     ) -> object:
         self.single_prompt_flags.append(single_prompt)
         if not callable(action):
@@ -119,7 +124,7 @@ class _LifecycleHost(_Host):
 
 def test_with_ephemeral_session_opens_and_closes_non_lifecycle_hosts() -> None:
     host = _Host()
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
 
     first = with_ephemeral_session(host, agent, "Cli", lambda handle: handle)
     second = with_ephemeral_session(host, agent, "Cli", lambda handle: handle, single_prompt=True)
@@ -129,7 +134,7 @@ def test_with_ephemeral_session_opens_and_closes_non_lifecycle_hosts() -> None:
 
 def test_with_ephemeral_session_delegates_single_prompt_lifecycle_hosts() -> None:
     host = _LifecycleHost()
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
 
     assert (
         with_ephemeral_session(host, agent, "Cli", lambda handle: handle, single_prompt=True)
@@ -143,7 +148,7 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
     host = AgentDispatcherSessionHost(
         lambda request: requests.append(request) or AgentResponse("answer", {"source": "test"})
     )
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
     handle = host.open_ephemeral(agent, "Cli")
     request = AgentRequest(agent=agent, prompt="question", attempt=2)
 
@@ -186,7 +191,7 @@ def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() 
     assert dispatch_error.value.cause == "timeout"
 
     default = host.default(agent, "Cli")
-    assert host.default(agent_value("AgentCommand", command="other"), "Rpc") == default
+    assert host.default(AgentCommand(command="other"), "Rpc") == default
     assert host.snapshot(default).agent == agent
     assert host.snapshot(default).transport == "Cli"
     host.close(default)
@@ -232,9 +237,34 @@ def _run(source: str, host: _Host) -> RunResult:
     return PipelineDriver(session_host=host).run(source)
 
 
+def test_session_open_maps_an_undecodable_agent_value_to_a_session_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A declared ``Agent`` variant with no host spec becomes a catchable ``SessionError``.
+
+    The evaluator decodes the agent value before ever reaching the session
+    host (``EffectHandlers._decode_agent_spec``), so a decode failure must
+    surface the same way a host lifecycle failure does -- without any host
+    ever being called.
+    """
+    from agm.agent import spec as agent_spec
+
+    catalog = dict(agent_spec.AGENT_SPECS)
+    del catalog["AgentCommand"]
+    monkeypatch.setattr(agent_spec, "AGENT_SPECS", catalog)
+
+    result = _run(
+        'program def main() -> unit =\n  let session = Session::open(AgentCommand("worker"))\n',
+        _Host(),
+    )
+
+    assert result.error is not None
+    assert result.error.type_name == "SessionError"
+
+
 def test_session_failures_report_the_session_call_location() -> None:
     class FailingHost(_Host):
-        def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
             del agent, transport, name
             raise SessionHostError("unavailable", "open")
 
@@ -270,7 +300,7 @@ def test_session_operation_failures_report_the_operation_location() -> None:
 
 def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
     class InvalidAgentHost(_Host):
-        def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
             raise SessionAgentError("invalid agent", "open")
 
     result = _run(
@@ -280,6 +310,59 @@ def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
 
     assert result.error is not None
     assert result.error.type_name == "AgentCallError"
+
+
+def test_free_ask_maps_an_undecodable_agent_value_to_an_agent_call_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A free ``ask`` on a declared ``Agent`` variant with no host spec is a catchable error.
+
+    Decoding happens once, before any ephemeral session opens, so a decode
+    failure never reaches the host.
+    """
+    from agm.agent import spec as agent_spec
+
+    catalog = dict(agent_spec.AGENT_SPECS)
+    del catalog["AgentCommand"]
+    monkeypatch.setattr(agent_spec, "AGENT_SPECS", catalog)
+
+    result = _run(
+        'program def main() -> unit =\n  let r: text = AgentCommand("bad").ask("prompt")\n  ()',
+        _Host(),
+    )
+
+    assert result.error is not None
+    assert result.error.type_name == "AgentCallError"
+
+
+def test_persistent_session_ask_maps_an_undecodable_agent_value_to_a_session_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session's stored agent losing its host spec between calls becomes a ``SessionError``.
+
+    Decoding happens once per ``ask``, from the session's own snapshot -- so a
+    registry change after a successful ``Session::open`` still surfaces here.
+    """
+    from agm.agent import spec as agent_spec
+
+    class DriftingHost(_Host):
+        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+            handle = super().open(agent, transport, name=name)
+            catalog = dict(agent_spec.AGENT_SPECS)
+            del catalog["AgentClaude"]
+            monkeypatch.setattr(agent_spec, "AGENT_SPECS", catalog)
+            return handle
+
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentClaude("sonnet", "medium"))\n'
+        '  session.ask("prompt")\n'
+        "  ()",
+        DriftingHost(),
+    )
+
+    assert result.error is not None
+    assert result.error.type_name == "SessionError"
 
 
 def test_open_ask_copy_and_lifecycle_operations_reach_their_session() -> None:
@@ -330,7 +413,9 @@ def test_free_ask_uses_the_default_session_and_snapshots_its_agent() -> None:
 
     assert result.ok
     assert list(host.handles) == ["s1"]
-    assert host.handles["s1"][0].fields["command"].value == "first"
+    agent = host.handles["s1"][0]
+    assert isinstance(agent, AgentCommand)
+    assert agent.command == "first"
     assert host.prompts["s1"] == ["one", "two", "three"]
 
 
@@ -351,7 +436,9 @@ def test_default_session_stays_snapshotted_while_ask_request_is_agent_independen
     )
 
     assert result.ok
-    assert host.handles["s1"][0].fields["command"].value == "first"
+    agent = host.handles["s1"][0]
+    assert isinstance(agent, AgentCommand)
+    assert agent.command == "first"
     assert host.prompts["s1"] == ["one", "two"]
     assert capsys.readouterr().out == "inspect\n"
 
@@ -396,7 +483,8 @@ def test_default_session_snapshots_agent_and_closed_use_is_catchable() -> None:
 
     assert result.ok
     agent, transport = host.handles["s1"]
-    assert agent.fields["command"].value == "first"
+    assert isinstance(agent, AgentCommand)
+    assert agent.command == "first"
     assert transport == "Cli"
     assert host.prompts["s1"] == ["one"]
 
@@ -641,7 +729,7 @@ def test_a_missing_session_host_becomes_a_catchable_session_error(source: str) -
 
 def test_a_failing_default_becomes_a_catchable_session_error() -> None:
     class FailingDefaultHost(_Host):
-        def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+        def default(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
             del agent, transport, name
             raise SessionHostError("unavailable", "default")
 
@@ -650,7 +738,7 @@ def test_a_failing_default_becomes_a_catchable_session_error() -> None:
 
 def test_a_failing_open_becomes_a_catchable_session_error() -> None:
     class FailingOpenHost(_Host):
-        def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
             del agent, transport, name
             raise SessionHostError("unavailable", "open")
 
@@ -732,11 +820,11 @@ def test_default_transport_is_rpc_for_pi_and_host_errors_are_session_errors() ->
 
 
 def test_default_session_transport_is_owned_by_each_agent_specification() -> None:
-    defaults = [
-        (agent_value("AgentCommand", command="worker"), SessionTransport.CLI),
-        (agent_value("AgentClaude", model="m", thinking="high"), SessionTransport.CLI),
-        (agent_value("AgentCodex", model="m", thinking="high"), SessionTransport.CLI),
-        (agent_value("AgentPi", provider="p", model="m", thinking="high"), SessionTransport.RPC),
+    defaults: list[tuple[AgentSpec, SessionTransport]] = [
+        (AgentCommand(command="worker"), SessionTransport.CLI),
+        (AgentClaude(model="m", thinking="high"), SessionTransport.CLI),
+        (AgentCodex(model="m", thinking="high"), SessionTransport.CLI),
+        (AgentPi(provider="p", model="m", thinking="high"), SessionTransport.RPC),
     ]
     for agent, expected in defaults:
         assert default_session_transport(agent) == expected

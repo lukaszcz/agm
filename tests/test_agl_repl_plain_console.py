@@ -112,9 +112,10 @@ def drive_plain(
     *,
     session: ReplSession | None = None,
     echo: bool = True,
+    echo_unit: bool = False,
     check_only: bool = False,
     theme: str = "auto",
-    on_theme_save: Callable[[str], None] | None = None,
+    on_setting_save: Callable[[str, "str | bool"], None] | None = None,
 ) -> str:
     """Feed *input_text* to a headless plain REPL and return everything it printed.
 
@@ -128,9 +129,10 @@ def drive_plain(
     run_plain_console(
         repl_session,
         echo=echo,
+        echo_unit=echo_unit,
         check_only=check_only,
         theme=theme,
-        on_theme_save=on_theme_save,
+        on_setting_save=on_setting_save,
         stdin=stdin,
         stdout=stdout,
     )
@@ -335,17 +337,35 @@ class TestPlainMetaAndEval:
         assert ": error:" in output.lower()
 
     def test_theme_switch_invokes_save_callback_only(self) -> None:
-        saved: list[str] = []
-        output = drive_plain(":theme dark\n", on_theme_save=saved.append)
-        assert saved == ["dark"]
+        saved: list[tuple[str, "str | bool"]] = []
+        output = drive_plain(
+            ":theme dark\n", on_setting_save=lambda key, value: saved.append((key, value))
+        )
+        assert saved == [("theme", "dark")]
         assert "Theme" in output
 
     def test_theme_switch_without_save_callback_does_not_raise(self) -> None:
-        # No on_theme_save was passed (defaults to None); the switch itself
+        # No on_setting_save was passed (defaults to None); the switch itself
         # still happens (plain mode has no styling to swap), it just persists
         # nothing.
         output = drive_plain(":theme dark\n")
         assert "Theme" in output
+
+    def test_set_echo_and_echo_unit_invoke_save_callback(self) -> None:
+        saved: list[tuple[str, "str | bool"]] = []
+        drive_plain(
+            ":set echo off\n:set echo-unit on\n",
+            on_setting_save=lambda key, value: saved.append((key, value)),
+        )
+        assert saved == [("echo", False), ("echo-unit", True)]
+
+    def test_echo_unit_setting_makes_unit_entries_echo(self) -> None:
+        output = drive_plain("()\n", echo_unit=True)
+        assert "()" in output
+
+    def test_echo_unit_off_by_default_suppresses_unit_entries(self) -> None:
+        output = drive_plain("()\n")
+        assert "()" not in output
 
 
 class TestPlainDryRun:

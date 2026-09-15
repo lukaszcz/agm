@@ -694,10 +694,11 @@ def run_console(
     session: "ReplSession",
     *,
     echo: bool = True,
+    echo_unit: bool = False,
     check_only: bool = False,
     history_path: "Path | None" = None,
     theme: str = "auto",
-    on_theme_save: "Callable[[str], None] | None" = None,
+    on_setting_save: "Callable[[str, str | bool], None] | None" = None,
     input: Input | None = None,
     output: Output | None = None,
 ) -> None:
@@ -709,24 +710,26 @@ def run_console(
     prompt_toolkit — ``prompt_session.prompt`` as the reader (it already raises
     ``EOFError`` on Ctrl-D and ``KeyboardInterrupt`` on Ctrl-C, exactly as the
     loop expects) and ``print`` as the writer — and swapping
-    ``prompt_session.style`` when the theme changes before persisting it via
-    *on_theme_save*.
+    ``prompt_session.style`` live for a ``"theme"`` setting change before
+    persisting every changed setting via *on_setting_save*.
     """
     prompt_session = build_prompt_session(
         session, theme=theme, history_path=history_path, input=input, output=output
     )
 
-    def on_theme_change(new_theme: str) -> None:
-        prompt_session.style = get_style(new_theme)
-        if on_theme_save is not None:
-            on_theme_save(new_theme)
+    def on_setting_change(key: str, value: "str | bool") -> None:
+        if key == "theme" and isinstance(value, str):
+            prompt_session.style = get_style(value)
+        if on_setting_save is not None:
+            on_setting_save(key, value)
 
     run_repl_loop(
         session,
         reader=prompt_session.prompt,
         writer=print,
         echo=echo,
+        echo_unit=echo_unit,
         check_only=check_only,
         theme=theme,
-        on_theme_change=on_theme_change,
+        on_setting_change=on_setting_change,
     )

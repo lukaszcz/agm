@@ -1462,7 +1462,7 @@ class TestBuiltinNominalsTable:
         source = "let stride = 0\nfor i in 1 to 5 step stride do\n  ()\ndone\n"
         program = _lower(source)
         exc = evaluate_ir_raises(source)
-        assert exc.display_name == "RangeError"
+        assert program.nominals[exc.nominal].display_name == "RangeError"
         assert exc.nominal == program.builtin_nominals.nominal("RangeError")
 
     def test_scoped_range_error_raised_at_runtime_carries_the_scoped_nominal(self) -> None:
@@ -1495,7 +1495,7 @@ class TestBuiltinNominalsTable:
         )
         program = lower_inline_ir(source, default_stdlib=False)
         exc = evaluate_ir_raises(source, default_stdlib=False)
-        assert exc.display_name == "A::RangeError"
+        assert program.nominals[exc.nominal].display_name == "A::RangeError"
         assert exc.nominal == nominal_id_for(program, "A::RangeError")
 
     def test_max_iterations_exceeded_raised_at_runtime_carries_the_table_nominal(self) -> None:
@@ -1505,7 +1505,7 @@ class TestBuiltinNominalsTable:
         source = "var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n"
         program = _lower(source)
         exc = evaluate_ir_raises(source)
-        assert exc.display_name == "MaxIterationsExceeded"
+        assert program.nominals[exc.nominal].display_name == "MaxIterationsExceeded"
         assert exc.nominal == program.builtin_nominals.nominal("MaxIterationsExceeded")
 
     @pytest.mark.parametrize(
@@ -1608,7 +1608,7 @@ let c = Color::Red
         entry = prog.modules[prog.entry_module]
         root_capture = _let_root_capture(entry.initializers[0])
         assert isinstance(root_capture.value, IrMakeRecord)
-        assert root_capture.value.display_name == "Color::Red"
+        assert prog.nominals[root_capture.value.nominal].display_name == "Color::Red"
 
     def test_lambda_lowers_to_make_closure_in_unsupported_class(self) -> None:
         """Lambda expressions now lower to IrMakeClosure."""
@@ -3348,8 +3348,8 @@ class TestIrMakeExceptionLowering:
     IrMakeException.fields contains the expressions supplied by the caller.
     """
 
-    def _get_raise_in_fn(self, source: str) -> IrRaise:
-        """Lower source and return the IrRaise from the 'stop-fn' function body."""
+    def _get_raise_in_fn(self, source: str) -> tuple[ExecutableProgram, IrRaise]:
+        """Lower source and return its program and the IrRaise from 'stop-fn'."""
         prog = _lower(source)
         stop_desc = next(
             d
@@ -3361,23 +3361,23 @@ class TestIrMakeExceptionLowering:
         if isinstance(body, IrBlock):
             for item in body.items:
                 if isinstance(item, IrRaise):
-                    return item
+                    return prog, item
             raise AssertionError("Expected IrRaise in function body IrBlock")
         assert isinstance(body, IrRaise)
-        return body
+        return prog, body
 
     def test_exception_construction_emits_ir_make_exception(self) -> None:
-        """raise Abort(message = ...) → IrRaise(exc=IrMakeException(display_name='Abort'))."""
+        """raise Abort(message = ...) → IrRaise(exc=IrMakeException(nominal=<Abort's>))."""
         source = 'def stop-fn() -> unit =\n  raise Abort(message = "stop")\nstop-fn()\n'
-        raise_node = self._get_raise_in_fn(source)
+        prog, raise_node = self._get_raise_in_fn(source)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
-        assert exc.display_name == "Abort"
+        assert prog.nominals[exc.nominal].display_name == "Abort"
 
     def test_provided_field_is_ir_expr(self) -> None:
         """An explicitly provided message field lowers to IrConstText."""
         source = 'def stop-fn() -> unit =\n  raise Abort(message = "stop")\nstop-fn()\n'
-        raise_node = self._get_raise_in_fn(source)
+        _prog, raise_node = self._get_raise_in_fn(source)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
         fields_dict = dict(exc.fields)
@@ -3393,15 +3393,20 @@ class TestIrMakeExceptionLowering:
 # ---------------------------------------------------------------------------
 
 
-def _get_loop_ir(source: str) -> "IrLoop | IrSequence":
-    """Lower *source* and return the top-level loop IR node (IrSequence or IrLoop)."""
+def _get_loop_ir_and_program(source: str) -> "tuple[ExecutableProgram, IrLoop | IrSequence]":
+    """Lower *source*; return its program and the top-level loop IR node."""
 
     executable = _lower(source)
     # Find the loop/sequence node; skip IrBind for var declarations.
     for node in executable.modules[ENTRY_ID].initializers:
         if isinstance(node, (IrLoop, IrSequence)):
-            return node
+            return executable, node
     raise AssertionError("No IrLoop or IrSequence found in initializers")
+
+
+def _get_loop_ir(source: str) -> "IrLoop | IrSequence":
+    """Lower *source* and return the top-level loop IR node (IrSequence or IrLoop)."""
+    return _get_loop_ir_and_program(source)[1]
 
 
 class TestLoopDesugar:
@@ -3471,7 +3476,7 @@ class TestLoopDesugar:
     def test_bounded_do_n_until_bound_check_structure(self) -> None:
         """Item 4 bound-check structure: outer GE if → inner EQ-or-raise if."""
         source = "var x = 0\ndo[5]\n  x := x + 1\nuntil x >= 5\n"
-        node = _get_loop_ir(source)
+        prog, node = _get_loop_ir_and_program(source)
         assert isinstance(node, IrSequence)
         loop = node.items[2]
         assert isinstance(loop, IrLoop)
@@ -3502,7 +3507,7 @@ class TestLoopDesugar:
         assert isinstance(else_branch.body, IrRaise)
         exc_node = else_branch.body.exc
         assert isinstance(exc_node, IrMakeException)
-        assert exc_node.display_name == "MaxIterationsExceeded"
+        assert exc_node.nominal == prog.builtin_nominals.nominal("MaxIterationsExceeded")
 
     def test_max_iterations_exception_field_order(self) -> None:
         """MaxIterationsExceeded IrMakeException has fields in declaration order."""
@@ -3610,8 +3615,9 @@ class TestLoopDesugar:
         from tests.agl.ir_harness import evaluate_ir_raises
 
         source = "var i = 0\r\ndo[3]\r\n  i := i + 1\r\nuntil i > 100\r\n"
+        prog = _lower(source)
         ir_exc = evaluate_ir_raises(source)
-        assert ir_exc.display_name == "MaxIterationsExceeded"
+        assert ir_exc.nominal == prog.builtin_nominals.nominal("MaxIterationsExceeded")
         from agm.agl.semantics.values import TextValue
 
         assert ir_exc.fields.get("condition") == TextValue("i > 100")
@@ -3835,7 +3841,7 @@ class TestRangeForDesugar:
         assert isinstance(guard_body, IrRaise)
         exc = guard_body.exc
         assert isinstance(exc, IrMakeException)
-        assert exc.display_name == "RangeError"
+        assert exc.nominal == prog.builtin_nominals.nominal("RangeError")
         fields_dict = dict(exc.fields)
         assert "message" in fields_dict
         assert isinstance(fields_dict["message"], IrConstText)
@@ -3962,7 +3968,6 @@ class TestRangeForDesugar:
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
         assert exc.nominal == nominal_id_for(program, "RangeError")
-        assert exc.display_name == "RangeError"
         fields_dict = dict(exc.fields)
         assert set(fields_dict.keys()) == {"message"}
         assert isinstance(fields_dict["message"], IrConstText)

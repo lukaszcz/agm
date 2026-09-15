@@ -38,8 +38,8 @@ def _scripted_reader(entries: list[str]) -> Callable[[], str]:
     return reader
 
 
-def test_theme_switch_with_no_on_theme_change_hook_is_tolerated() -> None:
-    # ``on_theme_change`` defaults to ``None``; a ``:theme`` switch must not
+def test_theme_switch_with_no_on_setting_change_hook_is_tolerated() -> None:
+    # ``on_setting_change`` defaults to ``None``; a ``:theme`` switch must not
     # crash when there is nothing to notify.
     session = ReplSession()
     written: list[str] = []
@@ -50,20 +50,96 @@ def test_theme_switch_with_no_on_theme_change_hook_is_tolerated() -> None:
     assert any("Theme" in line for line in written)
 
 
-def test_on_theme_change_is_called_only_when_the_theme_actually_changes() -> None:
+def test_on_setting_change_is_called_for_every_explicit_theme_switch() -> None:
     session = ReplSession()
     written: list[str] = []
-    changes: list[str] = []
+    changes: list[tuple[str, str | bool]] = []
     reader = _scripted_reader([":theme dark", ":theme dark", ":quit"])
 
     run_repl_loop(
         session,
         reader=reader,
         writer=written.append,
-        on_theme_change=changes.append,
+        on_setting_change=lambda key, value: changes.append((key, value)),
     )
 
-    assert changes == ["dark"]  # the second, same-value switch triggers nothing
+    # Both switches report, even the second (a no-op on the live session):
+    # an explicit ``:theme`` always persists its target.
+    assert changes == [("theme", "dark"), ("theme", "dark")]
+
+
+def test_on_setting_change_reports_echo_and_echo_unit_changes() -> None:
+    session = ReplSession()
+    written: list[str] = []
+    changes: list[tuple[str, str | bool]] = []
+    reader = _scripted_reader([":set echo off", ":set echo-unit on", ":quit"])
+
+    run_repl_loop(
+        session,
+        reader=reader,
+        writer=written.append,
+        on_setting_change=lambda key, value: changes.append((key, value)),
+    )
+
+    assert changes == [("echo", False), ("echo-unit", True)]
+
+
+def test_unit_entries_echo_nothing_by_default() -> None:
+    session = ReplSession()
+    written: list[str] = []
+    reader = _scripted_reader(["()", 'print "x"', "let u = ()", ":quit"])
+
+    run_repl_loop(session, reader=reader, writer=written.append)
+
+    # Only the banner and print's own stdout-bound output land in ``written``
+    # (``print`` here is the loop's writer callback, not the REPL entry's own
+    # ``print``, whose effect is not captured by this reader/writer seam);
+    # none of the three unit-typed entries produces an echo line.
+    assert written == [format_banner()]
+
+
+def test_set_echo_unit_on_makes_unit_entries_echo() -> None:
+    session = ReplSession()
+    written: list[str] = []
+    reader = _scripted_reader([":set echo-unit on", "()", 'print "x"', "let u = ()", ":quit"])
+
+    run_repl_loop(session, reader=reader, writer=written.append)
+
+    # ``()`` and ``print "x"`` are both bare unit-typed expressions, echoed as
+    # the bare value; ``let u = ()`` is a unit-typed binding, echoed with its
+    # name and type. All three echo once echo-unit is on.
+    assert written.count("()") == 2
+    assert "u : unit = ()" in written
+
+
+def test_set_echo_unit_off_suppresses_after_being_on() -> None:
+    session = ReplSession()
+    written: list[str] = []
+    reader = _scripted_reader([":set echo-unit on", ":set echo-unit off", "()", ":quit"])
+
+    run_repl_loop(session, reader=reader, writer=written.append)
+
+    assert not any(": unit = ()" in line for line in written)
+
+
+def test_dry_run_unit_entry_echoes_type_only_when_echo_unit_on() -> None:
+    session = ReplSession()
+    written: list[str] = []
+    reader = _scripted_reader([":set echo-unit on", "()", ":quit"])
+
+    run_repl_loop(session, reader=reader, writer=written.append, check_only=True)
+
+    assert any(line == ": unit" for line in written)
+
+
+def test_dry_run_unit_entry_echoes_nothing_by_default() -> None:
+    session = ReplSession()
+    written: list[str] = []
+    reader = _scripted_reader(["()", ":quit"])
+
+    run_repl_loop(session, reader=reader, writer=written.append, check_only=True)
+
+    assert written == [format_banner()]
 
 
 def test_entry_evaluation_and_rendering() -> None:

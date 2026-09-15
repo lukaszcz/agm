@@ -38,7 +38,7 @@ from agm.agl.semantics.types import (
     Type,
 )
 from agm.agl.semantics.values import (
-    VOID_VALUE,
+    UNIT_VALUE,
     ArrayValue,
     BoolValue,
     IntValue,
@@ -2466,7 +2466,8 @@ enum Agent
 
         assert result.ok, result.diagnostics
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name == "Box"
+        assert result.descriptors is not None
+        assert result.descriptors.nominals[result.value.nominal].display_name == "Box"
         assert result.value.fields == {"x": IntValue(1)}
         assert not cross.ok
 
@@ -2529,7 +2530,8 @@ enum Agent
 
         assert nested.ok, nested.diagnostics
         assert isinstance(nested.value, RecordValue)
-        assert nested.value.display_name == "Color::Meta"
+        assert nested.descriptors is not None
+        assert nested.descriptors.nominals[nested.value.nominal].display_name == "Color::Meta"
 
     def test_redeclaring_an_enum_retires_types_nested_under_an_old_member(self) -> None:
         session = open_session()
@@ -3064,31 +3066,37 @@ class TestEchoData:
         assert r.ok
 
     def test_print_call_echo_kind(self) -> None:
-        # ``print`` is a function call, but it yields void so REPL echo suppresses it.
+        # ``print`` is a function call, but it yields unit so REPL echo suppresses it.
+        from agm.agl.repl.render import render_entry_result
+
         s = open_session()
         r = s.eval_entry("print 1")
         assert r.kind == "expression"
         assert r.ok
-        assert r.value == VOID_VALUE
+        assert r.value == UNIT_VALUE
         assert isinstance(r.value, UnitValue)
-        assert not r.value.printable_in_repl
+        assert render_entry_result(r, echo=True) is None
 
-    def test_unit_literal_echoes_printable_unit(self) -> None:
+    def test_unit_literal_echoes_nothing(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
         s = open_session()
         r = s.eval_entry("()")
         assert r.kind == "expression"
         assert r.ok
         assert isinstance(r.value, UnitValue)
-        assert r.value.printable_in_repl
+        assert render_entry_result(r, echo=True) is None
 
-    def test_loop_echo_value_is_void(self) -> None:
+    def test_loop_echo_value_is_unit(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
         s = open_session()
         r = s.eval_entry("do[0] () done")
         assert r.kind == "expression"
         assert r.ok
-        assert r.value == VOID_VALUE
+        assert r.value == UNIT_VALUE
         assert isinstance(r.value, UnitValue)
-        assert not r.value.printable_in_repl
+        assert render_entry_result(r, echo=True) is None
 
 
 # ---------------------------------------------------------------------------
@@ -3817,8 +3825,10 @@ class TestAgentDeclarations:
 
 class TestReset:
     def test_reset_starts_a_fresh_default_agent_session(self) -> None:
+        from agm.agent.spec import AgentCommand
+
         host = AgentDispatcherSessionHost(None)
-        agent = agent_value("AgentCommand", command="worker")
+        agent = AgentCommand(command="worker")
         first = host.default(agent, "Cli")
         session = open_session(session_host=host)
 
@@ -4514,13 +4524,13 @@ class TestIfExpr:
     def test_bare_if_expr_classified_as_expression(self) -> None:
         # In AgL, ``if`` is a value-producing expression.  A bare ``if`` entry
         # at the prompt is classified as "expression" (it yields a value).
-        # The value is void when the branches are statement-like (e.g. ``:=``).
+        # The value is unit when the branches are statement-like (e.g. ``:=``).
         s = open_session()
         s.eval_entry("var x = 0")
         r = s.eval_entry("if true =>\n    x := 42\n| else =>\n    x := 0")
         assert r.ok
         assert r.kind == "expression"
-        assert r.value == VOID_VALUE
+        assert r.value == UNIT_VALUE
         # The side effect was applied.
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["x"] == 42
@@ -6503,11 +6513,12 @@ class TestUnpromotedNominalDeclarationEffects:
         ``TypeEnvironment.seed_from``'s ``BUILTIN_EXCEPTIONS`` exclusion), so
         a catch clause resolves to the canonical identity regardless of any
         program declaration, in every entry but the declaring one itself.
-        What is actually in effect is which spelling a fresh host mint
-        raises under (``DeclaredNominal.display_name``, baked into the
-        raised value's ``display_name`` at the mint site) -- a later entry's
-        uncaught error reports the identity the mint actually used, which is
-        the previously-declared, unscoped ``"RangeError"`` here, since the
+        What is actually in effect is which nominal a fresh host mint raises
+        under: an uncaught error's ``type_name`` is resolved from that
+        nominal via the program's descriptor table at report time (see
+        ``DeclaredNominal.display_name``), and a later entry's uncaught error
+        reports the identity the mint actually used, which is the
+        previously-declared, unscoped ``"RangeError"`` here, since the
         host-mint table is rebuilt from the shared type table on every
         lowering and that table still carries the earlier declaration under
         its own identity.
@@ -6808,7 +6819,8 @@ class TestFunctionAgentValueEcho:
         from agm.agl.semantics.values import IrClosureValue
 
         assert isinstance(r.value, IrClosureValue)
-        rendered = render_value(r.value)
+        assert r.descriptors is not None
+        rendered = render_value(r.value, r.descriptors)
         assert rendered == "<function: int -> int>"
 
     def test_bare_def_name_echo_does_not_crash(self) -> None:
@@ -6824,7 +6836,8 @@ class TestFunctionAgentValueEcho:
         from agm.agl.semantics.values import IrClosureValue
 
         assert isinstance(r.value, IrClosureValue)
-        rendered = render_value(r.value)
+        assert r.descriptors is not None
+        rendered = render_value(r.value, r.descriptors)
         assert rendered == "<function: int -> int>"
 
     def test_bindings_after_def_does_not_crash(self) -> None:
@@ -6838,8 +6851,9 @@ class TestFunctionAgentValueEcho:
 
         assert any(isinstance(v, IrClosureValue) for _n, _t, v in binds)
         # render_value on each must not raise.
+        descriptors = s.descriptors()
         for _n, _t, v in binds:
-            render_value(v)  # must not raise TypeError
+            render_value(v, descriptors)  # must not raise TypeError
 
 
 # ---------------------------------------------------------------------------
@@ -7711,7 +7725,10 @@ class TestSessionOpen:
 
         assert result.ok, result.diagnostics
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name == "Agent::AgentCommand"
+        assert result.descriptors is not None
+        assert (
+            result.descriptors.nominals[result.value.nominal].display_name == "Agent::AgentCommand"
+        )
         assert result.value.fields["command"] == TextValue("second-root")
 
     def test_open_does_not_reuse_a_bootstrap_with_different_capabilities(
@@ -7768,7 +7785,9 @@ class TestSessionOpen:
         result = seeded.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert result.descriptors is not None
+        result_display = result.descriptors.nominals[result.value.nominal].display_name
+        assert result_display.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("seeded")
 
         unseeded = ReplSession(stdlib_root=stdlib)
@@ -7776,7 +7795,11 @@ class TestSessionOpen:
         default_result = unseeded.eval_entry("import std/config\nstd/config::default-agent")
         assert default_result.ok
         assert isinstance(default_result.value, RecordValue)
-        assert default_result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert default_result.descriptors is not None
+        default_display = default_result.descriptors.nominals[
+            default_result.value.nominal
+        ].display_name
+        assert default_display.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
         assert default_result.value.fields["model"] == TextValue("sonnet")
         assert default_result.value.fields["thinking"] == TextValue("medium")
 
@@ -7816,7 +7839,9 @@ class TestSessionOpen:
         result = s.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert result.descriptors is not None
+        result_display = result.descriptors.nominals[result.value.nominal].display_name
+        assert result_display.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_reset_leaves_the_seed_in_force(self) -> None:
@@ -7831,7 +7856,9 @@ class TestSessionOpen:
         result = s.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert result.descriptors is not None
+        result_display = result.descriptors.nominals[result.value.nominal].display_name
+        assert result_display.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_stdlib_is_loaded_exactly_once_across_open_and_two_entries(

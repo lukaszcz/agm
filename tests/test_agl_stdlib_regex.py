@@ -69,7 +69,7 @@ def _regex_companion() -> tuple[_RegexCompanion, ModuleType]:
                 fields=("message", "pattern"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
-        }
+        },
     )
     module = registry.load_companion(_REGEX_MODULE, _STDLIB_ROOT / "src" / "regex.py")
     return cast(_RegexCompanion, module), module
@@ -84,20 +84,18 @@ def test_regex_match_populates_offsets_numbered_groups_named_groups_and_nonparti
 
     assert found == RecordValue(
         _OPTION_SOME,
-        "Option::Some",
         {
             "value": RecordValue(
                 _MATCH,
-                "Match",
                 {
                     "matched": TextValue("ref-42"),
                     "start": IntValue(0),
                     "end": IntValue(6),
                     "groups": ArrayValue(
                         [
-                            RecordValue(_OPTION_SOME, "Option::Some", {"value": TextValue("ref")}),
-                            RecordValue(_OPTION_SOME, "Option::Some", {"value": TextValue("42")}),
-                            RecordValue(_OPTION_NONE, "Option::None", {}),
+                            RecordValue(_OPTION_SOME, {"value": TextValue("ref")}),
+                            RecordValue(_OPTION_SOME, {"value": TextValue("42")}),
+                            RecordValue(_OPTION_NONE, {}),
                         ]
                     ),
                     "named-groups": DictValue({"word": TextValue("ref")}),
@@ -105,9 +103,7 @@ def test_regex_match_populates_offsets_numbered_groups_named_groups_and_nonparti
             )
         },
     )
-    assert decode_boundary_value(companion.find("x", "no match")) == RecordValue(
-        _OPTION_NONE, "Option::None", {}
-    )
+    assert decode_boundary_value(companion.find("x", "no match")) == RecordValue(_OPTION_NONE, {})
 
 
 def test_regex_find_all_replacement_split_and_escape_follow_python_re() -> None:
@@ -147,11 +143,9 @@ def test_regex_invalid_pattern_raises_typed_error_and_compiles_each_pattern_once
     assert companion.test("[0-9]+", "42")
     assert decode_boundary_value(companion.find("[0-9]+", "x7")) == RecordValue(
         _OPTION_SOME,
-        "Option::Some",
         {
             "value": RecordValue(
                 _MATCH,
-                "Match",
                 {
                     "matched": TextValue("7"),
                     "start": IntValue(1),

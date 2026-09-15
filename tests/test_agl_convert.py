@@ -341,7 +341,6 @@ class TestDecodeValueHappy:
         result = decode_value(schema, {"x": 1, "y": 2})
         assert result == RecordValue(
             nominal=nominal,
-            display_name="Point",
             fields={"x": IntValue(1), "y": IntValue(2)},
         )
 
@@ -372,7 +371,7 @@ class TestDecodeValueHappy:
             host_agent=False,
         )
         result = decode_value(schema, {"$case": "Red"})
-        assert result == RecordValue(nominal=NominalId(2), display_name="Color::Red", fields={})
+        assert result == RecordValue(nominal=NominalId(2), fields={})
 
     def test_enum_with_payload(self) -> None:
         nominal = NominalId(1)
@@ -409,9 +408,7 @@ class TestDecodeValueHappy:
             host_agent=False,
         )
         result = decode_value(schema, {"$case": "Err", "code": 42})
-        assert result == RecordValue(
-            nominal=NominalId(3), display_name="Result::Err", fields={"code": IntValue(42)}
-        )
+        assert result == RecordValue(nominal=NominalId(3), fields={"code": IntValue(42)})
 
     def test_record_reads_renamed_json_key_builds_declared_field(self) -> None:
         """A field's ``json_name`` is read from JSON; the built record keeps the declared name."""
@@ -432,9 +429,7 @@ class TestDecodeValueHappy:
             alias=None,
         )
         result = decode_value(schema, {"x-coord": 1})
-        assert result == RecordValue(
-            nominal=nominal, display_name="Point", fields={"x": IntValue(1)}
-        )
+        assert result == RecordValue(nominal=nominal, fields={"x": IntValue(1)})
 
     def test_enum_matches_case_against_renamed_json_tag(self) -> None:
         """``$case`` is matched against ``VariantDecode.json_name``, not the declared name."""
@@ -456,7 +451,7 @@ class TestDecodeValueHappy:
             host_agent=False,
         )
         result = decode_value(schema, {"$case": "RED"})
-        assert result == RecordValue(nominal=NominalId(2), display_name="Color::Red", fields={})
+        assert result == RecordValue(nominal=NominalId(2), fields={})
 
 
 # ---------------------------------------------------------------------------
@@ -711,18 +706,17 @@ class TestDecodeValueRefDecode:
         result = decode_value(schema, payload, defs)
         assert isinstance(result, RecordValue)
         assert result.nominal == NominalId(3)
-        assert result.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
         assert result.fields["value"] == IntValue(4)
         # Walk down the "right" spine to confirm every level decoded.
         node = result
         for expected in range(4, -1, -1):
             assert isinstance(node, RecordValue)
-            assert node.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
+            assert node.nominal == NominalId(3)
             assert node.fields["value"] == IntValue(expected)
             next_node = node.fields["right"]
             assert isinstance(next_node, RecordValue)
             node = next_node
-        assert node.display_name.rsplit("::", maxsplit=1)[-1] == "Leaf"
+        assert node.nominal == NominalId(2)
 
     def test_ref_nested_inside_array_and_record(self) -> None:
         """A RefDecode reachable through ArrayDecode/RecordDecode fields resolves the same way."""
@@ -757,14 +751,8 @@ class TestDecodeValueRefDecode:
         assert len(trees.elements) == 2
         first = trees.elements[0]
         second = trees.elements[1]
-        assert (
-            isinstance(first, RecordValue)
-            and first.display_name.rsplit("::", maxsplit=1)[-1] == "Leaf"
-        )
-        assert (
-            isinstance(second, RecordValue)
-            and second.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
-        )
+        assert isinstance(first, RecordValue) and first.nominal == NominalId(2)
+        assert isinstance(second, RecordValue) and second.nominal == NominalId(3)
 
     def test_unknown_defs_key_is_internal_error(self) -> None:
         """An unresolvable RefDecode key is an internal-invariant violation, not a user error."""

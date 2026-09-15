@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from agm.agl.ir.program import ValueDescriptors
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -33,6 +34,11 @@ from tests.agl.ir_harness import (
 if TYPE_CHECKING:
     from agm.agl.syntax.nodes import Call
     from agm.agl.syntax.spans import SourceSpan
+
+
+def _variant_name(value: RecordValue, descriptors: ValueDescriptors) -> str:
+    """Return the bare enum-member spelling *value* projects onto."""
+    return descriptors.nominals[value.nominal].display_name.rsplit("::", maxsplit=1)[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +69,10 @@ request
 
     request = ir["request"]
     assert isinstance(request, RecordValue)
-    assert request.fields["agent"] == RecordValue(
-        nominal=request.fields["agent"].nominal,
-        display_name=f"{'Agent'}::{'AgentCommand'}",
+    agent_field = request.fields["agent"]
+    assert isinstance(agent_field, RecordValue)
+    assert agent_field == RecordValue(
+        nominal=agent_field.nominal,
         fields={"command": TextValue("worker")},
     )
 
@@ -172,7 +179,9 @@ request
     assert isinstance(request, RecordValue)
     target = request.fields["target-type"]
     assert isinstance(target, RecordValue)
-    assert target.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+    program = lower_inline_ir(source)
+    descriptors = ValueDescriptors.from_program(program)
+    assert _variant_name(target, descriptors) == "Some"
     assert target.fields["value"] == TextValue("text")
 
 
@@ -190,7 +199,9 @@ request
     assert isinstance(request, RecordValue)
     target = request.fields["target-type"]
     assert isinstance(target, RecordValue)
-    assert target.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+    program = lower_inline_ir(source)
+    descriptors = ValueDescriptors.from_program(program)
+    assert _variant_name(target, descriptors) == "Some"
     assert target.fields["value"] == TextValue("int")
 
 
@@ -256,7 +267,9 @@ request
     assert isinstance(request, RecordValue)
     target = request.fields["target-type"]
     assert isinstance(target, RecordValue)
-    assert target.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+    program = lower_inline_ir(source)
+    descriptors = ValueDescriptors.from_program(program)
+    assert _variant_name(target, descriptors) == "Some"
     assert target.fields["value"] == TextValue("int")
 
 
@@ -366,7 +379,9 @@ status
         scripts={"checker": ['{"$case": "Ok"}']},
     )
     assert isinstance(ir["status"], RecordValue)
-    assert ir["status"].display_name == "Status::Ok"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir["status"].nominal].display_name == "Status::Ok"
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +440,9 @@ n
         scripts={"parser": ["bad1", "bad2"]},
     )
     assert isinstance(ir_exc, ExceptionValue)
-    assert ir_exc.display_name == "AgentParseError"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +548,9 @@ n
         scripts={"validator": ['"not an int"']},
     )
     assert isinstance(ir_exc, ExceptionValue)
-    assert ir_exc.display_name == "AgentParseError"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +571,9 @@ n
         scripts={"strict_agent": ["```json\n42\n```"]},
     )
     assert isinstance(ir_exc, ExceptionValue)
-    assert ir_exc.display_name == "AgentParseError"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
 
 
 # ---------------------------------------------------------------------------
@@ -598,15 +619,16 @@ prompt-text
     assert isinstance(req, RecordValue)
     program = lower_inline_ir(source, caps=agent_caps())
     assert req.nominal == program.builtin_nominals.nominal("AgentRequest")
+    descriptors = ValueDescriptors.from_program(program)
     assert isinstance(req.fields["agent"], RecordValue)
-    assert req.fields["agent"].display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+    assert _variant_name(req.fields["agent"], descriptors) == "AgentCommand"
     assert isinstance(req.fields["target-type"], RecordValue)
-    assert req.fields["target-type"].display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+    assert _variant_name(req.fields["target-type"], descriptors) == "Some"
     assert req.fields["target-type"].fields["value"] == TextValue("text")
     assert isinstance(req.fields["format-instructions"], RecordValue)
-    assert req.fields["format-instructions"].display_name.rsplit("::", maxsplit=1)[-1] == "None"
+    assert _variant_name(req.fields["format-instructions"], descriptors) == "None"
     assert isinstance(req.fields["json-schema"], RecordValue)
-    assert req.fields["json-schema"].display_name.rsplit("::", maxsplit=1)[-1] == "None"
+    assert _variant_name(req.fields["json-schema"], descriptors) == "None"
 
 
 def test_ask_request_carries_the_requested_output_contract() -> None:
@@ -623,18 +645,20 @@ req
 
     req = ir["req"]
     assert isinstance(req, RecordValue)
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
     target = req.fields["target-type"]
     assert isinstance(target, RecordValue)
-    assert target.display_name == "Option::Some"
+    assert descriptors.nominals[target.nominal].display_name == "Option::Some"
     assert target.fields["value"] == TextValue("Answer")
     schema = req.fields["json-schema"]
     assert isinstance(schema, RecordValue)
-    assert schema.display_name == "Option::Some"
+    assert descriptors.nominals[schema.nominal].display_name == "Option::Some"
     assert isinstance(schema.fields["value"], JsonValue)
     assert "value" in _json.dumps(schema.fields["value"].raw)
     instructions = req.fields["format-instructions"]
     assert isinstance(instructions, RecordValue)
-    assert instructions.display_name == "Option::Some"
+    assert descriptors.nominals[instructions.nominal].display_name == "Option::Some"
     metadata = req.fields["metadata"]
     assert isinstance(metadata, JsonValue)
     assert isinstance(metadata.raw, dict)
@@ -825,7 +849,9 @@ s
         scripts={"checker": ['{"$case": "Bad"}', '{"$case": "Ok"}']},
     )
     assert isinstance(ir["s"], RecordValue)
-    assert ir["s"].display_name == "Status::Ok"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir["s"].nominal].display_name == "Status::Ok"
 
 
 # ---------------------------------------------------------------------------
@@ -2189,7 +2215,9 @@ target
         scripts={"a": []},
     )
     assert isinstance(ir["target"], RecordValue)
-    assert ir["target"].display_name == "Option::Some"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir["target"].nominal].display_name == "Option::Some"
     assert ir["target"].fields["value"] == TextValue("text")
 
 
@@ -2731,7 +2759,9 @@ status
         source,
         scripts={"checker": ['{"$case": "Err"}']},  # declared name, not the renamed tag "ERR"
     )
-    assert ir_exc.display_name == "AgentParseError"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
 
     errors_val = ir_exc.fields.get("validation-errors")
     assert isinstance(errors_val, JsonValue)
@@ -2761,7 +2791,9 @@ status
         source,
         scripts={"checker": ['{"$case": "Err"}']},  # missing the renamed field "msg-text"
     )
-    assert ir_exc.display_name == "AgentParseError"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
 
     errors_val = ir_exc.fields.get("validation-errors")
     assert isinstance(errors_val, JsonValue)
@@ -2800,7 +2832,9 @@ status
         source,
         scripts={"checker": ['{"$case": "Bogus"}']},
     )
-    assert ir_exc.display_name == "AgentParseError"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
     # validation_errors is stored as a JsonValue(raw=[{...}]).
     from agm.agl.semantics.values import JsonValue
 
@@ -2837,7 +2871,9 @@ status
         source,
         scripts={"checker": ['{"$case": "Err"}']},
     )
-    assert ir_exc.display_name == "AgentParseError"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
 
     from agm.agl.semantics.values import JsonValue
 
@@ -2885,7 +2921,9 @@ status
         source,
         scripts={"checker": ['{"$case": "Ok", "extra_field": 42}']},
     )
-    assert ir_exc.display_name == "AgentParseError"
+    program = lower_inline_ir(source, caps=agent_caps())
+    descriptors = ValueDescriptors.from_program(program)
+    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
 
     from agm.agl.semantics.values import JsonValue
 

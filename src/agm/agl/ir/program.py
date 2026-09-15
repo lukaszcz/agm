@@ -43,6 +43,7 @@ __all__ = [
     "NominalKind",
     "SourceFile",
     "SymbolDescriptor",
+    "ValueDescriptors",
     "VariantDescriptor",
 ]
 
@@ -220,6 +221,33 @@ class FunctionDescriptor:
     @property
     def is_extern(self) -> bool:
         return isinstance(self.impl, ExternFunctionBody)
+
+
+# ---------------------------------------------------------------------------
+# Value descriptor view
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ValueDescriptors:
+    """Read-only view over a program's nominal and function descriptor tables.
+
+    A runtime value carries only its identity (``NominalId``/``FunctionId``)
+    and its data — never its own display name or signature labels. This is
+    the one argument every renderer and host name-lookup site takes to
+    resolve those from the program it runs under: ``nominals[value.nominal]
+    .display_name`` for a record/exception/constructor, and
+    ``functions[closure.function_id].param_labels``/``.result_label`` for a
+    closure. Built directly from ``ExecutableProgram.nominals``/``.functions``
+    (see ``ValueDescriptors.from_program``).
+    """
+
+    nominals: Mapping[NominalId, NominalDescriptor]
+    functions: Mapping[FunctionId, FunctionDescriptor]
+
+    @classmethod
+    def from_program(cls, program: "ExecutableProgram") -> "ValueDescriptors":
+        return cls(nominals=program.nominals, functions=program.functions)
 
 
 # ---------------------------------------------------------------------------

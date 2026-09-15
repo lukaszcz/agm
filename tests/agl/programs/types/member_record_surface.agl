@@ -19,7 +19,7 @@ def Tree::describe[T](self) -> text =
     | Node(value) => "node %{value}"
 
 def Referenced::show[T](self) -> text = "ref %{self.value}"
-def refresh(value: Referenced[text]) -> Referenced[text] = value with value = value.value + "!"
+def refresh(value: Referenced[text]) -> Referenced[text] = value with value = value.value ++ "!"
 
 record Holder(node: Tree::Node[int], nodes: array[Tree::Node[int]], ref: Referenced[text])
 def replace-in-slot(node: Tree::Node[int]) -> Tree::Node[int] = node.replace(8)

@@ -1,12 +1,12 @@
-# Built-in binary operators as function values: contextual specialization,
-# higher-order use, partial application, widening, and direct calls.
+# Built-in binary operators and the prelude `++` as function values: contextual
+# specialization, higher-order use, partial application, widening, and direct calls.
 
 def apply[A, B, C](f: (A, B) -> C, a: A, b: B) -> C = f(a, b)
 
 program def main(values: array[int], words: array[text], limit: int) -> unit =
   print(values.fold(0, (+)))
   print(values.fold(1, (*)))
-  print(words.fold("", (+)))
+  print(words.fold("", (++)))
   print(values.sort((-)))
   print(values.filter((<)(?, limit)))
   print(words.map((==)(?, "b")))

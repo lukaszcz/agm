@@ -75,13 +75,13 @@ var first = 0
 var second = 0
 
 def mark(label: text, value: int) -> int =
-  log := log + label
+  log := log ++ label
   value
 
 def digits(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
 
 def make-callee() -> (int, int, int) -> int =
-  log := log + "callee"
+  log := log ++ "callee"
   digits
 
 program def main() -> unit =

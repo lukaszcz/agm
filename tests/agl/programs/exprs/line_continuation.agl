@@ -20,8 +20,8 @@ program def main(a: int, b: int, tag: text) -> unit =
     .map(fn v => v * 2)
     |> .fold(0, fn (total, v) => total + v)
   let label = tag
-    + "/"
-    + (if flags => "both" | else => "mixed")
+    ++ "/"
+    ++ (if flags => "both" | else => "mixed")
   let shifted = Point(x = a, y = b)
     with x = a - 1, y = b +
     1

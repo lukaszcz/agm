@@ -50,7 +50,7 @@ def test_simple_positional_args() -> None:
 def test_named_args_reordered() -> None:
     """Named args supplied in non-declaration order."""
     source = (
-        'def greet(greeting: text, name: text) -> text = greeting + " " + name\n'
+        'def greet(greeting: text, name: text) -> text = greeting ++ " " ++ name\n'
         'let result = greet(name = "World", greeting = "Hello")\n()'
     )
     ir = evaluate_ir(source)
@@ -80,7 +80,7 @@ def test_default_and_named_supplied_args_evaluate_in_positional_order() -> None:
     source = (
         'var log = ""\n'
         "def note(s: text) -> int =\n"
-        "  log := log + s\n"
+        "  log := log ++ s\n"
         "  0\n"
         'def f(a: int = note("a"), b: int = 0) -> unit = ()\n'
         'f(b = note("b"))\n'
@@ -291,7 +291,7 @@ def test_function_with_named_args_in_body_call() -> None:
     """Function body calling another function with named args (exercises named_args walk)."""
     source = (
         'def greet(name: text, greeting: text = "Hi") -> text =\n'
-        '  greeting + ", " + name + "!"\n'
+        '  greeting ++ ", " ++ name ++ "!"\n'
         'def greet-world(g: text) -> text = greet(name = "World", greeting = g)\n'
         'let result = greet-world("Hello")\n()'
     )

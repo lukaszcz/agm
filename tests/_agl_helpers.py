@@ -163,7 +163,7 @@ def parse_inline_command(source: str) -> tuple[Program, int, bool]:
     Returns the executable program, its next node id, and whether a synthetic
     ``main`` was added. Static-root tests must parse source directly instead.
     """
-    program, next_node_id = parse_program_seeded(source, start_id=0)
+    program, next_node_id = parse_program_seeded(source, start_id=0, resolve_infix=False)
     wrapped, next_node_id = wrap_inline_program(program, next_node_id=next_node_id)
     return wrapped, next_node_id, wrapped is not program
 

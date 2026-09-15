@@ -8,7 +8,7 @@ record Point
   x: int
   y: int
 
-def Person::address-line(self) -> text = self.name + ": " + self.address
+def Person::address-line(self) -> text = self.name ++ ": " ++ self.address
 
 def Person::with-address(self, address: text) -> Person =
   Person(name = self.name, address = address)

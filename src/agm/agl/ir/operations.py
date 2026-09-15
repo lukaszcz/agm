@@ -56,11 +56,10 @@ class ArithOp(enum.Enum):
 
 
 class ArithKind(enum.Enum):
-    """Kind tag for arithmetic operations: integer, decimal, or text (ADD only)."""
+    """Kind tag for arithmetic operations: integer or decimal."""
 
     INT = "int"
     DECIMAL = "decimal"
-    TEXT = "text"
 
 
 class CmpOp(enum.Enum):

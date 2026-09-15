@@ -2,7 +2,7 @@
 var events: text = ""
 
 def log-event(event: text) -> text =
-  events := events + event + "|"
+  events := events ++ event ++ "|"
   event
 
 def prepare() -> unit =

@@ -673,7 +673,7 @@ def test_for_loop_dict_iterates_keys() -> None:
 def test_for_loop_dict_binds_keys_not_values() -> None:
     """The loop variable is bound to each key, in dict order — never to the value."""
     source = (
-        'var seen = ""\nfor k in {"a": 10, "b": 20, "c": 30} do\n  seen := seen + k\ndone\nseen\n'
+        'var seen = ""\nfor k in {"a": 10, "b": 20, "c": 30} do\n  seen := seen ++ k\ndone\nseen\n'
     )
     result = evaluate_ir(source)
     assert result["seen"] == TextValue("abc")
@@ -707,7 +707,7 @@ def test_for_loop_text_keeps_original_unicode_source() -> None:
         '  text := "replacement"\n'
         "  count := count + 1\n"
         '  if ch == "e" => continue\n'
-        "  seen := seen + ch\n"
+        "  seen := seen ++ ch\n"
         "done\n"
     )
     result = evaluate_ir(source)

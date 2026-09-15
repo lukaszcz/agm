@@ -151,7 +151,7 @@ class TestOperatorProgramsRunEndToEnd:
         result = run_inline_command(
             PipelineDriver(),
             "infixr << at 40\n"
-            'def <<(x: text, y: text) -> text = "(" + x + y + ")"\n'
+            'def <<(x: text, y: text) -> text = "(" ++ x ++ y ++ ")"\n'
             'print("a" << "b" << "c")\n',
         )
 
@@ -3238,7 +3238,7 @@ class TestRunPreparedProgram:
         utils_dir.mkdir(parents=True)
         (utils_dir / "math.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         (utils_dir / "strings.agl").write_text(
-            'def greet(name: text) -> text = "Hello, " + name + "!"\n'
+            'def greet(name: text) -> text = "Hello, " ++ name ++ "!"\n'
         )
 
         roots = agl_roots(lib_dir.resolve())

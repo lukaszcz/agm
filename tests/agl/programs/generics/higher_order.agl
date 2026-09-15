@@ -24,7 +24,7 @@ enum Wrapper[T]
 
 # Generic function values are fresh occurrences constrained by the other
 # argument of the enclosing declared call.
-def loud(s: text) -> text = s + "!!!"
+def loud(s: text) -> text = s ++ "!!!"
 def quiet(s: text) -> text = s
 
 program def main(shout: bool) -> unit =
@@ -45,7 +45,7 @@ program def main(shout: bool) -> unit =
 
   # `twice` instantiated at int and at text.
   print(twice(2, fn(n: int) -> int => n * n))
-  print(twice("a", fn(s: text) -> text => s + "!"))
+  print(twice("a", fn(s: text) -> text => s ++ "!"))
 
   # The type-variable lambda, instantiated at int and at text.
   print(via-lambda(99))

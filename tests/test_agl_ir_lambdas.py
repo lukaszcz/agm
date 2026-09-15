@@ -318,7 +318,7 @@ def test_function_values_program() -> None:
         '  if | n > 0 => "pos" | n < 0 => "neg" | else => "zero"\n'
         "\n"
         "def label(n: int) -> text =\n"
-        '  "val=" + classify(n)\n'
+        '  "val=" ++ classify(n)\n'
         "\n"
         "def apply(f: (int) -> text, n: int) -> text = f(n)\n"
         "\n"

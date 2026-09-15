@@ -3365,7 +3365,7 @@ class TestProgramValueArguments:
         write_file_program(
             agl_file,
             'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit =\n'
-            '  print(name + ":" + tag)\n',
+            '  print(name ++ ":" ++ tag)\n',
         )
 
         assert (
@@ -3381,7 +3381,7 @@ class TestProgramValueArguments:
         write_file_program(
             agl_file,
             'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit =\n'
-            '  print(name + ":" + tag)\n',
+            '  print(name ++ ":" ++ tag)\n',
         )
 
         assert (
@@ -3570,7 +3570,7 @@ class TestProgramValueArguments:
         write_file_program(
             agl_file,
             "program def main(@arg-pos id: text, @arg-std tag: text) -> unit =\n"
-            '  print(id + ":" + tag)\n',
+            '  print(id ++ ":" ++ tag)\n',
         )
 
         assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["one", "cli"])) is None
@@ -3718,7 +3718,7 @@ class TestProgramValueArguments:
         write_file_program(
             agl_file,
             'program def main(@arg-pos id: text, @arg-std tag: text = "default") -> unit =\n'
-            '  print(id + ":" + tag)\n',
+            '  print(id ++ ":" ++ tag)\n',
         )
 
         with pytest.raises(SystemExit) as exc_info:

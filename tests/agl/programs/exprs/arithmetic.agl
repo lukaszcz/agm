@@ -11,7 +11,7 @@ program def main(a: int, b: int, scale: decimal) -> unit =
   let precise = 0.1 + 0.2
   let nested = (a + b) * -(a - b) / 2
   let big = 1000000000000000000000000 * 1000000
-  let label = "n=" + "x"
+  let label = "n=" ++ "x"
 
   print sum
   print diff

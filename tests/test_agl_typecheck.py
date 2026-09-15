@@ -3837,7 +3837,7 @@ class TestFuncDef:
     @pytest.mark.parametrize(
         ("operation", "result"),
         (
-            ('+ "x"', TextType()),
+            ("* 2", IntType()),
             ("+ 1.5", DecimalType()),
             ("- 1", IntType()),
         ),
@@ -4684,7 +4684,7 @@ class TestFuncDef:
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_bottom_left_binary_operand_does_not_skip_right_operand_type(self) -> None:
-        err = reject_type('def f() -> int = (return 1) + "x"\nf')
+        err = reject_type("def f() -> int = (return 1) + 1.5\nf")
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_bottom_binary_operand_does_not_make_comparison_bottom(self) -> None:
@@ -6045,10 +6045,8 @@ class TestBinaryOps:
         node = r.resolved.program.body.items[0]
         assert r.node_types[node.node_id] == DecimalType()
 
-    def test_add_text(self) -> None:
-        r = accept_type('"a" + "b"')
-        node = r.resolved.program.body.items[0]
-        assert r.node_types[node.node_id] == TextType()
+    def test_add_text_is_rejected(self) -> None:
+        reject_type('"a" + "b"')
 
     def test_add_type_mismatch(self) -> None:
         err = reject_type('1 + "hello"')
@@ -6344,10 +6342,6 @@ class TestOperatorValues:
         [
             ("let f: (int, int) -> int = (+)", FunctionType((IntType(), IntType()), IntType())),
             (
-                "let f: (text, text) -> text = (+)",
-                FunctionType((TextType(), TextType()), TextType()),
-            ),
-            (
                 "let f: (int, decimal) -> decimal = (-)",
                 FunctionType((IntType(), DecimalType()), DecimalType()),
             ),
@@ -6394,8 +6388,8 @@ class TestOperatorValues:
         )
 
     def test_direct_call_result_is_available_to_the_enclosing_operation(self) -> None:
-        checked = accept_type('(+)("a", "b") + "c"')
-        assert checked.node_types[checked.resolved.program.body.items[0].node_id] == TextType()
+        checked = accept_type("(+)(1, 2) + 1.5")
+        assert checked.node_types[checked.resolved.program.body.items[0].node_id] == DecimalType()
 
     def test_nested_direct_calls_resolve_inside_out(self) -> None:
         checked = accept_type("let f: (int) -> int = (+)(?, (*)(2, 3))\nf")
@@ -6424,9 +6418,9 @@ class TestOperatorValues:
         checked = accept_type(
             "def join[A, B](read: (text) -> A, combine: (A, A) -> B) -> B =\n"
             '  combine(read("x"), read("y"))\n'
-            "join(ask, (+))"
+            "join(ask, (<))"
         )
-        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == TextType()
+        assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == BoolType()
 
     @pytest.mark.parametrize(
         "source",
@@ -6920,7 +6914,7 @@ class TestFieldAccess:
 
     def test_option_member_selects_its_unambiguous_enum_method(self) -> None:
         checked = accept_type(
-            'let result = Option::Some(value = "x").map(fn(value: text) => value + "!")\nresult'
+            'let result = Option::Some(value = "x").map(fn(value: text) => "%{value}!")\nresult'
         )
 
         result = checked.resolved.program.body.items[-1]

@@ -19,7 +19,7 @@ def sum-ints(t: Tree[int]) -> int =
 def concat-texts(t: Tree[text]) -> text =
   case t of
     | Leaf => ""
-    | Node(value, left, right) => concat-texts(left) + value + concat-texts(right)
+    | Node(value, left, right) => concat-texts(left) ++ value ++ concat-texts(right)
 
 def sum-nested-arrays(t: Tree[array[int]]) -> int =
   case t of

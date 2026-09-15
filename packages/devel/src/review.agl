@@ -96,7 +96,7 @@ program def review-main(
   agent: Agent = config::default-agent)
   -> unit =
   let sep = if extra-aspects == "" => "" else => ", "
-  print <| agent.review(scope, aspects + sep + extra-aspects)
+  print <| agent.review(scope, aspects ++ sep ++ extra-aspects)
 
 program def revise-main(
   file: path,
@@ -117,4 +117,4 @@ program def refine-main(
   max-steps: int = 8)
   -> unit =
   let sep = if extra-aspects == "" => "" else => ", "
-  print <| refine(scope, aspects + sep + extra-aspects, review-agent, revise-agent, max-steps)
+  print <| refine(scope, aspects ++ sep ++ extra-aspects, review-agent, revise-agent, max-steps)

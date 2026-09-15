@@ -4797,7 +4797,7 @@ class TestInfixDecl:
     def test_infixr_usable_in_subsequent_entry(self) -> None:
         s = open_session(default_stdlib=False)
         s.eval_entry("infixr << at 40")
-        s.eval_entry('def <<(x: text, y: text) -> text = "(" + x + y + ")"')
+        s.eval_entry('def <<(x: text, y: text) -> text = "(%{x}%{y})"')
         r = s.eval_entry('"a" << "b" << "c"')
         assert r.ok, r.diagnostics
         assert r.value is not None

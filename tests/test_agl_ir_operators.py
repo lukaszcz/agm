@@ -73,17 +73,6 @@ def test_decimal_mul() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Arithmetic: text concatenation
-# ---------------------------------------------------------------------------
-
-
-def test_text_concat() -> None:
-    source = 'let x: text = "hello" + " world"\n()'
-    ir = evaluate_ir(source)
-    assert ir["x"] == TextValue("hello world")
-
-
-# ---------------------------------------------------------------------------
 # Arithmetic: mixed int + decimal widening
 # ---------------------------------------------------------------------------
 
@@ -396,26 +385,6 @@ def test_unary_neg_decimal() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_arith_sub_text_raises() -> None:
-    """sub with TEXT kind must raise AssertionError (invalid in well-formed IR)."""
-    from agm.agl.eval.arith import sub
-    from agm.agl.ir.operations import ArithKind
-    from agm.agl.semantics.values import TextValue
-
-    with pytest.raises(AssertionError):
-        sub(ArithKind.TEXT, TextValue("a"), TextValue("b"))
-
-
-def test_arith_mul_text_raises() -> None:
-    """mul with TEXT kind must raise AssertionError."""
-    from agm.agl.eval.arith import mul
-    from agm.agl.ir.operations import ArithKind
-    from agm.agl.semantics.values import TextValue
-
-    with pytest.raises(AssertionError):
-        mul(ArithKind.TEXT, TextValue("a"), TextValue("b"))
-
-
 def test_arith_div_by_zero_raises_sentinel() -> None:
     """div() raises AglDivisionByZero on zero divisor."""
     from agm.agl.eval.arith import AglDivisionByZero, div
@@ -494,16 +463,6 @@ def test_add_decimal_wrong_types() -> None:
         add(ArithKind.DECIMAL, IntValue(1), TextValue("x"))
 
 
-def test_add_text_wrong_types() -> None:
-    """add TEXT with non-TextValues raises AssertionError."""
-    from agm.agl.eval.arith import add
-    from agm.agl.ir.operations import ArithKind
-    from agm.agl.semantics.values import IntValue, TextValue
-
-    with pytest.raises(AssertionError, match="add TEXT"):
-        add(ArithKind.TEXT, IntValue(1), TextValue("x"))
-
-
 def test_sub_int_wrong_types() -> None:
     """sub INT with non-IntValues raises AssertionError."""
     from agm.agl.eval.arith import sub
@@ -567,36 +526,6 @@ def test_negate_decimal_wrong_type() -> None:
 # ---------------------------------------------------------------------------
 # Defensive coverage: validate.py invalid IR
 # ---------------------------------------------------------------------------
-
-
-def test_validate_arith_text_sub_raises() -> None:
-    """Validate raises InvalidIrError when TEXT kind used with SUB."""
-    from agm.agl.ir.ids import Location, SourceId
-    from agm.agl.ir.nodes import IrArith, IrConstText
-    from agm.agl.ir.operations import ArithKind, ArithOp
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError
-    from agm.agl.modules.ids import ENTRY_ID
-
-    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
-    node = IrArith(
-        location=loc,
-        op=ArithOp.SUB,
-        kind=ArithKind.TEXT,
-        lhs=IrConstText(location=loc, value="a"),
-        rhs=IrConstText(location=loc, value="b"),
-    )
-    program = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={SourceId(0): SourceFile(display_name="<test>", normalized_text="x")},
-    )
-    from agm.agl.ir.validate import validate_ir
-
-    with pytest.raises(InvalidIrError):
-        validate_ir(program, deep=False)
 
 
 def test_validate_arith_div_non_decimal_raises() -> None:

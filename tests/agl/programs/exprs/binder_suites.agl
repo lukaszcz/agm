@@ -22,8 +22,8 @@ program def main(a: int, b: int, label: text) -> unit =
     Point(x = width, y = b)
 
   let described =
-    if a > b => label + ":left"
-    | else => label + ":right"
+    if a > b => label ++ ":left"
+    | else => label ++ ":right"
 
   print scaled
   print total

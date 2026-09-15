@@ -7899,7 +7899,7 @@ class TestPackageInstall:
         )
         (package / "src" / "main.agl").write_text(
             'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit =\n'
-            '  print(name + ":" + tag)\n',
+            '  print(name ++ ":" ++ tag)\n',
             encoding="utf-8",
         )
         home.mkdir()

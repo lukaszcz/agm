@@ -6,7 +6,7 @@ enum Status
 
 program def main() -> unit =
   let stepper: Agent = AgentCommand("stepper")
-  let a = "x"; let b = "y"; print(a + b)
+  let a = "x"; let b = "y"; print(a ++ b)
   var n: int = 0
   var s: Status = More
   do[5] n := n + 1; s := stepper.ask("Step %{n}.") until s is Done

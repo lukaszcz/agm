@@ -45,6 +45,7 @@ from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.cli_support.args import ReplArgs
 from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
+from agm.cli_support.param_config import resolve_module_param_values
 from agm.config.context import current_config_context
 from agm.config.general import (
     agm_home_dir,
@@ -75,9 +76,8 @@ def run(args: ReplArgs) -> None:
     """Run the ``agm repl`` command."""
     ctx = current_config_context()
     try:
-        merged_config = load_general_config(
-            home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
-        ).merged
+        general_config = load_general_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
+        merged_config = general_config.merged
         config = exec_config_from_merged(merged_config)
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
@@ -197,6 +197,9 @@ def run(args: ReplArgs) -> None:
             configured_roots=mod_roots_cfg.extra,
             package_roots=package_roots,
             default_stdlib=not args.no_stdlib,
+            param_seed_resolver=lambda _module, params: resolve_module_param_values(
+                general_config, params
+            ),
         )
 
         # Load and check the session's initial library image now, so a rejected

@@ -24,7 +24,7 @@ predicate) so they do not depend on whether the test runner has a tty either.
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -34,10 +34,13 @@ from typer.main import get_command
 
 import agm.cli as cli
 import agm.commands.repl as repl_command
+from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.repl import ReplSession
 from agm.agl.runtime.sessions import SessionSnapshot
+from agm.agl.runtime.types import ParamBindingInfo
 from agm.agl.semantics.values import RecordValue
 from agm.cli_support.args import ReplArgs
+from agm.config.general import GeneralConfig
 from agm.packages.layout import MODULE_TREE_DIRNAME
 
 
@@ -1162,6 +1165,153 @@ class TestReplModuleRoots:
         # The lib_root is wired: importing a module from lib_dir succeeds.
         result = session.eval_entry("import mymod")
         assert result.ok
+
+
+class TestReplModuleParameterConfig:
+    """The command supplies layered module routes to its incremental session."""
+
+    def _open_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+        *,
+        config: str,
+        module_source: str,
+    ) -> ReplSession:
+        _isolated_home(monkeypatch, tmp_path / "home")
+        project = tmp_path / "project"
+        config_dir = project / "config"
+        library = tmp_path / "library"
+        config_dir.mkdir(parents=True)
+        (library / "A").mkdir(parents=True)
+        (library / "A" / "logging.agl").write_text(module_source, encoding="utf-8")
+        (config_dir / "config.toml").write_text(
+            '[modules]\nroots = ["../../library"]\n\n' + config,
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("PROJ_DIR", str(project))
+        monkeypatch.chdir(project)
+
+        repl_command.run(_args(no_stdlib=True))
+
+        session = fake_plain_console[0]["session"]
+        assert isinstance(session, ReplSession)
+        return session
+
+    def test_module_table_seeds_an_imported_parameter(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        session = self._open_session(
+            monkeypatch,
+            tmp_path,
+            fake_plain_console,
+            config="[A.logging]\nverbose = true\n",
+            module_source="@param let verbose: bool = false\n",
+        )
+
+        result = session.eval_entry("import A/logging\nA/logging::verbose")
+
+        assert result.ok, result.diagnostics
+        assert result.value is not None
+        assert result.value.value is True
+
+    def test_scope_region_table_seeds_an_imported_parameter(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        session = self._open_session(
+            monkeypatch,
+            tmp_path,
+            fake_plain_console,
+            config="[A.logging.debug]\ntrace = true\n",
+            module_source="scope debug\n  @param let trace: bool = false\nend debug\n",
+        )
+
+        result = session.eval_entry("import A/logging\nA/logging::debug::trace")
+
+        assert result.ok, result.diagnostics
+        assert result.value is not None
+        assert result.value.value is True
+
+    def test_program_table_does_not_override_a_module_route(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        session = self._open_session(
+            monkeypatch,
+            tmp_path,
+            fake_plain_console,
+            config=("[A.logging]\nverbose = false\n\n[workflow.run]\nverbose = true\n"),
+            module_source="@param let verbose: bool = true\n",
+        )
+
+        result = session.eval_entry("import A/logging\nA/logging::verbose")
+
+        assert result.ok, result.diagnostics
+        assert result.value is not None
+        assert result.value.value is False
+
+    def test_importing_a_module_twice_resolves_its_config_once(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        calls: list[tuple[StaticBindingKey, ...]] = []
+        resolve = repl_command.resolve_module_param_values
+
+        def record_resolver(
+            config: GeneralConfig, params: Sequence[ParamBindingInfo]
+        ) -> dict[StaticBindingKey, object]:
+            calls.append(tuple(param.key for param in params))
+            return resolve(config, params)
+
+        monkeypatch.setattr(repl_command, "resolve_module_param_values", record_resolver)
+        session = self._open_session(
+            monkeypatch,
+            tmp_path,
+            fake_plain_console,
+            config="[A.logging]\nvalue = 7\n",
+            module_source="@param let value: int = 1\n",
+        )
+        first = session.eval_entry("import A/logging\nA/logging::value")
+        second = session.eval_entry("import A/logging\nA/logging::value")
+
+        assert first.ok, first.diagnostics
+        assert second.ok, second.diagnostics
+        assert first.value is not None
+        assert first.value.value == 7
+        assert second.value is not None
+        assert second.value.value == 7
+        assert len(calls) == 1
+
+    def test_initializer_applies_without_a_module_table(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        session = self._open_session(
+            monkeypatch,
+            tmp_path,
+            fake_plain_console,
+            config="",
+            module_source="@param let value: int = 3\n",
+        )
+
+        result = session.eval_entry("import A/logging\nA/logging::value")
+
+        assert result.ok, result.diagnostics
+        assert result.value is not None
+        assert result.value.value == 3
 
 
 class TestReplTrace:

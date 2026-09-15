@@ -22,7 +22,7 @@ from agm.config.qualified_keys import (
     resolve_qualified_values,
 )
 
-__all__ = ["RouteReport", "resolve_param_values"]
+__all__ = ["RouteReport", "resolve_module_param_values", "resolve_param_values"]
 
 
 class RouteReport(NamedTuple):
@@ -89,10 +89,10 @@ def resolve_param_values(
     values = dict(params)
     supplied = frozenset(params)
     entries = surface.entries
-    module_routes = _module_routes(entries)
-    _reject_configured_ambiguous_module_leaves(config, entries)
-    module_values = resolve_qualified_values(config, tuple(key for _entry, key in module_routes))
-    _merge_route_values(values, supplied, module_routes, module_values)
+    module_values = resolve_module_param_values(config, tuple(entry.param for entry in entries))
+    for key, value in module_values.items():
+        if key not in supplied:
+            values[key] = value
 
     program_routes = _program_routes(program, entry_segments, command_paths, entries)
     _reject_configured_ambiguous_program_leaves(
@@ -103,33 +103,52 @@ def resolve_param_values(
     return values, _route_reports(program, entry_segments, command_paths, entries, program_routes)
 
 
+def resolve_module_param_values(
+    config: GeneralConfig, params: Sequence[ParamBindingInfo]
+) -> dict[StaticBindingKey, object]:
+    """Resolve parameter values from their declaration-module routes only.
+
+    This is the config surface used by incremental hosts, which initialize
+    modules without selecting a program and therefore have no program route.
+    """
+    module_routes = _module_routes(params)
+    _reject_configured_ambiguous_module_leaves(config, params)
+    configured = resolve_qualified_values(config, tuple(key for _param, key in module_routes))
+    values: dict[StaticBindingKey, object] = {}
+    for param, key in module_routes:
+        if key not in configured:
+            continue
+        projected = project_option(param.cli.name, param.type)
+        values[param.key] = native_raw_value(projected, configured[key])
+    return values
+
+
 def _module_routes(
-    entries: Sequence[ParamSurfaceEntry],
-) -> tuple[tuple[ParamSurfaceEntry, QualifiedConfigKey], ...]:
+    params: Sequence[ParamBindingInfo],
+) -> tuple[tuple[ParamBindingInfo, QualifiedConfigKey], ...]:
     """Return declaration-module routes for every non-anonymous binding."""
     return tuple(
         (
-            entry,
+            param,
             QualifiedConfigKey(
-                entry.param.module.segments,
-                entry.param.scope_path,
-                entry.param.cli.name,
+                param.module.segments,
+                param.scope_path,
+                param.cli.name,
             ),
         )
-        for entry in entries
-        if not entry.param.module.is_entry
+        for param in params
+        if not param.module.is_entry
     )
 
 
 def _reject_configured_ambiguous_module_leaves(
-    config: GeneralConfig, entries: Sequence[ParamSurfaceEntry]
+    config: GeneralConfig, params: Sequence[ParamBindingInfo]
 ) -> None:
     """Reject a configured leaf claimed by multiple bindings on one module route."""
     candidates_by_route: dict[
         tuple[tuple[str, ...], tuple[str, ...], str], list[ParamBindingInfo]
     ] = {}
-    for entry in entries:
-        param = entry.param
+    for param in params:
         if param.module.is_entry:
             continue
         route = (param.module.segments, param.scope_path, param.cli.name)

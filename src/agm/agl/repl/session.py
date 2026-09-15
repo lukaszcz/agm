@@ -51,7 +51,6 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, RecordValue, Value
-    from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.nodes import (
         ExportDecl,
         ImportDecl,
@@ -191,7 +190,6 @@ class ReplSession:
         engine_base: "Mapping[str, Value] | None" = None,
         builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
         process_environment: "Mapping[str, str] | None" = None,
-        setting_overrides: "Mapping[str, SettingOverride] | None" = None,
         host_settings_policy: "HostSettingsPolicy | None" = None,
         cwd: "Path | None" = None,
         stdlib_root: "Path | None" = None,
@@ -243,15 +241,6 @@ class ReplSession:
                 else:
                     self._builtin_var_seed[key] = value
         self._builtin_var_values = dict(self._builtin_var_seed)
-        # Host-supplied AgL source overrides (currently only ``default-agent``
-        # from ``--default-agent``/``[exec] default-agent``) spliced into the module
-        # graph the FIRST time it loads ``std/config`` (see
-        # ``EntryPipeline.eval_entry``), so the override is resolved,
-        # type-checked, and constant-checked by that entry's own compilation
-        # rather than a separate one run before the session exists.
-        self._setting_overrides: dict[str, SettingOverride] = (
-            dict(setting_overrides) if setting_overrides is not None else {}
-        )
         if "timeout" not in self._engine_seed and shell_exec_timeout is not None:
             self._engine_seed["timeout"] = some_value(TextValue(format_timeout(shell_exec_timeout)))
         # shell-exec-timeout is backed by a plain scalar rather than derived on
@@ -354,7 +343,7 @@ class ReplSession:
         # Compilation artifacts of the library modules this session has loaded,
         # retained across entries. Each pass reuses one only while the entry's
         # graph still holds the very AST object the artifact was derived from,
-        # so a reparse, an override splice, or a redeclaration simply misses.
+        # so a reparse or a redeclaration simply misses.
         self._retained_resolved_modules: dict[ModuleId, ResolvedModule] = {}
         self._retained_checked_modules: dict[ModuleId, CheckedModule] = {}
         self._last_match_compilation: MatchCompiledProgram | None = None
@@ -432,19 +421,7 @@ class ReplSession:
         """Load the session's initial library image before any entry runs.
 
         Builds the module graph a first entry would build (honoring
-        ``default_stdlib``), splicing any host-supplied ``setting_overrides``
-        into ``std/config`` the first time it loads, then resolves and
-        type-checks the result. A rejected override — an unparseable literal,
-        the wrong type, a non-constant expression, or an unknown engine key —
-        is reported here rather than deferred to whichever entry happens to
-        load ``std/config`` first. A graph with no loaded ``std/config`` (e.g.
-        ``--no-stdlib`` with no explicit import) is likewise reported here,
-        but only for a ``required`` override (e.g. ``--default-agent``): an explicit
-        per-run request the host cannot silently drop, validated up front
-        (``load_and_check_program``'s ``validate_missing_std_config=True``)
-        rather than deferred to a later entry that may never come. A
-        non-``required`` override (ambient configuration) is simply inert in
-        that same situation — no diagnostic.
+        ``default_stdlib``), then resolves and type-checks the result.
 
         On success, the loaded library modules, the node-id counter, and the
         session's type environment are promoted into the session's caches
@@ -460,18 +437,15 @@ class ReplSession:
         session and before it accepts any entry or prints a banner. Every
         checked frontend failure ``load_and_check_program`` can raise -- a
         syntax, module-loading, scope, or type error -- is a subclass of
-        ``AglError`` (:class:`OverrideRejected` is the sole exception,
-        carrying its diagnostics directly); a bare ``except Exception``
-        beneath those two also adapts an unchecked failure reading a module
-        file (a permission error, invalid UTF-8) or resolving the default
-        stdlib root, raised lazily by :meth:`_ensure_roots` the first time it
-        runs -- exactly as
+        ``AglError``; a bare ``except Exception`` beneath it also adapts an
+        unchecked failure reading a module file (a permission error, invalid
+        UTF-8) or resolving the default stdlib root, raised lazily by
+        :meth:`_ensure_roots` the first time it runs -- exactly as
         :meth:`EntryPipeline.eval_entry` adapts the same raises for an
         ordinary entry.
         """
         from agm.agl.diagnostics import AglError
         from agm.agl.parser import parse_program_seeded
-        from agm.agl.repl.entry_pipeline import OverrideRejected
 
         host_env = self._runtime.host_environment()
         try:
@@ -504,10 +478,7 @@ class ReplSession:
                     pipeline_program=program,
                     host_env=host_env,
                     next_start_id=next_start_id,
-                    validate_missing_std_config=True,
                 )
-            except OverrideRejected as exc:
-                return tuple(exc.diagnostics)
             except AglError as exc:
                 return (exc.to_diagnostic(),)
             except Exception as exc:
@@ -542,15 +513,15 @@ class ReplSession:
         """Return a cache key only for a pristine, default-stdlib session.
 
         A bootstrap cache is safe only before an entry can contribute session
-        state, without source-level setting overrides, and when both module
-        roots and static host capabilities agree. The cached type environment
-        is sealed; later entry checks seed from it without mutating it.
+        state, and when both module roots and static host capabilities agree
+        — typed engine seeds never touch the compiled module graph, so they
+        do not disqualify reuse. The cached type environment is sealed; later
+        entry checks seed from it without mutating it.
         """
         from agm.agl.capabilities import HostCapabilities
 
         if (
             not self._default_stdlib
-            or self._setting_overrides
             or self._next_node_id != 0
             or self._loaded_lib_modules
             or not isinstance(capabilities, HostCapabilities)

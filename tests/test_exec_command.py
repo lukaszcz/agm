@@ -4497,29 +4497,29 @@ class TestNegatedConstantDefaults:
         assert capsys.readouterr().out == "-1/false\n"
 
 
-class TestSettingOverrideProvenanceWithNoStdlib:
-    """``--no-stdlib`` interacts differently with a CLI flag vs. ambient config.
+class TestDefaultAgentDecodeWithNoStdlib:
+    """A decoded ``default-agent`` seed is effective with ``--no-stdlib``.
 
-    A ``default-agent`` override reaching the engine as AgL literal source
-    (``--default-agent`` or ``[exec]``/qualified program-table ``default-agent``) can only be
-    spliced into ``std/config``'s own declaration when that module is loaded.
-    ``--no-stdlib`` on a program that never explicitly imports ``std/config``
-    means it never is. An ambient config value is then simply inert (the key
-    does not apply to this run); an explicit ``--default-agent`` flag is a request the
-    host cannot silently drop, so it still fails the run.
+    A typed seed reaches the interpreter's engine register independent of
+    whether the program imports ``std/config`` at all -- from either
+    ``[exec] default-agent`` or ``--default-agent``. A plain program that
+    never mentions an agent proves this with a malformed command text: the
+    interpreter validates its dispatchability eagerly at construction, so
+    the run fails only if the seed actually reached it.
     """
 
-    def test_config_default_agent_is_inert_without_stdlib(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_config_default_agent_is_effective_without_stdlib(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A project-configured ``[exec] default-agent`` must not break every
-        ``--no-stdlib`` program, including one that never mentions an agent."""
+        import json
+
         from agm.config.context import ConfigContext
 
+        agl_source = 'AgentCommand("nonexistent-bin -p \'oops")'
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            "[exec]\ndefault-agent = 'AgentCommand(\"echo cfg\")'\n"
+            f"[exec]\ndefault-agent = {json.dumps(agl_source)}\n"
         )
         monkeypatch.setattr(
             exec_engine,
@@ -4530,8 +4530,9 @@ class TestSettingOverrideProvenanceWithNoStdlib:
         agl_file = tmp_path / "plain.agl"
         write_file_program(agl_file, "let x = 1\nprogram def main() -> unit = ()\n")
 
-        result = exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True))
-        assert result is None
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True))
+        assert exc_info.value.code == 1
 
     def test_process_environment_is_inert_without_stdlib(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -4545,20 +4546,74 @@ class TestSettingOverrideProvenanceWithNoStdlib:
         assert capsys.readouterr().out == ""
         assert os.environ["AGL_TEST_NO_STDLIB"] == "original"
 
-    def test_agent_flag_still_fails_without_stdlib(
+    def test_default_agent_flag_is_effective_without_stdlib(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """An explicit ``--default-agent`` literal is a request, not ambient config: it
-        must still fail (rather than be silently dropped) when the program
-        never loads ``std/config``."""
         agl_file = tmp_path / "plain.agl"
         write_file_program(agl_file, "let x = 1\nprogram def main() -> unit = ()\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True, default_agent="("))
+            exec_command.run(
+                _exec_args_no_log(
+                    agl_file,
+                    no_stdlib=True,
+                    default_agent="nonexistent-bin -p 'oops",
+                )
+            )
+        assert exc_info.value.code == 1
+
+    def test_malformed_default_agent_flag_exits_before_running_without_stdlib(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A literal that opens a member call but fails to parse is a decode
+        error, reported and exited before the module graph is even loaded --
+        distinct from a well-typed but undispatchable command (tested above),
+        which fails only once the interpreter is constructed."""
+        agl_file = tmp_path / "plain.agl"
+        write_file_program(agl_file, "let x = 1\nprogram def main() -> unit = ()\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(
+                _exec_args_no_log(agl_file, no_stdlib=True, default_agent='AgentClaude(model = "x"')
+            )
 
         assert exc_info.value.code == 1
         assert "--default-agent" in capsys.readouterr().err
+
+    def test_blank_default_agent_flag_exits_naming_the_flag(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "plain.agl"
+        write_file_program(agl_file, "let x = 1\nprogram def main() -> unit = ()\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True, default_agent=""))
+
+        assert exc_info.value.code == 1
+        assert "--default-agent" in capsys.readouterr().err
+
+
+class TestDefaultAgentHostSyntax:
+    """``--default-agent`` accepts every host-facing ``Agent`` syntax form."""
+
+    @pytest.mark.parametrize(
+        "literal",
+        [
+            'Agent::AgentCommand(command = "echo hi")',
+            '{"$case": "AgentCommand", "command": "echo hi"}',
+        ],
+    )
+    def test_qualified_constructor_and_tagged_json_are_both_accepted(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], literal: str
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "import std/config\nprint std/config::default-agent\n")
+
+        assert exec_command.run(_exec_args_no_log(agl_file, default_agent=literal)) is None
+
+        rendered = capsys.readouterr().out
+        assert "AgentCommand" in rendered
+        assert "echo hi" in rendered
 
 
 class TestExecProcessEnvironment:

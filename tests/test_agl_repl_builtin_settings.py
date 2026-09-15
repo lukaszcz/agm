@@ -25,7 +25,6 @@ from agm.agl.runtime.engine_config import build_engine_config_seeds
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue, Value
-from agm.agl.setting_overrides import SettingOverride
 from tests._agl_helpers import agent_value
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
@@ -65,8 +64,7 @@ def _unopened_session(**kwargs: object) -> ReplSession:
     """Build a session over the repository standard library, left unopened.
 
     For the tests that must observe the initial ``std/config`` load from the
-    entry that triggers it -- notably the ``setting_overrides`` splice, which
-    is deliberately deferred to that entry.
+    entry that triggers it.
     """
     kwargs.setdefault("stdlib_root", _STDLIB_ROOT)
     return ReplSession(**kwargs)
@@ -268,10 +266,9 @@ def _host_seeded_session(
 ) -> ReplSession:
     """Build a session with explicit host seeds ONLY for the given keys.
 
-    ``default_agent`` is the raw
-    ``AgentCommand`` command text (not AgL source) — a host-seeded ``Value``,
-    rather than the AgL-literal ``SettingOverride`` path
-    ``--default-agent``/``[exec] default-agent`` use.
+    ``default_agent`` is the raw ``AgentCommand`` command text, built into the
+    same typed ``Value`` seed ``--default-agent``/``[exec] default-agent``
+    decode into via ``cli_support.engine_seeds``.
     """
     raw: dict[str, object] = {}
     if strict_json is not None:
@@ -667,28 +664,22 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Host-supplied AgL setting overrides (--default-agent / [exec] default-agent)
+# Host-supplied default-agent seed (--default-agent / [exec] default-agent)
 # ---------------------------------------------------------------------------
 
 
-class TestSettingOverrideThreading:
-    """``setting_overrides`` splices AgL source in as ``std/config``'s default.
+class TestDefaultAgentSeedThreading:
+    """A decoded ``default-agent`` seed behaves like any other typed engine seed.
 
-    Mirrors ``PipelineDriver.prepare_parsed_entry``'s ``setting_overrides``
-    seam (``tests/test_agl_pipeline_setting_overrides.py``), but threaded
-    through the REPL's own module-graph load instead of a batch one: the
-    override is spliced in the first time an entry loads ``std/config`` (see
-    ``EntryPipeline.eval_entry``), so it is resolved, type-checked, and
-    constant-checked by that entry's own compilation.
+    ``--default-agent``/``[exec] default-agent`` decode into the same typed
+    ``Value`` seed every other engine key uses (see
+    ``cli_support.engine_seeds``), so these tests seed ``engine_base``
+    directly.
     """
 
-    def test_override_is_observed_on_the_first_entry_that_loads_std_config(self) -> None:
+    def test_seed_is_observed_and_persists_across_entries(self) -> None:
         s = _unopened_session(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--default-agent"
-                )
-            }
+            engine_base={"default-agent": agent_value("AgentCommand", command="overridden")}
         )
         _ok(s, "import std/config")
         value = _read(s, "default-agent")
@@ -696,13 +687,14 @@ class TestSettingOverrideThreading:
         assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert value.fields["command"] == TextValue("overridden")
 
+        _ok(s, "let unrelated = 1")
+        value = _read(s, "default-agent")
+        assert isinstance(value, RecordValue)
+        assert value.fields["command"] == TextValue("overridden")
+
     def test_source_write_still_overrides_it_afterward(self) -> None:
         s = _unopened_session(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--default-agent"
-                )
-            }
+            engine_base={"default-agent": agent_value("AgentCommand", command="overridden")}
         )
         _ok(s, "import std/config")
         assert _read(s, "default-agent").display_name == "Agent::AgentCommand"
@@ -712,181 +704,24 @@ class TestSettingOverrideThreading:
         assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
         assert value.fields["model"] == TextValue("haiku")
 
-    def test_malformed_override_fails_only_the_entry_that_triggers_it(self) -> None:
-        """A bad literal rejects only the entry that loads ``std/config``, naming the origin.
+    def test_malformed_command_text_is_rejected_at_the_first_entry(self) -> None:
+        """A well-typed seed whose command text does not shell-split fails eagerly.
 
-        The rejection surfaces from that entry's own ordinary type-checking of
-        ``std/config``'s builtin var default — the spliced expression's span
-        carries the override's origin as its source label, so
-        ``format_diagnostic`` names it in the location prefix.  With
-        ``default_stdlib=False`` an entry that never imports ``std/config``
-        never triggers the splice at all, so the session stays usable for
-        those both before and after the rejected attempt.
-        """
-        from agm.agl.diagnostics import format_diagnostic
-
-        s = ReplSession(
-            stdlib_root=_STDLIB_ROOT,
-            default_stdlib=False,
-            setting_overrides={
-                "default-agent": SettingOverride(source='"not-an-agent"', origin="--default-agent")
-            },
-        )
-        assert _ok(s, "1 + 1").value == IntValue(2)
-
-        result = s.eval_entry("import std/config")
-        assert not result.ok
-        assert result.diagnostics
-        assert any("--default-agent" in format_diagnostic(diag) for diag in result.diagnostics)
-
-        # Nothing from the rejected entry was promoted or persisted.
-        assert _ok(s, "1 + 1").value == IntValue(2)
-
-    def test_unparseable_override_source_fails_only_the_entry_that_triggers_it(self) -> None:
-        """An override rejected by the REPL's own splice call, not by typechecking.
-
-        Unlike a type-invalid override (caught later by ``std/config``'s
-        ordinary typechecking, see
-        ``test_malformed_override_fails_only_the_entry_that_triggers_it``) or
-        unparseable command TEXT (caught at interpreter construction),
-        unparseable override SOURCE is diagnosed by
-        ``_apply_setting_overrides`` itself at the REPL's own splice call site
-        (``EntryPipeline.eval_entry``, mirroring
-        ``PipelineDriver.prepare_parsed_entry``'s batch splice).
-        """
-        from agm.agl.diagnostics import format_diagnostic
-
-        s = ReplSession(
-            stdlib_root=_STDLIB_ROOT,
-            default_stdlib=False,
-            setting_overrides={
-                "default-agent": SettingOverride(source="(", origin="--default-agent")
-            },
-        )
-        assert _ok(s, "1 + 1").value == IntValue(2)
-
-        result = s.eval_entry("import std/config")
-        assert not result.ok
-        assert result.diagnostics
-        assert any("--default-agent" in format_diagnostic(diag) for diag in result.diagnostics)
-
-        # Nothing from the rejected entry was promoted or persisted.
-        assert _ok(s, "1 + 1").value == IntValue(2)
-
-    def test_unparseable_command_text_rejects_only_the_entry_that_triggers_it(self) -> None:
-        """A well-typed ``AgentCommand`` whose text does not shell-split is rejected too.
-
-        Unlike a type-invalid override (caught by ``std/config``'s own
-        typechecking, see ``test_malformed_override_fails_only_the_entry_that_triggers_it``),
-        an unclosed quote in the command text is a syntactically valid
-        constant ``Agent`` expression, so it is only caught when the entry's
-        interpreter is constructed and materializes the winning
-        ``default-agent`` value -- reported as an ordinary per-entry
-        diagnostic (``result.error`` stays ``None``), never a process exit.
+        A typed seed carries no source text to type-check -- it is validated
+        the moment the first entry's interpreter is constructed, whether or
+        not that entry ever imports ``std/config`` (mirrors
+        ``tests/test_agl_pipeline_parse_entry.py``'s
+        ``TestMalformedAgentCommandAtConstruction``).
         """
         s = ReplSession(
             stdlib_root=_STDLIB_ROOT,
             default_stdlib=False,
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("nonexistent-bin -p \'oops")', origin="--default-agent"
-                )
+            engine_base={
+                "default-agent": agent_value("AgentCommand", command="nonexistent-bin -p 'oops")
             },
         )
-        assert _ok(s, "1 + 1").value == IntValue(2)
 
-        result = s.eval_entry("import std/config")
+        result = s.eval_entry("1 + 1")
         assert not result.ok
         assert result.diagnostics
         assert result.error is None
-
-        # Nothing from the rejected entry was promoted or persisted.
-        assert _ok(s, "1 + 1").value == IntValue(2)
-
-    def test_node_ids_stay_disjoint_after_a_spliced_override(self) -> None:
-        """The splice's own parsed nodes never collide with later entries' ids.
-
-        A regression guard for threading ``_apply_setting_overrides``'s
-        updated next-id back into the REPL's node-id counter: reusing the
-        pre-splice id would let a later entry's declaration collide with an
-        identity the spliced override expression already claimed.
-        """
-        s = _unopened_session(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--default-agent"
-                )
-            }
-        )
-        _ok(s, "import std/config")
-        _ok(s, "let a = 1")
-        _ok(s, "let b = 2")
-        result = _ok(s, "a + b")
-        assert result.value == IntValue(3)
-
-    def test_reset_reapplies_the_override_after_a_fresh_std_config_load(self) -> None:
-        s = _unopened_session(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--default-agent"
-                )
-            }
-        )
-        _ok(s, "import std/config")
-        assert _read(s, "default-agent").display_name == "Agent::AgentCommand"
-        _ok(s, 'std/config::default-agent := AgentClaude("haiku", "low")')
-        s.reset()
-
-        _ok(s, "import std/config")
-        value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
-        assert value.fields["command"] == TextValue("overridden")
-
-    def test_reimporting_std_config_does_not_resplice_the_override(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A later entry that re-imports ``std/config`` reuses the cached,
-        already-spliced module rather than re-running the splice: re-splicing
-        would waste work and mint a new, unstable declaration identity for the
-        same builtin var each time (see ``apply_setting_overrides`` in
-        ``agm.agl.pipeline``). Spies on the module loader the same way
-        ``test_stdlib_is_loaded_exactly_once_across_open_and_two_entries``
-        (``test_agl_repl_session.py``) does, counting freshly loaded modules
-        per call rather than call count.
-        """
-        import agm.agl.modules.loader as loader_mod
-
-        original = loader_mod.build_repl_graph
-        new_module_counts: list[int] = []
-
-        def spy(*args: object, **kwargs: object) -> object:
-            result = original(*args, **kwargs)
-            _graph, _next_id, new_modules = result
-            new_module_counts.append(len(new_modules))
-            return result
-
-        monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
-
-        s = _unopened_session(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--default-agent"
-                )
-            }
-        )
-        first = _ok(s, "import std/config\nstd/config::default-agent")
-        assert isinstance(first.value, RecordValue)
-        assert first.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
-        assert first.value.fields["command"] == TextValue("overridden")
-        assert new_module_counts[0] > 0
-
-        second = _ok(s, "import std/config\nstd/config::default-agent")
-        assert isinstance(second.value, RecordValue)
-        assert second.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
-        assert second.value.fields["command"] == TextValue("overridden")
-
-        # The re-import found ``std/config`` already cached: nothing freshly
-        # loaded, so the splice's own declaration identity (and the module's)
-        # is the one the first entry already minted, never a second one.
-        assert new_module_counts[1] == 0

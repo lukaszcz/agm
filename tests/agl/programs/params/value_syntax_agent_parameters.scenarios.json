@@ -87,6 +87,17 @@
           "message_contains": ["worker"]
         }
       }
+    },
+    {
+      "name": "blank_text_is_a_host_error_not_a_command",
+      "params": {
+        "worker": "   "
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["worker"]
+        }
+      }
     }
   ]
 }

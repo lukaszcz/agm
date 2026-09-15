@@ -72,7 +72,6 @@ from agm.agl.semantics.types import (
     transform_type,
 )
 from agm.agl.semantics.values import RecordValue, TextValue
-from agm.agl.setting_overrides import SettingOverride
 from agm.agl.syntax import (
     AssignStmt,
     BuiltinVarDecl,
@@ -175,7 +174,6 @@ def prepare_inline_command(
     entry_path: Path | None = None,
     roots: RootSet | None = None,
     default_stdlib: bool = True,
-    setting_overrides: dict[str, SettingOverride] | None = None,
 ) -> PreparedProgram:
     """Prepare test-only inline source with the ``agm exec -c`` entry transform.
 
@@ -192,7 +190,6 @@ def prepare_inline_command(
         parsed,
         roots=roots,
         default_stdlib=default_stdlib,
-        setting_overrides=setting_overrides,
     )
 
 
@@ -202,7 +199,6 @@ def run_inline_command(
     *,
     roots: RootSet | None = None,
     default_stdlib: bool = True,
-    setting_overrides: dict[str, SettingOverride] | None = None,
     **run_kwargs: object,
 ) -> RunResult:
     """Run test-only inline source through the same entry transform as ``agm exec -c``.
@@ -216,7 +212,6 @@ def run_inline_command(
         source,
         roots=roots,
         default_stdlib=default_stdlib,
-        setting_overrides=setting_overrides,
     )
     param_values = run_kwargs.pop("param_values", None)
     positional = run_kwargs.pop("positional", None)

@@ -7507,13 +7507,14 @@ class TestSessionOpen:
 
     A host (``agm repl``) calls it once, right after constructing the
     session and before printing a banner or accepting input, so a rejected
-    engine-setting override is reported before the session appears to have
-    started. The loaded library modules become the cache the first entry
-    reuses, so opening the session never doubles the standard-library
-    compile a lone first entry would otherwise perform on its own.
+    library module (a syntax, scope, type, or file-read failure) is reported
+    before the session appears to have started. The loaded library modules
+    become the cache the first entry reuses, so opening the session never
+    doubles the standard-library compile a lone first entry would otherwise
+    perform on its own.
     """
 
-    def test_open_with_no_overrides_preloads_the_default_stdlib(self) -> None:
+    def test_open_with_no_engine_seeds_preloads_the_default_stdlib(self) -> None:
         from agm.agl.modules.ids import STD_CONFIG_ID, STD_PRELUDE_ID
 
         s = ReplSession()
@@ -7746,31 +7747,38 @@ class TestSessionOpen:
         assert len(new_module_counts) == 2
         assert all(count > 0 for count in new_module_counts)
 
-    def test_open_does_not_reuse_a_bootstrap_when_settings_are_overridden(
-        self, tmp_path: Path
-    ) -> None:
-        """Source-level setting overrides require a freshly checked std/config."""
-        from agm.agl.setting_overrides import SettingOverride
+    def test_open_reuses_a_bootstrap_regardless_of_engine_base_seeds(self, tmp_path: Path) -> None:
+        """A typed engine seed does not touch the compiled module graph.
 
+        A seeded ``default-agent`` value is applied per entry at interpreter
+        construction, never baked into ``std/config``'s own compilation, so
+        two sessions with different seeds safely share one bootstrap image:
+        each still sees its own seed (or the declared default, unseeded),
+        never a value leaked from another session that shared the image.
+        """
         stdlib = tmp_path / "stdlib"
         copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
         assert ReplSession(stdlib_root=stdlib).open() == ()
 
-        overridden = ReplSession(
+        seeded = ReplSession(
             stdlib_root=stdlib,
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("overridden")', origin="--default-agent"
-                )
-            },
+            engine_base={"default-agent": agent_value("AgentCommand", command="seeded")},
         )
-        assert overridden.open() == ()
-        result = overridden.eval_entry("import std/config\nstd/config::default-agent")
-
-        assert result.ok, result.diagnostics
+        assert seeded.open() == ()
+        result = seeded.eval_entry("import std/config\nstd/config::default-agent")
+        assert result.ok
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name == "Agent::AgentCommand"
-        assert result.value.fields["command"] == TextValue("overridden")
+        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert result.value.fields["command"] == TextValue("seeded")
+
+        unseeded = ReplSession(stdlib_root=stdlib)
+        assert unseeded.open() == ()
+        default_result = unseeded.eval_entry("import std/config\nstd/config::default-agent")
+        assert default_result.ok
+        assert isinstance(default_result.value, RecordValue)
+        assert default_result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert default_result.value.fields["model"] == TextValue("sonnet")
+        assert default_result.value.fields["thinking"] == TextValue("medium")
 
     def test_reopened_sessions_keep_their_library_values_after_eviction(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -7792,16 +7800,16 @@ class TestSessionOpen:
             assert result.ok, result.diagnostics
             assert result.value == IntValue(value)
 
-    def test_open_applies_a_well_formed_override_before_the_first_entry(self) -> None:
-        from agm.agl.semantics.values import RecordValue, TextValue
-        from agm.agl.setting_overrides import SettingOverride
-
+    def test_open_never_rejects_a_default_agent_seed(self) -> None:
+        """``open()`` only loads and checks modules; it never constructs an
+        interpreter, so a seeded ``default-agent`` cannot be rejected here.
+        A malformed command's shell-split failure surfaces only once the
+        first entry constructs its interpreter (see
+        ``tests/test_agl_pipeline_parse_entry.py``'s
+        ``TestMalformedAgentCommandAtConstruction``).
+        """
         s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("preloaded")', origin="--default-agent"
-                )
-            }
+            engine_base={"default-agent": agent_value("AgentCommand", command="preloaded")}
         )
         assert s.open() == ()
 
@@ -7811,64 +7819,9 @@ class TestSessionOpen:
         assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert result.value.fields["command"] == TextValue("preloaded")
 
-    def test_open_rejects_an_unparseable_override_naming_its_origin(self) -> None:
-        from agm.agl.setting_overrides import SettingOverride
-
+    def test_reset_leaves_the_seed_in_force(self) -> None:
         s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(source="(", origin="--default-agent")
-            }
-        )
-        diagnostics = s.open()
-        assert diagnostics
-        from agm.agl.diagnostics import format_diagnostic
-
-        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
-        # A rejected override promotes nothing, so the session is left exactly
-        # as constructed rather than with a half-applied initial image.
-        assert s._loaded_lib_modules == {}
-        assert s._next_node_id == 0
-
-    def test_open_rejects_a_wrong_typed_override_naming_its_origin(self) -> None:
-        from agm.agl.setting_overrides import SettingOverride
-
-        s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(source='"not-an-agent"', origin="--default-agent")
-            }
-        )
-        diagnostics = s.open()
-        assert diagnostics
-        from agm.agl.diagnostics import format_diagnostic
-
-        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
-
-    def test_open_rejects_a_non_constant_override_naming_its_origin(self) -> None:
-        from agm.agl.setting_overrides import SettingOverride
-
-        s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("not " + "constant")', origin="--default-agent"
-                )
-            }
-        )
-        diagnostics = s.open()
-        assert diagnostics
-        from agm.agl.diagnostics import format_diagnostic
-
-        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
-
-    def test_reset_leaves_the_override_in_force(self) -> None:
-        from agm.agl.semantics.values import RecordValue, TextValue
-        from agm.agl.setting_overrides import SettingOverride
-
-        s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("preloaded")', origin="--default-agent"
-                )
-            }
+            engine_base={"default-agent": agent_value("AgentCommand", command="preloaded")}
         )
         assert s.open() == ()
         assert s.eval_entry("import std/config").ok
@@ -7882,18 +7835,25 @@ class TestSessionOpen:
         assert result.value.fields["command"] == TextValue("preloaded")
 
     def test_stdlib_is_loaded_exactly_once_across_open_and_two_entries(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The initial image ``open`` builds is the cache every entry reuses.
 
         Spies on the module loader the way the ``agm exec`` guard does
-        (``test_agl_pipeline_setting_overrides.py``), but counts freshly
+        (``test_agl_pipeline_parse_entry.py``), but counts freshly
         loaded modules per call rather than call count -- ``open`` calls
         ``build_repl_graph`` too, same as an entry, so counting calls alone
         would not distinguish "loaded the stdlib" from "reused the cache".
+
+        Uses its own stdlib copy so its bootstrap cache key is guaranteed
+        fresh -- an engine seed does not disqualify the session-wide
+        bootstrap cache, so a shared default root could otherwise be served
+        from another test's cached image before ``build_repl_graph`` runs.
         """
         import agm.agl.modules.loader as loader_mod
-        from agm.agl.setting_overrides import SettingOverride
+
+        stdlib = tmp_path / "stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
 
         original = loader_mod.build_repl_graph
         new_module_counts: list[int] = []
@@ -7907,11 +7867,8 @@ class TestSessionOpen:
         monkeypatch.setattr(loader_mod, "build_repl_graph", spy)
 
         s = ReplSession(
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("preloaded")', origin="--default-agent"
-                )
-            }
+            stdlib_root=stdlib,
+            engine_base={"default-agent": agent_value("AgentCommand", command="preloaded")},
         )
         assert s.open() == ()
         assert new_module_counts and new_module_counts[0] > 0
@@ -7921,45 +7878,25 @@ class TestSessionOpen:
 
         assert new_module_counts[1:] == [0, 0]
 
-    def test_open_rejects_a_required_override_when_std_config_never_loads(self) -> None:
-        """``--no-stdlib`` never loads ``std/config``, but a ``required`` override
-        (the default; mirrors a CLI ``--default-agent`` flag) is a request the host
-        cannot silently drop -- it still fails ``open()`` up front, rather than
-        being deferred to whichever entry, if any, first imports ``std/config``.
+    def test_default_agent_seed_is_effective_without_stdlib(self) -> None:
+        """A seeded ``default-agent`` reaches the interpreter's register even
+        when ``std/config`` never loads (``default_stdlib=False``): a typed
+        seed carries no per-key provenance and needs no loaded module to
+        take effect, so a malformed command still fails eagerly on the
+        first entry.
         """
-        from agm.agl.diagnostics import format_diagnostic
-        from agm.agl.setting_overrides import SettingOverride
-
         s = ReplSession(
             default_stdlib=False,
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("x")', origin="--default-agent"
-                )
-            },
-        )
-        diagnostics = s.open()
-        assert diagnostics
-        assert any("--default-agent" in format_diagnostic(d) for d in diagnostics)
-        assert s._loaded_lib_modules == {}
-
-    def test_open_with_non_required_override_and_no_stdlib_is_a_harmless_no_op(self) -> None:
-        """A non-``required`` override (ambient configuration, e.g.
-        ``[exec] default-agent``) is simply inert when ``std/config`` never
-        loads: ``open()`` must not fail because of it.
-        """
-        from agm.agl.setting_overrides import SettingOverride
-
-        s = ReplSession(
-            default_stdlib=False,
-            setting_overrides={
-                "default-agent": SettingOverride(
-                    source='AgentCommand("x")', origin="[exec] default-agent", required=False
-                )
+            engine_base={
+                "default-agent": agent_value("AgentCommand", command="nonexistent-bin -p 'oops")
             },
         )
         assert s.open() == ()
         assert s._loaded_lib_modules == {}
+
+        result = s.eval_entry("1 + 1")
+        assert not result.ok
+        assert result.diagnostics
 
     def test_open_reports_an_unreadable_stdlib_module_instead_of_raising(
         self, tmp_path: Path
@@ -7971,8 +7908,8 @@ class TestSessionOpen:
         tuple, the same as it already does for a syntax/scope/type error. A
         module file's own I/O failure -- invalid UTF-8 here, the same class of
         failure a permission-denied file would raise via
-        ``agm.core.fs.read_text`` -- was previously left uncaught, an
-        unhandled ``UnicodeDecodeError`` breaking the "Never raises" contract.
+        ``agm.core.fs.read_text`` -- must not surface as an unhandled
+        ``UnicodeDecodeError``, which would break the "Never raises" contract.
         """
         std_dir = tmp_path / MODULE_TREE_DIRNAME
         std_dir.mkdir()

@@ -508,15 +508,10 @@ class TestReplRun:
         fake_plain_console: list[dict[str, object]],
     ) -> None:
         from agm.agl.semantics.values import RecordValue, TextValue
-        from agm.agl.setting_overrides import SettingOverride
 
         _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args(default_agent='AgentCommand("configured")'))
         session: ReplSession = fake_plain_console[0]["session"]
-        assert session._setting_overrides["default-agent"] == SettingOverride(
-            source='AgentCommand("configured")', origin="--default-agent"
-        )
-        assert "default-agent" not in session._engine_seed
 
         assert session.eval_entry("import std/config").ok
         seeded = session.eval_entry("std/config::default-agent")
@@ -723,21 +718,20 @@ class TestReplRun:
         assert "--default-agent" in capsys.readouterr().err
         assert fake_plain_console == []
 
-    def test_malformed_agent_literal_with_no_stdlib_fails_at_session_open(
+    def test_malformed_agent_literal_with_no_stdlib_exits_before_the_session_builds(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``--no-stdlib`` never loads ``std/config``, but ``--default-agent`` is still an
-        explicit request the host cannot silently drop: it must still exit 1 at
-        session-open time (before the console starts), not be deferred to a
-        later entry that happens to import ``std/config`` (or never come)."""
+        """``--no-stdlib`` never loads ``std/config``, but a malformed
+        ``--default-agent`` literal still exits 1: the decode failure is
+        reported directly, independent of whether any module ever loads."""
         _isolated_home(monkeypatch, tmp_path)
 
         with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(default_agent="(", no_stdlib=True))
+            repl_command.run(_args(default_agent='AgentClaude(model = "x"', no_stdlib=True))
 
         assert exc_info.value.code == 1
         assert "--default-agent" in capsys.readouterr().err
@@ -749,9 +743,10 @@ class TestReplRun:
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
-        """A project-configured ``[exec] default-agent`` is ambient configuration,
-        not a request: with ``--no-stdlib`` (``std/config`` never loads), it must
-        be inert rather than block the session from opening."""
+        """A project-configured ``[exec] default-agent`` decodes and seeds the
+        session cleanly even when ``--no-stdlib`` means ``std/config`` never
+        loads: the seed reaches the interpreter's register independent of the
+        module graph."""
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
         agm_dir.mkdir()
@@ -788,6 +783,36 @@ class TestReplRun:
         assert "Error:" in captured.err
         assert "0.0.1" in captured.err
         assert "just install" in captured.err
+        assert fake_plain_console == []
+
+    def test_open_diagnostics_from_a_broken_stdlib_exit_1_before_the_banner(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """``session.open()`` loading the initial library image can still
+        fail -- e.g. a broken standard-library source -- and that exits 1
+        before any front end prints its banner."""
+        from shutil import copytree
+
+        _isolated_home(monkeypatch, tmp_path)
+
+        stdlib = tmp_path / "broken-stdlib"
+        copytree(Path(__file__).resolve().parent.parent / "packages" / "stdlib", stdlib)
+        config_agl = stdlib / MODULE_TREE_DIRNAME / "config.agl"
+        config_agl.write_text(
+            config_agl.read_text(encoding="utf-8") + '\nlet broken: int = "text"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(repl_command, "resolve_stdlib_root", lambda **_kwargs: stdlib)
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args())
+
+        assert exc_info.value.code == 1
+        assert capsys.readouterr().err
         assert fake_plain_console == []
 
     def test_blank_default_agent_config_literal_exits_1(

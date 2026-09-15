@@ -423,7 +423,12 @@ def _decode_agent_text(
     including a wrong qualifier, which ``_convert_enum`` already rejects --
     propagates as a :class:`ValueDecodeError` rather than silently falling
     back to a verbatim command.
+
+    Whitespace-only text is always an error, before any other reading is
+    tried: an empty command is never a meaningful ``AgentCommand`` fallback.
     """
+    if not text.strip():
+        raise ValueDecodeError(f"expected a non-empty Agent value, got {text!r}")
     shorthand = parse_agent_shorthand(text)
     if shorthand is not None:
         return agent_spec_shape(shorthand)

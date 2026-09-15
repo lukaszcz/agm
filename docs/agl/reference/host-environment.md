@@ -181,7 +181,7 @@ key:
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::strict-json`).
-`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML strings use the shared [Agent syntax](../../commands/agl.md#host-agent-syntax): native shorthand selects Claude, Codex, or Pi, and other text selects `AgentCommand`. The optional settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
+`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML values read the same [host Agent syntax](../../commands/agl.md#host-agent-syntax) as an `Agent`-typed parameter: compact shorthand, then a JSON object, then an `Agent` member constructor call, and otherwise a verbatim command. The optional settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
 
 ### Precedence
 

@@ -90,12 +90,10 @@ a direct `agm repl` entry is a static error.
 - `--max-call-depth N`: Maximum recursion depth (overrides `[exec] max-call-depth`; default 256).
   Exceeding it raises `RecursionError`.
 - `--default-agent AGENT`: Seed `std/config::default-agent`, the agent of `ask` calls without
-  `agent`, in [host Agent syntax](#host-agent-syntax) or canonical constructor syntax
-  (`AgentClaude("sonnet", "medium")`). Typechecked before execution; overrides qualified
-  program-table/`[exec]` config. An `AgentCommand(...)` command is shell-split and validated
-  before execution; a malformed one (e.g. an unclosed quote) exits 1 with nothing run. With
-  `--no-stdlib` on a program that never loads `std/config` it exits 1, whereas a configured
-  `default-agent` is merely inert.
+  `agent`, in [host Agent syntax](#host-agent-syntax). Decoded before execution, overriding
+  qualified program-table/`[exec]` config; effective whether or not the program loads
+  `std/config` or `--no-stdlib` is given. An `AgentCommand(...)` command is shell-split and
+  validated before execution; a malformed one (e.g. an unclosed quote) exits 1 with nothing run.
 - `--timeout DURATION` / `--no-timeout`: Override the initial shell-exec and agent idle
   timeouts, seeding `std/config::timeout` with `Some(DURATION)`, or remove configured ones,
   seeding `None`.
@@ -228,7 +226,8 @@ config table, then the default), so it cannot deliver an empty `text`; use a `""
 
 ### Host Agent syntax
 
-Every CLI argument or TOML string of the standard `Agent` type accepts:
+Every CLI argument or TOML string of the standard `Agent` type accepts (a config value may
+instead be a native TOML table, read directly as the tagged JSON object below):
 
 - `claude/MODEL-EFFORT` → `AgentClaude(MODEL, EFFORT)`
 - `codex/MODEL-EFFORT` → `AgentCodex(MODEL, EFFORT)`
@@ -237,15 +236,15 @@ Every CLI argument or TOML string of the standard `Agent` type accepts:
 
 The last hyphen separates the model from an opaque, non-empty effort suffix of any vocabulary.
 Exact lowercase `claude/` and `codex/` prefixes win over the generic Pi form. Failing shorthand, an
-Agent-typed program parameter or `Agent`-typed flag is read, in order: as a JSON object; then as an
+Agent-typed program parameter, `Agent`-typed flag, `--default-agent`, or the `default-agent` config
+key is read, in order: as a JSON object; then as an
 [AgL value syntax](../agl/reference/host-environment.md#value-syntax) `Agent` member constructor
 call (`AgentCodex(model = "o3", thinking = "high")`, bare or qualified `Agent::AgentPi(...)`); text
-naming no member this way, with no `(` following it, is a verbatim `AgentCommand`. Text that does
-open a member call but fails to read or bind — an unclosed `AgentClaude(model = "x"`, an unknown
-field, a qualifier naming anything but `Agent` — is a host error, not a verbatim command.
-`--default-agent` and the `default-agent` config key instead fall back, after shorthand, straight
-to full AgL constructor syntax (no tagged JSON); other text is likewise a verbatim `AgentCommand`
-(`--default-agent 'worker --flag'`).
+naming no member this way, with no `(` following it, is a verbatim `AgentCommand`
+(`--default-agent 'worker --flag'`). Text that does open a member call but fails to read or bind —
+an unclosed `AgentClaude(model = "x"`, an unknown field, a qualifier naming anything but `Agent` —
+is a host error, not a verbatim command. Whitespace-only text is always a host error, never a
+verbatim empty command.
 
 ### Agents
 
@@ -495,8 +494,7 @@ forces it on a terminal. No flag forces the console onto a non-terminal.
 The REPL reuses `[exec]` settings for `default-agent`, call depth, JSON strictness,
 and timeout. As in `agm exec`, each typed `Agent` value selects its own backend command,
 `--default-agent` and `[exec] default-agent` accept [host Agent syntax](#host-agent-syntax), and
-`--default-agent` with `--no-stdlib` fails if the session never loads `std/config` (during
-session initialization, before the prompt), while `[exec] default-agent` is inert.
+both are effective whether or not the session loads `std/config` or `--no-stdlib` is given.
 
 Free `ask` lazily opens one default conversation, snapshotting `default-agent` at first use;
 later free calls reuse it even if the setting changes. Explicit `Session::open` sessions stay
@@ -599,19 +597,18 @@ Per-entry errors are reported inline and never exit; the REPL fails only before 
 The exception is `std/process::exit(code)`, which ends the REPL with its `0..255` status after
 finalizing the entry's trace.
 
-`--default-agent`/`[exec] default-agent` is validated before the loop: a blank or non-string
-value fails there. A recognized direct Agent constructor is spliced into `std/config` before the
-console starts, so wrong arguments or non-constant fields are resolved, type-checked, and
-constant-checked before the banner, with errors naming the flag or config key. Other text is
-custom command text, not an AgL parse error. An `AgentCommand(...)` whose command does not
-shell-split fails only when the first entry constructs the interpreter (session initialization
-constructs none); construction validates the winning value before any statement runs, so even
-an entry with no agent dispatch reports it inline without exiting.
+`--default-agent`/`[exec] default-agent` is decoded before the loop, before the session is even
+built: a blank value, or text that opens a constructor call but fails to read or bind, exits with
+an error naming the flag or config key. Other text is custom command text, not an AgL parse error.
+An `AgentCommand(...)` whose command does not shell-split fails only when the first entry
+constructs the interpreter (session initialization constructs none); construction validates the
+winning value before any statement runs, so even an entry with no agent dispatch reports it inline
+without exiting.
 
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: a blank/non-string or invalid canonical constructor in `[exec] default-agent` or `--default-agent`, or an unwritable `--log-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: a blank or invalid `[exec] default-agent` or `--default-agent`, or an unwritable `--log-file` — reported before the prompt appears |
 
 ### Examples
 

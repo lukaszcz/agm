@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
-    from agm.agl.modules.loader import LoadedModule, ModuleGraph
+    from agm.agl.modules.loader import ModuleGraph
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.arguments import ProgramArguments
     from agm.agl.runtime.codec import OutputCodec
@@ -64,7 +64,6 @@ if TYPE_CHECKING:
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import ExceptionValue, Value
-    from agm.agl.setting_overrides import SettingOverride
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import FuncDef, Program
     from agm.agl.syntax.types import TypeExpr
@@ -700,29 +699,16 @@ class PipelineDriver:
         roots: "RootSet | None" = None,
         package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
-        setting_overrides: "Mapping[str, SettingOverride] | None" = None,
     ) -> PreparedProgram:
         """Load imports and resolve scope for an already-parsed entry.
 
         The second half of :meth:`prepare_program`, taking
         :meth:`parse_entry`'s result: drives
-        ``load imports → apply setting_overrides → resolve_program``.
+        ``load imports → resolve_program``.
 
-        ``setting_overrides``, when given, splices each named engine key's
-        AgL source text in as its ``std/config`` ``builtin var`` declaration's
-        default *after* the module graph is loaded but *before* scope
-        resolution — so the override is resolved, type-checked, and
-        constant-checked by this same pass, never by a second compilation.  A
-        rejected override (unparseable source, not exactly one expression, an
-        unknown engine key, or a graph with no loaded ``std/config``) is
-        captured as a diagnostic naming the override's origin; a type or
-        constant-expression violation surfaces later, from the ordinary
-        ``builtin var`` checking in :meth:`run_prepared`/:meth:`discover_programs`.
-
-        Non-raising in the same way as :meth:`prepare_program`: every load,
-        override, or scope failure is captured into
-        :attr:`PreparedProgram.diagnostics` rather than raised, with
-        ``resolved`` left ``None``.
+        Non-raising in the same way as :meth:`prepare_program`: every load or
+        scope failure is captured into :attr:`PreparedProgram.diagnostics`
+        rather than raised, with ``resolved`` left ``None``.
         """
         from agm.agl.lexer import tab_warning_collector
         from agm.agl.modules.errors import (
@@ -785,7 +771,7 @@ class PipelineDriver:
         with tab_warning_collector() as tab_sink:
             try:
                 with frontend_recursion_boundary():
-                    graph, next_id, newly_loaded_modules = build_repl_graph(
+                    graph, next_id, _ = build_repl_graph(
                         parsed.program,
                         parsed.next_id,
                         path=entry_path,
@@ -840,23 +826,6 @@ class PipelineDriver:
                 )
         warnings: tuple[Diagnostic, ...] = (*parsed.warnings, *tab_sink)
 
-        if setting_overrides:
-            # A one-shot compile: whether or not ``std/config`` is in this
-            # graph, this is the only chance to apply/validate the overrides,
-            # so a ``required`` override (e.g. ``--default-agent``) must be validated
-            # even when ``std/config`` never loads (``validate_when_absent=True``).
-            graph, next_id, override_diagnostics, _newly_loaded_modules = apply_setting_overrides(
-                graph,
-                next_id,
-                setting_overrides,
-                newly_loaded_modules=newly_loaded_modules,
-                validate_when_absent=True,
-            )
-            if override_diagnostics:
-                return PreparedProgram(
-                    entry_source, entry_path, roots, None, tuple(override_diagnostics), warnings
-                )
-
         try:
             with frontend_recursion_boundary():
                 resolved = resolve_program(graph)
@@ -897,7 +866,6 @@ class PipelineDriver:
         roots: "RootSet | None" = None,
         package_roots: "Iterable[PackageInfo]" = (),
         default_stdlib: bool = True,
-        setting_overrides: "Mapping[str, SettingOverride] | None" = None,
     ) -> PreparedProgram:
         """Load and resolve the program rooted at *entry_source* once.
 
@@ -905,11 +873,6 @@ class PipelineDriver:
         and every reachable module — a thin wrapper over :meth:`parse_entry`
         followed by :meth:`prepare_parsed_entry`, kept for callers that have
         no use for the split (most of them).
-
-        ``setting_overrides`` maps an engine key (e.g. ``"default-agent"``) to
-        a :class:`~agm.agl.setting_overrides.SettingOverride` supplying its
-        default as host-provided AgL source text; see
-        :meth:`prepare_parsed_entry` for how it is applied and diagnosed.
 
         Non-raising: any load (``ModuleNotFound``, ``AmbiguousModule``,
         ``ModulePrefixNotFound``, ``ImportEntryError``), parse
@@ -924,7 +887,6 @@ class PipelineDriver:
             roots=roots,
             package_roots=package_roots,
             default_stdlib=default_stdlib,
-            setting_overrides=setting_overrides,
         )
 
     def run(
@@ -1626,183 +1588,6 @@ def _annotates_path(
             checked, module_id, scope_path, type_expr.args[0], resolved.type_args[0]
         )
     )
-
-
-def apply_setting_overrides(
-    graph: "ModuleGraph",
-    next_id: int,
-    overrides: "Mapping[str, SettingOverride]",
-    *,
-    newly_loaded_modules: "Mapping[ModuleId, LoadedModule]",
-    validate_when_absent: bool,
-) -> "tuple[ModuleGraph, int, list[Diagnostic], dict[ModuleId, LoadedModule]]":
-    """Own the splice-once apply condition and module-cache reconciliation.
-
-    The public seam both one-shot hosts (``PipelineDriver.prepare_parsed_entry``)
-    and incremental ones (``EntryPipeline.load_and_check_program``, shared by
-    the REPL's ``open()`` and ``eval_entry``) call, so neither has to
-    rediscover *when* ``_apply_setting_overrides`` may run or how to keep a
-    caller's own module cache in sync with the spliced result.
-
-    *newly_loaded_modules* is the ``build_repl_graph``/``load_and_check_program``
-    "loaded during this call" dict (not the caller's whole cache): it decides
-    which of three states *graph* is in for ``std/config``, keyed off
-    :data:`~agm.agl.modules.ids.STD_CONFIG_ID`:
-
-    - Already spliced by an earlier call this session (present in
-      ``graph.modules`` but not freshly loaded this round) — a no-op, since
-      splicing a second time would both waste work and mint a new, unstable
-      declaration identity for the same ``builtin var``.
-    - Freshly loaded this round — splice via :func:`_apply_setting_overrides`,
-      then return *newly_loaded_modules* updated with the spliced module, so
-      whichever cache the caller promotes it into (the REPL's
-      ``_loaded_lib_modules``) holds the SPLICED module, not the pre-splice one.
-    - Never loaded at all — nothing to splice into. *validate_when_absent*
-      decides whether this is reported now: ``True`` (every one-shot host,
-      and the REPL's ``open()``, which validates a CLI-required override up
-      front even without ``std/config``) still runs
-      :func:`_apply_setting_overrides` so a ``required`` override's
-      diagnostic surfaces as early as the host can report it; ``False`` (an
-      ordinary REPL entry) defers entirely, leaving even a ``required``
-      override unvalidated until whichever later entry, if any, first loads
-      ``std/config``.
-
-    Returns *overrides* unchanged (empty diagnostics, *newly_loaded_modules*
-    as given) when *overrides* is empty, so every caller can call this
-    unconditionally.
-    """
-    from agm.agl.modules.ids import STD_CONFIG_ID
-
-    if not overrides:
-        return graph, next_id, [], dict(newly_loaded_modules)
-
-    freshly_loaded = STD_CONFIG_ID in newly_loaded_modules
-    already_loaded = STD_CONFIG_ID in graph.modules
-
-    if not freshly_loaded and already_loaded:
-        return graph, next_id, [], dict(newly_loaded_modules)
-    if not freshly_loaded and not already_loaded and not validate_when_absent:
-        return graph, next_id, [], dict(newly_loaded_modules)
-
-    graph, next_id, diagnostics = _apply_setting_overrides(graph, next_id, overrides)
-    if diagnostics or not freshly_loaded:
-        return graph, next_id, diagnostics, dict(newly_loaded_modules)
-    reconciled = {**newly_loaded_modules, STD_CONFIG_ID: graph.modules[STD_CONFIG_ID]}
-    return graph, next_id, [], reconciled
-
-
-def _apply_setting_overrides(
-    graph: "ModuleGraph",
-    next_id: int,
-    overrides: "Mapping[str, SettingOverride]",
-) -> "tuple[ModuleGraph, int, list[Diagnostic]]":
-    """Splice each override's parsed expression in as its engine key's default.
-
-    Runs after the module graph is loaded and before scope resolution, so
-    every spliced expression is resolved, type-checked, and constant-checked
-    by the ordinary ``std/config`` ``builtin var`` machinery
-    (``typecheck.checker._check_builtin_var``) exactly as if it had been
-    written in ``std/config.agl`` itself — no separate compilation. Node ids
-    for the parsed override expressions are seeded from *next_id*, the first
-    id not yet used anywhere in *graph*, so they stay disjoint from every
-    loaded module.  The returned ``int`` is the first id still unused after
-    every override's expression was parsed — a one-shot batch caller (e.g.
-    ``prepare_parsed_entry``) has no further use for it, but an incremental
-    host that keeps minting node ids afterward (the REPL, which caches and
-    reuses the spliced module across later entries) must continue from it
-    rather than from the pre-splice *next_id*, to keep every later entry's
-    ids disjoint from the ones spliced here.
-
-    Diagnostics — never exceptions — are returned for: unparseable override
-    source, an override that is not exactly one expression, an engine key no
-    loaded ``builtin var`` declares, and a graph with no loaded ``std/config``
-    module (e.g. ``default_stdlib=False`` with no explicit import of it) when
-    the override is :attr:`~agm.agl.setting_overrides.SettingOverride.required`
-    — a non-``required`` override is skipped silently in that case instead,
-    since it is ambient configuration rather than a request the host must
-    honor. Each diagnostic names the offending override's ``origin``.
-    Overrides are processed in sorted key order for deterministic diagnostics.
-
-    Callers reach this only through :func:`apply_setting_overrides`, which
-    decides *when* it may run; this function itself has no opinion on that.
-    """
-    from dataclasses import replace as dc_replace
-
-    from agm.agl.modules.ids import STD_CONFIG_ID
-    from agm.agl.parser import AglSyntaxError
-    from agm.agl.parser.parser import parse_program_seeded
-    from agm.agl.syntax.nodes import BuiltinVarDecl, Expr
-    from agm.agl.syntax.spans import SourceId
-
-    diagnostics: list[Diagnostic] = []
-    modules = dict(graph.modules)
-    std_config = modules.get(STD_CONFIG_ID)
-
-    for key in sorted(overrides):
-        override = overrides[key]
-        if std_config is None and not override.required:
-            # Ambient configuration, not a request: inert when std/config
-            # never loads, so it is skipped without even being parsed.
-            continue
-        try:
-            override_program, next_id = parse_program_seeded(
-                override.source, start_id=next_id, source=SourceId(label=override.origin)
-            )
-        except AglSyntaxError as exc:
-            base = exc.to_diagnostic()
-            diagnostics.append(
-                dc_replace(
-                    base,
-                    message=f"{override.origin}: invalid AgL expression: {base.message}",
-                )
-            )
-            continue
-
-        items = override_program.body.items
-        if len(items) != 1 or not isinstance(items[0], Expr):
-            diagnostics.append(
-                diagnostic_from_span(
-                    f"{override.origin}: expected exactly one AgL expression, "
-                    f"got {override.source!r}",
-                    override_program.span,
-                )
-            )
-            continue
-        value_expr = items[0]
-
-        if std_config is None:
-            diagnostics.append(
-                diagnostic_from_span(
-                    f"{override.origin}: cannot override engine key {key!r}: the "
-                    "standard library module 'std/config' is not loaded",
-                    override_program.span,
-                )
-            )
-            continue
-
-        target_index: int | None = None
-        target_decl: BuiltinVarDecl | None = None
-        for i, item in enumerate(std_config.program.body.items):
-            if isinstance(item, BuiltinVarDecl) and item.name == key:
-                target_index = i
-                target_decl = item
-                break
-        if target_index is None or target_decl is None:
-            diagnostics.append(
-                diagnostic_from_span(
-                    f"{override.origin}: unknown engine key {key!r}", override_program.span
-                )
-            )
-            continue
-
-        new_items = list(std_config.program.body.items)
-        new_items[target_index] = dc_replace(target_decl, default=value_expr)
-        new_body = dc_replace(std_config.program.body, items=tuple(new_items))
-        new_program = dc_replace(std_config.program, body=new_body)
-        std_config = dc_replace(std_config, program=new_program)
-        modules[STD_CONFIG_ID] = std_config
-
-    return dc_replace(graph, modules=modules), next_id, diagnostics
 
 
 def _check_artifact_provenance(

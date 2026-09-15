@@ -52,10 +52,9 @@ def raw_option_str(
 
 
 def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
-    """Decode explicitly supplied scalar or ``Option`` host engine settings.
+    """Decode explicitly supplied scalar, ``Option``, or ``Agent`` host engine settings.
 
-    Callers seed ``default-agent`` separately as a typed ``Agent`` value. The
-    returned mapping deliberately omits absent keys. This preserves the
+    The returned mapping deliberately omits absent keys. This preserves the
     distinction between a host control and the runtime fallback, letting a
     ``builtin var`` initializer supply the latter.  A present value of
     ``None`` remains meaningful for ``Option`` settings such as ``timeout``.
@@ -112,8 +111,10 @@ def convert_host_value(
     *type_obj*: the boxed payload decodes against ``T``'s own field schema and
     is wrapped into the enum's ``Some`` shape, exactly as a program's own
     ``Option[T]`` parameter decodes. Types with no wire schema
-    (unit/agent/exception/…) are rejected up front. *type_table* resolves
-    record/enum field/variant shapes for *type_obj*.
+    (unit/function/exception/…) are rejected up front; the builtin ``Agent``
+    enum has an ordinary wire schema, dispatched through its own shorthand
+    and constructor-call reading. *type_table* resolves record/enum
+    field/variant shapes for *type_obj*.
     """
     from agm.agl.runtime.arguments import decode_param_value
     from agm.agl.runtime.convert import StrictJsonParseError
@@ -132,11 +133,11 @@ def convert_host_value(
 def convert_config_value(
     name: str, raw: object, key_type: AglType, type_table: "TypeTable | None" = None
 ) -> "Value":
-    """Convert a raw scalar or ``Option`` host engine value to its AgL type.
+    """Convert a raw scalar, ``Option``, or ``Agent`` host engine value to its AgL type.
 
     ``default-agent`` is an ``Agent`` value, not a scalar or ``Option`` setting;
-    a host-supplied AgL literal (``--default-agent``/``[exec] default-agent``) is parsed
-    separately as an engine-setting override rather than through this helper.
+    its host-supplied text or JSON-shaped data (``--default-agent``/config)
+    decodes through :func:`convert_host_value` exactly like every other key.
     For ``Option[T]`` engine keys (``timeout``, ``log-file``) a present *raw*
     is boxed as an :class:`~agm.agl.runtime.arguments.OptionSome` and decoded
     through :func:`convert_host_value` against the *whole* ``Option[T]``
@@ -145,8 +146,9 @@ def convert_config_value(
     Non-Option keys decode directly through :func:`convert_host_value`.
     *type_table* is threaded through to it.
 
-    The settings accepted here are built-in scalar or ``Option[text]`` types,
-    never user-declared nominal types, so *type_table* defaults to a fresh
+    The settings accepted here are built-in scalar, ``Option[text]``, or the
+    builtin ``Agent`` enum, never user-declared nominal types, so *type_table*
+    defaults to a fresh
     seeded ``TypeTable`` when the caller has none in hand (e.g. CLI-flag config
     projection); callers that already hold the session/program table (the
     REPL) pass it explicitly.

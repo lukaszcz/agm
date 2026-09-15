@@ -132,9 +132,7 @@ def run(args: ReplArgs) -> None:
 
     # Seed only explicit CLI/config controls.  Trace-service fallbacks remain
     # absent so a ``builtin var`` initializer can provide the setting default.
-    # The raw timeout preserves its configured spelling. A host Agent value
-    # (``--default-agent``/``[exec] default-agent``) becomes an override spliced into
-    # the session's own first-loaded ``std/config`` rather than a seed value.
+    # The raw timeout preserves its configured spelling.
     cli_values: dict[str, object | None] = {}
     if args.strict_json is not None:
         cli_values["strict-json"] = args.strict_json
@@ -144,12 +142,13 @@ def run(args: ReplArgs) -> None:
         cli_values["log"] = True
     if args.log_file is not None:
         cli_values["log-file"] = args.log_file
+    if args.default_agent is not None:
+        cli_values["default-agent"] = args.default_agent
 
     engine_seeds = build_host_engine_seeds(
         config=config,
         primary_table=toml_dict(merged_config.get("exec")),
         cli_values=cli_values,
-        default_agent=args.default_agent,
     )
 
     process_environment = dict(os.environ)
@@ -161,9 +160,8 @@ def run(args: ReplArgs) -> None:
             session_host=session_host,
             shell_exec_timeout=config.timeout,
             trace_path=trace_path,
-            engine_base=engine_seeds.values,
+            engine_base=engine_seeds,
             process_environment=process_environment,
-            setting_overrides=engine_seeds.overrides,
             host_settings_policy=host_settings_policy,
             cwd=ctx.cwd,
             stdlib_root=stdlib_root,
@@ -173,11 +171,10 @@ def run(args: ReplArgs) -> None:
             default_stdlib=not args.no_stdlib,
         )
 
-        # Load and check the session's initial library image now, so a rejected
-        # ``--default-agent``/``[exec] default-agent`` override (or any other startup
-        # failure loading the standard library) exits before the console opens
-        # and prints its banner, rather than surfacing only once the first entry
-        # happens to load ``std/config``.
+        # Load and check the session's initial library image now, so any
+        # startup failure loading the standard library exits before the
+        # console opens and prints its banner, rather than surfacing only
+        # once the first entry runs.
         open_diagnostics = session.open()
         if open_diagnostics:
             for diagnostic in open_diagnostics:

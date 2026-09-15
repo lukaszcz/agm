@@ -665,7 +665,8 @@ class ExecConfig:
     timeout: float | None
     log: bool
     log_file: str | None
-    # Raw TOML value: only exec/repl may normalize it as a host Agent value.
+    # Raw TOML value (a string or a native table): exec/repl decode it as a
+    # host Agent value through the shared host-value decoder.
     default_agent: object | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
@@ -730,9 +731,10 @@ def exec_config_from_merged(
 
     resolved_log = _optional_bool(effective, "log")
     resolved_log_file = _optional_str(effective, "log-file")
-    # Keep every explicitly supplied Agent value raw so exec/repl can normalize
-    # strings and diagnose empty or non-string values at their AgL host boundary;
-    # other commands stay free of AgL imports.
+    # Keep every explicitly supplied Agent value raw (a string or a native
+    # TOML table) so exec/repl can decode it through the shared host-value
+    # decoder at their AgL host boundary; other commands stay free of AgL
+    # imports.
     resolved_default_agent = effective.get("default-agent")
 
     return ExecConfig(

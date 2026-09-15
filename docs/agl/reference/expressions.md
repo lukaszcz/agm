@@ -495,7 +495,7 @@ with `key` and `message` fields.
 
 All calls use the same uniform parenthesized syntax. This applies equally to
 user `def`s, built-in functions (`ask`, `exec`, `print`, `render`, `copy`,
-`shallow-copy`, `resource`, `resource-dir`), and
+`shallow-copy`, `parse`, `try-parse`, `resource`, `resource-dir`), and
 function values stored in bindings:
 
 ```ebnf
@@ -632,6 +632,12 @@ let package-root = resource-dir()
 `copy` and `shallow-copy` are the built-ins that ask for an independent value
 when binding is by reference — see [Copying values](types.md#copying-values)
 for the full deep-vs-shallow model and how each treats a cyclic value.
+
+## `parse` and `try-parse`
+
+`parse` and `try-parse` read a text as a value of a data type, like a
+`text`-to-`T` cast but raising `ValueParseError` or returning a `Result` —
+see [Parsing values](types.md#parsing-values).
 
 ## Operators
 

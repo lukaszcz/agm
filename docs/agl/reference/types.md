@@ -1163,7 +1163,9 @@ interpret it as a JSON value. This is a total, no-parse cast.
 
 To parse the *contents* of a text as JSON, import `std/json` and use
 `json::parse("42")`. It produces the JSON number `42` and raises
-`JsonParseError` (`std/json`) on malformed input.
+`JsonParseError` (`std/json`) on malformed input. To read the contents of a
+text as a value of a specific data type, use `parse`/`try-parse`
+([Parsing values](#parsing-values)).
 
 ## Values and equality
 

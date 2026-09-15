@@ -168,7 +168,9 @@ contract to `text`. Configured variants can be expressed with a lambda around a
 direct call. Built-in methods produce receiver-capturing values, and qualified
 method or `Session` static references produce ordinary positional function
 values. `resource` is call-only because its path must be a source literal resolved
-at link time; the nullary `resource-dir` is a function value.
+at link time; the nullary `resource-dir` is a function value. `parse` and
+`try-parse` are call-only because their target type comes from the call's
+explicit type argument or expected type ([Parsing values](types.md#parsing-values)).
 
 ### Externally implemented functions
 

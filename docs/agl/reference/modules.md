@@ -287,7 +287,7 @@ rows, `std/path`'s `path` type alone, and `std/env`'s `getenv` alone. The rest a
 | ------ | -------- |
 | `std/errors` | the built-in exception hierarchy |
 | `std/fun` | the function application and composition combinators |
-| `std/io`, `std/value` | printing; rendering and copying values |
+| `std/io`, `std/value` | printing; rendering, copying, and parsing values |
 | `std/exec`, `std/agent`, `std/session` | shell execution, agent calls, and agent sessions |
 | `std/package` | package resource lookup |
 | `std/option`, `std/pair`, `std/either`, `std/result` | `Option[T]`, `Pair[A, B]`, `Either[A, B]`, and `Result[T, E]` |

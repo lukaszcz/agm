@@ -22,4 +22,4 @@ program def main() -> unit =
   print (scoped.first + scoped.second)
 
   let inner = A::make-local()
-  print (inner.first + inner.second)
+  print (inner.first ++ inner.second)

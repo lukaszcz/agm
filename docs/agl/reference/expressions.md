@@ -669,12 +669,14 @@ issue in issues          # element membership:  issues: array[T]
 
 ### Arithmetic: `+` `-` `*` `/` and unary `-`
 
-1. `+ - *` on two `int` values yield `int`; if either is `decimal`, the
-   result is `decimal`.
+1. Both operands must be numeric. `+ - *` on two `int` values yield `int`; if
+   either is `decimal`, the result is `decimal`.
 2. `/` **always yields `decimal`**, even for two `int` operands.
 3. Division by zero raises `ArithmeticError` at runtime.
-4. `+` on two `text` values is concatenation.
-5. Unary `-` negates an `int` or `decimal`.
+4. Unary `-` negates an `int` or `decimal`.
+
+Text is concatenated with the prelude operator `++`, not `+`; see
+[Prelude combinators](lexical-structure.md#prelude-combinators).
 
 ### Boolean: `and`, `or`, `not`
 
@@ -779,7 +781,7 @@ of a higher-order function, or the arguments of a direct or partial call.
 ```agl
 program def main() -> unit =
   print([1, 2, 3].fold(0, (+)))         # 6
-  print(["a", "b"].fold("", (+)))       # ab
+  print(["a", "b"].map((==)(?, "a")))   # [true, false]
   print([3, 1, 2].sort((-)))            # [1, 2, 3]
   print([1, 5, 9].filter((<)(?, 4)))    # [1]
   let ratio: (int, int) -> decimal = (/)

@@ -120,7 +120,7 @@ def contains(kind: ContainsKind, item: Value, container: Value) -> bool:
 
 
 def add(kind: ArithKind, left: Value, right: Value) -> Value:
-    """Addition/concatenation: INT, DECIMAL (with widening), or TEXT."""
+    """Addition: INT or DECIMAL (with widening)."""
     match kind:
         case ArithKind.INT:
             if not isinstance(left, IntValue) or not isinstance(right, IntValue):
@@ -138,19 +138,12 @@ def add(kind: ArithKind, left: Value, right: Value) -> Value:
                     f" {type(left).__name__}+{type(right).__name__}"
                 )
             return DecimalValue(_to_decimal(left) + _to_decimal(right))
-        case ArithKind.TEXT:
-            if not isinstance(left, TextValue) or not isinstance(right, TextValue):
-                raise AssertionError(
-                    f"add TEXT: expected TextValue+TextValue, got"
-                    f" {type(left).__name__}+{type(right).__name__}"
-                )
-            return TextValue(left.value + right.value)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
 def sub(kind: ArithKind, left: Value, right: Value) -> Value:
-    """Subtraction: INT or DECIMAL only (TEXT is not valid)."""
+    """Subtraction: INT or DECIMAL (with widening)."""
     match kind:
         case ArithKind.INT:
             if not isinstance(left, IntValue) or not isinstance(right, IntValue):
@@ -168,14 +161,12 @@ def sub(kind: ArithKind, left: Value, right: Value) -> Value:
                     f" {type(left).__name__}+{type(right).__name__}"
                 )
             return DecimalValue(_to_decimal(left) - _to_decimal(right))
-        case ArithKind.TEXT:
-            raise AssertionError("sub: TEXT kind is not valid for subtraction")
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
 def mul(kind: ArithKind, left: Value, right: Value) -> Value:
-    """Multiplication: INT or DECIMAL only (TEXT is not valid)."""
+    """Multiplication: INT or DECIMAL (with widening)."""
     match kind:
         case ArithKind.INT:
             if not isinstance(left, IntValue) or not isinstance(right, IntValue):
@@ -193,8 +184,6 @@ def mul(kind: ArithKind, left: Value, right: Value) -> Value:
                     f" {type(left).__name__}+{type(right).__name__}"
                 )
             return DecimalValue(_to_decimal(left) * _to_decimal(right))
-        case ArithKind.TEXT:
-            raise AssertionError("mul: TEXT kind is not valid for multiplication")
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 

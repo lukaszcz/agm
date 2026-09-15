@@ -8,7 +8,7 @@ scope Codec
   record Pair[T](first: T)
   type Boxed[T] = Pair[T]
 
-  def wrap(payload: text) -> Encoded = Frame("w:" + payload)
+  def wrap(payload: text) -> Encoded = Frame("w:" ++ payload)
 end Codec
 
 program def main() -> unit =

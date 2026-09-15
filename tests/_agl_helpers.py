@@ -54,7 +54,6 @@ from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
-from agm.agl.parser import parse_program_seeded, wrap_inline_program
 from agm.agl.pipeline import PreparedProgram, ProgramDiscovery, RunResult
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.types import ProgramDeclInfo
@@ -90,7 +89,6 @@ from agm.agl.syntax import (
     UseDecl,
     VarDecl,
 )
-from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.zones import ParamZone
 
@@ -159,17 +157,6 @@ def write_file_program(path: Path, source: str, **kwargs: str) -> None:
     path.write_text(file_program(source), **kwargs)
 
 
-def parse_inline_command(source: str) -> tuple[Program, int, bool]:
-    """Parse inline ``agm exec -c`` source and synthesize its entry when needed.
-
-    Returns the executable program, its next node id, and whether a synthetic
-    ``main`` was added. Static-root tests must parse source directly instead.
-    """
-    program, next_node_id = parse_program_seeded(source, start_id=0)
-    wrapped, next_node_id = wrap_inline_program(program, next_node_id=next_node_id)
-    return wrapped, next_node_id, wrapped is not program
-
-
 def prepare_inline_command(
     source: str,
     *,
@@ -182,12 +169,7 @@ def prepare_inline_command(
     ``entry_path`` is ``None`` for real inline sources; the corpus passes a path
     for programs whose builtins need a file-backed anchor (``resource``).
     """
-    from dataclasses import replace
-
-    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path)
-    if parsed.program is not None:
-        program, next_node_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
-        parsed = replace(parsed, program=program, next_id=next_node_id)
+    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path, inline_command=True)
     return PipelineDriver.prepare_parsed_entry(
         parsed,
         roots=roots,
@@ -201,6 +183,7 @@ def run_inline_command(
     *,
     roots: RootSet | None = None,
     default_stdlib: bool = True,
+    entry_path: Path | None = None,
     **run_kwargs: object,
 ) -> RunResult:
     """Run test-only inline source through the same entry transform as ``agm exec -c``.
@@ -211,6 +194,7 @@ def run_inline_command(
     """
     prepared = prepare_inline_command(
         source,
+        entry_path=entry_path,
         roots=roots,
         default_stdlib=default_stdlib,
     )

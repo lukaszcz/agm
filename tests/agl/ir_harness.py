@@ -11,29 +11,27 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBlock, IrConstUnit, IrExpr
-from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody, IrFunctionBody
+from agm.agl.ir.program import ExecutableProgram, IrFunctionBody
 from agm.agl.lexer import spaced_qualifier_collector
 from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram, compile_program_matches
 from agm.agl.matchcompile.stage import _compile_owner_sites
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import ModuleGraph, build_repl_graph, load_graph
+from agm.agl.modules.loader import ModuleGraph, build_repl_graph, load_graph, parse_entry_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded
+from agm.agl.pipeline import PipelineDriver, RunError, RunResult
 from agm.agl.runtime.agents import AgentFn
-from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ScopeNode
-from agm.agl.semantics.exceptions import AglRaise
-from agm.agl.semantics.values import ExceptionValue, Value
+from agm.agl.semantics.values import Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
-from tests._agl_helpers import agl_roots, parse_inline_command
+from tests._agl_helpers import agl_roots, run_inline_command
 from tests.agl.module_graph import build_module_graph, build_module_graph_from_program
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "packages" / "stdlib"
@@ -74,12 +72,13 @@ def _checked_inline_program(
     Raw lowering helpers intentionally do not call this: shape tests must
     supply static-root source explicitly.
     """
-    program, next_node_id, _wrapped = parse_inline_command(source)
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
     graph, _import_node_id = build_module_graph_from_program(
-        program,
-        next_node_id=next_node_id,
+        parsed.program,
+        next_node_id=parsed.next_id,
         origin_path=origin_path,
         default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
     )
     return check_program(resolve_program(graph), caps or base_caps())
 
@@ -260,45 +259,66 @@ def lower_inline_ir(
     )
 
 
-def _run_ir(
+def run_inline_ir(
     source: str,
     *,
-    caps: HostCapabilities | None = None,
     agent_dispatcher: AgentFn | None = None,
     default_stdlib: bool = True,
+    entry_path: Path | None = None,
+    roots: RootSet | None = None,
     process_environment: dict[str, str] | None = None,
     shell_exec_timeout: float | None = None,
-) -> tuple[dict[str, Value], str]:
-    executable = lower_inline_ir(source, caps=caps, default_stdlib=default_stdlib)
+) -> tuple[RunResult, str]:
+    """Run *source* as ``agm exec -c`` through :class:`PipelineDriver`, capturing stdout.
+
+    The driver receives only the test's own agent dispatcher; without one, an
+    agent call fails instead of reaching a real agent.
+    """
+    runtime = PipelineDriver(
+        agent_dispatcher=agent_dispatcher, shell_exec_timeout=shell_exec_timeout
+    )
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        result = IrInterpreter(
-            executable,
-            agent_dispatcher=agent_dispatcher,
+        result = run_inline_command(
+            runtime,
+            source,
+            roots=_roots() if roots is None else roots,
+            default_stdlib=default_stdlib,
+            entry_path=entry_path,
             process_environment=process_environment,
-            shell_exec_timeout=shell_exec_timeout,
-        ).run(program_symbol=executable.synthetic_main_symbol)
+        )
     return result, output.getvalue()
+
+
+def completed_bindings(run: tuple[RunResult, str]) -> dict[str, Value]:
+    """Return the bindings of a run that must have succeeded."""
+    result, _ = run
+    assert result.ok, (result.diagnostics, result.error)
+    return result.bindings
+
+
+def uncaught_error(run: tuple[RunResult, str]) -> RunError:
+    """Return the uncaught AgL exception a run must have ended with."""
+    result, _ = run
+    assert result.error is not None, (result.diagnostics, result.bindings)
+    return result.error
 
 
 def evaluate_ir(source: str, *, default_stdlib: bool = True) -> dict[str, Value]:
     """Run a statement-oriented inline command and return module bindings."""
-    result, _ = _run_ir(source, default_stdlib=default_stdlib)
-    return result
+    return completed_bindings(run_inline_ir(source, default_stdlib=default_stdlib))
 
 
 def evaluate_ir_output(source: str, *, default_stdlib: bool = True) -> str:
     """Run the program through the IR pipeline and return its captured stdout."""
-    _, output = _run_ir(source, default_stdlib=default_stdlib)
-    return output
+    run = run_inline_ir(source, default_stdlib=default_stdlib)
+    completed_bindings(run)
+    return run[1]
 
 
-def evaluate_ir_raises(source: str, *, default_stdlib: bool = True) -> ExceptionValue:
-    try:
-        _run_ir(source, default_stdlib=default_stdlib)
-    except AglRaise as exc:
-        return exc.exc
-    raise AssertionError("IR pipeline did not raise AglRaise")
+def evaluate_ir_raises(source: str, *, default_stdlib: bool = True) -> RunError:
+    """Run a program that must end with an uncaught AgL exception."""
+    return uncaught_error(run_inline_ir(source, default_stdlib=default_stdlib))
 
 
 def write_module_file(root: Path, module_path: str, source: str) -> Path:
@@ -327,76 +347,47 @@ def age_file(path: Path, *, seconds: int = 3600) -> None:
     os.utime(path, ns=(stamp, stamp))
 
 
-def _prepare_extern_program(
-    source: str,
-    companion_source: str,
-    tmp_path: Path,
-    *,
-    caps: HostCapabilities | None = None,
-) -> tuple[ExecutableProgram, ExternRegistry]:
-    """Resolve + check + lower an extern-declaring *source* through a real module graph.
+def _write_extern_entry(source: str, companion_source: str, tmp_path: Path) -> Path:
+    """Write an extern-declaring entry and its Python companion as real sibling files.
 
-    Writes *source* and *companion_source* as real sibling files on disk (an
-    extern def needs a resolvable origin path, and the registry needs a real
-    file to import) and resolves *source* at that real path -- the entry's
-    real origin, so the module loader's own missing-companion check runs
-    exactly as it does in production -- then builds an ``ExternRegistry``
-    populated the same way the pipeline wires one before evaluation -- one
-    ``load_companion`` per declaring module, mirroring
-    ``pipeline._wire_extern_registry``.
+    An extern needs a resolvable origin path, so the loader's missing-companion
+    check and the driver's companion import both run as in production.
     """
     entry_path = tmp_path / "entry.agl"
     entry_path.write_text(source)
-    companion_path = tmp_path / "entry.py"
-    companion_path.write_text(companion_source)
+    (tmp_path / "entry.py").write_text(companion_source)
+    return entry_path
 
-    executable = lower_inline_ir(source, caps=caps or extern_caps(), origin_path=entry_path)
-    registry = ExternRegistry()
-    registry.set_nominals(executable.nominals, functions=executable.functions)
-    loaded: set[ModuleId] = set()
-    for desc in executable.functions.values():
-        if not isinstance(desc.impl, ExternFunctionBody) or desc.module_id in loaded:
-            continue
-        registry.load_companion(desc.module_id, companion_path)
-        loaded.add(desc.module_id)
-    return executable, registry
+
+def lower_extern_program(source: str, companion_source: str, tmp_path: Path) -> ExecutableProgram:
+    """Lower an extern-declaring *source* at its real entry path without running it."""
+    entry_path = _write_extern_entry(source, companion_source, tmp_path)
+    return lower_inline_ir(source, caps=extern_caps(), origin_path=entry_path)
 
 
 def evaluate_ir_with_externs(
-    source: str,
-    companion_source: str,
-    tmp_path: Path,
-    *,
-    caps: HostCapabilities | None = None,
+    source: str, companion_source: str, tmp_path: Path
 ) -> tuple[dict[str, Value], str]:
-    """Run a single-module program declaring ``extern def`` end to end.
-
-    Returns ``(bindings, captured_stdout)``, mirroring ``_run_ir``.
-    """
-    executable, registry = _prepare_extern_program(source, companion_source, tmp_path, caps=caps)
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
-        result = IrInterpreter(executable, extern_registry=registry).run(
-            program_symbol=executable.synthetic_main_symbol
-        )
-    return result, output.getvalue()
+    """Run a single-module program declaring ``extern def``; return bindings and stdout."""
+    run = run_inline_ir(source, entry_path=_write_extern_entry(source, companion_source, tmp_path))
+    return completed_bindings(run), run[1]
 
 
-def evaluate_ir_raises_with_externs(
-    source: str,
-    companion_source: str,
-    tmp_path: Path,
-    *,
-    caps: HostCapabilities | None = None,
-) -> ExceptionValue:
-    executable, registry = _prepare_extern_program(source, companion_source, tmp_path, caps=caps)
-    try:
-        IrInterpreter(executable, extern_registry=registry).run(
-            program_symbol=executable.synthetic_main_symbol
-        )
-    except AglRaise as exc:
-        return exc.exc
-    raise AssertionError("IR extern program did not raise AglRaise")
+def evaluate_ir_raises_with_externs(source: str, companion_source: str, tmp_path: Path) -> RunError:
+    """Run an extern-declaring program that must end with an uncaught AgL exception."""
+    return uncaught_error(
+        run_inline_ir(source, entry_path=_write_extern_entry(source, companion_source, tmp_path))
+    )
+
+
+def _write_module_root(tmp_path: Path, modules: dict[str, str]) -> Path:
+    """Write every module except ``entry`` under ``tmp_path/root`` and return that root."""
+    root = tmp_path / "root"
+    root.mkdir(parents=True, exist_ok=True)
+    for module_path, source in modules.items():
+        if module_path != "entry":
+            write_module_file(root, module_path, source)
+    return root
 
 
 def make_repl_graph_from_files(
@@ -408,14 +399,10 @@ def make_repl_graph_from_files(
     root. This is the appropriate seam for resolver tests that inspect or
     reject root expressions rather than model an ``agm exec -c`` invocation.
     """
-    root = tmp_path / "root"
-    root.mkdir(parents=True, exist_ok=True)
+    root = _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
-    for module_path, source in modules.items():
-        if module_path != "entry":
-            write_module_file(root, module_path, source)
     with spaced_qualifier_collector() as spaced_qualifiers:
-        program, next_node_id = parse_program_seeded(entry_source, start_id=0)
+        program, next_node_id = parse_program_seeded(entry_source, start_id=0, resolve_infix=False)
     graph, _next_id, _new_modules = build_repl_graph(
         program,
         next_node_id,
@@ -447,20 +434,17 @@ def make_inline_graph_from_files(
     is a static library file. Use :func:`make_file_graph_from_files` when the
     entry itself is a file-style program with an explicit entry declaration.
     """
-    root = tmp_path / "root"
-    root.mkdir(parents=True, exist_ok=True)
+    root = _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
-    for module_path, source in modules.items():
-        if module_path != "entry":
-            write_module_file(root, module_path, source)
-    program, next_node_id, _wrapped = parse_inline_command(entry_source)
+    parsed = parse_entry_module(entry_source, entry_path=None, inline_command=True)
     graph, _next_id, _new_modules = build_repl_graph(
-        program,
-        next_node_id,
+        parsed.program,
+        parsed.next_id,
         path=None,
         cached={},
         roots=_roots(root, include_stdlib=default_stdlib),
         default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
         source_text=entry_source,
     )
     return graph
@@ -470,12 +454,8 @@ def make_file_graph_from_files(
     tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
 ) -> ModuleGraph:
     """Build a file-style graph from explicit entry-program source and imports."""
-    root = tmp_path / "root"
-    root.mkdir(parents=True, exist_ok=True)
+    root = _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
-    for module_path, source in modules.items():
-        if module_path != "entry":
-            write_module_file(root, module_path, source)
     return load_graph(
         entry_source,
         entry_path=None,
@@ -497,22 +477,17 @@ def _checked(entry_source: str, modules: dict[str, str], tmp_path: Path) -> Chec
 def evaluate_ir_graph(
     entry_source: str, modules: dict[str, str], tmp_path: Path
 ) -> dict[str, Value]:
-    checked = _checked(entry_source, modules, tmp_path)
-    executable = lower_program(_compiled_checked(checked))
-    result = IrInterpreter(executable).run(program_symbol=executable.synthetic_main_symbol)
-    return result
+    """Run an inline entry that imports file-backed *modules*; return its bindings."""
+    roots = _roots(_write_module_root(tmp_path, modules))
+    return completed_bindings(run_inline_ir(entry_source, roots=roots))
 
 
 def evaluate_ir_graph_raises(
     entry_source: str, modules: dict[str, str], tmp_path: Path
-) -> ExceptionValue:
-    checked = _checked(entry_source, modules, tmp_path)
-    executable = lower_program(_compiled_checked(checked))
-    try:
-        IrInterpreter(executable).run(program_symbol=executable.synthetic_main_symbol)
-    except AglRaise as exc:
-        return exc.exc
-    raise AssertionError("IR graph did not raise AglRaise")
+) -> RunError:
+    """Run an inline entry importing *modules* that must end with an uncaught AgL exception."""
+    roots = _roots(_write_module_root(tmp_path, modules))
+    return uncaught_error(run_inline_ir(entry_source, roots=roots))
 
 
 def agent_caps() -> HostCapabilities:
@@ -558,10 +533,8 @@ def evaluate_ir_with_agents(
     *,
     default_responses: list[str] | None = None,
 ) -> dict[str, Value]:
-    caps = agent_caps()
     agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
-    result, _ = _run_ir(source, caps=caps, agent_dispatcher=agent_dispatcher)
-    return result
+    return completed_bindings(run_inline_ir(source, agent_dispatcher=agent_dispatcher))
 
 
 def evaluate_ir_raises_with_agents(
@@ -569,14 +542,9 @@ def evaluate_ir_raises_with_agents(
     scripts: dict[str, list[str]],
     *,
     default_responses: list[str] | None = None,
-) -> ExceptionValue:
-    caps = agent_caps()
+) -> RunError:
     agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
-    try:
-        _run_ir(source, caps=caps, agent_dispatcher=agent_dispatcher)
-    except AglRaise as exc:
-        return exc.exc
-    raise AssertionError("IR agent program did not raise AglRaise")
+    return uncaught_error(run_inline_ir(source, agent_dispatcher=agent_dispatcher))
 
 
 def shell_caps() -> HostCapabilities:
@@ -604,18 +572,17 @@ def _scripted_shell(
     return run
 
 
-def _run_ir_exec(
+def run_inline_ir_with_shell(
     source: str,
     shell_fake: Callable[..., ProcessCaptureResult],
-    caps: HostCapabilities,
     *,
     process_environment: dict[str, str] | None = None,
     shell_exec_timeout: float | None = None,
-) -> tuple[dict[str, Value], str]:
+) -> tuple[RunResult, str]:
+    """Run *source* like :func:`run_inline_ir` with every shell process faked by *shell_fake*."""
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell_fake):
-        return _run_ir(
+        return run_inline_ir(
             source,
-            caps=caps,
             process_environment=process_environment,
             shell_exec_timeout=shell_exec_timeout,
         )
@@ -624,22 +591,14 @@ def _run_ir_exec(
 def evaluate_ir_with_shell(
     source: str,
     commands: dict[str, ProcessCaptureResult],
-    caps: HostCapabilities | None = None,
     *,
     cmd_log_ir: list[str] | None = None,
 ) -> dict[str, Value]:
     shell = _scripted_shell(commands, cmd_log=cmd_log_ir)
-    result, _ = _run_ir_exec(source, shell, caps or shell_caps())
-    return result
+    return completed_bindings(run_inline_ir_with_shell(source, shell))
 
 
 def evaluate_ir_raises_with_shell(
-    source: str,
-    commands: dict[str, ProcessCaptureResult],
-    caps: HostCapabilities | None = None,
-) -> ExceptionValue:
-    try:
-        _run_ir_exec(source, _scripted_shell(commands), caps or shell_caps())
-    except AglRaise as exc:
-        return exc.exc
-    raise AssertionError("IR shell program did not raise AglRaise")
+    source: str, commands: dict[str, ProcessCaptureResult]
+) -> RunError:
+    return uncaught_error(run_inline_ir_with_shell(source, _scripted_shell(commands)))

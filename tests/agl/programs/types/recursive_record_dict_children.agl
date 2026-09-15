@@ -16,7 +16,7 @@ def count-nodes(t: Tree) -> int =
 def render-tree(t: Tree) -> text =
   var result: text = t.name
   for key in t.children do
-    result := result + " > " + render-tree(t.children[key])
+    result := result ++ " > " ++ render-tree(t.children[key])
   result
 
 program def main(root-name: text, child-name: text, include-grandchild: bool) -> unit =

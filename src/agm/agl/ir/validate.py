@@ -927,9 +927,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 
         case IrArith(op=op, kind=kind, lhs=lhs, rhs=rhs):
             _validate_location(node.location, ctx)
-            # TEXT kind is only valid with ADD
-            if kind is ArithKind.TEXT and op is not ArithOp.ADD:
-                raise InvalidIrError(f"IrArith: TEXT kind is only valid with ADD, got op={op!r}")
             # DIV op requires DECIMAL kind (DIV always returns decimal)
             if op is ArithOp.DIV and kind is not ArithKind.DECIMAL:
                 raise InvalidIrError(f"IrArith: DIV op requires DECIMAL kind, got kind={kind!r}")

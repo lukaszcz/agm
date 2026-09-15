@@ -1,7 +1,7 @@
 # Optional arguments via default values; named-argument calls.
 
 def tag-text(text-val: text, prefix: text = "INFO", suffix: text = "") -> text =
-  "[" + prefix + "] " + text-val + suffix
+  "[" ++ prefix ++ "] " ++ text-val ++ suffix
 
 # Called with only required arg — both defaults apply.
 

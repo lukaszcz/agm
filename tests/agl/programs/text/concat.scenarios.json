@@ -1,0 +1,29 @@
+{
+  "scenarios": [
+    {
+      "name": "chains_bind_tighter_than_comparisons_and_pipes",
+      "params": {"mode": "chain", "words": ["x", "y", "z"], "sep": "-"},
+      "expect": {"stdout": "a-b-c\ntrue\ntrue\nHI-!\n3 words: x-y-z\n"}
+    },
+    {
+      "name": "chains_preserve_empty_and_unicode_operands",
+      "params": {"mode": "chain", "words": ["ż", "ó"], "sep": ""},
+      "expect": {"stdout": "abc\ntrue\ntrue\nHI!\n2 words: żó\n"}
+    },
+    {
+      "name": "operator_values_fold_map_and_partially_apply",
+      "params": {"mode": "values", "words": ["a", "b"], "sep": ","},
+      "expect": {"stdout": "ab\n[\"a,\", \"b,\"]\n<tag>\n"}
+    },
+    {
+      "name": "loops_accumulate_through_reassignment",
+      "params": {"mode": "loop", "words": ["p", "q"], "sep": ";"},
+      "expect": {"stdout": "[p;q;]\n"}
+    },
+    {
+      "name": "loops_over_no_words_leave_the_accumulator_empty",
+      "params": {"mode": "loop", "words": [], "sep": ";"},
+      "expect": {"stdout": "[]\n"}
+    }
+  ]
+}

@@ -15,7 +15,7 @@ end Scoped
 
 def Problem::label(self) -> text = "problem %{self.code}"
 
-def DetailedProblem::detail-label(self) -> text = self.label() + ": %{self.detail}"
+def DetailedProblem::detail-label(self) -> text = self.label() ++ ": %{self.detail}"
 
 def Scoped::Marker::label(self) -> text = "scoped %{self.code}"
 

@@ -36,10 +36,8 @@ from agm.agl.type_schema import (
 )
 from tests._agl_helpers import enum_type, next_decl_id, record_type, type_table_for
 from tests.agl.ir_harness import (
-    agent_caps,
     evaluate_ir_raises_with_agents,
     evaluate_ir_with_agents,
-    lower_inline_ir,
 )
 
 
@@ -373,6 +371,4 @@ def test_mocked_agent_rejects_an_unknown_member_case() -> None:
     )
 
     error = evaluate_ir_raises_with_agents(_AGENT_SOURCE, {"worker": [response]})
-
-    program = lower_inline_ir(_AGENT_SOURCE, caps=agent_caps())
-    assert error.nominal == program.builtin_nominals.nominal("AgentParseError")
+    assert error.type_name == "AgentParseError"

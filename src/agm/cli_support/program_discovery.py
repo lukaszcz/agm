@@ -80,18 +80,11 @@ def discover_program_declarations_from_source(
     file.
     """
     try:
-        from dataclasses import replace
-
         from agm.agl import PipelineDriver
 
         runtime = PipelineDriver(agent_dispatcher=lambda request: AgentResponse(content=""))
         if inline_source:
-            parsed = runtime.parse_entry(source)
-            if parsed.program is not None:
-                from agm.agl.parser import wrap_inline_program
-
-                program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
-                parsed = replace(parsed, program=program, next_id=next_id)
+            parsed = runtime.parse_entry(source, inline_command=True)
             prepared = runtime.prepare_parsed_entry(
                 parsed, roots=roots, default_stdlib=default_stdlib
             )
@@ -187,8 +180,6 @@ def discover_program_artifacts_for_target(
     context: "ConfigContext | None" = None,
 ) -> ProgramDiscoveryArtifacts | None:
     """Discover an ``agm exec`` target and retain every reusable static artifact."""
-    from dataclasses import replace
-
     from agm.agl import PipelineDriver
     from agm.cli_support.exec_roots import effective_exec_roots
     from agm.cli_support.exec_target import (
@@ -234,12 +225,7 @@ def discover_program_artifacts_for_target(
         )
         assert source is not None
         runtime = PipelineDriver(agent_dispatcher=lambda request: AgentResponse(content=""))
-        parsed = runtime.parse_entry(source, entry_path=entry_path)
-        if inline_source and parsed.program is not None:
-            from agm.agl.parser import wrap_inline_program
-
-            program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
-            parsed = replace(parsed, program=program, next_id=next_id)
+        parsed = runtime.parse_entry(source, entry_path=entry_path, inline_command=inline_source)
         prepared = runtime.prepare_parsed_entry(
             parsed, roots=exec_roots.roots, default_stdlib=not no_stdlib
         )

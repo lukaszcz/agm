@@ -38,6 +38,7 @@ from agm.packages.record import write_record
 from agm.project.workspace_shell import _sanitize_session_key
 from tests._agl_helpers import write_file_program
 from tests._command_coverage import record_invocation
+from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
 from tests._git_helpers import clone_with_fork_remote
 from tests._package_helpers import write_installed_package
 from tests._proc_helpers import wait_for_path
@@ -401,15 +402,11 @@ _AGM_INSTALL: dict[str, Path] = {}
 # that live on the developer's PATH.
 _ORIGINAL_PATH: str = os.environ.get("PATH", "")
 
-# External agent/sandbox CLIs that an e2e test must NEVER invoke for real.
-# The ``_agm_install`` fixture places a hard-failing shim for each one in the
-# guard directory (which ``_agm_env`` prepends to PATH).  A test that
-# needs one of these installs a *fake* by prepending its own tmp dir to PATH
-# first, which shadows the shim; a test that forgets to install a fake hits
-# the shim and fails loudly instead of silently calling a real agent.  ``srt``
-# is included so ``agm run`` (sandboxed) can never reach a real sandbox runtime
-# unless a test deliberately installs a fake ``srt``.
-_EXTERNAL_AGENT_CLIS: tuple[str, ...] = ("claude", "codex", "opencode", "pi", "srt")
+# The ``_agm_install`` fixture places a hard-failing shim for each of
+# ``EXTERNAL_AGENT_CLIS`` in the guard directory (which ``_agm_env`` prepends to
+# PATH).  A test that needs one of these installs a *fake* by prepending its own
+# tmp dir to PATH first, which shadows the shim; a test that forgets to install a
+# fake hits the shim and fails loudly instead of silently calling a real agent.
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -450,7 +447,7 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory, isolated_compiler_cac
     #     instead of falling through to a *real* ``claude``/``codex``/``srt``/…
     #     elsewhere on PATH.
     guard_dir = tmp_path_factory.mktemp("agm-agent-guard")
-    for cli in _EXTERNAL_AGENT_CLIS:
+    for cli in EXTERNAL_AGENT_CLIS:
         shim = guard_dir / cli
         shim.write_text(
             "#!/bin/bash\n"
@@ -7899,7 +7896,7 @@ class TestPackageInstall:
         )
         (package / "src" / "main.agl").write_text(
             'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit =\n'
-            '  print(name + ":" + tag)\n',
+            '  print(name ++ ":" ++ tag)\n',
             encoding="utf-8",
         )
         home.mkdir()

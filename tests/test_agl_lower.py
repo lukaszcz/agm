@@ -1460,10 +1460,8 @@ class TestBuiltinNominalsTable:
         from tests.agl.ir_harness import evaluate_ir_raises
 
         source = "let stride = 0\nfor i in 1 to 5 step stride do\n  ()\ndone\n"
-        program = _lower(source)
         exc = evaluate_ir_raises(source)
-        assert program.nominals[exc.nominal].display_name == "RangeError"
-        assert exc.nominal == program.builtin_nominals.nominal("RangeError")
+        assert exc.type_name == "RangeError"
 
     def test_scoped_range_error_raised_at_runtime_carries_the_scoped_nominal(self) -> None:
         """A host-raised exception now carries its declaring region's own path.
@@ -1481,7 +1479,7 @@ class TestBuiltinNominalsTable:
         ``default_stdlib=False``: that is what makes "nothing declared at
         the root" true here.
         """
-        from tests.agl.ir_harness import evaluate_ir_raises, lower_inline_ir, nominal_id_for
+        from tests.agl.ir_harness import evaluate_ir_raises
 
         source = (
             "scope A\n"
@@ -1493,20 +1491,16 @@ class TestBuiltinNominalsTable:
             "  ()\n"
             "done\n"
         )
-        program = lower_inline_ir(source, default_stdlib=False)
         exc = evaluate_ir_raises(source, default_stdlib=False)
-        assert program.nominals[exc.nominal].display_name == "A::RangeError"
-        assert exc.nominal == nominal_id_for(program, "A::RangeError")
+        assert exc.type_name == "A::RangeError"
 
     def test_max_iterations_exceeded_raised_at_runtime_carries_the_table_nominal(self) -> None:
         """A ``do[n]`` loop exhausted at its bound carries the table's nominal."""
         from tests.agl.ir_harness import evaluate_ir_raises
 
         source = "var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n"
-        program = _lower(source)
         exc = evaluate_ir_raises(source)
-        assert program.nominals[exc.nominal].display_name == "MaxIterationsExceeded"
-        assert exc.nominal == program.builtin_nominals.nominal("MaxIterationsExceeded")
+        assert exc.type_name == "MaxIterationsExceeded"
 
     @pytest.mark.parametrize(
         ("source", "default_stdlib"),
@@ -3615,12 +3609,9 @@ class TestLoopDesugar:
         from tests.agl.ir_harness import evaluate_ir_raises
 
         source = "var i = 0\r\ndo[3]\r\n  i := i + 1\r\nuntil i > 100\r\n"
-        prog = _lower(source)
         ir_exc = evaluate_ir_raises(source)
-        assert ir_exc.nominal == prog.builtin_nominals.nominal("MaxIterationsExceeded")
-        from agm.agl.semantics.values import TextValue
-
-        assert ir_exc.fields.get("condition") == TextValue("i > 100")
+        assert ir_exc.type_name == "MaxIterationsExceeded"
+        assert ir_exc.fields.get("condition") == "i > 100"
 
     def test_for_while_bounded_until_full_body_item_order(self) -> None:
         """``for x in items while x < 10 do[5] body until total > 20`` — all 7 items.

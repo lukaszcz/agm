@@ -1,0 +1,27 @@
+# Text concatenation with the prelude `++` operator: right-associative chains,
+# precedence against comparisons, `in`, and `|>`, interpolated operands, operator
+# values, partial application, and accumulation in loops.
+import std/array
+
+def shout(s: text) -> text = s.upper() ++ "!"
+
+program def main(mode: text, words: array[text], sep: text) -> unit =
+  if mode == "chain" =>
+    print("a" ++ sep ++ "b" ++ sep ++ "c")
+    print("" ++ sep == sep)
+    print("ab" in "x" ++ "abc")
+    print("hi" ++ sep |> shout)
+    print("%{words.size()} words: " ++ array::join(words, sep))
+
+  if mode == "values" =>
+    print(words.fold("", (++)))
+    print(words.map((++)(?, sep)))
+    let wrap: (text) -> text = (++)("<", ?)
+    print(wrap("tag") ++ ">")
+
+  if mode == "loop" =>
+    var acc = ""
+    for w in words do
+      acc := acc ++ w ++ sep
+    done
+    print("[" ++ acc ++ "]")

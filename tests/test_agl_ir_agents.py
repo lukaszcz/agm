@@ -15,7 +15,6 @@ from agm.agl.ir.program import ValueDescriptors
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
-    ExceptionValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -439,10 +438,7 @@ n
         source,
         scripts={"parser": ["bad1", "bad2"]},
     )
-    assert isinstance(ir_exc, ExceptionValue)
-    program = lower_inline_ir(source, caps=agent_caps())
-    descriptors = ValueDescriptors.from_program(program)
-    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
+    assert ir_exc.type_name == "AgentParseError"
 
 
 # ---------------------------------------------------------------------------
@@ -547,10 +543,7 @@ n
         source,
         scripts={"validator": ['"not an int"']},
     )
-    assert isinstance(ir_exc, ExceptionValue)
-    program = lower_inline_ir(source, caps=agent_caps())
-    descriptors = ValueDescriptors.from_program(program)
-    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
+    assert ir_exc.type_name == "AgentParseError"
 
 
 # ---------------------------------------------------------------------------
@@ -570,10 +563,7 @@ n
         source,
         scripts={"strict_agent": ["```json\n42\n```"]},
     )
-    assert isinstance(ir_exc, ExceptionValue)
-    program = lower_inline_ir(source, caps=agent_caps())
-    descriptors = ValueDescriptors.from_program(program)
-    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
+    assert ir_exc.type_name == "AgentParseError"
 
 
 # ---------------------------------------------------------------------------
@@ -2759,14 +2749,11 @@ status
         source,
         scripts={"checker": ['{"$case": "Err"}']},  # declared name, not the renamed tag "ERR"
     )
-    program = lower_inline_ir(source, caps=agent_caps())
-    descriptors = ValueDescriptors.from_program(program)
-    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
+    assert ir_exc.type_name == "AgentParseError"
 
     errors_val = ir_exc.fields.get("validation-errors")
-    assert isinstance(errors_val, JsonValue)
-    assert isinstance(errors_val.raw, list)
-    first_err = errors_val.raw[0]
+    assert isinstance(errors_val, list)
+    first_err = errors_val[0]
     assert isinstance(first_err, dict)
     msg = first_err.get("message", "")
     assert "ERR" in msg
@@ -2791,14 +2778,11 @@ status
         source,
         scripts={"checker": ['{"$case": "Err"}']},  # missing the renamed field "msg-text"
     )
-    program = lower_inline_ir(source, caps=agent_caps())
-    descriptors = ValueDescriptors.from_program(program)
-    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
+    assert ir_exc.type_name == "AgentParseError"
 
     errors_val = ir_exc.fields.get("validation-errors")
-    assert isinstance(errors_val, JsonValue)
-    assert isinstance(errors_val.raw, list)
-    first_err = errors_val.raw[0]
+    assert isinstance(errors_val, list)
+    first_err = errors_val[0]
     assert isinstance(first_err, dict)
     msg = first_err.get("message", "")
     assert "msg-text" in msg
@@ -2832,17 +2816,11 @@ status
         source,
         scripts={"checker": ['{"$case": "Bogus"}']},
     )
-    program = lower_inline_ir(source, caps=agent_caps())
-    descriptors = ValueDescriptors.from_program(program)
-    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
-    # validation_errors is stored as a JsonValue(raw=[{...}]).
-    from agm.agl.semantics.values import JsonValue
-
+    assert ir_exc.type_name == "AgentParseError"
     errors_val = ir_exc.fields.get("validation-errors")
-    assert isinstance(errors_val, JsonValue)
-    assert isinstance(errors_val.raw, list)
-    assert len(errors_val.raw) >= 1
-    first_err = errors_val.raw[0]
+    assert isinstance(errors_val, list)
+    assert len(errors_val) >= 1
+    first_err = errors_val[0]
     assert isinstance(first_err, dict)
     msg = first_err.get("message", "")
     # The message identifies the bad case and lists the valid variants.
@@ -2871,17 +2849,12 @@ status
         source,
         scripts={"checker": ['{"$case": "Err"}']},
     )
-    program = lower_inline_ir(source, caps=agent_caps())
-    descriptors = ValueDescriptors.from_program(program)
-    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
-
-    from agm.agl.semantics.values import JsonValue
+    assert ir_exc.type_name == "AgentParseError"
 
     errors_val = ir_exc.fields.get("validation-errors")
-    assert isinstance(errors_val, JsonValue)
-    assert isinstance(errors_val.raw, list)
-    assert len(errors_val.raw) >= 1
-    first_err = errors_val.raw[0]
+    assert isinstance(errors_val, list)
+    assert len(errors_val) >= 1
+    first_err = errors_val[0]
     assert isinstance(first_err, dict)
     msg = first_err.get("message", "")
     # IR reference message: "Enum variant 'Err' is missing field 'msg'."
@@ -2893,8 +2866,8 @@ status
 
     # Verify the same validation_errors fields are consistent.
     ir_errors_val = ir_exc.fields.get("validation-errors")
-    assert isinstance(ir_errors_val, JsonValue)
-    ir_first = ir_errors_val.raw[0]
+    assert isinstance(ir_errors_val, list)
+    ir_first = ir_errors_val[0]
     assert isinstance(ir_first, dict)
     assert ir_first.get("message") == msg, (
         f"Message mismatch:\n  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
@@ -2921,17 +2894,12 @@ status
         source,
         scripts={"checker": ['{"$case": "Ok", "extra_field": 42}']},
     )
-    program = lower_inline_ir(source, caps=agent_caps())
-    descriptors = ValueDescriptors.from_program(program)
-    assert descriptors.nominals[ir_exc.nominal].display_name == "AgentParseError"
-
-    from agm.agl.semantics.values import JsonValue
+    assert ir_exc.type_name == "AgentParseError"
 
     errors_val = ir_exc.fields.get("validation-errors")
-    assert isinstance(errors_val, JsonValue)
-    assert isinstance(errors_val.raw, list)
-    assert len(errors_val.raw) >= 1
-    first_err = errors_val.raw[0]
+    assert isinstance(errors_val, list)
+    assert len(errors_val) >= 1
+    first_err = errors_val[0]
     assert isinstance(first_err, dict)
     msg = first_err.get("message", "")
     # IR reference message: "Enum variant 'Ok' has an unexpected field 'extra_field'."
@@ -2943,8 +2911,8 @@ status
 
     # Verify the same validation_errors fields are consistent.
     ir_errors_val = ir_exc.fields.get("validation-errors")
-    assert isinstance(ir_errors_val, JsonValue)
-    ir_first = ir_errors_val.raw[0]
+    assert isinstance(ir_errors_val, list)
+    ir_first = ir_errors_val[0]
     assert isinstance(ir_first, dict)
     assert ir_first.get("message") == msg, (
         f"Message mismatch:\n  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"

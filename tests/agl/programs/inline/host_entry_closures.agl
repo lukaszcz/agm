@@ -62,7 +62,7 @@ print(apply(scale, 3))
 # Entry-local mutable state written from a `case` branch and from a `catch`
 # body, both through the same captured lambda.
 var notes = "notes"
-let note = fn(entry: text) -> unit => do notes := notes + "/" + entry until true
+let note = fn(entry: text) -> unit => do notes := notes ++ "/" ++ entry until true
 try
   let verdict: Mood = reviewer.ask("Review %{describe()}.")
   case verdict of

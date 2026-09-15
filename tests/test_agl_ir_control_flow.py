@@ -255,7 +255,7 @@ let r = f()
 r
 """
     with pytest.raises(AglTypeError):
-        evaluate_ir(source)
+        lower_inline_ir(source)
 
 
 def test_return_in_enclosing_expression_does_not_hide_following_type_mismatch() -> None:
@@ -267,7 +267,7 @@ let r = f()
 r
 """
     with pytest.raises(AglTypeError):
-        evaluate_ir(source)
+        lower_inline_ir(source)
 
 
 def test_return_in_binary_operand_does_not_hide_following_type_mismatch() -> None:
@@ -279,7 +279,7 @@ let r = f()
 r
 """
     with pytest.raises(AglTypeError):
-        evaluate_ir(source)
+        lower_inline_ir(source)
 
 
 def test_return_in_non_short_circuit_right_operand_does_not_hide_type_mismatch() -> None:
@@ -290,7 +290,7 @@ let r = f()
 r
 """
     with pytest.raises(AglTypeError):
-        evaluate_ir(source)
+        lower_inline_ir(source)
 
 
 def test_return_in_left_binary_operand_still_returns_at_runtime() -> None:

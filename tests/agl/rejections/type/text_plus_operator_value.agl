@@ -1,0 +1,2 @@
+program def main(words: array[text]) -> unit =
+  print(words.fold("", (+)))

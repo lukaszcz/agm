@@ -1,2 +1,2 @@
 # The implementation remains behind the facade's exported name.
-def format-text(title: text) -> text = "report: " + title
+def format-text(title: text) -> text = "report: " ++ title

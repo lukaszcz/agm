@@ -2057,11 +2057,8 @@ class _Lowerer:
         self, op: BinOp, lhs: _Operand, rhs: _Operand, loc: Location
     ) -> tuple[IrArith, Type]:
         """Lower an arithmetic binary op (ADD/SUB/MUL); return it with its common type."""
-        if isinstance(lhs.type, TextType) and isinstance(rhs.type, TextType):
-            common: Type = TextType()
-            kind = ArithKind.TEXT
-        elif isinstance(lhs.type, DecimalType) or isinstance(rhs.type, DecimalType):
-            common = DecimalType()
+        if isinstance(lhs.type, DecimalType) or isinstance(rhs.type, DecimalType):
+            common: Type = DecimalType()
             kind = ArithKind.DECIMAL
         else:
             common = IntType()

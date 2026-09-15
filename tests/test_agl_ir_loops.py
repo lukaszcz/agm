@@ -52,13 +52,11 @@ from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID
 from agm.agl.semantics.values import (
     UNIT_VALUE,
-    BoolValue,
     IntValue,
-    JsonValue,
     TextValue,
     UnitValue,
 )
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, nominal_id_for
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -186,15 +184,12 @@ def test_loop_exhaustion_raises() -> None:
     source = "var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n"
     ir_exc = evaluate_ir_raises(source)
 
-    assert ir_exc.nominal == nominal_id_for(_lower(source), "MaxIterationsExceeded")
+    assert ir_exc.type_name == "MaxIterationsExceeded"
 
-    cond_field = ir_exc.fields.get("condition")
-    assert isinstance(cond_field, TextValue), f"condition field: {cond_field!r}"
-    assert cond_field.value == "false", f"condition source text mismatch: {cond_field.value!r}"
-
-    assert ir_exc.fields.get("limit") == IntValue(3)
-    assert ir_exc.fields.get("last-condition-value") == BoolValue(False)
-    assert ir_exc.fields.get("metadata") == JsonValue(None)
+    assert ir_exc.fields.get("condition") == "false"
+    assert ir_exc.fields.get("limit") == 3
+    assert ir_exc.fields.get("last-condition-value") is False
+    assert ir_exc.fields.get("metadata") is None
 
 
 def test_condition_source_slice_complex() -> None:
@@ -202,9 +197,7 @@ def test_condition_source_slice_complex() -> None:
     source = "var i = 0\ndo[2]\n  i := i + 1\nuntil i > 10\n"
     ir_exc = evaluate_ir_raises(source)
 
-    cond_field = ir_exc.fields.get("condition")
-    assert isinstance(cond_field, TextValue)
-    assert cond_field.value == "i > 10", f"got: {cond_field.value!r}"
+    assert ir_exc.fields.get("condition") == "i > 10"
 
 
 def test_loop_succeeds_at_exact_limit() -> None:
@@ -218,8 +211,8 @@ def test_loop_exhausts_one_short_of_condition() -> None:
     """do[2] until counter>=3 needs 3 iterations but limit is 2 → MaxIterationsExceeded."""
     source = "var counter = 0\ndo[2]\n  counter := counter + 1\nuntil counter >= 3\ncounter\n"
     exc = evaluate_ir_raises(source)
-    assert exc.nominal == nominal_id_for(_lower(source), "MaxIterationsExceeded")
-    assert exc.fields.get("limit") == IntValue(2)
+    assert exc.type_name == "MaxIterationsExceeded"
+    assert exc.fields.get("limit") == 2
 
 
 def test_ir_semantic_unbounded_loop_runs_to_completion() -> None:
@@ -257,8 +250,8 @@ def test_crlf_loop_exhaustion_condition_field() -> None:
     """With CRLF source, the MaxIterationsExceeded condition field is the clean source slice."""
     source = "var i = 0\r\ndo[3]\r\n  i := i + 1\r\nuntil i > 100\r\n"
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.nominal == nominal_id_for(_lower(source), "MaxIterationsExceeded")
-    assert ir_exc.fields.get("condition") == TextValue("i > 100")
+    assert ir_exc.type_name == "MaxIterationsExceeded"
+    assert ir_exc.fields.get("condition") == "i > 100"
 
 
 # ---------------------------------------------------------------------------
@@ -673,7 +666,7 @@ def test_for_loop_dict_iterates_keys() -> None:
 def test_for_loop_dict_binds_keys_not_values() -> None:
     """The loop variable is bound to each key, in dict order — never to the value."""
     source = (
-        'var seen = ""\nfor k in {"a": 10, "b": 20, "c": 30} do\n  seen := seen + k\ndone\nseen\n'
+        'var seen = ""\nfor k in {"a": 10, "b": 20, "c": 30} do\n  seen := seen ++ k\ndone\nseen\n'
     )
     result = evaluate_ir(source)
     assert result["seen"] == TextValue("abc")
@@ -707,7 +700,7 @@ def test_for_loop_text_keeps_original_unicode_source() -> None:
         '  text := "replacement"\n'
         "  count := count + 1\n"
         '  if ch == "e" => continue\n'
-        "  seen := seen + ch\n"
+        "  seen := seen ++ ch\n"
         "done\n"
     )
     result = evaluate_ir(source)
@@ -728,8 +721,8 @@ def test_for_loop_array_bound_limits_iterations() -> None:
         "var total = 0\nfor x in [10, 20, 30, 40, 50] do[3]\n  total := total + x\nuntil false\n"
     )
     exc = evaluate_ir_raises(source)
-    assert exc.nominal == nominal_id_for(_lower(source), "MaxIterationsExceeded")
-    assert exc.fields.get("limit") == IntValue(3)
+    assert exc.type_name == "MaxIterationsExceeded"
+    assert exc.fields.get("limit") == 3
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ def count-categories(c: Category) -> int =
 def render-category(c: Category) -> text =
   var result: text = c.name
   for child in c.subcategories do
-    result := result + " > " + render-category(child)
+    result := result ++ " > " ++ render-category(child)
   result
 
 program def main(root-name: text, child-name: text, include-grandchild: bool) -> unit =

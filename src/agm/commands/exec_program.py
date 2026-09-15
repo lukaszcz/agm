@@ -421,8 +421,8 @@ def run(
     config_view = load_general_config(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
     merged_config = config_view.merged
 
-    # Inline source remains a statement-oriented host. Its AST is wrapped before
-    # scope resolution whenever it has no explicit program entry.
+    # Inline source remains a statement-oriented host. Its entry parse wraps the
+    # AST before scope resolution whenever it has no explicit program entry.
     cached_pipeline = (
         args.pipeline_cache
         if isinstance(args.pipeline_cache, ProgramDiscoveryArtifacts)
@@ -435,13 +435,10 @@ def run(
     parsed = (
         cached_pipeline.parsed
         if cached_pipeline is not None
-        else PipelineDriver.parse_entry(source, entry_path=entry_path)
+        else PipelineDriver.parse_entry(
+            source, entry_path=entry_path, inline_command=args.command is not None
+        )
     )
-    if cached_pipeline is None and args.command is not None and parsed.program is not None:
-        from agm.agl.parser import wrap_inline_program
-
-        program, next_id = wrap_inline_program(parsed.program, next_node_id=parsed.next_id)
-        parsed = replace(parsed, program=program, next_id=next_id)
 
     # Loose file entries address declarations under the file stem; package
     # entries retain their package-qualified route.

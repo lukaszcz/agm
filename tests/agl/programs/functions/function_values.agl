@@ -5,7 +5,7 @@ def classify(n: int) -> text =
   if | n > 0 => "pos" | n < 0 => "neg" | else => "zero"
 
 def label(n: int) -> text =
-  "val=" + classify(n)
+  "val=" ++ classify(n)
 
 # Higher-order: accept a function value and apply it.
 def apply(f: int -> text, n: int) -> text = f(n)

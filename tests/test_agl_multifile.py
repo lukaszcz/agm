@@ -200,7 +200,7 @@ class TestWildcardImport:
         utils_dir.mkdir(parents=True)
         (utils_dir / "math.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         (utils_dir / "strings.agl").write_text(
-            'def greet(name: text) -> text = "Hello, " + name + "!"\n'
+            'def greet(name: text) -> text = "Hello, " ++ name ++ "!"\n'
         )
 
         source = (
@@ -587,8 +587,8 @@ class TestWildcardImportTailsAndHiding:
         )
         # pkg.text exports: upper (faked as concatenation), join
         (pkg_dir / "text.agl").write_text(
-            'def join(a: text, b: text) -> text = a + " " + b\n'
-            'def greet(name: text) -> text = "Hello, " + name\n'
+            'def join(a: text, b: text) -> text = a ++ " " ++ b\n'
+            'def greet(name: text) -> text = "Hello, " ++ name\n'
         )
         return lib_dir
 

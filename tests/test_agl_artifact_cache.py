@@ -12,7 +12,7 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import compile_program_matches
 from agm.agl.modules.ids import ModuleId
-from agm.agl.modules.loader import build_repl_graph
+from agm.agl.modules.loader import build_repl_graph, parse_entry_module
 from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.runtime.codec import TextCodec
@@ -25,7 +25,7 @@ from agm.agl.typecheck.env import (
     TypeEnvironment,
 )
 from agm.agl.typecheck.program import _prepare_program, check_program
-from tests._agl_helpers import agl_roots, parse_inline_command, run_inline_command
+from tests._agl_helpers import agl_roots, run_inline_command
 from tests.agl.ir_harness import (
     base_caps,
     make_file_graph_from_files,
@@ -160,10 +160,10 @@ def _persisted_checked_entry_size(
     write_module_file(root, "library", library_source)
     clear_parsed_module_cache()
     artifact_cache.clear_retained_artifacts()
-    program, next_node_id, _wrapped = parse_inline_command("import library::*\ngreet()")
+    parsed = parse_entry_module("import library::*\ngreet()", entry_path=None, inline_command=True)
     graph, _next_id, _new_modules = build_repl_graph(
-        program,
-        next_node_id,
+        parsed.program,
+        parsed.next_id,
         path=None,
         cached={},
         roots=agl_roots(root, include_stdlib=True),

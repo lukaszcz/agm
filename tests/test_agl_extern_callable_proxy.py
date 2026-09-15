@@ -18,9 +18,8 @@ from agm.agl.runtime.externs import (
     ExternRegistry,
 )
 from agm.agl.semantics.exceptions import AglRaise
-from agm.agl.semantics.values import ConstructorValue, IntValue, IrClosureValue, TextValue, Value
+from agm.agl.semantics.values import ConstructorValue, IntValue, IrClosureValue, Value
 from tests.agl.ir_harness import (
-    _prepare_extern_program,
     evaluate_ir_raises_with_externs,
     evaluate_ir_with_externs,
 )
@@ -301,7 +300,5 @@ def test_returning_a_python_callable_into_agl_raises_extern_error(tmp_path: Path
     source = "extern def build() -> (int) -> int\nlet callback = build()\ncallback(1)\n"
     companion = "def build(): return lambda value: value\n"
     exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
-
-    executable, _ = _prepare_extern_program(source, companion, tmp_path)
-    assert exc.nominal == executable.builtin_nominals.resolve("ExternError").nominal
-    assert exc.fields["python-type"] == TextValue("")
+    assert exc.type_name == "ExternError"
+    assert exc.fields["python-type"] == ""

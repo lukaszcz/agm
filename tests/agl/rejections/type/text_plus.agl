@@ -1,0 +1,2 @@
+program def main(name: text) -> unit =
+  print("hello " + name)

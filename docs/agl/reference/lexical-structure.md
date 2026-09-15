@@ -523,6 +523,11 @@ right-associative at priority 60 and composes them right-to-left. Thus
 and `<<` without parentheses because they have opposite associativity at the
 same priority.
 
+The prelude also provides `++`, which concatenates two `text` values. It is
+right-associative at the `+`/`-` priority, so it binds tighter than comparisons
+and `|>`: `"a" ++ b == c` is `("a" ++ b) == c`. A chain cannot mix `++` with
+`+` or `-` without parentheses.
+
 User-defined symbolic infix operators are declared with `infixl` or `infixr`:
 
 ```agl

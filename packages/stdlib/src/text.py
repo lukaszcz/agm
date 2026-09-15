@@ -22,6 +22,10 @@ def _padding(length: int, fill: str) -> str:
     return (fill * ((length + len(fill) - 1) // len(fill)))[:length]
 
 
+def concat(left: str, right: str) -> str:
+    return left + right
+
+
 def size(value: str) -> int:
     return len(value)
 

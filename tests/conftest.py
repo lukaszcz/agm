@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 import shutil
 import signal
-from collections.abc import Callable, Generator
+import subprocess
+from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, NoReturn
 
 import pytest
 
@@ -20,6 +23,7 @@ from tests._durations import (
     pytest_sessionfinish,
     pytest_testnodedown,
 )
+from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
 
 # Re-exported so pytest picks the per-test cost accounting up as conftest hooks.
 # Registering the module with ``-p`` instead would break every invocation that
@@ -124,6 +128,56 @@ def default_sigint() -> Generator[None, None, None]:
         yield
     finally:
         signal.signal(signal.SIGINT, previous)
+
+
+@pytest.fixture(autouse=True)
+def refuse_real_external_agent_clis(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Refuse every in-process spawn of an external agent CLI that no test faked.
+
+    A test's fake CLI lives under the pytest temp base; resolving one of
+    ``EXTERNAL_AGENT_CLIS`` anywhere else would run a real agent, so ``Popen``
+    raises and a forked ``execvp`` child exits 127 instead.  Subprocess ``agm``
+    runs in the e2e suite are guarded by its PATH shims.
+    """
+    fakes_root = tmp_path_factory.getbasetemp().resolve()
+    popen_init = subprocess.Popen.__init__
+    popen_signature = inspect.signature(popen_init)
+    execvp = os.execvp
+
+    def real_agent_cli(program: str, search_path: str | None) -> str | None:
+        if Path(program).name not in EXTERNAL_AGENT_CLIS:
+            return None
+        resolved = shutil.which(program, path=search_path)
+        if resolved is None or Path(resolved).resolve().is_relative_to(fakes_root):
+            return None
+        return resolved
+
+    def guarded_popen_init(self: subprocess.Popen[Any], *args: Any, **kwargs: Any) -> None:
+        bound = popen_signature.bind(self, *args, **kwargs).arguments
+        command = bound["args"]
+        if bound.get("executable") is not None:
+            program = os.fsdecode(bound["executable"])
+        elif isinstance(command, (str, bytes, os.PathLike)):
+            words = os.fsdecode(command).split()
+            program = words[0] if words else ""
+        else:
+            program = os.fsdecode(command[0]) if command else ""
+        env = bound.get("env")
+        real = real_agent_cli(program, (os.environ if env is None else env).get("PATH"))
+        if real is not None:
+            raise AssertionError(f"test tried to run the real external agent CLI {real}")
+        popen_init(self, *args, **kwargs)
+
+    def guarded_execvp(file: str, args: Sequence[str]) -> NoReturn:
+        if real_agent_cli(file, os.environ.get("PATH")) is not None:
+            os.write(2, f"test tried to run the real external agent CLI {file}\n".encode())
+            os._exit(127)
+        execvp(file, args)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", guarded_popen_init)
+    monkeypatch.setattr(os, "execvp", guarded_execvp)
 
 
 @pytest.fixture(autouse=True)

@@ -4335,8 +4335,6 @@ class _Checker:
         if not all(isinstance(typ, allowed) for typ in concrete):
             return None
         if concrete:
-            if all(isinstance(typ, TextType) for typ in concrete):
-                return TextType()
             if any(isinstance(typ, DecimalType) for typ in concrete):
                 return DecimalType()
             return IntType()
@@ -4577,7 +4575,7 @@ class _Checker:
             return self._check_in_op(left_type, right_type, span)
 
         if op == BinOp.ADD:
-            return self._check_add(left_type, right_type, span)
+            return self._check_numeric_binop(left_type, right_type, span, "+")
         if op in (BinOp.SUB, BinOp.MUL):
             return self._check_numeric_binop(
                 left_type, right_type, span, "-" if op == BinOp.SUB else "*"
@@ -4614,46 +4612,6 @@ class _Checker:
             span=span,
         )
 
-    def _check_add(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
-        candidate = self._candidate_same_family_result(
-            left_type,
-            right_type,
-            allowed=(TextType, IntType, DecimalType),
-            span=span,
-            subject="'+' operands",
-        )
-        if candidate is not None:
-            return candidate
-        # reject operations on bare type variables.
-        if isinstance(left_type, TypeVarType):
-            raise AglTypeError(
-                f"operation '+' is not permitted on a value of abstract type variable "
-                f"'{left_type.name}'.",
-                span=span,
-            )
-        if isinstance(right_type, TypeVarType):
-            raise AglTypeError(
-                f"operation '+' is not permitted on a value of abstract type variable "
-                f"'{right_type.name}'.",
-                span=span,
-            )
-        if self._is_type_or_bottom(left_type, TextType) and self._is_type_or_bottom(
-            right_type, TextType
-        ):
-            if isinstance(left_type, TextType) or isinstance(right_type, TextType):
-                return TextType()
-        if self._is_type_or_bottom(left_type, IntType, DecimalType) and self._is_type_or_bottom(
-            right_type, IntType, DecimalType
-        ):
-            if isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):
-                return DecimalType()
-            return IntType()
-        raise AglTypeError(
-            f"'+' requires both operands to be text or both to be numeric; "
-            f"got '{left_type!r}' and '{right_type!r}'.",
-            span=span,
-        )
-
     def _check_numeric_binop(
         self, left_type: Type, right_type: Type, span: SourceSpan, op_str: str
     ) -> Type:
@@ -4683,8 +4641,14 @@ class _Checker:
             self._is_type_or_bottom(left_type, IntType, DecimalType)
             and self._is_type_or_bottom(right_type, IntType, DecimalType)
         ):
+            text_hint = (
+                " Use '++' to concatenate text."
+                if isinstance(left_type, TextType) and isinstance(right_type, TextType)
+                else ""
+            )
             raise AglTypeError(
-                f"'{op_str}' requires numeric operands; got '{left_type!r}' and '{right_type!r}'.",
+                f"'{op_str}' requires numeric operands; got '{left_type!r}' and "
+                f"'{right_type!r}'.{text_hint}",
                 span=span,
             )
         if isinstance(left_type, DecimalType) or isinstance(right_type, DecimalType):

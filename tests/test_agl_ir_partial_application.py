@@ -75,13 +75,13 @@ var first = 0
 var second = 0
 
 def mark(label: text, value: int) -> int =
-  log := log + label
+  log := log ++ label
   value
 
 def digits(a: int, b: int, c: int) -> int = a * 100 + b * 10 + c
 
 def make-callee() -> (int, int, int) -> int =
-  log := log + "callee"
+  log := log ++ "callee"
   digits
 
 program def main() -> unit =
@@ -90,9 +90,7 @@ program def main() -> unit =
   first := h(2)
   second := h(4)
 """
-    executable = lower_inline_ir(source)
-    (main_symbol,) = executable.program_functions
-    result = IrInterpreter(executable).run(program_symbol=main_symbol)
+    result = evaluate_ir(source)
     assert result["after-create"] == TextValue("calleeac")
     assert result["log"] == TextValue("calleeac")
     assert result["first"] == IntValue(123)

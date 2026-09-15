@@ -41,9 +41,9 @@ from agm.agl.semantics.values import (
 )
 from tests._timeouts import fail_if_slow
 from tests.agl.ir_harness import (
-    _prepare_extern_program,
     evaluate_ir_raises_with_externs,
     evaluate_ir_with_externs,
+    lower_extern_program,
     nominal_id_for,
 )
 
@@ -93,7 +93,7 @@ class TestValueDirectedBoundary:
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         agent = result["result"]
         assert isinstance(agent, RecordValue)
-        executable, _ = _prepare_extern_program(source, companion, tmp_path)
+        executable = lower_extern_program(source, companion, tmp_path)
         assert agent.nominal == nominal_id_for(executable, "Agent::AgentCommand")
         assert agent.fields == {"command": TextValue("runner")}
 
@@ -103,7 +103,7 @@ class TestValueDirectedBoundary:
             "def f(): return [1]\n",
             tmp_path,
         )
-        assert exc.fields["python-type"].value == ""
+        assert exc.fields["python-type"] == ""
 
     def test_agl_dict_rejects_non_text_keys(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
@@ -112,7 +112,7 @@ class TestValueDirectedBoundary:
             tmp_path,
         )
 
-        assert exc.fields["python-type"].value == "TypeError"
+        assert exc.fields["python-type"] == "TypeError"
 
     def test_generic_aliases_need_no_schema_reconciliation(self, tmp_path: Path) -> None:
         source = (
@@ -143,7 +143,7 @@ class TestValueDirectedBoundary:
         assert isinstance(outer, RecordValue)
         inner = outer.fields["inner"]
         assert isinstance(inner, RecordValue)
-        executable, _ = _prepare_extern_program(source, companion, tmp_path)
+        executable = lower_extern_program(source, companion, tmp_path)
         assert inner.nominal == nominal_id_for(executable, "Inner")
         assert inner.fields == {"x": IntValue(1)}
 
@@ -172,7 +172,7 @@ class TestValueDirectedBoundary:
         )
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["result"] == IntValue(5)
-        executable, _ = _prepare_extern_program(source, companion, tmp_path)
+        executable = lower_extern_program(source, companion, tmp_path)
         inner = nominal_id_for(executable, "Inner")
         assert result["xs"] == ArrayValue(
             [

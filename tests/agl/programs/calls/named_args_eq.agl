@@ -7,7 +7,7 @@
 def add3(a: int, b: int, c: int) -> int = a + b + c
 
 def tag(text-val: text, prefix: text = "INFO", suffix: text = "") -> text =
-  "[" + prefix + "] " + text-val + suffix
+  "[" ++ prefix ++ "] " ++ text-val ++ suffix
 
 # Positional, all-named with '=', reordered named, and mixed positional+named
 # all agree.

@@ -2,6 +2,7 @@
 
 import std/config
 import std/fs
+import std/log
 
 enum Severity = LOW | MEDIUM | HIGH | CRITICAL
 
@@ -14,6 +15,10 @@ record Issue
 record Review
   issues: array[Issue]
 
+enum ReviseIssueResponse
+  | Valid(fix-description: text)
+  | Invalid(reason: text)
+
 def Agent::review(self, scope: text, aspects: text) -> Review =
   let prompt: text = """
   Review %{scope} for %{aspects}.
@@ -22,17 +27,13 @@ def Agent::review(self, scope: text, aspects: text) -> Review =
   """
   self.ask prompt
 
-enum ReviseIssueResponse
-  | Valid(fix-description: text)
-  | Invalid(reason: text)
-
 def Agent::revise-issue(self, issue: Issue) -> ReviseIssueResponse =
   let prompt: text = """
   Check if the following issue is still valid — if so, understand the root cause and fix it. Keep changes minimal and validate. Commit after fixing the issue.
 
   ## Issue
 
-  %{issue}
+  %{issue as json}
 
   ## Response
 
@@ -42,12 +43,11 @@ def Agent::revise-issue(self, issue: Issue) -> ReviseIssueResponse =
   self.ask prompt
 
 # Returns `true` if there was at least one valid HIGH or CRITICAL issue.
-def Agent::revise-review(self, review: Review, quiet: bool) -> bool =
+def Agent::revise-review(self, review: Review) -> bool =
   var ct: bool = false
   for issue in review.issues do
     let r = self.revise-issue(issue)
-    if not quiet =>
-      print r
+    log::info (r as json)
     if r is Valid and (issue.severity is HIGH or issue.severity is CRITICAL) =>
       ct := true
   done
@@ -61,9 +61,13 @@ def Agent::revise-review-text(self, review: text) -> bool =
 
   ## Review
 
-  ```
+  START REVIEW
+  >>>>>>>>>>>>>>>>
+
   %{review}
-  ```
+
+  >>>>>>>>>>>>>>>>
+  END REVIEW
 
   ## Response
 
@@ -74,16 +78,13 @@ def Agent::revise-review-text(self, review: text) -> bool =
   """
   self.ask prompt
 
-def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent, max-steps: int, quiet: bool) -> unit =
+def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent, max-steps: int) -> unit =
   var n: int = 1
   do[max-steps]
-    if not quiet =>
-      print "-------------------------------------------------"
-      print "Step %{n}"
-      print "-------------------------------------------------"
+    log::info-heading "Step %{n}"
     n := n + 1
     let review = review-agent.review(scope, aspects)
-    let ct = revise-agent.revise-review(review, quiet)
+    let ct = revise-agent.revise-review(review)
   until not ct
 
 let default-aspects = "correctness, maintainability, efficency, non-duplication, adherence to relevant AGENTS.md files"
@@ -99,13 +100,11 @@ program def review-main(
 
 program def revise-main(
   file: path,
-  agent: Agent = config::default-agent,
-  @opt-short("q")
-  quiet: bool = false)
+  agent: Agent = config::default-agent)
   -> unit =
   let txt: text = fs::read(file)
   if txt as? Review =>
-    print <| agent.revise-review(txt as Review, quiet)
+    print <| agent.revise-review(txt as Review)
   else =>
     print <| agent.revise-review-text(txt)
 
@@ -115,9 +114,7 @@ program def refine-main(
   extra-aspects: text = "",
   review-agent: Agent = config::default-agent,
   revise-agent: Agent = config::default-agent,
-  max-steps: int = 8,
-  @opt-short("q")
-  quiet: bool = false)
+  max-steps: int = 8)
   -> unit =
   let sep = if extra-aspects == "" => "" else => ", "
-  print <| refine(scope, aspects + sep + extra-aspects, review-agent, revise-agent, max-steps, quiet)
+  print <| refine(scope, aspects + sep + extra-aspects, review-agent, revise-agent, max-steps)

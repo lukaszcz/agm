@@ -1,4 +1,5 @@
 import std/result::Result
+import std/option::Option
 
 exception TimeParseError extends Exception
   raw: text
@@ -12,6 +13,8 @@ extern def sleep(seconds: decimal) -> unit
 extern def parse-iso(value: text) -> decimal
 def try-parse-iso(value: text) -> Result[decimal, TimeParseError] =
   try Result::Ok(value = parse-iso(value)) catch TimeParseError as e => Result::Err(error = e)
+def parse-iso?(value: text) -> Option[decimal] =
+  try-parse-iso(value).ok()
 
 @extern-name("format_iso")
 extern def format-iso(epoch: decimal) -> text
@@ -19,3 +22,5 @@ extern def format(epoch: decimal, fmt: text) -> text
 extern def parse(value: text, fmt: text) -> decimal
 def try-parse(value: text, fmt: text) -> Result[decimal, TimeParseError] =
   try Result::Ok(value = parse(value, fmt)) catch TimeParseError as e => Result::Err(error = e)
+def parse?(value: text, fmt: text) -> Option[decimal] =
+  try-parse(value, fmt).ok()

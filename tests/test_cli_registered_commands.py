@@ -359,6 +359,32 @@ def test_registered_command_rejects_mutually_exclusive_run_time_options(
     assert calls == []
 
 
+def test_registered_command_conflict_help_includes_module_parameters(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    write_installed_package(
+        home,
+        "tools",
+        source="@param let verbose: bool = false\nprogram def main() -> unit = ()\n",
+        commands={"tools run": "tools/main::main"},
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={"tools run": CommandRegistration("tools", "tools/main::main")}
+        ),
+    )
+
+    result = invoke(CliRunner(), ["tools", "run", "--log", "--no-log"])
+
+    assert result.exit_code == 1
+    assert "Parameters of tools/main" in result.output
+    assert "--verbose" in result.output
+
+
 def test_ambiguous_registered_value_reuses_static_pipeline_artifacts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -398,6 +424,49 @@ def test_ambiguous_registered_value_reuses_static_pipeline_artifacts(
     result = invoke(CliRunner(), ["tools", "run", "--message", "--dry-run"])
 
     assert result.exit_code == 0
+    assert discoveries == 1
+
+
+def test_registered_value_named_like_short_help_reuses_static_pipeline_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from agm.agl.matchcompile.stage import MatchCompiledProgram
+    from agm.agl.pipeline import PipelineDriver, PreparedProgram, ProgramDiscovery
+
+    home = tmp_path / "home"
+    write_installed_package(
+        home,
+        "tools",
+        source="program def main(tag: text) -> unit = print tag\n",
+        commands={"tools run": "tools/main::main"},
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        dispatch,
+        "load_command_index",
+        lambda **_: ActivationIndex(
+            commands={"tools run": CommandRegistration("tools", "tools/main::main")}
+        ),
+    )
+    real_discover = PipelineDriver.discover_programs
+    discoveries = 0
+
+    def counting_discover(
+        self: PipelineDriver,
+        prepared: PreparedProgram,
+        *,
+        compiled: MatchCompiledProgram | None = None,
+    ) -> ProgramDiscovery:
+        nonlocal discoveries
+        discoveries += 1
+        return real_discover(self, prepared, compiled=compiled)
+
+    monkeypatch.setattr(PipelineDriver, "discover_programs", counting_discover)
+
+    result = invoke(CliRunner(), ["tools", "run", "--tag", "-h"])
+
+    assert result.exit_code == 0
+    assert result.output == "-h\n"
     assert discoveries == 1
 
 

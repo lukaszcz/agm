@@ -1551,6 +1551,42 @@ class TestModuleParameterOptions:
 
         assert command.parse(["--no-no-foo"]).params == {no_foo.key: False}
 
+    def test_help_renders_a_short_only_module_parameter(self) -> None:
+        program = self._program()
+        verbose = _module_param(program.module, "verbose", BoolType(), short="v")
+        command = build_program_command(
+            program,
+            frozenset(
+                {
+                    "--verbose",
+                    "--no-verbose",
+                    "--tool.verbose",
+                    "--no-tool.verbose",
+                }
+            ),
+            (verbose,),
+        )
+        assert isinstance(command, ProgramCommand)
+
+        help_text = command.render_help("agm exec tool.agl")
+
+        assert "-v" in help_text
+
+    def test_help_omits_a_metavar_for_a_negative_only_option_module_parameter(self) -> None:
+        program = self._program()
+        region = _module_param(program.module, "region", _option_type(TextType()))
+        command = build_program_command(
+            program,
+            frozenset({"--region", "--no-region", "--tool.region"}),
+            (region,),
+        )
+        assert isinstance(command, ProgramCommand)
+
+        help_text = command.render_help("agm exec tool.agl")
+
+        assert "--no-tool.region" in help_text
+        assert "--no-tool.region TEXT" not in help_text
+
     def test_module_bool_rejects_both_resolving_polarities(self) -> None:
         program = self._program()
         verbose = _module_param(program.module, "verbose", BoolType())

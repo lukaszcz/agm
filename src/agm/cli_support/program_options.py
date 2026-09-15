@@ -1046,12 +1046,16 @@ def _module_environment_fallback(
 
 def _module_help_record(entry: "ParamSurfaceEntry", projected: ProjectedOption) -> tuple[str, str]:
     """Render one module parameter under its shortest resolving option spelling."""
-    spelling = (
-        entry.positive_option_spellings[0]
-        if entry.positive_option_spellings
-        else entry.negative_option_spellings[0]
+    spelling = next(
+        iter(
+            (
+                *entry.positive_option_spellings,
+                *entry.short_option_spellings,
+                *entry.negative_option_spellings,
+            )
+        )
     )
-    if projected.takes_value:
+    if projected.takes_value and spelling not in entry.negative_option_spellings:
         spelling = (
             f"{spelling} {entry.param.cli.metavar or _default_metavar(entry.param, projected)}"
         )

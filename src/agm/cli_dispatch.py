@@ -388,12 +388,6 @@ class RegisteredProgramCommand(TyperCommand):
         )
         return program, artifacts[0] if artifacts else None
 
-    def _discover_program(self) -> "ProgramDeclInfo | None":
-        """Discover the referenced ``program def`` declaration, or ``None``."""
-        from agm.commands.exec_program import registered_program_declaration
-
-        return registered_program_declaration(self._program, self._registration.package)
-
     def invoke(self, ctx: click.Context) -> None:
         from agm.cli_support.program_options import (
             REGISTERED_RESERVED_FLAGS,
@@ -406,26 +400,31 @@ class RegisteredProgramCommand(TyperCommand):
 
         metadata = cast(dict[str, object], ctx.meta)
         cached_program = cast("ProgramDeclInfo | None", metadata.pop("registered_program", None))
+        cached_pipeline = cast(
+            "ProgramDiscoveryArtifacts | None", metadata.pop("registered_pipeline_cache", None)
+        )
+        discovered = cached_program is not None or cached_pipeline is not None
 
-        def program() -> "ProgramDeclInfo | None":
-            return cached_program if cached_program is not None else self._discover_program()
+        def discover() -> "ProgramDeclInfo | None":
+            nonlocal cached_program, cached_pipeline, discovered
+            if not discovered:
+                cached_program, cached_pipeline = self._discover_program_with_artifacts()
+                discovered = True
+            return cached_program
+
+        def program_command() -> "tuple[ProgramDeclInfo | None, ProgramCommand | None]":
+            declaration = discover()
+            params = (
+                ()
+                if declaration is None or cached_pipeline is None
+                else cached_pipeline.discovery.params_for(declaration)
+            )
+            return declaration, program_command_for(declaration, REGISTERED_RESERVED_FLAGS, params)
 
         if contains_help_flag(ctx.args):
             # This is the first point at which an unknown command has been proven
             # to be registered, so AgL remains unloaded for all builtin commands.
-            cached_pipeline = metadata.pop("registered_pipeline_cache", None)
-            declaration: ProgramDeclInfo | None
-            if cached_program is not None:
-                declaration = cached_program
-                pipeline_cache = cast("ProgramDiscoveryArtifacts | None", cached_pipeline)
-            else:
-                declaration, pipeline_cache = self._discover_program_with_artifacts()
-            params = (
-                ()
-                if declaration is None or pipeline_cache is None
-                else pipeline_cache.discovery.params_for(declaration)
-            )
-            command = program_command_for(declaration, REGISTERED_RESERVED_FLAGS, params)
+            declaration, command = program_command()
             if program_help_requested(ctx.args, command):
                 print(self._help(program=declaration, command=command), end="")
                 return
@@ -436,7 +435,8 @@ class RegisteredProgramCommand(TyperCommand):
         )
         conflict = exec_option_conflict(exec_args)
         if conflict is not None:
-            self._usage_error(conflict, program())
+            declaration, command = program_command()
+            self._usage_error(conflict, declaration, command)
         from agm.commands.exec_program import RegisteredProgramUsageError, run_registered
 
         try:
@@ -446,10 +446,7 @@ class RegisteredProgramCommand(TyperCommand):
                 args=exec_args,
                 package=self._registration.package,
                 command_path=self._path_name,
-                pipeline_cache=cast(
-                    "ProgramDiscoveryArtifacts | None",
-                    metadata.pop("registered_pipeline_cache", None),
-                ),
+                pipeline_cache=cached_pipeline,
             )
         except ProgramHelpRequested as exc:
             # A help request Click recognized only while parsing the program's

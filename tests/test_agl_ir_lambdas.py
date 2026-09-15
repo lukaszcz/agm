@@ -277,8 +277,8 @@ def test_recursion_depth_via_indirect_call() -> None:
     # The simplest: a def called via a function-value binding.
     source = "def inf(n: int) -> int = inf(n + 1)\nlet f: (int) -> int = inf\nlet r = f(0)\n()"
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.nominal == nominal_id_for(lower_inline_ir(source), "RecursionError")
-    assert ir_exc.fields["limit"] == IntValue(256)
+    assert ir_exc.type_name == "RecursionError"
+    assert ir_exc.fields["limit"] == 256
 
 
 def test_recursion_depth_custom_limit_indirect() -> None:

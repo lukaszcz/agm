@@ -27,7 +27,7 @@ The AST records source structure faithfully so later passes never reconstruct sp
 - A leading-dot method invocation (`.map(f)`) becomes a marked unary lambda over a generated `self` binding. The marker lets type checking require a contextual receiver type while scope, traversal, capture analysis, and lowering reuse ordinary lambda and member-call paths.
 - Declaration nodes carry an optional attribute prefix — a name plus ordinary call arguments — held verbatim. The AST makes no claim about which attributes exist or what they mean; recognition happens against the catalog in `agl/attributes.py`, a dependency-free leaf the AST itself never imports. The parser attaches an attribute to its declaration, parameter, or field and stops there; scope is where an attribute acquires meaning ([scope.md](scope.md)).
 
-An inline-source host (`agm exec -c`, the REPL) wraps statement-oriented source with a pure syntactic wrapper in `parser/wrap.py` before the static passes run.
+Inline `agm exec -c` source is statement-oriented: the entry parse (`PipelineDriver.parse_entry(inline_command=True)`) wraps it with a pure syntactic wrapper in `parser/wrap.py` before the static passes run.
 
 ## Code Entry Points
 

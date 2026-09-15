@@ -90,9 +90,7 @@ program def main() -> unit =
   first := h(2)
   second := h(4)
 """
-    executable = lower_inline_ir(source)
-    (main_symbol,) = executable.program_functions
-    result = IrInterpreter(executable).run(program_symbol=main_symbol)
+    result = evaluate_ir(source)
     assert result["after-create"] == TextValue("calleeac")
     assert result["log"] == TextValue("calleeac")
     assert result["first"] == IntValue(123)

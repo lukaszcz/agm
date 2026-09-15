@@ -178,16 +178,16 @@ def test_companion_exceptions_still_become_extern_errors(tmp_path: Path) -> None
     source = "extern def fail() -> int\nlet _ = fail()\n()\n"
     companion = "def fail(): raise RuntimeError('boom')\n"
     exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
-    assert exc.fields["python-type"] == TextValue("RuntimeError")
-    assert exc.fields["function"] == TextValue("fail")
+    assert exc.fields["python-type"] == "RuntimeError"
+    assert exc.fields["function"] == "fail"
 
 
 def test_an_extern_error_names_the_extern_as_declared(tmp_path: Path) -> None:
     source = '@extern-name("py_fail")\nextern def fail-it!() -> int\nlet _ = fail-it!()\n()\n'
     companion = "def py_fail(): raise RuntimeError('boom')\n"
     exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
-    assert exc.fields["python-type"] == TextValue("RuntimeError")
-    assert exc.fields["function"] == TextValue("fail-it!")
+    assert exc.fields["python-type"] == "RuntimeError"
+    assert exc.fields["function"] == "fail-it!"
 
 
 def test_extern_defaults_work_for_direct_calls(tmp_path: Path) -> None:

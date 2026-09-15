@@ -417,10 +417,10 @@ def stop() -> Pair = raise Abort(message = "stop")
 let Pair(left, right): Pair = stop()
 left + right
 """
-    from tests.agl.ir_harness import evaluate_ir_raises, nominal_id_for
+    from tests.agl.ir_harness import evaluate_ir_raises
 
     failure = evaluate_ir_raises(src)
-    assert failure.nominal == nominal_id_for(lower_inline_ir(src), "Abort")
+    assert failure.type_name == "Abort"
 
 
 def test_case_record_and_singleton_enum_decompositions_execute_without_discriminants() -> None:

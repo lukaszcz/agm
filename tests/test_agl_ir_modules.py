@@ -349,7 +349,7 @@ let boom = lib::Root(code = 1)
 """
 
     with pytest.raises(AglTypeError):
-        evaluate_ir_graph(entry_source, {"lib": lib_source}, tmp_path)
+        _checked(entry_source, {"lib": lib_source}, tmp_path)
 
 
 def test_imported_record_and_enum(tmp_path: Path) -> None:
@@ -431,9 +431,7 @@ let result = mathlib::safe-div(10, 0)
 """
     modules = {"mathlib": mathlib_source}
     exc = evaluate_ir_graph_raises(entry_source, modules, tmp_path)
-    checked = _checked(entry_source, modules, tmp_path)
-    program = lower_program(_compiled_checked(checked))
-    assert exc.nominal == nominal_id_for(program, "ArithmeticError")
+    assert exc.type_name == "ArithmeticError"
 
 
 def test_wildcard_imported_nullary_enum_as_value(tmp_path: Path) -> None:

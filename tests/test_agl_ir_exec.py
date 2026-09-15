@@ -14,11 +14,14 @@ from agm.agl.semantics.exceptions import AglRaise
 from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import agl_roots, let_root_capture
 from tests.agl.ir_harness import (
+    completed_bindings,
     evaluate_ir_raises_with_shell,
     evaluate_ir_with_shell,
     inline_main_items,
     lower_inline_ir,
+    run_inline_ir_with_shell,
     shell_caps,
+    uncaught_error,
 )
 
 # ---------------------------------------------------------------------------
@@ -141,9 +144,7 @@ def test_t4_nonzero_exit_text() -> None:
     source = 'let result: text = exec("false")\nresult'
     commands = {"false": _fail(1)}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
-
-    program = lower_inline_ir(source, caps=shell_caps())
-    assert ir_exc.nominal == program.builtin_nominals.nominal("ExecError")
+    assert ir_exc.type_name == "ExecError"
 
 
 def test_t4a_full_pipeline_unit_exec_discards_successful_output() -> None:
@@ -159,9 +160,7 @@ def test_t4b_full_pipeline_unit_exec_still_raises_on_nonzero_exit() -> None:
     """A checked unit exec still maps a shell failure to ExecError."""
     source = 'exec("fail")\n()'
     ir_exc = evaluate_ir_raises_with_shell(source, {"fail": _fail(2)})
-
-    program = lower_inline_ir(source, caps=shell_caps())
-    assert ir_exc.nominal == program.builtin_nominals.nominal("ExecError")
+    assert ir_exc.type_name == "ExecError"
 
 
 # ---------------------------------------------------------------------------
@@ -174,22 +173,16 @@ def test_t5_timeout() -> None:
     source = 'let result: text = exec("sleep 999")\nresult'
     commands = {"sleep 999": _timed_out()}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
-    from agm.agl.semantics.values import BoolValue
-
-    program = lower_inline_ir(source, caps=shell_caps())
-    assert ir_exc.nominal == program.builtin_nominals.nominal("ExecError")
-    assert ir_exc.fields["timed-out"] == BoolValue(True)
+    assert ir_exc.type_name == "ExecError"
+    assert ir_exc.fields["timed-out"] is True
 
 
 def test_t5a_structured_exec_timeout_raises_exec_error() -> None:
     """Structured exec raises ExecError, rather than returning a timed-out record."""
     source = 'let result: ExecResult = exec("sleep 999")\nresult'
     ir_exc = evaluate_ir_raises_with_shell(source, {"sleep 999": _timed_out()})
-    from agm.agl.semantics.values import BoolValue
-
-    program = lower_inline_ir(source, caps=shell_caps())
-    assert ir_exc.nominal == program.builtin_nominals.nominal("ExecError")
-    assert ir_exc.fields["timed-out"] == BoolValue(True)
+    assert ir_exc.type_name == "ExecError"
+    assert ir_exc.fields["timed-out"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -202,11 +195,8 @@ def test_t6_spawn_error() -> None:
     source = 'let result: text = exec("nonexistent_cmd")\nresult'
     commands = {"nonexistent_cmd": _spawn_failed("No such file or directory")}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
-    from agm.agl.semantics.values import BoolValue
-
-    program = lower_inline_ir(source, caps=shell_caps())
-    assert ir_exc.nominal == program.builtin_nominals.nominal("ExecError")
-    assert ir_exc.fields["timed-out"] == BoolValue(False)
+    assert ir_exc.type_name == "ExecError"
+    assert ir_exc.fields["timed-out"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -233,12 +223,8 @@ def test_t7_retry_success() -> None:
         return _ok("99\n")
 
     source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 1))\nn'
-    from tests.agl.ir_harness import _run_ir_exec
-
-    caps = shell_caps()
-
     call_count[0] = 0
-    ir_snap, _ = _run_ir_exec(source, fake_shell, caps)
+    ir_snap = completed_bindings(run_inline_ir_with_shell(source, fake_shell))
 
     from agm.agl.semantics.values import IntValue
 
@@ -270,9 +256,7 @@ def test_t7_retry_forwards_spawn_settings_on_every_attempt() -> None:
         "on-parse-error = Retry(n = 1))\n"
         "n"
     )
-    from tests.agl.ir_harness import _run_ir_exec
-
-    snapshot, _ = _run_ir_exec(source, fake_shell, shell_caps())
+    snapshot = completed_bindings(run_inline_ir_with_shell(source, fake_shell))
 
     from agm.agl.semantics.values import IntValue
 
@@ -297,8 +281,7 @@ def test_t8_retry_exhaustion() -> None:
     source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 2))\nn'
     commands = {"cmd": _ok("not_a_number\n")}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
-    program = lower_inline_ir(source, caps=shell_caps())
-    assert ir_exc.nominal == program.builtin_nominals.nominal("ExecError")
+    assert ir_exc.type_name == "ExecError"
 
 
 @pytest.mark.parametrize("retries,expected_runs", [(0, 1), (1, 2), (2, 3)])
@@ -319,13 +302,9 @@ def test_retry_reruns_the_shell_exactly_once_per_attempt(retries: int, expected_
         return _ok("not_a_number\n")
 
     source = f'let n: int = exec("cmd", on-parse-error = Retry(n = {retries}))\nn'
-    from tests.agl.ir_harness import _run_ir_exec
+    exc = uncaught_error(run_inline_ir_with_shell(source, fake_shell))
 
-    with pytest.raises(AglRaise) as exc:
-        _run_ir_exec(source, fake_shell, shell_caps())
-
-    program = lower_inline_ir(source, caps=shell_caps())
-    assert exc.value.exc.nominal == program.builtin_nominals.nominal("ExecError")
+    assert exc.type_name == "ExecError"
     assert len(runs) == expected_runs
 
 
@@ -394,7 +373,6 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
     )
     from agm.agl.ir.reserved_nominals import require_reserved_enum_member_id
     from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.semantics.exceptions import AglRaise
     from agm.core.process import ProcessCaptureResult
 
     source_id = SourceId(0)
@@ -538,9 +516,7 @@ def test_exec_raw_tail_uses_the_live_std_config_timeout_default() -> None:
         "let output: text = exec$ configured\n"
         "output"
     )
-    from tests.agl.ir_harness import _run_ir_exec
-
-    _run_ir_exec(source, fake_shell, shell_caps())
+    completed_bindings(run_inline_ir_with_shell(source, fake_shell))
 
     assert calls == [2.0]
 
@@ -571,14 +547,13 @@ def test_t13_exec_spawn_parameters_and_defaults() -> None:
         "let configured: text = exec$ configured\n"
         "()"
     )
-    from tests.agl.ir_harness import _run_ir_exec
-
-    _run_ir_exec(
-        source,
-        fake_shell,
-        shell_caps(),
-        process_environment={"AMBIENT": "present"},
-        shell_exec_timeout=3.5,
+    completed_bindings(
+        run_inline_ir_with_shell(
+            source,
+            fake_shell,
+            process_environment={"AMBIENT": "present"},
+            shell_exec_timeout=3.5,
+        )
     )
 
     assert calls == [
@@ -610,18 +585,9 @@ def test_t12_retry_then_nonzero_exit() -> None:
         return _fail(1, stdout="", stderr="retry failed")
 
     source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 1))\nn'
-    from agm.agl.semantics.exceptions import AglRaise
-    from agm.agl.semantics.values import ExceptionValue
-    from tests.agl.ir_harness import _run_ir_exec
-
-    caps = shell_caps()
-
     call_count[0] = 0
-    with pytest.raises(AglRaise) as exc_info:
-        _run_ir_exec(source, fake_shell, caps)
-    assert isinstance(exc_info.value.exc, ExceptionValue)
-    program = lower_inline_ir(source, caps=caps)
-    assert exc_info.value.exc.nominal == program.builtin_nominals.nominal("ExecError")
+    exc = uncaught_error(run_inline_ir_with_shell(source, fake_shell))
+    assert exc.type_name == "ExecError"
 
 
 def test_t14_invalid_exec_timeout_raises_type_error_before_shell_execution() -> None:
@@ -629,6 +595,4 @@ def test_t14_invalid_exec_timeout_raises_type_error_before_shell_execution() -> 
     source = 'let _: text = exec("must-not-run", timeout = Option[text]::Some(value = "bad"))\n()'
 
     ir_exc = evaluate_ir_raises_with_shell(source, {})
-
-    program = lower_inline_ir(source, caps=shell_caps())
-    assert ir_exc.nominal == program.builtin_nominals.nominal("TypeError")
+    assert ir_exc.type_name == "TypeError"

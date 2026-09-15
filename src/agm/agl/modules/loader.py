@@ -61,6 +61,7 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, build_infix_operator_table, resolve_infix_chains
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.parser.transform import resolve_infix_fixity
+from agm.agl.parser.wrap import wrap_inline_program
 from agm.agl.syntax.advisories import SpacedQualifier
 from agm.agl.syntax.nodes import (
     ExportDecl,
@@ -1158,11 +1159,13 @@ def parse_entry_module(
     entry_source: str,
     *,
     entry_path: Path | None,
+    inline_command: bool = False,
 ) -> ParsedEntryModule:
     """Parse an entry source and collect its lexical advisories.
 
-    Syntax failures intentionally propagate to let callers choose their own
-    raising or diagnostic-capturing policy.
+    *inline_command* applies the ``agm exec -c`` synthetic-entry wrap. Syntax
+    failures intentionally propagate to let callers choose their own raising or
+    diagnostic-capturing policy.
     """
     canonical_path, source_id = entry_source_id(entry_path)
     with spaced_qualifier_collector() as spaced_sink:
@@ -1172,6 +1175,8 @@ def parse_entry_module(
             )
         except AglSyntaxError as error:
             raise EntryParseSyntaxError(error, tuple(spaced_sink)) from error
+    if inline_command:
+        program, next_id = wrap_inline_program(program, next_node_id=next_id)
     return ParsedEntryModule(
         program=program,
         next_id=next_id,

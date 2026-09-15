@@ -629,6 +629,7 @@ class PipelineDriver:
         entry_source: str,
         *,
         entry_path: "Path | None" = None,
+        inline_command: bool = False,
     ) -> ParsedEntry:
         """Parse *entry_source* once, ahead of module-graph loading.
 
@@ -638,6 +639,7 @@ class PipelineDriver:
         :func:`~agm.agl.modules.loader.load_graph` does for its own entry
         parse.  Non-raising: an ``AglSyntaxError`` is captured into
         :attr:`ParsedEntry.diagnostics` with ``program`` left ``None``.
+        *inline_command* applies the ``agm exec -c`` synthetic-entry wrap.
         """
         from agm.agl.lexer import tab_warning_collector
         from agm.agl.modules.loader import EntryParseSyntaxError, parse_entry_module
@@ -646,7 +648,9 @@ class PipelineDriver:
         with tab_warning_collector() as tab_sink:
             try:
                 with frontend_recursion_boundary():
-                    parsed_module = parse_entry_module(entry_source, entry_path=entry_path)
+                    parsed_module = parse_entry_module(
+                        entry_source, entry_path=entry_path, inline_command=inline_command
+                    )
             except AglSyntaxError as exc:
                 spaced_qualifiers = (
                     exc.spaced_qualifiers if isinstance(exc, EntryParseSyntaxError) else ()

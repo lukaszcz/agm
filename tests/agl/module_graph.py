@@ -54,7 +54,12 @@ from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph
+from agm.agl.modules.loader import (
+    LoadedModule,
+    ModuleGraph,
+    build_repl_graph,
+    parse_entry_module,
+)
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.parser.wrap import wrap_inline_program
@@ -67,7 +72,7 @@ from agm.agl.typecheck import CheckedModule
 from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.program import check_program
-from tests._agl_helpers import agl_roots, parse_inline_command
+from tests._agl_helpers import agl_roots
 
 # A general-purpose capability set (default agent, shell exec, json/text
 # codecs) for a test that does not care which capabilities back its checked
@@ -244,10 +249,10 @@ def resolve_inline_entry(
     admit executable root statements, while static-root tests must retain the
     file source unchanged.
     """
-    source_program, next_node_id, _wrapped = parse_inline_command(source)
+    parsed = parse_entry_module(source, entry_path=None, inline_command=True)
     graph, import_node_id = build_module_graph_from_program(
-        source_program,
-        next_node_id=next_node_id,
+        parsed.program,
+        next_node_id=parsed.next_id,
         origin_path=origin_path,
         default_stdlib=default_stdlib,
     )
@@ -260,7 +265,10 @@ def resolve_inline_entry(
     resolved = _without_synthetic_import(
         resolved_program.modules[graph.entry_id].resolved, import_node_id
     )
-    return dataclasses.replace(resolved, program=parse_program_seeded(source, start_id=0)[0])
+    source_view = parse_program_seeded(source, start_id=0, ambient_infix=graph.entry_infix_ambient)[
+        0
+    ]
+    return dataclasses.replace(resolved, program=source_view)
 
 
 def resolve_repl_entry(
@@ -324,10 +332,10 @@ def resolve_and_check_inline_entry(
     default_stdlib: bool = True,
 ) -> CheckedModule:
     """Type-check test-only inline source with the ``agm exec -c`` transform."""
-    source_program, next_node_id, _wrapped = parse_inline_command(source)
+    parsed = parse_entry_module(source, entry_path=None, inline_command=True)
     graph, import_node_id = build_module_graph_from_program(
-        source_program,
-        next_node_id=next_node_id,
+        parsed.program,
+        next_node_id=parsed.next_id,
         origin_path=origin_path,
         default_stdlib=default_stdlib,
     )
@@ -343,7 +351,10 @@ def resolve_and_check_inline_entry(
     # Keep the source AST view: the wrapper only changes execution placement,
     # and side tables stay valid because every source node id is preserved.
     source_view = dataclasses.replace(
-        stripped_resolved, program=parse_program_seeded(source, start_id=0)[0]
+        stripped_resolved,
+        program=parse_program_seeded(source, start_id=0, ambient_infix=graph.entry_infix_ambient)[
+            0
+        ],
     )
     return dataclasses.replace(checked, resolved=source_view)
 

@@ -58,7 +58,6 @@ from tests.agl.ir_harness import (
     evaluate_ir_raises,
     inline_main_items,
     lower_inline_ir,
-    nominal_id_for,
 )
 
 _EMPTY_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
@@ -66,18 +65,6 @@ _EMPTY_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
 
 def _lower(source: str):
     return lower_inline_ir(source)
-
-
-def _raised_nominal_id(source: str, display_name: str) -> NominalId:
-    """Nominal identity a real (stdlib-declared) built-in exception carries for *source*.
-
-    ``Abort``/``CastError`` are ordinary ``exception`` declarations in
-    ``std/errors``, not host-reserved fallbacks, so their identity is this
-    compiled program's own declaration id — looked up by recompiling the
-    same source (deterministic, matches the identity ``evaluate_ir_raises``
-    produces for it).
-    """
-    return nominal_id_for(lower_inline_ir(source), display_name)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +198,7 @@ let x = j as int
 )
 def test_cast_raises_cast_error(source: str) -> None:
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.nominal == _raised_nominal_id(source, "CastError")
+    assert ir_exc.type_name == "CastError"
 
 
 _MISSING_MEMBER_SOURCES = (
@@ -232,7 +219,7 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
 @pytest.mark.parametrize("source", _MISSING_MEMBER_SOURCES)
 def test_cast_missing_field_and_unknown_variant_raise(source: str) -> None:
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.nominal == _raised_nominal_id(source, "CastError")
+    assert ir_exc.type_name == "CastError"
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +267,7 @@ def test_cast_rejects_undeclared_property(shape: str) -> None:
     """An undeclared JSON property fails the cast rather than being silently dropped."""
     source = _UNDECLARED_PROPERTY_SOURCES[shape]
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.nominal == _raised_nominal_id(source, "CastError")
+    assert ir_exc.type_name == "CastError"
 
 
 @pytest.mark.parametrize("shape", sorted(_UNDECLARED_PROPERTY_SOURCES))
@@ -488,8 +475,8 @@ def test_golden_bottom_json_cast_lowers_to_noop(source: str) -> None:
 @pytest.mark.parametrize("source", _BOTTOM_JSON_CAST_SOURCES)
 def test_bottom_json_cast_preserves_the_raised_source(source: str) -> None:
     raised = evaluate_ir_raises(source)
-    assert raised.nominal == _raised_nominal_id(source, "Abort")
-    assert raised.fields["message"] == TextValue("stop")
+    assert raised.type_name == "Abort"
+    assert raised.fields["message"] == "stop"
 
 
 def test_golden_nested_decode_schema_shape() -> None:

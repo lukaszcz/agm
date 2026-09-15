@@ -702,9 +702,9 @@ def test_recursion_depth_limit() -> None:
 
     ir_exc = evaluate_ir_raises(source)
     # IR pipeline must raise RecursionError
-    assert ir_exc.nominal == nominal_id_for(lower_inline_ir(source), "RecursionError")
+    assert ir_exc.type_name == "RecursionError"
     # The limit field must match DEFAULT_MAX_CALL_DEPTH = 256
-    assert ir_exc.fields["limit"] == IntValue(256)
+    assert ir_exc.fields["limit"] == 256
 
 
 def test_case_wildcard_and_literal_patterns_in_function_body() -> None:

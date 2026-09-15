@@ -178,7 +178,7 @@ class TestBuiltinVarDefaults:
         assert result.diagnostics
 
     def test_initializer_must_be_constant(self, tmp_path: Path) -> None:
-        declaration_source = 'builtin var default-agent: Agent = AgentCommand("not " ++ "constant")'
+        declaration_source = 'builtin var default-agent: Agent = AgentCommand("not %{"constant"}")'
         (declaration,) = parse_program(declaration_source).body.items
         assert isinstance(declaration, BuiltinVarDecl)
         assert isinstance(declaration.default, Call)

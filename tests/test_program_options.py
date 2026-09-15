@@ -1384,6 +1384,13 @@ class TestModuleParameterOptions:
         with pytest.raises(ValueError):
             command.parse(["--region", "eu", "--no-region"])
 
+    def test_module_path_parameter_uses_the_path_metavar_by_default(self) -> None:
+        program = self._program()
+        output = _module_param(program.module, "out", TextType(), is_path=True)
+        command = _command_with_module_params(program, output)
+
+        assert "--out PATH" in command.render_help("agm exec tool.agl")
+
     def test_ambiguous_module_spelling_is_a_usage_error(self) -> None:
         program = self._program()
         left = _module_param(ModuleId(("A", "one")), "trace", BoolType())
@@ -1709,6 +1716,15 @@ class TestModuleParameterOptions:
         ]
 
         assert value_options == [("out", ("--out", "--tool.out"), True)]
+
+    def test_value_options_exclude_negative_optional_module_path_flags(self) -> None:
+        program = self._program()
+        output = _module_param(program.module, "out", _option_type(TextType()), is_path=True)
+        command = _command_with_module_params(program, output)
+
+        value_options = [(param.name, spellings) for param, spellings in command.value_options()]
+
+        assert value_options == [("out", ("--out", "--tool.out"))]
 
     def test_program_arguments_stay_separate_without_module_param_values(self) -> None:
         program = self._program()

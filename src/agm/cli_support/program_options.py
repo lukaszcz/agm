@@ -883,7 +883,7 @@ def _default_metavar(
     syntax, ``json`` parses one JSON value, and every other type reads strict
     JSON or AgL value syntax. An ``Option[T]`` follows ``T``.
     """
-    if isinstance(param, ProgramParamInfo) and param.is_path:
+    if param.is_path:
         return "PATH"
     if projected.value_form is ValueForm.OPTION:
         return _value_form_metavar(cast(ValueForm, projected.option_inner_form))
@@ -1469,7 +1469,12 @@ class ProgramCommand:
             result.append((param, (projected.flags[0], *(() if short is None else (short,)))))
         for entry, projected in self.module_options:
             if projected.takes_value:
-                result.append((entry.param, tuple(entry.option_spellings)))
+                result.append(
+                    (
+                        entry.param,
+                        (*entry.positive_option_spellings, *entry.short_option_spellings),
+                    )
+                )
         return tuple(result)
 
     def _read_tokens(

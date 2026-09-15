@@ -89,18 +89,52 @@ def resolve_param_values(
     values = dict(params)
     supplied = frozenset(params)
     entries = surface.entries
-    module_values = resolve_module_param_values(config, tuple(entry.param for entry in entries))
+    module_params = tuple(entry.param for entry in entries)
+    module_routes = _module_routes(module_params)
+    program_routes = _program_routes(program, entry_segments, command_paths, entries)
+    _reject_configured_cross_route_ambiguities(config, module_routes, program_routes)
+    module_values = resolve_module_param_values(config, module_params)
     for key, value in module_values.items():
         if key not in supplied:
             values[key] = value
 
-    program_routes = _program_routes(program, entry_segments, command_paths, entries)
     _reject_configured_ambiguous_program_leaves(
         config, program, entry_segments, command_paths, surface
     )
     program_values = resolve_qualified_values(config, tuple(key for _entry, key in program_routes))
     _merge_route_values(values, supplied, program_routes, program_values)
     return values, _route_reports(program, entry_segments, command_paths, entries, program_routes)
+
+
+def _reject_configured_cross_route_ambiguities(
+    config: GeneralConfig,
+    module_routes: Sequence[tuple[ParamBindingInfo, QualifiedConfigKey]],
+    program_routes: Sequence[tuple[ParamSurfaceEntry, QualifiedConfigKey]],
+) -> None:
+    """Reject a configured table leaf that resolves to distinct route kinds."""
+    for module_param, module_key in module_routes:
+        module_leaves = configured_leaf_tables(
+            config, module_key.module_segments, module_key.scope_path, module_key.command_paths
+        )
+        module_table = module_leaves.get(module_key.leaf)
+        if module_table is None:
+            continue
+        for entry, program_key in program_routes:
+            if module_param.key == entry.param.key or module_key.leaf != program_key.leaf:
+                continue
+            program_leaves = configured_leaf_tables(
+                config,
+                program_key.module_segments,
+                program_key.scope_path,
+                program_key.command_paths,
+            )
+            if program_leaves.get(program_key.leaf) != module_table:
+                continue
+            table_name = display_table_path(module_table)
+            raise QualifiedConfigLookupError(
+                f"config key {table_name}.{module_key.leaf} matches multiple parameters: "
+                f"{module_param.declaration_path}, {entry.param.declaration_path}"
+            )
 
 
 def resolve_module_param_values(

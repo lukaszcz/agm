@@ -1518,6 +1518,9 @@ def _select_program_inventory(
             for key, decoder in executable.param_decoders.items()
             if key[0] in source_reachable
         },
+        param_spans={
+            key: span for key, span in executable.param_spans.items() if key[0] in source_reachable
+        },
     )
 
 
@@ -1572,9 +1575,11 @@ def _module_param_infos(
             if isinstance(item, VarDecl):
                 binding_node_id = item.node_id
                 name = item.name
+                type_ann = item.type_ann
             elif isinstance(item, LetDecl):
                 binding_node_id = item.pattern.node_id
                 name = simple_let_pattern_name(item.pattern)
+                type_ann = item.type_ann
             else:
                 continue
             cli = attributes.params.get(binding_node_id)
@@ -1594,6 +1599,13 @@ def _module_param_infos(
                     mutable=isinstance(item, VarDecl),
                     cli=cli,
                     doc=attributes.docs.get(item.node_id),
+                    is_path=_annotates_path(
+                        checked,
+                        module_id,
+                        tuple(segment.name for segment in item.scope_path),
+                        type_ann,
+                        binding_type,
+                    ),
                 )
             )
         module_params[module_id] = tuple(params)

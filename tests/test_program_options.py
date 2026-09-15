@@ -149,6 +149,7 @@ def _module_param(
     metavar: str | None = None,
     hidden: bool = False,
     doc: str | None = None,
+    is_path: bool = False,
 ) -> ParamBindingInfo:
     return ParamBindingInfo(
         module=module,
@@ -167,6 +168,7 @@ def _module_param(
             doc=doc,
         ),
         doc=doc,
+        is_path=is_path,
     )
 
 
@@ -1696,6 +1698,17 @@ class TestModuleParameterOptions:
         assert command.value_token_indexes(
             ["--message", "--dry-run", "-m", "--no-stdlib", "--enabled"]
         ) == frozenset({1, 3})
+
+    def test_value_options_include_path_typed_module_parameters(self) -> None:
+        program = self._program()
+        output = _module_param(program.module, "out", TextType(), is_path=True)
+        command = _command_with_module_params(program, output)
+
+        value_options = [
+            (param.name, spellings, param.is_path) for param, spellings in command.value_options()
+        ]
+
+        assert value_options == [("out", ("--out", "--tool.out"), True)]
 
     def test_program_arguments_stay_separate_without_module_param_values(self) -> None:
         program = self._program()

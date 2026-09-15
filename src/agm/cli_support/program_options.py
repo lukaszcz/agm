@@ -1453,18 +1453,23 @@ class ProgramCommand:
             return None
         return self.positional[count]
 
-    def value_options(self) -> tuple[tuple["ProgramParamInfo", tuple[str, ...]], ...]:
+    def value_options(
+        self,
+    ) -> tuple[tuple["ProgramParamInfo | ParamBindingInfo", tuple[str, ...]], ...]:
         """Return each value-taking parameter with the spellings its value follows.
 
-        Its long flag and ``@opt-short`` spelling; a ``--no-x`` negative
-        never takes a value.
+        Program and module option spellings that take a value are included;
+        a ``--no-x`` negative never takes a value.
         """
-        result: list[tuple["ProgramParamInfo", tuple[str, ...]]] = []
+        result: list[tuple["ProgramParamInfo | ParamBindingInfo", tuple[str, ...]]] = []
         for param, projected in self.options:
             if not projected.takes_value:
                 continue
             short = _short_flag(param)
             result.append((param, (projected.flags[0], *(() if short is None else (short,)))))
+        for entry, projected in self.module_options:
+            if projected.takes_value:
+                result.append((entry.param, tuple(entry.option_spellings)))
         return tuple(result)
 
     def _read_tokens(

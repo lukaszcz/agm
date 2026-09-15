@@ -585,7 +585,7 @@ def _program_argument_completion_items(
 
 
 def _program_value_completer(
-    param: ProgramParamInfo,
+    param: ProgramParamInfo | ParamBindingInfo,
 ) -> Callable[[click.Context, click.Parameter, str], list[CompletionItem]]:
     """Return the value completer for one program parameter's flag."""
 

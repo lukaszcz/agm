@@ -206,6 +206,24 @@ program def main() -> unit = ()
         assert preflight.param_seeds == {}
         assert len(preflight.result.diagnostics) == 3
 
+    def test_imported_param_decode_failure_points_to_its_declaration(self, tmp_path: Path) -> None:
+        library = tmp_path / "library.agl"
+        library.write_text("@param let retries: int = 1\n", encoding="utf-8")
+        runtime = PipelineDriver()
+        prepared = _prepared(
+            "import library\nprogram def main() -> unit = ()\n",
+            tmp_path,
+        )
+        discovery = runtime.discover_programs(prepared)
+        retries = discovery.params_for(discovery.programs[0])[0]
+
+        preflight = _preflight(
+            runtime, prepared, discovery, param_values={retries.key: "not-an-int"}
+        )
+
+        assert not preflight.result.ok
+        assert preflight.result.diagnostics[0].source_label == str(library)
+
     def test_seeds_override_defaults_and_keep_vars_writable(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

@@ -373,6 +373,8 @@ class ExecutableProgram:
         while initializing modules without changing the executable IR.
       ``param_decoders`` — static ``@param`` identities -> their host-value
         decoders, compiled alongside program parameter signatures.
+      ``param_spans`` — static ``@param`` identities -> declaration spans,
+        retained to anchor host-value decode diagnostics in their source file.
       ``builtin_nominals`` — bare built-in type name -> the ``NominalId`` a
         host mints for it (see ``agm.agl.ir.builtin_nominals``), built during
         lowering from the program's ``builtin`` declarations. Defaults to
@@ -407,6 +409,7 @@ class ExecutableProgram:
     program_signatures: Mapping[SymbolId, tuple[IrProgramParam, ...]] = field(default_factory=dict)
     param_bindings: dict[StaticBindingKey, SymbolId] = field(default_factory=dict)
     param_decoders: dict[StaticBindingKey, ParamDecoder] = field(default_factory=dict)
+    param_spans: Mapping[StaticBindingKey, object] = field(default_factory=dict)
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS

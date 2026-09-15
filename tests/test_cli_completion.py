@@ -147,6 +147,35 @@ class TestExecPathParameterCompletion:
 
         assert values == [f"{program.parent}/data.txt"]
 
+    @pytest.mark.parametrize("flag", ["--out", "--library.out"])
+    def test_a_module_path_option_value_completes_paths(self, tmp_path: Path, flag: str) -> None:
+        modules = tmp_path / "modules"
+        modules.mkdir()
+        (modules / "library.agl").write_text('@param let out: path = "out.txt"\n', encoding="utf-8")
+        source = tmp_path / "prog.agl"
+        source.write_text("import library\nprogram def main() -> unit = ()\n", encoding="utf-8")
+        (tmp_path / "data.txt").write_text("", encoding="utf-8")
+
+        values = _completion_values(
+            ["exec", "-I", str(modules), str(source), flag], f"{tmp_path}/da"
+        )
+
+        assert values == [f"{tmp_path}/data.txt"]
+
+    def test_an_attached_module_path_option_value_completes_paths(self, tmp_path: Path) -> None:
+        modules = tmp_path / "modules"
+        modules.mkdir()
+        (modules / "library.agl").write_text('@param let out: path = "out.txt"\n', encoding="utf-8")
+        source = tmp_path / "prog.agl"
+        source.write_text("import library\nprogram def main() -> unit = ()\n", encoding="utf-8")
+        (tmp_path / "data.txt").write_text("", encoding="utf-8")
+
+        values = _completion_values(
+            ["exec", "-I", str(modules), str(source)], f"--out={tmp_path}/da"
+        )
+
+        assert values == [f"{tmp_path}/data.txt"]
+
     def test_a_non_path_option_value_offers_nothing(self, program: Path) -> None:
         assert _completion_values(["exec", str(program), "--name"], f"{program.parent}/d") == []
 

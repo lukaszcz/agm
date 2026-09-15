@@ -1246,6 +1246,28 @@ class TestReplModuleParameterConfig:
         assert result.value is not None
         assert result.value.value is False
 
+    def test_ambiguous_module_suffix_across_new_imports_is_rejected(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        session = self._open_session(
+            monkeypatch,
+            tmp_path,
+            fake_plain_console,
+            config="[logging]\nverbose = true\n",
+            module_source="@param let verbose: bool = false\n",
+        )
+        second = tmp_path / "library" / "B"
+        second.mkdir()
+        (second / "logging.agl").write_text("@param let verbose: bool = false\n", encoding="utf-8")
+
+        result = session.eval_entry("import A/logging\nimport B/logging\n()")
+
+        assert not result.ok
+        assert any("multiple routes" in diagnostic.message for diagnostic in result.diagnostics)
+
     def test_importing_a_module_twice_resolves_its_config_once(
         self,
         monkeypatch: pytest.MonkeyPatch,

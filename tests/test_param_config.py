@@ -57,6 +57,7 @@ def _binding(
 def _program(
     *,
     module: str | ModuleId = "app/main",
+    name: str = "run",
     closure: tuple[ModuleId, ...] = (),
     parameters: tuple[ProgramParamInfo, ...] = (),
 ) -> ProgramDeclInfo:
@@ -64,7 +65,7 @@ def _program(
     return ProgramDeclInfo(
         module=module_id,
         scope_path=(),
-        name="run",
+        name=name,
         node_id=1,
         span=_SPAN,
         parameters=parameters,
@@ -144,6 +145,30 @@ def test_a_lower_layer_program_route_overrides_a_higher_layer_module_route() -> 
     )
 
     assert values == {binding.key: True}
+
+
+def test_rejects_a_leaf_shared_by_a_module_and_program_route() -> None:
+    imported = _binding("workflow/main", "verbose")
+    own = _binding(ENTRY_ID, "verbose")
+    program = _program(module=ENTRY_ID, name="main", closure=(ENTRY_ID, imported.module))
+
+    with pytest.raises(QualifiedConfigLookupError) as exc_info:
+        _resolve(_config({"workflow": {"main": {"verbose": True}}}), program, (imported, own))
+
+    assert imported.declaration_path in str(exc_info.value)
+    assert own.declaration_path in str(exc_info.value)
+
+
+def test_distinct_module_and_program_tables_do_not_collide() -> None:
+    imported = _binding("A/logging", "verbose")
+    own = _binding(ENTRY_ID, "verbose")
+    program = _program(module=ENTRY_ID, closure=(ENTRY_ID, imported.module))
+
+    values, _reports = _resolve(
+        _config({"A": {"logging": {"verbose": False}}}), program, (imported, own)
+    )
+
+    assert values == {imported.key: False}
 
 
 def test_option_name_is_used_for_module_and_program_routes_but_keeps_the_declared_key() -> None:

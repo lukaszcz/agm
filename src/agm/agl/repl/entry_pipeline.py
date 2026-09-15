@@ -224,19 +224,17 @@ class EntryPipeline:
         checked_program: "CheckedProgram",
         new_modules: Mapping[ModuleId, "LoadedModule"],
     ) -> dict["StaticBindingKey", object]:
-        """Ask the host once for each newly loaded module's parameter values."""
+        """Ask the host once for all parameters declared by newly loaded modules."""
         resolver = self._ctx._param_seed_resolver
         if resolver is None:
             return {}
         from agm.agl.pipeline import _module_param_infos
 
         module_params = _module_param_infos(checked_program)
-        values: dict[StaticBindingKey, object] = {}
-        for module_id in new_modules:
-            params = module_params[module_id]
-            if params:
-                values.update(resolver(module_id, params))
-        return values
+        params = tuple(param for module_id in new_modules for param in module_params[module_id])
+        if not params:
+            return {}
+        return dict(resolver(params[0].module, params))
 
     def eval_entry(
         self,

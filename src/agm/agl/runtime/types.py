@@ -110,7 +110,11 @@ class ProgramParamInfo:
 
 @dataclass(frozen=True, slots=True)
 class ParamBindingInfo:
-    """Static summary of one host-configurable ``@param`` binding."""
+    """Static summary of one host-configurable ``@param`` binding.
+
+    ``is_path`` retains whether its annotation spells the builtin ``path``
+    alias, including ``Option[path]``, for host filesystem completion.
+    """
 
     module: "ModuleId"
     scope_path: tuple[str, ...]
@@ -121,6 +125,7 @@ class ParamBindingInfo:
     mutable: bool
     cli: "ProgramOptionSpec"
     doc: str | None
+    is_path: bool = False
 
     @property
     def key(self) -> "StaticBindingKey":

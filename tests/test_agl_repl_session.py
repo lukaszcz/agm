@@ -1401,6 +1401,20 @@ class TestModuleParameterSeeds:
         assert _int(second.value) == 7
         assert calls == [("settings", ("value",))]
 
+    def test_resolver_is_not_called_for_a_module_without_parameters(self, tmp_path: Path) -> None:
+        (tmp_path / "plain.agl").write_text("let value: int = 1\n", encoding="utf-8")
+
+        def resolve(
+            _module: ModuleId, _params: tuple[ParamBindingInfo, ...]
+        ) -> Mapping[StaticBindingKey, object]:
+            pytest.fail("resolver must not be called for an empty parameter inventory")
+
+        session = _session_with_import_root(tmp_path, param_seed_resolver=resolve)
+        result = session.eval_entry("import plain\nplain::value")
+
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 1
+
     def test_seed_replaces_the_first_module_initializer(self, tmp_path: Path) -> None:
         (tmp_path / "settings.agl").write_text("@param let value: int = 1\n", encoding="utf-8")
 

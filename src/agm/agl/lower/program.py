@@ -51,6 +51,7 @@ from agm.agl.syntax.nodes import (
     simple_let_pattern_name,
     static_items,
 )
+from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_encode_plan, build_param_decoder
 from agm.agl.typecheck.env import CheckedModule, FunctionSignature
 from agm.agl.typecheck.program import program_funcdefs
@@ -134,10 +135,15 @@ def _param_tables(
     modules: Mapping[ModuleId, CheckedModule],
     decl_to_sym: Mapping[int, SymbolId],
     type_table: TypeTable,
-) -> tuple[dict[StaticBindingKey, SymbolId], dict[StaticBindingKey, ParamDecoder]]:
-    """Build host seed identities and decoders for every linked ``@param`` binding."""
+) -> tuple[
+    dict[StaticBindingKey, SymbolId],
+    dict[StaticBindingKey, ParamDecoder],
+    dict[StaticBindingKey, SourceSpan],
+]:
+    """Build host seed identities, decoders, and spans for every ``@param`` binding."""
     bindings: dict[StaticBindingKey, SymbolId] = {}
     decoders: dict[StaticBindingKey, ParamDecoder] = {}
+    spans: dict[StaticBindingKey, SourceSpan] = {}
     for module_id, checked_module in modules.items():
         attributes = checked_module.resolved.attributes
         for item in static_items(checked_module.resolved.program.body.items):
@@ -161,7 +167,8 @@ def _param_tables(
                 f"compiler bug: parameter binding {name!r} has no checked type"
             )
             decoders[key] = build_param_decoder(binding_type, type_table)
-    return bindings, decoders
+            spans[key] = item.span
+    return bindings, decoders, spans
 
 
 def _live_functions_and_symbols(
@@ -512,7 +519,9 @@ def lower_program(
         item.node_id: link.fn_node_to_sym[item.node_id]
         for _mid, _cm, item in program_funcdefs(checked.modules)
     }
-    param_bindings, param_decoders = _param_tables(checked.modules, link.decl_to_sym, type_table)
+    param_bindings, param_decoders, param_spans = _param_tables(
+        checked.modules, link.decl_to_sym, type_table
+    )
     program = ExecutableProgram(
         entry_module=checked.entry_id,
         modules=executable_modules,
@@ -537,6 +546,7 @@ def lower_program(
         program_signatures=_program_signatures(checked.modules, link.fn_node_to_sym, type_table),
         param_bindings=param_bindings,
         param_decoders=param_decoders,
+        param_spans=param_spans,
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,

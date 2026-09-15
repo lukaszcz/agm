@@ -20,7 +20,7 @@ offending parameter is reported in one pass.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, assert_never, cast
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.ir.nodes import UseDefault
@@ -358,14 +358,15 @@ def bind_param_values(
         except (StrictJsonParseError, ValueError) as exc:
             module_id, scope_path, name = key
             declaration_path = "::".join((*scope_path, name))
+            message = (
+                f"Module parameter {module_id.display()}::{declaration_path}: "
+                f"could not parse as {decoder.target_type_label}: {exc}"
+            )
+            span = executable.param_spans.get(key)
             diagnostics.append(
-                Diagnostic(
-                    message=(
-                        f"Module parameter {module_id.display()}::{declaration_path}: "
-                        f"could not parse as {decoder.target_type_label}: {exc}"
-                    ),
-                    line=1,
-                )
+                diagnostic_from_span(message, cast("SourceSpan", span))
+                if span is not None
+                else Diagnostic(message, line=1)
             )
     if diagnostics:
         return {}, tuple(diagnostics)

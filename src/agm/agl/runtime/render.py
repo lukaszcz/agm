@@ -10,8 +10,8 @@ and REPL display.  Callers choose two display options:
   when ``True``; leave top-level text verbatim when ``False``.
 
 Nested ``text`` values are always quoted so structured output remains parseable
-as AgL surface syntax.  Nominal values (record and exception) carry fields in declaration order
-already, so rendering walks ``value.fields`` directly.
+as AgL surface syntax.  A record or exception renders its nominal's
+``positional_fields`` bare, then the rest as ``name = value``.
 """
 
 from __future__ import annotations
@@ -189,7 +189,8 @@ def _render(
         return _render_sequence("{", "}", items, level=level, pretty=pretty)
 
     if isinstance(value, (RecordValue, ExceptionValue)):
-        display_name = descriptors.nominals[value.nominal].display_name
+        descriptor = descriptors.nominals[value.nominal]
+        display_name = descriptor.display_name
         # A nullary constructor is an auto-value, so a fieldless record's bare
         # spelling round-trips as written: every fieldless record renders bare,
         # whether it is an enum member (`E::A`) or a standalone record (`Root`).
@@ -199,12 +200,17 @@ def _render(
             return display_name if isinstance(value, RecordValue) else f"{display_name}()"
         active = enter_value(id(value), active)
         try:
-            items = []
+            positional: list[str] = []
+            named: list[str] = []
             for name, child in value.fields.items():
                 rendered = _render_child(
                     child, descriptors, pretty=pretty, level=level + 1, active=active
                 )
-                items.append(f"{name} = {rendered}")
+                if name in descriptor.positional_fields:
+                    positional.append(rendered)
+                else:
+                    named.append(f"{name} = {rendered}")
+            items = positional + named
         finally:
             active.discard(id(value))
         return _render_sequence(f"{display_name}(", ")", items, level=level, pretty=pretty)

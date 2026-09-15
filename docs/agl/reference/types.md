@@ -563,7 +563,9 @@ let r = R(0, y = 1)            # x positional-only, y named (standard)
 ```
 
 Fields are listed in zone order: positional-only, then standard, then named-only.
-A field that follows one from a later zone is a static error.
+A field that follows one from a later zone is a static error. Rendering
+follows the same zones — see
+[Uniform rendering rules](strings-and-interpolation.md#uniform-rendering-rules).
 
 Two record types with identical fields are still distinct types (nominal
 typing). Two record types from different modules are also distinct even if

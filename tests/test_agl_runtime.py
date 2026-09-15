@@ -51,7 +51,13 @@ if TYPE_CHECKING:
 _NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
 
 
-def _named(nominal: NominalId, name: str) -> NominalDescriptor:
+def _named(
+    nominal: NominalId,
+    name: str,
+    *,
+    kind: NominalKind = NominalKind.RECORD,
+    positional_fields: tuple[str, ...] = (),
+) -> NominalDescriptor:
     """A NominalDescriptor whose derived display_name is *name* (accepts "A::B" spellings)."""
     *scope, declared = name.split("::")
     return NominalDescriptor(
@@ -59,7 +65,8 @@ def _named(nominal: NominalId, name: str) -> NominalDescriptor:
         module_id=ENTRY_ID,
         scope_path=tuple(scope),
         declared_name=declared,
-        kind=NominalKind.RECORD,
+        kind=kind,
+        positional_fields=positional_fields,
     )
 
 
@@ -1374,6 +1381,19 @@ class TestRenderValue:
         descriptors = _descriptors(_named(NominalId(1), "Issue"))
         assert render_value(v, descriptors) == 'Issue(title = "Missing tests", severity = 3)'
 
+    def test_record_positional_fields_render_first_then_named(self) -> None:
+        """A record's positional fields render bare, in field order, ahead of
+        the rest as ``name = value``."""
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, RecordValue, TextValue
+
+        v = RecordValue(
+            nominal=NominalId(1),
+            fields={"start": IntValue(1), "stop": IntValue(4), "label": TextValue("span")},
+        )
+        descriptors = _descriptors(_named(NominalId(1), "Span", positional_fields=("start",)))
+        assert render_value(v, descriptors) == 'Span(1, stop = 4, label = "span")'
+
     def test_record_empty(self) -> None:
         """A record with no fields renders bare, as ``TypeName`` (no parens):
         a nullary constructor is an auto-value, so its bare spelling
@@ -1499,6 +1519,37 @@ class TestRenderValue:
             'source-type = "text", target-type = "int", raw = "x")'
         )
         assert out == expected
+
+    def test_exception_inherited_standard_field_renders_positionally_before_named_message(
+        self,
+    ) -> None:
+        """Given a descriptor whose ``positional_fields`` spans an inherited
+        standard field and a subclass's own positional-only field, the
+        renderer renders both bare and ahead of the inherited named-only
+        ``message`` — this hand-supplies ``positional_fields`` to exercise the
+        renderer only; computing it across an `extends` chain is the lowerer's
+        concern."""
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import ExceptionValue, IntValue, TextValue
+
+        v = ExceptionValue(
+            nominal=NominalId(1),
+            fields={
+                "message": TextValue("timeout"),
+                "attempt": IntValue(2),
+                "endpoint": TextValue("svc"),
+            },
+        )
+        descriptors = _descriptors(
+            _named(
+                NominalId(1),
+                "UploadTimeout",
+                kind=NominalKind.EXCEPTION,
+                positional_fields=("attempt", "endpoint"),
+            )
+        )
+        out = render_value(v, descriptors)
+        assert out == 'UploadTimeout(2, "svc", message = "timeout")'
 
     def test_exception_abort_renders_with_message(self) -> None:
         """Abort exception renders its sole message field."""
@@ -1645,6 +1696,19 @@ class TestRenderValue:
             render_value(v, descriptors, pretty=True)
             == 'Issue(\n  title = "Missing tests",\n  severity = 3\n)'
         )
+
+    def test_record_pretty_positional_fields_first(self) -> None:
+        """Pretty rendering keeps items in the same one-per-line layout, just
+        in the positional-first, then-named order."""
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import IntValue, RecordValue
+
+        v = RecordValue(
+            nominal=NominalId(1),
+            fields={"start": IntValue(1), "stop": IntValue(4)},
+        )
+        descriptors = _descriptors(_named(NominalId(1), "Span", positional_fields=("start",)))
+        assert render_value(v, descriptors, pretty=True) == "Span(\n  1,\n  stop = 4\n)"
 
     def test_pretty_nested_indentation(self) -> None:
         """Pretty rendering indents nested structures recursively."""

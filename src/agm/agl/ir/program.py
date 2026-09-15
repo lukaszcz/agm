@@ -125,6 +125,10 @@ class NominalDescriptor:
     ``variants``     — for ENUM: ordered tuple of ``VariantDescriptor`` objects
                        (one per variant, in declaration order).  ``()`` for
                        RECORD and EXCEPTION.
+    ``positional_fields`` — fields a constructor call binds positionally (see
+                       ``semantics.arguments.positional_field_names``), in
+                       field order. Used for RECORD and EXCEPTION; ``()`` for
+                       ENUM and for a fieldless RECORD/EXCEPTION.
     ``bears_name_path`` — whether this identity is the one its
                        ``(module_id, scope_path, declared_name)`` path
                        currently resolves to, per the type table's name
@@ -152,6 +156,7 @@ class NominalDescriptor:
     fields: tuple[str, ...] = ()
     variants: tuple[VariantDescriptor, ...] = ()
     mutable_fields: frozenset[str] = frozenset()
+    positional_fields: tuple[str, ...] = ()
     bears_name_path: bool = field(default=True, compare=False)
 
     @property

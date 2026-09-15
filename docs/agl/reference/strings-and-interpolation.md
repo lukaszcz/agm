@@ -79,15 +79,24 @@ enabled; with `--no-stdlib`, import a route to the method first.
 | `json` | compact JSON by default; use `render(value, pretty = true)` for indented display |
 | `array[E]` | `[e1, e2, …]` — AgL array syntax |
 | `dict[text, V]` | `{"k1": value1, "k2": value2}` — AgL dict syntax; keys always quoted |
-| record | `TypeName(f1 = value1, f2 = value2)` — AgL constructor form; fields in declaration order. Fieldless: bare `TypeName` (no parens) — a nullary constructor is an auto-value, so its bare spelling round-trips as written. |
-| enum | inline member: `TypeName::Member(f1 = value1, …)`; fieldless inline member: `TypeName::Member` (no parens). A referenced member retains its record's own display form. |
-| exception | `TypeName(f1 = value1, …)` — record-style with all fields in declaration order |
+| record | `TypeName(v1, v2, f3 = value3, …)` — AgL constructor form, positional fields first (see note below). Fieldless: bare `TypeName` (no parens) — a nullary constructor is an auto-value, so its bare spelling round-trips as written. |
+| enum | inline member: same constructor form, qualified `TypeName::Member(…)`; fieldless inline member: `TypeName::Member` (no parens). A referenced member retains its record's own display form. |
+| exception | `TypeName(v1, v2, f3 = value3, …)` — same constructor form, positional fields spanning the whole `extends` chain (base fields first) |
+
+A field renders positionally (bare value) iff it is not named-only and sits at
+or before the last positional-only field in declaration order; every other
+field renders as `name = value`. Both groups keep declaration order. (A
+record's fields are all zone-ordered, so this is equivalent to
+"positional-only fields render bare first, then the rest.")
 
 AgL structured values (`array`, `dict`, record, enum, exception) always render on
 a **single line** — no injected newlines. A `json` value renders as **compact**
 (single-line) JSON whether it is nested inside another structured value or
 interpolated directly; use `render(value, pretty = true)` for indented,
 multi-line output.
+
+For when a rendered record or enum value parses back to an equal value, see
+[Value syntax](host-environment.md#value-syntax).
 
 Scalar text conventions:
 

@@ -60,6 +60,7 @@ __all__ = [
     "BindParam",
     "ParamZone",
     "bind_arguments",
+    "positional_field_names",
 ]
 
 # ---------------------------------------------------------------------------
@@ -250,3 +251,17 @@ def bind_arguments(
         # else: bound[i] stays None → caller uses default.
 
     return tuple(bound)
+
+
+def positional_field_names(field_kinds: Sequence[tuple[str, ParamZone]]) -> tuple[str, ...]:
+    """Fields a constructor call binds positionally: every non-named-only field up to
+    the last positional-only one, in field order."""
+    last_positional_only = -1
+    for index, (_name, zone) in enumerate(field_kinds):
+        if zone is ParamZone.POSITIONAL_ONLY:
+            last_positional_only = index
+    return tuple(
+        name
+        for index, (name, zone) in enumerate(field_kinds)
+        if index <= last_positional_only and zone is not ParamZone.NAMED_ONLY
+    )

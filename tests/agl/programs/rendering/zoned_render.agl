@@ -1,0 +1,143 @@
+# Zone-aware rendering: a field renders bare, positionally, iff it is not
+# named-only and sits at or before the last positional-only field in field
+# order (base fields first, across an `extends` chain); every other field
+# renders as `name = value`, also in field order. This is what a constructor
+# call accepts, so every rendered zoned value parses back to the same value
+# through `std/value::parse`.
+
+import std/value
+
+# Declaration-level positional-only default with one standard override.
+@arg-pos
+record Span
+  start: int
+  @arg-std stop: int
+
+# Declaration-level positional-only default with no override: every field
+# is positional-only.
+@arg-pos
+record Triple(a: int, b: int, c: text)
+
+# A generic record with one positional-only and one named-only field.
+record Boxed[T](@arg-pos value: T, @arg-named tag: text)
+
+# A generic enum with an `@arg-pos` inline member: the same zone rule applies
+# regardless of the type argument.
+enum Tree[T]
+  | @arg-pos Leaf(value: T, @arg-named tag: text)
+  | Empty
+
+# An inline `@arg-pos` enum member: it renders qualified by its enum.
+enum Shape
+  | @arg-pos Rect(width: int, height: int)
+  | Circle(radius: int)
+
+# A qualified-form enum member: the record is declared on its own and keeps
+# its own display form wherever it appears, enum-typed slot included.
+record Corner(@arg-pos x: int, @arg-pos y: int)
+
+enum Frame = ::Corner | Blank
+
+# A scoped record, still positional-only by declaration-level attribute.
+scope geo
+  @arg-pos
+  record Point
+    x: int
+    y: int
+end geo
+
+# An ordinary standard-zone record nesting a zoned value.
+record Holder
+  label: text
+  span: Span
+
+@arg-pos
+exception DeployError extends Exception
+  service: text
+  @arg-std attempt: int
+  @arg-named fatal: bool
+
+# A base exception with an own standard field, and a subclass whose own field
+# is positional-only: the inherited `message` (named-only) and the base's own
+# `attempt` (standard) both precede `endpoint` in field order, but only
+# `attempt` and `endpoint` are positional-capable, so both render positionally
+# ahead of `message`.
+exception UploadError extends Exception
+  attempt: int
+
+exception UploadTimeout extends UploadError
+  @arg-pos endpoint: text
+
+program def main(base: int) -> unit =
+  let drafter: Agent = AgentCommand("drafter")
+
+  let span = Span(base, stop = base + 4)
+  print span
+
+  let triple = Triple(base, base + 1, "t")
+  print triple
+
+  let boxed = Boxed(base, tag = "boxed")
+  print boxed
+
+  let leaf: Tree[int] = Leaf(base, tag = "leaf")
+  print leaf
+
+  let shape: Shape = Rect(base, base + 1)
+  print shape
+
+  let frame: Frame = Corner(base, base + 2)
+  print frame
+
+  let point = geo::Point(base, base + 3)
+  print point
+
+  # Zoned values nested inside a record, an array, and a dict.
+  let holder = Holder(label = "h", span = span)
+  print holder
+  print [span, Span(base + 1, stop = base + 5)]
+  print {"only": boxed}
+
+  # A zoned exception: the inherited named-only `message` field, present
+  # before the own fields in field order, still renders after the
+  # positional-only `service` field.
+  try
+    raise DeployError("api", base, message = "m", fatal = true)
+  catch DeployError as e =>
+    print e
+
+  # An inherited standard field (`attempt`) precedes the subclass's own
+  # positional-only field (`endpoint`) in field order; both render
+  # positionally, ahead of the inherited named-only `message`.
+  let uploaded = UploadTimeout(base, "svc", message = "timeout")
+  print uploaded
+
+  # A branch that differs across scenarios: only `base > 3` takes the `Some`
+  # case, nesting a referenced zoned member (`Corner`) inside a generic enum.
+  let maybe_corner: Option[Corner] =
+    if base > 3 => Some(value = Corner(base, base + 1)) else => None
+  print maybe_corner
+  print "%{parse::[Option[Corner]](render(maybe_corner)) == maybe_corner}"
+
+  # Pretty rendering of a zoned value nesting another zoned value.
+  print render(holder, pretty = true)
+
+  # A record parsed from an agent response: JSON decoding is field-keyed
+  # whatever zones the fields are in.
+  let drafted: Corner = drafter.ask("Draft a corner.")
+  print drafted
+
+  # `copy`/`with` on a zoned value.
+  let copied = copy(span) with stop = span.stop + 1
+  print copied
+
+  # Round trips through `parse::[T](render(v)) == v`.
+  print "%{parse::[Span](render(span)) == span}"
+  print "%{parse::[Triple](render(triple)) == triple}"
+  print "%{parse::[Boxed[int]](render(boxed)) == boxed}"
+  print "%{parse::[Tree[int]](render(leaf)) == leaf}"
+  print "%{parse::[Shape](render(shape)) == shape}"
+  print "%{parse::[Frame](render(frame)) == frame}"
+  print "%{parse::[geo::Point](render(point)) == point}"
+  print "%{parse::[Holder](render(holder)) == holder}"
+  print "%{parse::[Span](render(copied)) == copied}"

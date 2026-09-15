@@ -17,6 +17,7 @@ from agm.agl.semantics.arguments import (
     BindParam,
     ParamZone,
     bind_arguments,
+    positional_field_names,
 )
 
 POSITIONAL_ONLY = ParamZone.POSITIONAL_ONLY
@@ -288,3 +289,39 @@ def test_missing_required_pos_only() -> None:
     err = exc_info.value
     assert err.kind is ArgumentBindingErrorKind.MISSING_REQUIRED
     assert err.name == "x"
+
+
+# ---------------------------------------------------------------------------
+# positional_field_names
+# ---------------------------------------------------------------------------
+
+
+def test_positional_field_names_named_only_between_standard_and_positional_only() -> None:
+    """A named-only field between a standard field and a later positional-only
+    field stays out; the standard field before it is still included."""
+    fields = [
+        ("a", STANDARD),
+        ("tag", NAMED_ONLY),
+        ("b", POSITIONAL_ONLY),
+    ]
+    assert positional_field_names(fields) == ("a", "b")
+
+
+def test_positional_field_names_trailing_standard_excluded() -> None:
+    """A standard field after the last positional-only field renders named, not
+    positionally."""
+    fields = [
+        ("a", POSITIONAL_ONLY),
+        ("b", STANDARD),
+    ]
+    assert positional_field_names(fields) == ("a",)
+
+
+def test_positional_field_names_no_positional_only_is_empty() -> None:
+    fields = [("a", STANDARD), ("b", NAMED_ONLY)]
+    assert positional_field_names(fields) == ()
+
+
+def test_positional_field_names_all_positional_only() -> None:
+    fields = [("a", POSITIONAL_ONLY), ("b", POSITIONAL_ONLY)]
+    assert positional_field_names(fields) == ("a", "b")

@@ -178,6 +178,7 @@ from agm.agl.scope.symbols import (
     BuiltinStaticKind,
     builtin_type_static_kind,
 )
+from agm.agl.semantics.arguments import positional_field_names
 from agm.agl.semantics.type_table import MethodDef, TypeDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -330,6 +331,7 @@ def _add_builtin_nominals(
                 fields=tuple(type_table.record_fields(typ).keys()),
                 mutable_fields=type_table.record_mutable_fields(typ),
                 variants=(),
+                positional_fields=positional_field_names(type_table.field_kinds(typ)),
             )
             continue
         if isinstance(typ, ExceptionType):
@@ -362,6 +364,7 @@ def _add_builtin_nominals(
             kind=NominalKind.EXCEPTION,
             fields=tuple(type_table.exception_fields(exc_type).keys()),
             variants=(),
+            positional_fields=positional_field_names(type_table.field_kinds(exc_type)),
         )
 
 

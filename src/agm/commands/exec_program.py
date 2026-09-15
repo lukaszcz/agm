@@ -60,7 +60,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn, TypeVar, assert_never
+from typing import TYPE_CHECKING, NoReturn, TypedDict, TypeVar, assert_never
 
 from agm.agent.session import create_agl_session_host
 from agm.agl import PipelineDriver
@@ -80,7 +80,10 @@ from agm.cli_support.exec_target import (
     PackageProgramReference,
     resolve_installed_reference,
 )
-from agm.cli_support.param_config import RouteReport, _report_undeclared_config_keys
+from agm.cli_support.param_config import (
+    _report_undeclared_config_keys,
+    resolve_param_values,
+)
 from agm.cli_support.program_discovery import (
     ProgramDiscoveryArtifacts,
     discover_program_artifacts_for_target,
@@ -122,9 +125,14 @@ from agm.packages.manifest import command_paths_for_program
 from agm.packages.model import owning_package
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from agm.agl.ir.nodes import UseDefault
     from agm.agl.ir.program import ExecutableProgram
+    from agm.agl.ir.static_keys import StaticBindingKey
+    from agm.agl.runtime.types import ParamBindingInfo
     from agm.agl.semantics.values import Value
+    from agm.config.general import GeneralConfig
 
 
 class RegisteredProgramUsageError(Exception):
@@ -149,6 +157,90 @@ class RegisteredProgramUsageError(Exception):
         self.message = message
         self.program = program
         self.command = command
+
+
+class _PreparedRunOverrides(TypedDict, total=False):
+    """Optional typed seed channel passed to the prepared execution."""
+
+    param_seeds: "Mapping[StaticBindingKey, Value]"
+
+
+def _bind_host_inputs(
+    *,
+    tokens: "Sequence[str]",
+    program: ProgramDeclInfo | None,
+    params: "Sequence[ParamBindingInfo]",
+    reserved_flags: frozenset[str],
+    config: "GeneralConfig",
+    entry_segments: tuple[str, ...],
+    command_paths: tuple[tuple[str, ...], ...],
+) -> tuple[ProgramArguments, dict["StaticBindingKey", object]]:
+    """Bind one selected program's CLI, environment, and config host inputs.
+
+    This is the only execution-host path that combines the signature and
+    module-parameter surfaces.  Registered commands reach it through
+    :func:`run`, retaining their smaller reserved-flag inventory while sharing
+    parsing, config precedence, warning reports, and preflight input shape.
+    """
+    if program is None:
+        if tokens:
+            raise RegisteredProgramUsageError(f"unexpected argument: {tokens[0]!r}")
+        return ProgramArguments(positional=(), named={}), {}
+
+    command_result = build_program_command(program, reserved_flags, params)
+    if not isinstance(command_result, ProgramCommand):
+        print(f"Error: {_program_option_error_message(command_result)}", file=sys.stderr)
+        raise SystemExit(1)
+    program_command = command_result
+    try:
+        parsed_tail = program_command.parse(tokens)
+    except ProgramHelpRequested as exc:
+        raise ProgramHelpRequested(exc.command, program) from exc
+    except ValueError as exc:
+        raise RegisteredProgramUsageError(str(exc), program, program_command) from exc
+
+    program_named = dict(parsed_tail.arguments.named)
+    program_path = (*program.scope_path, program.name)
+    argument_options = tuple(
+        (
+            info,
+            projected,
+            QualifiedConfigKey(entry_segments, program_path, info.cli.name, command_paths),
+        )
+        for info, projected in program_command.options
+    )
+    argument_keys = tuple(key for _info, _projected, key in argument_options)
+    try:
+        param_values, route_reports = resolve_param_values(
+            config,
+            program,
+            parsed_tail.params,
+            entry_segments=entry_segments,
+            command_paths=command_paths,
+            surface=program_command.surface,
+        )
+    except QualifiedConfigLookupError as exc:
+        print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    if entry_segments:
+        try:
+            configured_arguments = resolve_qualified_values(config, argument_keys)
+        except QualifiedConfigLookupError as exc:
+            print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+        positional_names = program_command.positionally_filled_names(
+            len(parsed_tail.arguments.positional)
+        )
+        cli_supplied_names = set(program_named) | positional_names
+        for info, projected, key in argument_options:
+            if key in configured_arguments and info.name not in cli_supplied_names:
+                program_named[info.name] = native_raw_value(projected, configured_arguments[key])
+
+    _report_undeclared_config_keys(config, route_reports)
+    return ProgramArguments(
+        positional=parsed_tail.arguments.positional, named=program_named
+    ), param_values
 
 
 def _package_entry_segments(entry_path: Path | None, roots: RootSet) -> tuple[str, ...] | None:
@@ -544,83 +636,15 @@ def run(
             )
             raise SystemExit(1)
 
-    # A selected program's own value parameters project onto their own Click
-    # command, built from its declared signature. This is a static,
-    # source-derived check independent of any supplied arguments, so a
-    # colliding projection (against a reserved host flag, or against another
-    # parameter's own flag) is reported unconditionally.
-    program_command: ProgramCommand | None = None
-    if selected_program is not None:
-        command_result = build_program_command(
-            selected_program, reserved_flags, discovery.params_for(selected_program)
-        )
-        if isinstance(command_result, ProgramCommand):
-            program_command = command_result
-        else:
-            print(f"Error: {_program_option_error_message(command_result)}", file=sys.stderr)
-            raise SystemExit(1)
-
-    if program_command is not None:
-        try:
-            cli_arguments = program_command.parse(args.argument_tokens).arguments
-        except ProgramHelpRequested as exc:
-            # The command owns ``-h``/``--help``; the caller renders the help
-            # its own invocation calls for, so it is given the declaration
-            # behind the command as well.
-            raise ProgramHelpRequested(exc.command, selected_program) from exc
-        except ValueError as exc:
-            raise RegisteredProgramUsageError(str(exc), selected_program, program_command) from exc
-    elif args.argument_tokens:
-        raise RegisteredProgramUsageError(
-            f"unexpected argument: {args.argument_tokens[0]!r}", selected_program
-        )
-    else:
-        cli_arguments = ProgramArguments(positional=(), named={})
-
-    # The selected program's own value parameters resolve config-file values
-    # from its qualified table (e.g. ``[workflow.main]``), keyed by their
-    # external names — the same table an engine-key override reads, and the
-    # same ``QualifiedConfigKey`` shape. Precedence is CLI token > ``@opt-env``
-    # variable > config table > signature default: a parameter Click filled
-    # from either of the first two is already in ``cli_arguments.named``, so
-    # config values are folded in only beneath those.
-    program_named: dict[str, object] = dict(cli_arguments.named)
-    if entry_path is not None and program_command is not None and selected_program is not None:
-        program_path = selected_program.scope_path + (selected_program.name,)
-        argument_options = tuple(
-            (
-                info,
-                projected,
-                QualifiedConfigKey(
-                    config_entry_segments, program_path, info.cli.name, command_paths
-                ),
-            )
-            for info, projected in program_command.options
-        )
-        argument_keys = [key for _info, _projected, key in argument_options]
-        try:
-            configured_arguments = resolve_qualified_values(config_view, argument_keys)
-        except QualifiedConfigLookupError as exc:
-            print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
-        positional_names = program_command.positionally_filled_names(len(cli_arguments.positional))
-        cli_supplied_names = set(program_named) | positional_names
-        for info, projected, key in argument_options:
-            if key in configured_arguments and info.name not in cli_supplied_names:
-                program_named[info.name] = native_raw_value(projected, configured_arguments[key])
-        _report_undeclared_config_keys(
-            config_view,
-            (
-                RouteReport(
-                    config_entry_segments,
-                    program_path,
-                    command_paths,
-                    frozenset(key.leaf for key in argument_keys) | ENGINE_KEY_NAMES,
-                    frozenset(program_command.positional_only_names()),
-                ),
-            ),
-        )
-    arguments = ProgramArguments(positional=cli_arguments.positional, named=program_named)
+    arguments, param_values = _bind_host_inputs(
+        tokens=args.argument_tokens,
+        program=selected_program,
+        params=() if selected_program is None else discovery.params_for(selected_program),
+        reserved_flags=reserved_flags,
+        config=config_view,
+        entry_segments=config_entry_segments,
+        command_paths=command_paths,
+    )
 
     # Program arguments are validated against the lowered program, so this
     # preflight lowers the graph.  It must report a failure (exit 1) BEFORE
@@ -633,7 +657,11 @@ def run(
     arguments_bound: "tuple[Value | UseDefault, ...] | None" = None
     if selected_program is not None:
         argument_preflight = runtime.preflight_arguments(
-            prepared, selected_program, arguments, compiled=discovery.compiled
+            prepared,
+            selected_program,
+            arguments,
+            compiled=discovery.compiled,
+            param_values=param_values,
         )
         if not argument_preflight.result.ok:
             for diag in argument_preflight.result.diagnostics:
@@ -680,6 +708,9 @@ def run(
     # boundary: a failed result is a primary program failure, just like an
     # exception, and must not be replaced by a secondary close failure.
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
+        run_kwargs: _PreparedRunOverrides = {}
+        if selected_program is not None and argument_preflight.param_seeds:
+            run_kwargs["param_seeds"] = argument_preflight.param_seeds
         result = runtime.run_prepared(
             prepared,
             check_only=dry_run.enabled(),
@@ -691,6 +722,7 @@ def run(
             process_environment=process_environment,
             program_symbol=program_symbol,
             arguments=arguments_bound,
+            **run_kwargs,
         )
 
         for diag in result.warnings:

@@ -1827,3 +1827,104 @@ def test_registered_program_declaration_degrades_when_selection_fails(
     )
 
     assert registered_program_declaration("tools/lint::main", "tools", context=context) is None
+
+
+def test_registered_command_binds_module_parameters_from_its_command_table(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Registered execution shares module parameter precedence with ``agm exec``."""
+    import agm.commands.exec_program as exec_program
+
+    home = tmp_path / "home"
+    source = "import tools/logging\nprogram def main() -> unit = print tools/logging::verbose\n"
+    module = write_installed_package(
+        home,
+        "tools",
+        source=source,
+        commands={"dev review": "tools/main::main"},
+    )
+    (module.parent / "logging.agl").write_text(
+        '@param @opt-env("AGM_REGISTERED_VERBOSE") let verbose: bool = false\n'
+        "@param let retries: int = 1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        exec_program,
+        "current_config_context",
+        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    default = invoke(CliRunner(), ["dev", "review"])
+    assert default.exit_code == 0
+    assert default.output == "false\n"
+
+    config = home / ".agm" / "config.toml"
+    config.write_text("[tools.logging]\nverbose = true\n", encoding="utf-8")
+    module_value = invoke(CliRunner(), ["dev", "review"])
+    assert module_value.exit_code == 0
+    assert module_value.output == "true\n"
+
+    config.write_text(
+        "[tools.logging]\nverbose = true\n\n[dev.review]\nverbose = false\n",
+        encoding="utf-8",
+    )
+
+    exec_program.run_registered("tools/main::main", [], package="tools", command_path="dev review")
+    assert capsys.readouterr().out == "false\n"
+
+    exec_program.run_registered(
+        "tools/main::main", ["--verbose"], package="tools", command_path="dev review"
+    )
+    assert capsys.readouterr().out == "true\n"
+
+    program_value = invoke(CliRunner(), ["dev", "review"])
+    assert program_value.exit_code == 0
+    assert program_value.output == "false\n"
+
+    monkeypatch.setenv("AGM_REGISTERED_VERBOSE", "true")
+    environment_value = invoke(CliRunner(), ["dev", "review"])
+    assert environment_value.exit_code == 0
+    assert environment_value.output == "true\n"
+
+    cli_value = invoke(CliRunner(), ["dev", "review", "--no-verbose"])
+    assert cli_value.exit_code == 0
+    assert cli_value.output == "false\n"
+
+    undecodable = invoke(CliRunner(), ["dev", "review", "--tools.logging.retries", "bad"])
+    assert undecodable.exit_code == 1
+    assert "retries" in undecodable.output
+    assert "false\n" not in undecodable.output
+
+    help_result = invoke(CliRunner(), ["dev", "review", "--help"])
+    assert help_result.exit_code == 0
+    assert "Parameters of tools/logging" in help_result.output
+
+
+def test_registered_command_reports_an_ambiguous_module_parameter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    source = (
+        "import tools/logging\n"
+        "import tools/other\n"
+        "program def main() -> unit = print tools/logging::verbose\n"
+    )
+    module = write_installed_package(
+        home,
+        "tools",
+        source=source,
+        commands={"dev review": "tools/main::main"},
+    )
+    (module.parent / "logging.agl").write_text(
+        "@param let verbose: bool = false\n", encoding="utf-8"
+    )
+    (module.parent / "other.agl").write_text("@param let verbose: bool = false\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    result = invoke(CliRunner(), ["dev", "review", "--verbose"])
+
+    assert result.exit_code == 1
+    assert "ambiguous" in result.output.lower()

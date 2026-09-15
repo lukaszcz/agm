@@ -262,7 +262,9 @@ def test_registered_command_param_completion_offers_program_value_argument_flags
     package_root.mkdir(parents=True)
     (package_root / MODULE_TREE_DIRNAME).mkdir()
     (package_root / MODULE_TREE_DIRNAME / "lint.agl").write_text(
-        "program def main(tag: text, verbose: bool = false) -> unit = ()\n", encoding="utf-8"
+        "@param let module-verbose: bool = false\n"
+        "program def main(tag: text, verbose: bool = false) -> unit = ()\n",
+        encoding="utf-8",
     )
     (package_root / "package.toml").write_text(
         """[package]
@@ -294,6 +296,8 @@ version = "1.0.0"
     assert "--tag" in values
     assert "--verbose" in values
     assert "--no-verbose" in values
+    assert "--tools.lint.module-verbose" in values
+    assert "--no-tools.lint.module-verbose" in values
     assert "--dry-run" in values
 
 
@@ -1736,6 +1740,24 @@ class TestExecCommandShellComplete:
             ["exec", "-c", "program def main(count: int) -> unit = print count"], "--"
         )
         assert "--count" in result
+
+    def test_file_program_offers_qualified_module_parameter_flags(self, tmp_path: Path) -> None:
+        modules = tmp_path / "modules"
+        logging = modules / "A" / "logging.agl"
+        logging.parent.mkdir(parents=True)
+        logging.write_text(
+            "@param let verbose: bool = false\n@param @opt-hidden let secret: bool = false\n",
+            encoding="utf-8",
+        )
+        source = tmp_path / "prog.agl"
+        source.write_text("import A/logging\nprogram def main() -> unit = ()\n", encoding="utf-8")
+
+        result = self._complete(["exec", "-I", str(modules), str(source)], "--")
+
+        assert "--verbose" in result
+        assert "--A.logging.verbose" in result
+        assert "--no-A.logging.verbose" in result
+        assert "--secret" not in result
 
     def test_nonexistent_file_degrades_to_base_completion(self) -> None:
         """Unreadable file degrades to standard exec option completion (no crash)."""

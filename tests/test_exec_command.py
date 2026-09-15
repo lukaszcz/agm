@@ -96,6 +96,225 @@ def file_args(path: Path) -> ExecArgs:
     )
 
 
+class TestModuleParameterHostInputs:
+    """Module parameters flow through the same exec host as program arguments."""
+
+    def _program(self, tmp_path: Path, *, additional_module: bool = False) -> tuple[Path, Path]:
+        modules = tmp_path / "modules"
+        logging = modules / "A" / "logging.agl"
+        logging.parent.mkdir(parents=True)
+        logging.write_text(
+            '@param @opt-env("AGM_VERBOSE") let verbose: bool = false\n'
+            "@param let retries: int = 1\n",
+            encoding="utf-8",
+        )
+        imports = "import A/logging\n"
+        if additional_module:
+            alternate = modules / "B" / "logging.agl"
+            alternate.parent.mkdir()
+            alternate.write_text("@param let verbose: bool = false\n", encoding="utf-8")
+            imports += "import B/logging\n"
+        source = tmp_path / "main.agl"
+        source.write_text(
+            f"{imports}program def main() -> unit =\n  print A/logging::verbose\n",
+            encoding="utf-8",
+        )
+        return source, modules
+
+    def _context(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: exec_engine.ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+        return home
+
+    def test_module_parameter_precedence_through_exec(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        source, modules = self._program(tmp_path)
+        home = self._context(tmp_path, monkeypatch)
+        (home / ".agm" / "config.toml").write_text(
+            "[A.logging]\nverbose = true\n\n[main.main]\nverbose = false\n", encoding="utf-8"
+        )
+
+        exec_engine.run(replace(file_args(source), module_paths=[str(modules)], argument_tokens=[]))
+        assert capsys.readouterr().out == "false\n"
+
+        monkeypatch.setenv("AGM_VERBOSE", "true")
+        exec_engine.run(replace(file_args(source), module_paths=[str(modules)], argument_tokens=[]))
+        assert capsys.readouterr().out == "true\n"
+
+        exec_engine.run(
+            replace(
+                file_args(source),
+                module_paths=[str(modules)],
+                argument_tokens=["--no-A.logging.verbose"],
+            )
+        )
+        assert capsys.readouterr().out == "false\n"
+
+    def test_cli_applies_module_parameter_precedence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+    ) -> None:
+        source, modules = self._program(tmp_path)
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        config = home / ".agm" / "config.toml"
+        monkeypatch.setenv("HOME", str(home))
+
+        default = invoke(runner, ["exec", "-I", str(modules), str(source)])
+        assert default.exit_code == 0
+        assert default.output == "false\n"
+
+        config.write_text("[A.logging]\nverbose = true\n", encoding="utf-8")
+        module_value = invoke(runner, ["exec", "-I", str(modules), str(source)])
+        assert module_value.exit_code == 0
+        assert module_value.output == "true\n"
+
+        config.write_text(
+            "[A.logging]\nverbose = true\n\n[main.main]\nverbose = false\n",
+            encoding="utf-8",
+        )
+        program_value = invoke(runner, ["exec", "-I", str(modules), str(source)])
+        assert program_value.exit_code == 0
+        assert program_value.output == "false\n"
+
+        monkeypatch.setenv("AGM_VERBOSE", "true")
+        environment_value = invoke(runner, ["exec", "-I", str(modules), str(source)])
+        assert environment_value.exit_code == 0
+        assert environment_value.output == "true\n"
+
+        cli_value = invoke(
+            runner,
+            ["exec", "-I", str(modules), str(source), "--no-A.logging.verbose"],
+        )
+        assert cli_value.exit_code == 0
+        assert cli_value.output == "false\n"
+
+    def test_module_parameter_ambiguous_bare_flag_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source, modules = self._program(tmp_path, additional_module=True)
+        self._context(tmp_path, monkeypatch)
+
+        with pytest.raises(exec_engine.RegisteredProgramUsageError):
+            exec_engine.run(
+                replace(
+                    file_args(source),
+                    module_paths=[str(modules)],
+                    argument_tokens=["--verbose"],
+                )
+            )
+
+    def test_ambiguous_program_table_module_parameter_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source, modules = self._program(tmp_path, additional_module=True)
+        home = self._context(tmp_path, monkeypatch)
+        (home / ".agm" / "config.toml").write_text("[main.main]\nverbose = true\n")
+
+        with pytest.raises(SystemExit):
+            exec_engine.run(replace(file_args(source), module_paths=[str(modules)]))
+
+    def test_module_parameter_decode_failure_exits_before_execution(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        source, modules = self._program(tmp_path)
+        self._context(tmp_path, monkeypatch)
+
+        with pytest.raises(SystemExit):
+            exec_engine.run(
+                replace(
+                    file_args(source),
+                    module_paths=[str(modules)],
+                    argument_tokens=["--A.logging.retries", "not-a-number"],
+                )
+            )
+        assert capsys.readouterr().out == ""
+
+    def test_cli_reports_ambiguous_and_undecodable_module_parameters(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+    ) -> None:
+        source, modules = self._program(tmp_path, additional_module=True)
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+
+        ambiguous = invoke(runner, ["exec", "-I", str(modules), str(source), "--verbose"])
+        assert ambiguous.exit_code == 1
+        assert "ambiguous" in ambiguous.output.lower()
+
+        undecodable = invoke(
+            runner,
+            ["exec", "-I", str(modules), str(source), "--A.logging.retries", "not-a-number"],
+        )
+        assert undecodable.exit_code == 1
+        assert "retries" in undecodable.output
+        assert "false\n" not in undecodable.output
+
+    def test_exec_help_groups_module_parameters_by_module(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        source, modules = self._program(tmp_path)
+        self._context(tmp_path, monkeypatch)
+
+        assert print_exec_help(
+            tokens=["--help"], file=str(source), command=None, module_paths=[str(modules)]
+        )
+
+        output = capsys.readouterr().out
+        assert "Parameters of A/logging" in output
+        assert "--verbose" in output
+
+    def test_inline_own_module_parameter_is_cli_only(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        home = self._context(tmp_path, monkeypatch)
+        (home / ".agm" / "config.toml").write_text("[main.main]\nverbose = true\n")
+        source = "@param let verbose: bool = false\nprint verbose\n"
+
+        exec_engine.run(inline_args(source, argument_tokens=[]))
+        assert capsys.readouterr().out == "false\n"
+
+        exec_engine.run(inline_args(source, argument_tokens=["--verbose"]))
+        assert capsys.readouterr().out == "true\n"
+
+    def test_inline_imports_keep_their_module_config_routes(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _source, modules = self._program(tmp_path)
+        home = self._context(tmp_path, monkeypatch)
+        (home / ".agm" / "config.toml").write_text("[A.logging]\nverbose = true\n")
+        inline = (
+            "import A/logging\n"
+            "@param let local: bool = false\n"
+            "print local\n"
+            "print A/logging::verbose\n"
+        )
+
+        exec_engine.run(replace(inline_args(inline), module_paths=[str(modules)]))
+
+        assert capsys.readouterr().out == "false\ntrue\n"
+
+
 @pytest.fixture()
 def recorded_runs(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     """Patch ``exec.run`` to record its ExecArgs instead of executing.

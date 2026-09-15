@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -193,6 +194,109 @@ class TestExecConfigProgramTableOverride:
         cfg = exec_config_from_merged(merged, program_table={"strict-json": True})
         assert cfg.default_loop_limit == 7
         assert cfg.strict_json is True
+
+
+class TestModuleParameterConfigRoutes:
+    """Module parameter config routes feed the ordinary exec host."""
+
+    def _program(self, tmp_path: Path) -> tuple[Path, Path]:
+        modules = tmp_path / "modules"
+        module = modules / "A" / "logging.agl"
+        module.parent.mkdir(parents=True)
+        module.write_text(
+            "@param let verbose: bool = false\n"
+            "scope debug\n"
+            "  @param let trace: bool = false\n"
+            "end debug\n",
+            encoding="utf-8",
+        )
+        source = tmp_path / "main.agl"
+        source.write_text(
+            "import A/logging\n"
+            "program def main() -> unit =\n"
+            "  print A/logging::verbose\n"
+            "  print A/logging::debug::trace\n",
+            encoding="utf-8",
+        )
+        return source, modules
+
+    def _configure_context(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, project: bool = False
+    ) -> tuple[Path, Path | None]:
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        proj_dir = tmp_path / "project" if project else None
+        if proj_dir is not None:
+            (proj_dir / "config").mkdir(parents=True)
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=proj_dir, cwd=tmp_path),
+        )
+        return home, proj_dir
+
+    def _run(self, source: Path, modules: Path) -> None:
+        exec_engine.run(
+            replace(
+                ExecArgs(file=str(source), strict_json=None, no_log=True, log_file=None),
+                module_paths=[str(modules)],
+            )
+        )
+
+    @pytest.mark.parametrize(
+        "table",
+        ["[A.logging.debug]", '["A/logging".debug]'],
+    )
+    def test_scope_region_config_routes_accept_dotted_and_anchor_spellings(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        table: str,
+    ) -> None:
+        source, modules = self._program(tmp_path)
+        home, _ = self._configure_context(tmp_path, monkeypatch)
+        (home / ".agm" / "config.toml").write_text(f"{table}\ntrace = true\n")
+
+        self._run(source, modules)
+
+        assert capsys.readouterr().out == "false\ntrue\n"
+
+    def test_program_table_overrides_module_route_across_config_layers(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        source, modules = self._program(tmp_path)
+        home, project = self._configure_context(tmp_path, monkeypatch, project=True)
+        assert project is not None
+        (home / ".agm" / "config.toml").write_text("[A.logging]\nverbose = false\n")
+        (project / "config" / "config.toml").write_text("[main.main]\nverbose = true\n")
+
+        self._run(source, modules)
+
+        assert capsys.readouterr().out == "true\nfalse\n"
+
+    def test_undeclared_keys_are_reported_for_module_and_program_routes(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        source, modules = self._program(tmp_path)
+        home, _ = self._configure_context(tmp_path, monkeypatch)
+        (home / ".agm" / "config.toml").write_text(
+            "[A.logging]\nunknown-module = true\n\n"
+            "[main.main]\nunknown-program = true\nmax-iters = 1\n"
+        )
+
+        self._run(source, modules)
+
+        err = capsys.readouterr().err
+        assert "unknown-module" in err
+        assert "unknown-program" in err
+        assert "max-iters" not in err
 
 
 class TestPackageEntryConfigRoute:

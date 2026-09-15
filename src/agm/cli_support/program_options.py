@@ -110,7 +110,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo, ProgramParamInfo
     from agm.agl.semantics.types import Type as AglType
-    from agm.cli_support.param_surface import ParamSurfaceEntry
+    from agm.cli_support.param_surface import ParamSurface, ParamSurfaceEntry
 
 __all__ = [
     "DuplicateOptionFlagError",
@@ -1262,6 +1262,7 @@ class ProgramCommand:
     positional: tuple["ProgramParamInfo", ...]
     options: tuple[tuple["ProgramParamInfo", ProjectedOption], ...]
     module_options: tuple[tuple["ParamSurfaceEntry", ProjectedOption], ...]
+    surface: "ParamSurface"
     params: tuple[click.Parameter, ...]
 
     def parse(self, tokens: Sequence[str]) -> ParsedTail:
@@ -1695,6 +1696,7 @@ def build_program_command(
         positional=positional,
         options=options,
         module_options=module_options,
+        surface=surface,
         params=tuple(click_params),
     )
 

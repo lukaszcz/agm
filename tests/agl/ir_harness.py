@@ -78,6 +78,7 @@ def _checked_inline_program(
         next_node_id=parsed.next_id,
         origin_path=origin_path,
         default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
     )
     return check_program(resolve_program(graph), caps or base_caps())
 
@@ -401,7 +402,7 @@ def make_repl_graph_from_files(
     root = _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
     with spaced_qualifier_collector() as spaced_qualifiers:
-        program, next_node_id = parse_program_seeded(entry_source, start_id=0)
+        program, next_node_id = parse_program_seeded(entry_source, start_id=0, resolve_infix=False)
     graph, _next_id, _new_modules = build_repl_graph(
         program,
         next_node_id,
@@ -443,6 +444,7 @@ def make_inline_graph_from_files(
         cached={},
         roots=_roots(root, include_stdlib=default_stdlib),
         default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
         source_text=entry_source,
     )
     return graph

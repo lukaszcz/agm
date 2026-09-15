@@ -53,6 +53,7 @@ import dataclasses
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.lexer import SpacedQualifier, spaced_qualifier_collector
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import (
     LoadedModule,
@@ -66,7 +67,7 @@ from agm.agl.parser.wrap import wrap_inline_program
 from agm.agl.scope import ModuleResolution
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ConstructorRef, ScopeNode
-from agm.agl.syntax.nodes import ExportDecl, ImportDecl, Program, static_items
+from agm.agl.syntax.nodes import Block, ExportDecl, FuncDef, ImportDecl, Program, static_items
 from agm.agl.syntax.spans import SourceId
 from agm.agl.typecheck import CheckedModule
 from agm.agl.typecheck.checker import _check_prepared_module
@@ -112,7 +113,9 @@ def _cached_std_core() -> tuple[dict[ModuleId, LoadedModule], int]:
     """
     global _std_core_cache, _std_core_next_start_id
     if _std_core_cache is None:
-        priming_program, next_id = parse_program_seeded("()", start_id=_STD_PRELUDE_SEED_START)
+        priming_program, next_id = parse_program_seeded(
+            "()", start_id=_STD_PRELUDE_SEED_START, resolve_infix=False
+        )
         _graph, next_id, new_modules = build_repl_graph(
             priming_program,
             next_id,
@@ -131,13 +134,14 @@ def build_module_graph(
     origin_path: Path | None,
     default_stdlib: bool,
 ) -> tuple[ModuleGraph, int | None]:
-    """Build the real module graph for parsed *source*."""
-    entry_program, entry_next_id = parse_program_seeded(source, start_id=0)
+    """Build the real module graph for file-style *source*, parsed as production parses an entry."""
+    parsed = parse_entry_module(source, entry_path=origin_path)
     return build_module_graph_from_program(
-        entry_program,
-        next_node_id=entry_next_id,
+        parsed.program,
+        next_node_id=parsed.next_id,
         origin_path=origin_path,
         default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
     )
 
 
@@ -147,10 +151,12 @@ def build_module_graph_from_program(
     next_node_id: int,
     origin_path: Path | None,
     default_stdlib: bool,
+    spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
 ) -> tuple[ModuleGraph, int | None]:
-    """Build a graph from an already parsed entry program.
+    """Build a graph from an entry program parsed with infix chains unresolved.
 
-    The IR harness uses this seam after applying the inline-source AST wrap.
+    The loader resolves the chains once the graph's fixities are known, as in
+    production.
     """
     if default_stdlib:
         cached, next_start_id = _cached_std_core()
@@ -164,8 +170,33 @@ def build_module_graph_from_program(
         cached=cached,
         roots=_roots(),
         default_stdlib=default_stdlib,
+        spaced_qualifiers=spaced_qualifiers,
     )
     return graph, import_node_id
+
+
+def _parse_repl_entry(source: str) -> tuple[Program, int, tuple[SpacedQualifier, ...]]:
+    """Parse one REPL entry as the REPL session does, leaving infix chains to the loader."""
+    with spaced_qualifier_collector() as spaced_qualifiers:
+        program, next_node_id = parse_program_seeded(source, start_id=0, resolve_infix=False)
+    return program, next_node_id, tuple(spaced_qualifiers)
+
+
+def _inline_source_view(program: Program) -> Program:
+    """Return a wrapped inline entry with its synthetic ``main`` items back at the root.
+
+    Items keep their node ids and return to source order, so every resolution
+    and checking side table stays valid for the source the test wrote.
+    """
+    items = []
+    for item in program.body.items:
+        if isinstance(item, FuncDef) and item.is_synthetic:
+            assert isinstance(item.body, Block)
+            items.extend(item.body.items)
+        else:
+            items.append(item)
+    items.sort(key=lambda item: item.span.start_offset)
+    return dataclasses.replace(program, body=dataclasses.replace(program.body, items=tuple(items)))
 
 
 def _without_synthetic_import(
@@ -249,12 +280,13 @@ def resolve_inline_entry(
     admit executable root statements, while static-root tests must retain the
     file source unchanged.
     """
-    parsed = parse_entry_module(source, entry_path=None, inline_command=True)
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
     graph, import_node_id = build_module_graph_from_program(
         parsed.program,
         next_node_id=parsed.next_id,
         origin_path=origin_path,
         default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
     )
     resolved_program = resolve_program(
         graph,
@@ -265,10 +297,7 @@ def resolve_inline_entry(
     resolved = _without_synthetic_import(
         resolved_program.modules[graph.entry_id].resolved, import_node_id
     )
-    source_view = parse_program_seeded(source, start_id=0, ambient_infix=graph.entry_infix_ambient)[
-        0
-    ]
-    return dataclasses.replace(resolved, program=source_view)
+    return dataclasses.replace(resolved, program=_inline_source_view(resolved.program))
 
 
 def resolve_repl_entry(
@@ -278,12 +307,13 @@ def resolve_repl_entry(
     default_stdlib: bool = True,
 ) -> ModuleResolution:
     """Resolve a test-only incremental REPL entry without an inline wrapper."""
-    entry_program, next_node_id = parse_program_seeded(source, start_id=0)
+    entry_program, next_node_id, spaced_qualifiers = _parse_repl_entry(source)
     graph, import_node_id = build_module_graph_from_program(
         entry_program,
         next_node_id=next_node_id,
         origin_path=None,
         default_stdlib=default_stdlib,
+        spaced_qualifiers=spaced_qualifiers,
     )
     resolved_program = resolve_program(
         graph,
@@ -303,12 +333,13 @@ def resolve_and_check_repl_entry(
     default_stdlib: bool = True,
 ) -> CheckedModule:
     """Type-check a test-only incremental REPL entry."""
-    entry_program, next_node_id = parse_program_seeded(source, start_id=0)
+    entry_program, next_node_id, spaced_qualifiers = _parse_repl_entry(source)
     graph, import_node_id = build_module_graph_from_program(
         entry_program,
         next_node_id=next_node_id,
         origin_path=None,
         default_stdlib=default_stdlib,
+        spaced_qualifiers=spaced_qualifiers,
     )
     resolved_program = resolve_program(
         graph,
@@ -332,12 +363,13 @@ def resolve_and_check_inline_entry(
     default_stdlib: bool = True,
 ) -> CheckedModule:
     """Type-check test-only inline source with the ``agm exec -c`` transform."""
-    parsed = parse_entry_module(source, entry_path=None, inline_command=True)
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
     graph, import_node_id = build_module_graph_from_program(
         parsed.program,
         next_node_id=parsed.next_id,
         origin_path=origin_path,
         default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
     )
     resolved_program = resolve_program(
         graph,
@@ -348,13 +380,8 @@ def resolve_and_check_inline_entry(
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
     checked = checked_program.modules[graph.entry_id]
     stripped_resolved = _without_synthetic_import(checked.resolved, import_node_id)
-    # Keep the source AST view: the wrapper only changes execution placement,
-    # and side tables stay valid because every source node id is preserved.
     source_view = dataclasses.replace(
-        stripped_resolved,
-        program=parse_program_seeded(source, start_id=0, ambient_infix=graph.entry_infix_ambient)[
-            0
-        ],
+        stripped_resolved, program=_inline_source_view(stripped_resolved.program)
     )
     return dataclasses.replace(checked, resolved=source_view)
 

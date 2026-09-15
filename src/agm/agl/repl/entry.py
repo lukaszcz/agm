@@ -13,6 +13,7 @@ from agm.agl.diagnostics import Diagnostic
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from agm.agl.ir.program import ValueDescriptors
     from agm.agl.pipeline import RunError
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type
@@ -43,6 +44,11 @@ class EntryResult:
     ``value``
         The echoed runtime value (expression value or new binding value); ``None``
         for declarations, statements, ``check_only`` runs, and failures.
+    ``descriptors``
+        The descriptor view for rendering the entry's compiled program (nominal
+        display spellings, function labels). Set for every successfully
+        evaluated entry, regardless of ``kind``; ``None`` for check-only runs
+        and failures.
     ``value_type``
         The static type of the echoed value; ``None`` when not applicable.
     ``type_display``
@@ -91,3 +97,4 @@ class EntryResult:
     quote_strings: bool = True
     type_display: str | None = None
     type_table: "TypeTable | None" = None
+    descriptors: "ValueDescriptors | None" = None

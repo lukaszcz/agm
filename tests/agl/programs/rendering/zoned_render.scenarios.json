@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "base_zero_small_draft",
+      "params": { "base": 0 },
+      "agents": {
+        "drafter": ["{\"x\": 3, \"y\": 4}"]
+      },
+      "expect": {
+        "stdout": "Span(0, stop = 4)\nTriple(0, 1, \"t\")\nBoxed(0, tag = \"boxed\")\nTree::Leaf(0, tag = \"leaf\")\nShape::Rect(0, 1)\nCorner(0, 2)\ngeo::Point(0, 3)\nHolder(label = \"h\", span = Span(0, stop = 4))\n[Span(0, stop = 4), Span(1, stop = 5)]\n{\"only\": Boxed(0, tag = \"boxed\")}\nDeployError(\"api\", message = \"m\", attempt = 0, fatal = true)\nUploadTimeout(0, \"svc\", message = \"timeout\")\nOption::None\ntrue\nHolder(\n  label = \"h\",\n  span = Span(\n    0,\n    stop = 4\n  )\n)\nCorner(3, 4)\nSpan(0, stop = 5)\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n",
+        "calls": { "drafter": 1 }
+      }
+    },
+    {
+      "name": "base_two_mid_draft",
+      "params": { "base": 2 },
+      "agents": {
+        "drafter": ["{\"x\": 9, \"y\": 10}"]
+      },
+      "expect": {
+        "stdout": "Span(2, stop = 6)\nTriple(2, 3, \"t\")\nBoxed(2, tag = \"boxed\")\nTree::Leaf(2, tag = \"leaf\")\nShape::Rect(2, 3)\nCorner(2, 4)\ngeo::Point(2, 5)\nHolder(label = \"h\", span = Span(2, stop = 6))\n[Span(2, stop = 6), Span(3, stop = 7)]\n{\"only\": Boxed(2, tag = \"boxed\")}\nDeployError(\"api\", message = \"m\", attempt = 2, fatal = true)\nUploadTimeout(2, \"svc\", message = \"timeout\")\nOption::None\ntrue\nHolder(\n  label = \"h\",\n  span = Span(\n    2,\n    stop = 6\n  )\n)\nCorner(9, 10)\nSpan(2, stop = 7)\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n",
+        "calls": { "drafter": 1 }
+      }
+    },
+    {
+      "name": "base_five_large_draft",
+      "params": { "base": 5 },
+      "agents": {
+        "drafter": ["{\"x\": 100, \"y\": 200}"]
+      },
+      "expect": {
+        "stdout": "Span(5, stop = 9)\nTriple(5, 6, \"t\")\nBoxed(5, tag = \"boxed\")\nTree::Leaf(5, tag = \"leaf\")\nShape::Rect(5, 6)\nCorner(5, 7)\ngeo::Point(5, 8)\nHolder(label = \"h\", span = Span(5, stop = 9))\n[Span(5, stop = 9), Span(6, stop = 10)]\n{\"only\": Boxed(5, tag = \"boxed\")}\nDeployError(\"api\", message = \"m\", attempt = 5, fatal = true)\nUploadTimeout(5, \"svc\", message = \"timeout\")\nOption::Some(value = Corner(5, 6))\ntrue\nHolder(\n  label = \"h\",\n  span = Span(\n    5,\n    stop = 9\n  )\n)\nCorner(100, 200)\nSpan(5, stop = 10)\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n",
+        "calls": { "drafter": 1 }
+      }
+    }
+  ]
+}

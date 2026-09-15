@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, Literal
 
 from agm.agent.transport import AgentCallInfo
 from agm.agl.ir.ids import Location
-from agm.agl.semantics.values import RecordValue
 
 if TYPE_CHECKING:
+    from agm.agent.spec import AgentSpec
     from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
 
 ValidationErrorCategory = Literal[
@@ -76,9 +76,14 @@ class AgentCallHostError(Exception):
 
 @dataclass(slots=True)
 class AgentRequest:
-    """The fully composed request passed verbatim to a host dispatcher."""
+    """The fully composed request passed verbatim to a host dispatcher.
 
-    agent: RecordValue
+    ``agent`` is already resolved to its host specification: the evaluator is
+    the single seam that decodes an AgL ``Agent`` value, so no dispatcher ever
+    sees the value or its nominal identity.
+    """
+
+    agent: "AgentSpec"
     prompt: str
     attempt: int = 0
     previous_invalid_output: str | None = None

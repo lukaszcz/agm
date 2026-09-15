@@ -77,6 +77,124 @@
       "name": "top_level_text_target_is_verbatim_not_a_value_syntax_escape",
       "params": {"mode": "top_level_text_verbatim", "input": "hello \"world\""},
       "expect": {"stdout": "hello \"world\"\n"}
+    },
+    {
+      "name": "parse_json_strict_nested_object_array_number_string_bool_null",
+      "params": {
+        "mode": "parse_json",
+        "input": "{\"n\": 42, \"s\": \"hi\", \"b\": true, \"z\": null, \"arr\": [1, \"two\", false], \"obj\": {\"nested\": true}}"
+      },
+      "expect": {
+        "stdout": "{\"n\": 42, \"s\": \"hi\", \"b\": true, \"z\": null, \"arr\": [1, \"two\", false], \"obj\": {\"nested\": true}}\n"
+      }
+    },
+    {
+      "name": "parse_json_value_syntax_bare_keys_and_trailing_comma",
+      "params": {"mode": "parse_json", "input": "{a: 1, b: [true, null],}"},
+      "expect": {"stdout": "{\"a\": 1, \"b\": [true, null]}\n"}
+    },
+    {
+      "name": "parse_json_text_with_escapes_and_percent",
+      "params": {"mode": "parse_json", "input": "\"line1\\nline2 % end\""},
+      "expect": {"stdout": "\"line1\\nline2 % end\"\n"}
+    },
+    {
+      "name": "parse_json_non_integral_decimal_preserved",
+      "params": {"mode": "parse_json", "input": "1.50"},
+      "expect": {"stdout": "1.50\n"}
+    },
+    {
+      "name": "parse_json_equals_value_syntax_literal",
+      "params": {"mode": "parse_json_equals", "input": "{a: 1, b: [true, null]}"},
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "parse_json_round_trip_object",
+      "params": {"mode": "parse_json_round_trip", "input": "{\"a\": 1, \"b\": [true, null]}"},
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "parse_json_round_trip_string",
+      "params": {"mode": "parse_json_round_trip", "input": "\"hello \\\"world\\\"\""},
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "parse_json_round_trip_decimal",
+      "params": {"mode": "parse_json_round_trip", "input": "1.50"},
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "parse_json_contextual_expected_type",
+      "params": {"mode": "parse_json_contextual", "input": "{\"a\": 1}"},
+      "expect": {"stdout": "{\"a\": 1}\n"}
+    },
+    {
+      "name": "parse_json_type_alias_target",
+      "params": {"mode": "parse_json_alias_target", "input": "{\"a\": 1}"},
+      "expect": {"stdout": "{\"a\": 1}\n"}
+    },
+    {
+      "name": "try_parse_json_ok",
+      "params": {"mode": "try_parse_json", "input": "{\"a\": 1}"},
+      "expect": {"stdout": "ok {\"a\": 1}\n"}
+    },
+    {
+      "name": "try_parse_json_err_invalid_syntax",
+      "params": {"mode": "try_parse_json", "input": "{\"a\": "},
+      "expect": {"stdout": "err {\"a\": \n"}
+    },
+    {
+      "name": "try_parse_json_err_constructor_call",
+      "params": {"mode": "try_parse_json", "input": "P(1)"},
+      "expect": {"stdout": "err P(1)\n"}
+    },
+    {
+      "name": "try_parse_json_expected_type_ok",
+      "params": {"mode": "try_parse_json_expected", "input": "{\"a\": 1}"},
+      "expect": {"stdout": "ok {\"a\": 1}\n"}
+    },
+    {
+      "name": "try_parse_json_expected_type_err",
+      "params": {"mode": "try_parse_json_expected", "input": "not json"},
+      "expect": {"stdout": "err not json\n"}
+    },
+    {
+      "name": "parse_json_error_not_caught_as_cast_error",
+      "params": {"mode": "parse_json_error_uncatchable_as_cast_error", "input": "not json"},
+      "expect": {"stdout": "caught: not json\n"}
+    },
+    {
+      "name": "as_json_still_wraps_as_string",
+      "params": {"mode": "as_json_contrast", "input": "{\"a\": 1}"},
+      "expect": {"stdout": "\"{\\\"a\\\": 1}\"\n"}
+    },
+    {
+      "name": "json_vs_value_parse_exactness_integral_decimal",
+      "params": {"mode": "json_vs_value_parse_exactness", "input": "1.0"},
+      "expect": {"stdout": "1.0 (decimal) | 1.0 (decimal)\n"}
+    },
+    {
+      "name": "json_vs_value_parse_exactness_negative_zero",
+      "params": {"mode": "json_vs_value_parse_exactness", "input": "-0.0"},
+      "expect": {"stdout": "-0.0 (decimal) | -0.0 (decimal)\n"}
+    },
+    {
+      "name": "json_vs_value_parse_exactness_scientific_notation",
+      "params": {"mode": "json_vs_value_parse_exactness", "input": "1e3"},
+      "expect": {"stdout": "1000 (decimal) | 1000 (decimal)\n"}
+    },
+    {
+      "name": "json_vs_value_parse_exactness_array",
+      "params": {"mode": "json_vs_value_parse_exactness", "input": "[1.0, 2]"},
+      "expect": {"stdout": "[1.0, 2] (array) | [1.0, 2] (array)\n"}
+    },
+    {
+      "name": "json_number_exactness_record_int_decimal_json_fields",
+      "params": {
+        "mode": "json_number_exactness_record",
+        "input": "{\"n\": 2.0, \"d\": 1.0, \"j\": 3.0}"
+      },
+      "expect": {"stdout": "2\n1\n1.0\n3.0\n"}
     }
   ]
 }

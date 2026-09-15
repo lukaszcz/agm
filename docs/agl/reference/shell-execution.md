@@ -190,7 +190,7 @@ A nonzero exit and unparseable output both raise `ExecError`.
 When context requires `unit` — for example, a non-final bare expression in a
 block or a binding annotated `unit` — `exec` has target type `unit`. For this
 unit contract, a nonzero exit raises `ExecError`; successful stdout is
-discarded and the call returns `void`:
+discarded and the call returns `()`:
 
 ```agl
 program def main() -> unit =

@@ -2506,21 +2506,37 @@ class _Checker:
         *,
         exprs: tuple[Expr, ...],
     ) -> CastKind:
-        """Classify one text/json/decimal-driven conversion; reject a bad target.
+        """Classify a cast from *source_type* to *target_type*; reject a bad target.
 
-        Shared by ``as``/``as?`` (:meth:`_check_cast`) and
-        ``std/value::parse``/``try-parse`` (``typecheck.builtins``): both
-        report the same STATIC_ERROR diagnostic (including the ``json``
-        obstacle detail) and the same FALLIBLE finite-schema / wire-serializable
-        rejections before their caller records a ``CastSpec``.
+        Used by ``as``/``as?`` (:meth:`_check_cast`). ``std/value::parse``/
+        ``try-parse`` (``typecheck.builtins``) classify with
+        :func:`semantics.type_table.parse_classification` instead and share
+        the rejection rules via :meth:`_reject_conversion`.
         """
-        table = self._env.type_table
-        kind = cast_classification(source_type, target_type, table)
+        kind = cast_classification(source_type, target_type, self._env.type_table)
+        return self._reject_conversion(source_type, target_type, kind, span, exprs=exprs)
+
+    def _reject_conversion(
+        self,
+        source_type: Type,
+        target_type: Type,
+        kind: CastKind,
+        span: SourceSpan,
+        *,
+        exprs: tuple[Expr, ...],
+    ) -> CastKind:
+        """Raise the shared STATIC_ERROR/FALLIBLE diagnostics for *kind*; else return it.
+
+        Shared by :meth:`_check_convertible` (casts) and
+        ``std/value::parse``/``try-parse`` (``typecheck.builtins``, classified
+        via :func:`semantics.type_table.parse_classification`) so both report
+        the same diagnostics for the same ``CastKind``.
+        """
         if kind == CastKind.STATIC_ERROR:
             # A rejected `as json` can usually name the culprit — the non-data
             # type reached, or the declaration field carrying it.
             obstacle = (
-                table.json_representation_obstacle(source_type)
+                self._env.type_table.json_representation_obstacle(source_type)
                 if isinstance(target_type, JsonType)
                 else None
             )

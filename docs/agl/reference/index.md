@@ -21,7 +21,7 @@ oriented orchestration language whose core ideas are:
   always.
 - **Everything is an expression.** There is no statement category: binders
   (`let`/`var`) scope over a continuation, side-effecting forms have type
-  `unit` and return `void`, and `if`/`case`/`try` with matching branches yield
+  `unit` and return `()`, and `if`/`case`/`try` with matching branches yield
   a typed value.
 - **Functions are first-class.** User-defined `def` declarations and `fn`
   lambdas produce values of function type `A -> B` or `(A, B) -> C`; they may be stored,

@@ -51,14 +51,14 @@ from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID
 from agm.agl.semantics.values import (
-    VOID_VALUE,
+    UNIT_VALUE,
     BoolValue,
     IntValue,
     JsonValue,
     TextValue,
     UnitValue,
 )
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, nominal_id_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -186,7 +186,7 @@ def test_loop_exhaustion_raises() -> None:
     source = "var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n"
     ir_exc = evaluate_ir_raises(source)
 
-    assert ir_exc.display_name == "MaxIterationsExceeded"
+    assert ir_exc.nominal == nominal_id_for(_lower(source), "MaxIterationsExceeded")
 
     cond_field = ir_exc.fields.get("condition")
     assert isinstance(cond_field, TextValue), f"condition field: {cond_field!r}"
@@ -216,10 +216,9 @@ def test_loop_succeeds_at_exact_limit() -> None:
 
 def test_loop_exhausts_one_short_of_condition() -> None:
     """do[2] until counter>=3 needs 3 iterations but limit is 2 → MaxIterationsExceeded."""
-    exc = evaluate_ir_raises(
-        "var counter = 0\ndo[2]\n  counter := counter + 1\nuntil counter >= 3\ncounter\n"
-    )
-    assert exc.display_name == "MaxIterationsExceeded"
+    source = "var counter = 0\ndo[2]\n  counter := counter + 1\nuntil counter >= 3\ncounter\n"
+    exc = evaluate_ir_raises(source)
+    assert exc.nominal == nominal_id_for(_lower(source), "MaxIterationsExceeded")
     assert exc.fields.get("limit") == IntValue(2)
 
 
@@ -258,7 +257,7 @@ def test_crlf_loop_exhaustion_condition_field() -> None:
     """With CRLF source, the MaxIterationsExceeded condition field is the clean source slice."""
     source = "var i = 0\r\ndo[3]\r\n  i := i + 1\r\nuntil i > 100\r\n"
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.display_name == "MaxIterationsExceeded"
+    assert ir_exc.nominal == nominal_id_for(_lower(source), "MaxIterationsExceeded")
     assert ir_exc.fields.get("condition") == TextValue("i > 100")
 
 
@@ -277,9 +276,8 @@ def test_irloop_break_exits_immediately() -> None:
     result = interp.run()
     # The loop yields unit; no bindings → empty result
     assert result == {}
-    assert interp.initializer_values == [VOID_VALUE]
+    assert interp.initializer_values == [UNIT_VALUE]
     assert isinstance(interp.initializer_values[0], UnitValue)
-    assert not interp.initializer_values[0].printable_in_repl
 
 
 def test_irloop_break_exits_after_several_iterations() -> None:
@@ -398,7 +396,6 @@ def test_break_bypasses_irtry() -> None:
         handlers=(
             IrCatchHandler(
                 nominal=None,
-                display_name=None,
                 symbol=None,
                 body=IrAssign(
                     location=_DUMMY_LOC,
@@ -469,7 +466,6 @@ def test_continue_bypasses_irtry() -> None:
         handlers=(
             IrCatchHandler(
                 nominal=None,
-                display_name=None,
                 symbol=None,
                 body=IrAssign(
                     location=_DUMMY_LOC,
@@ -732,7 +728,7 @@ def test_for_loop_array_bound_limits_iterations() -> None:
         "var total = 0\nfor x in [10, 20, 30, 40, 50] do[3]\n  total := total + x\nuntil false\n"
     )
     exc = evaluate_ir_raises(source)
-    assert exc.display_name == "MaxIterationsExceeded"
+    assert exc.nominal == nominal_id_for(_lower(source), "MaxIterationsExceeded")
     assert exc.fields.get("limit") == IntValue(3)
 
 

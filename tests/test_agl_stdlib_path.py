@@ -62,7 +62,7 @@ def _path_companion() -> _PathCompanion:
     registry.set_nominals(
         {
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
-        }
+        },
     )
     module: ModuleType = registry.load_companion(_PATH_MODULE, _STDLIB_ROOT / "src" / "path.py")
     return cast(_PathCompanion, module)
@@ -84,11 +84,9 @@ def test_path_operations_preserve_platform_path_semantics(
     assert companion.dirname(file_path) == parent
     assert companion.basename(trailing_parent) == ""
     assert decode_boundary_value(companion.extension(file_path)) == RecordValue(
-        _OPTION_SOME, "Option::Some", {"value": TextValue(".txt")}
+        _OPTION_SOME, {"value": TextValue(".txt")}
     )
-    assert decode_boundary_value(companion.extension(no_extension)) == RecordValue(
-        _OPTION_NONE, "Option::None", {}
-    )
+    assert decode_boundary_value(companion.extension(no_extension)) == RecordValue(_OPTION_NONE, {})
     assert companion.with_extension(no_extension, ".bak") == os.path.join(parent, "file.bak")
     assert companion.absolute(os.path.join("one", "..", "two")) == str(tmp_path / "two")
     assert companion.normalize(os.path.join("one", "..", "two", ".")) == "two"
@@ -112,7 +110,7 @@ def test_path_decomposition_splits_a_name_into_its_stem_and_extension() -> None:
     assert companion.stem("") == ""
     # stem and extension reconstruct the basename they decomposed.
     extension = decode_boundary_value(companion.extension(nested))
-    assert extension == RecordValue(_OPTION_SOME, "Option::Some", {"value": TextValue(".txt")})
+    assert extension == RecordValue(_OPTION_SOME, {"value": TextValue(".txt")})
     assert companion.stem(nested) + ".txt" == companion.basename(nested)
 
 
@@ -161,13 +159,13 @@ def test_common_prefix_returns_none_when_no_single_prefix_exists() -> None:
 
     shared = [os.path.join("one", "two", "a.txt"), os.path.join("one", "three", "b.txt")]
     assert decode_boundary_value(companion.common_prefix(shared)) == RecordValue(
-        _OPTION_SOME, "Option::Some", {"value": TextValue("one")}
+        _OPTION_SOME, {"value": TextValue("one")}
     )
     single = [os.path.join("one", "two")]
     assert decode_boundary_value(companion.common_prefix(single)) == RecordValue(
-        _OPTION_SOME, "Option::Some", {"value": TextValue(os.path.join("one", "two"))}
+        _OPTION_SOME, {"value": TextValue(os.path.join("one", "two"))}
     )
-    none = RecordValue(_OPTION_NONE, "Option::None", {})
+    none = RecordValue(_OPTION_NONE, {})
     # No paths at all, and absolute mixed with relative, have no common prefix.
     assert decode_boundary_value(companion.common_prefix([])) == none
     assert decode_boundary_value(companion.common_prefix([os.sep + "one", "one"])) == none

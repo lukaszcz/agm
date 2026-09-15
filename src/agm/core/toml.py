@@ -46,7 +46,7 @@ def _get_or_create_table(doc: TOMLDocument, table_name: str) -> Table:
     return new_table
 
 
-def set_toml_table_value(doc: TOMLDocument, table_name: str, key: str, value: str) -> None:
+def set_toml_table_value(doc: TOMLDocument, table_name: str, key: str, value: str | bool) -> None:
     """Set *key* = *value* inside ``[*table_name*]``, creating the table if absent."""
 
     table = _get_or_create_table(doc, table_name)

@@ -20,6 +20,7 @@ from shutil import copyfile
 
 import pytest
 
+from agm.agl.ir.program import ValueDescriptors
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.engine_config import build_engine_config_seeds
 from agm.agl.runtime.host_settings import HostSettingsPolicy
@@ -84,33 +85,52 @@ def _session(**kwargs: object) -> ReplSession:
     return session
 
 
-def _assert_setting(value: Value, expected: object) -> None:
-    """Assert a read engine setting equals *expected*.
-
-    A scalar setting compares directly.  An ``Option``/``Agent`` setting is
-    given as a ``(variant, field, payload)`` triple, compared against the
-    value's terminal variant name and that field.
-    """
-    if isinstance(expected, tuple):
-        variant, field_name, payload = expected
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == variant
-        assert value.fields[field_name] == payload
-    else:
-        assert value == expected
-
-
 def _ok(session: ReplSession, text: str) -> EntryResult:
     result = session.eval_entry(text)
     assert result.ok, f"entry {text!r} failed: {result.diagnostics} {result.error}"
     return result
 
 
-def _read(session: ReplSession, key: str) -> Value:
-    """Import-and-read *key*, returning the read value of a later-entry read."""
+def _read_result(session: ReplSession, key: str) -> EntryResult:
+    """Import-and-read *key*, returning the full entry result (value + descriptors)."""
     result = _ok(session, f"std/config::{key}")
     assert result.value is not None
-    return result.value
+    return result
+
+
+def _read(session: ReplSession, key: str) -> Value:
+    """Import-and-read *key*, returning the read value of a later-entry read."""
+    value = _read_result(session, key).value
+    assert value is not None
+    return value
+
+
+def _variant(value: Value, descriptors: ValueDescriptors) -> str:
+    """Return the terminal member name a ``RecordValue``'s nominal resolves to.
+
+    A ``RecordValue`` carries only its opaque ``NominalId``; its scoped
+    display spelling comes from the entry's own descriptor table.
+    """
+    assert isinstance(value, RecordValue)
+    return descriptors.nominals[value.nominal].display_name.rsplit("::", maxsplit=1)[-1]
+
+
+def _assert_setting(session: ReplSession, key: str, expected: object) -> None:
+    """Assert ``std/config::key`` reads as *expected*.
+
+    A scalar setting compares directly.  An ``Option``/``Agent`` setting is
+    given as a ``(variant, field, payload)`` triple, compared against the
+    value's terminal variant name (see :func:`_variant`) and that field.
+    """
+    result = _read_result(session, key)
+    if isinstance(expected, tuple):
+        variant, field_name, payload = expected
+        assert isinstance(result.value, RecordValue)
+        assert result.descriptors is not None
+        assert _variant(result.value, result.descriptors) == variant
+        assert result.value.fields[field_name] == payload
+    else:
+        assert result.value == expected
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +168,7 @@ class TestCrossEntryPersistence:
         _ok(s, "import std/config")
         _ok(s, f"std/config::{key} := {written}")
         _ok(s, "let unrelated = 1")
-        _assert_setting(_read(s, key), expected)
+        _assert_setting(s, key, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -234,10 +254,11 @@ class TestDefaultsAndSeeding:
         _ok(s, "import std/config")
         _ok(s, "let unrelated = 1")
 
-        value = _read(s, "default-agent")
+        result = _read_result(s, "default-agent")
 
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert isinstance(result.value, RecordValue)
+        assert result.descriptors is not None
+        assert _variant(result.value, result.descriptors) == "AgentClaude"
 
     def test_host_timeout_seed_round_trips_without_disabling_live_timeout(self) -> None:
         s = _session(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)
@@ -358,7 +379,7 @@ class TestResetHostSeedPrecedence:
         _ok(s, f"std/config::{key} := {written}")
         s.reset()
         _ok(s, "import std/config")
-        _assert_setting(_read(s, key), expected)
+        _assert_setting(s, key, expected)
 
     def test_timeout_driver_synthesized_host_seed_survives_a_source_write(self) -> None:
         # No ``engine_base["timeout"]``: the host seed is synthesized from the
@@ -368,7 +389,7 @@ class TestResetHostSeedPrecedence:
         _ok(s, 'std/config::timeout := Some("99s")')
         s.reset()
         _ok(s, "import std/config")
-        _assert_setting(_read(s, "timeout"), ("Some", "value", TextValue("0.0000001s")))
+        _assert_setting(s, "timeout", ("Some", "value", TextValue("0.0000001s")))
         assert s._shell_exec_timeout == 0.0000001
 
 
@@ -472,7 +493,7 @@ class TestResetDeclaredDefaultPrecedence:
         _ok(s, f"std/config::{key} := {written}")
         s.reset()
         _ok(s, "import std/config")
-        _assert_setting(_read(s, key), expected)
+        _assert_setting(s, key, expected)
 
 
 class TestResetSeedWinsOverDriverArgument:
@@ -533,9 +554,10 @@ class TestResetSeedWinsOverDriverArgument:
         s.reset()
         assert s._shell_exec_timeout is None
         _ok(s, "import std/config")
-        value = _read(s, "timeout")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "None"
+        result = _read_result(s, "timeout")
+        assert isinstance(result.value, RecordValue)
+        assert result.descriptors is not None
+        assert _variant(result.value, result.descriptors) == "None"
 
 
 class TestResetRestoresMixedSeedOrigins:
@@ -682,10 +704,11 @@ class TestDefaultAgentSeedThreading:
             engine_base={"default-agent": agent_value("AgentCommand", command="overridden")}
         )
         _ok(s, "import std/config")
-        value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
-        assert value.fields["command"] == TextValue("overridden")
+        result = _read_result(s, "default-agent")
+        assert isinstance(result.value, RecordValue)
+        assert result.descriptors is not None
+        assert _variant(result.value, result.descriptors) == "AgentCommand"
+        assert result.value.fields["command"] == TextValue("overridden")
 
         _ok(s, "let unrelated = 1")
         value = _read(s, "default-agent")
@@ -697,12 +720,18 @@ class TestDefaultAgentSeedThreading:
             engine_base={"default-agent": agent_value("AgentCommand", command="overridden")}
         )
         _ok(s, "import std/config")
-        assert _read(s, "default-agent").display_name == "Agent::AgentCommand"
+        initial = _read_result(s, "default-agent")
+        assert isinstance(initial.value, RecordValue)
+        assert initial.descriptors is not None
+        assert initial.descriptors.nominals[initial.value.nominal].display_name == (
+            "Agent::AgentCommand"
+        )
         _ok(s, 'std/config::default-agent := AgentClaude("haiku", "low")')
-        value = _read(s, "default-agent")
-        assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
-        assert value.fields["model"] == TextValue("haiku")
+        result = _read_result(s, "default-agent")
+        assert isinstance(result.value, RecordValue)
+        assert result.descriptors is not None
+        assert _variant(result.value, result.descriptors) == "AgentClaude"
+        assert result.value.fields["model"] == TextValue("haiku")
 
     def test_malformed_command_text_is_rejected_at_the_first_entry(self) -> None:
         """A well-typed seed whose command text does not shell-split fails eagerly.

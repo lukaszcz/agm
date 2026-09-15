@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import Diagnostic, RelatedDiagnostic
+from agm.agl.ir.program import ValueDescriptors
 from agm.agl.pipeline import RunError
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
@@ -24,6 +25,10 @@ from agm.agl.repl.session import ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.types import IntType, TextType, Type
 from agm.agl.semantics.values import IntValue, TextValue, Value
+
+# A descriptor view with no nominal/function entries: enough for every test
+# value here, none of which is a record/enum/exception or closure.
+_EMPTY_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
 
 
 def _open_session(**kwargs: object) -> ReplSession:
@@ -66,8 +71,14 @@ def _result(
     ok: bool = True,
     installed: tuple[str, ...] = (),
     quote_strings: bool = True,
+    descriptors: ValueDescriptors | None = None,
 ) -> EntryResult:
-    """Build an ``EntryResult`` with sensible defaults for one test axis."""
+    """Build an ``EntryResult`` with sensible defaults for one test axis.
+
+    *descriptors* defaults to an empty view whenever *value* is set (matching
+    the invariant ``render_entry_result`` relies on: descriptors are present
+    whenever a value is), and to ``None`` otherwise.
+    """
     return EntryResult(
         kind=kind,
         name=name,
@@ -79,6 +90,9 @@ def _result(
         ok=ok,
         installed=installed,
         quote_strings=quote_strings,
+        descriptors=descriptors
+        if descriptors is not None
+        else (_EMPTY_DESCRIPTORS if value is not None else None),
     )
 
 
@@ -136,14 +150,35 @@ class TestRenderEntryResult:
 
     def test_expression_echo_pretty_prints_structured_values(self) -> None:
         from agm.agl.ir.ids import NominalId
+        from agm.agl.ir.program import NominalDescriptor, NominalKind
+        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue
 
+        nominal = NominalId(1)
         value = RecordValue(
-            nominal=NominalId(1),
-            display_name="Box",
+            nominal=nominal,
             fields={"items": ArrayValue([IntValue(1), IntValue(2)])},
         )
-        result = _result(kind="expression", value=value, value_type=TextType(), ok=True)
+        descriptors = ValueDescriptors(
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Box",
+                    kind=NominalKind.RECORD,
+                    fields=("items",),
+                )
+            },
+            functions={},
+        )
+        result = _result(
+            kind="expression",
+            value=value,
+            value_type=TextType(),
+            descriptors=descriptors,
+            ok=True,
+        )
 
         rendered = render_mod.render_entry_result(result, echo=True)
         assert rendered == "Box(\n  items = [\n    1,\n    2\n  ]\n)"
@@ -156,30 +191,68 @@ class TestRenderEntryResult:
         result = _result(kind="statement", ok=True)
         assert render_mod.render_entry_result(result, echo=True) is None
 
-    def test_void_expression_echo_is_none(self) -> None:
+    def test_unit_expression_echo_is_none_by_default(self) -> None:
         from agm.agl.semantics.types import UnitType
-        from agm.agl.semantics.values import VOID_VALUE
+        from agm.agl.semantics.values import UNIT_VALUE
 
         result = _result(
             kind="expression",
-            value=VOID_VALUE,
+            value=UNIT_VALUE,
             value_type=UnitType(),
             ok=True,
         )
         assert render_mod.render_entry_result(result, echo=True) is None
 
-    def test_void_binding_echo_is_none(self) -> None:
+    def test_unit_binding_echo_is_none_by_default(self) -> None:
         from agm.agl.semantics.types import UnitType
-        from agm.agl.semantics.values import VOID_VALUE
+        from agm.agl.semantics.values import UNIT_VALUE
 
         result = _result(
             kind="binding",
             name="x",
-            value=VOID_VALUE,
+            value=UNIT_VALUE,
             value_type=UnitType(),
             ok=True,
         )
         assert render_mod.render_entry_result(result, echo=True) is None
+
+    def test_unit_expression_echoes_when_echo_unit_on(self) -> None:
+        from agm.agl.semantics.types import UnitType
+        from agm.agl.semantics.values import UNIT_VALUE
+
+        result = _result(kind="expression", value=UNIT_VALUE, value_type=UnitType(), ok=True)
+        assert render_mod.render_entry_result(result, echo=True, echo_unit=True) == "()"
+
+    def test_unit_binding_echoes_when_echo_unit_on(self) -> None:
+        from agm.agl.semantics.types import UnitType
+        from agm.agl.semantics.values import UNIT_VALUE
+
+        result = _result(kind="binding", name="x", value=UNIT_VALUE, value_type=UnitType(), ok=True)
+        rendered = render_mod.render_entry_result(result, echo=True, echo_unit=True)
+        assert rendered == "x : unit = ()"
+
+    def test_unit_entry_still_suppressed_when_echo_is_off(self) -> None:
+        from agm.agl.semantics.types import UnitType
+        from agm.agl.semantics.values import UNIT_VALUE
+
+        result = _result(kind="expression", value=UNIT_VALUE, value_type=UnitType(), ok=True)
+        assert render_mod.render_entry_result(result, echo=False, echo_unit=True) is None
+
+    def test_dry_run_unit_expression_echoes_type_when_echo_unit_on(self) -> None:
+        from agm.agl.semantics.types import UnitType
+
+        result = _result(kind="expression", value_type=UnitType(), ok=True)
+        rendered = render_mod.render_entry_result(
+            result, echo=True, echo_unit=True, check_only=True
+        )
+        assert rendered == ": unit"
+
+    def test_dry_run_unit_expression_echoes_nothing_by_default(self) -> None:
+        from agm.agl.semantics.types import UnitType
+
+        result = _result(kind="expression", value_type=UnitType(), ok=True)
+        rendered = render_mod.render_entry_result(result, echo=True, check_only=True)
+        assert rendered is None
 
     def test_check_only_expression_shows_type(self) -> None:
         # In dry-run there is no value; the echo shows the inferred type.
@@ -457,7 +530,7 @@ class TestSetOptions:
 
     @pytest.mark.parametrize(
         "arg",
-        ("foo", "=5", "foo=", "", "echo", "echo on off"),
+        ("foo", "=5", "foo=", "", "echo", "echo on off", "echo-unit", "echo-unit maybe"),
         ids=(
             "missing-equals",
             "empty-name",
@@ -465,6 +538,8 @@ class TestSetOptions:
             "no-argument",
             "echo-without-state",
             "echo-with-extra-words",
+            "echo-unit-without-state",
+            "echo-unit-bad-state",
         ),
     )
     def test_set_non_echo_forms_give_usage(self, arg: str) -> None:
@@ -479,7 +554,9 @@ class TestSetOptions:
 
 class TestRenderHelpers:
     def test_format_typed_value(self) -> None:
-        line = render_mod.format_typed_value("x", IntType(), IntValue(Decimal(5)))
+        line = render_mod.format_typed_value(
+            "x", IntType(), IntValue(Decimal(5)), _EMPTY_DESCRIPTORS
+        )
         assert line == "x : int = 5"
 
     def test_binding_echo_matches_format_helper(self) -> None:
@@ -487,10 +564,12 @@ class TestRenderHelpers:
         value = TextValue("hi")
         result = _result(kind="binding", name="g", value=value, value_type=TextType())
         echoed = render_mod.render_entry_result(result, echo=True)
-        assert echoed == render_mod.format_typed_value("g", TextType(), value)
+        assert echoed == render_mod.format_typed_value("g", TextType(), value, _EMPTY_DESCRIPTORS)
 
     def test_format_typed_value_without_name(self) -> None:
-        line = render_mod.format_typed_value(None, IntType(), IntValue(Decimal(5)))
+        line = render_mod.format_typed_value(
+            None, IntType(), IntValue(Decimal(5)), _EMPTY_DESCRIPTORS
+        )
         assert line == ": int = 5"
 
     def test_unnamed_binding_echo_matches_format_helper(self) -> None:
@@ -500,7 +579,7 @@ class TestRenderHelpers:
         value = TextValue("hi")
         result = _result(kind="binding", name=None, value=value, value_type=TextType())
         echoed = render_mod.render_entry_result(result, echo=True)
-        assert echoed == render_mod.format_typed_value(None, TextType(), value)
+        assert echoed == render_mod.format_typed_value(None, TextType(), value, _EMPTY_DESCRIPTORS)
 
 
 # ---------------------------------------------------------------------------
@@ -608,15 +687,45 @@ class TestSet:
         off = meta_mod.dispatch_meta(":set echo off", ctx)
         assert ctx.echo is False
         assert "off" in (off.text or "").lower()
+        assert off.setting_change == ("echo", False)
         on = meta_mod.dispatch_meta(":set echo on", ctx)
         assert ctx.echo is True
         assert "on" in (on.text or "").lower()
+        assert on.setting_change == ("echo", True)
 
     def test_set_echo_bad_state_gives_usage(self) -> None:
         ctx = _session_ctx()
         outcome = meta_mod.dispatch_meta(":set echo maybe", ctx)
         assert "usage" in (outcome.text or "").lower()
         assert ctx.echo is True  # unchanged
+        assert outcome.setting_change is None
+
+    def test_set_echo_already_on_still_reports_the_change_to_persist(self) -> None:
+        # Already on; setting it to "on" again live-changes nothing, but the
+        # explicit command still reports its target for persistence.
+        ctx = _session_ctx()
+        outcome = meta_mod.dispatch_meta(":set echo on", ctx)
+        assert ctx.echo is True
+        assert outcome.setting_change == ("echo", True)
+
+    def test_set_echo_unit_off_then_on_toggles_ctx(self) -> None:
+        ctx = _session_ctx()
+        assert ctx.echo_unit is False
+        on = meta_mod.dispatch_meta(":set echo-unit on", ctx)
+        assert ctx.echo_unit is True
+        assert "on" in (on.text or "").lower()
+        assert on.setting_change == ("echo-unit", True)
+        off = meta_mod.dispatch_meta(":set echo-unit off", ctx)
+        assert ctx.echo_unit is False
+        assert "off" in (off.text or "").lower()
+        assert off.setting_change == ("echo-unit", False)
+
+    def test_set_echo_unit_bad_state_gives_usage(self) -> None:
+        ctx = _session_ctx()
+        outcome = meta_mod.dispatch_meta(":set echo-unit maybe", ctx)
+        assert "usage" in (outcome.text or "").lower()
+        assert ctx.echo_unit is False  # unchanged
+        assert outcome.setting_change is None
 
 
 class TestLoad:
@@ -737,6 +846,7 @@ class TestTheme:
         assert ctx.theme == "light"
         assert outcome.text is not None
         assert "light" in outcome.text
+        assert outcome.setting_change == ("theme", "light")
 
     def test_switch_to_dark(self) -> None:
         ctx = _ctx()
@@ -749,12 +859,19 @@ class TestTheme:
         meta_mod.dispatch_meta(":theme auto", ctx)
         assert ctx.theme == "auto"
 
+    def test_switch_to_same_theme_still_reports_the_change_to_persist(self) -> None:
+        ctx = _ctx()
+        ctx.theme = "dark"
+        outcome = meta_mod.dispatch_meta(":theme dark", ctx)
+        assert outcome.setting_change == ("theme", "dark")
+
     def test_unknown_theme_returns_error(self) -> None:
         ctx = _ctx()
         outcome = meta_mod.dispatch_meta(":theme neon", ctx)
         assert outcome.text is not None
         assert "Unknown theme" in outcome.text
         assert ctx.theme == "auto"  # unchanged
+        assert outcome.setting_change is None
 
     def test_theme_in_help(self) -> None:
         outcome = meta_mod.dispatch_meta(":help", _ctx())

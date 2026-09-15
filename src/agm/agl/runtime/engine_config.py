@@ -153,6 +153,7 @@ def convert_config_value(
     projection); callers that already hold the session/program table (the
     REPL) pass it explicitly.
     """
+    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
     from agm.agl.runtime.arguments import OptionSome
     from agm.agl.runtime.option import none_value
     from agm.agl.semantics.type_table import create_seeded_type_table
@@ -161,6 +162,6 @@ def convert_config_value(
     table = type_table if type_table is not None else create_seeded_type_table()
     if is_standard_option_enum(key_type):
         if raw is None:
-            return none_value()
+            return none_value(nominals=NO_BUILTIN_DECLARATIONS)
         return convert_host_value(name, OptionSome(raw), key_type, table)
     return convert_host_value(name, raw, key_type, table)

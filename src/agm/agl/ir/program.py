@@ -44,6 +44,7 @@ __all__ = [
     "NominalKind",
     "SourceFile",
     "SymbolDescriptor",
+    "ValueDescriptors",
     "VariantDescriptor",
 ]
 
@@ -125,6 +126,10 @@ class NominalDescriptor:
     ``variants``     — for ENUM: ordered tuple of ``VariantDescriptor`` objects
                        (one per variant, in declaration order).  ``()`` for
                        RECORD and EXCEPTION.
+    ``positional_fields`` — fields a constructor call binds positionally (see
+                       ``semantics.arguments.positional_field_names``), in
+                       field order. Used for RECORD and EXCEPTION; ``()`` for
+                       ENUM and for a fieldless RECORD/EXCEPTION.
     ``bears_name_path`` — whether this identity is the one its
                        ``(module_id, scope_path, declared_name)`` path
                        currently resolves to, per the type table's name
@@ -152,6 +157,7 @@ class NominalDescriptor:
     fields: tuple[str, ...] = ()
     variants: tuple[VariantDescriptor, ...] = ()
     mutable_fields: frozenset[str] = frozenset()
+    positional_fields: tuple[str, ...] = ()
     bears_name_path: bool = field(default=True, compare=False)
 
     @property
@@ -221,6 +227,33 @@ class FunctionDescriptor:
     @property
     def is_extern(self) -> bool:
         return isinstance(self.impl, ExternFunctionBody)
+
+
+# ---------------------------------------------------------------------------
+# Value descriptor view
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ValueDescriptors:
+    """Read-only view over a program's nominal and function descriptor tables.
+
+    A runtime value carries only its identity (``NominalId``/``FunctionId``)
+    and its data — never its own display name or signature labels. This is
+    the one argument every renderer and host name-lookup site takes to
+    resolve those from the program it runs under: ``nominals[value.nominal]
+    .display_name`` for a record/exception/constructor, and
+    ``functions[closure.function_id].param_labels``/``.result_label`` for a
+    closure. Built directly from ``ExecutableProgram.nominals``/``.functions``
+    (see ``ValueDescriptors.from_program``).
+    """
+
+    nominals: Mapping[NominalId, NominalDescriptor]
+    functions: Mapping[FunctionId, FunctionDescriptor]
+
+    @classmethod
+    def from_program(cls, program: "ExecutableProgram") -> "ValueDescriptors":
+        return cls(nominals=program.nominals, functions=program.functions)
 
 
 # ---------------------------------------------------------------------------

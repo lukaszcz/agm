@@ -16,10 +16,15 @@ import pytest
 from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.contracts import ParamDecoder
+from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import UseDefault
 from agm.agl.ir.program import IrProgramParam
-from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
+from agm.agl.ir.reserved_nominals import (
+    require_reserved_enum_member_id,
+    require_reserved_nominal_id,
+)
 from agm.agl.modules.ids import RESERVED_ID
 from agm.agl.runtime.arguments import (
     OptionSome,
@@ -453,7 +458,7 @@ class TestDecodeParamValue:
         value = decode_param_value(_decoder(BUILTIN_PRELUDE_TYPES["Agent"]), raw)
 
         assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == case
+        assert value.nominal == NominalId(require_reserved_enum_member_id("Agent", case))
         assert value.fields == {name: TextValue(field) for name, field in fields.items()}
 
     def test_agent_keeps_canonical_json_shape(self) -> None:
@@ -463,7 +468,7 @@ class TestDecodeParamValue:
         )
 
         assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert value.nominal == NominalId(require_reserved_enum_member_id("Agent", "AgentClaude"))
         assert value.fields == {"model": TextValue("opus"), "thinking": TextValue("custom")}
 
     def test_rejects_non_json_shaped_native_value(self) -> None:
@@ -484,7 +489,7 @@ class TestDecodeParamValue:
     def test_option_some_decodes_a_native_value(self) -> None:
         value = decode_param_value(_decoder(_option_type(IntType())), OptionSome(5))
 
-        assert value == some_value(IntValue(5))
+        assert value == some_value(IntValue(5), nominals=NO_BUILTIN_DECLARATIONS)
 
     def test_option_some_decodes_a_native_float_into_a_decimal(self) -> None:
         """A native (non-string) ``OptionSome`` payload crosses the same
@@ -493,7 +498,7 @@ class TestDecodeParamValue:
         exactly as it would outside an ``Option``."""
         value = decode_param_value(_decoder(_option_type(DecimalType())), OptionSome(1.1))
 
-        assert value == some_value(DecimalValue(Decimal("1.1")))
+        assert value == some_value(DecimalValue(Decimal("1.1")), nominals=NO_BUILTIN_DECLARATIONS)
 
     def test_option_some_rejects_a_non_json_shaped_native_payload(self) -> None:
         with pytest.raises(ValueError):
@@ -502,12 +507,12 @@ class TestDecodeParamValue:
     def test_option_some_decodes_a_string_through_host_text(self) -> None:
         value = decode_param_value(_decoder(_option_type(IntType())), OptionSome("5"))
 
-        assert value == some_value(IntValue(5))
+        assert value == some_value(IntValue(5), nominals=NO_BUILTIN_DECLARATIONS)
 
     def test_option_some_of_text_is_taken_verbatim(self) -> None:
         value = decode_param_value(_decoder(_option_type(TextType())), OptionSome("hello"))
 
-        assert value == some_value(TextValue("hello"))
+        assert value == some_value(TextValue("hello"), nominals=NO_BUILTIN_DECLARATIONS)
 
     def test_option_some_of_agent_uses_host_syntax(self) -> None:
         value = decode_param_value(
@@ -517,7 +522,7 @@ class TestDecodeParamValue:
         assert isinstance(value, RecordValue)
         payload = value.fields["value"]
         assert isinstance(payload, RecordValue)
-        assert payload.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCodex"
+        assert payload.nominal == NominalId(require_reserved_enum_member_id("Agent", "AgentCodex"))
 
     def test_option_some_of_a_record_value_syntax_string(self) -> None:
         typ, table = _record_point_type()

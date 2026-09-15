@@ -89,9 +89,10 @@ from agm.agl.ir import (
     VariantDescriptor,
 )
 from agm.agl.ir.ids import NominalId
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import (
-    VOID_VALUE,
+    UNIT_VALUE,
     ArrayValue,
     BoolValue,
     DecimalValue,
@@ -124,7 +125,6 @@ def _empty_environ(location: Location) -> IrMakeRecord:
     return IrMakeRecord(
         location=location,
         nominal=NominalId(-1),
-        display_name="Environ",
         fields=(("vars", IrMakeDict(location=location, entries=())),),
     )
 
@@ -134,7 +134,6 @@ def _none_option(location: Location) -> IrMakeRecord:
     return IrMakeRecord(
         location=location,
         nominal=NominalId(-2),
-        display_name="Option::None",
         fields=(),
     )
 
@@ -448,8 +447,8 @@ class TestVarCell:
         )
         assert result == {"counter": IntValue(42)}
 
-    def test_var_assign_returns_void(self) -> None:
-        """Assignment mutates the cell and yields unprintable unit."""
+    def test_var_assign_returns_unit(self) -> None:
+        """Assignment mutates the cell and yields unit."""
         sym, desc = _var_sym(0, "counter")
         prog = _make_program(
             (
@@ -461,10 +460,8 @@ class TestVarCell:
         interp = IrInterpreter(prog)
         interp.run()
 
-        assert interp.initializer_values[-1] == UnitValue()
-        assert interp.initializer_values[-1] == VOID_VALUE
+        assert interp.initializer_values[-1] == UNIT_VALUE
         assert isinstance(interp.initializer_values[-1], UnitValue)
-        assert not interp.initializer_values[-1].printable_in_repl
 
     def test_var_assign_multiple_times(self) -> None:
         sym, desc = _var_sym(0, "x")
@@ -970,7 +967,7 @@ class TestEnumMemberDispatch:
                 IrBind(
                     _LOC,
                     constructor,
-                    IrMakeConstructor(_LOC, member, "Packet::data"),
+                    IrMakeConstructor(_LOC, member),
                 ),
                 IrBind(
                     _LOC,
@@ -1043,7 +1040,7 @@ class TestEnumMemberDispatch:
                     NominalId(45),
                     IrIndirectCall(
                         _LOC,
-                        IrMakeConstructor(_LOC, NominalId(45), "Packet::data"),
+                        IrMakeConstructor(_LOC, NominalId(45)),
                         (IrConstInt(_LOC, 7),),
                     ),
                     False,
@@ -1095,7 +1092,6 @@ class TestIrField:
         make_record = IrMakeRecord(
             location=_LOC,
             nominal=nominal,
-            display_name="Point",
             fields=(
                 ("x", IrConstInt(_LOC, x_val)),
                 ("y", IrConstInt(_LOC, y_val)),
@@ -1160,7 +1156,7 @@ class TestIrField:
                 IrBind(
                     _LOC,
                     record_symbol,
-                    IrMakeRecord(_LOC, nominal, "Point", (("x", IrConstInt(_LOC, 0)),)),
+                    IrMakeRecord(_LOC, nominal, (("x", IrConstInt(_LOC, 0)),)),
                 ),
                 IrBind(_LOC, marker_symbol, IrConstInt(_LOC, 0)),
                 IrFieldSet(
@@ -1212,7 +1208,6 @@ class TestIrField:
                     IrMakeRecord(
                         _LOC,
                         record_nominal,
-                        "Point",
                         (("x", IrConstInt(_LOC, 1)),),
                     ),
                     store_nominal,
@@ -1222,7 +1217,6 @@ class TestIrField:
                         IrMakeException(
                             _LOC,
                             NominalId(4),
-                            "ReplacementWasEvaluated",
                             (),
                         ),
                     ),
@@ -1253,7 +1247,6 @@ class TestIrField:
                     IrMakeException(
                         _LOC,
                         exception_nominal,
-                        "Abort",
                         (("message", IrConstText(_LOC, "stop")),),
                     ),
                 ),
@@ -1303,7 +1296,6 @@ class TestIrField:
                     IrMakeRecord(
                         _LOC,
                         member,
-                        "Wrapper::wrap",
                         (("value", IrConstInt(_LOC, 9)),),
                     ),
                 ),
@@ -1380,7 +1372,6 @@ class TestIrUpdateRecord:
         make_record = IrMakeRecord(
             location=_LOC,
             nominal=nominal,
-            display_name="Point",
             fields=(
                 ("x", IrConstInt(_LOC, 1)),
                 ("y", IrConstInt(_LOC, 2)),
@@ -1491,7 +1482,7 @@ class TestIrIndexSetErrors:
         )
         with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog).run()
-        assert exc.value.exc.display_name == "IndexError"
+        assert exc.value.exc.nominal == NominalId(require_reserved_nominal_id("IndexError"))
 
     def test_index_set_container_dict_missing_key_raises(self) -> None:
         """IrIndexSet: the container expression (IrIndex) raises missing key."""
@@ -1520,7 +1511,7 @@ class TestIrIndexSetErrors:
         )
         with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog).run()
-        assert exc.value.exc.display_name == "KeyError"
+        assert exc.value.exc.nominal == NominalId(require_reserved_nominal_id("KeyError"))
 
     def test_index_set_final_array_oob_raises(self) -> None:
         """IrIndexSet: the final indexed store is out-of-bounds."""
@@ -1543,7 +1534,7 @@ class TestIrIndexSetErrors:
         )
         with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog).run()
-        assert exc.value.exc.display_name == "IndexError"
+        assert exc.value.exc.nominal == NominalId(require_reserved_nominal_id("IndexError"))
 
     def test_index_set_final_dict_missing_key_raises(self) -> None:
         """IrIndexSet: the final indexed store hits a missing key."""
@@ -1570,7 +1561,7 @@ class TestIrIndexSetErrors:
         )
         with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog).run()
-        assert exc.value.exc.display_name == "KeyError"
+        assert exc.value.exc.nominal == NominalId(require_reserved_nominal_id("KeyError"))
 
 
 # ---------------------------------------------------------------------------
@@ -1741,7 +1732,6 @@ class TestFunctionEvaluation:
                 IrMakeException(
                     raise_loc,
                     NominalId(9),
-                    "Abort",
                     (("message", IrConstText(raise_loc, "boom")),),
                 ),
             )
@@ -2051,7 +2041,9 @@ class TestSelectedProgramExecution:
         with pytest.raises(AglRaise) as exc_info:
             IrInterpreter(program).run(program_symbol=fn_symbol)
 
-        assert exc_info.value.exc.display_name == "RecursionError"
+        assert exc_info.value.exc.nominal == NominalId(
+            require_reserved_nominal_id("RecursionError")
+        )
         assert exc_info.value.span == _LOC
 
     def test_python_recursion_during_module_initialization_has_no_entry_span(
@@ -2101,7 +2093,9 @@ class TestSelectedProgramExecution:
         with pytest.raises(AglRaise) as exc_info:
             IrInterpreter(program).run(program_symbol=fn_symbol)
 
-        assert exc_info.value.exc.display_name == "RecursionError"
+        assert exc_info.value.exc.nominal == NominalId(
+            require_reserved_nominal_id("RecursionError")
+        )
         assert exc_info.value.span is None
 
 
@@ -2177,7 +2171,7 @@ class TestIndirectCallInterpreterDefensivePaths:
         )
         with pytest.raises(AglRaise) as exc:
             IrInterpreter(prog, max_call_depth=1).run()
-        assert exc.value.exc.display_name == "RecursionError"
+        assert exc.value.exc.nominal == NominalId(require_reserved_nominal_id("RecursionError"))
 
     def test_indirect_call_uses_param_default_when_arg_omitted(self) -> None:
         """IrIndirectCall falls back to param.default when fewer args than params."""
@@ -2250,8 +2244,8 @@ class TestIndirectCallInterpreterDefensivePaths:
 class TestPrintParseJsonParam:
     """Unit tests for host operations in the IrInterpreter."""
 
-    def test_ir_print_returns_void(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """IrPrint writes its argument and yields unprintable unit."""
+    def test_ir_print_returns_unit(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """IrPrint writes its argument and yields unit."""
         node = IrPrint(_LOC, IrConstUnit(_LOC))
         prog = _make_program(initializers=(node,))
 
@@ -2259,7 +2253,7 @@ class TestPrintParseJsonParam:
         interp.run()
 
         assert capsys.readouterr().out == "()\n"
-        assert interp.initializer_values == [VOID_VALUE]
+        assert interp.initializer_values == [UNIT_VALUE]
 
     def test_ir_render_non_bool_option_raises_invalid_ir_error(self) -> None:
         """IrRenderValue with a non-bool option raises InvalidIrError (bad IR)."""
@@ -2303,7 +2297,6 @@ class TestIrAsk:
                     agent=IrMakeRecord(
                         location=_LOC,
                         nominal=NominalId(1),
-                        display_name="Agent::AgentCommand",
                         fields=(),
                     ),
                     prompt=IrRaise(
@@ -2311,7 +2304,6 @@ class TestIrAsk:
                         exc=IrMakeException(
                             location=prompt_location,
                             nominal=NominalId(2),
-                            display_name="Abort",
                             fields=(("message", IrConstText(prompt_location, "boom")),),
                         ),
                     ),
@@ -2484,7 +2476,9 @@ class TestIrExec:
         )
         with pytest.raises(AglRaise) as exc_info:
             IrInterpreter(prog).run()
-        assert exc_info.value.exc.display_name == "CyclicValueError"
+        assert exc_info.value.exc.nominal == NominalId(
+            require_reserved_nominal_id("CyclicValueError")
+        )
 
     def test_ir_exec_retry_spawn_error_raises_exec_error(self) -> None:
         """On retry, spawn_error in subsequent shell call raises ExecError."""
@@ -2570,7 +2564,7 @@ class TestIrExec:
         with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
-        assert exc_info.value.exc.display_name == "ExecError"
+        assert exc_info.value.exc.nominal == NominalId(require_reserved_nominal_id("ExecError"))
 
     def test_legacy_string_key_builtin_default_initializes_engine_setting(self) -> None:
         """Hand-built legacy IR defaults still address root ``std/config`` keys."""
@@ -2653,7 +2647,6 @@ class TestIrExec:
             IrMakeException(
                 command_loc,
                 NominalId(10),
-                "Abort",
                 (("message", IrConstText(command_loc, "boom")),),
             ),
         )
@@ -2746,7 +2739,7 @@ class TestIrExec:
                 IrInterpreter(prog).run()
         from agm.agl.semantics.values import BoolValue
 
-        assert exc_info.value.exc.display_name == "ExecError"
+        assert exc_info.value.exc.nominal == NominalId(require_reserved_nominal_id("ExecError"))
         assert exc_info.value.exc.fields["timed-out"] == BoolValue(True)
 
     def test_ir_exec_retry_nonzero_exit_raises_exec_error(self) -> None:
@@ -2829,7 +2822,7 @@ class TestIrExec:
         with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
-        assert exc_info.value.exc.display_name == "ExecError"
+        assert exc_info.value.exc.nominal == NominalId(require_reserved_nominal_id("ExecError"))
 
     def test_ir_exec_structured_parse_errors_path(self) -> None:
         """IrExec JSON parse with structured errors populates last_errors."""
@@ -2899,7 +2892,7 @@ class TestIrExec:
         with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
-        assert exc_info.value.exc.display_name == "ExecError"
+        assert exc_info.value.exc.nominal == NominalId(require_reserved_nominal_id("ExecError"))
 
 
 class TestHostConsumedSettingRegister:
@@ -2976,5 +2969,5 @@ class TestCallDepthBoundary:
         program = self._call_chain(5)
         with pytest.raises(AglRaise) as exc:
             IrInterpreter(program, max_call_depth=4).run()
-        assert exc.value.exc.display_name == "RecursionError"
+        assert exc.value.exc.nominal == NominalId(require_reserved_nominal_id("RecursionError"))
         assert exc.value.exc.fields["limit"] == IntValue(4)

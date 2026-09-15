@@ -47,7 +47,7 @@ def Agent::revise-review(self, review: Review) -> bool =
   var ct: bool = false
   for issue in review.issues do
     let r = self.revise-issue(issue)
-    log::info (r as json)
+    log::info(r as json)
     if r is Valid and (issue.severity is HIGH or issue.severity is CRITICAL) =>
       ct := true
   done

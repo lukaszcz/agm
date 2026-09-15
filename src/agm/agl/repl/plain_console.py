@@ -107,9 +107,10 @@ def run_plain_console(
     session: "ReplSession",
     *,
     echo: bool = True,
+    echo_unit: bool = False,
     check_only: bool = False,
     theme: str = "auto",
-    on_theme_save: "Callable[[str], None] | None" = None,
+    on_setting_save: "Callable[[str, str | bool], None] | None" = None,
     stdin: TextIO,
     stdout: TextIO,
 ) -> None:
@@ -120,8 +121,8 @@ def run_plain_console(
     which have no plain-mode equivalent — there is no command history in this
     front end): *stdin* / *stdout* replace prompt_toolkit's ``Input``/``Output``
     objects with plain text streams, so tests can drive it with ``StringIO`` or
-    a pipe. *theme* only affects what ``:theme`` persists via *on_theme_save*,
-    since plain output carries no colour to swap.
+    a pipe. *theme* / *echo_unit* only affect what a setting change persists via
+    *on_setting_save*, since plain output carries no colour to swap.
     """
     reader = PlainReader(stdin=stdin, stdout=stdout)
 
@@ -129,16 +130,17 @@ def run_plain_console(
         stdout.write(text + "\n")
         stdout.flush()
 
-    def on_theme_change(new_theme: str) -> None:
-        if on_theme_save is not None:
-            on_theme_save(new_theme)
+    def on_setting_change(key: str, value: "str | bool") -> None:
+        if on_setting_save is not None:
+            on_setting_save(key, value)
 
     run_repl_loop(
         session,
         reader=reader,
         writer=writer,
         echo=echo,
+        echo_unit=echo_unit,
         check_only=check_only,
         theme=theme,
-        on_theme_change=on_theme_change,
+        on_setting_change=on_setting_change,
     )

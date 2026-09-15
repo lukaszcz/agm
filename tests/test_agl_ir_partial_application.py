@@ -175,7 +175,6 @@ def test_cross_module_constructor_call_uses_shared_lowering(tmp_path: Path) -> N
 
     assert result["point"] == RecordValue(
         nominal=result["point"].nominal,
-        display_name="Point",
         fields={"x": IntValue(7)},
     )
 

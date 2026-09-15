@@ -8,8 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.pipeline import PipelineDriver, RunResult
-from agm.agl.semantics.values import RecordValue, TextValue, Value
+from agm.agl.runtime.agents import agent_member_name
+from agm.agl.semantics.values import BoolValue, RecordValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.commands import exec_program as exec_engine
@@ -45,9 +47,19 @@ def _run(
     return result
 
 
-def _assert_agent_shape(actual: Value, expected: RecordValue) -> None:
+def _assert_agent_shape(actual: Value, is_variant: Value, expected: RecordValue) -> None:
+    """Verify *actual* is the expected ``Agent`` variant with the expected payload.
+
+    *is_variant* is an ``as?`` identity check run inside the program's own
+    source (bound alongside *actual*): the running program loads real stdlib,
+    so its own ``Agent`` enum carries that program's own nominal identity,
+    distinct from the reserved-fallback identity *expected* (built by the
+    shared ``agent_value`` test helper) carries. Only a cast evaluated inside
+    that same program can compare identity correctly; fields compare directly
+    since they carry no identity of their own.
+    """
+    assert is_variant == BoolValue(True)
     assert isinstance(actual, RecordValue)
-    assert actual.display_name == expected.display_name
     assert actual.fields == expected.fields
 
 
@@ -78,17 +90,24 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
     result = _run(
         "import std/config\n"
         "let initial = std/config::default-agent\n"
+        "let initial-is-claude = initial as? Agent::AgentClaude\n"
         'std/config::default-agent := AgentCommand("command")\n'
         "let updated = std/config::default-agent\n"
+        "let updated-is-command = updated as? Agent::AgentCommand\n"
         "updated\n"
     )
 
     assert result.ok
     _assert_agent_shape(
         result.bindings["initial"],
+        result.bindings["initial-is-claude"],
         agent_value("AgentClaude", model="sonnet", thinking="medium"),
     )
-    _assert_agent_shape(result.bindings["updated"], agent_value("AgentCommand", command="command"))
+    _assert_agent_shape(
+        result.bindings["updated"],
+        result.bindings["updated-is-command"],
+        agent_value("AgentCommand", command="command"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -163,18 +182,23 @@ def test_host_seed_overrides_initializer_until_source_write() -> None:
     result = _run(
         "import std/config\n"
         "let seeded = std/config::default-agent\n"
+        "let seeded-is-codex = seeded as? Agent::AgentCodex\n"
         'std/config::default-agent := AgentPi("openai", "gpt", "high")\n'
         "let written = std/config::default-agent\n"
+        "let written-is-pi = written as? Agent::AgentPi\n"
         "written\n",
         seed={"default-agent": agent_value("AgentCodex", model="o3", thinking="medium")},
     )
 
     assert result.ok
     _assert_agent_shape(
-        result.bindings["seeded"], agent_value("AgentCodex", model="o3", thinking="medium")
+        result.bindings["seeded"],
+        result.bindings["seeded-is-codex"],
+        agent_value("AgentCodex", model="o3", thinking="medium"),
     )
     _assert_agent_shape(
         result.bindings["written"],
+        result.bindings["written-is-pi"],
         agent_value("AgentPi", provider="openai", model="gpt", thinking="high"),
     )
 
@@ -246,7 +270,7 @@ def test_exec_agent_source_cli_and_config_precedence(
     # ``run`` retains top-level bindings only internally; the observable output
     # confirms the selected constructor and each expected field.
     rendered = capsys.readouterr().out
-    assert expected.display_name.rsplit("::", maxsplit=1)[-1] in rendered
+    assert agent_member_name(expected, NO_BUILTIN_DECLARATIONS) in rendered
     for field in expected.fields.values():
         assert isinstance(field, TextValue)
         assert field.value in rendered
@@ -583,3 +607,25 @@ class TestMalformedAgentCommandAtConstruction:
         assert not result.ok
         assert result.diagnostics
         assert result.error is None
+
+
+def test_engine_key_enum_shape_and_restamp_ignore_non_enum_backed_keys() -> None:
+    """A boolean-kind or unrecognized key carries no host-enum identity to restamp.
+
+    ``_engine_key_enum_shape`` is the one place that maps an engine key to the
+    enum it restamps; ``log``/``strict-json`` are boolean-kind and an
+    unrecognized name is not a key at all, so both return ``None`` and
+    ``_restamp_engine_setting`` leaves such a value untouched.
+    """
+    from agm.agl.eval.ir_interpreter import _engine_key_enum_shape, _restamp_engine_setting
+
+    for key in ("log", "strict-json", "not-an-engine-key"):
+        assert _engine_key_enum_shape(key) is None
+
+    stray = agent_value("AgentCommand", command="unused")
+    assert (
+        _restamp_engine_setting(
+            "log", stray, from_table=NO_BUILTIN_DECLARATIONS, to_table=NO_BUILTIN_DECLARATIONS
+        )
+        is stray
+    )

@@ -153,6 +153,14 @@ supplies a value for the parameter. A [recursive](types.md#recursive-types)
 record or enum parameter decodes normally, subject to the same finite-schema
 restriction as an agent output type or cast target — see [Generics](generics.md#the-finite-schema-boundary).
 
+A rendered record or enum value (see
+[Uniform rendering rules](strings-and-interpolation.md#uniform-rendering-rules))
+parses back through `parse`/`as` to an equal value when every field,
+transitively, holds value-syntax data (no function values) and each nested
+record's or enum member's declaration sits at top level or directly inside
+one scope or enum — so its rendered qualifier is the single name value syntax
+accepts.
+
 ### Presentation attributes
 
 `@opt-name`, `@opt-short`, `@opt-env`, `@opt-metavar`, `@opt-hidden`, and

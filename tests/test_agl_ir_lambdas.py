@@ -22,7 +22,7 @@ import pytest
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import DecimalValue, IntValue, TextValue
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_inline_ir
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_inline_ir, nominal_id_for
 
 
 def test_top_level_call_can_reference_later_function() -> None:
@@ -277,7 +277,7 @@ def test_recursion_depth_via_indirect_call() -> None:
     # The simplest: a def called via a function-value binding.
     source = "def inf(n: int) -> int = inf(n + 1)\nlet f: (int) -> int = inf\nlet r = f(0)\n()"
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.display_name == "RecursionError"
+    assert ir_exc.nominal == nominal_id_for(lower_inline_ir(source), "RecursionError")
     assert ir_exc.fields["limit"] == IntValue(256)
 
 
@@ -289,7 +289,7 @@ def test_recursion_depth_custom_limit_indirect() -> None:
     with pytest.raises(AglRaise) as exc_info:
         interp.run(program_symbol=executable.synthetic_main_symbol)
     exc = exc_info.value.exc
-    assert exc.display_name == "RecursionError"
+    assert exc.nominal == nominal_id_for(executable, "RecursionError")
     assert exc.fields["message"] == TextValue("Maximum call depth (5) exceeded")
     assert exc.fields["limit"] == IntValue(5)
 

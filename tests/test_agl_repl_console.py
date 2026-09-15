@@ -31,6 +31,7 @@ from prompt_toolkit.input import PipeInput, create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 import agm.agl.repl.console as console
+from agm.agl.lexer import tokenize
 from agm.agl.repl import ReplSession as _ReplSession
 from agm.agl.repl.console import (
     AglCompleter,
@@ -313,6 +314,16 @@ class TestLexer:
         source = "let x = \u200bbad"
         fragments = lexer.lex_document(Document(source))(0)
         assert "".join(text for _style, text in fragments) == source
+
+    def test_token_without_source_position_is_not_styled(self) -> None:
+        source = "let x = 1 + foo"
+        expected = AglPromptLexer().lex_document(Document(source))(0)
+        with patch(
+            "agm.agl.repl.console.tokenize",
+            side_effect=lambda text: iter([Token("NAME", "ghost"), *tokenize(text)]),
+        ):
+            fragments = AglPromptLexer().lex_document(Document(source))(0)
+        assert fragments == expected
 
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_unterminated_triple_quoted_string_preserves_prefix_highlighting(
@@ -1098,9 +1109,9 @@ class TestThemeThroughLoop:
         keystrokes: str,
         *,
         initial_theme: str = "dark",
-    ) -> tuple[str, list[str]]:
-        """Run the loop, capture output and recorded on_theme_save calls."""
-        saved: list[str] = []
+    ) -> tuple[str, list[tuple[str, "str | bool"]]]:
+        """Run the loop, capture output and recorded on_setting_save calls."""
+        saved: list[tuple[str, "str | bool"]] = []
         with _scripted_input(keystrokes) as pipe:
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
@@ -1108,7 +1119,7 @@ class TestThemeThroughLoop:
                     ReplSession(),
                     history_path=None,
                     theme=initial_theme,
-                    on_theme_save=saved.append,
+                    on_setting_save=lambda key, value: saved.append((key, value)),
                     input=pipe,
                     output=DummyOutput(),
                 )
@@ -1124,32 +1135,38 @@ class TestThemeThroughLoop:
 
     def test_theme_switch_invokes_save_callback(self) -> None:
         _, saved = self._drive_with_save_tracking(":theme light\r\x04")
-        assert saved == ["light"]
+        assert saved == [("theme", "light")]
 
-    def test_theme_switch_to_same_value_does_not_invoke_callback(self) -> None:
+    def test_theme_switch_to_same_value_still_invokes_the_save_callback(self) -> None:
+        # An explicit ``:theme dark`` still persists its target, even when it
+        # already matches the active theme.
         _, saved = self._drive_with_save_tracking(":theme dark\r\x04", initial_theme="dark")
-        assert saved == []
+        assert saved == [("theme", "dark")]
 
     def test_multiple_theme_switches_all_saved(self) -> None:
         _, saved = self._drive_with_save_tracking(":theme light\r:theme dark\r:theme auto\r\x04")
-        assert saved == ["light", "dark", "auto"]
+        assert saved == [("theme", "light"), ("theme", "dark"), ("theme", "auto")]
 
     def test_unknown_theme_does_not_trigger_save(self) -> None:
         _, saved = self._drive_with_save_tracking(":theme neon\r\x04")
         assert saved == []
 
     def test_theme_switch_without_save_callback_does_not_raise(self) -> None:
-        # on_theme_save=None (the default) — must not raise when theme changes.
+        # on_setting_save=None (the default) — must not raise when theme changes.
         with _scripted_input(":theme light\r\x04") as pipe:
             with contextlib.redirect_stdout(io.StringIO()):
                 run_console(
                     ReplSession(),
                     theme="dark",
-                    on_theme_save=None,
+                    on_setting_save=None,
                     history_path=None,
                     input=pipe,
                     output=DummyOutput(),
                 )
+
+    def test_set_echo_and_echo_unit_invoke_save_callback(self) -> None:
+        _, saved = self._drive_with_save_tracking(":set echo off\r:set echo-unit on\r\x04")
+        assert saved == [("echo", False), ("echo-unit", True)]
 
     def test_build_prompt_session_dark_theme(self) -> None:
         from agm.agl.repl.themes import DARK_THEME

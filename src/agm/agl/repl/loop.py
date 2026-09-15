@@ -105,9 +105,10 @@ def run_repl_loop(
     reader: Callable[[], str],
     writer: Callable[[str], None],
     echo: bool = True,
+    echo_unit: bool = False,
     check_only: bool = False,
     theme: str = "auto",
-    on_theme_change: Callable[[str], None] | None = None,
+    on_setting_change: "Callable[[str, str | bool], None] | None" = None,
 ) -> None:
     """Run the read-eval-print loop against *session*; the core both front ends share.
 
@@ -129,11 +130,16 @@ def run_repl_loop(
     compilation) only — no evaluation, no agent/exec calls, and no bindings
     are persisted — and its inferred type is echoed.
 
-    *theme* selects the initial colour palette; whenever ``:theme`` switches the
-    active theme, *on_theme_change* is called with the new theme name. The
-    prompt_toolkit console uses it to swap ``prompt_session.style`` and persist
-    the choice; the plain console — which has no styling to swap — only
-    persists.
+    *echo_unit* selects whether a ``unit``-typed expression/binding entry also
+    echoes (off by default); ``:set echo-unit on|off`` toggles it live.
+
+    *theme* selects the initial colour palette. Every meta-command that changes
+    a persisted REPL setting (``:theme``, ``:set echo``, ``:set echo-unit``)
+    reports the change as ``(key, value)`` via ``MetaOutcome.setting_change``;
+    the loop forwards it, once, to *on_setting_change*. The prompt_toolkit
+    console swaps ``prompt_session.style`` live for a ``"theme"`` change and
+    persists every key; the plain console — which has no styling to swap —
+    only persists.
 
     The loop is intentionally thin: formatting lives in ``render`` and meta
     handling in ``meta`` so both paths can evolve without touching it.
@@ -141,11 +147,11 @@ def run_repl_loop(
     ctx = meta_mod.MetaContext(
         session=session,
         echo=echo,
+        echo_unit=echo_unit,
         theme=theme,
     )
 
     writer(format_banner())
-    current_theme = theme
     while True:
         try:
             entry = reader()
@@ -160,10 +166,8 @@ def run_repl_loop(
             outcome = meta_mod.dispatch_meta(entry, ctx)
             if outcome.text is not None:
                 writer(outcome.text)
-            if ctx.theme != current_theme:
-                current_theme = ctx.theme
-                if on_theme_change is not None:
-                    on_theme_change(current_theme)
+            if outcome.setting_change is not None and on_setting_change is not None:
+                on_setting_change(*outcome.setting_change)
             if outcome.quit:
                 break
             continue
@@ -174,6 +178,8 @@ def run_repl_loop(
             continue
 
         result = session.eval_entry(entry, check_only=check_only)
-        rendered = render_mod.render_entry_result(result, echo=ctx.echo, check_only=check_only)
+        rendered = render_mod.render_entry_result(
+            result, echo=ctx.echo, echo_unit=ctx.echo_unit, check_only=check_only
+        )
         if rendered is not None:
             writer(rendered)

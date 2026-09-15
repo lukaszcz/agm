@@ -96,7 +96,7 @@ def _literal_case(*arms: IrCaseArm, default: IrConstInt | None = None) -> IrCase
 
 
 def test_validation_requires_enum_member_record() -> None:
-    enum_value = IrMakeRecord(_LOC, _PLAIN, "Color::Plain", ())
+    enum_value = IrMakeRecord(_LOC, _PLAIN, ())
     validate_ir(_program(enum_value, nominals=_color_nominals()))
 
     incomplete = _color_nominals()
@@ -351,7 +351,6 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
     subject = IrMakeRecord(
         _LOC,
         _WITH,
-        "Color::With",
         (("value", IrConstInt(_LOC, 42)), ("unused", IrConstInt(_LOC, 0))),
     )
     enum_case = IrCase(
@@ -375,7 +374,7 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
         "result": IntValue(42)
     }
 
-    missing_field_subject = IrMakeRecord(_LOC, _WITH, "Color::With", ())
+    missing_field_subject = IrMakeRecord(_LOC, _WITH, ())
     malformed = IrCase(
         _LOC,
         missing_field_subject,
@@ -396,7 +395,7 @@ def test_enum_dispatch_defaults_for_an_unmatched_member_record() -> None:
     """Case dispatch compares direct member identities without enum fallback."""
     malformed = IrCase(
         _LOC,
-        IrMakeRecord(_LOC, _OTHER, "Color::Missing", ()),
+        IrMakeRecord(_LOC, _OTHER, ()),
         (IrCaseArm(IrNominalCaseKey(_WITH), (), IrConstInt(_LOC, 1)),),
         IrConstInt(_LOC, 0),
     )

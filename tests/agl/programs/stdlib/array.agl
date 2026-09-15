@@ -21,6 +21,7 @@ program def main(mode: int) -> unit =
         print(empty.any(fn(value: int) => value > 0))
         print(empty.take(3))
         print(empty.drop(3))
+        print(empty.zip-with([1], fn(left: int, right: int) => left + right))
     | 2 =>
         let offset = 10
         var values = [3, 1, 2]
@@ -49,11 +50,11 @@ program def main(mode: int) -> unit =
         values.filter!(fn(value: int) => value > 11)
         values.reverse!()
         values.sort!(by-order)
-        values.append(14)
+        values.push(14)
         values.insert(1, 12)
         print(values.remove-at(0))
         print(values.pop())
-        values.extend([15, 16])
+        values.concat!([15, 16])
         print(values)
         values.clear()
         print(values.is-empty())
@@ -66,6 +67,7 @@ program def main(mode: int) -> unit =
         print(singleton.pop?())
         print(singleton)
         print(many.zip(["a", "b", "c"]))
+        print(many.zip-with(["a", "b", "c"], fn(number: int, label: text) => Pair(first = label, second = number)))
         print(many.enumerate())
         print(array::join(["a", "b", "c"], ","))
         print(array::flatten([[1, 2], [], [3, 4]]))

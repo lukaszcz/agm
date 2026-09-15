@@ -197,7 +197,7 @@ program def main() -> unit =
 ```
 
 Side-effecting forms (`print`, `:=`, loops, else-less `if`) have type `unit`,
-return `void`, and are commonly followed by another expression.
+return `()`, and are commonly followed by another expression.
 
 ## Engine settings
 

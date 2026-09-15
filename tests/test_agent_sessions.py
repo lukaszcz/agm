@@ -22,12 +22,11 @@ from agm.agent.session import (
     SessionStats,
     create_agl_session_host,
 )
-from agm.agent.spec import AgentCommand
+from agm.agent.spec import AgentCommand, AgentPi
 from agm.agent.transport import AgentCallInfo
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
 from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
-from tests._agl_helpers import agent_value
 
 
 @dataclass
@@ -123,7 +122,7 @@ def test_agl_session_host_adapts_all_lifecycle_operations() -> None:
         return parent
 
     host = AglSessionHost(SessionService(backend_for))
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
     handle = host.open(agent, "Cli", name="primary")
     assert host.ask(handle, "hello") == "answer"
     host.compact(handle, "retain")
@@ -158,10 +157,10 @@ def test_production_session_host_selects_and_rejects_transports(
         PiRpcSessionBackend, "_start", lambda self, _agent, _operation, name="": None
     )
     host = create_agl_session_host(idle_timeout=1.0)
-    pi = agent_value("AgentPi", provider="provider", model="model", thinking="think")
+    pi = AgentPi(provider="provider", model="model", thinking="think")
     handle = host.open(pi, "Rpc")
     host.close(handle)
-    command = agent_value("AgentCommand", command="echo %{SESSION_ID}")
+    command = AgentCommand(command="echo %{SESSION_ID}")
     command_handle = host.open(command, "Cli")
     host.close(command_handle)
     with pytest.raises(AglSessionHostError):
@@ -170,11 +169,12 @@ def test_production_session_host_selects_and_rejects_transports(
         host.open(command, "bad")
 
 
-def test_agl_session_host_rejects_closed_unknown_and_invalid_agents() -> None:
+def test_agl_session_host_rejects_closed_and_unknown_sessions() -> None:
+    """Agent decoding now happens in the evaluator; the host only sees specs."""
     capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
     backend = FakeBackend(capabilities)
     host = AglSessionHost(SessionService(lambda _agent, _transport: backend))
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
     handle = host.open(agent, "Cli")
     assert host.ask(handle, "hello") == "answer"
     host.close(handle)
@@ -183,10 +183,6 @@ def test_agl_session_host_rejects_closed_unknown_and_invalid_agents() -> None:
     with pytest.raises(AglSessionHostError) as unknown:
         host.ask("unknown", "missing")
     assert unknown.value.operation == "ask"
-    with pytest.raises(TypeError):
-        host._agent_spec(object())
-    with pytest.raises(AglSessionHostError):
-        host._agent_spec(agent_value("Unknown"))
 
 
 def test_agl_session_host_preserves_success_response_metadata_and_call_info() -> None:
@@ -205,7 +201,7 @@ def test_agl_session_host_preserves_success_response_metadata_and_call_info() ->
         ),
     )
     host = AglSessionHost(SessionService(lambda _agent, _transport: backend))
-    agent = agent_value("AgentPi", provider="provider", model="model", thinking="think")
+    agent = AgentPi(provider="provider", model="model", thinking="think")
     handle = host.open(agent, "Rpc")
 
     response = host.ask_request(handle, AgentRequest(agent=agent, prompt="hello"))
@@ -225,7 +221,7 @@ def test_agl_session_host_translates_host_and_ask_failures() -> None:
     capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
     backend = FakeBackend(capabilities)
     host = AglSessionHost(SessionService(lambda _agent, _transport: backend))
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
     handle = host.default(agent, "Cli")
     assert host.default(agent, "Cli") == handle
 
@@ -404,7 +400,7 @@ def test_ephemeral_lifecycle_retires_its_handle_after_closing() -> None:
 def test_agl_host_single_prompt_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
     service, factory = _service()
     host = AglSessionHost(service)
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
 
     assert (
         host.with_ephemeral(
@@ -421,7 +417,7 @@ def test_agl_host_single_prompt_ephemeral_lifecycle_retires_its_agent_mapping() 
 def test_agl_host_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
     service, factory = _service()
     host = AglSessionHost(service)
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
     handles: list[str] = []
 
     response = host.with_ephemeral(
@@ -441,7 +437,7 @@ def test_agl_host_ephemeral_lifecycle_retires_its_agent_mapping() -> None:
 def test_agl_host_reset_all_retires_all_successfully_closed_mappings() -> None:
     service, _factory = _service()
     host = AglSessionHost(service)
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
     persistent = host.open(agent, "Cli")
     ephemeral = host.open_ephemeral(agent, "Cli")
 
@@ -455,7 +451,7 @@ def test_agl_host_reset_all_retires_all_successfully_closed_mappings() -> None:
 def test_agl_host_reset_all_keeps_only_failed_close_mappings() -> None:
     service, factory = _service()
     host = AglSessionHost(service)
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
     failed = host.open(agent, "Cli")
     closed = host.open(agent, "Cli")
     factory.backends[0].close_error = RuntimeError("busy")
@@ -471,7 +467,7 @@ def test_agl_host_reset_all_keeps_only_failed_close_mappings() -> None:
 def test_close_all_retires_closed_ephemeral_host_mappings() -> None:
     service, factory = _service()
     host = AglSessionHost(service)
-    agent = agent_value("AgentCommand", command="worker")
+    agent = AgentCommand(command="worker")
     handle = host.open_ephemeral(agent, "Cli", single_prompt=True)
 
     host.close_all()
@@ -489,7 +485,7 @@ def test_close_all_retires_closed_ephemeral_host_mappings() -> None:
 def test_close_all_keeps_an_ephemeral_mapping_when_its_close_can_be_retried() -> None:
     service, factory = _service()
     host = AglSessionHost(service)
-    handle = host.open_ephemeral(agent_value("AgentCommand", command="worker"), "Cli")
+    handle = host.open_ephemeral(AgentCommand(command="worker"), "Cli")
     factory.backends[0].close_error = RuntimeError("close failed")
 
     with pytest.raises(ExceptionGroup):

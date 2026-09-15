@@ -10,8 +10,9 @@ from decimal import Decimal
 from typing import Protocol, Self, SupportsIndex, cast, overload
 
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind
+from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
 from agm.agl.runtime.render import render_value
+from agm.agl.semantics.exceptions import exception_message
 from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import (
     UNIT_VALUE,
@@ -80,7 +81,7 @@ class AglException(Exception):
             raise TypeError("AglException requires an AgL exception value") from exc
         if not isinstance(decoded, ExceptionValue):
             raise TypeError("AglException requires an AgL exception value")
-        super().__init__(decoded.display_name)
+        super().__init__(exception_message(decoded))
         self.value = decoded
 
 
@@ -103,6 +104,46 @@ _ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextva
 def active_function_encoder(encoder: "_FunctionEncoder") -> ScopedVar["_FunctionEncoder | None"]:
     """Publish *encoder* as the ambient closure encoder for a call's extent."""
     return ScopedVar(_ACTIVE_FUNCTION_ENCODER, encoder)
+
+
+#: Empty descriptor view used when a nominal view is built outside any active
+#: extern call or companion import -- a companion class synthesized and
+#: constructed directly by a host test or tool rather than driven through
+#: :meth:`ExternRegistry.invoke` or :meth:`ExternRegistry.load_companion`.
+#: Real execution never hits this: a call publishes its program's real
+#: descriptors for its extent, and so does a companion import. A value built
+#: outside either has no nominal recorded in this empty view, so looking up
+#: its nominal to render it raises ``KeyError`` -- matching
+#: :class:`agm.agl.runtime.ExternRuntimeState`'s own detached fallback, which
+#: is likewise for direct companion use outside evaluation.
+_DETACHED_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+
+#: The descriptor view for the extern call currently running on this thread,
+#: published by :meth:`ExternRegistry.invoke` for the call's extent. A freshly
+#: constructed view or record reads this once, at construction time, and
+#: keeps what it read in its own slot -- never this context var again -- so it
+#: renders correctly even after the call that built it returns.
+_ACTIVE_DESCRIPTORS: contextvars.ContextVar["ValueDescriptors | None"] = contextvars.ContextVar(
+    "agl_active_descriptors", default=None
+)
+
+
+def active_descriptors(descriptors: ValueDescriptors) -> ScopedVar["ValueDescriptors | None"]:
+    """Publish *descriptors* as the ambient descriptor view for a call's extent."""
+    return ScopedVar(_ACTIVE_DESCRIPTORS, descriptors)
+
+
+def current_descriptors() -> ValueDescriptors:
+    """Return the active call's descriptor view, or the empty detached one.
+
+    Consulted only at construction time -- by :class:`_AglRecordView`'s own
+    constructor and by the ``agl.array``/``agl.dict`` companion factories in
+    :mod:`agm.agl.runtime.externs` -- for a value a companion builds itself
+    rather than one crossing through :func:`encode_boundary_value`, which
+    already carries an explicit ``descriptors`` argument.
+    """
+    descriptors = _ACTIVE_DESCRIPTORS.get()
+    return descriptors if descriptors is not None else _DETACHED_DESCRIPTORS
 
 
 def _require_exact_fields(
@@ -131,11 +172,11 @@ def _nominal_value(
 ) -> RecordValue | ExceptionValue:
     """Build the AgL value one synthesized nominal instance stands for."""
     if descriptor.kind is NominalKind.RECORD:
-        return RecordValue(descriptor.nominal, descriptor.display_name, fields)
+        return RecordValue(descriptor.nominal, fields)
     # A descriptor reaches here only from :func:`_create_nominal`, which builds
     # a class for a record or an exception declaration; an enum class is a pure
     # namespace carrying no descriptor of its own.
-    return ExceptionValue(descriptor.nominal, descriptor.display_name, fields)
+    return ExceptionValue(descriptor.nominal, fields)
 
 
 class _AglNominalShape(Protocol):
@@ -151,7 +192,10 @@ class _AglNominalShape(Protocol):
 
     @classmethod
     def _agl_encode(
-        cls, value: RecordValue | ExceptionValue, memo: dict[int, object]
+        cls,
+        value: RecordValue | ExceptionValue,
+        descriptors: ValueDescriptors,
+        memo: dict[int, object],
     ) -> object: ...
 
     def _agl_decode(self, memo: dict[int, Value]) -> Value: ...
@@ -202,14 +246,22 @@ class _AglNominal:
         return f"{type(self).__name__}(...)"
 
     @classmethod
-    def _agl_encode(cls, value: RecordValue | ExceptionValue, memo: dict[int, object]) -> Self:
+    def _agl_encode(
+        cls,
+        value: RecordValue | ExceptionValue,
+        descriptors: ValueDescriptors,
+        memo: dict[int, object],
+    ) -> Self:
         """Snapshot *value*: encode every field once, up front."""
         encoded = object.__new__(cls)
         fields: dict[str, object] = {}
         object.__setattr__(encoded, "_agl_values", fields)
         memo[id(value)] = encoded
         fields.update(
-            {name: _encode_boundary_value(field, memo) for name, field in value.fields.items()}
+            {
+                name: _encode_boundary_value(field, descriptors, memo)
+                for name, field in value.fields.items()
+            }
         )
         return encoded
 
@@ -241,8 +293,9 @@ class _AglRecordView:
     cannot.
     """
 
-    __slots__ = ("_agl_value",)
+    __slots__ = ("_agl_value", "_agl_descriptors")
     _agl_value: RecordValue
+    _agl_descriptors: ValueDescriptors
     _agl_nominal: NominalId
     _agl_kind: NominalKind
     _agl_fields: tuple[str, ...]
@@ -252,6 +305,7 @@ class _AglRecordView:
     def __init__(self, **fields: object) -> None:
         expected = type(self)._agl_fields
         _require_exact_fields(type(self), fields)
+        object.__setattr__(self, "_agl_descriptors", current_descriptors())
         object.__setattr__(
             self,
             "_agl_value",
@@ -262,10 +316,16 @@ class _AglRecordView:
         )
 
     @classmethod
-    def _agl_encode(cls, value: RecordValue | ExceptionValue, memo: dict[int, object]) -> Self:
+    def _agl_encode(
+        cls,
+        value: RecordValue | ExceptionValue,
+        descriptors: ValueDescriptors,
+        memo: dict[int, object],
+    ) -> Self:
         """Open a window onto *value*: nothing is copied and no field is read."""
         view = object.__new__(cls)
         object.__setattr__(view, "_agl_value", value)
+        object.__setattr__(view, "_agl_descriptors", descriptors)
         return view
 
     def _agl_decode(self, memo: dict[int, Value]) -> Value:
@@ -277,7 +337,7 @@ class _AglRecordView:
             field = self._agl_value.fields[name]
         except KeyError:
             raise AttributeError(name) from None
-        return encode_boundary_value(field)
+        return encode_boundary_value(field, self._agl_descriptors)
 
     def __setattr__(self, name: str, value: object) -> None:
         cls = type(self)
@@ -297,7 +357,7 @@ class _AglRecordView:
         return self._agl_value == other._agl_value
 
     def __repr__(self) -> str:
-        return render_value(self._agl_value)
+        return render_value(self._agl_value, self._agl_descriptors)
 
 
 class _AglEnum:
@@ -454,10 +514,11 @@ def synthesize_nominal_classes(
 class AglArrayView(MutableSequence[object]):
     """A mutable, lazy Python view over one AgL array value."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_value", "_descriptors")
 
-    def __init__(self, value: ArrayValue) -> None:
+    def __init__(self, value: ArrayValue, descriptors: ValueDescriptors) -> None:
         self._value = value
+        self._descriptors = descriptors
 
     def __len__(self) -> int:
         return len(self._value.elements)
@@ -473,8 +534,11 @@ class AglArrayView(MutableSequence[object]):
     ) -> object | list[object]:
         if not isinstance(index, SupportsIndex):
             slice_index = index
-            return [encode_boundary_value(value) for value in self._value.elements[slice_index]]
-        return encode_boundary_value(self._value.elements[operator.index(index)])
+            return [
+                encode_boundary_value(value, self._descriptors)
+                for value in self._value.elements[slice_index]
+            ]
+        return encode_boundary_value(self._value.elements[operator.index(index)], self._descriptors)
 
     @overload
     def __setitem__(self, index: SupportsIndex, value: object) -> None: ...
@@ -534,9 +598,9 @@ class AglArrayView(MutableSequence[object]):
             (
                 cast(
                     "_SortKey",
-                    encode_boundary_value(value)
+                    encode_boundary_value(value, self._descriptors)
                     if key is None
-                    else key(encode_boundary_value(value)),
+                    else key(encode_boundary_value(value, self._descriptors)),
                 ),
                 index,
             )
@@ -547,7 +611,7 @@ class AglArrayView(MutableSequence[object]):
 
     def __iter__(self) -> Iterator[object]:
         for value in self._value.elements:
-            yield encode_boundary_value(value)
+            yield encode_boundary_value(value, self._descriptors)
 
     def __contains__(self, value: object) -> bool:
         try:
@@ -590,19 +654,20 @@ class AglArrayView(MutableSequence[object]):
         return id(self._value)
 
     def __repr__(self) -> str:
-        return render_value(self._value)
+        return render_value(self._value, self._descriptors)
 
 
 class AglDictView(MutableMapping[str, object]):
     """A mutable, lazy Python view over one AgL dict value."""
 
-    __slots__ = ("_value",)
+    __slots__ = ("_value", "_descriptors")
 
-    def __init__(self, value: DictValue) -> None:
+    def __init__(self, value: DictValue, descriptors: ValueDescriptors) -> None:
         self._value = value
+        self._descriptors = descriptors
 
     def __getitem__(self, key: str) -> object:
-        return encode_boundary_value(self._value.entries[key])
+        return encode_boundary_value(self._value.entries[key], self._descriptors)
 
     def __setitem__(self, key: str, value: object) -> None:
         if not isinstance(key, str):
@@ -623,7 +688,7 @@ class AglDictView(MutableMapping[str, object]):
 
     def popitem(self) -> tuple[str, object]:
         key, value = self._value.entries.popitem()
-        return key, encode_boundary_value(value)
+        return key, encode_boundary_value(value, self._descriptors)
 
     def __contains__(self, key: object) -> bool:
         return key in self._value.entries
@@ -635,13 +700,25 @@ class AglDictView(MutableMapping[str, object]):
         return id(self._value)
 
     def __repr__(self) -> str:
-        return render_value(self._value)
+        return render_value(self._value, self._descriptors)
 
 
-def encode_boundary_value(value: Value) -> object:
+def _unknown_nominal_message(nominal: NominalId, descriptors: ValueDescriptors) -> str:
+    """Report an unregistered nominal identity without printing its raw id."""
+    known = descriptors.nominals.get(nominal)
+    if known is not None:
+        return f"unknown AgL nominal {known.display_name!r}"
+    return "unknown AgL nominal: no companion class was synthesized for this identity"
+
+
+def encode_boundary_value(value: Value, descriptors: ValueDescriptors) -> object:
     """Encode an AgL value by its runtime subclass.
 
-    An ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
+    *descriptors* resolves nominal/function spellings for anything this
+    crossing renders (an unknown-nominal message, a view's own ``repr``) and
+    is stored on any array/dict/mutable-record view this mints, so the view
+    keeps rendering correctly after the call that built it returns. An
+    ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
     value). A closure needs an interpreter to become a callable proxy, which
     the active extern call supplies through :func:`active_function_encoder`;
     the runtime boundary itself remains evaluator-independent. A closure
@@ -652,10 +729,12 @@ def encode_boundary_value(value: Value) -> object:
     and unchecked: the companion is trusted to treat what it receives as
     read-only.
     """
-    return _encode_boundary_value(value, {})
+    return _encode_boundary_value(value, descriptors, {})
 
 
-def _encode_boundary_value(value: Value, memo: dict[int, object]) -> object:
+def _encode_boundary_value(
+    value: Value, descriptors: ValueDescriptors, memo: dict[int, object]
+) -> object:
     """Encode *value*, retaining shared nominal nodes within one crossing."""
     if isinstance(value, UnitValue):
         return None
@@ -670,9 +749,9 @@ def _encode_boundary_value(value: Value, memo: dict[int, object]) -> object:
     if isinstance(value, JsonValue):
         return AglJson(value.raw)
     if isinstance(value, ArrayValue):
-        return AglArrayView(value)
+        return AglArrayView(value, descriptors)
     if isinstance(value, DictValue):
-        return AglDictView(value)
+        return AglDictView(value, descriptors)
     if isinstance(value, IrClosureValue):
         encoder = _ACTIVE_FUNCTION_ENCODER.get()
         if encoder is None:
@@ -688,8 +767,8 @@ def _encode_boundary_value(value: Value, memo: dict[int, object]) -> object:
         try:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
-            raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
-        encoded = cast("type[_AglNominalShape]", cls)._agl_encode(value, memo)
+            raise BoundaryViolation(_unknown_nominal_message(value.nominal, descriptors)) from exc
+        encoded = cast("type[_AglNominalShape]", cls)._agl_encode(value, descriptors, memo)
         memo[id(value)] = encoded
         return encoded
     raise BoundaryViolation(f"cannot encode {type(value).__name__}")

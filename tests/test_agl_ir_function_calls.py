@@ -31,6 +31,7 @@ from tests.agl.ir_harness import (
     evaluate_ir,
     lower_inline_ir,
     make_repl_graph_from_files,
+    nominal_id_for,
     resolve_repl_graph,
 )
 
@@ -181,7 +182,7 @@ def test_call_depth_guard_ir_only() -> None:
     with pytest.raises(AglRaise) as exc_info:
         interp.run(program_symbol=executable.synthetic_main_symbol)
     exc = exc_info.value.exc
-    assert exc.display_name == "RecursionError"
+    assert exc.nominal == nominal_id_for(executable, "RecursionError")
     assert exc.fields["message"] == TextValue("Maximum call depth (10) exceeded")
     assert exc.fields["limit"] == IntValue(10)
 
@@ -647,7 +648,7 @@ def test_program_entry_raising_default_propagates_like_a_body_raise() -> None:
     with pytest.raises(AglRaise) as body_exc_info:
         IrInterpreter(body_executable).run(program_symbol=body_symbol, arguments=())
 
-    assert default_exc_info.value.exc.display_name == "Abort"
+    assert default_exc_info.value.exc.nominal == nominal_id_for(default_executable, "Abort")
     assert default_exc_info.value.span is not None
     assert body_exc_info.value.span is not None
     assert type(default_exc_info.value.span) is type(body_exc_info.value.span)
@@ -669,7 +670,7 @@ def test_program_entry_depth_limit_error_carries_entry_span() -> None:
     (main_symbol,) = executable.program_functions
     with pytest.raises(AglRaise) as exc_info:
         IrInterpreter(executable, max_call_depth=0).run(program_symbol=main_symbol, arguments=())
-    assert exc_info.value.exc.display_name == "RecursionError"
+    assert exc_info.value.exc.nominal == nominal_id_for(executable, "RecursionError")
     assert exc_info.value.span is not None
 
 
@@ -701,7 +702,7 @@ def test_recursion_depth_limit() -> None:
 
     ir_exc = evaluate_ir_raises(source)
     # IR pipeline must raise RecursionError
-    assert ir_exc.display_name == "RecursionError"
+    assert ir_exc.nominal == nominal_id_for(lower_inline_ir(source), "RecursionError")
     # The limit field must match DEFAULT_MAX_CALL_DEPTH = 256
     assert ir_exc.fields["limit"] == IntValue(256)
 

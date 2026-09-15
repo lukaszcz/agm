@@ -9,6 +9,8 @@ import pytest
 from agm.agl.eval.arith import contains, div, order, value_eq
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import CmpOp, ContainsKind
+from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.contract import materialize_contract
 from agm.agl.runtime.engine_config import convert_host_value
 from agm.agl.runtime.render import render_value
@@ -52,11 +54,8 @@ def test_runtime_value_notimplemented_and_unhashable_edges() -> None:
     values = [
         ArrayValue([IntValue(1)]),
         DictValue({"x": IntValue(1)}),
-        RecordValue(nominal, "Thing", {"x": IntValue(1)}),
-        RecordValue(
-            nominal=nominal, display_name=f"{'Thing'}::{'Case'}", fields={"x": IntValue(1)}
-        ),
-        ExceptionValue(nominal, "Thing", {"x": IntValue(1)}),
+        RecordValue(nominal, {"x": IntValue(1)}),
+        ExceptionValue(nominal, {"x": IntValue(1)}),
     ]
     for value in values:
         assert value.__eq__(object()) is NotImplemented
@@ -73,10 +72,30 @@ def test_json_value_helper_edges() -> None:
 
 def test_constructor_render_and_serialization_edges() -> None:
     nominal = NominalId(1)
-    record = ConstructorValue(nominal, "Thing")
-    variant = ConstructorValue(nominal, "Thing::Case")
-    assert render_value(record) == "<constructor Thing>"
-    assert render_value(variant) == "<constructor Thing::Case>"
+    variant_nominal = NominalId(2)
+    record = ConstructorValue(nominal)
+    variant = ConstructorValue(variant_nominal)
+    descriptors = ValueDescriptors(
+        nominals={
+            nominal: NominalDescriptor(
+                nominal=nominal,
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Thing",
+                kind=NominalKind.RECORD,
+            ),
+            variant_nominal: NominalDescriptor(
+                nominal=variant_nominal,
+                module_id=ENTRY_ID,
+                scope_path=("Thing",),
+                declared_name="Case",
+                kind=NominalKind.RECORD,
+            ),
+        },
+        functions={},
+    )
+    assert render_value(record, descriptors) == "<constructor Thing>"
+    assert render_value(variant, descriptors) == "<constructor Thing::Case>"
     with pytest.raises(AglNonDataValue, match="constructor"):
         value_to_json_obj(record)
     with pytest.raises(AglNonDataValue, match="iterator"):

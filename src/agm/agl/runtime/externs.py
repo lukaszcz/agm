@@ -18,7 +18,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from types import CodeType, ModuleType
@@ -26,9 +26,9 @@ from typing import Protocol, cast
 
 from agm.agl.artifact_storage import artifact_entry, read_payload, write_payload
 from agm.agl.diagnostics import AglError
-from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
-from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor
+from agm.agl.ir.builtin_nominals import BuiltinNominals
+from agm.agl.ir.ids import FunctionId, NominalId
+from agm.agl.ir.program import FunctionDescriptor, NominalDescriptor, ValueDescriptors
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import (
     AglArrayView,
@@ -37,7 +37,9 @@ from agm.agl.runtime.boundary import (
     AglJson,
     BoundaryTypeError,
     BoundaryViolation,
+    active_descriptors,
     active_function_encoder,
+    current_descriptors,
     decode_boundary_value,
     encode_boundary_value,
     synthesize_nominal_classes,
@@ -281,7 +283,7 @@ class AglCallableProxy:
         except BoundaryViolation as exc:
             raise BoundaryTypeError(str(exc)) from exc
         try:
-            return encode_boundary_value(self._invoke(values))
+            return encode_boundary_value(self._invoke(values), current_descriptors())
         except AglRaise as exc:
             raise AglException(exc.exc) from exc
 
@@ -324,8 +326,14 @@ class ExternRegistry:
         self._resolved: dict[tuple[ModuleId, str], ExternCallable] = {}
         self._nominal_classes: dict[NominalId, type[object]] = {}
         self._nominal_by_id: dict[NominalId, NominalDescriptor] = {}
+        self._function_by_id: dict[FunctionId, FunctionDescriptor] = {}
 
-    def set_nominals(self, descriptors: dict[NominalId, NominalDescriptor]) -> None:
+    def set_nominals(
+        self,
+        descriptors: dict[NominalId, NominalDescriptor],
+        *,
+        functions: Mapping[FunctionId, FunctionDescriptor] | None = None,
+    ) -> None:
         """Materialize this program's companion-visible nominal classes, insert-only.
 
         A nominal identity's layout is fixed at its declaration, so a class
@@ -341,6 +349,13 @@ class ExternRegistry:
         flip from one call to the next as a later declaration supersedes it;
         :meth:`_agl_module` consults that snapshot to decide which identity a
         companion's bare/dotted nominal lookup resolves to at import time.
+
+        *functions* accumulates alongside *descriptors* into the same program
+        descriptor view :meth:`_program_descriptors` publishes for a companion
+        import (see :meth:`load_companion`), so a view a companion builds at
+        import time renders correctly. Omitted by direct-registry callers that
+        never need that view -- companion import without it still succeeds,
+        just with no nominal/function spellings recorded yet.
         """
         if self_validation_enabled():
             for nominal, descriptor in descriptors.items():
@@ -358,6 +373,19 @@ class ExternRegistry:
             )
             self._nominal_classes.update(classes)
         self._nominal_by_id.update(descriptors)
+        if functions is not None:
+            self._function_by_id.update(functions)
+
+    def _program_descriptors(self) -> ValueDescriptors:
+        """The program descriptor view accumulated by :meth:`set_nominals`.
+
+        Published for a companion import's extent by :meth:`load_companion`,
+        mirroring how :meth:`invoke` publishes the same kind of view for a
+        call's extent -- so a view a companion builds at either site keeps a
+        real, non-empty descriptor slot rather than the detached one in
+        :mod:`agm.agl.runtime.boundary`.
+        """
+        return ValueDescriptors(nominals=self._nominal_by_id, functions=self._function_by_id)
 
     def _agl_module(self) -> ModuleType:
         """Build the temporary ``agl`` module exposed while importing a companion.
@@ -415,6 +443,12 @@ class ExternRegistry:
         object, and :meth:`_bind_module` drops the callables resolved from the
         old one; a value already handed out keeps denoting the version it was
         taken from, as a superseded declaration does.
+
+        Runs the companion's top-level code under :meth:`_program_descriptors`,
+        so a view or record it builds at module level -- e.g. ``agl.array``
+        over synthesized nominal instances -- renders correctly by ``repr``
+        after the import returns, the same guarantee an extern call gets from
+        :meth:`invoke`.
         """
         canonical = companion_path.resolve()
         try:
@@ -448,7 +482,8 @@ class ExternRegistry:
         previous_agl = sys.modules.get("agl")
         sys.modules["agl"] = self._agl_module()
         try:
-            spec.loader.exec_module(module)
+            with active_descriptors(self._program_descriptors()):
+                spec.loader.exec_module(module)
         except Exception as exc:
             raise self._import_error(module_id, canonical, exc) from exc
         finally:
@@ -514,7 +549,8 @@ class ExternRegistry:
         fn: ExternCallable,
         args: Sequence[Value],
         *,
-        nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
+        nominals: BuiltinNominals,
+        descriptors: ValueDescriptors,
         function_encoder: Callable[[IrClosureValue], object] | None = None,
         runtime_state: ExternRuntimeState | None = None,
     ) -> Value:
@@ -532,9 +568,17 @@ class ExternRegistry:
         call, except for reads of a function-valued field or element, which
         need the encoder this call publishes.
 
-        *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
-        it defaults to the shipped standard library's own identities for a
-        caller (e.g. a direct unit test) that invokes without a program.
+        *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal.
+        *descriptors* resolves the nominal/function spellings this call's
+        arguments render with -- an unknown-nominal message, or a view's own
+        ``repr`` -- and is published for the call's extent so a companion's
+        own ``agl.array``/``agl.dict``/nominal construction picks it up too;
+        every view or record view this call mints keeps it in its own slot,
+        so it keeps rendering correctly after the call returns. Both are
+        required: a caller that invokes without a real program (e.g. a direct
+        unit test) passes the shipped standard library's own identities and
+        an empty descriptor view explicitly, rather than a default silently
+        standing in for the wrong program.
         *runtime_state* is the evaluator-owned companion state activated for
         this call; absent direct callers use detached host state instead.
         *function_encoder* turns an AgL closure into a callable proxy and is
@@ -545,9 +589,9 @@ class ExternRegistry:
         context: a thread the companion spawns sees it only if it runs in a
         copy of that context.
         """
-        with active_function_encoder(function_encoder):
+        with active_function_encoder(function_encoder), active_descriptors(descriptors):
             try:
-                encoded_args = [encode_boundary_value(arg) for arg in args]
+                encoded_args = [encode_boundary_value(arg, descriptors) for arg in args]
             except BoundaryViolation as exc:
                 raise _extern_error(
                     function_name,
@@ -656,15 +700,26 @@ def _extern_error(
 
 
 def _array(values: Sequence[object]) -> AglArrayView:
-    """Construct the companion representation of a new AgL array."""
-    return AglArrayView(ArrayValue([decode_boundary_value(value) for value in values]))
+    """Construct the companion representation of a new AgL array.
+
+    Bound as ``agl.array`` for the duration of a companion import (see
+    ``ExternRegistry._agl_module``); a companion calls this with no
+    descriptors of its own, so the new view's slot takes the active extern
+    call's descriptors (or the empty detached view outside any call).
+    """
+    return AglArrayView(
+        ArrayValue([decode_boundary_value(value) for value in values]), current_descriptors()
+    )
 
 
 def _dict(values: dict[str, object]) -> AglDictView:
-    """Construct the companion representation of a new AgL dict."""
+    """Construct the companion representation of a new AgL dict.
+
+    Bound as ``agl.dict``; see :func:`_array` for where its descriptors come from.
+    """
     entries: dict[str, Value] = {}
     for key, value in values.items():
         if not isinstance(key, str):
             raise TypeError("AgL dict keys must be str")
         entries[key] = decode_boundary_value(value)
-    return AglDictView(DictValue(entries))
+    return AglDictView(DictValue(entries), current_descriptors())

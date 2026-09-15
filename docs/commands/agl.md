@@ -575,7 +575,8 @@ In both front ends:
   reads the terminal background from `$COLORFGBG` (set by most terminals; falls back to dark).
   `:theme dark|light|auto` switches and saves to `[repl] theme` in `~/.agm/config.toml`, which
   can also be set directly. In the plain front end `:theme` works and persists but has no
-  visible effect.
+  visible effect. `:set echo` and `:set echo-unit` (see [Meta-commands](#meta-commands)) persist
+  the same way, to `[repl] echo` and `[repl] echo-unit`.
 - History persists in `~/.agm/repl_history`.
 
 ### Meta-commands
@@ -590,6 +591,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
 | `:set echo on\|off` | Toggle result echoing |
+| `:set echo-unit on\|off` | Toggle echoing `unit`-typed entries too (off by default) |
 | `:load FILE` | Load a saved transcript by its original entries, or an ordinary `.agl` file one item per entry |
 | `:save FILE` | Write the accumulated session source and entry boundaries to a transcript |
 | `:theme [dark\|light\|auto]` | Show or switch the syntax-highlighting theme; saves to `~/.agm/config.toml` |
@@ -598,7 +600,8 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 
 - `--strict-json` / `--no-strict-json`, `--max-call-depth N`,
   `--default-agent AGENT`: As for `agm exec`.
-- `--quiet`: Do not echo entry results.
+- `--quiet`: Do not echo entry results, for this session only (does not persist and overrides a
+  saved `echo = true`).
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library
   modules); explicit imports still work. `:reset` keeps this choice.
 - `--log` / `--log-file PATH` / `--no-log`: As for `agm exec`; with `--log-file`, each evaluated
@@ -612,6 +615,10 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 ### Evaluation notes
 
 - Blank and comment-only entries (`#` starts a comment) are no-ops: a fresh prompt, no error.
+- **Expression and binding entries** echo `: Type = value` or `name : Type = value`, except that
+  by default an entry whose type is `unit` echoes nothing — this covers both an explicit `()`
+  result and a statement-like expression (`print`, `:=`, an else-less `if`, a loop, a discarded
+  binding), so every `unit`-typed entry is silent uniformly. `:set echo-unit on` echoes them too.
 - **Declaration entries** echo `NAME declared`, with the full path for a scoped declaration
   (`Tools::twice declared`) or `scope … end` region (`Tools declared`). `import`, `use`,
   `export`, and fixity declarations echo nothing.

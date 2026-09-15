@@ -1012,7 +1012,6 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
             checked,
             RecordValue(
                 nominal=nominal,
-                display_name=f"{'Choice'}::{'present'}",
                 fields={"value": DecimalValue(decimal.Decimal("1.0")), "note": TextValue("x")},
             ),
         )
@@ -1024,7 +1023,6 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
             checked,
             RecordValue(
                 nominal=nominal,
-                display_name=f"{'Choice'}::{'present'}",
                 fields={"value": DecimalValue(decimal.Decimal("2")), "note": TextValue("x")},
             ),
         )
@@ -1038,7 +1036,6 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
                 nominal=NominalId(
                     checked.type_env.type_table.enum_member_names(enum_type)["absent"].decl_id
                 ),
-                display_name="Choice::absent",
                 fields={},
             ),
         )

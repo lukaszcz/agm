@@ -433,7 +433,7 @@ otherwise a plain, non-`::`-anchored name chain) declares a scoped binding
 instead of matching a pattern — see [Bindings and scope](bindings-and-scope.md)
 for the full disambiguation.
 
-Assignment has type `unit` and returns `void`. `assign_target`'s qualifier
+Assignment has type `unit` and returns `()`. `assign_target`'s qualifier
 accepts any number of segments: a local scope path (`A::B::count`) reaches a
 scoped `var` exactly as a qualified read does, while a bare (non-indexed)
 cross-module target — written with a qualifier, or bare when an import tail or
@@ -498,7 +498,7 @@ ways to write a multi-item body inline. An inline `:=` has the form
 `assign_target := expr` form.
 
 Without an `else` branch the `if` expression has type `unit` and returns
-`void`. With all branches returning a common type `T`, the `if` expression has
+`()`. With all branches returning a common type `T`, the `if` expression has
 type `T`.
 
 ## `case`

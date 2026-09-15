@@ -1,0 +1,89 @@
+{
+  "scenarios": [
+    {
+      "name": "agent_response_int_decimal_json_fields_exact",
+      "params": {"mode": "agent_output"},
+      "agents": {
+        "nums_source": [
+          "{\"n\": 2.0, \"d\": 1.0, \"j\": [1.0, -0.0], \"xs\": [1.0, 2E0], \"m\": {\"a\": 3.00}, \"opt\": {\"$case\": \"Some\", \"value\": 4.0}}"
+        ]
+      },
+      "expect": {
+        "stdout": "2\n1\n[1.0, -0.0]\n[1, 2]\n{\"a\": 3}\nOption::Some(value = 4)\n",
+        "calls": {
+          "nums_source": 1
+        }
+      }
+    },
+    {
+      "name": "agent_response_nested_narrowing_with_option_none",
+      "params": {"mode": "agent_output"},
+      "agents": {
+        "nums_source": [
+          "{\"n\": 3, \"d\": 2, \"j\": 5, \"xs\": [4.0, -5E0], \"m\": {\"b\": 6.00, \"c\": 7}, \"opt\": {\"$case\": \"None\"}}"
+        ]
+      },
+      "expect": {
+        "stdout": "3\n2\n5\n[4, -5]\n{\"b\": 6, \"c\": 7}\nOption::None\n",
+        "calls": {
+          "nums_source": 1
+        }
+      }
+    },
+    {
+      "name": "agent_response_non_integral_int_field_fails",
+      "params": {"mode": "agent_output"},
+      "agents": {
+        "nums_source": [
+          "{\"n\": 2.5, \"d\": 1.0, \"j\": 1.0, \"xs\": [1], \"m\": {}, \"opt\": {\"$case\": \"None\"}}"
+        ]
+      },
+      "expect": {
+        "calls": {
+          "nums_source": 1
+        },
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "nums_source"
+            },
+            "attempts": 1,
+            "target-type": "Nums"
+          }
+        }
+      }
+    },
+    {
+      "name": "agent_response_non_integral_decimal_in_array_element_fails",
+      "params": {"mode": "agent_output"},
+      "agents": {
+        "nums_source": [
+          "{\"n\": 1, \"d\": 1.0, \"j\": 1.0, \"xs\": [1.5], \"m\": {}, \"opt\": {\"$case\": \"None\"}}"
+        ]
+      },
+      "expect": {
+        "calls": {
+          "nums_source": 1
+        },
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "nums_source"
+            },
+            "attempts": 1,
+            "target-type": "Nums"
+          }
+        }
+      }
+    },
+    {
+      "name": "json_and_decimal_params_keep_exact_value",
+      "params": {"mode": "params", "ratio": "1.0", "meta": "1.0"},
+      "expect": {"stdout": "1\n1.0\n1.0\n"}
+    }
+  ]
+}

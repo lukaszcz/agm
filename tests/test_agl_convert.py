@@ -4,8 +4,9 @@ Covers:
 1. parse_json_strict: valid scalars/objects/arrays with Decimal floats.
 2. parse_json_strict: rejects trailing junk, NaN/Infinity (including nested),
    empty, malformed.
-3. normalize_integral_decimals: integral Decimal→int; non-integral preserved;
-   nested containers; bool not confused with int.
+3. validator_for_schema: the AgL Draft 2020-12 validator accepts an integral
+   Decimal as ``integer`` (including through ``$ref``/``$defs``), rejects a
+   non-integral Decimal and bool, and caches by schema string.
 4. _clean_validation_message: Decimal repr is stripped from jsonschema messages.
 5. decode_value / _decode_scalar: all ScalarKind branches, array/dict/record/enum
    happy-path and every ValueError branch for 100% coverage.
@@ -13,6 +14,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import sys
 from decimal import Decimal
 
@@ -36,8 +38,8 @@ from agm.agl.runtime.convert import (
     _clean_validation_message,
     _decode_scalar,
     decode_value,
-    normalize_integral_decimals,
     parse_json_strict,
+    validator_for_schema,
 )
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -113,7 +115,8 @@ class TestParseJsonStrict:
         assert parse_json_strict("  42  ") == 42
 
     def test_parses_integral_float_as_decimal(self) -> None:
-        # 1.0 is parsed as Decimal("1.0"), not int — normalization is separate
+        # 1.0 is parsed as Decimal("1.0"), not int — the validator, not the
+        # parser, is what accepts it against an integer schema.
         result = parse_json_strict("1.0")
         assert isinstance(result, Decimal)
         assert result == Decimal("1.0")
@@ -205,53 +208,45 @@ class TestParseJsonStrictNested:
 
 
 # ---------------------------------------------------------------------------
-# 3. normalize_integral_decimals
+# 3. validator_for_schema — the AgL Decimal-aware "integer" type check
 # ---------------------------------------------------------------------------
 
 
-class TestNormalizeIntegralDecimals:
-    def test_integral_decimal_becomes_int(self) -> None:
-        assert normalize_integral_decimals(Decimal("1.0")) == 1
-        assert isinstance(normalize_integral_decimals(Decimal("1.0")), int)
+class TestAglValidator:
+    def test_integral_decimal_accepted_as_integer(self) -> None:
+        validator = validator_for_schema('{"type": "integer"}')
+        assert list(validator.iter_errors(Decimal("1.0"))) == []
 
-    def test_non_integral_decimal_preserved(self) -> None:
-        result = normalize_integral_decimals(Decimal("1.5"))
-        assert result == Decimal("1.5")
-        assert isinstance(result, Decimal)
+    def test_negative_zero_decimal_accepted_as_integer(self) -> None:
+        validator = validator_for_schema('{"type": "integer"}')
+        assert list(validator.iter_errors(Decimal("-0.0"))) == []
 
-    def test_int_unchanged(self) -> None:
-        assert normalize_integral_decimals(42) == 42
-        assert isinstance(normalize_integral_decimals(42), int)
+    def test_non_integral_decimal_rejected_as_integer(self) -> None:
+        validator = validator_for_schema('{"type": "integer"}')
+        assert len(list(validator.iter_errors(Decimal("1.5")))) == 1
 
-    def test_str_unchanged(self) -> None:
-        assert normalize_integral_decimals("hello") == "hello"
+    def test_int_still_accepted_as_integer(self) -> None:
+        validator = validator_for_schema('{"type": "integer"}')
+        assert list(validator.iter_errors(1)) == []
 
-    def test_none_unchanged(self) -> None:
-        assert normalize_integral_decimals(None) is None
+    def test_bool_rejected_as_integer(self) -> None:
+        validator = validator_for_schema('{"type": "integer"}')
+        assert len(list(validator.iter_errors(True))) == 1
 
-    def test_bool_not_treated_as_int(self) -> None:
-        # bool is a subclass of int; must not be normalized as Decimal
-        result = normalize_integral_decimals(True)
-        assert result is True
-        assert isinstance(result, bool)
+    def test_integral_decimal_accepted_through_ref(self) -> None:
+        schema = json.dumps({"$ref": "#/$defs/Num", "$defs": {"Num": {"type": "integer"}}})
+        validator = validator_for_schema(schema)
+        assert list(validator.iter_errors(Decimal("2.0"))) == []
 
-    def test_nested_list(self) -> None:
-        result = normalize_integral_decimals([Decimal("2.0"), Decimal("3.5")])
-        assert result == [2, Decimal("3.5")]
-        assert isinstance(result, list)
-        items = result
-        assert isinstance(items, list)
-        assert isinstance(items[0], int)
-        assert isinstance(items[1], Decimal)
+    def test_non_integral_decimal_rejected_through_ref(self) -> None:
+        schema = json.dumps({"$ref": "#/$defs/Num", "$defs": {"Num": {"type": "integer"}}})
+        validator = validator_for_schema(schema)
+        assert len(list(validator.iter_errors(Decimal("2.5")))) == 1
 
-    def test_nested_dict(self) -> None:
-        result = normalize_integral_decimals({"a": Decimal("4.0"), "b": Decimal("1.1")})
-        assert isinstance(result, dict)
-        d = result
-        assert isinstance(d, dict)
-        assert d["a"] == 4
-        assert isinstance(d["a"], int)
-        assert d["b"] == Decimal("1.1")
+    def test_caches_by_schema_string(self) -> None:
+        assert validator_for_schema('{"type": "integer"}') is validator_for_schema(
+            '{"type": "integer"}'
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +336,6 @@ class TestDecodeValueHappy:
         result = decode_value(schema, {"x": 1, "y": 2})
         assert result == RecordValue(
             nominal=nominal,
-            display_name="Point",
             fields={"x": IntValue(1), "y": IntValue(2)},
         )
 
@@ -372,7 +366,7 @@ class TestDecodeValueHappy:
             host_agent=False,
         )
         result = decode_value(schema, {"$case": "Red"})
-        assert result == RecordValue(nominal=NominalId(2), display_name="Color::Red", fields={})
+        assert result == RecordValue(nominal=NominalId(2), fields={})
 
     def test_enum_with_payload(self) -> None:
         nominal = NominalId(1)
@@ -409,9 +403,7 @@ class TestDecodeValueHappy:
             host_agent=False,
         )
         result = decode_value(schema, {"$case": "Err", "code": 42})
-        assert result == RecordValue(
-            nominal=NominalId(3), display_name="Result::Err", fields={"code": IntValue(42)}
-        )
+        assert result == RecordValue(nominal=NominalId(3), fields={"code": IntValue(42)})
 
     def test_record_reads_renamed_json_key_builds_declared_field(self) -> None:
         """A field's ``json_name`` is read from JSON; the built record keeps the declared name."""
@@ -432,9 +424,7 @@ class TestDecodeValueHappy:
             alias=None,
         )
         result = decode_value(schema, {"x-coord": 1})
-        assert result == RecordValue(
-            nominal=nominal, display_name="Point", fields={"x": IntValue(1)}
-        )
+        assert result == RecordValue(nominal=nominal, fields={"x": IntValue(1)})
 
     def test_enum_matches_case_against_renamed_json_tag(self) -> None:
         """``$case`` is matched against ``VariantDecode.json_name``, not the declared name."""
@@ -456,7 +446,7 @@ class TestDecodeValueHappy:
             host_agent=False,
         )
         result = decode_value(schema, {"$case": "RED"})
-        assert result == RecordValue(nominal=NominalId(2), display_name="Color::Red", fields={})
+        assert result == RecordValue(nominal=NominalId(2), fields={})
 
 
 # ---------------------------------------------------------------------------
@@ -711,18 +701,17 @@ class TestDecodeValueRefDecode:
         result = decode_value(schema, payload, defs)
         assert isinstance(result, RecordValue)
         assert result.nominal == NominalId(3)
-        assert result.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
         assert result.fields["value"] == IntValue(4)
         # Walk down the "right" spine to confirm every level decoded.
         node = result
         for expected in range(4, -1, -1):
             assert isinstance(node, RecordValue)
-            assert node.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
+            assert node.nominal == NominalId(3)
             assert node.fields["value"] == IntValue(expected)
             next_node = node.fields["right"]
             assert isinstance(next_node, RecordValue)
             node = next_node
-        assert node.display_name.rsplit("::", maxsplit=1)[-1] == "Leaf"
+        assert node.nominal == NominalId(2)
 
     def test_ref_nested_inside_array_and_record(self) -> None:
         """A RefDecode reachable through ArrayDecode/RecordDecode fields resolves the same way."""
@@ -757,14 +746,8 @@ class TestDecodeValueRefDecode:
         assert len(trees.elements) == 2
         first = trees.elements[0]
         second = trees.elements[1]
-        assert (
-            isinstance(first, RecordValue)
-            and first.display_name.rsplit("::", maxsplit=1)[-1] == "Leaf"
-        )
-        assert (
-            isinstance(second, RecordValue)
-            and second.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
-        )
+        assert isinstance(first, RecordValue) and first.nominal == NominalId(2)
+        assert isinstance(second, RecordValue) and second.nominal == NominalId(3)
 
     def test_unknown_defs_key_is_internal_error(self) -> None:
         """An unresolvable RefDecode key is an internal-invariant violation, not a user error."""

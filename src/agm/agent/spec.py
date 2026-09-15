@@ -58,6 +58,10 @@ class AgentCommand:
         """
         return parse_command(self.command, kind="agent")
 
+    def payload_values(self) -> tuple[str, ...]:
+        """This specification's ``PAYLOAD_FIELDS`` values, in that order."""
+        return (self.command,)
+
 
 @dataclass(frozen=True, slots=True)
 class AgentClaude:
@@ -73,6 +77,10 @@ class AgentClaude:
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Claude prompt invocation."""
         return ["claude", "-p", *_claude_options(self.model, self.thinking)]
+
+    def payload_values(self) -> tuple[str, ...]:
+        """This specification's ``PAYLOAD_FIELDS`` values, in that order."""
+        return (self.model, self.thinking)
 
     def session_argv(
         self,
@@ -116,6 +124,10 @@ class AgentCodex:
         """Build the argv for a one-shot Codex prompt invocation, reading stdin."""
         return self._exec_argv()
 
+    def payload_values(self) -> tuple[str, ...]:
+        """This specification's ``PAYLOAD_FIELDS`` values, in that order."""
+        return (self.model, self.thinking)
+
     def session_argv(self, session_id: str | None = None) -> list[str]:
         """Build the argv that starts or resumes a Codex CLI session."""
         command = ["codex", "exec"]
@@ -148,6 +160,10 @@ class AgentPi:
     def argv(self) -> list[str]:
         """Build the argv for a one-shot Pi prompt invocation."""
         return ["pi", "-p", *_pi_options(self.provider, self.model, self.thinking)]
+
+    def payload_values(self) -> tuple[str, ...]:
+        """This specification's ``PAYLOAD_FIELDS`` values, in that order."""
+        return (self.provider, self.model, self.thinking)
 
     def session_argv(
         self, session_id: str, *, fork_from: str | None = None, name: str = ""

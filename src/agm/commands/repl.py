@@ -44,7 +44,7 @@ from agm.config.general import (
     exec_config_from_merged,
     load_general_config,
     load_repl_config,
-    save_repl_theme,
+    save_repl_setting,
 )
 from agm.config.module_roots import (
     StdlibResolutionError,
@@ -187,8 +187,13 @@ def run(args: ReplArgs) -> None:
         history_path = agm_home_dir(home=ctx.home) / "repl_history"
         history_path.parent.mkdir(parents=True, exist_ok=True)
 
-        def on_theme_save(new_theme: str) -> None:
-            save_repl_theme(new_theme, home=ctx.home)
+        def on_setting_save(key: str, value: str | bool) -> None:
+            save_repl_setting(key, value, home=ctx.home)
+
+        # ``--quiet`` disables echo for this session only and never persists,
+        # overriding a saved ``[repl] echo = true``; absent ``--quiet`` the
+        # persisted (or default) ``[repl] echo`` applies.
+        echo = repl_config.echo and not args.quiet
 
         # ``--dry-run`` means type-check only in the REPL: every entry runs the full
         # static pipeline but is never evaluated, so no agent/exec calls fire and no
@@ -208,10 +213,11 @@ def run(args: ReplArgs) -> None:
 
             run_plain_console(
                 session,
-                echo=not args.quiet,
+                echo=echo,
+                echo_unit=repl_config.echo_unit,
                 check_only=dry_run.enabled(),
                 theme=repl_config.theme,
-                on_theme_save=on_theme_save,
+                on_setting_save=on_setting_save,
                 stdin=sys.stdin,
                 stdout=sys.stdout,
             )
@@ -221,9 +227,10 @@ def run(args: ReplArgs) -> None:
 
         run_console(
             session,
-            echo=not args.quiet,
+            echo=echo,
+            echo_unit=repl_config.echo_unit,
             check_only=dry_run.enabled(),
             history_path=history_path,
             theme=repl_config.theme,
-            on_theme_save=on_theme_save,
+            on_setting_save=on_setting_save,
         )

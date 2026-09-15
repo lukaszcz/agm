@@ -178,6 +178,7 @@ from agm.agl.scope.symbols import (
     BuiltinStaticKind,
     builtin_type_static_kind,
 )
+from agm.agl.semantics.arguments import positional_field_names
 from agm.agl.semantics.type_table import MethodDef, TypeDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -330,6 +331,7 @@ def _add_builtin_nominals(
                 fields=tuple(type_table.record_fields(typ).keys()),
                 mutable_fields=type_table.record_mutable_fields(typ),
                 variants=(),
+                positional_fields=positional_field_names(type_table.field_kinds(typ)),
             )
             continue
         if isinstance(typ, ExceptionType):
@@ -362,6 +364,7 @@ def _add_builtin_nominals(
             kind=NominalKind.EXCEPTION,
             fields=tuple(type_table.exception_fields(exc_type).keys()),
             variants=(),
+            positional_fields=positional_field_names(type_table.field_kinds(exc_type)),
         )
 
 
@@ -1289,14 +1292,10 @@ class _Lowerer:
                     node_typ = self._node_type(nid)
                     if isinstance(node_typ, FunctionType):
                         # Constructor with fields used as a value → IrMakeConstructor.
-                        nominal, display = self._nominal_for_constructor_result(
+                        nominal = self._nominal_for_constructor_result(
                             self._constructor_result_type(nid)
                         )
-                        return IrMakeConstructor(
-                            location=self._loc(span),
-                            nominal=nominal,
-                            display_name=display,
-                        )
+                        return IrMakeConstructor(location=self._loc(span), nominal=nominal)
                     # Fieldless constructor used as a value → construct immediately.
                     return self._lower_nullary_constructor(nid, span)
 
@@ -1317,7 +1316,6 @@ class _Lowerer:
                     return IrMakeConstructor(
                         location=self._loc(span),
                         nominal=NominalId(node_typ.result.decl_id),
-                        display_name="::".join((*node_typ.result.scope_path, node_typ.result.name)),
                     )
                 if ref.kind is BinderKind.function_binding and ref.is_builtin:
                     return self._lower_builtin_value(ref, nid, span)
@@ -1365,7 +1363,7 @@ class _Lowerer:
                 if selected_method is not None:
                     return self._lower_bound_method(node, selected_method)
                 obj_type = self._node_type(obj_expr.node_id)
-                nominal, _display, mode = self._nominal_for_field_projection(obj_type)
+                nominal, mode = self._nominal_for_field_projection(obj_type)
                 return IrField(
                     location=self._loc(span),
                     value=self.lower_expr(obj_expr),
@@ -1641,7 +1639,6 @@ class _Lowerer:
             # Step guard: if __step <= 0 => raise RangeError(...)
             range_error = self._link.builtin_nominals.resolve("RangeError")
             range_error_nominal = range_error.nominal
-            range_error_display_name = range_error.display_name
             pre_items.append(
                 IrIf(
                     location=loc,
@@ -1659,7 +1656,6 @@ class _Lowerer:
                                 exc=IrMakeException(
                                     location=loc,
                                     nominal=range_error_nominal,
-                                    display_name=range_error_display_name,
                                     fields=(
                                         (
                                             "message",
@@ -1840,7 +1836,6 @@ class _Lowerer:
             # Inner if: if __count == 0 => IrBreak else => IrRaise(MaxIterationsExceeded)
             max_iterations_exceeded = self._link.builtin_nominals.resolve("MaxIterationsExceeded")
             max_iterations_exceeded_nominal = max_iterations_exceeded.nominal
-            max_iterations_exceeded_display_name = max_iterations_exceeded.display_name
             inner_if = IrIf(
                 location=loc,
                 branches=(
@@ -1861,7 +1856,6 @@ class _Lowerer:
                             exc=IrMakeException(
                                 location=loc,
                                 nominal=max_iterations_exceeded_nominal,
-                                display_name=max_iterations_exceeded_display_name,
                                 fields=(
                                     (
                                         "message",
@@ -2145,15 +2139,15 @@ class _Lowerer:
     # Constructor lowering helpers
     # ------------------------------------------------------------------
 
-    def _nominal_for_constructor_result(self, typ: Type) -> tuple[NominalId, str]:
+    def _nominal_for_constructor_result(self, typ: Type) -> NominalId:
         """Return the record or exception identity constructed by a callable."""
         if isinstance(typ, (RecordType, ExceptionType)):
-            return NominalId(typ.decl_id), "::".join((*typ.scope_path, typ.name))
+            return NominalId(typ.decl_id)
         raise AssertionError(f"constructor function has non-nominal result {typ!r}")
 
-    def _nominal_for_field_projection(self, typ: Type) -> tuple[NominalId, str, IrFieldMode]:
+    def _nominal_for_field_projection(self, typ: Type) -> tuple[NominalId, IrFieldMode]:
         """Return a nominal and mode from declaration metadata, never a name test."""
-        nominal, display_name = self._nominal_for_constructor_result(typ)
+        nominal = self._nominal_for_constructor_result(typ)
         assert isinstance(typ, (RecordType, EnumType, ExceptionType))
         typedef = self._checked.type_env.type_table.get_by_id(typ.decl_id)
         assert typedef is not None, (
@@ -2164,7 +2158,7 @@ class _Lowerer:
             if typedef.abstract or isinstance(typ, ExceptionType)
             else IrFieldMode.EXACT
         )
-        return nominal, display_name, mode
+        return nominal, mode
 
     def _constructor_result_type(self, ref_node_id: int) -> RecordType | ExceptionType:
         """Return a constructor's declared result, before any contextual widening."""
@@ -2504,8 +2498,8 @@ class _Lowerer:
         )
 
     def _lower_parse_call(self, call_node: "Call", span: "SourceSpan") -> IrExpr:
-        """Lower ``std/value::parse[T](value)``: like ``value as T``, but raises
-        ``ValueParseError`` on failure instead of ``CastError`` (see
+        """Lower ``std/value::parse[T](value)`` from its recorded ``CastSpec``;
+        failure raises ``ValueParseError`` instead of ``CastError`` (see
         ``eval.ir_interpreter._on_cast_failure``).
         """
         spec = self._checked.cast_specs[call_node.node_id]
@@ -2553,7 +2547,6 @@ class _Lowerer:
         assert isinstance(exc_type, ExceptionType)
         handler = IrCatchHandler(
             nominal=NominalId(exc_type.decl_id),
-            display_name=exc_type.name,
             symbol=exc_sym,
             body=err_value,
         )
@@ -2917,24 +2910,14 @@ class _Lowerer:
             ir_fields = tuple(
                 (fname, arg_slots[fname]) for fname in self._type_table.record_fields(typ)
             )
-            return IrMakeRecord(
-                location=loc,
-                nominal=nominal,
-                display_name="::".join((*typ.scope_path, typ.name)),
-                fields=ir_fields,
-            )
+            return IrMakeRecord(location=loc, nominal=nominal, fields=ir_fields)
 
         if isinstance(typ, ExceptionType):
             nominal = NominalId(typ.decl_id)
             exc_fields = tuple(
                 (fname, arg_slots[fname]) for fname in self._type_table.exception_fields(typ)
             )
-            return IrMakeException(
-                location=loc,
-                nominal=nominal,
-                display_name="::".join((*typ.scope_path, typ.name)),
-                fields=exc_fields,
-            )
+            return IrMakeException(location=loc, nominal=nominal, fields=exc_fields)
 
         raise AssertionError("compiler bug: cannot determine constructor type")  # pragma: no cover
 
@@ -3279,22 +3262,20 @@ class _Lowerer:
 
     def _lower_catch_clause(self, clause: "CatchClause") -> IrCatchHandler:
         """Lower a ``CatchClause`` to an ``IrCatchHandler``."""
-        # Determine nominal + display_name.  ``nominal`` must carry the resolved
-        # exception's own declaration identity (``decl_id`` — the reserved
-        # identity for a built-in, or the declaring AST node for an entry or
-        # library exception) because specific catches match exactly by
+        # Determine nominal.  It must carry the resolved exception's own
+        # declaration identity (``decl_id`` — the reserved identity for a
+        # built-in, or the declaring AST node for an entry or library
+        # exception) because specific catches match exactly by
         # ``ExceptionValue.nominal`` at runtime.
         exc_type = clause.exc_type
         if exc_type is None or exc_type == "_" or exc_type == "Exception":
             nominal: NominalId | None = None
-            display_name: str | None = None
         else:
             resolved = self._checked.type_env.resolve_named_type(exc_type, span=clause.span)
             assert isinstance(resolved, ExceptionType), (
                 f"compiler bug: catch clause type {exc_type!r} did not resolve to an ExceptionType"
             )
             nominal = NominalId(resolved.decl_id)
-            display_name = resolved.name
 
         # Allocate a SymbolId for the binding variable when present.
         # public=False: catch-clause binders are not top-level exported names.
@@ -3307,12 +3288,7 @@ class _Lowerer:
                 public=False,
             )
 
-        return IrCatchHandler(
-            nominal=nominal,
-            display_name=display_name,
-            symbol=sym,
-            body=self.lower_expr(clause.body),
-        )
+        return IrCatchHandler(nominal=nominal, symbol=sym, body=self.lower_expr(clause.body))
 
     # ------------------------------------------------------------------
     # Compiled match-site decision helpers
@@ -3753,12 +3729,7 @@ class _Lowerer:
             else IrMakeDict(location=loc, entries=())
         )
         option_none = self._link.builtin_nominals.resolve_standard_member("Option", "None")
-        cwd = IrMakeRecord(
-            location=loc,
-            nominal=option_none.nominal,
-            display_name=option_none.display_name,
-            fields=(),
-        )
+        cwd = IrMakeRecord(location=loc, nominal=option_none.nominal, fields=())
         timeout = IrBuiltinLoad(
             location=loc,
             key=builtin_var_key(STD_CONFIG_ID, (), "timeout"),

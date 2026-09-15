@@ -1,4 +1,4 @@
-"""Strict-parse/normalize primitives and the typeless decode walk for AgL.
+"""Strict-parse primitives and the typeless decode walk for AgL.
 
 This module is the canonical home for the reusable building blocks shared by
 the cast path (``as`` / ``as?`` operators), the agent/exec output codec, and
@@ -11,8 +11,9 @@ host parameter decoding:
   (``NaN`` / ``Infinity`` / ``-Infinity``) even when nested inside containers.
   Also rejects any trailing/leading non-whitespace.  Returns the raw parsed
   Python object.
-- :func:`normalize_integral_decimals` — walk a JSON-shaped tree and replace
-  integral ``Decimal`` values with ``int``.
+- :data:`AglValidator` / :func:`validator_for_schema` — the Draft 2020-12
+  validator AgL uses everywhere (see :func:`_is_integer_or_integral_decimal`
+  for its Decimal-aware ``integer`` check).
 - :func:`_clean_validation_message` — strip Python ``Decimal(...)`` reprs from
   jsonschema error messages before surfacing them to users.
 - :func:`decode_value` / :func:`_decode_scalar` — the typeless
@@ -33,8 +34,10 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import assert_never
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, TypeChecker
 from jsonschema import ValidationError as JsonschemaValidationError
+from jsonschema.protocols import Validator
+from jsonschema.validators import extend
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
@@ -81,14 +84,37 @@ class StrictJsonParseError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Cached JSON-Schema validators
+# AglValidator — Draft 2020-12 with a Decimal-aware "integer" type check
 # ---------------------------------------------------------------------------
 
-_VALIDATOR_CACHE: dict[str, Draft202012Validator] = {}
+
+def _is_integer_or_integral_decimal(checker: TypeChecker, instance: object) -> bool:
+    """Accept the default JSON-Schema ``integer`` instances, plus an integral ``Decimal``.
+
+    A wire number written with a fraction or exponent parses as ``Decimal``
+    (``parse_float=Decimal``); an ``int`` target accepts it when integral, as
+    ``decimal as int`` would (``_decode_scalar`` then narrows it). Everything
+    else uses the base Draft 2020-12 check; ``bool`` is never accepted.
+    """
+    if isinstance(instance, Decimal):
+        return instance == instance.to_integral_value()
+    return Draft202012Validator.TYPE_CHECKER.is_type(instance, "integer")
 
 
-def validator_for_schema(json_schema: str) -> Draft202012Validator:
-    """Compile (and cache) a JSON-Schema validator from its canonical JSON string.
+#: The Draft 2020-12 validator class used for every AgL JSON-Schema check;
+#: see :func:`_is_integer_or_integral_decimal` for its ``integer`` check.
+AglValidator = extend(
+    Draft202012Validator,
+    type_checker=Draft202012Validator.TYPE_CHECKER.redefine(
+        "integer", _is_integer_or_integral_decimal
+    ),
+)
+
+_VALIDATOR_CACHE: dict[str, Validator] = {}
+
+
+def validator_for_schema(json_schema: str) -> Validator:
+    """Compile (and cache) an :data:`AglValidator` from its canonical JSON string.
 
     Shared by the cast path (``conversions``) and host param decoding
     (``params``) so identical schemas are compiled once.
@@ -96,41 +122,9 @@ def validator_for_schema(json_schema: str) -> Draft202012Validator:
     validator = _VALIDATOR_CACHE.get(json_schema)
     if validator is None:
         schema_obj: object = json.loads(json_schema)
-        validator = Draft202012Validator(schema_obj)
+        validator = AglValidator(schema_obj)
         _VALIDATOR_CACHE[json_schema] = validator
     return validator
-
-
-# ---------------------------------------------------------------------------
-# normalize_integral_decimals — canonical home in convert.py
-# ---------------------------------------------------------------------------
-
-
-def normalize_integral_decimals(obj: object) -> object:
-    """Convert integral ``Decimal`` values to ``int`` throughout *obj*.
-
-    Walks the JSON-shaped tree produced by ``json.loads(parse_float=Decimal)``
-    and replaces any ``Decimal`` whose value is integral and lossless
-    (``d == int(d)``) with the equivalent ``int``.  This lets a wire value of
-    ``1.0`` satisfy an ``{"type": "integer"}`` schema; non-integral decimals
-    such as ``1.5`` are preserved and continue to fail integer targets.
-
-    Decimal targets re-widen ``int`` → ``Decimal`` via ``decode_value`` and a
-    ``json`` passthrough sees a JSON-equal value, so this is loss-free.
-    """
-    if isinstance(obj, bool):
-        return obj
-    if isinstance(obj, Decimal):
-        if obj == obj.to_integral_value():
-            return int(obj)
-        return obj
-    if isinstance(obj, list):
-        items: list[object] = obj
-        return [normalize_integral_decimals(e) for e in items]
-    if isinstance(obj, dict):
-        mapping: dict[object, object] = obj
-        return {k: normalize_integral_decimals(v) for k, v in mapping.items()}
-    return obj
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +243,7 @@ def decode_value(
                     raise ValueError(f"Dict key must be string, got {type(k).__name__}")
                 entries[k] = decode_value(value_schema, v, defs)
             return DictValue(entries=entries)
-        case RecordDecode(nominal=nominal, display_name=display_name, fields=fields):
+        case RecordDecode(nominal=nominal, fields=fields):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for record, got {type(obj).__name__}")
             record_fields: dict[str, Value] = {}
@@ -259,7 +253,7 @@ def decode_value(
                 record_fields[rfield.name] = decode_value(
                     rfield.schema, obj[rfield.json_name], defs
                 )
-            return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
+            return RecordValue(nominal=nominal, fields=record_fields)
         case EnumDecode(display_name=display_name, variants=variants):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
@@ -279,11 +273,7 @@ def decode_value(
                         f"Enum variant {case_val!r} is missing field {vfield.json_name!r}"
                     )
                 payload[vfield.name] = decode_value(vfield.schema, obj[vfield.json_name], defs)
-            return RecordValue(
-                nominal=variant.nominal,
-                display_name=variant.display_name,
-                fields=payload,
-            )
+            return RecordValue(nominal=variant.nominal, fields=payload)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 

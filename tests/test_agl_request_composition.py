@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from agm.agent.spec import AgentCommand
 from agm.agl.runtime.contract import TypelessOutputContract
 from agm.agl.runtime.request import (
     AgentRequest,
@@ -16,7 +17,6 @@ from agm.agl.runtime.request import (
     compose_initial_agent_prompt,
     compose_session_corrective_follow_up,
 )
-from tests._agl_helpers import agent_value
 
 
 @pytest.mark.parametrize("strict_json", [False, True])
@@ -31,7 +31,7 @@ def test_initial_prompt_includes_the_format_contract_for_each_json_mode(strict_j
 
     prompt = compose_initial_agent_prompt(
         AgentRequest(
-            agent=agent_value("AgentCommand", command="runner"),
+            agent=AgentCommand(command="runner"),
             prompt="Count.",
             output_contract=contract,
         )
@@ -42,7 +42,7 @@ def test_initial_prompt_includes_the_format_contract_for_each_json_mode(strict_j
 
 def test_initial_prompt_without_a_format_contract_is_just_the_original_prompt() -> None:
     prompt = compose_initial_agent_prompt(
-        AgentRequest(agent=agent_value("AgentCommand", command="runner"), prompt="Count.")
+        AgentRequest(agent=AgentCommand(command="runner"), prompt="Count.")
     )
 
     assert prompt == "Count."
@@ -62,7 +62,7 @@ def test_corrective_follow_up_contains_feedback_without_recomposing_the_initial_
 
     follow_up = compose_corrective_follow_up(
         AgentRequest(
-            agent=agent_value("AgentCommand", command="runner"),
+            agent=AgentCommand(command="runner"),
             prompt="ORIGINAL REQUEST",
             attempt=1,
             previous_invalid_output="not-a-number",
@@ -101,7 +101,7 @@ def test_corrective_follow_up_contains_feedback_without_recomposing_the_initial_
 def test_session_corrective_follow_up_omits_the_original_prompt_and_invalid_output() -> None:
     follow_up = compose_session_corrective_follow_up(
         AgentRequest(
-            agent=agent_value("AgentCommand", command="runner"),
+            agent=AgentCommand(command="runner"),
             prompt="ORIGINAL REQUEST",
             attempt=1,
             previous_invalid_output="not-a-number",
@@ -129,7 +129,7 @@ def test_session_corrective_follow_up_omits_the_original_prompt_and_invalid_outp
 def test_corrective_follow_up_without_a_format_contract_keeps_the_json_reminder() -> None:
     follow_up = compose_corrective_follow_up(
         AgentRequest(
-            agent=agent_value("AgentCommand", command="runner"),
+            agent=AgentCommand(command="runner"),
             prompt="ORIGINAL REQUEST",
             attempt=1,
         )

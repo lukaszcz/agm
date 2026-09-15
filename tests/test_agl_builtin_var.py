@@ -13,6 +13,7 @@ from typing import cast
 
 import pytest
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.pipeline import PipelineDriver, RunResult
@@ -149,7 +150,6 @@ class TestBuiltinVarDefaults:
         assert result.ok, f"expected success but got: {result.error!r}"
         value = result.bindings["value"]
         assert isinstance(value, RecordValue)
-        assert value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
         assert value.fields["command"] == TextValue("declared")
 
     def test_host_seed_overrides_the_declared_default(self, tmp_path: Path) -> None:
@@ -389,7 +389,7 @@ class TestStdConfigQualified:
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["f"]
         assert isinstance(bound, RecordValue)
-        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+        assert set(bound.fields) == {"value"}
         assert bound.fields["value"] == TextValue("x")
 
     def test_clearing_log_file_does_not_enable_logging(self) -> None:
@@ -409,7 +409,7 @@ class TestStdConfigQualified:
         assert result.ok
         bound = result.bindings["t"]
         assert isinstance(bound, RecordValue)
-        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "None"
+        assert bound.fields == {}
 
     def test_timeout_write_then_read_is_some(self) -> None:
         result = _run_program(
@@ -421,7 +421,7 @@ class TestStdConfigQualified:
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
         assert isinstance(bound, RecordValue)
-        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "Some"
+        assert set(bound.fields) == {"value"}
         assert isinstance(bound.fields["value"], TextValue)
 
     def test_timeout_write_none_clears_the_shell_timeout(self) -> None:
@@ -435,7 +435,7 @@ class TestStdConfigQualified:
         assert result.ok, f"expected success but got: {result.error!r}"
         bound = result.bindings["t"]
         assert isinstance(bound, RecordValue)
-        assert bound.display_name.rsplit("::", maxsplit=1)[-1] == "None"
+        assert bound.fields == {}
 
     def test_timeout_preserves_raw_text_through_tiny_self_assignment(self) -> None:
         result = _run_program(
@@ -455,7 +455,9 @@ class TestStdConfigQualified:
         result = _run_program(
             "import std/config::*\nlet t = std/config::timeout\nt\n",
             shell_exec_timeout=2.0,
-            builtin_host_settings={"timeout": some_value(TextValue("45s"))},
+            builtin_host_settings={
+                "timeout": some_value(TextValue("45s"), nominals=NO_BUILTIN_DECLARATIONS)
+            },
         )
 
         assert result.ok, f"expected success but got: {result.error!r}"

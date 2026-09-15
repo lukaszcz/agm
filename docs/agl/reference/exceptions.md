@@ -100,8 +100,10 @@ field cycle is.
 
 Exception values support field access (`e.raw`), equality, and rendering.
 In interpolation and `print` an exception renders in **AgL record form**,
-including all fields (`message` and any type-specific fields) in declaration
-order — for example:
+positional fields first across the whole `extends` chain (base fields first),
+then the rest as `name = value` (see
+[Uniform rendering rules](strings-and-interpolation.md#uniform-rendering-rules))
+— for example:
 
 ```
 CastError(message = "cannot parse \"x\" as int", source-type = "text", target-type = "int", raw = "x")

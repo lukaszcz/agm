@@ -40,7 +40,7 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrConvert, IrNominalCast, IrSequence
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors, VariantDescriptor
 from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import (
@@ -53,11 +53,31 @@ from agm.agl.semantics.values import (
     TextValue,
 )
 from agm.agl.zones import ParamZone
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, inline_main_items, lower_inline_ir
+from tests.agl.ir_harness import (
+    evaluate_ir,
+    evaluate_ir_raises,
+    inline_main_items,
+    lower_inline_ir,
+    nominal_id_for,
+)
+
+_EMPTY_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
 
 
 def _lower(source: str):
     return lower_inline_ir(source)
+
+
+def _raised_nominal_id(source: str, display_name: str) -> NominalId:
+    """Nominal identity a real (stdlib-declared) built-in exception carries for *source*.
+
+    ``Abort``/``CastError`` are ordinary ``exception`` declarations in
+    ``std/errors``, not host-reserved fallbacks, so their identity is this
+    compiled program's own declaration id — looked up by recompiling the
+    same source (deterministic, matches the identity ``evaluate_ir_raises``
+    produces for it).
+    """
+    return nominal_id_for(lower_inline_ir(source), display_name)
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +211,7 @@ let x = j as int
 )
 def test_cast_raises_cast_error(source: str) -> None:
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.display_name == "CastError"
+    assert ir_exc.nominal == _raised_nominal_id(source, "CastError")
 
 
 _MISSING_MEMBER_SOURCES = (
@@ -212,7 +232,7 @@ let x = "{\\"$case\\": \\"Purple\\"}" as Color
 @pytest.mark.parametrize("source", _MISSING_MEMBER_SOURCES)
 def test_cast_missing_field_and_unknown_variant_raise(source: str) -> None:
     ir_exc = evaluate_ir_raises(source)
-    assert ir_exc.display_name == "CastError"
+    assert ir_exc.nominal == _raised_nominal_id(source, "CastError")
 
 
 # ---------------------------------------------------------------------------
@@ -258,8 +278,9 @@ let x = "{\\"$case\\": \\"Circle\\", \\"radius\\": 1, \\"extra\\": 9}" as Shape
 @pytest.mark.parametrize("shape", sorted(_UNDECLARED_PROPERTY_SOURCES))
 def test_cast_rejects_undeclared_property(shape: str) -> None:
     """An undeclared JSON property fails the cast rather than being silently dropped."""
-    ir_exc = evaluate_ir_raises(_UNDECLARED_PROPERTY_SOURCES[shape])
-    assert ir_exc.display_name == "CastError"
+    source = _UNDECLARED_PROPERTY_SOURCES[shape]
+    ir_exc = evaluate_ir_raises(source)
+    assert ir_exc.nominal == _raised_nominal_id(source, "CastError")
 
 
 @pytest.mark.parametrize("shape", sorted(_UNDECLARED_PROPERTY_SOURCES))
@@ -374,7 +395,7 @@ let upcast = Circle(radius = 3) as? Shape
     assert isinstance(upcast, IrConvert)
     validate_ir(program, deep=True)
     values = evaluate_ir(source)
-    assert values["circle"] == RecordValue(circle.nominal, "Shape::Circle", {"radius": IntValue(2)})
+    assert values["circle"] == RecordValue(circle.nominal, {"radius": IntValue(2)})
     assert values["is-circle"] == BoolValue(True)
     assert values["is-square"] == BoolValue(False)
     assert values["upcast"] == BoolValue(True)
@@ -467,7 +488,7 @@ def test_golden_bottom_json_cast_lowers_to_noop(source: str) -> None:
 @pytest.mark.parametrize("source", _BOTTOM_JSON_CAST_SOURCES)
 def test_bottom_json_cast_preserves_the_raised_source(source: str) -> None:
     raised = evaluate_ir_raises(source)
-    assert raised.display_name == "Abort"
+    assert raised.nominal == _raised_nominal_id(source, "Abort")
     assert raised.fields["message"] == TextValue("stop")
 
 
@@ -629,7 +650,7 @@ def test_decode_nested_record_and_enum_success() -> None:
         ),
         {"a": 3},
     )
-    assert rec == RecordValue(nominal=_FOO, display_name="Foo", fields={"a": IntValue(3)})
+    assert rec == RecordValue(nominal=_FOO, fields={"a": IntValue(3)})
     enum_val = _decode(
         EnumDecode(
             _RED,
@@ -640,7 +661,7 @@ def test_decode_nested_record_and_enum_success() -> None:
         ),
         {"$case": "Red"},
     )
-    assert enum_val == RecordValue(nominal=NominalId(999), display_name="Color::Red", fields={})
+    assert enum_val == RecordValue(nominal=NominalId(999), fields={})
     lst = _decode(ArrayDecode(ScalarDecode(ScalarKind.INT)), [1, 2])
     assert lst == ArrayValue([IntValue(1), IntValue(2)])
     dct = _decode(DictDecode(ScalarDecode(ScalarKind.INT)), {"k": 1})
@@ -672,9 +693,7 @@ def test_decode_nested_record_and_enum_success() -> None:
         ),
         {"$case": "Circle", "r": 5},
     )
-    assert variant_with_field == RecordValue(
-        nominal=NominalId(999), display_name="Shape::Circle", fields={"r": IntValue(5)}
-    )
+    assert variant_with_field == RecordValue(nominal=NominalId(999), fields={"r": IntValue(5)})
 
 
 def test_run_recipe_value_conversion_failed_when_schema_permits() -> None:
@@ -687,7 +706,7 @@ def test_run_recipe_value_conversion_failed_when_schema_permits() -> None:
         decode=ScalarDecode(ScalarKind.INT),
     )
     with pytest.raises(AglCastConversion, match="Value conversion failed"):
-        run_recipe(recipe, JsonValue("not-an-int"))
+        run_recipe(recipe, JsonValue("not-an-int"), _EMPTY_DESCRIPTORS)
 
 
 def test_run_recipe_return_bool_on_failure() -> None:
@@ -700,7 +719,7 @@ def test_run_recipe_return_bool_on_failure() -> None:
         decode=ScalarDecode(ScalarKind.INT),
     )
     with pytest.raises(AglCastConversion):
-        run_recipe(recipe, TextValue("not json"))
+        run_recipe(recipe, TextValue("not json"), _EMPTY_DESCRIPTORS)
 
 
 # ---------------------------------------------------------------------------
@@ -1040,14 +1059,15 @@ def test_validate_accepts_well_formed_convert() -> None:
     validate_ir(_convert_program(recipe), deep=True)  # no exception
 
 
-def test_run_error_encodes_attached_nominal_plan_without_display_name_inspection() -> None:
-    """Host-error fields use their attached static plan, not value display metadata."""
+def test_run_error_encodes_attached_nominal_plan() -> None:
+    """Host-error fields use their attached static plan to encode a nested payload."""
     from agm.agl.ir.contracts import EncodePlan, ExceptionFieldEncode
     from agm.agl.pipeline import exception_value_to_run_error
     from agm.agl.semantics.values import ExceptionValue
 
     agent = NominalId(4)
     command = NominalId(5)
+    exc_nominal = NominalId(3)
     plan = EncodePlan(
         EnumEncode(
             agent,
@@ -1063,13 +1083,17 @@ def test_run_error_encodes_attached_nominal_plan_without_display_name_inspection
     )
     error = exception_value_to_run_error(
         ExceptionValue(
-            nominal=NominalId(3),
-            display_name="AgentCallError",
+            nominal=exc_nominal,
             fields={
                 "message": TextValue("failed"),
-                "agent": RecordValue(command, "not-a-tag", {"command": TextValue("worker")}),
+                "agent": RecordValue(command, {"command": TextValue("worker")}),
             },
         ),
+        nominals={
+            exc_nominal: NominalDescriptor(
+                exc_nominal, ENTRY_ID, (), "AgentCallError", NominalKind.EXCEPTION
+            )
+        },
         exception_field_encodes={
             NominalId(3): (ExceptionFieldEncode("agent", "agent-payload", plan),)
         },
@@ -1577,9 +1601,9 @@ def test_run_recipe_decode_json_resolves_recursive_defs() -> None:
         "left": {"$case": "Leaf"},
         "right": {"$case": "Leaf"},
     }
-    result = run_recipe(recipe, JsonValue(payload))
+    result = run_recipe(recipe, JsonValue(payload), _EMPTY_DESCRIPTORS)
     assert isinstance(result, RecordValue)
-    assert result.display_name.rsplit("::", maxsplit=1)[-1] == "Node"
+    assert result.nominal == NominalId(2)  # the "Node" record, per _tree_decode_defs
     assert result.fields["value"] == IntValue(1)
 
 

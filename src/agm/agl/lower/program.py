@@ -40,6 +40,7 @@ from agm.agl.lower.lowerer import (
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_ENV_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
+from agm.agl.semantics.arguments import positional_field_names
 from agm.agl.semantics.type_table import TypeDef, TypeTable, is_json_convertible
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import (
@@ -284,49 +285,49 @@ def lower_program(
         bears_name_path = (
             type_table.is_current(typedef) and typedef.decl_node_id not in inline_member_ids
         )
-        if typedef.kind == "record":
-            link.nominals[nominal] = NominalDescriptor(
-                nominal=nominal,
-                module_id=typedef.module_id,
-                scope_path=typedef.scope_path,
-                declared_name=typedef.name,
-                kind=NominalKind.RECORD,
-                fields=tuple(name for name, _ in typedef.fields),
-                mutable_fields=typedef.mutable_fields,
-                variants=(),
-                bears_name_path=bears_name_path,
-            )
-        elif typedef.kind == "enum":
-            handle = typedef.handle()
-            assert isinstance(handle, EnumType)
-            link.nominals[nominal] = NominalDescriptor(
-                nominal=nominal,
-                module_id=typedef.module_id,
-                scope_path=typedef.scope_path,
-                declared_name=typedef.name,
-                kind=NominalKind.ENUM,
-                fields=(),
-                variants=tuple(
-                    VariantDescriptor(
-                        name, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
-                    )
-                    for name, member in type_table.enum_member_names(handle).items()
-                ),
-                bears_name_path=bears_name_path,
-            )
-        else:
-            handle = typedef.handle()
-            assert isinstance(handle, ExceptionType)  # typedef.kind == "exception" guarantees this
-            link.nominals[nominal] = NominalDescriptor(
-                nominal=nominal,
-                module_id=typedef.module_id,
-                scope_path=typedef.scope_path,
-                declared_name=typedef.name,
-                kind=NominalKind.EXCEPTION,
-                fields=tuple(type_table.exception_fields(handle).keys()),
-                variants=(),
-                bears_name_path=bears_name_path,
-            )
+        handle = typedef.handle()
+        match handle:
+            case RecordType():
+                link.nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    module_id=typedef.module_id,
+                    scope_path=typedef.scope_path,
+                    declared_name=typedef.name,
+                    kind=NominalKind.RECORD,
+                    fields=tuple(name for name, _ in typedef.fields),
+                    mutable_fields=typedef.mutable_fields,
+                    variants=(),
+                    positional_fields=positional_field_names(type_table.field_kinds(handle)),
+                    bears_name_path=bears_name_path,
+                )
+            case EnumType():
+                link.nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    module_id=typedef.module_id,
+                    scope_path=typedef.scope_path,
+                    declared_name=typedef.name,
+                    kind=NominalKind.ENUM,
+                    fields=(),
+                    variants=tuple(
+                        VariantDescriptor(
+                            name, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
+                        )
+                        for name, member in type_table.enum_member_names(handle).items()
+                    ),
+                    bears_name_path=bears_name_path,
+                )
+            case _:
+                link.nominals[nominal] = NominalDescriptor(
+                    nominal=nominal,
+                    module_id=typedef.module_id,
+                    scope_path=typedef.scope_path,
+                    declared_name=typedef.name,
+                    kind=NominalKind.EXCEPTION,
+                    fields=tuple(type_table.exception_fields(handle).keys()),
+                    variants=(),
+                    positional_fields=positional_field_names(type_table.field_kinds(handle)),
+                    bears_name_path=bears_name_path,
+                )
 
     _add_builtin_nominals(link.nominals, type_table)
 
@@ -359,6 +360,7 @@ def lower_program(
                     kind=NominalKind.RECORD,
                     fields=tuple(fname for fname, _ in generic_typedef.fields),
                     mutable_fields=generic_typedef.mutable_fields,
+                    positional_fields=positional_field_names(type_table.field_kinds(typ)),
                     bears_name_path=bears_name_path,
                 )
             else:

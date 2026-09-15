@@ -20,6 +20,13 @@ record Nested
   weights: dict[text, decimal]
   note: text
 
+type J = json
+
+record Nums
+  n: int
+  d: decimal
+  j: json
+
 program def main(mode: text, input: text) -> unit =
   if
     | mode == "explicit" =>
@@ -73,5 +80,50 @@ program def main(mode: text, input: text) -> unit =
     | mode == "top_level_text_verbatim" =>
         let s: text = parse(input)
         print "%{s}"
+    | mode == "parse_json" =>
+        print "%{parse::[json](input)}"
+    | mode == "parse_json_contextual" =>
+        let j: json = parse(input)
+        print "%{j}"
+    | mode == "parse_json_alias_target" =>
+        print "%{parse::[J](input)}"
+    | mode == "parse_json_equals" =>
+        let j = parse::[json](input)
+        let expected: json = {"a": 1, "b": [true, null]}
+        print "%{j == expected}"
+    | mode == "parse_json_round_trip" =>
+        let j: json = parse::[json](input)
+        let round = parse::[json](render(j))
+        print "%{round == j}"
+    | mode == "try_parse_json" =>
+        case try-parse::[json](input) of
+          | Result::Ok(value) => print("ok %{value}")
+          | Result::Err(error) => print("err %{error.raw}")
+    | mode == "try_parse_json_expected" =>
+        let r: Result[json, ValueParseError] = try-parse(input)
+        print (case r of
+          | Result::Ok(value) => "ok %{value}"
+          | Result::Err(error) => "err %{error.raw}")
+    | mode == "parse_json_error_uncatchable_as_cast_error" =>
+        try
+          try
+            let _ = parse::[json](input)
+            ()
+          catch CastError as _ =>
+            print("wrongly caught as CastError")
+        catch ValueParseError as e =>
+          print("caught: %{e.raw}")
+    | mode == "as_json_contrast" =>
+        print "%{input as json}"
+    | mode == "json_vs_value_parse_exactness" =>
+        let p = parse::[json](input)
+        let j = json::parse(input)
+        print "%{p} (%{json::kind(p)}) | %{j} (%{json::kind(j)})"
+    | mode == "json_number_exactness_record" =>
+        let v: Nums = parse(input)
+        print "%{v.n}"
+        print "%{v.d}"
+        print "%{v.d as json}"
+        print "%{v.j}"
     | else =>
         print "unknown mode"

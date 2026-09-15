@@ -275,7 +275,7 @@ The target type drives the call's **output contract**:
   on success.
 
 `unit` is the exception: the call is dispatched once without an output
-contract, its response is ignored, and the expression evaluates to `void`.
+contract, its response is ignored, and the expression evaluates to `()`.
 A bare `ask` in a discarded-value position therefore runs as a fire-and-forget
 unit call:
 
@@ -464,7 +464,9 @@ valid responses are:
 ```
 
 Numbers on the wire are parsed exactly (never through binary floats). A
-number with an integral value (e.g. `1.0`) satisfies an `int` target.
+number written without a fraction or exponent is an `int`, any other a
+`decimal`; a `decimal` fills an `int` target only when integral (e.g. `2.0`), as
+`decimal as int` would ([Numbers](types.md#numbers-int-and-decimal)).
 
 ### Derived JSON Schema
 

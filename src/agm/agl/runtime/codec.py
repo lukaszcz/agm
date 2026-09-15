@@ -21,7 +21,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol
 
 import json_repair
-from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
 from agm.agl.ir.contracts import (
@@ -33,7 +32,12 @@ from agm.agl.ir.contracts import (
     RecordDecode,
     RefDecode,
 )
-from agm.agl.runtime.convert import _EMPTY_DEFS, decode_value, normalize_integral_decimals
+from agm.agl.runtime.convert import (
+    _EMPTY_DEFS,
+    AglValidator,
+    _clean_validation_message,
+    decode_value,
+)
 from agm.agl.runtime.request import ValidationError
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import TextType, Type
@@ -491,6 +495,7 @@ def _make_validation_error(
 
     path = "$" + "".join(f".{p}" if isinstance(p, str) else f"[{p}]" for p in error.path)
 
+    message = _clean_validation_message(error)
     if error.validator == "required":
         required = error.validator_value
         instance = error.instance
@@ -500,20 +505,16 @@ def _make_validation_error(
                 if isinstance(n, str) and n not in instance:
                     name = n
                     break
-        return ValidationError(
-            category="missing_field", message=error.message, path=path, field=name
-        )
+        return ValidationError(category="missing_field", message=message, path=path, field=name)
     if error.validator == "additionalProperties":
-        return ValidationError(
-            category="unknown_field", message=error.message, path=path, field=None
-        )
+        return ValidationError(category="unknown_field", message=message, path=path, field=None)
     if error.validator == "type":
         field_elem = error.path[-1] if error.path else None
         fname: str | None = field_elem if isinstance(field_elem, str) else None
-        return ValidationError(category="wrong_type", message=error.message, path=path, field=fname)
+        return ValidationError(category="wrong_type", message=message, path=path, field=fname)
     if error.validator == "oneOf":
         return _classify_enum_failure(error, path, decode_schema, defs)
-    return ValidationError(category="wrong_type", message=error.message, path=path, field=None)
+    return ValidationError(category="wrong_type", message=message, path=path, field=None)
 
 
 def _classify_enum_failure(
@@ -637,9 +638,8 @@ def _validate_and_decode_core(
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
 ) -> ParseResult:
     """Validate *parsed_obj* against *schema_dict*, then decode to typed ``Value``."""
-    normalized = normalize_integral_decimals(parsed_obj)
-    validator = Draft202012Validator(schema_dict)
-    raw_errors: list[JsonschemaValidationError] = list(validator.iter_errors(normalized))
+    validator = AglValidator(schema_dict)
+    raw_errors: list[JsonschemaValidationError] = list(validator.iter_errors(parsed_obj))
     if raw_errors:
         errors_sorted = sorted(raw_errors, key=_path_sort_key)
         errors = tuple(_make_validation_error(e, decode_schema, defs) for e in errors_sorted)
@@ -650,7 +650,7 @@ def _validate_and_decode_core(
             normalized_raw=json_text,
         )
     try:
-        value = decode_value(decode_schema, normalized, defs)
+        value = decode_value(decode_schema, parsed_obj, defs)
     except ValueError as exc:
         return ParseResult.failure(f"Value conversion failed: {exc}", normalized_raw=json_text)
     return ParseResult.success(value, normalized_raw=json_text)

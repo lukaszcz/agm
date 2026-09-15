@@ -38,6 +38,7 @@ from agm.agl.semantics.type_table import (
     create_seeded_type_table,
     is_json_convertible,
     json_cast_hint,
+    parse_classification,
     source_enum_member_decl_id,
 )
 from agm.agl.semantics.types import (
@@ -2881,6 +2882,16 @@ class TestCastClassification:
         table = _bad_record_table()
         bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029))
         assert cast_classification(bad, JsonType(), table) == CastKind.STATIC_ERROR
+
+
+class TestParseClassification:
+    def test_json_target_is_fallible(self) -> None:
+        # Diverges from cast_classification(text, json, ...), which is TOTAL_JSON.
+        assert parse_classification(JsonType(), TypeTable()) == CastKind.FALLIBLE
+
+    def test_non_json_target_matches_cast_from_text(self) -> None:
+        assert parse_classification(IntType(), TypeTable()) == CastKind.FALLIBLE
+        assert parse_classification(TextType(), TypeTable()) == CastKind.TOTAL_NOOP
 
 
 class TestIsJsonConvertible:

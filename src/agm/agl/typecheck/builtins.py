@@ -18,7 +18,7 @@ from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import STD_ENV_ID, spell_declaration
 from agm.agl.scope.symbols import BindingRef, BuiltinKind, ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
-from agm.agl.semantics.type_table import DeclId
+from agm.agl.semantics.type_table import DeclId, parse_classification
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     OPTION_TEXT_TYPE,
@@ -162,10 +162,11 @@ class BuiltinCheckCtx(Protocol):
 
     def _record_cast_spec(self, node_id: int, spec: CastSpec) -> None: ...
 
-    def _check_convertible(
+    def _reject_conversion(
         self,
         source_type: Type,
         target_type: Type,
+        kind: CastKind,
         span: SourceSpan,
         *,
         exprs: tuple[Expr, ...],
@@ -475,7 +476,8 @@ class BuiltinCallChecker:
     # --- parse / try-parse ---
 
     def check_parse(self, node: Call, *, expected: Type | None) -> Type:
-        """Type-check ``std/value::parse[T](value)``: same static rule as ``value as T``.
+        """Type-check ``std/value::parse[T](value)``: same static rule as ``value as T``
+        (see ``semantics.type_table.parse_classification`` for the one divergence).
 
         ``T`` is the explicit ``::[T]`` type argument, or else the contextual
         *expected* type; a call with neither is a static error. Failure raises
@@ -536,12 +538,13 @@ class BuiltinCallChecker:
     def _check_parse_like(
         self, node: Call, name: str, target_type: Type | None, missing_hint: str
     ) -> Type:
-        """Shared static rule for ``parse``/``try-parse``: the same rule as a cast.
+        """Shared static rule for ``parse``/``try-parse``: the same rule as a cast
+        from ``text`` (see ``semantics.type_table.parse_classification``).
 
         *target_type* is the caller's already-resolved ``T`` (or ``None``, which
-        raises *missing_hint*). Checks the argument as ``text``, resolves the
-        conversion the same way ``as``/``as?`` would, and records it into
-        ``cast_specs`` under ``node.node_id`` for the lowerer to read.
+        raises *missing_hint*). Checks the argument as ``text``, classifies and
+        rejects the conversion the same way ``as``/``as?`` would, and records it
+        into ``cast_specs`` under ``node.node_id`` for the lowerer to read.
         """
         if target_type is None:
             raise AglTypeError(missing_hint, span=node.span)
@@ -549,7 +552,8 @@ class BuiltinCallChecker:
         arg = self._single_positional_argument(node, name)
         arg_type = self._ctx._check_expr(arg, expected=TextType())
         self._ctx._assert_assignable_from(arg_type, TextType(), arg.span, arg)
-        kind = self._ctx._check_convertible(TextType(), target_type, node.span, exprs=(arg,))
+        kind = parse_classification(target_type, self._ctx._env.type_table)
+        kind = self._ctx._reject_conversion(TextType(), target_type, kind, node.span, exprs=(arg,))
         self._ctx._record_cast_spec(node.node_id, CastSpec(target_type=target_type, kind=kind))
         return target_type
 

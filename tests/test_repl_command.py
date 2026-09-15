@@ -34,11 +34,11 @@ from typer.main import get_command
 
 import agm.cli as cli
 import agm.commands.repl as repl_command
+from agm.agent.spec import AgentPi, AgentSpec
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.repl import ReplSession
 from agm.agl.runtime.sessions import SessionSnapshot
 from agm.agl.runtime.types import ParamBindingInfo
-from agm.agl.semantics.values import RecordValue
 from agm.cli_support.args import ReplArgs
 from agm.config.general import GeneralConfig
 from agm.packages.layout import MODULE_TREE_DIRNAME
@@ -154,9 +154,10 @@ def fake_plain_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object
         session: ReplSession,
         *,
         echo: bool = True,
+        echo_unit: bool = False,
         check_only: bool = False,
         theme: str = "auto",
-        on_theme_save: object = None,
+        on_setting_save: object = None,
         stdin: object = None,
         stdout: object = None,
     ) -> None:
@@ -164,9 +165,10 @@ def fake_plain_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object
             {
                 "session": session,
                 "echo": echo,
+                "echo_unit": echo_unit,
                 "check_only": check_only,
                 "theme": theme,
-                "on_theme_save": on_theme_save,
+                "on_setting_save": on_setting_save,
             }
         )
 
@@ -194,10 +196,11 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
         session: ReplSession,
         *,
         echo: bool = True,
+        echo_unit: bool = False,
         check_only: bool = False,
         history_path: Path | None = None,
         theme: str = "auto",
-        on_theme_save: object = None,
+        on_setting_save: object = None,
         input: object = None,
         output: object = None,
     ) -> None:
@@ -205,10 +208,11 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
             {
                 "session": session,
                 "echo": echo,
+                "echo_unit": echo_unit,
                 "check_only": check_only,
                 "history_path": history_path,
                 "theme": theme,
-                "on_theme_save": on_theme_save,
+                "on_setting_save": on_setting_save,
             }
         )
 
@@ -292,21 +296,22 @@ class TestReplRun:
 
         class SessionHost:
             def __init__(self) -> None:
-                self._sessions: dict[str, tuple[RecordValue, str]] = {}
+                self._sessions: dict[str, tuple[AgentSpec, str]] = {}
                 self._default_handle: str | None = None
                 self.opened: list[str] = []
                 self.prompts: list[tuple[str, str]] = []
                 self.close_calls = 0
                 self.closed_handles: set[str] = set()
 
-            def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+            def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
                 del name
+                assert isinstance(agent, AgentPi)
                 handle = f"session-{len(self._sessions) + 1}"
                 self._sessions[handle] = (agent, transport)
-                self.opened.append(agent.fields["provider"].value)
+                self.opened.append(agent.provider)
                 return handle
 
-            def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+            def default(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
                 if self._default_handle is None:
                     self._default_handle = self.open(agent, transport, name=name)
                 return self._default_handle
@@ -415,13 +420,13 @@ class TestReplRun:
         assert call["check_only"] is False  # not a dry-run by default
         assert (home / ".agm").is_dir()
 
-    def test_on_theme_save_persists_the_theme_to_config(
+    def test_on_setting_save_persists_the_theme_to_config(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
-        """The ``on_theme_save`` callback passed to the front end persists to config.
+        """The ``on_setting_save`` callback passed to the front end persists to config.
 
         Both front ends receive the same callback (built once in ``repl.run``);
         it is exercised here directly rather than by driving a live loop.
@@ -429,12 +434,93 @@ class TestReplRun:
         home = _isolated_home(monkeypatch, tmp_path)
         repl_command.run(_args())
 
-        on_theme_save = fake_plain_console[0]["on_theme_save"]
-        assert callable(on_theme_save)
-        on_theme_save("light")
+        on_setting_save = fake_plain_console[0]["on_setting_save"]
+        assert callable(on_setting_save)
+        on_setting_save("theme", "light")
 
         config_text = (home / ".agm" / "config.toml").read_text(encoding="utf-8")
         assert 'theme = "light"' in config_text
+
+    def test_on_setting_save_persists_echo_and_echo_unit_to_config(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args())
+
+        on_setting_save = fake_plain_console[0]["on_setting_save"]
+        assert callable(on_setting_save)
+        on_setting_save("echo", False)
+        on_setting_save("echo-unit", True)
+
+        config_text = (home / ".agm" / "config.toml").read_text(encoding="utf-8")
+        assert "echo = false" in config_text
+        assert "echo-unit = true" in config_text
+
+    def test_persisted_echo_settings_are_loaded_at_repl_startup(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir()
+        (agm_dir / "config.toml").write_text("[repl]\necho = false\necho-unit = true\n")
+
+        repl_command.run(_args())
+
+        call = fake_plain_console[0]
+        assert call["echo"] is False
+        assert call["echo_unit"] is True
+
+    def test_quiet_overrides_saved_echo_true_for_this_session_only(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir()
+        (agm_dir / "config.toml").write_text("[repl]\necho = true\n")
+
+        repl_command.run(_args(quiet=True))
+
+        assert fake_plain_console[0]["echo"] is False
+        # --quiet never persists: the saved value is untouched.
+        config_text = (agm_dir / "config.toml").read_text(encoding="utf-8")
+        assert "echo = true" in config_text
+
+    def test_explicit_set_persists_even_when_quiet_already_matches_it(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """An explicit ``:set echo off`` persists even though ``--quiet`` already reads that way.
+
+        ``--quiet`` forces the live session's ``echo`` to ``False`` without
+        touching the saved ``[repl] echo = true``. Typing ``:set echo off`` in
+        that session requests no live change, but it is still an explicit
+        command whose target value must be saved -- drives the real plain
+        front end (unfaked) over piped stdin/stdout so the actual meta-command
+        dispatch and persistence wiring both run.
+        """
+        import io
+
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir()
+        (agm_dir / "config.toml").write_text("[repl]\necho = true\n")
+        monkeypatch.setattr(sys, "stdin", io.StringIO(":set echo off\n"))
+        monkeypatch.setattr(sys, "stdout", io.StringIO())
+
+        repl_command.run(_args(quiet=True, plain=True))
+
+        config_text = (agm_dir / "config.toml").read_text(encoding="utf-8")
+        assert "echo = false" in config_text
 
     def test_invalid_development_package_exits_before_opening_the_console(
         self,
@@ -511,6 +597,7 @@ class TestReplRun:
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
+        from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import RecordValue, TextValue
 
         _isolated_home(monkeypatch, tmp_path)
@@ -521,14 +608,14 @@ class TestReplRun:
         seeded = session.eval_entry("std/config::default-agent")
         assert seeded.ok
         assert isinstance(seeded.value, RecordValue)
-        assert seeded.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert "AgentCommand(" in render_value(seeded.value, session.descriptors())
         assert seeded.value.fields["command"] == TextValue("configured")
 
         assert session.eval_entry('std/config::default-agent := AgentClaude("haiku", "low")').ok
         result = session.eval_entry("std/config::default-agent")
         assert result.ok
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentClaude"
+        assert "AgentClaude(" in render_value(result.value, session.descriptors())
         assert result.value.fields["model"] == TextValue("haiku")
 
     def test_cli_agent_override_still_applies_after_reset(
@@ -538,6 +625,7 @@ class TestReplRun:
         fake_plain_console: list[dict[str, object]],
     ) -> None:
         """``:reset`` clears the session's cached stdlib, but the override reapplies."""
+        from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import RecordValue, TextValue
 
         _isolated_home(monkeypatch, tmp_path)
@@ -550,8 +638,33 @@ class TestReplRun:
         result = session.eval_entry("import std/config\nstd/config::default-agent")
         assert result.ok
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "AgentCommand"
+        assert "AgentCommand(" in render_value(result.value, session.descriptors())
         assert result.value.fields["command"] == TextValue("configured")
+
+    def test_config_timeout_seed_still_applies_after_reset(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        """``:reset`` clears the cached stdlib, but the config-seeded timeout reapplies."""
+        from agm.agl.semantics.values import RecordValue, TextValue
+
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir(parents=True, exist_ok=True)
+        (agm_dir / "config.toml").write_text('[exec]\ntimeout = "30s"\n')
+
+        repl_command.run(_args())
+        session: ReplSession = fake_plain_console[0]["session"]
+
+        assert session.eval_entry("import std/config").ok
+        session.reset()
+
+        result = session.eval_entry("import std/config\nstd/config::timeout")
+        assert result.ok
+        assert isinstance(result.value, RecordValue)
+        assert result.value.fields["value"] == TextValue("30s")
 
     def test_exec_config_seeds_each_configured_engine_setting(
         self,

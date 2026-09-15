@@ -8,12 +8,13 @@ from typing import get_type_hints
 
 import pytest
 
-from agm.agent.spec import AGENT_SPECS
+from agm.agent.spec import AGENT_SPECS, AgentClaude, AgentCodex, AgentCommand, AgentPi
 from agm.agl import PipelineDriver
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+from agm.agl.runtime.agents import agent_value as encode_agent_value
 from agm.agl.runtime.agents import decode_agent_value, value_driven_agent_factory
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import TextType
-from agm.agl.semantics.values import RecordValue
 from tests._agl_helpers import agent_value, run_inline_command
 from tests.conftest import FakeAgentTransport
 
@@ -48,7 +49,7 @@ def test_decode_accepts_every_declared_agent_variant() -> None:
     for variant, payload in _agent_member_fields().items():
         value = agent_value(variant, **{name: name for name in payload})
 
-        assert isinstance(decode_agent_value(value), AGENT_SPECS[variant])
+        assert isinstance(decode_agent_value(value, NO_BUILTIN_DECLARATIONS), AGENT_SPECS[variant])
 
 
 def test_decode_rejects_declared_variant_without_a_host_spec(
@@ -59,7 +60,19 @@ def test_decode_rejects_declared_variant_without_a_host_spec(
     monkeypatch.setattr("agm.agent.spec.AGENT_SPECS", catalog)
 
     with pytest.raises(ValueError):
-        decode_agent_value(agent_value("AgentCommand", command="runner"))
+        decode_agent_value(agent_value("AgentCommand", command="runner"), NO_BUILTIN_DECLARATIONS)
+
+
+def test_agent_value_encodes_the_inverse_of_decode_agent_value() -> None:
+    """``agent_value`` round-trips every declared ``Agent`` variant's host spec."""
+    for variant, payload in _agent_member_fields().items():
+        fields_by_name = {name: name for name in payload}
+        spec = AGENT_SPECS[variant](**fields_by_name)
+
+        value = encode_agent_value(spec, NO_BUILTIN_DECLARATIONS)
+
+        assert decode_agent_value(value, NO_BUILTIN_DECLARATIONS) == spec
+        assert value == agent_value(variant, **fields_by_name)
 
 
 @pytest.mark.parametrize(
@@ -194,7 +207,7 @@ def test_composed_prompt_is_unchanged_when_no_output_contract(
     from agm.agl.runtime.request import AgentRequest
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
-    agent = agent_value("AgentCommand", command="runner")
+    agent = AgentCommand(command="runner")
 
     dispatch(AgentRequest(agent=agent, prompt="Do X."))
 
@@ -208,7 +221,7 @@ def test_composed_prompt_appends_format_instructions_after_the_prompt(
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
-    agent = agent_value("AgentCommand", command="runner")
+    agent = AgentCommand(command="runner")
     contract = TypelessOutputContract(
         target_type="int",
         codec_name="json",
@@ -235,7 +248,7 @@ def test_composed_prompt_omits_format_instructions_when_the_contract_has_none(
     from agm.agl.runtime.request import AgentRequest
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
-    agent = agent_value("AgentCommand", command="runner")
+    agent = AgentCommand(command="runner")
     contract = TypelessOutputContract(
         target_type="text",
         codec_name="text",
@@ -256,7 +269,7 @@ def test_composed_prompt_includes_retry_feedback_on_a_retry_attempt(
     from agm.agl.runtime.request import AgentRequest, ValidationError, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
-    agent = agent_value("AgentCommand", command="runner")
+    agent = AgentCommand(command="runner")
 
     request = AgentRequest(
         agent=agent,
@@ -285,7 +298,7 @@ def test_composed_prompt_has_no_retry_feedback_on_the_first_attempt(
     from agm.agl.runtime.request import AgentRequest
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
-    agent = agent_value("AgentCommand", command="runner")
+    agent = AgentCommand(command="runner")
 
     dispatch(AgentRequest(agent=agent, prompt="Do X.", attempt=0))
 
@@ -301,7 +314,7 @@ def test_composed_prompt_orders_format_instructions_before_retry_feedback(
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
-    agent = agent_value("AgentCommand", command="runner")
+    agent = AgentCommand(command="runner")
     contract = TypelessOutputContract(
         target_type="int",
         codec_name="json",
@@ -349,7 +362,7 @@ def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.Monk
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
 
-    agent = agent_value("AgentCodex", model="o3", thinking="high")
+    agent = AgentCodex(model="o3", thinking="high")
     dispatch = value_driven_agent_factory(idle_timeout=None)
 
     response = dispatch(AgentRequest(agent=agent, prompt="hello"))
@@ -403,26 +416,12 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
     assert os.environ[variable] == "original"
 
 
-def test_unrecognized_agent_variant_becomes_a_typed_error() -> None:
-    """An Agent variant with no host builder cannot leak an untyped host failure."""
-    from agm.agl.runtime.agents import AgentCallHostError
-    from agm.agl.runtime.request import AgentRequest
-
-    unknown = agent_value("AgentFuture")
-    dispatch = value_driven_agent_factory(idle_timeout=None)
-
-    with pytest.raises(AgentCallHostError) as exc_info:
-        dispatch(AgentRequest(agent=unknown, prompt="hello"))
-
-    assert exc_info.value.cause == "invalid_agent"
-
-
 def test_unresolvable_command_hole_becomes_a_typed_error() -> None:
     """A host interpolation hole the environment cannot fill fails as a spawn failure."""
     from agm.agl.runtime.agents import AgentCallHostError
     from agm.agl.runtime.request import AgentRequest
 
-    agent = agent_value("AgentCommand", command="runner --flag=%{AGM_NO_SUCH_VARIABLE}")
+    agent = AgentCommand(command="runner --flag=%{AGM_NO_SUCH_VARIABLE}")
     dispatch = value_driven_agent_factory(idle_timeout=None)
 
     with pytest.raises(AgentCallHostError) as exc_info:
@@ -461,11 +460,13 @@ def test_invalid_agent_value_becomes_typed_error() -> None:
 
 
 def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> None:
-    requests: list[RecordValue] = []
+    from agm.agl.runtime.request import AgentRequest
 
-    def agent(request: object) -> str:
-        value = getattr(request, "agent")
-        assert isinstance(value, RecordValue)
+    requests: list[AgentCommand | AgentClaude | AgentCodex | AgentPi] = []
+
+    def agent(request: AgentRequest) -> str:
+        value = request.agent
+        assert isinstance(value, (AgentCommand, AgentClaude, AgentCodex, AgentPi))
         requests.append(value)
         return "not an integer"
 
@@ -487,7 +488,7 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
         "$case": "AgentCommand",
         "command": "first",
     }
-    assert [request.display_name.rsplit("::", maxsplit=1)[-1] for request in requests] == [
+    assert [type(request).__name__ for request in requests] == [
         "AgentCommand",
         "AgentCommand",
     ]

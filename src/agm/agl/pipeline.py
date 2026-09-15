@@ -49,8 +49,8 @@ if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
-    from agm.agl.ir.ids import NominalId, SymbolId
-    from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
+    from agm.agl.ir.ids import FunctionId, NominalId, SymbolId
+    from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, NominalDescriptor
     from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
@@ -593,6 +593,7 @@ class PipelineDriver:
             # rather than masquerade as a user-facing pre-execution diagnostic.
             error = exception_value_to_run_error(
                 exc.exc,
+                nominals=executable.nominals,
                 span=exc.span,
                 exception_field_encodes=executable.exception_field_encodes,
             )
@@ -1059,6 +1060,7 @@ class PipelineDriver:
         prepared: PreparedProgram,
         module_ids: "set[ModuleId]",
         nominals: "Mapping[NominalId, NominalDescriptor]",
+        functions: "Mapping[FunctionId, FunctionDescriptor]",
         on_failure: "Callable[[list[Diagnostic]], _ResultT]",
     ) -> "_ResultT | None":
         """Import and resolve every extern companion, or build a failure result.
@@ -1074,6 +1076,7 @@ class PipelineDriver:
             companion_paths=prepared.companion_paths,
             module_ids=module_ids,
             nominals=nominals,
+            functions=functions,
         )
         if extern_diagnostics:
             return on_failure(extern_diagnostics)
@@ -1402,6 +1405,7 @@ class PipelineDriver:
                 prepared=prepared,
                 module_ids=set(executable.modules),
                 nominals=executable.nominals,
+                functions=executable.functions,
                 on_failure=lambda extern_diagnostics: RunResult(
                     ok=False,
                     diagnostics=extern_diagnostics,
@@ -1881,6 +1885,7 @@ def _wire_extern_registry(
     companion_paths: "Mapping[ModuleId, Path | None]",
     module_ids: "set[ModuleId] | None" = None,
     nominals: "Mapping[NominalId, NominalDescriptor] | None" = None,
+    functions: "Mapping[FunctionId, FunctionDescriptor] | None" = None,
 ) -> list[Diagnostic]:
     """Import every companion and resolve every declared extern, up front.
 
@@ -1915,7 +1920,7 @@ def _wire_extern_registry(
         ]
     declarations = _extern_declarations(checked, module_ids)
     if nominals is not None:
-        registry.set_nominals(dict(nominals))
+        registry.set_nominals(dict(nominals), functions=functions)
 
     diagnostics: list[Diagnostic] = []
     loaded_modules: set["ModuleId"] = set()
@@ -1989,6 +1994,7 @@ def assemble_host_environment(
 def exception_value_to_run_error(
     exc: "ExceptionValue",
     *,
+    nominals: "Mapping[NominalId, NominalDescriptor]",
     span: "object" = None,  # SourceSpan | None — avoids import cycle
     exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] | None" = None,
 ) -> RunError:
@@ -2010,6 +2016,9 @@ def exception_value_to_run_error(
     even though a cast to ``json`` of such a type is statically rejected),
     must not raise and mask the real error — that one field is reported as a
     marker instead.
+
+    ``nominals`` resolves *exc*'s display spelling for ``RunError.type_name``
+    from the running program's own descriptor table.
 
     *span* is the optional raise-site source span threaded from ``AglRaise``;
     when present, ``RunError.line`` and ``RunError.col`` are populated from it
@@ -2051,7 +2060,7 @@ def exception_value_to_run_error(
     if isinstance(span, (SourceSpan, Location)):
         line = span.start_line
         col = span.start_col
-    return RunError(type_name=exc.display_name, fields=fields, line=line, col=col)
+    return RunError(type_name=nominals[exc.nominal].display_name, fields=fields, line=line, col=col)
 
 
 def _build_call_inventory_from_ir(entries: "tuple[object, ...]") -> list[CallSiteInfo]:

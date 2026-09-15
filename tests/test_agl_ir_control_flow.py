@@ -56,7 +56,13 @@ from agm.agl.semantics.values import (
 )
 from agm.agl.typecheck import AglTypeError
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, inline_main_items, lower_inline_ir
+from tests.agl.ir_harness import (
+    evaluate_ir,
+    evaluate_ir_raises,
+    inline_main_items,
+    lower_inline_ir,
+    nominal_id_for,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -599,7 +605,7 @@ def test_lower_raise_shape() -> None:
     ir_raise = items[0]
     assert isinstance(ir_raise, IrRaise)
     assert isinstance(ir_raise.exc, IrMakeException)
-    assert ir_raise.exc.display_name == "Abort"
+    assert ir_raise.exc.nominal == nominal_id_for(prog, "Abort")
 
 
 def test_lower_return_shape() -> None:
@@ -636,8 +642,7 @@ def test_lower_try_no_binding_shape() -> None:
     assert len(ir_try.handlers) == 1
     handler = ir_try.handlers[0]
     assert isinstance(handler, IrCatchHandler)
-    assert handler.nominal is not None
-    assert handler.display_name == "Abort"
+    assert handler.nominal == nominal_id_for(prog, "Abort")
     assert handler.symbol is None
 
 
@@ -655,14 +660,13 @@ def test_lower_try_with_binding_shape() -> None:
     assert isinstance(ir_try, IrTry)
     handler = ir_try.handlers[0]
     assert isinstance(handler, IrCatchHandler)
-    assert handler.nominal is not None
-    assert handler.display_name == "Abort"
+    assert handler.nominal == nominal_id_for(prog, "Abort")
     assert handler.symbol is not None
     assert handler.symbol in prog.symbols
 
 
 def test_lower_try_catchall_shape() -> None:
-    """Golden lowering: catch-all (_, Exception) → nominal=None, display_name=None."""
+    """Golden lowering: catch-all (_, Exception) → nominal=None."""
     from agm.agl.ir.program import ExecutableProgram
 
     source = "let r = try\n  1\ncatch _ =>\n  2\nr\n"
@@ -676,7 +680,6 @@ def test_lower_try_catchall_shape() -> None:
     handler = ir_try.handlers[0]
     assert isinstance(handler, IrCatchHandler)
     assert handler.nominal is None
-    assert handler.display_name is None
     assert handler.symbol is None
 
 
@@ -728,13 +731,11 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
     exc_node = IrMakeException(
         location=loc,
         nominal=exc_nominal,
-        display_name="Abort",
         fields=(("message", IrConstText(location=loc, value="test")),),
     )
     raise_node = IrRaise(location=loc, exc=exc_node)
     handler = IrCatchHandler(
         nominal=exc_nominal,
-        display_name="Abort",
         symbol=exc_sym,
         body=IrConstInt(location=loc, value=99),
     )
@@ -768,7 +769,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
     assert exc_sym in interp._frame
     bound = interp._frame[exc_sym]
     assert isinstance(bound, ExceptionValue)
-    assert bound.display_name == "Abort"
+    assert bound.nominal == exc_nominal
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +783,6 @@ def test_validate_ir_try_handler_nominal_missing() -> None:
     missing_nominal = NominalId(2)
     handler = IrCatchHandler(
         nominal=missing_nominal,
-        display_name="NonExistentError",
         symbol=None,
         body=IrConstUnit(loc),
     )
@@ -803,7 +803,6 @@ def test_validate_ir_try_handler_symbol_missing() -> None:
     orphan_sym = SymbolId(999)
     handler = IrCatchHandler(
         nominal=exc_nominal,
-        display_name="Abort",
         symbol=orphan_sym,
         body=IrConstUnit(loc),
     )
@@ -854,7 +853,6 @@ def test_validate_ir_try_cheap_ok() -> None:
     exc_nominal = NominalId(4)
     handler = IrCatchHandler(
         nominal=exc_nominal,
-        display_name="Abort",
         symbol=None,
         body=IrConstUnit(loc),
     )

@@ -4,7 +4,7 @@
 
 Control flow in AgL is expression-oriented: every construct produces a
 value. `if` and `case` with branches unify to a common type; loops and
-else-less `if` have type `unit` and return `void`. Exception control flow —
+else-less `if` have type `unit` and evaluate to `()`. Exception control flow —
 `try`, `catch`, `raise` — is covered in [Exceptions](exceptions.md).
 
 ## `if`
@@ -39,7 +39,7 @@ Semantics:
 1. Conditions are evaluated left to right; each must be `bool`.
 2. The first true condition's body executes in a fresh branch scope.
 3. With no matching condition, `else` runs if present; otherwise the
-   expression returns `void`.
+   expression returns `()`.
 
 ### `if` with `else`: a value-producing expression
 
@@ -55,7 +55,7 @@ print(if status is Pass => "passed" else => "failed")
 
 ### `if` without `else`: type `unit`
 
-When `else` is absent, the `if` expression has type `unit` and returns `void`.
+When `else` is absent, the `if` expression has type `unit` and returns `()`.
 All branch bodies must also have type `unit`:
 
 <!-- agl-check: fragment -->
@@ -182,7 +182,7 @@ until r is Pass
 ```
 
 Every loop expression has type **`unit`** — it runs for effect and returns
-`void`. Its body is a discarded-value position, so a bare body value must also
+`()`. Its body is a discarded-value position, so a bare body value must also
 have type `unit` (or `bottom`). A trailing `let` or `var` is unit-valued (or bottom when its RHS exits) and
 may bind a value for the loop's post-body `until` clause:
 

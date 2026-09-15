@@ -1,0 +1,33 @@
+# A wire number decodes exactly as written: an int field accepts an integral
+# decimal (narrowing to int), while a decimal or json field/parameter keeps
+# the number's exact written form (scale, sign) rather than normalizing it.
+# The narrowing applies the same way nested inside array[int], dict[text, int],
+# and Option[int]. A `decimal` value always prints without trailing zeros
+# regardless of its stored scale, so exactness is shown via `as json`, which
+# serializes the stored value verbatim.
+
+record Nums
+  n: int
+  d: decimal
+  j: json
+  xs: array[int]
+  m: dict[text, int]
+  opt: Option[int]
+
+program def main(mode: text, ratio: decimal = 0, meta: json = {}) -> unit =
+  if
+    | mode == "agent_output" =>
+        let source: Agent = AgentCommand("nums_source")
+        let v: Nums = ask("Fetch numbers.", agent = source)
+        print "%{v.n}"
+        print "%{v.d}"
+        print "%{v.j}"
+        print "%{v.xs}"
+        print "%{v.m}"
+        print "%{v.opt}"
+    | mode == "params" =>
+        print "%{ratio}"
+        print "%{ratio as json}"
+        print "%{meta}"
+    | else =>
+        print "unknown mode"

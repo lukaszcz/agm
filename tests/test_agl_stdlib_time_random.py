@@ -13,7 +13,7 @@ import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.program import NominalDescriptor, NominalKind
+from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.boundary import AglArrayView, AglException
 from agm.agl.runtime.externs import ExternRegistry
@@ -29,6 +29,7 @@ _INDEX_ERROR = NominalId(9_600_002)
 _OPTION = NominalId(9_600_003)
 _OPTION_NONE = NominalId(9_600_004)
 _OPTION_SOME = NominalId(9_600_005)
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
 
 
 class _TimeCompanion(Protocol):
@@ -83,7 +84,7 @@ def _companion(
                 fields=("message", "index", "length"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
-        }
+        },
     )
     return active_registry.load_companion(module_id, _STDLIB_ROOT / "src" / f"{name}.py")
 
@@ -128,7 +129,7 @@ def test_time_parse_errors_are_typed_and_retain_the_raw_input(
 def test_random_seed_reproduces_bounded_sequences_and_shuffle_preserves_a_live_multiset() -> None:
     companion = cast(_RandomCompanion, _companion(_RANDOM_MODULE, "random"))
     values = ArrayValue([IntValue(1), IntValue(2), IntValue(2), IntValue(3), IntValue(4)])
-    view = AglArrayView(values)
+    view = AglArrayView(values, _NO_DESCRIPTORS)
     companion.seed(21)
     sequence = (companion.below(100), companion.between(-10, 10), companion.uniform())
     companion.seed(21)

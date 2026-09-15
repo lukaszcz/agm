@@ -12,6 +12,7 @@ Allowed imports:
 - ``agm.agl.runtime.serialize`` (untyped coercion and static direct JSON
   construction)
 - ``agm.config.engine_keys`` (the canonical engine-key catalog data leaf)
+- ``agm.agent.spec`` (AGENT_SPECS, for the Agent enum's member names)
 
 NOT allowed: ``agm.agl.syntax``, ``agm.agl.scope``, ``agm.agl.typecheck``.
 """
@@ -24,6 +25,7 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, ContextManager, Protocol, TypeVar, assert_never, cast
 
+from agm.agent.spec import AGENT_SPECS
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.eval.arith import (
     AglDivisionByZero,
@@ -135,6 +137,7 @@ from agm.agl.ir.program import (
     ExternFunctionBody,
     FunctionDescriptor,
     IrFunctionBody,
+    ValueDescriptors,
 )
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.ir.validate import InvalidIrError
@@ -159,7 +162,6 @@ from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.semantics.values import (
     UNIT_VALUE,
-    VOID_VALUE,
     ArrayValue,
     BoolValue,
     Cell,
@@ -177,9 +179,11 @@ from agm.agl.semantics.values import (
     Value,
 )
 from agm.config.engine_keys import (
+    ENGINE_KEYS,
     HOST_CONSUMED_ENGINE_KEYS,
     RUNTIME_LIVE_ENGINE_KEYS,
     TRACE_ENGINE_KEYS,
+    EngineKeyKind,
     trace_write_implies_enabled,
 )
 from agm.core.cleanup import preserve_primary_error
@@ -205,24 +209,69 @@ _SCALAR_ENCODE_PLAN = EncodePlan(ScalarEncode())
 _ArgT = TypeVar("_ArgT")
 
 
-def _rebind_host_enum_member(
+def _engine_key_shape(kind: EngineKeyKind) -> tuple[str, tuple[str, ...]] | None:
+    """Return the ``(enum name, member names)`` an engine key *kind* restamps, if any."""
+    if kind is EngineKeyKind.AGENT:
+        return ("Agent", tuple(AGENT_SPECS))
+    if kind is EngineKeyKind.OPTION_TEXT:
+        return ("Option", ("None", "Some"))
+    return None
+
+
+#: Engine key name -> ``(enum name, member names)``, built once from ``ENGINE_KEYS``.
+_ENGINE_KEY_ENUM_SHAPES: dict[str, tuple[str, tuple[str, ...]]] = {
+    spec.name: shape for spec in ENGINE_KEYS if (shape := _engine_key_shape(spec.kind)) is not None
+}
+
+
+def _engine_key_enum_shape(key: str) -> tuple[str, tuple[str, ...]] | None:
+    """Return the ``(enum name, member names)`` an enum-backed engine key restamps.
+
+    ``None`` for a key whose kind carries no host-enum identity.
+    """
+    return _ENGINE_KEY_ENUM_SHAPES.get(key)
+
+
+def _restamp_host_enum_member(
     value: RecordValue,
     *,
     enum_name: str,
     member_names: tuple[str, ...],
-    nominals: BuiltinNominals,
+    from_table: BuiltinNominals,
+    to_table: BuiltinNominals,
 ) -> RecordValue:
-    """Stamp a fallback host enum record with this executable's member identity."""
+    """Restamp *value*'s identity from *from_table* to *to_table*, if it is an *enum_name* member.
+
+    Used both to bind a persisted engine-setting seed (reserved fallback
+    identity) onto this program's own nominal table, and to persist a
+    post-run engine-setting value (this program's identity) back onto the
+    reserved fallback table so it survives past this program's own lifetime.
+    """
     for member_name in member_names:
-        fallback = NO_BUILTIN_DECLARATIONS.resolve_standard_member(enum_name, member_name)
-        if value.nominal == fallback.nominal:
-            selected = nominals.resolve_standard_member(enum_name, member_name)
-            return RecordValue(
-                nominal=selected.nominal,
-                display_name=selected.display_name,
-                fields=value.fields,
-            )
+        source = from_table.resolve_standard_member(enum_name, member_name)
+        if value.nominal == source.nominal:
+            target = to_table.resolve_standard_member(enum_name, member_name)
+            return RecordValue(nominal=target.nominal, fields=value.fields)
     return value
+
+
+def _restamp_engine_setting(
+    key: str, value: Value, *, from_table: BuiltinNominals, to_table: BuiltinNominals
+) -> Value:
+    """Restamp *value* onto *to_table*'s identity when *key* is enum-backed."""
+    if not isinstance(value, RecordValue):
+        return value
+    shape = _engine_key_enum_shape(key)
+    if shape is None:
+        return value
+    enum_name, member_names = shape
+    return _restamp_host_enum_member(
+        value,
+        enum_name=enum_name,
+        member_names=member_names,
+        from_table=from_table,
+        to_table=to_table,
+    )
 
 
 class HostConfigurationError(Exception):
@@ -493,6 +542,7 @@ class IrInterpreter:
         process_environment: Mapping[str, str] | None = None,
     ) -> None:
         self._program = program
+        self._descriptors = ValueDescriptors.from_program(program)
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
@@ -574,11 +624,14 @@ class IrInterpreter:
                 else defaults[timeout_key]
             )
         assert isinstance(timeout_setting, RecordValue)
-        timeout_setting = _rebind_host_enum_member(
-            timeout_setting,
-            enum_name="Option",
-            member_names=("None", "Some"),
-            nominals=self._program.builtin_nominals,
+        timeout_setting = cast(
+            RecordValue,
+            _restamp_engine_setting(
+                "timeout",
+                timeout_setting,
+                from_table=NO_BUILTIN_DECLARATIONS,
+                to_table=self._program.builtin_nominals,
+            ),
         )
         self._timeout_setting = timeout_setting
         self._apply_config_effect("timeout", timeout_setting)
@@ -598,14 +651,27 @@ class IrInterpreter:
         }
         default_agent = self._builtin_host_settings.get("default-agent")
         if isinstance(default_agent, RecordValue):
-            default_agent = _rebind_host_enum_member(
-                default_agent,
-                enum_name="Agent",
-                member_names=("AgentCommand", "AgentClaude", "AgentCodex", "AgentPi"),
-                nominals=self._program.builtin_nominals,
+            default_agent = cast(
+                RecordValue,
+                _restamp_engine_setting(
+                    "default-agent",
+                    default_agent,
+                    from_table=NO_BUILTIN_DECLARATIONS,
+                    to_table=self._program.builtin_nominals,
+                ),
             )
             self._builtin_host_settings["default-agent"] = default_agent
             self._check_default_agent_dispatchable(default_agent)
+        log_file = self._builtin_host_settings.get("log-file")
+        # ``log-file`` always has a declared default (unlike ``default-agent``),
+        # so it is always present here.
+        assert isinstance(log_file, RecordValue)
+        self._builtin_host_settings["log-file"] = _restamp_engine_setting(
+            "log-file",
+            log_file,
+            from_table=NO_BUILTIN_DECLARATIONS,
+            to_table=self._program.builtin_nominals,
+        )
         if self._host_reconfigurer is not None:
             self._reconfigure_host_service()
         self._host_contracts: Mapping[ContractId, OutputContract] = (
@@ -650,8 +716,20 @@ class IrInterpreter:
 
     @property
     def timeout_setting(self) -> RecordValue:
-        """Current raw ``Option[text]`` timeout value."""
-        return self._timeout_setting
+        """Current raw ``Option[text]`` timeout value, in reserved fallback identity.
+
+        A host that persists this past the run that produced it (the REPL)
+        needs it recognizable once this run's own compiled program is gone --
+        see :func:`_restamp_host_enum_member`.
+        """
+        value = _restamp_engine_setting(
+            "timeout",
+            self._timeout_setting,
+            from_table=self._program.builtin_nominals,
+            to_table=NO_BUILTIN_DECLARATIONS,
+        )
+        assert isinstance(value, RecordValue)
+        return value
 
     @property
     def shell_exec_timeout(self) -> float | None:
@@ -665,15 +743,26 @@ class IrInterpreter:
 
     @property
     def builtin_host_settings(self) -> dict[str, Value]:
-        """Current host-consumed register values.
+        """Current host-consumed register values, in reserved fallback identity.
 
-        A snapshot copy of the registers backing the host-consumed ``builtin
-        var`` engine settings, reflecting any writes made during the run.  A key
+        A snapshot of the registers backing the host-consumed ``builtin var``
+        engine settings, reflecting any writes made during the run.  A key
         with neither a host seed nor a declared default is absent.  Hosts that
         persist settings across runs (the REPL) read this back after a run to
-        seed the next one.
+        seed the next one; an enum-backed value (``Option``/``Agent``) is
+        already restamped onto the reserved fallback identity, so such a host
+        needs no program-specific nominal table of its own -- see
+        :func:`_restamp_host_enum_member`.
         """
-        return dict(self._builtin_host_settings)
+        return {
+            key: _restamp_engine_setting(
+                key,
+                value,
+                from_table=self._program.builtin_nominals,
+                to_table=NO_BUILTIN_DECLARATIONS,
+            )
+            for key, value in self._builtin_host_settings.items()
+        }
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -737,7 +826,9 @@ class IrInterpreter:
     ) -> str:
         """Render a value, converting only the rendering cycle sentinel."""
         try:
-            return render_value(value, pretty=pretty, quote_strings=quote_strings)
+            return render_value(
+                value, self._descriptors, pretty=pretty, quote_strings=quote_strings
+            )
         except AglCyclicValue:
             raise self._cyclic_failure()
 
@@ -775,11 +866,10 @@ class IrInterpreter:
             ),
         )
 
-    @staticmethod
-    def _cast_raw(value: Value) -> str:
+    def _cast_raw(self, value: Value) -> str:
         """Render a failed nominal cast without letting a cycle mask CastError."""
         try:
-            return render_value(value)
+            return render_value(value, self._descriptors)
         except AglCyclicValue:
             return "<cyclic value>"
 
@@ -918,7 +1008,7 @@ class IrInterpreter:
             return self._invoke_crossed_closure(closure, args)
 
         return AglCallableProxy(
-            arity=closure.arity,
+            arity=len(self._program.functions[closure.function_id].params),
             closure=closure,
             require_active_window=self._extern_call_window_guard.require_active,
             invoke=invoke,
@@ -1035,11 +1125,7 @@ class IrInterpreter:
                 name: self._eval(argument)
                 for name, argument in zip(constructor_desc.fields, arguments, strict=True)
             }
-            return RecordValue(
-                nominal=callee_val.nominal,
-                display_name=callee_val.display_name,
-                fields=fields,
-            )
+            return RecordValue(nominal=callee_val.nominal, fields=fields)
         if not isinstance(callee_val, IrClosureValue):
             raise InvalidIrError(
                 f"IrIndirectCall: callee evaluated to {type(callee_val).__name__},"
@@ -1341,7 +1427,7 @@ class IrInterpreter:
                 # A simple var-cell store.  An assignment statement yields unit;
                 # the mutation is the side effect.
                 slot.value = self._eval(val_expr)
-                return VOID_VALUE
+                return UNIT_VALUE
 
             case IrFieldSet(value=value_expr, nominal=nominal, field=field, new=new_expr):
                 # Evaluate the receiver before the replacement. The identity
@@ -1358,7 +1444,7 @@ class IrInterpreter:
                         f"IrFieldSet: expected nominal {nominal!r}, got {value.nominal!r}"
                     )
                 value.fields[field] = self._eval(new_expr)
-                return VOID_VALUE
+                return UNIT_VALUE
 
             # Plain left-to-right evaluation order: container, then index,
             # then the right-hand side, then the checked in-place store.
@@ -1370,14 +1456,14 @@ class IrInterpreter:
                     index_set(kind, container, index_val, new_value)
                 except (AglIndexOutOfRange, AglMissingKey) as e:
                     raise self._index_failure(e)
-                return VOID_VALUE
+                return UNIT_VALUE
 
             case IrCoerce(value=val_expr, operation=op):
                 value = self._eval(val_expr)
                 return _apply_coercion(value, op)
 
             case IrSequence(items=items) | IrBlock(items=items):
-                last: Value = VOID_VALUE
+                last: Value = UNIT_VALUE
                 for item in items:
                     last = self._eval(item)
                 return last
@@ -1492,16 +1578,8 @@ class IrInterpreter:
                 for fname, fexpr in updates:
                     updated_fields[fname] = self._eval(fexpr)
                 if isinstance(target, RecordValue):
-                    return RecordValue(
-                        nominal=target.nominal,
-                        display_name=target.display_name,
-                        fields=updated_fields,
-                    )
-                return ExceptionValue(
-                    nominal=target.nominal,
-                    display_name=target.display_name,
-                    fields=updated_fields,
-                )
+                    return RecordValue(nominal=target.nominal, fields=updated_fields)
+                return ExceptionValue(nominal=target.nominal, fields=updated_fields)
 
             case IrIndex(kind=kind, value=val_expr, index=idx_expr):
                 container = self._eval(val_expr)
@@ -1525,28 +1603,20 @@ class IrInterpreter:
                             assert_never(unreachable_seg)
                 return TextValue("".join(parts))
 
-            case IrMakeRecord(nominal=nominal, display_name=display_name, fields=fields):
+            case IrMakeRecord(nominal=nominal, fields=fields):
                 record_fields: dict[str, Value] = {
                     fname: self._eval(fexpr) for fname, fexpr in fields
                 }
-                return RecordValue(
-                    nominal=nominal,
-                    display_name=display_name,
-                    fields=record_fields,
-                )
+                return RecordValue(nominal=nominal, fields=record_fields)
 
-            case IrMakeException(nominal=nominal, display_name=display_name, fields=fields):
+            case IrMakeException(nominal=nominal, fields=fields):
                 exc_fields: dict[str, Value] = {
                     fname: self._eval(field_expr) for fname, field_expr in fields
                 }
-                return ExceptionValue(
-                    nominal=nominal,
-                    display_name=display_name,
-                    fields=exc_fields,
-                )
+                return ExceptionValue(nominal=nominal, fields=exc_fields)
 
-            case IrMakeConstructor(nominal=nominal, display_name=display_name):
-                return ConstructorValue(nominal=nominal, display_name=display_name)
+            case IrMakeConstructor(nominal=nominal):
+                return ConstructorValue(nominal=nominal)
 
             case IrNominalCast(
                 nominal=nominal,
@@ -1588,7 +1658,7 @@ class IrInterpreter:
             case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
                 source_value = self._eval(val_expr)
                 try:
-                    converted = run_recipe(recipe, source_value)
+                    converted = run_recipe(recipe, source_value, self._descriptors)
                 except AglCastConversion as exc:
                     return self._on_cast_failure(failure_mode, exc)
                 except AglCyclicValue:
@@ -1606,7 +1676,7 @@ class IrInterpreter:
                     if branch.cond is None:
                         # Else branch — always taken.
                         branch_val = self._eval(branch.body)
-                        return branch_val if has_else else VOID_VALUE
+                        return branch_val if has_else else UNIT_VALUE
                     cond_val = self._eval(branch.cond)
                     if not isinstance(cond_val, BoolValue):
                         raise InvalidIrError(
@@ -1615,9 +1685,9 @@ class IrInterpreter:
                         )
                     if cond_val.value:
                         branch_val = self._eval(branch.body)
-                        return branch_val if has_else else VOID_VALUE
-                # No branch matched and no else: return the non-printable unit.
-                return VOID_VALUE
+                        return branch_val if has_else else UNIT_VALUE
+                # No branch matched and no else: return unit.
+                return UNIT_VALUE
 
             case IrRaise(exc=exc_expr):
                 exc_val = self._eval(exc_expr)
@@ -1693,7 +1763,7 @@ class IrInterpreter:
                     try:
                         self._eval(body_expr)
                     except _BreakSignal:
-                        return VOID_VALUE
+                        return UNIT_VALUE
                     except _ContinueSignal:
                         continue
 
@@ -1753,17 +1823,7 @@ class IrInterpreter:
                     else:
                         val = slot.value if isinstance(slot, Cell) else slot
                         cap_slots.append((cap.symbol, val))
-                function_desc = self._program.functions.get(fn_id)
-                assert function_desc is not None, (
-                    f"IrMakeClosure references unknown function id {fn_id.value!r}"
-                )
-                return IrClosureValue(
-                    function_id=fn_id,
-                    captures=tuple(cap_slots),
-                    param_labels=function_desc.param_labels,
-                    arity=len(function_desc.params),
-                    result_label=function_desc.result_label,
-                )
+                return IrClosureValue(function_id=fn_id, captures=tuple(cap_slots))
 
             case IrDirectCall() | IrIndirectCall():
                 # A call unwinding an AglRaise surfaces its own site's location
@@ -1786,7 +1846,7 @@ class IrInterpreter:
                 rendered = self._render_or_raise(self._eval(val_expr))
                 print(rendered)
                 self._trace.print_stmt(rendered=rendered, span=node.location)
-                return VOID_VALUE
+                return UNIT_VALUE
 
             case IrRenderValue(
                 value=val_expr,
@@ -1876,7 +1936,7 @@ class IrInterpreter:
                 except AglRaise as exc:
                     exc.span = node.location
                     raise
-                return VOID_VALUE
+                return UNIT_VALUE
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
@@ -1896,7 +1956,7 @@ class IrInterpreter:
         from agm.agl.runtime.agents import decode_agent_value
 
         try:
-            decode_agent_value(value).argv()
+            decode_agent_value(value, self._program.builtin_nominals).argv()
         except ValueError as exc:
             raise HostConfigurationError(str(exc)) from exc
 
@@ -1922,7 +1982,6 @@ class IrInterpreter:
             builtin_var_key(STD_ENV_ID, (), "environ"),
             RecordValue(
                 nominal=descriptor.nominal,
-                display_name=descriptor.display_name,
                 fields={
                     "vars": DictValue(
                         {name: TextValue(value) for name, value in process_environment.items()}

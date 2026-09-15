@@ -79,11 +79,10 @@ aliases, and `def` functions can declare type parameters. See
 ### `unit`
 
 `unit` is the type of expressions that exist only for their side effect and
-produce no meaningful value. The printable unit value is written `()` — the
-empty argument list. Statement-like expressions return `void`, which has type
-`unit`, compares equal to `()`, and is not echoed by the REPL. Side-effecting
-expressions such as `print(…)`, `:=`, an `if` without an `else` branch, and
-loops all have type `unit`.
+produce no meaningful value. Its only value is written `()` — the empty
+argument list. Side-effecting expressions such as `print(…)`, `:=`, an `if`
+without an `else` branch, and loops all have type `unit` and evaluate to
+`()`.
 
 ```agl
 program def main() -> unit =
@@ -91,9 +90,11 @@ program def main() -> unit =
 ```
 
 `unit` cannot be JSON-encoded or stored in a `json` slot; it renders and
-interpolates as `()` — or `void` for the value produced by statement-like
-effects. The literal `()` is both the unit value and the empty argument list
-of a zero-argument call — the two are syntactically unified.
+interpolates as `()`. The literal `()` is both the unit value and the empty
+argument list of a zero-argument call — the two are syntactically unified.
+In the REPL, an expression or binding entry whose type is `unit` echoes
+nothing by default
+([`agm repl` evaluation notes](../../commands/agl.md#evaluation-notes)).
 
 ### `text`
 
@@ -117,8 +118,13 @@ with banker's rounding (round-half-even). This context is part of the
 language semantics and does not vary by host.
 
 On the JSON wire both kinds are plain JSON numbers, parsed and emitted
-exactly. A wire number with an integral value (such as `1.0`) satisfies an
-`int` target; a non-integral number does not.
+exactly. A wire number written without a fraction or exponent reads as an
+`int`; any other reads as a `decimal`. Where the target expects the other
+kind, the number converts as the cast would: an `int` widens to `decimal`, and
+a `decimal` narrows to `int` only when integral
+([`decimal as int` integrality](#decimal-as-int-integrality)), so `2.0` fills
+an `int` target and `2.5` does not. A `decimal` or `json` target keeps the
+number's exact value, trailing zeros included (visible in its JSON encoding).
 
 ### `bool`
 
@@ -303,14 +309,20 @@ program def main() -> unit =
 ### Parsing values
 
 `parse[T](value: text) -> T` and `try-parse[T](value: text) -> Result[T,
-ValueParseError]` convert text the same way a cast does: `parse::[T](v)`
-follows the same static rules as `v as T` (a `T` requiring structure parses
-strict JSON or [value-syntax](host-environment.md#value-syntax); a `text` or
-`json` target instead follows the conversion matrix verbatim — see
-[Casts and convertibility](#casts-and-convertibility)) but raises
-`ValueParseError` instead of `CastError` on failure
-([Exceptions](exceptions.md#valueparseerror)). `try-parse` never raises: it
-returns `Result::Err` with the `ValueParseError` instead.
+ValueParseError]` accept exactly the targets `v as T` accepts (so, for
+instance, a function or `unit` target is a static error) and convert text the
+same way that cast would, but raise `ValueParseError` instead of `CastError`
+on failure ([Exceptions](exceptions.md#valueparseerror)). `try-parse` never
+raises: it returns `Result::Err` with the `ValueParseError` instead.
+
+A `T` requiring structure parses strict JSON or
+[value-syntax](host-environment.md#value-syntax), the same as a cast to that
+`T` would. A `json` target also parses strict JSON or value syntax, as plain
+data only (see [Value syntax](host-environment.md#value-syntax)) — unlike
+`text as json`, which wraps the text as a JSON string instead of parsing it
+(see [`text as json` — embedding, not
+parsing](#text-as-json--embedding-not-parsing)). A `text` target returns the
+text unchanged.
 
 `T` comes from an explicit `::[T]` type argument or the contextual expected
 type; a call supplying neither is a static error. Unlike `copy`/
@@ -562,7 +574,9 @@ let r = R(0, y = 1)            # x positional-only, y named (standard)
 ```
 
 Fields are listed in zone order: positional-only, then standard, then named-only.
-A field that follows one from a later zone is a static error.
+A field that follows one from a later zone is a static error. Rendering
+follows the same zones — see
+[Uniform rendering rules](strings-and-interpolation.md#uniform-rendering-rules).
 
 Two record types with identical fields are still distinct types (nominal
 typing). Two record types from different modules are also distinct even if
@@ -1165,6 +1179,11 @@ To parse the *contents* of a text as JSON, import `std/json` and use
 `json::parse("42")`. It produces the JSON number `42` and raises
 `JsonParseError` (`std/json`) on malformed input. To read the contents of a
 text as a value of a specific data type, use `parse`/`try-parse`
+([Parsing values](#parsing-values)).
+
+`parse::[json]`/`try-parse::[json]` also parse a text's contents rather than
+embedding it, differing from `json::parse` in also accepting value-syntax
+data and raising `ValueParseError` rather than `JsonParseError`
 ([Parsing values](#parsing-values)).
 
 ## Values and equality

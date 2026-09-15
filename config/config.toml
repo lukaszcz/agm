@@ -25,7 +25,9 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # [repl] — AgL REPL settings (agm repl).
 #
 # [repl]
-# theme = "auto"    # syntax-highlighting theme: "dark", "light", or "auto" (detect from $COLORFGBG)
+# theme = "auto"     # syntax-highlighting theme: "dark", "light", or "auto" (detect from $COLORFGBG)
+# echo = true        # echo entry results automatically
+# echo-unit = false  # also echo unit-typed entries (silent by default)
 
 # [packages] — pins for installed package versions. In this home-level template,
 # uncommented pins apply globally; project or workspace config can override them.

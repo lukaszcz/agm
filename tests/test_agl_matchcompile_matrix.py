@@ -314,7 +314,6 @@ def test_paper_decomposition_partition_preserves_first_match_actions() -> None:
         for right in (False, True):
             subject = RecordValue(
                 nominal=nominal,
-                display_name=f"{enum_type.name}::{pair.terminal_name}",
                 fields={"left": BoolValue(left), "right": BoolValue(right)},
             )
             assert matrix_action(
@@ -325,7 +324,6 @@ def test_paper_decomposition_partition_preserves_first_match_actions() -> None:
         nominal=NominalId(
             checked.type_env.type_table.enum_member_names(enum_type)["empty"].decl_id
         ),
-        display_name=f"{enum_type.name}::empty",
         fields={},
     )
     assert matrix_action(defaulted, ()) == reference_action(case, checked, empty)

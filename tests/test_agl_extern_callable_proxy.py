@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.ids import FunctionId, NominalId
+from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.boundary import BoundaryTypeError, BoundaryViolation, encode_boundary_value
 from agm.agl.runtime.externs import (
     AglCallableProxy,
@@ -17,7 +19,13 @@ from agm.agl.runtime.externs import (
 )
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import ConstructorValue, IntValue, IrClosureValue, TextValue, Value
-from tests.agl.ir_harness import evaluate_ir_raises_with_externs, evaluate_ir_with_externs
+from tests.agl.ir_harness import (
+    _prepare_extern_program,
+    evaluate_ir_raises_with_externs,
+    evaluate_ir_with_externs,
+)
+
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
 
 
 def _proxy(window: ExternCallWindow) -> AglCallableProxy:
@@ -39,7 +47,13 @@ def test_proxy_converts_arguments_and_result_on_the_owner_thread_during_an_exter
     proxy = _proxy(window)
 
     with window.active():
-        assert registry.invoke("apply", lambda: proxy(2), ()) == IntValue(3)
+        assert registry.invoke(
+            "apply",
+            lambda: proxy(2),
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        ) == IntValue(3)
 
 
 def test_proxy_rejects_invocation_after_the_extern_call_window_closes() -> None:
@@ -64,7 +78,9 @@ def test_proxy_rejects_worker_registry_window_bypass() -> None:
                 failures.append(exc)
             return None
 
-        registry.invoke("worker", call_proxy, ())
+        registry.invoke(
+            "worker", call_proxy, (), nominals=NO_BUILTIN_DECLARATIONS, descriptors=_NO_DESCRIPTORS
+        )
 
     with window.active():
         worker = threading.Thread(target=invoke_from_worker)
@@ -102,14 +118,32 @@ def test_proxy_remains_valid_for_nested_and_later_owner_extern_calls() -> None:
 
     def invoke_nested() -> object:
         with window.active():
-            nested = registry.invoke("nested", lambda: proxy(2), ())
+            nested = registry.invoke(
+                "nested",
+                lambda: proxy(2),
+                (),
+                nominals=NO_BUILTIN_DECLARATIONS,
+                descriptors=_NO_DESCRIPTORS,
+            )
         assert isinstance(nested, IntValue)
         return nested.value
 
     with window.active():
-        assert registry.invoke("outer", invoke_nested, ()) == IntValue(3)
+        assert registry.invoke(
+            "outer",
+            invoke_nested,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        ) == IntValue(3)
     with window.active():
-        assert registry.invoke("later", lambda: proxy(2), ()) == IntValue(3)
+        assert registry.invoke(
+            "later",
+            lambda: proxy(2),
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        ) == IntValue(3)
 
 
 def test_shared_registry_keeps_interpreter_callback_windows_independent() -> None:
@@ -128,7 +162,15 @@ def test_shared_registry_keeps_interpreter_callback_windows_independent() -> Non
 
     def invoke_first() -> object:
         worker = threading.Thread(
-            target=lambda: second_results.append(registry.invoke("second", invoke_second, ()))
+            target=lambda: second_results.append(
+                registry.invoke(
+                    "second",
+                    invoke_second,
+                    (),
+                    nominals=NO_BUILTIN_DECLARATIONS,
+                    descriptors=_NO_DESCRIPTORS,
+                )
+            )
         )
         worker.start()
         assert second_started.wait(timeout=5)
@@ -137,7 +179,9 @@ def test_shared_registry_keeps_interpreter_callback_windows_independent() -> Non
         return first_result
 
     with first_window.active():
-        assert registry.invoke("first", invoke_first, ()) == IntValue(3)
+        assert registry.invoke(
+            "first", invoke_first, (), nominals=NO_BUILTIN_DECLARATIONS, descriptors=_NO_DESCRIPTORS
+        ) == IntValue(3)
     assert second_results == [IntValue(3)]
 
 
@@ -154,7 +198,13 @@ def test_proxy_rejects_keyword_arguments() -> None:
         return 0
 
     with window.active():
-        assert registry.invoke("apply", invoke_with_keyword, ()) == IntValue(1)
+        assert registry.invoke(
+            "apply",
+            invoke_with_keyword,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        ) == IntValue(1)
 
 
 def test_proxy_rejects_the_wrong_number_of_positional_arguments() -> None:
@@ -170,7 +220,13 @@ def test_proxy_rejects_the_wrong_number_of_positional_arguments() -> None:
         return 0
 
     with window.active():
-        assert registry.invoke("apply", invoke_without_an_argument, ()) == IntValue(1)
+        assert registry.invoke(
+            "apply",
+            invoke_without_an_argument,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        ) == IntValue(1)
 
 
 def test_proxy_rejects_unsupported_python_arguments() -> None:
@@ -186,28 +242,46 @@ def test_proxy_rejects_unsupported_python_arguments() -> None:
         return 0
 
     with window.active():
-        assert registry.invoke("apply", invoke_with_bad_argument, ()) == IntValue(1)
+        assert registry.invoke(
+            "apply",
+            invoke_with_bad_argument,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        ) == IntValue(1)
 
 
 def test_encoding_a_function_requires_an_interpreter_callback_factory() -> None:
     closure = IrClosureValue(FunctionId(1), ())
 
     with pytest.raises(BoundaryViolation):
-        encode_boundary_value(closure)
+        encode_boundary_value(closure, _NO_DESCRIPTORS)
 
 
 def test_python_callable_return_remains_a_boundary_error() -> None:
     registry = ExternRegistry()
 
     with pytest.raises(AglRaise):
-        registry.invoke("build", lambda: lambda value: value, ())
+        registry.invoke(
+            "build",
+            lambda: lambda value: value,
+            (),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        )
 
 
 def test_unencodable_argument_remains_an_extern_error() -> None:
     registry = ExternRegistry()
 
     with pytest.raises(AglRaise):
-        registry.invoke("take", lambda value: value, (ConstructorValue(NominalId(1), "Box"),))
+        registry.invoke(
+            "take",
+            lambda value: value,
+            (ConstructorValue(NominalId(1)),),
+            nominals=NO_BUILTIN_DECLARATIONS,
+            descriptors=_NO_DESCRIPTORS,
+        )
 
 
 def test_extern_returning_a_callback_round_trips_its_agl_closure(tmp_path: Path) -> None:
@@ -224,11 +298,10 @@ def test_extern_returning_a_callback_round_trips_its_agl_closure(tmp_path: Path)
 
 
 def test_returning_a_python_callable_into_agl_raises_extern_error(tmp_path: Path) -> None:
-    exc = evaluate_ir_raises_with_externs(
-        "extern def build() -> (int) -> int\nlet callback = build()\ncallback(1)\n",
-        "def build(): return lambda value: value\n",
-        tmp_path,
-    )
+    source = "extern def build() -> (int) -> int\nlet callback = build()\ncallback(1)\n"
+    companion = "def build(): return lambda value: value\n"
+    exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
 
-    assert exc.display_name == "ExternError"
+    executable, _ = _prepare_extern_program(source, companion, tmp_path)
+    assert exc.nominal == executable.builtin_nominals.resolve("ExternError").nominal
     assert exc.fields["python-type"] == TextValue("")

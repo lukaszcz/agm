@@ -298,8 +298,7 @@ def test_boolean_and_enum_decompositions_partition_complete_finite_domains() -> 
     enum_type = cast(EnumType, enum_matrix.occurrences[0].type)
     nominal = NominalId(enum_type.decl_id)
     subjects = tuple(
-        RecordValue(nominal=nominal, display_name=f"{enum_type.name}::{variant}", fields={})
-        for variant in ("red", "green", "blue")
+        RecordValue(nominal=nominal, fields={}) for variant in ("red", "green", "blue")
     )
     _assert_decomposition_partition(enum_checked, enum_case, enum_matrix, enum_allocator, subjects)
 
@@ -374,19 +373,16 @@ def test_record_decompositions_partition_partial_and_nested_patterns() -> None:
     subjects = (
         RecordValue(
             outer_nominal,
-            outer.record_type.name,
             {
-                "inner": RecordValue(inner_nominal, inner.record_type.name, {"value": IntValue(1)}),
+                "inner": RecordValue(inner_nominal, {"value": IntValue(1)}),
                 "label": TextValue("x"),
             },
         ),
         RecordValue(
             outer_nominal,
-            outer.record_type.name,
             {
                 "inner": RecordValue(
                     inner_nominal,
-                    inner.record_type.name,
                     {"value": DecimalValue(decimal.Decimal("2"))},
                 ),
                 "label": TextValue("x"),
@@ -394,11 +390,9 @@ def test_record_decompositions_partition_partial_and_nested_patterns() -> None:
         ),
         RecordValue(
             outer_nominal,
-            outer.record_type.name,
             {
                 "inner": RecordValue(
                     inner_nominal,
-                    inner.record_type.name,
                     {"value": DecimalValue(decimal.Decimal("2"))},
                 ),
                 "label": TextValue("other"),
@@ -433,9 +427,6 @@ def test_nested_enum_and_literal_decomposition_preserves_first_match_actions() -
         "  | empty() => 4\n"
         "  | _ => 5\n"
     )
-    envelope_heads = _constructor_by_variant(matrix, 0)
-    wrapped = envelope_heads["wrapped"]
-    empty = envelope_heads["empty"]
     envelope_type = cast(EnumType, matrix.occurrences[0].type)
     envelope_nominal = NominalId(envelope_type.decl_id)
     wrapped_cell = cast(ConstructorCell, matrix.rows[0].cells[0])
@@ -445,39 +436,32 @@ def test_nested_enum_and_literal_decomposition_preserves_first_match_actions() -
     def payload(variant: str, value: Value) -> RecordValue:
         return RecordValue(
             nominal=payload_nominal,
-            display_name=f"{payload_type.name}::{variant}",
             fields={"value": value},
         )
 
     subjects = (
         RecordValue(
             nominal=envelope_nominal,
-            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
             fields={"payload": payload("number", IntValue(1))},
         ),
         RecordValue(
             nominal=envelope_nominal,
-            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
             fields={"payload": payload("number", DecimalValue(decimal.Decimal("1.0")))},
         ),
         RecordValue(
             nominal=envelope_nominal,
-            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
             fields={"payload": payload("number", DecimalValue(decimal.Decimal("2.5")))},
         ),
         RecordValue(
             nominal=envelope_nominal,
-            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
             fields={"payload": payload("word", TextValue("x"))},
         ),
         RecordValue(
             nominal=envelope_nominal,
-            display_name=f"{envelope_type.name}::{wrapped.terminal_name}",
             fields={"payload": payload("word", TextValue("other"))},
         ),
         RecordValue(
             nominal=envelope_nominal,
-            display_name=f"{envelope_type.name}::{empty.terminal_name}",
             fields={},
         ),
     )

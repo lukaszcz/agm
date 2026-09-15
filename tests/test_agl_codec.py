@@ -46,11 +46,16 @@ from agm.agl.ir.contracts import (
     VariantDecode,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
+from agm.agl.ir.program import ValueDescriptors
+from agm.agl.ir.reserved_nominals import (
+    require_reserved_enum_member_id,
+    require_reserved_nominal_id,
+)
 from agm.agl.modules.ids import ENTRY_ID, RESERVED_ID, ModuleId
 from agm.agl.parser.parser import parse_program
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec, extract_json_text
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
+from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.external_names import ExternalName
@@ -181,6 +186,11 @@ def _make_review_type() -> EnumType:
     return _REVIEW_TYPE
 
 
+def _review_member_nominal(case: str) -> NominalId:
+    """Identity of a ``Review`` enum member, for asserting a decoded variant."""
+    return NominalId(_DEFAULT_TABLE.enum_member_names(_REVIEW_TYPE)[case].decl_id)
+
+
 def _make_contract_for(typ: Type, table: TypeTable | None = None) -> OutputContract:
     """Build an OutputContract for a type via JsonCodec.make_contract.
 
@@ -289,6 +299,8 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
 
 
 class _Bindings(dict[str, object]):
+    descriptors: ValueDescriptors
+
     def snapshot(self) -> "_Bindings":
         return self
 
@@ -303,8 +315,7 @@ class _Bindings(dict[str, object]):
 # validates the materialized ``default-agent`` value eagerly at construction,
 # regardless of whether anything ever dispatches it.
 _TEST_DEFAULT_AGENT = RecordValue(
-    nominal=NominalId(require_reserved_nominal_id("Agent")),
-    display_name=f"{'Agent'}::{'AgentCommand'}",
+    nominal=NominalId(require_reserved_enum_member_id("Agent", "AgentCommand")),
     fields={"command": TextValue("unused")},
 )
 
@@ -328,7 +339,7 @@ def _run_with_json_codec(
     executable = lower_compiled_module(compile_checked_module(checked), source_text="<direct-ast>")
     contracts, errors = materialize_ir_contracts(executable, codecs)
     assert errors == []
-    return _Bindings(
+    bindings = _Bindings(
         IrInterpreter(
             executable,
             agent_dispatcher=agent_dispatcher,
@@ -337,6 +348,8 @@ def _run_with_json_codec(
             builtin_host_settings={"default-agent": _TEST_DEFAULT_AGENT},
         ).run()
     )
+    bindings.descriptors = ValueDescriptors.from_program(executable)
+    return bindings
 
 
 # AST statement / expression builders (subset needed for codec tests)
@@ -1883,7 +1896,7 @@ class TestTypedValueConstruction:
         result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name == "Issue"
+        assert result.value.nominal == NominalId(_ISSUE_TYPE.decl_id)
         assert result.value.fields["title"] == TextValue("Bug")
         assert result.value.fields["severity"] == IntValue(5)
         assert result.value.fields["description"] == TextValue("Oh no")
@@ -1894,7 +1907,7 @@ class TestTypedValueConstruction:
         result = _parse_typed(codec, '{"$case": "Pass"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name == "Review::Pass"
+        assert result.value.nominal == _review_member_nominal("Pass")
         assert result.value.fields == {}
 
     def test_enum_payload_variant(self) -> None:
@@ -1904,7 +1917,7 @@ class TestTypedValueConstruction:
         result = _parse_typed(codec, raw, typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "Fail"
+        assert result.value.nominal == _review_member_nominal("Fail")
         issues = result.value.fields["issues"]
         assert isinstance(issues, ArrayValue)
         assert issues.elements == [TextValue("a"), TextValue("b")]
@@ -2108,6 +2121,32 @@ class TestStructuredValidationErrors:
         assert result.errors == ()
 
 
+class TestValidationMessagesHaveNoDecimalRepr:
+    """Structured validation messages never leak the Python ``Decimal(...)`` repr.
+
+    A wire number written with a fraction/exponent parses as ``Decimal``
+    (``parse_float=Decimal``); when it fails schema validation, jsonschema's
+    raw ``error.message`` embeds the Python repr (e.g.
+    ``Decimal('1.0') is not of type 'string'``). These reach agents (retry
+    prompts) and users (trace, ``AgentParseError``) and must read as the
+    number the agent wrote, not a Python internal.
+    """
+
+    def test_decimal_repr_absent_for_text_target(self) -> None:
+        codec = JsonCodec()
+        result = _parse_typed(codec, "1.0", TextType(), strict_json=False)
+        assert result.ok is False
+        assert "Decimal(" not in result.error_msg
+        assert result.errors and all("Decimal(" not in e.message for e in result.errors)
+
+    def test_decimal_repr_absent_for_array_element_wrong_type(self) -> None:
+        codec = JsonCodec()
+        result = _parse_typed(codec, "[1.0]", ArrayType(elem=BoolType()), strict_json=False)
+        assert result.ok is False
+        assert "Decimal(" not in result.error_msg
+        assert result.errors and all("Decimal(" not in e.message for e in result.errors)
+
+
 class TestValidationErrorsThroughRuntime:
     """real ValidationErrors thread into AgentParseError.validation_errors."""
 
@@ -2129,7 +2168,7 @@ class TestValidationErrorsThroughRuntime:
                 agent_dispatcher=lambda req: '{"title": "Bug"}',
             )
         exc = exc_info.value.exc
-        assert exc.display_name == "AgentParseError"
+        assert exc.nominal == NominalId(require_reserved_nominal_id("AgentParseError"))
         ve = exc.fields["validation-errors"]
         assert isinstance(ve, JsonValue)
         assert isinstance(ve.raw, list)
@@ -2444,7 +2483,7 @@ class TestPipelineDriverWireUp:
         )
         r = scope.snapshot()["r"]
         assert isinstance(r, RecordValue)
-        assert r.display_name.rsplit("::", maxsplit=1)[-1] == "Pass"
+        assert render_value(r, scope.descriptors) == "Review::Pass"
 
     def test_array_target_accepted(self) -> None:
         let_xs = _let(
@@ -2521,7 +2560,7 @@ class TestPipelineDriverWireUp:
                 agent_dispatcher=lambda req: "```json\n6\n```",
             )
         exc = exc_info.value.exc
-        assert exc.display_name == "AgentParseError"
+        assert exc.nominal == NominalId(require_reserved_nominal_id("AgentParseError"))
 
     def test_runtime_default_strict_json_applies(self) -> None:
         """default_strict_json=True on runtime applies to calls without explicit option."""
@@ -2533,7 +2572,7 @@ class TestPipelineDriverWireUp:
                 strict_json=True,
             )
         exc = exc_info.value.exc
-        assert exc.display_name == "AgentParseError"
+        assert exc.nominal == NominalId(require_reserved_nominal_id("AgentParseError"))
 
     def test_parse_error_becomes_agent_parse_error(self) -> None:
         let_n = _let("n", _ask_call("Num."), type_ann=_int_ty())
@@ -2543,7 +2582,7 @@ class TestPipelineDriverWireUp:
                 agent_dispatcher=lambda req: "not json at all",
             )
         exc = exc_info.value.exc
-        assert exc.display_name == "AgentParseError"
+        assert exc.nominal == NominalId(require_reserved_nominal_id("AgentParseError"))
         # AgentParseError preserves the (seeded) default Agent enum value.
         agent = exc.fields.get("agent")
         assert agent == _TEST_DEFAULT_AGENT
@@ -2553,7 +2592,7 @@ class TestPipelineDriverWireUp:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec((let_n,), agent_dispatcher=lambda req: "bad")
         exc = exc_info.value.exc
-        assert exc.display_name == "AgentParseError"
+        assert exc.nominal == NominalId(require_reserved_nominal_id("AgentParseError"))
         assert "target-type" in exc.fields
 
     def test_decimal_exactness_end_to_end(self) -> None:
@@ -2603,16 +2642,17 @@ class TestCaseDispatch:
                 "Running": {"progress": IntType()},
             },
         )
+        table = type_table_for(typedef)
         result = _parse_typed(
             codec,
             '{"$case": "Running", "progress": 50}',
             typ,
             strict_json=False,
-            table=type_table_for(typedef),
+            table=table,
         )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "Running"
+        assert result.value.nominal == NominalId(table.enum_member_names(typ)["Running"].decl_id)
         assert result.value.fields["progress"] == IntValue(50)
 
     def test_bad_case_fails(self) -> None:
@@ -2714,12 +2754,11 @@ program def main(issue: Issue) -> unit =
         """Enum can be parsed via JsonCodec from a JSON string."""
         codec = JsonCodec()
         typ, typedef = enum_type("Status", {"Done": {}, "Pending": {}})
-        result = _parse_typed(
-            codec, '{"$case": "Done"}', typ, strict_json=False, table=type_table_for(typedef)
-        )
+        table = type_table_for(typedef)
+        result = _parse_typed(codec, '{"$case": "Done"}', typ, strict_json=False, table=table)
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
-        assert result.value.display_name.rsplit("::", maxsplit=1)[-1] == "Done"
+        assert result.value.nominal == NominalId(table.enum_member_names(typ)["Done"].decl_id)
 
     def test_array_program_argument_parsed_from_json_string(self) -> None:
         rt = PipelineDriver()
@@ -2912,8 +2951,8 @@ class TestDecodeValueRejectsMismatchedPayloads:
     def test_integral_decimal_to_int_through_parse(self) -> None:
         """wire ``1.0`` validates and converts to IntValue(1) for an int target.
 
-        Exercised through ``parse()`` (the public path): post-parse normalization
-        rewrites integral Decimals to int *before* schema validation, so
+        Exercised through ``parse()`` (the public path): the AgL validator's
+        ``integer`` type check accepts an integral Decimal directly, so
         ``{"type": "integer"}`` accepts ``1.0``.
         """
         codec = JsonCodec()
@@ -2922,7 +2961,7 @@ class TestDecodeValueRejectsMismatchedPayloads:
         assert result.value == IntValue(1)
 
     def test_integral_decimal_to_int_strict(self) -> None:
-        """integral-Decimal normalization also applies on the strict path."""
+        """The Decimal-aware integer check also applies on the strict path."""
         codec = JsonCodec()
         result = _parse_typed(codec, "1.0", IntType(), strict_json=True)
         assert result.ok is True
@@ -2936,22 +2975,18 @@ class TestDecodeValueRejectsMismatchedPayloads:
         assert result.value is None
         assert any(e.category == "wrong_type" for e in result.errors)
 
-    def test_integral_decimal_for_decimal_target(self) -> None:
-        """``1.0`` for a decimal target yields a value-exact DecimalValue.
+    def test_integral_decimal_for_decimal_target_keeps_exact_scale(self) -> None:
+        """``1.0`` for a decimal target yields a scale-exact DecimalValue.
 
-        Normalization routes the integral Decimal through int, and the
-        int→decimal widening in ``decode_value`` re-widens it: the resulting
-        value equals ``1`` exactly == Decimal('1.0')``).
+        A decimal target is never routed through the integer check, so the
+        wire value keeps the exact scale it was written with — ``1.0``.
         """
         codec = JsonCodec()
         result = _parse_typed(codec, "1.0", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
-        # Value exactness: numerically equal to both 1 and 1.0.
         assert result.value.value == Decimal("1.0")
-        assert result.value.value == Decimal("1")
-        # Pinned representation: integral decimals normalize to scale-0 Decimal('1').
-        assert result.value.value == Decimal(1)
+        assert str(result.value.value) == "1.0"
 
 
 # ---------------------------------------------------------------------------
@@ -3747,7 +3782,6 @@ class TestRegisterCodec:
                 return ParseResult.success(
                     RecordValue(
                         nominal=NominalId(target_type.decl_id),
-                        display_name="Box",
                         fields={"value": IntValue(int(raw))},
                     )
                 )
@@ -3763,7 +3797,6 @@ class TestRegisterCodec:
         assert isinstance(seen_parse_targets[0], RecordType)
         assert result.bindings["y"] == RecordValue(
             nominal=NominalId(seen_parse_targets[0].decl_id),
-            display_name="Box",
             fields={"value": IntValue(12)},
         )
         assert len(seen_parse_targets) == 1
@@ -4112,7 +4145,6 @@ class TestRegisterCodec:
                 return ParseResult.success(
                     RecordValue(
                         nominal=NominalId(target_type.decl_id),
-                        display_name=target_type.name,
                         fields={"value": IntValue(int(raw))},
                     )
                 )
@@ -4128,7 +4160,6 @@ class TestRegisterCodec:
         assert isinstance(seen_parse_type[0], RecordType)
         assert result.bindings["box"] == RecordValue(
             nominal=NominalId(seen_parse_type[0].decl_id),
-            display_name="Box",
             fields={"value": IntValue(5)},
         )
         assert [strip_decl_ids(t) for t in seen_contract_type] == [RecordType("Box")]

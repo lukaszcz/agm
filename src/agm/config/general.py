@@ -787,6 +787,8 @@ class ReplConfig:
     """Resolved REPL configuration."""
 
     theme: str
+    echo: bool = True
+    echo_unit: bool = False
 
 
 def load_repl_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> ReplConfig:
@@ -796,13 +798,22 @@ def load_repl_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> ReplCon
     theme = section.get("theme", "auto")
     if not isinstance(theme, str) or theme not in ("dark", "light", "auto"):
         theme = "auto"
-    return ReplConfig(theme=theme)
+    return ReplConfig(
+        theme=theme,
+        echo=_optional_bool(section, "echo", default=True),
+        echo_unit=_optional_bool(section, "echo-unit", default=False),
+    )
 
 
-def save_repl_theme(theme: str, *, home: Path) -> None:
-    """Persist the REPL theme preference to the home-level ``config.toml``."""
+def save_repl_setting(key: str, value: str | bool, *, home: Path) -> None:
+    """Persist one ``[repl]`` setting (``theme``, ``echo``, ``echo-unit``, …) to config.toml.
+
+    Single generic save path for every REPL setting: writes the raw TOML
+    value as-is (a ``bool`` round-trips as a TOML boolean, a ``str`` as a TOML
+    string), always to the home-level ``config.toml``.
+    """
     path = agm_home_dir(home=home) / "config.toml"
     doc = load_toml_doc(path) if path.is_file() else empty_toml_doc()
-    set_toml_table_value(doc, "repl", "theme", theme)
+    set_toml_table_value(doc, "repl", key, value)
     mkdir(path.parent, parents=True, exist_ok=True)
     write_text(path, dumps_toml(doc), encoding="utf-8")

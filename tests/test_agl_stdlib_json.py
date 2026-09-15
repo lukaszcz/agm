@@ -53,7 +53,7 @@ def _json_companion() -> _JsonCompanion:
                 fields=("message", "key"),
             ),
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
-        }
+        },
     )
     module: ModuleType = registry.load_companion(_JSON_MODULE, _STDLIB_ROOT / "src" / "json.py")
     return cast(_JsonCompanion, module)
@@ -64,7 +64,7 @@ def test_json_companion_get_handles_object_and_non_object_receivers() -> None:
 
     assert decode_boundary_value(companion.get(AglJson({"present": 1}), "present")) == JsonValue(1)
     assert decode_boundary_value(companion.get_option(AglJson({}), "missing")) == RecordValue(
-        _OPTION_NONE, "Option::None", {}
+        _OPTION_NONE, {}
     )
 
     for raw in ([], True):
@@ -72,5 +72,5 @@ def test_json_companion_get_handles_object_and_non_object_receivers() -> None:
             companion.get(AglJson(raw), "missing")
         assert exc_info.value.value.fields["key"] == TextValue("missing")
         assert decode_boundary_value(companion.get_option(AglJson(raw), "missing")) == RecordValue(
-            _OPTION_NONE, "Option::None", {}
+            _OPTION_NONE, {}
         )

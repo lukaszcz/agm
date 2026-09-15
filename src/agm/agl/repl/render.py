@@ -27,18 +27,15 @@ from typing import TYPE_CHECKING
 from agm.agl.diagnostics import format_diagnostic
 
 if TYPE_CHECKING:
+    from agm.agl.ir.program import ValueDescriptors
     from agm.agl.repl.entry import EntryResult
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Value
 
 
-def _is_repl_printable_value(value: "Value") -> bool:
-    from agm.agl.semantics.values import UnitValue
-
-    return not isinstance(value, UnitValue) or value.printable_in_repl
-
-
-def _render_value_or_cyclic_message(value: "Value", *, pretty: bool, quote_strings: bool) -> str:
+def _render_value_or_cyclic_message(
+    value: "Value", descriptors: "ValueDescriptors", *, pretty: bool, quote_strings: bool
+) -> str:
     """Render *value*, or the ``AgL exception: CyclicValueError: ...`` line.
 
     Reference semantics lets a value bound at the REPL prompt become cyclic
@@ -54,7 +51,7 @@ def _render_value_or_cyclic_message(value: "Value", *, pretty: bool, quote_strin
     from agm.agl.semantics.cycles import CYCLE_MESSAGE, AglCyclicValue
 
     try:
-        return render_value(value, pretty=pretty, quote_strings=quote_strings)
+        return render_value(value, descriptors, pretty=pretty, quote_strings=quote_strings)
     except AglCyclicValue:
         return RunError(
             type_name="CyclicValueError",
@@ -62,7 +59,9 @@ def _render_value_or_cyclic_message(value: "Value", *, pretty: bool, quote_strin
         ).to_message()
 
 
-def format_typed_value(name: "str | None", value_type: "Type", value: "Value") -> str:
+def format_typed_value(
+    name: "str | None", value_type: "Type", value: "Value", descriptors: "ValueDescriptors"
+) -> str:
     """Format a ``name : Type = value`` line, or ``: Type = value`` when unnamed.
 
     This is the single source of truth for the binding/value display shared by
@@ -74,14 +73,28 @@ def format_typed_value(name: "str | None", value_type: "Type", value: "Value") -
     :func:`_render_value_or_cyclic_message`).
     """
     prefix = f"{name} :" if name is not None else ":"
-    rendered = _render_value_or_cyclic_message(value, pretty=True, quote_strings=True)
+    rendered = _render_value_or_cyclic_message(value, descriptors, pretty=True, quote_strings=True)
     return f"{prefix} {value_type!r} = {rendered}"
+
+
+def _is_unit_entry(result: "EntryResult") -> bool:
+    """Whether *result*'s checked type is ``unit`` — an entry that echoes nothing.
+
+    The single place the "unit-typed entry echoes nothing" decision is made,
+    for both the live value echo and the ``check_only`` (dry-run) type echo, so
+    the two never drift.  Decided from the entry's checked static type, never
+    from a value-carried flag.
+    """
+    from agm.agl.semantics.types import UnitType
+
+    return result.kind in ("expression", "binding") and isinstance(result.value_type, UnitType)
 
 
 def render_entry_result(
     result: "EntryResult",
     *,
     echo: bool,
+    echo_unit: bool = False,
     check_only: bool = False,
 ) -> str | None:
     """Return the text to print for *result*, or ``None`` when nothing to print.
@@ -89,7 +102,10 @@ def render_entry_result(
     *echo* mirrors the session echo setting: when off, successful entries
     produce no echo line (errors and warnings are always reported regardless).
     *check_only* selects the dry-run echo: a check-only result has a type but no
-    value, so the echo shows the inferred type instead of a value.
+    value, so the echo shows the inferred type instead of a value. A
+    ``unit``-typed expression or binding never echoes, in either mode (see
+    :func:`_is_unit_entry`), unless *echo_unit* is set — the single place that
+    decision is gated.
     """
     lines: list[str] = []
 
@@ -104,7 +120,7 @@ def render_entry_result(
             lines.append(f"Installed before failure: {', '.join(result.installed)}")
         return "\n".join(lines) if lines else None
 
-    if echo:
+    if echo and (echo_unit or not _is_unit_entry(result)):
         echo_line = _render_check_only(result) if check_only else _render_echo(result)
         if echo_line is not None:
             lines.append(echo_line)
@@ -175,24 +191,28 @@ def _render_echo(result: "EntryResult") -> str | None:
         assert result.value_type is not None
         return format_type_echo_for_repl(result.value_type, result.type_table)
     if result.kind == "expression":
-        # A bare expression always carries a value and type on success.
-        assert result.value is not None
-        assert result.value_type is not None
-        if not _is_repl_printable_value(result.value):
-            return None
+        # A bare expression always carries a value, type, and descriptor view
+        # on success.
+        assert (
+            result.value is not None
+            and result.value_type is not None
+            and result.descriptors is not None
+        )
         return _render_value_or_cyclic_message(
             result.value,
+            result.descriptors,
             pretty=True,
             quote_strings=result.quote_strings,
         )
     if result.kind == "binding":
         # Named bindings share their display with ``:bindings``. A destructuring
         # let has no single public name, so it echoes its complete matched value.
-        assert result.value is not None
-        assert result.value_type is not None
-        if not _is_repl_printable_value(result.value):
-            return None
-        return format_typed_value(result.name, result.value_type, result.value)
+        assert (
+            result.value is not None
+            and result.value_type is not None
+            and result.descriptors is not None
+        )
+        return format_typed_value(result.name, result.value_type, result.value, result.descriptors)
     if result.kind == "declaration":
         assert result.name is not None
         return f"{result.name} declared"

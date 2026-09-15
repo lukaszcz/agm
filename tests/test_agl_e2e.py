@@ -166,10 +166,14 @@ class ScriptedAgent:
         return _ScriptedSessionService(self)
 
     def _new_session_backend(self, agent: object, transport: str) -> Any:
-        """Build the same transport-specific backend production would select."""
+        """Build the same transport-specific backend production would select.
+
+        *agent* is already the resolved host specification: the evaluator is
+        the sole seam that decodes an AgL ``Agent`` value, so no session-host
+        layer below it ever sees the value or has to decode it.
+        """
         from agm.agent.runner import command_targets_session_id
         from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
-        from agm.agl.runtime.agents import decode_agent_value
 
         if transport == "scripted":
             session = _ScriptedSession(tag=f"session-{len(self.sessions) + 1}", parent=None)
@@ -177,10 +181,7 @@ class ScriptedAgent:
             return _ScriptedSessionBackend(
                 self, session, frozenset(SessionOperation), supports_name=True
             )
-        try:
-            spec = decode_agent_value(agent)
-        except (AttributeError, ValueError) as error:
-            raise SessionHostError(str(error), "open") from error
+        spec = agent
         if transport == "rpc":
             if not isinstance(spec, AgentPi):
                 raise SessionHostError("RPC transport is only supported by AgentPi", "open")
@@ -283,10 +284,13 @@ class _ScriptedSessionService:
 
     def __init__(self, agent: ScriptedAgent) -> None:
         self._agent = agent
-        self._service = SessionService(agent._new_session_backend)
+        self._service = SessionService(self._backend_factory)
         self._sessions: dict[str, _ScriptedSession] = {}
         self._backends: dict[str, _ScriptedSessionBackend] = {}
         self._ephemeral_handles: set[str] = set()
+
+    def _backend_factory(self, agent: object, transport: str) -> Any:
+        return self._agent._new_session_backend(agent, transport)
 
     def open(self, agent: object, transport: str, *, name: str = "") -> str:
         handle = self._service.open(agent, transport, name=name)
@@ -448,7 +452,11 @@ class _ScenarioSessionHost:
 
         try:
             return service.with_ephemeral(
-                agent, transport.lower(), register, on_closed=retire, single_prompt=single_prompt
+                agent,
+                transport.lower(),
+                register,
+                on_closed=retire,
+                single_prompt=single_prompt,
             )
         except SessionHostError as error:
             self._raise_host_error(error)
@@ -696,17 +704,19 @@ class _ScriptedPiRpcSessionBackend(_ScriptedSessionBackend):
 
 
 def _scripted_agent_name(agent: Any) -> str:
-    """Map an AgL agent value onto one scenario's scripted service."""
+    """Map an agent specification onto one scenario's scripted service."""
     import shlex
 
-    command = agent.fields.get("command")
-    if command is not None:
+    from agm.agent.spec import AgentCommand, AgentPi
+
+    if isinstance(agent, AgentCommand):
         try:
-            return shlex.split(command.value)[0]
-        except (TypeError, ValueError):
-            return command.value
-    provider = agent.fields.get("provider")
-    return provider.value if provider is not None else "ask"
+            return shlex.split(agent.command)[0]
+        except ValueError:
+            return agent.command
+    if isinstance(agent, AgentPi):
+        return agent.provider
+    return "ask"
 
 
 def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:

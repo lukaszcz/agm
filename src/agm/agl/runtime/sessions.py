@@ -9,11 +9,10 @@ from typing import TYPE_CHECKING, NoReturn, Protocol, TypeVar, runtime_checkable
 
 from agm.agent.transport import AgentCallInfo
 from agm.agl.runtime.request import AgentCallHostError, AgentRequest, AgentResponse
-from agm.agl.semantics.values import RecordValue
 from agm.core.cleanup import preserve_primary_error
 
 if TYPE_CHECKING:
-    from agm.agent.spec import SessionTransport
+    from agm.agent.spec import AgentSpec, SessionTransport
     from agm.agl.runtime.agents import AgentFn
 
 __all__ = [
@@ -33,22 +32,16 @@ __all__ = [
 _T = TypeVar("_T")
 
 
-def default_session_transport(agent: RecordValue) -> "SessionTransport":
-    """Return the transport an ``Agent`` value drives when none was selected.
-
-    The choice belongs to the agent's host specification; AgL never recognizes
-    an agent by its variant name.
-    """
-    from agm.agl.runtime.agents import agent_spec_type
-
-    return agent_spec_type(agent).DEFAULT_SESSION_TRANSPORT
+def default_session_transport(spec: "AgentSpec") -> "SessionTransport":
+    """Return the transport *spec* drives when none was selected."""
+    return type(spec).DEFAULT_SESSION_TRANSPORT
 
 
 @dataclass(frozen=True, slots=True)
 class SessionSnapshot:
     """The opening identity the host associates with an opaque handle."""
 
-    agent: RecordValue
+    agent: "AgentSpec"
     transport: str
 
 
@@ -113,7 +106,7 @@ class EphemeralSessionHost(Protocol):
 
     def with_ephemeral(
         self,
-        agent: RecordValue,
+        agent: "AgentSpec",
         transport: str,
         action: Callable[[str], _T],
         *,
@@ -122,15 +115,19 @@ class EphemeralSessionHost(Protocol):
 
 
 class SessionHost(Protocol):
-    """Host-owned lifecycle service addressed by opaque AgL session ids."""
+    """Host-owned lifecycle service addressed by opaque AgL session ids.
 
-    def open(self, agent: RecordValue, transport: str, *, name: str = "") -> str: ...
+    *agent* is already resolved to its host specification: the evaluator
+    decodes the AgL ``Agent`` value once, before it ever reaches a host.
+    """
+
+    def open(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str: ...
 
     def open_ephemeral(
-        self, agent: RecordValue, transport: str, *, single_prompt: bool = False
+        self, agent: "AgentSpec", transport: str, *, single_prompt: bool = False
     ) -> str: ...
 
-    def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str: ...
+    def default(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str: ...
 
     def ask(self, handle: str, prompt: str) -> str: ...
 
@@ -155,7 +152,7 @@ class SessionHost(Protocol):
 
 def with_ephemeral_session(
     host: SessionHost,
-    agent: RecordValue,
+    agent: "AgentSpec",
     transport: str,
     action: Callable[[str], _T],
     *,
@@ -190,19 +187,19 @@ class AgentDispatcherSessionHost(SessionHost):
         self._default_handle: str | None = None
         self._next_handle = 0
 
-    def open(self, _agent: RecordValue, _transport: str, *, name: str = "") -> str:
+    def open(self, _agent: "AgentSpec", _transport: str, *, name: str = "") -> str:
         del name
         self._unavailable("open")
 
     def open_ephemeral(
-        self, agent: RecordValue, transport: str, *, single_prompt: bool = False
+        self, agent: "AgentSpec", transport: str, *, single_prompt: bool = False
     ) -> str:
         del single_prompt
         handle = self._new_handle()
         self._sessions[handle] = SessionSnapshot(agent, transport)
         return handle
 
-    def default(self, agent: RecordValue, transport: str, *, name: str = "") -> str:
+    def default(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str:
         del name
         if self._default_handle is None:
             self._default_handle = self._new_handle()
@@ -279,7 +276,7 @@ class AgentDispatcherSessionHost(SessionHost):
         self._next_handle += 1
         return handle
 
-    def _agent_for(self, handle: str, operation: str) -> RecordValue:
+    def _agent_for(self, handle: str, operation: str) -> "AgentSpec":
         if handle in self._closed:
             raise SessionHostError("closed session", operation)
         try:

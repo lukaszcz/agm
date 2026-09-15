@@ -307,7 +307,8 @@ def parse(input):
 
 `AglException` requires a synthesized AgL exception value. Every other Python
 value, including a record, enum, scalar, container, callable, or arbitrary
-object, raises a Python-side `TypeError`.
+object, raises a Python-side `TypeError`. `str()` of an `AglException` is the
+wrapped AgL exception's `message` field.
 
 ## Generics and trust
 

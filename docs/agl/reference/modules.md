@@ -317,7 +317,7 @@ whose natural result is an `Option` and which has no raising form carries no
 `?`. A `!` suffix marks an in-place operation — usually the counterpart of a
 copy-producing one, sometimes an inherently mutating operation with no
 copy-producing form. An operation with neither suffix may still mutate when that
-is its purpose, as `append` and `set` do. An `-or` suffix supplies a fallback
+is its purpose, as `push` and `set` do. An `-or` suffix supplies a fallback
 eagerly, as a value; its `-else` twin supplies the same fallback lazily, as a
 function evaluated only on the failing branch — `Option` and `Result` carry both
 pairs, `or`/`or-else` and `unwrap-or`/`unwrap-or-else`.

@@ -1659,8 +1659,9 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
 
     The standard library's builtin declarations are concatenated inside a
     ``scope Std`` region of a replacement ``std/prelude``, importing only
-    ``Option``: the region itself holds everything else they name, including a
-    local ``path`` alias standing in for extern-backed ``std/path``. Canonical
+    ``Option`` and ``Result``: the region itself holds everything else they
+    name, including a local ``path`` alias standing in for extern-backed
+    ``std/path``. Canonical
     session statics are omitted because wrapping changes their owner path,
     and ``exec``'s and the agent calls' defaults are rewritten so that no
     default names the environment or config module. Infix declarations stay at
@@ -1676,7 +1677,11 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
 
     fun_lines = module_lines("fun")
     infix_declarations = "".join(line for line in fun_lines if line.startswith("infix"))
-    scoped_sources = ["import std/option::Option\n", "type path = text\n"]
+    scoped_sources = [
+        "import std/option::Option\n",
+        "import std/result::Result\n",
+        "type path = text\n",
+    ]
     scoped_sources.append("".join(line for line in fun_lines if not line.startswith("infix")))
     for name in _SCOPED_STDLIB_MODULES:
         source = "".join(line for line in module_lines(name) if not line.startswith("import "))

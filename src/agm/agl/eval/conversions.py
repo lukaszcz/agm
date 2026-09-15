@@ -4,15 +4,18 @@
 runtime ``Value`` and returns the converted ``Value``.  On an expected fallible
 failure it raises the module-private ``AglCastConversion`` sentinel (carrying
 the message + user-facing source/target labels + rendered raw value); the
-caller wraps it into the appropriate ``CastError`` / ``BoolValue(False)``.
+caller wraps it into the appropriate ``CastError`` / ``ValueParseError`` /
+``BoolValue(False)``.
 
 It reuses the existing runtime leaf primitives (rendering, JSON serialization,
-strict parse, integral-decimal normalization, JSON-Schema validation, and the
-typeless ``decode_value`` decode walk) rather than reimplementing them.
+the host text/value-syntax decode boundary, integral-decimal normalization,
+JSON-Schema validation, and the typeless ``decode_value`` decode walk) rather
+than reimplementing them.
 
 Imports: stdlib + ``agm.agl.semantics.values`` + ``agm.agl.ir``
-contracts + ``agm.agl.runtime`` leaf helpers.  No ``syntax`` / ``scope`` /
-``typecheck`` imports are permitted here.
+contracts + ``agm.agl.runtime`` leaf helpers (including the host
+text/value-syntax decode boundary).  No ``syntax`` / ``scope`` / ``typecheck``
+imports are permitted here.
 """
 
 from __future__ import annotations
@@ -26,15 +29,14 @@ from agm.agl.ir.contracts import (
     EncodePlan,
 )
 from agm.agl.runtime.convert import (
-    StrictJsonParseError,
     _clean_validation_message,
     decode_value,
     normalize_integral_decimals,
-    parse_json_strict,
     validator_for_schema,
 )
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import encode_value
+from agm.agl.runtime.value_decode import host_text_to_json
 from agm.agl.semantics.values import (
     DecimalValue,
     IntValue,
@@ -91,11 +93,15 @@ def run_recipe(recipe: ConversionRecipe, value: Value) -> Value:
                 raise AssertionError(  # pragma: no cover
                     f"PARSE_TEXT_THEN_DECODE expected TextValue, got {type(value).__name__}"
                 )
+            if recipe.decode is None:  # pragma: no cover
+                raise AssertionError("PARSE_TEXT_THEN_DECODE strategy requires a decode schema")
             try:
-                parsed = parse_json_strict(value.value)
-            except StrictJsonParseError as exc:
+                parsed = host_text_to_json(
+                    value.value, recipe.decode, dict(recipe.defs), agent_command_fallback=False
+                )
+            except ValueError as exc:
                 raise AglCastConversion(
-                    f"Failed to parse text as JSON: {exc.message}",
+                    f"Failed to parse text: {exc}",
                     source_label=recipe.source_label,
                     target_label=recipe.target_label,
                     raw=render_value(value),

@@ -1,0 +1,77 @@
+import std/json
+import std/value
+
+record Point
+  x: int
+  y: int
+
+enum Shape
+  | Square(side: int)
+  | Circle(radius: int)
+
+scope geo
+  record Circle
+    radius: int
+end geo
+
+record Nested
+  shapes: array[Shape]
+  center: Option[Point]
+  weights: dict[text, decimal]
+  note: text
+
+program def main(mode: text, input: text) -> unit =
+  if
+    | mode == "explicit" =>
+        print "%{parse::[Point](input)}"
+    | mode == "contextual" =>
+        let p: Point = parse(input)
+        print "%{p}"
+    | mode == "round_trip_record" =>
+        let original: Point = parse(input)
+        let round = parse::[Point](render(original))
+        print "%{round == original}"
+    | mode == "round_trip_enum_member" =>
+        let original: Shape = parse(input)
+        let round = parse::[Shape](render(original))
+        print "%{round == original}"
+    | mode == "round_trip_scoped_record" =>
+        let original: geo::Circle = parse(input)
+        let round = parse::[geo::Circle](render(original))
+        print "%{round == original}"
+    | mode == "round_trip_nested" =>
+        let original: Nested = parse(input)
+        let round = parse::[Nested](render(original))
+        print "%{round == original}"
+    | mode == "qualified_member" =>
+        print "%{parse::[Shape](input)}"
+    | mode == "try_parse_expected" =>
+        let r: Result[Point, ValueParseError] = try-parse(input)
+        print (case r of
+          | Result::Ok(value) => "ok %{value}"
+          | Result::Err(error) => "err %{error.raw}")
+    | mode == "try_parse_err_raw" =>
+        case try-parse::[int](input) of
+          | Result::Ok(value) => print("ok %{value}")
+          | Result::Err(error) =>
+              print("err %{error.source-type} -> %{error.target-type}, raw = %{error.raw}")
+    | mode == "distinct_from_cast_error" =>
+        try
+          let _ = parse::[int](input)
+          ()
+        catch CastError as _ =>
+          print("unexpectedly caught as CastError")
+        catch ValueParseError as e =>
+          print("caught: %{e.source-type} -> %{e.target-type}, raw = %{e.raw}")
+    | mode == "json_and_value_parse" =>
+        let j = json::parse(input)
+        print "%{j}"
+        print "%{parse::[int](input)}"
+        print "%{value::parse::[int](input)}"
+    | mode == "strict_json" =>
+        print "%{parse::[Point](input)}"
+    | mode == "top_level_text_verbatim" =>
+        let s: text = parse(input)
+        print "%{s}"
+    | else =>
+        print "unknown mode"

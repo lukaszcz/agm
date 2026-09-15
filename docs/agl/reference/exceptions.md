@@ -432,6 +432,21 @@ raw: text           # text representation of the value that failed to convert
 [Types](types.md#casts-and-convertibility)). The `as?` form never raises —
 it reports whether the cast would succeed as a `bool`.
 
+### `ValueParseError`
+
+`std/value::parse` received text that is neither strict JSON nor an AgL
+value-syntax literal, or that does not conform to the target type.
+
+```text
+source-type: text   # always "text"
+target-type: text   # name of the target type, e.g. "int"
+raw: text           # the input text that failed to parse
+```
+
+`std/value::try-parse` never raises: it returns `Result::Err` with a
+`ValueParseError` instead. `ValueParseError` is a distinct exception from
+`CastError` — a `catch CastError` clause does not catch it.
+
 ### `JsonParseError`
 
 A `std/json` parsing function received text that is not a well-formed JSON
@@ -524,6 +539,7 @@ how equality and tracing treat one.
 | Division by zero | `ArithmeticError` |
 | Engine-setting write the host rejects (unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
+| `std/value::parse` — input is neither strict JSON nor an AgL value-syntax literal, or does not conform to the target type | `ValueParseError` |
 | `std/json` parsing — input is not well-formed JSON | `JsonParseError` |
 | `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
 | `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |

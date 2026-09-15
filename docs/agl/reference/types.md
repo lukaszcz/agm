@@ -300,6 +300,23 @@ program def main() -> unit =
   print(copied)
 ```
 
+### Parsing values
+
+`parse[T](value: text) -> T` and `try-parse[T](value: text) -> Result[T,
+ValueParseError]` convert text the same way a cast does: `parse::[T](v)`
+follows the same static rules as `v as T` (a `T` requiring structure parses
+strict JSON or [value-syntax](host-environment.md#value-syntax); a `text` or
+`json` target instead follows the conversion matrix verbatim — see
+[Casts and convertibility](#casts-and-convertibility)) but raises
+`ValueParseError` instead of `CastError` on failure
+([Exceptions](exceptions.md#valueparseerror)). `try-parse` never raises: it
+returns `Result::Err` with the `ValueParseError` instead.
+
+`T` comes from an explicit `::[T]` type argument or the contextual expected
+type; a call supplying neither is a static error. Unlike `copy`/
+`shallow-copy`, `parse` and `try-parse` are not identity-typed and cannot be
+used as first-class function values.
+
 ### Function types: `A -> B` and `(A, B, …) -> C`
 
 A function value has a positional function type. The parameters appear as a
@@ -999,15 +1016,21 @@ may raise `CastError`.
 | `decimal` | `int` | total (widening, same as the implicit coercion) |
 | `decimal` | `text`, `json` | fallible — value must be a number |
 | `array[E]` | identical `array[E]` | total (no-op) |
-| `array[E]` | `text`, `json` | fallible — strict JSON parse then element validation |
+| `array[E]` | `text` | fallible — strict JSON or AgL value syntax parse, then element validation |
+| `array[E]` | `json` | fallible — element validation |
 | `dict[text,V]` | identical `dict[text,V]` | total (no-op) |
-| `dict[text,V]` | `text`, `json` | fallible — strict JSON parse then value validation |
+| `dict[text,V]` | `text` | fallible — strict JSON or AgL value syntax parse, then value validation |
+| `dict[text,V]` | `json` | fallible — value validation |
 | record `R` | same record `R` | total (no-op) |
-| record `R` | `text`, `json` | fallible — strict JSON parse then field validation |
+| record `R` | `text` | fallible — strict JSON or AgL value syntax parse, then field validation |
+| record `R` | `json` | fallible — field validation |
 | enum `E` | same enum `E` | total (no-op) |
 | member record `R` of enum `E` | `E` | total compile-time-checked identity upcast (no-op) |
 | enum `E` | declared member record `R` | fallible identity downcast — checks that the runtime member is `R` |
-| enum `E` | `text`, `json` | fallible — strict JSON parse then member validation |
+| enum `E` | `text` | fallible — strict JSON or AgL value syntax parse, then member validation |
+| enum `E` | `json` | fallible — member validation |
+| `Agent` | `text` | fallible — shorthand, a JSON object, or an `Agent` member constructor call; no verbatim command fallback |
+| `Agent` | `json` | fallible — validates a tagged `Agent` member object |
 | any type | `unit`, function type | **static cast error** |
 | `unit`, function type | any type | **static cast error** |
 
@@ -1064,12 +1087,20 @@ let parses-as-int: bool = some-json as? int
 
 ### Strict parsing in text and json casts
 
-When the source type is `text` or `json` and the target is a type that
-requires structure (`bool`, `int`, `decimal`, array, dict, record, or enum),
-the cast parses the text (or validates the JSON tree) using **strict JSON
-parsing**: the input must be exactly one well-formed JSON value with no
-surrounding prose, no Markdown fences, and no recovery. This contrasts with
-agent-output parsing, which uses lenient recovery by default.
+When the target is a type that requires structure (`bool`, `int`, `decimal`,
+array, dict, record, or enum), a `json` source is only **validated** against
+the target's shape — it is already a value, not text to parse. A `text`
+source is first **parsed** as either strict JSON or an AgL
+[value-syntax](host-environment.md#value-syntax) literal — the input must be
+exactly one well-formed JSON value, or exactly one value-syntax literal, with
+no surrounding prose, no Markdown fences, and no recovery either way — and
+the result is then validated the same way. This contrasts with agent-output
+parsing, which uses lenient recovery by default. A cast to `Agent` from
+`text` accepts the same shorthand, JSON object, or member constructor call a
+host `Agent` parameter reads, but never falls back to a verbatim command; a
+cast to `Agent` from `json` validates a tagged member object the same way any
+other enum does. `parse`/`try-parse` apply the same rule under a different
+exception — see [Parsing values](#parsing-values) above.
 
 ### `decimal as int` integrality
 

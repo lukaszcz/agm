@@ -951,6 +951,8 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
         # AgL: RecursionError raised when the call-depth limit is exceeded.
         "RecursionError",
         "CastError",
+        # Raised by `std/value::parse`/`try-parse` on a malformed text argument.
+        "ValueParseError",
         "JsonParseError",
         "RangeError",
         # Reference semantics makes cyclic arrays, dicts, and records constructible;

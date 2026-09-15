@@ -1,0 +1,28 @@
+# A `scope` region may declare its own ordinary `type` or `exception`
+# spelled `ValueParseError` -- unrelated to the standard library's builtin
+# exception that `try-parse` raises on failure. `try-parse` must resolve
+# that exception's identity from its own checked result type rather than by
+# looking up the bare name at the call site, so a local `ValueParseError` of
+# either shape never derails it: it keeps returning `Result::Err` built from
+# the real standard-library exception.
+scope WithType
+  type ValueParseError = int
+
+  def go(input: text) -> text =
+    case try-parse::[int](input) of
+      | Result::Ok(value) => "ok %{value}"
+      | Result::Err(error) => "err %{error.raw}"
+end WithType
+
+scope WithException
+  exception ValueParseError extends Exception()
+
+  def go(input: text) -> text =
+    case try-parse::[int](input) of
+      | Result::Ok(value) => "ok %{value}"
+      | Result::Err(error) => "err %{error.raw}"
+end WithException
+
+program def main(input: text) -> unit =
+  print(WithType::go(input))
+  print(WithException::go(input))

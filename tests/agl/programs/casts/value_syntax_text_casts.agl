@@ -1,0 +1,49 @@
+# Text casts accept AgL value syntax (constructor calls, `@name` aliases,
+# nested arrays/dicts/enums/Option, decimal widening) in addition to strict
+# JSON. Casts perform no lenient recovery: malformed input still raises
+# CastError. `as?` reports success as a bool. `Agent` reads shorthand, a
+# tagged JSON object, or a member constructor call — never a verbatim
+# command fallback.
+
+@name("pt") record Point
+  @json-name("px") x: int
+  @name("why") y: int
+
+enum Shape
+  | @name("sq") Square(side: int)
+  | Circle(radius: int)
+
+program def main(value: text, target: text) -> unit =
+  try
+    if
+      | target == "point" =>
+          let p = value as Point
+          print "point: %{p.x},%{p.y}"
+      | target == "shape" =>
+          let s = value as Shape
+          print (case s of
+            | Square(side) => "square %{side}"
+            | Circle(radius) => "circle %{radius}")
+      | target == "array" =>
+          print (value as array[int])
+      | target == "dict" =>
+          print (value as dict[text, int])
+      | target == "option" =>
+          print (case value as Option[int] of
+            | Option::Some(value) => "some %{value}"
+            | Option::None => "none")
+      | target == "decimal" =>
+          print (value as decimal)
+      | target == "agent" =>
+          let a = value as Agent
+          print (case a of
+            | AgentCommand(command) => "command %{command}"
+            | AgentClaude(model, thinking) => "claude %{model} %{thinking}"
+            | AgentCodex(model, thinking) => "codex %{model} %{thinking}"
+            | AgentPi(provider, model, thinking) => "pi %{provider} %{model} %{thinking}")
+      | else =>
+          print (value as int)
+  catch CastError as e =>
+    print "cast error: %{e.source-type} -> %{e.target-type}"
+
+  print "as?: %{(value as? Point) as text}"

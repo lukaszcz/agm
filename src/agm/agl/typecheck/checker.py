@@ -67,6 +67,7 @@ from agm.agl.scope.symbols import (
     DeclarationKey,
     ModuleResolution,
     PatternSlot,
+    builtin_call_kind,
     builtin_type_static_kind,
     duplicate_binder_message,
     immutable_assignment_message,
@@ -85,6 +86,7 @@ from agm.agl.semantics.type_table import (
     qualified_decl_name,
 )
 from agm.agl.semantics.types import (
+    BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
     OPTION_TEXT_TYPE,
     ArrayType,
@@ -507,6 +509,18 @@ def _builtin_function_signature(
             return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
         case "shallow-copy":
             return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
+        case "parse":
+            return FunctionSignature(
+                params=(_std_param("value", TextType()),), result=t, type_params=("T",)
+            )
+        case "try-parse":
+            return FunctionSignature(
+                params=(_std_param("value", TextType()),),
+                result=EnumType(
+                    name="Result", type_args=(t, BUILTIN_EXCEPTIONS["ValueParseError"])
+                ),
+                type_params=("T",),
+            )
         case "resource":
             return FunctionSignature(params=(_std_param("path", TextType()),), result=TextType())
         case "resource-dir":
@@ -612,7 +626,7 @@ def _rerooted_signature(sig: FunctionSignature, prefix: tuple[str, ...]) -> Func
     )
 
 
-def _builtin_nominal_matches(actual: Type, expected: Type) -> bool:
+def _builtin_nominal_matches(actual: Type, expected: Type, type_table: TypeTable) -> bool:
     """Compare one builtin signature type by nominal name and scope path.
 
     ``module_id`` is deliberately excluded: the canonical *expected* type
@@ -633,17 +647,57 @@ def _builtin_nominal_matches(actual: Type, expected: Type) -> bool:
             isinstance(actual, RecordType)
             and actual.name == expected.name
             and actual.scope_path == expected.scope_path
+            and _builtin_type_args_match(actual.type_args, expected.type_args, type_table)
         )
     if isinstance(expected, EnumType):
         return (
             isinstance(actual, EnumType)
             and actual.name == expected.name
             and actual.scope_path == expected.scope_path
+            and _builtin_type_args_match(actual.type_args, expected.type_args, type_table)
+        )
+    if isinstance(expected, ExceptionType):
+        # Exceptions are never generic (no type_args to recurse into), but the
+        # same module_id asymmetry applies as for RecordType/EnumType above —
+        # e.g. a type argument resolving to the standard library's own
+        # ``ValueParseError`` vs. the canonical literal's un-rooted one. Name
+        # and scope path alone are not enough, though: an ordinary (non-
+        # ``builtin``) exception declared under the same name and scope must
+        # not satisfy a canonical builtin-exception shape, so *actual* must
+        # also be a real ``builtin`` declaration.
+        return (
+            isinstance(actual, ExceptionType)
+            and actual.name == expected.name
+            and actual.scope_path == expected.scope_path
+            and _is_builtin_exception_declaration(actual, type_table)
         )
     return actual == expected
 
 
-def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -> bool:
+def _is_builtin_exception_declaration(actual: ExceptionType, type_table: TypeTable) -> bool:
+    """Return whether *actual* names a real, source-``builtin`` exception declaration."""
+    typedef = type_table.get_by_id(actual.decl_id)
+    return typedef is not None and typedef.is_builtin
+
+
+def _builtin_type_args_match(
+    actual: tuple[Type, ...], expected: tuple[Type, ...], type_table: TypeTable
+) -> bool:
+    """Recursively compare generic type arguments via :func:`_builtin_nominal_matches`.
+
+    Without this, ``Result[int, CastError]`` would validate against the
+    canonical ``Result[T, ValueParseError]`` shape: both are ``Result`` at
+    scope path ``()``, and a bare name/scope-path check never looks inside
+    the brackets.
+    """
+    return len(actual) == len(expected) and all(
+        _builtin_nominal_matches(a, e, type_table) for a, e in zip(actual, expected)
+    )
+
+
+def _signature_matches(
+    actual: FunctionSignature, expected: FunctionSignature, type_table: TypeTable
+) -> bool:
     if actual.type_params != expected.type_params:
         return False
     if len(actual.params) != len(expected.params):
@@ -651,9 +705,9 @@ def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -
     for ap, ep in zip(actual.params, expected.params):
         if ap.name != ep.name or ap.kind != ep.kind or ap.has_default != ep.has_default:
             return False
-        if not _builtin_nominal_matches(ap.type, ep.type):
+        if not _builtin_nominal_matches(ap.type, ep.type, type_table):
             return False
-    return _builtin_nominal_matches(actual.result, expected.result)
+    return _builtin_nominal_matches(actual.result, expected.result, type_table)
 
 
 def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
@@ -892,7 +946,7 @@ class _Checker:
                 span=node.span,
             )
         if not is_method and node.is_builtin and node.name not in _BUILTIN_FUNC_NAMES:
-            if static_kind is None:
+            if static_kind is None and builtin_call_kind(node.name) is None:
                 raise AglTypeError(
                     f"Unknown builtin function '{node.name}'.",
                     span=node.span,
@@ -994,7 +1048,8 @@ class _Checker:
                 static_kind=static_kind,
             )
             if not any(
-                _signature_matches(rerooted_sig, expected_sig) for expected_sig in expected_sigs
+                _signature_matches(rerooted_sig, expected_sig, self._env.type_table)
+                for expected_sig in expected_sigs
             ):
                 raise AglTypeError(
                     f"Builtin function '{node.name}' has an invalid signature.",
@@ -1038,7 +1093,7 @@ class _Checker:
             result=result,
             type_params=sig.type_params[: receiver.type_param_arity],
         )
-        if not _signature_matches(sig, expected):
+        if not _signature_matches(sig, expected, self._env.type_table):
             raise AglTypeError(
                 f"Builtin receiver method '{node.name}' has an invalid signature.", span=node.span
             )
@@ -2423,6 +2478,26 @@ class _Checker:
         target_type = self._env.resolve_type_expr(
             node.target_type, span=node.span, type_vars=self._current_type_vars
         )
+        kind = self._check_convertible(source_type, target_type, node.span, exprs=(node.expr,))
+        self._record_cast_spec(node.node_id, CastSpec(target_type=target_type, kind=kind))
+        return BoolType() if node.test_only else target_type
+
+    def _check_convertible(
+        self,
+        source_type: Type,
+        target_type: Type,
+        span: SourceSpan,
+        *,
+        exprs: tuple[Expr, ...],
+    ) -> CastKind:
+        """Classify one text/json/decimal-driven conversion; reject a bad target.
+
+        Shared by ``as``/``as?`` (:meth:`_check_cast`) and
+        ``std/value::parse``/``try-parse`` (``typecheck.builtins``): both
+        report the same STATIC_ERROR diagnostic (including the ``json``
+        obstacle detail) and the same FALLIBLE finite-schema / wire-serializable
+        rejections before their caller records a ``CastSpec``.
+        """
         table = self._env.type_table
         kind = cast_classification(source_type, target_type, table)
         if kind == CastKind.STATIC_ERROR:
@@ -2436,9 +2511,9 @@ class _Checker:
             detail = "" if obstacle is None else f": {obstacle}"
             error = AglTypeError(
                 f"cannot cast '{source_type!r}' to '{target_type!r}'{detail}.",
-                span=node.span,
+                span=span,
             )
-            raise self._frame_inferred_return_error(error, exprs=(node.expr,)) from error
+            raise self._frame_inferred_return_error(error, exprs=exprs) from error
         # Only a FALLIBLE cast derives a JSON schema at lowering time
         # (TOTAL_RENDER/TOTAL_JSON/TOTAL_NOOP never do) — and it may need one
         # not just for a bare record/enum target but for a composite target
@@ -2452,15 +2527,14 @@ class _Checker:
                 target_type, use="a cast target"
             )
             if message is not None:
-                raise AglTypeError(message, span=node.span)
+                raise AglTypeError(message, span=span)
             if not self._type_is_wire_serializable(target_type):
                 raise AglTypeError(
                     f"Cast target '{target_type!r}' is not JSON-serializable; "
                     "use a JSON-serializable data type.",
-                    span=node.span,
+                    span=span,
                 )
-        self._record_cast_spec(node.node_id, CastSpec(target_type=target_type, kind=kind))
-        return BoolType() if node.test_only else target_type
+        return kind
 
     # --- Call dispatch ---
 
@@ -3114,6 +3188,10 @@ class _Checker:
                     return self._builtins.check_session_default(node)
                 case BuiltinKind.EXEC:
                     return self._builtins.check_exec(node, expected=expected)
+                case BuiltinKind.PARSE:
+                    return self._builtins.check_parse(node, expected=expected)
+                case BuiltinKind.TRY_PARSE:
+                    return self._builtins.check_try_parse(node, expected=expected)
                 case _ as unreachable:  # pragma: no cover
                     assert_never(unreachable)
 

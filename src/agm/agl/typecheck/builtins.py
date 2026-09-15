@@ -16,23 +16,27 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import STD_ENV_ID, spell_declaration
-from agm.agl.scope.symbols import BuiltinKind, ConstructorRef
+from agm.agl.scope.symbols import BindingRef, BuiltinKind, ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
 from agm.agl.semantics.type_table import DeclId
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     OPTION_TEXT_TYPE,
     BoolType,
+    CastKind,
+    CastSpec,
     EnumType,
     ExceptionType,
     FunctionType,
     RecordType,
     TextType,
     Type,
+    TypeVarType,
     UnitType,
     contains_inference_var,
     contains_type_var,
     free_type_vars,
+    substitute,
 )
 from agm.agl.syntax.nodes import (
     BoolLit,
@@ -154,6 +158,19 @@ class BuiltinCheckCtx(Protocol):
 
     def _constructor_ref_for(self, node_id: int) -> ConstructorRef | None: ...
 
+    def _binding_for(self, node_id: int) -> BindingRef: ...
+
+    def _record_cast_spec(self, node_id: int, spec: CastSpec) -> None: ...
+
+    def _check_convertible(
+        self,
+        source_type: Type,
+        target_type: Type,
+        span: SourceSpan,
+        *,
+        exprs: tuple[Expr, ...],
+    ) -> CastKind: ...
+
 
 # ---------------------------------------------------------------------------
 # Collaborator class
@@ -242,12 +259,8 @@ class BuiltinCallChecker:
     # --- print ---
 
     def check_print(self, node: Call) -> Type:
-        if len(node.args) != 1 or node.named_args:
-            raise AglTypeError(
-                "print() requires exactly one positional argument.",
-                span=node.span,
-            )
-        self._check_arg_with_optional_explicit_target(node, node.args[0], "print")
+        arg = self._single_positional_argument(node, "print")
+        self._check_arg_with_optional_explicit_target(node, arg, "print")
         return UnitType()
 
     # --- render ---
@@ -275,16 +288,12 @@ class BuiltinCallChecker:
     # --- copy / shallow_copy ---
 
     def check_copy(self, node: Call) -> Type:
-        if len(node.args) != 1 or node.named_args:
-            raise AglTypeError("copy() requires exactly one positional argument.", span=node.span)
-        return self._check_arg_with_optional_explicit_target(node, node.args[0], "copy")
+        arg = self._single_positional_argument(node, "copy")
+        return self._check_arg_with_optional_explicit_target(node, arg, "copy")
 
     def check_shallow_copy(self, node: Call) -> Type:
-        if len(node.args) != 1 or node.named_args:
-            raise AglTypeError(
-                "shallow-copy() requires exactly one positional argument.", span=node.span
-            )
-        return self._check_arg_with_optional_explicit_target(node, node.args[0], "shallow-copy")
+        arg = self._single_positional_argument(node, "shallow-copy")
+        return self._check_arg_with_optional_explicit_target(node, arg, "shallow-copy")
 
     def _check_arg_with_optional_explicit_target(
         self, node: Call, arg_expr: Expr, name: str
@@ -463,6 +472,123 @@ class BuiltinCallChecker:
             raise AglTypeError(str(exc), span=node.span) from exc
         return TextType()
 
+    # --- parse / try-parse ---
+
+    def check_parse(self, node: Call, *, expected: Type | None) -> Type:
+        """Type-check ``std/value::parse[T](value)``: same static rule as ``value as T``.
+
+        ``T`` is the explicit ``::[T]`` type argument, or else the contextual
+        *expected* type; a call with neither is a static error. Failure raises
+        ``ValueParseError`` at runtime rather than ``CastError`` (see
+        ``lower.lowerer._lower_parse_call``).
+        """
+        explicit = self._resolve_explicit_target(node, "parse")
+        target_type = self._resolved_parse_target(explicit, expected)
+        return self._check_parse_like(
+            node,
+            "parse",
+            target_type,
+            "'parse' needs an explicit '::[T]' type argument or a known expected type.",
+        )
+
+    def check_try_parse(self, node: Call, *, expected: Type | None) -> Type:
+        """Type-check ``std/value::try-parse[T](value)`` -> ``Result[T, ValueParseError]``.
+
+        ``T`` comes from an explicit ``::[T]`` type argument, or else from a
+        ``Result[T, ValueParseError]`` expected type; a call with neither is a
+        static error. The declared ``try-parse`` signature supplies the exact
+        ``Result[T, ValueParseError]`` shape to substitute ``T`` into, so this
+        never hand-constructs the ``Result`` type.
+        """
+        assert isinstance(node.callee, VarRef)  # only VarRef callees reach a builtin kind
+        ref = self._ctx._binding_for(node.callee.node_id)
+        signature = self._ctx._env.get_function_signature_by_node_id(ref.decl_node_id)
+        assert signature is not None and len(signature.type_params) == 1
+        type_param = signature.type_params[0]
+        explicit = self._resolve_explicit_target(node, "try-parse")
+        target_type = self._resolved_parse_target(
+            explicit, self._try_parse_target_from_expected(expected, signature.result, type_param)
+        )
+        result_type = self._check_parse_like(
+            node,
+            "try-parse",
+            target_type,
+            "'try-parse' needs an explicit '::[T]' type argument or a "
+            "'Result[T, ValueParseError]' expected type.",
+        )
+        return substitute(signature.result, {type_param: result_type})
+
+    @staticmethod
+    def _resolved_parse_target(explicit: Type | None, contextual: Type | None) -> Type | None:
+        """Pick *explicit* over *contextual*, discarding an unresolved *contextual*.
+
+        A contextual expected type reached through an open generic call (e.g.
+        ``id(parse("41"))``) can still carry an inference variable; treating it
+        as present would leak that variable into cast/schema checks, so it
+        counts as no target at all — the "needs an explicit type argument"
+        error fires instead.
+        """
+        target = explicit if explicit is not None else contextual
+        if target is not None and contains_inference_var(target):
+            return None
+        return target
+
+    def _check_parse_like(
+        self, node: Call, name: str, target_type: Type | None, missing_hint: str
+    ) -> Type:
+        """Shared static rule for ``parse``/``try-parse``: the same rule as a cast.
+
+        *target_type* is the caller's already-resolved ``T`` (or ``None``, which
+        raises *missing_hint*). Checks the argument as ``text``, resolves the
+        conversion the same way ``as``/``as?`` would, and records it into
+        ``cast_specs`` under ``node.node_id`` for the lowerer to read.
+        """
+        if target_type is None:
+            raise AglTypeError(missing_hint, span=node.span)
+        self._reject_type_var_target(name, target_type, node.span)
+        arg = self._single_positional_argument(node, name)
+        arg_type = self._ctx._check_expr(arg, expected=TextType())
+        self._ctx._assert_assignable_from(arg_type, TextType(), arg.span, arg)
+        kind = self._ctx._check_convertible(TextType(), target_type, node.span, exprs=(arg,))
+        self._ctx._record_cast_spec(node.node_id, CastSpec(target_type=target_type, kind=kind))
+        return target_type
+
+    @staticmethod
+    def _try_parse_target_from_expected(
+        expected: Type | None, declared_result: Type, type_param: str
+    ) -> Type | None:
+        """Extract ``T`` from a ``Result[T, ValueParseError]`` expected type.
+
+        Matches *expected* against *declared_result* (``try-parse``'s own
+        declared ``Result[T, ValueParseError]`` return type, ``T`` still a
+        ``TypeVarType``) shape-for-shape, returning whatever *expected*
+        supplies in the slot *declared_result* has ``T`` in; ``None`` when the
+        shapes disagree. The ``Result`` nominal is matched by declaration
+        identity (``decl_id``), like every other nominal comparison in the
+        checker — never by name, which a same-named unrelated type could
+        satisfy. *declared_result* is ``try-parse``'s own declared signature,
+        so ``T`` is always present in it — its slot is looked up directly
+        rather than defended against being absent.
+        """
+        if (
+            not isinstance(expected, EnumType)
+            or not isinstance(declared_result, EnumType)
+            or expected.decl_id != declared_result.decl_id
+            or len(expected.type_args) != len(declared_result.type_args)
+        ):
+            return None
+        index = declared_result.type_args.index(TypeVarType(type_param))
+        return expected.type_args[index]
+
+    @staticmethod
+    def _single_positional_argument(node: Call, name: str) -> Expr:
+        """Require and return *node*'s sole positional argument."""
+        if len(node.args) != 1 or node.named_args:
+            raise AglTypeError(
+                f"'{name}' requires exactly one positional argument.", span=node.span
+            )
+        return node.args[0]
+
     # --- ask ---
 
     def check_ask(
@@ -474,7 +600,7 @@ class BuiltinCallChecker:
         target_type: Type = (
             explicit if explicit is not None else (expected if expected is not None else TextType())
         )
-        self._reject_type_var_target(target_type, node.span)
+        self._reject_type_var_target("ask", target_type, node.span)
         self._register_ask_like_obligation(
             node,
             target_type=target_type,
@@ -505,7 +631,7 @@ class BuiltinCallChecker:
         agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
         explicit = self._resolve_explicit_target(node, "ask-request")
         target_type: Type = explicit if explicit is not None else TextType()
-        self._reject_type_var_target(target_type, node.span)
+        self._reject_type_var_target("ask-request", target_type, node.span)
         # The contract resolved above is threaded through so the coherence walk
         # does not run a second time for this call site.
         self._register_ask_like_obligation(
@@ -623,7 +749,7 @@ class BuiltinCallChecker:
             raise AglTypeError(
                 "Cannot infer a concrete target type for this built-in call.", span=obligation.span
             )
-        self._reject_type_var_target(target_type, obligation.span)
+        self._reject_type_var_target(obligation.kind.value, target_type, obligation.span)
         if isinstance(target_type, FunctionType):
             raise AglTypeError(
                 "cannot parse agent or exec output into a function/agent value.",
@@ -702,7 +828,7 @@ class BuiltinCallChecker:
             target_type = expected
         else:
             target_type = self.contract_type("ExecResult")
-        self._reject_type_var_target(target_type, node.span)
+        self._reject_type_var_target("exec", target_type, node.span)
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():
             if arg_name not in self._EXEC_ALLOWED_NAMED_ARGS:
@@ -943,8 +1069,8 @@ class BuiltinCallChecker:
         self._ctx._record_explicit_builtin_target(node.node_id, resolved)
         return resolved
 
-    def _reject_type_var_target(self, target_type: Type, span: SourceSpan) -> None:
-        """An ask/exec target type may not contain a type variable.
+    def _reject_type_var_target(self, name: str, target_type: Type, span: SourceSpan) -> None:
+        """A *name* builtin's target type may not contain a type variable.
 
         Applied to the final resolved target — whether it came from an explicit
         ``::[…]`` argument or was inferred from the contextual expected type
@@ -954,7 +1080,7 @@ class BuiltinCallChecker:
         if contains_type_var(target_type):
             tv = next(iter(free_type_vars(target_type)))
             raise AglTypeError(
-                f"agent/exec target type cannot contain a type variable ('{tv}').",
+                f"'{name}' target type cannot contain a type variable ('{tv}').",
                 span=span,
             )
 

@@ -1441,11 +1441,12 @@ class _Lowerer:
                         source_label=repr(source_type),
                         target_label=repr(spec.target_type),
                     )
-                recipe = compile_recipe(source_type, spec.target_type, spec.kind, self._type_table)
-                return IrConvert(
-                    location=self._loc(span),
-                    value=inner,
-                    recipe=recipe,
+                return self._lower_recipe_convert(
+                    inner,
+                    source_type,
+                    spec.target_type,
+                    spec.kind,
+                    span,
                     failure_mode=(
                         ConversionFailureMode.RETURN_BOOL
                         if test_only
@@ -2283,6 +2284,12 @@ class _Lowerer:
                     raise AssertionError(  # pragma: no cover
                         "resource cannot reach builtin-value lowering"
                     )
+                # Scope rejects parse/try-parse values: their target type is
+                # resolved at the call site, which no closure value carries.
+                case BuiltinKind.PARSE | BuiltinKind.TRY_PARSE:  # pragma: no cover
+                    raise AssertionError(  # pragma: no cover
+                        f"{ref.name} cannot reach builtin-value lowering"
+                    )
 
         return self._make_partial_closure(function_type, span, (), build_body)
 
@@ -2466,8 +2473,91 @@ class _Lowerer:
             case BuiltinKind.EXEC:
                 return self._lower_exec_call(call_node, span)
 
+            case BuiltinKind.PARSE:
+                return self._lower_parse_call(call_node, span)
+
+            case BuiltinKind.TRY_PARSE:
+                return self._lower_try_parse_call(call_node, span)
+
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    def _lower_recipe_convert(
+        self,
+        value_ir: IrExpr,
+        source_type: Type,
+        target_type: Type,
+        kind: CastKind,
+        span: "SourceSpan",
+        *,
+        failure_mode: ConversionFailureMode,
+    ) -> IrExpr:
+        """Compile *kind*'s recipe and wrap *value_ir* in an ``IrConvert``.
+
+        Shared by ``as``/``as?`` and ``std/value::parse``/``try-parse``: all
+        four run the same typeless conversion machinery and differ only in
+        what a fallible failure does at runtime (*failure_mode*).
+        """
+        recipe = compile_recipe(source_type, target_type, kind, self._type_table)
+        return IrConvert(
+            location=self._loc(span), value=value_ir, recipe=recipe, failure_mode=failure_mode
+        )
+
+    def _lower_parse_call(self, call_node: "Call", span: "SourceSpan") -> IrExpr:
+        """Lower ``std/value::parse[T](value)``: like ``value as T``, but raises
+        ``ValueParseError`` on failure instead of ``CastError`` (see
+        ``eval.ir_interpreter._on_cast_failure``).
+        """
+        spec = self._checked.cast_specs[call_node.node_id]
+        arg_ir = self.lower_expr(call_node.args[0])
+        if spec.kind is CastKind.TOTAL_NOOP:
+            return arg_ir
+        return self._lower_recipe_convert(
+            arg_ir,
+            TextType(),
+            spec.target_type,
+            spec.kind,
+            span,
+            failure_mode=ConversionFailureMode.RAISE_VALUE_PARSE_ERROR,
+        )
+
+    def _lower_try_parse_call(self, call_node: "Call", span: "SourceSpan") -> IrExpr:
+        """Lower ``std/value::try-parse[T](value)`` to a hand-built try/catch.
+
+        Composes existing IR nodes rather than a second decoder: the checked
+        result type is ``Result[T, ValueParseError]`` — its ``Ok``/``Err``
+        member record types (via ``TypeTable.enum_member_names``) give the
+        exact field types to build ``Result::Ok(value = <parse>)`` /
+        ``Result::Err(error = e)`` with, mirroring an ordinary
+        ``try <parse> catch ValueParseError as e => Result::Err(error = e)``.
+        """
+        loc = self._loc(span)
+        result_type = self._node_type(call_node.node_id)
+        assert isinstance(result_type, EnumType)
+        members = self._type_table.enum_member_names(result_type)
+        ok_type, err_type = members["Ok"], members["Err"]
+
+        parsed = self._lower_parse_call(call_node, span)
+        try_body = self._lower_constructor_from_slots(ok_type, {"value": parsed}, span)
+
+        exc_sym = self._alloc_synthetic_sym(mutable=False)
+        err_value = self._lower_constructor_from_slots(
+            err_type, {"error": IrLoad(location=loc, symbol=exc_sym)}, span
+        )
+        # ValueParseError's nominal comes from the checked result type's own
+        # ``Err.error`` field type, never from a call-site name lookup: a
+        # ``scope`` region enclosing this call may declare its own type,
+        # record, or exception named ``ValueParseError``, and only the
+        # checked type is immune to that shadowing.
+        exc_type = self._type_table.record_fields(err_type)["error"]
+        assert isinstance(exc_type, ExceptionType)
+        handler = IrCatchHandler(
+            nominal=NominalId(exc_type.decl_id),
+            display_name=exc_type.name,
+            symbol=exc_sym,
+            body=err_value,
+        )
+        return IrTry(location=loc, body=try_body, handlers=(handler,))
 
     def _lower_session_static_call(
         self, kind: BuiltinStaticKind, call_node: Call, span: SourceSpan

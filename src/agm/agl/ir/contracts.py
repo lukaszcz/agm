@@ -401,6 +401,7 @@ class ConversionFailureMode(enum.Enum):
     """What a failed fallible conversion does at runtime."""
 
     RAISE_CAST_ERROR = "raise_cast_error"  # `as`
+    RAISE_VALUE_PARSE_ERROR = "raise_value_parse_error"  # `std/value::parse`
     RETURN_BOOL = "return_bool"  # `as?`
 
 

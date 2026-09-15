@@ -608,6 +608,7 @@ class IrConvert:
     Evaluates ``value`` once, then runs ``recipe`` (a typeless
     ``ConversionRecipe``).  ``failure_mode`` selects behavior on a fallible
     failure: ``RAISE_CAST_ERROR`` raises a ``CastError`` (the ``as`` operator);
+    ``RAISE_VALUE_PARSE_ERROR`` raises a ``ValueParseError`` (``std/value::parse``);
     ``RETURN_BOOL`` makes ``as?`` evaluate to whether the conversion succeeded.
     """
 

@@ -11,7 +11,12 @@ from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import BUILTIN_CALL_NAMES, BUILTIN_TYPE_STATICS
+from agm.agl.scope.symbols import (
+    BUILTIN_CALL_NAMES,
+    BUILTIN_TYPE_STATICS,
+    NON_RESERVED_BUILTIN_CALL_NAMES,
+)
+from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -160,12 +165,14 @@ def _ps(name: str, t: Type, has_default: bool = False) -> ParamSpec:
 
 
 def test_builtin_signature_helpers_cover_negative_paths() -> None:
+    table = create_seeded_type_table()
     sig = FunctionSignature(params=(_ps("value", TextType()),), result=TextType())
     assert _builtin_function_signature("unknown") is None
     assert _builtin_function_signature_alternates("unknown") == ()
     assert not _signature_matches(
         sig,
         FunctionSignature(params=(_ps("value", IntType()),), result=TextType()),
+        table,
     )
     assert not _signature_matches(
         FunctionSignature(params=(_ps("value", IntType()),), result=TextType()),
@@ -173,6 +180,7 @@ def test_builtin_signature_helpers_cover_negative_paths() -> None:
             params=(_ps("value", RecordType(name="R")),),
             result=TextType(),
         ),
+        table,
     )
     assert _signature_matches(
         FunctionSignature(
@@ -183,6 +191,7 @@ def test_builtin_signature_helpers_cover_negative_paths() -> None:
             params=(_ps("value", RecordType(name="R")),),
             result=TextType(),
         ),
+        table,
     )
     assert not _signature_matches(
         FunctionSignature(
@@ -193,6 +202,7 @@ def test_builtin_signature_helpers_cover_negative_paths() -> None:
             params=(_ps("value", EnumType(name="Expected")),),
             result=TextType(),
         ),
+        table,
     )
 
 
@@ -225,7 +235,7 @@ def test_standard_library_declares_every_public_builtin() -> None:
         | {OPTION_TEXT_TYPE.name}
     )
     assert exceptions == set(BUILTIN_EXCEPTIONS) | {"SessionError"}
-    assert functions == set(BUILTIN_CALL_NAMES)
+    assert functions == set(BUILTIN_CALL_NAMES) | set(NON_RESERVED_BUILTIN_CALL_NAMES)
     assert statics == {
         ("::".join(owner_path), static_name)
         for owner_path, names in BUILTIN_TYPE_STATICS.items()

@@ -1,3 +1,8 @@
+import std/result::Result
+import std/errors::ValueParseError
+
 builtin def render[T](value: T) -> text
 builtin def copy[T](value: T) -> T
 builtin def shallow-copy[T](value: T) -> T
+builtin def parse[T](value: text) -> T
+builtin def try-parse[T](value: text) -> Result[T, ValueParseError]

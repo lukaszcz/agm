@@ -66,3 +66,9 @@ exception RangeError extends Exception()
 
 builtin
 exception CyclicValueError extends Exception()
+
+builtin
+exception ValueParseError extends Exception
+  source-type: text
+  target-type: text
+  raw: text

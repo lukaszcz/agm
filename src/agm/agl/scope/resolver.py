@@ -93,6 +93,7 @@ from agm.agl.scope.symbols import (
     ScopePath,
     SlotCandidate,
     alias_denotes_constructible_type,
+    builtin_call_kind,
     builtin_type_static_kind,
     duplicate_binder_message,
     immutable_binder_phrase,
@@ -3300,20 +3301,32 @@ class _Resolver:
             span=node.span,
         )
 
+    #: Built-in names that genuinely require direct call syntax and may never
+    #: be referenced as a first-class value, each mapped to why: ``resource``
+    #: needs a literal path argument visible at its own call site;
+    #: ``parse``/``try-parse`` need their target type resolved at the call
+    #: site (explicit ``::[T]`` or the contextual expected type), which no
+    #: eta-expanded closure value carries.
+    _FIRST_CLASS_REJECTED_BUILTIN_REASONS: Mapping[str, str] = {
+        "resource": "it requires a literal path argument in direct call position",
+        "parse": "its target type is resolved at the call site",
+        "try-parse": "its target type is resolved at the call site",
+    }
+
     def _reject_builtin_value_ref(
         self, node: VarRef, ref: BindingRef | None, *, is_call_target: bool
     ) -> None:
         """Reject the built-in forms that genuinely require direct call syntax."""
-        if (
-            not is_call_target
-            and self._is_builtin_function_ref(ref)
-            and ref is not None
-            and ref.name == "resource"
-        ):
-            raise AglScopeError(
-                "Built-in function 'resource' requires a literal path in direct call position.",
-                span=node.span,
-            )
+        if is_call_target or ref is None or not self._is_builtin_function_ref(ref):
+            return
+        reason = self._FIRST_CLASS_REJECTED_BUILTIN_REASONS.get(ref.name)
+        if reason is None:
+            return
+        raise AglScopeError(
+            f"Built-in function '{ref.name}' cannot be referenced as a value; "
+            f"call it directly ({reason}).",
+            span=node.span,
+        )
 
     def _record_varref_binding(
         self,
@@ -4323,7 +4336,7 @@ class _Resolver:
             if static_kind is not None:
                 self._builtin_static_calls[node.node_id] = static_kind
             elif ref is not None and self._is_builtin_function_ref(ref) and not ref.is_method:
-                kind = _BUILTIN_CALL_NAMES.get(ref.name)
+                kind = builtin_call_kind(ref.name)
                 if kind is not None:
                     self._builtin_calls[node.node_id] = kind
         elif isinstance(callee, FieldAccess):
@@ -4332,8 +4345,8 @@ class _Resolver:
             # whether this spelling names a builtin method or an ordinary
             # method with the same name. Record the possible host route; the
             # checker confirms it only after selecting the method declaration.
-            if callee.field in _BUILTIN_CALL_NAMES:
-                self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.field]
+            if (kind := builtin_call_kind(callee.field)) is not None:
+                self._builtin_calls[node.node_id] = kind
         else:
             self._resolve_expr(callee)
         # Resolve positional args.

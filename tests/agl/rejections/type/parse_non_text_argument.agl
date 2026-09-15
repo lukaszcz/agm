@@ -1,0 +1,3 @@
+program def main() -> unit =
+  let p = parse::[int](42)
+  p

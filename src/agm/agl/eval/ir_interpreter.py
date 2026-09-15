@@ -740,22 +740,33 @@ class IrInterpreter:
         """Handle a fallible-cast failure per the conversion failure mode."""
         match failure_mode:
             case ConversionFailureMode.RAISE_CAST_ERROR:
-                raise AglRaise(
-                    _make_exc_value(
-                        "CastError",
-                        exc.message,
-                        nominals=self._program.builtin_nominals,
-                        fields={
-                            "source-type": TextValue(exc.source_label),
-                            "target-type": TextValue(exc.target_label),
-                            "raw": TextValue(exc.raw),
-                        },
-                    ),
-                )
+                raise self._cast_conversion_raise("CastError", exc)
+            case ConversionFailureMode.RAISE_VALUE_PARSE_ERROR:
+                raise self._cast_conversion_raise("ValueParseError", exc)
             case ConversionFailureMode.RETURN_BOOL:
                 return BoolValue(False)
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    def _cast_conversion_raise(self, exception_name: str, exc: AglCastConversion) -> AglRaise:
+        """Build the ``AglRaise`` for a failed cast-like conversion, by exception name.
+
+        Shared by ``RAISE_CAST_ERROR`` (``CastError``) and
+        ``RAISE_VALUE_PARSE_ERROR`` (``ValueParseError``): both exceptions carry
+        the identical ``source-type``/``target-type``/``raw`` field shape.
+        """
+        return AglRaise(
+            _make_exc_value(
+                exception_name,
+                exc.message,
+                nominals=self._program.builtin_nominals,
+                fields={
+                    "source-type": TextValue(exc.source_label),
+                    "target-type": TextValue(exc.target_label),
+                    "raw": TextValue(exc.raw),
+                },
+            ),
+        )
 
     @staticmethod
     def _cast_raw(value: Value) -> str:

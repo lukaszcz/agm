@@ -1,0 +1,4 @@
+def fetch[T](s: text) -> T = parse::[T](s)
+
+program def main() -> unit =
+  fetch::[int]("42")

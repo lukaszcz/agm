@@ -1,0 +1,9 @@
+# A contextual expected type reached through an open generic call still
+# carries an unresolved inference variable when `parse`'s argument is
+# checked -- that must not leak into the cast rule as a usable target; it
+# is treated as no target at all, so the explicit-type-argument error fires.
+def id[T](x: T) -> T = x
+
+program def main() -> unit =
+  let a: int = id(parse("41"))
+  a

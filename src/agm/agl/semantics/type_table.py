@@ -2104,6 +2104,14 @@ def source_enum_member_decl_id(
 
 _EXCEPTION_ROOT_ID: DeclId = _reserved_id("Exception")
 
+# Shared field shape for CastError and ValueParseError: both report a failed
+# type-directed conversion by its source/target type names and the raw value.
+_CAST_LIKE_FIELDS: tuple[tuple[str, Type], ...] = (
+    ("source-type", TextType()),
+    ("target-type", TextType()),
+    ("raw", TextType()),
+)
+
 
 _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
     "Exception": TypeDef(
@@ -2270,15 +2278,17 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
         kind="exception",
         name="CastError",
         module_id=RESERVED_ID,
-        fields=(
-            _fields := (
-                ("source-type", TextType()),
-                ("target-type", TextType()),
-                ("raw", TextType()),
-            )
-        ),
+        fields=_CAST_LIKE_FIELDS,
         base=_EXCEPTION_ROOT_ID,
-        field_kinds=_standard(_fields),
+        field_kinds=_standard(_CAST_LIKE_FIELDS),
+    ),
+    "ValueParseError": TypeDef(
+        kind="exception",
+        name="ValueParseError",
+        module_id=RESERVED_ID,
+        fields=_CAST_LIKE_FIELDS,
+        base=_EXCEPTION_ROOT_ID,
+        field_kinds=_standard(_CAST_LIKE_FIELDS),
     ),
     "JsonParseError": TypeDef(
         kind="exception",

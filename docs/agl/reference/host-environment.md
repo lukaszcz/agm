@@ -111,6 +111,12 @@ a verbatim command — see [host Agent syntax](../../commands/agl.md#host-agent-
 
 ### Value syntax
 
+A `text`-to-structured-type cast (`as`/`as?`, [Types](types.md#strict-parsing-in-text-and-json-casts))
+accepts the same value-syntax literal alongside strict JSON, with no lenient
+recovery either way; a cast to `Agent` accepts shorthand, a JSON object, or a
+member constructor call, but never falls back to a verbatim command the way a
+host `Agent` parameter does.
+
 A value-syntax literal is a data-only subset of AgL's own expression syntax:
 an integer, decimal, `true`/`false`, a quoted text literal, an `[item, ...]`
 array, a `{key: value, ...}` dict of quoted-or-bare keys, or a constructor

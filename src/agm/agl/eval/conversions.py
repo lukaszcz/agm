@@ -8,9 +8,8 @@ caller wraps it into the appropriate ``CastError`` / ``ValueParseError`` /
 ``BoolValue(False)``.
 
 It reuses the existing runtime leaf primitives (rendering, JSON serialization,
-the host text/value-syntax decode boundary, integral-decimal normalization,
-JSON-Schema validation, and the typeless ``decode_value`` decode walk) rather
-than reimplementing them.
+the host text/value-syntax decode boundary, JSON-Schema validation, and the
+typeless ``decode_value`` decode walk) rather than reimplementing them.
 
 Imports: stdlib + ``agm.agl.semantics.values`` + ``agm.agl.ir``
 contracts + ``agm.agl.runtime`` leaf helpers (including the host
@@ -32,7 +31,6 @@ from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.convert import (
     _clean_validation_message,
     decode_value,
-    normalize_integral_decimals,
     validator_for_schema,
 )
 from agm.agl.runtime.render import render_value
@@ -121,12 +119,10 @@ def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescrip
 def _decode_from_json(
     recipe: ConversionRecipe, obj: object, value: Value, descriptors: ValueDescriptors
 ) -> Value:
-    """Normalize → JSON-Schema validate → decode."""
-    normalized = normalize_integral_decimals(obj)
-
+    """JSON-Schema validate → decode."""
     if recipe.json_schema is None:  # pragma: no cover
         raise AssertionError("decode strategy requires a json_schema")
-    errors = list(validator_for_schema(recipe.json_schema).iter_errors(normalized))
+    errors = list(validator_for_schema(recipe.json_schema).iter_errors(obj))
     if errors:
         msgs = "; ".join(_clean_validation_message(e) for e in errors)
         raise AglCastConversion(
@@ -139,7 +135,7 @@ def _decode_from_json(
     if recipe.decode is None:  # pragma: no cover
         raise AssertionError("decode strategy requires a decode schema")
     try:
-        return decode_value(recipe.decode, normalized, dict(recipe.defs))
+        return decode_value(recipe.decode, obj, dict(recipe.defs))
     except ValueError as exc:
         raise AglCastConversion(
             f"Value conversion failed: {exc}",

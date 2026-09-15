@@ -118,8 +118,13 @@ with banker's rounding (round-half-even). This context is part of the
 language semantics and does not vary by host.
 
 On the JSON wire both kinds are plain JSON numbers, parsed and emitted
-exactly. A wire number with an integral value (such as `1.0`) satisfies an
-`int` target; a non-integral number does not.
+exactly. A wire number written without a fraction or exponent reads as an
+`int`; any other reads as a `decimal`. Where the target expects the other
+kind, the number converts as the cast would: an `int` widens to `decimal`, and
+a `decimal` narrows to `int` only when integral
+([`decimal as int` integrality](#decimal-as-int-integrality)), so `2.0` fills
+an `int` target and `2.5` does not. A `decimal` or `json` target keeps the
+number's exact value, trailing zeros included (visible in its JSON encoding).
 
 ### `bool`
 
@@ -317,11 +322,7 @@ data only (see [Value syntax](host-environment.md#value-syntax)) — unlike
 `text as json`, which wraps the text as a JSON string instead of parsing it
 (see [`text as json` — embedding, not
 parsing](#text-as-json--embedding-not-parsing)). A `text` target returns the
-text unchanged. Parsing a `json` target normalizes an integral decimal (such
-as `1.0` or `-0.0`) to the equal `int`, the same normalization a `json` field
-nested in a larger parse or a `json`-typed [host
-parameter](host-environment.md#program-arguments) gets; `1 == 1.0`
-numerically, so this never affects equality.
+text unchanged.
 
 `T` comes from an explicit `::[T]` type argument or the contextual expected
 type; a call supplying neither is a static error. Unlike `copy`/
@@ -1182,8 +1183,8 @@ text as a value of a specific data type, use `parse`/`try-parse`
 
 `parse::[json]`/`try-parse::[json]` also parse a text's contents rather than
 embedding it, differing from `json::parse` in also accepting value-syntax
-data, raising `ValueParseError` rather than `JsonParseError`, and normalizing
-integral numbers ([Parsing values](#parsing-values)).
+data and raising `ValueParseError` rather than `JsonParseError`
+([Parsing values](#parsing-values)).
 
 ## Values and equality
 

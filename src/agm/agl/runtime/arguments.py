@@ -176,15 +176,13 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     syntax. An :class:`OptionSome` payload decodes its own ``value`` the same
     way (when textual) before being wrapped back into the ``Option`` enum's
     JSON shape. Every other value crosses the canonical JSON boundary (strict
-    parse, integral-decimal normalization, JSON-Schema validation, then the
-    typeless ``decode_value`` walk).
+    parse, JSON-Schema validation, then the typeless ``decode_value`` walk).
 
     :raises ValueError: on a type/shape mismatch or schema-validation failure.
     """
     from agm.agl.runtime.convert import (
         _clean_validation_message,
         decode_value,
-        normalize_integral_decimals,
         parse_json_strict,
         validator_for_schema,
     )
@@ -224,11 +222,10 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
         obj = host_text_to_json(raw, decoder.decode, defs, agent_command_fallback=True)
     else:
         obj = native_to_json(raw)
-    normalized = normalize_integral_decimals(obj)
-    validation_errors = list(validator_for_schema(decoder.json_schema).iter_errors(normalized))
+    validation_errors = list(validator_for_schema(decoder.json_schema).iter_errors(obj))
     if validation_errors:
         raise ValueError(_clean_validation_message(validation_errors[0]))
-    return decode_value(decoder.decode, normalized, defs)
+    return decode_value(decoder.decode, obj, defs)
 
 
 @dataclass(frozen=True, slots=True)

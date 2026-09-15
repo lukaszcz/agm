@@ -2196,15 +2196,17 @@ class TestRuntimeErrorPaths:
         result = convert_host_value("meta", [1, 2, 3], JsonType(), type_table_for())
         assert result == JsonValue([1, 2, 3])
 
-    def test_convert_host_value_json_type_decodes_normalized_value(self) -> None:
+    def test_convert_host_value_json_type_keeps_exact_written_value(self) -> None:
+        from decimal import Decimal
+
         from agm.agl.runtime.engine_config import convert_host_value
         from agm.agl.semantics.types import JsonType
         from agm.agl.semantics.values import JsonValue
 
         result = convert_host_value("meta", "1.0", JsonType(), type_table_for())
 
-        assert result == JsonValue(1)
-        assert isinstance(result.raw, int)
+        assert result == JsonValue(Decimal("1.0"))
+        assert isinstance(result.raw, Decimal)
 
     def test_convert_host_value_array_type_parsed_via_json_codec(self) -> None:
         # array/dict/record/enum params are now accepted via the JsonCodec.

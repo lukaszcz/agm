@@ -22,6 +22,11 @@ record Nested
 
 type J = json
 
+record Nums
+  n: int
+  d: decimal
+  j: json
+
 program def main(mode: text, input: text) -> unit =
   if
     | mode == "explicit" =>
@@ -110,5 +115,15 @@ program def main(mode: text, input: text) -> unit =
           print("caught: %{e.raw}")
     | mode == "as_json_contrast" =>
         print "%{input as json}"
+    | mode == "json_vs_value_parse_exactness" =>
+        let p = parse::[json](input)
+        let j = json::parse(input)
+        print "%{p} (%{json::kind(p)}) | %{j} (%{json::kind(j)})"
+    | mode == "json_number_exactness_record" =>
+        let v: Nums = parse(input)
+        print "%{v.n}"
+        print "%{v.d}"
+        print "%{v.d as json}"
+        print "%{v.j}"
     | else =>
         print "unknown mode"

@@ -99,21 +99,6 @@
       "expect": {"stdout": "\"line1\\nline2 % end\"\n"}
     },
     {
-      "name": "parse_json_integral_decimal_normalizes_to_int",
-      "params": {"mode": "parse_json", "input": "1.0"},
-      "expect": {"stdout": "1\n"}
-    },
-    {
-      "name": "parse_json_negative_zero_normalizes_to_int",
-      "params": {"mode": "parse_json", "input": "-0.0"},
-      "expect": {"stdout": "0\n"}
-    },
-    {
-      "name": "parse_json_scientific_notation_normalizes_to_int",
-      "params": {"mode": "parse_json", "input": "1e3"},
-      "expect": {"stdout": "1000\n"}
-    },
-    {
       "name": "parse_json_non_integral_decimal_preserved",
       "params": {"mode": "parse_json", "input": "1.50"},
       "expect": {"stdout": "1.50\n"}
@@ -182,6 +167,34 @@
       "name": "as_json_still_wraps_as_string",
       "params": {"mode": "as_json_contrast", "input": "{\"a\": 1}"},
       "expect": {"stdout": "\"{\\\"a\\\": 1}\"\n"}
+    },
+    {
+      "name": "json_vs_value_parse_exactness_integral_decimal",
+      "params": {"mode": "json_vs_value_parse_exactness", "input": "1.0"},
+      "expect": {"stdout": "1.0 (decimal) | 1.0 (decimal)\n"}
+    },
+    {
+      "name": "json_vs_value_parse_exactness_negative_zero",
+      "params": {"mode": "json_vs_value_parse_exactness", "input": "-0.0"},
+      "expect": {"stdout": "-0.0 (decimal) | -0.0 (decimal)\n"}
+    },
+    {
+      "name": "json_vs_value_parse_exactness_scientific_notation",
+      "params": {"mode": "json_vs_value_parse_exactness", "input": "1e3"},
+      "expect": {"stdout": "1000 (decimal) | 1000 (decimal)\n"}
+    },
+    {
+      "name": "json_vs_value_parse_exactness_array",
+      "params": {"mode": "json_vs_value_parse_exactness", "input": "[1.0, 2]"},
+      "expect": {"stdout": "[1.0, 2] (array) | [1.0, 2] (array)\n"}
+    },
+    {
+      "name": "json_number_exactness_record_int_decimal_json_fields",
+      "params": {
+        "mode": "json_number_exactness_record",
+        "input": "{\"n\": 2.0, \"d\": 1.0, \"j\": 3.0}"
+      },
+      "expect": {"stdout": "2\n1\n1.0\n3.0\n"}
     }
   ]
 }

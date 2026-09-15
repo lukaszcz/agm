@@ -2121,6 +2121,32 @@ class TestStructuredValidationErrors:
         assert result.errors == ()
 
 
+class TestValidationMessagesHaveNoDecimalRepr:
+    """Structured validation messages never leak the Python ``Decimal(...)`` repr.
+
+    A wire number written with a fraction/exponent parses as ``Decimal``
+    (``parse_float=Decimal``); when it fails schema validation, jsonschema's
+    raw ``error.message`` embeds the Python repr (e.g.
+    ``Decimal('1.0') is not of type 'string'``). These reach agents (retry
+    prompts) and users (trace, ``AgentParseError``) and must read as the
+    number the agent wrote, not a Python internal.
+    """
+
+    def test_decimal_repr_absent_for_text_target(self) -> None:
+        codec = JsonCodec()
+        result = _parse_typed(codec, "1.0", TextType(), strict_json=False)
+        assert result.ok is False
+        assert "Decimal(" not in result.error_msg
+        assert result.errors and all("Decimal(" not in e.message for e in result.errors)
+
+    def test_decimal_repr_absent_for_array_element_wrong_type(self) -> None:
+        codec = JsonCodec()
+        result = _parse_typed(codec, "[1.0]", ArrayType(elem=BoolType()), strict_json=False)
+        assert result.ok is False
+        assert "Decimal(" not in result.error_msg
+        assert result.errors and all("Decimal(" not in e.message for e in result.errors)
+
+
 class TestValidationErrorsThroughRuntime:
     """real ValidationErrors thread into AgentParseError.validation_errors."""
 
@@ -2925,8 +2951,8 @@ class TestDecodeValueRejectsMismatchedPayloads:
     def test_integral_decimal_to_int_through_parse(self) -> None:
         """wire ``1.0`` validates and converts to IntValue(1) for an int target.
 
-        Exercised through ``parse()`` (the public path): post-parse normalization
-        rewrites integral Decimals to int *before* schema validation, so
+        Exercised through ``parse()`` (the public path): the AgL validator's
+        ``integer`` type check accepts an integral Decimal directly, so
         ``{"type": "integer"}`` accepts ``1.0``.
         """
         codec = JsonCodec()
@@ -2935,7 +2961,7 @@ class TestDecodeValueRejectsMismatchedPayloads:
         assert result.value == IntValue(1)
 
     def test_integral_decimal_to_int_strict(self) -> None:
-        """integral-Decimal normalization also applies on the strict path."""
+        """The Decimal-aware integer check also applies on the strict path."""
         codec = JsonCodec()
         result = _parse_typed(codec, "1.0", IntType(), strict_json=True)
         assert result.ok is True
@@ -2949,22 +2975,18 @@ class TestDecodeValueRejectsMismatchedPayloads:
         assert result.value is None
         assert any(e.category == "wrong_type" for e in result.errors)
 
-    def test_integral_decimal_for_decimal_target(self) -> None:
-        """``1.0`` for a decimal target yields a value-exact DecimalValue.
+    def test_integral_decimal_for_decimal_target_keeps_exact_scale(self) -> None:
+        """``1.0`` for a decimal target yields a scale-exact DecimalValue.
 
-        Normalization routes the integral Decimal through int, and the
-        int→decimal widening in ``decode_value`` re-widens it: the resulting
-        value equals ``1`` exactly == Decimal('1.0')``).
+        A decimal target is never routed through the integer check, so the
+        wire value keeps the exact scale it was written with — ``1.0``.
         """
         codec = JsonCodec()
         result = _parse_typed(codec, "1.0", DecimalType(), strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DecimalValue)
-        # Value exactness: numerically equal to both 1 and 1.0.
         assert result.value.value == Decimal("1.0")
-        assert result.value.value == Decimal("1")
-        # Pinned representation: integral decimals normalize to scale-0 Decimal('1').
-        assert result.value.value == Decimal(1)
+        assert str(result.value.value) == "1.0"
 
 
 # ---------------------------------------------------------------------------

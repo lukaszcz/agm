@@ -314,7 +314,10 @@ def _styled_spans(
     for index, token in enumerate(tokens):
         start = token.start_pos
         end = token.end_pos
-        if start is None or end is None or (end := min(end, next_starts[index])) <= start:
+        if start is None or end is None:
+            continue
+        end = min(end, next_starts[index])
+        if end <= start:
             continue
         style = forced.get(index)
         if style is None:

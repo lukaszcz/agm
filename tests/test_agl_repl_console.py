@@ -23,12 +23,14 @@ from contextlib import AbstractContextManager
 from unittest.mock import patch
 
 import pytest
+from lark.lexer import Token
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory, InMemoryHistory
 from prompt_toolkit.input import PipeInput, create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
+from agm.agl.lexer import tokenize
 from agm.agl.repl import ReplSession as _ReplSession
 from agm.agl.repl.console import (
     AglCompleter,
@@ -311,6 +313,16 @@ class TestLexer:
         source = "let x = \u200bbad"
         fragments = lexer.lex_document(Document(source))(0)
         assert "".join(text for _style, text in fragments) == source
+
+    def test_token_without_source_position_is_not_styled(self) -> None:
+        source = "let x = 1 + foo"
+        expected = AglPromptLexer().lex_document(Document(source))(0)
+        with patch(
+            "agm.agl.repl.console.tokenize",
+            side_effect=lambda text: iter([Token("NAME", "ghost"), *tokenize(text)]),
+        ):
+            fragments = AglPromptLexer().lex_document(Document(source))(0)
+        assert fragments == expected
 
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_unterminated_triple_quoted_string_preserves_prefix_highlighting(

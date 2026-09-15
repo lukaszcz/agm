@@ -3,8 +3,8 @@
 [← Index](index.md)
 
 An AgL program does not run in a vacuum: a **host** embeds the language,
-supplies the agents, provides external values for a selected program's own
-parameters, executes shell commands, and records the trace. This chapter
+supplies the agents, provides external values for a selected program's
+signature and module parameters, executes shell commands, and records the trace. This chapter
 specifies the contract between a program and its host — what a program may
 assume, and which knobs are host-configurable.
 
@@ -17,8 +17,9 @@ A conforming host processes a program in this order:
 3. **Static validation** against the host's *capability catalog*. Any type
    error, non-exhaustive case, or redundant case arm aborts here. Independent
    advisory diagnostics are collected separately.
-4. **Program-argument validation** — externally provided values are checked
-   against the selected `program def`'s own value parameters.
+4. **Host-input validation** — externally provided values are checked against
+   the selected `program def`'s own value parameters and every module
+   parameter in its import closure.
 5. **Contract materialization** — every agent-call and `exec` site's output
    contract (codec, schema, format instructions) is built.
 6. **Execution.**
@@ -115,7 +116,7 @@ restriction as an agent output type or cast target — see [Generics](generics.m
 
 `@opt-name`, `@opt-short`, `@opt-env`, `@opt-metavar`, `@opt-hidden`, and
 `@doc` shape how a value parameter is addressed and described on the command
-line; see [Attributes](attributes.md#program-parameter-attributes).
+line; see [Attributes](attributes.md#host-parameter-attributes).
 
 ### Help
 
@@ -160,14 +161,14 @@ short spelling.
 For an unset module parameter, the value is chosen in this order:
 
 ```
-CLI flag  >  @opt-env variable  >  selected-program route  >  module route  >  initializer
+CLI flag  >  @opt-env variable  >  program route  >  module route  >  initializer
 ```
 
-The selected-program route can provide a bare external name that resolves for
-the parameter, and wins over the module route even when the latter appears in
-a more-specific TOML layer. A module route addresses the binding's declaring
-module and scope, so it remains available even if its bare spelling is
-shadowed elsewhere.
+The **program route** is the selected program's table and can provide a bare
+external name that resolves for the parameter. It wins over the **module
+route**, even when the latter appears in a more-specific TOML layer. A module
+route addresses the binding's declaring module and scope, so it remains
+available even if its bare spelling is shadowed elsewhere.
 
 For example, this program imports the `A/logging` module:
 
@@ -206,11 +207,11 @@ visible module parameter is shown under its shortest resolving spelling.
 unavailable to config, environment, or an explicit resolving flag.
 
 `agm check` validates module parameter declarations but supplies no host
-values and evaluates nothing. The REPL has no selected-program route or
-parameter flags: when it first loads a module, its parameters read that
-module's route only. An inline `agm exec -c` entry has no module route for its
-own parameters, so they resolve as CLI flag > `@opt-env` variable >
-initializer; its file-backed imports keep their module routes.
+values and evaluates nothing. The REPL has no program route or parameter
+flags: when it first loads a module, its parameters read that module's route
+only. An inline `agm exec -c` entry has no module route for its own parameters,
+so they resolve as CLI flag > `@opt-env` variable > initializer; its
+file-backed imports keep their module routes.
 
 ### Engine settings
 

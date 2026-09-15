@@ -8,7 +8,7 @@ Module roots come from the invocation directory, the global library in the AGM h
 
 `import` adds a graph edge and qualified access to a module's public surface; import tails and `use` add bare names to a region without narrowing that surface; `hiding` subtracts paths. Reachable qualified declaration routes also determine method visibility, while `use` never loads a module or makes methods visible. Imports, uses, and exports may appear inside `scope` regions: qualified routes stay module-wide, bare contributions are regional, and a scoped export re-roots forwarded paths beneath the region. Re-exports are part of the same graph.
 
-The entry module is keyed by the module id its owning package declares for its file, so a package file executed or checked directly is still that module: the rest of its package may import it back, and its parameters and configuration route under that path. An entry no package owns — inline source, a REPL entry, a file under a loose root — has no module identity, is keyed by an anonymous sentinel, cannot be imported, and spells `<entry>` wherever a module route is shown.
+The entry module is keyed by the module id its owning package declares for its file, so a package file executed or checked directly is still that module: the rest of its package may import it back, and its module parameters and module route use that path. An entry no package owns — inline source, a REPL entry, a file under a loose root — has no module identity, is keyed by an anonymous sentinel, cannot be imported, and spells `<entry>` wherever a module route is shown.
 
 ## Prelude and Standard-Library Surfaces
 

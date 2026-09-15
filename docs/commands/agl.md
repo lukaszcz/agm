@@ -330,13 +330,13 @@ value parameters from `[review-tools.review.review.main]`, a shorter unambiguous
 exact quoted route `["review-tools/review".review.main]`. Inline `-c` programs have no route, so
 their parameters are CLI-only (CLI value, then signature default).
 
-Module parameters use the declaring module's table instead. For `A/logging`, root bindings use
-`[A.logging]`; bindings in `scope debug` use `[A.logging.debug]`, or the exact module anchor
-`["A/logging".debug]`. Leaves use `@opt-name` when present. The selected program's own table can
-override a module parameter only through a resolving bare external name, and wins over the
-module table; CLI and `@opt-env` still win over both. An inline entry's own module parameters
-have no config route, so they resolve as CLI > `@opt-env` > initializer; its imported modules
-retain their module tables.
+Module parameters use their declaring module's **module route**. For `A/logging`, root bindings
+use `[A.logging]`; bindings in `scope debug` use `[A.logging.debug]`, or the exact module anchor
+`["A/logging".debug]`. Leaves use `@opt-name` when present. The selected program's table is the
+**program route**: it can override a module parameter only through a resolving bare external
+name, and wins over the module route; CLI and `@opt-env` still win over both. An inline entry's
+own module parameters have no config route, so they resolve as CLI > `@opt-env` > initializer;
+its imported modules retain their module routes.
 
 A key in the selected program's table naming neither a name-addressable parameter nor an engine
 setting (typically a misspelling) is reported on stderr and ignored; one naming a
@@ -533,9 +533,9 @@ Each loaded program gets the automatic prelude as in `agm exec`, so `Option`, `S
 etc. are unqualified from a fresh prompt.
 
 When the REPL first loads a module with `@param` bindings, it seeds them from that module's
-configuration route. It does not read selected-program tables and offers no module-parameter
-flags. A seeded `var` keeps later writes for the session; `:reset` restores the configured
-initial value when the module is loaded again.
+module route. It does not read program routes and offers no module-parameter flags. A seeded
+`var` keeps later writes for the session; `:reset` restores the configured initial value when
+the module is loaded again.
 
 An imported module's `extern def` companion ([Python FFI](../agl/reference/ffi.md)) is imported
 once per session, so its module globals last for the session; `:reset` discards the cached

@@ -83,7 +83,7 @@ parameter list defaults to the **named-only** zone: a plain `name: text`
 parameter is addressed by `--name`. `@arg-pos` opens a positional slot;
 `@arg-std` accepts both. Presentation attributes (`@doc`, `@opt-name`,
 `@opt-short`, `@opt-env`, `@opt-metavar`, `@opt-hidden`) shape the flag; see
-[Attributes](attributes.md#program-parameter-attributes).
+[Attributes](attributes.md#host-parameter-attributes).
 
 Each parameter resolves as CLI token > `@opt-env` variable > qualified config
 table > declared default. A required parameter with no external value is a

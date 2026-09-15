@@ -108,11 +108,13 @@ program = "review-tools/main::batch"
   cannot start with a built-in command or root alias (`wsp`, `wt`).
 - `program` names the `program def` to run as `<module>::<program>`: `review-tools/main::review` is
   program `review` in module `review-tools/main`, file `review-tools/src/main.agl`. Must belong to
-  this package, take no type parameters, return unit; its arguments become the command's.
+  this package, take no type parameters, return unit; its signature arguments and closure module
+  parameters become the command's host surface.
 - `description` is an optional short summary shown in command listings.
 - `help` is optional longer guidance (TOML multiline strings work). Command help combines the
-  description, the program's source `@doc`, and this help, omitting identical blocks. Parameter
-  `@doc` attributes describe their options.
+  description, the program's source `@doc`, and this help, omitting identical blocks. It then
+  shows signature options followed by one section for each closure module with visible module
+  parameters. Parameter `@doc` attributes describe their options.
 - Omit `program` for a command group (must have descendant commands). Undeclared parent groups
   work automatically, with generated help listing their descendants. Listings use each command's
   description, help, or source `@doc`, falling back to a generated summary when none is available.
@@ -133,8 +135,8 @@ rev = "devel review"
 ```
 
 `agm devel`, `agm devel --help`, and `agm help devel` show the group's guidance and a generated
-subcommand listing. Leaf commands generate usage and option help from their program signatures,
-so authored help is optional.
+subcommand listing. Leaf commands generate usage and option help from their program signatures and
+closure module parameters, so authored help is optional.
 
 A program may register its own command instead, via
 [`@command`](../agl/reference/attributes.md#command-attributes), `@description`, and `@help`
@@ -161,10 +163,10 @@ descendants: the example supports both `agm dev review` and `agm rev`. Aliases p
 activation conflicts, project pins, help, and completion like commands.
 
 Config tables use dots between path words: `[rev]`, `[dev.review]`, and `[devel.review]` all
-address the same program (arguments and engine settings), even via `agm exec`. Different keys in
-these tables combine; setting the same key through multiple spellings in one layer is an
-ambiguity error, and a later config layer overrides an earlier one. CLI flags still take
-precedence. Group tables do not supply inherited defaults.
+address the same program route (signature arguments, engine settings, and resolving bare module
+parameters), even via `agm exec`. Different keys in these tables combine; setting the same key
+through multiple spellings in one layer is an ambiguity error, and a later config layer overrides
+an earlier one. CLI flags still take precedence. Group tables do not supply inherited defaults.
 
 ## Registered commands
 
@@ -172,18 +174,25 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
 `agm help` and shell completion, and support `--help`. A command comes from the manifest's
 `[commands]` table, a program's own `@command` attribute, or both merged.
 
-- **Arguments.** Value parameters project onto the command's CLI as for `agm exec`:
+- **Host parameters.** Signature value parameters project onto the command's CLI as for `agm exec`:
   positional-capable parameters fill trailing words in order, name-addressable ones take
-  `--name VALUE` (`--name`/`--no-name` for `bool`). See
-  [Program arguments](agl.md#program-arguments). A registered command reserves only `--dry-run`
+  `--name VALUE` (`--name`/`--no-name` for `bool`). Every `@param` binding in the selected
+  program's transitive import closure is a module parameter too: its external name supplies a
+  resolving bare flag and dotted qualified flags, including `--no-...` where its type permits.
+  Help groups visible module parameters by declaring module, and completion offers their resolving
+  spellings. See [Program arguments](agl.md#program-arguments) and
+  [Module parameters](agl.md#module-parameters). A registered command reserves only `--dry-run`
   and `-h`/`--help`, so its parameters may reuse spellings `agm exec` itself reserves, such as
   `--module-path` or `-p`; running that program through `agm exec` instead still rejects them.
-- **Configuration.** Omitted arguments and engine settings come from the program's qualified table
-  (e.g. `[review-tools.main.review]` for `review-tools/main::review`) or the registered command
-  path (`[pr-review]`, or `[dev.review]` for command `dev review`). Both name the same program
-  regardless of how it runs, so setting one key through both in one config layer is an error.
-  See [Configuration](agl.md#configuration).
-- **`--dry-run`**, before or after the command path, runs the static pipeline and argument
+- **Configuration.** Omitted signature arguments and engine settings use the program route:
+  the program's qualified table (e.g. `[review-tools.main.review]` for
+  `review-tools/main::review`) or a registered command path (`[pr-review]`, or `[dev.review]`
+  for command `dev review`). Both name the same program regardless of how it runs, so setting
+  one key through both in one config layer is an error. A module parameter also uses the module
+  route of its declaring module; a resolving bare program-route leaf overrides that
+  module-route leaf.
+  CLI and `@opt-env` values win over both. See [Configuration](agl.md#configuration).
+- **`--dry-run`**, before or after the command path, runs the static pipeline and host-input
   validation without executing.
 - **Conflicts.** Two active packages cannot own the same command path; install the later one with
   `--shadow` to make it the owner. Shadowing is recorded per store tree, so a rebuilt activation

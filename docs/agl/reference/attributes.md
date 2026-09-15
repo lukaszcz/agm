@@ -134,8 +134,9 @@ The presentation attributes `@opt-name`, `@opt-short`, `@opt-env`,
 Host command-line and configuration channels use the module parameter's
 presentation. The external name is the config leaf as well as the flag name;
 qualified module and scope spellings are dotted, while its declaration path
-uses `::`. See [Module parameters](host-environment.md#module-parameters) for
-the available routes, precedence, help, and REPL behavior.
+uses `::`. Its [program route and module route](host-environment.md#module-parameters)
+use that same external name; the latter identifies its declaring module. See
+that section for precedence, help, and REPL behavior.
 
 ```agl
 @param @doc("Log level") @opt-short("l") var level: int = 1

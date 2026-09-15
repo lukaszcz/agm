@@ -103,18 +103,22 @@ program's `@command` — is an error whenever the two declarations differ; each
 path has one declaration.
 
 A registered command runs its program exactly as a directly executed program
-does: the selected `program def`'s own value parameters become flags, and
-configuration is read by qualified key. Its parameters carry the same
-[presentation attributes](attributes.md#program-parameter-attributes) as any
-other program's, so the flags, one-letter spellings, environment fallbacks, and
-`@doc` prose a program declares are what its registered command presents. A
-command the manifest registers takes its description and `help` prose from that
-entry, and a program's own registration takes them from `@description` and
-`@help`; either appears alongside the program's `@doc`. Command groups and
-aliases are defined in the [package manifest](../../commands/pkg.md#commands),
-and either may name a command a program registers.
+does: the selected `program def`'s own value parameters and every `@param`
+binding in its transitive import closure share its host surface. Module
+parameters use their external names for resolving bare and dotted flags,
+configuration leaves, and completion, just as under `agm exec`. The same
+[presentation attributes](attributes.md#host-parameter-attributes) apply to
+both parameter kinds, so their flags, one-letter spellings, environment
+fallbacks, and `@doc` prose appear on the registered command. Its help shows
+the signature's options first, then a `Parameters of MODULE` section for each
+closure module with visible module parameters. A command the manifest registers
+takes its description and `help` prose from that entry, and a program's own
+registration takes them from `@description` and `@help`; either appears
+alongside the program's `@doc`. Command groups and aliases are defined in the
+[package manifest](../../commands/pkg.md#commands), and either may name a
+command a program registers.
 
-## Program parameters and configuration keys
+## Program and module parameters and configuration routes
 
 A package program may declare its own value parameters like any other
 [`program def`](program-structure.md). The CLI projects those parameters onto
@@ -131,6 +135,17 @@ equivalent address: with `"dev review"` registered for
 `review-tools/review::main`, `[dev.review]` configures the same program as
 `[review-tools.review.review.main]` does, whether it is run as `agm dev
 review`, by reference, or by file path.
+
+The command's closure module parameters retain their declaring-module
+**module routes**. For example, a root parameter in `review-tools/logging`
+uses `[review-tools.logging]`; one in `scope debug` uses
+`[review-tools.logging.debug]` or `["review-tools/logging".debug]`. The
+registered command path and the selected program's own table are equivalent
+**program routes**: either can override a module parameter only when its bare
+external name resolves for that parameter. A program-route value wins over a
+module-route value; CLI and `@opt-env` values win over both. See
+[Module parameters](host-environment.md#module-parameters) for all spelling,
+ambiguity, and precedence rules.
 
 ```toml
 [dev.review]

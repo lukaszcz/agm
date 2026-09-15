@@ -124,8 +124,10 @@ class BuiltinKind(enum.Enum):
         ``shallow-copy(value)`` — one-level copy; yields the same type as its
         argument.
     ``PARSE``
-        ``std/value::parse[T](value)`` — same conversion as ``value as T``,
-        raising ``ValueParseError`` on failure instead of ``CastError``.
+        ``std/value::parse[T](value)`` — same conversion as ``value as T``
+        (see ``semantics.type_table.parse_classification`` for the one
+        divergence), raising ``ValueParseError`` on failure instead of
+        ``CastError``.
     ``TRY_PARSE``
         ``std/value::try-parse[T](value)`` — ``parse`` wrapped in a
         ``Result[T, ValueParseError]``.

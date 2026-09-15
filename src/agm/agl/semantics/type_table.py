@@ -1806,6 +1806,18 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
     return CastKind.STATIC_ERROR  # pragma: no cover
 
 
+def parse_classification(target: Type, table: TypeTable) -> CastKind:
+    """Classify a ``std/value::parse``/``try-parse`` conversion from text to *target*.
+
+    Same as :func:`cast_classification` from a ``text`` source, except a
+    ``json`` target is ``FALLIBLE`` (parses the text) rather than
+    ``TOTAL_JSON`` (wraps the text as a JSON string, as ``text as json`` does).
+    """
+    if isinstance(target, JsonType):
+        return CastKind.FALLIBLE
+    return cast_classification(TextType(), target, table)
+
+
 # ---------------------------------------------------------------------------
 # Prelude type shapes — the single source of truth for built-in nominal types
 #

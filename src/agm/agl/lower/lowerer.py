@@ -2498,8 +2498,8 @@ class _Lowerer:
         )
 
     def _lower_parse_call(self, call_node: "Call", span: "SourceSpan") -> IrExpr:
-        """Lower ``std/value::parse[T](value)``: like ``value as T``, but raises
-        ``ValueParseError`` on failure instead of ``CastError`` (see
+        """Lower ``std/value::parse[T](value)`` from its recorded ``CastSpec``;
+        failure raises ``ValueParseError`` instead of ``CastError`` (see
         ``eval.ir_interpreter._on_cast_failure``).
         """
         spec = self._checked.cast_specs[call_node.node_id]

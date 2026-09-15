@@ -304,14 +304,24 @@ program def main() -> unit =
 ### Parsing values
 
 `parse[T](value: text) -> T` and `try-parse[T](value: text) -> Result[T,
-ValueParseError]` convert text the same way a cast does: `parse::[T](v)`
-follows the same static rules as `v as T` (a `T` requiring structure parses
-strict JSON or [value-syntax](host-environment.md#value-syntax); a `text` or
-`json` target instead follows the conversion matrix verbatim — see
-[Casts and convertibility](#casts-and-convertibility)) but raises
-`ValueParseError` instead of `CastError` on failure
-([Exceptions](exceptions.md#valueparseerror)). `try-parse` never raises: it
-returns `Result::Err` with the `ValueParseError` instead.
+ValueParseError]` accept exactly the targets `v as T` accepts (so, for
+instance, a function or `unit` target is a static error) and convert text the
+same way that cast would, but raise `ValueParseError` instead of `CastError`
+on failure ([Exceptions](exceptions.md#valueparseerror)). `try-parse` never
+raises: it returns `Result::Err` with the `ValueParseError` instead.
+
+A `T` requiring structure parses strict JSON or
+[value-syntax](host-environment.md#value-syntax), the same as a cast to that
+`T` would. A `json` target also parses strict JSON or value syntax, as plain
+data only (see [Value syntax](host-environment.md#value-syntax)) — unlike
+`text as json`, which wraps the text as a JSON string instead of parsing it
+(see [`text as json` — embedding, not
+parsing](#text-as-json--embedding-not-parsing)). A `text` target returns the
+text unchanged. Parsing a `json` target normalizes an integral decimal (such
+as `1.0` or `-0.0`) to the equal `int`, the same normalization a `json` field
+nested in a larger parse or a `json`-typed [host
+parameter](host-environment.md#program-arguments) gets; `1 == 1.0`
+numerically, so this never affects equality.
 
 `T` comes from an explicit `::[T]` type argument or the contextual expected
 type; a call supplying neither is a static error. Unlike `copy`/
@@ -1169,6 +1179,11 @@ To parse the *contents* of a text as JSON, import `std/json` and use
 `JsonParseError` (`std/json`) on malformed input. To read the contents of a
 text as a value of a specific data type, use `parse`/`try-parse`
 ([Parsing values](#parsing-values)).
+
+`parse::[json]`/`try-parse::[json]` also parse a text's contents rather than
+embedding it, differing from `json::parse` in also accepting value-syntax
+data, raising `ValueParseError` rather than `JsonParseError`, and normalizing
+integral numbers ([Parsing values](#parsing-values)).
 
 ## Values and equality
 

@@ -593,6 +593,15 @@ _HELP_TEXTS: dict[str, str] = {
         table (which reaches name-addressable parameters only), then its
         signature default; a required parameter with none of these errors.
 
+        A static `@param` let or var in the selected program's import closure
+        is also host-configurable. Its external name supplies a bare flag when
+        it resolves and dotted qualified flags such as --A.logging.verbose;
+        bool and Option[T] values also accept --no- forms. Module parameters
+        resolve as CLI > @opt-env > selected-program config table > declaring
+        module config table > initializer. Help groups them by module after
+        the selected program's own options; an ambiguous bare spelling errors
+        only when used.
+
         The selected program owns -h/--help: `agm exec FILE -h` prints that
         program's own usage, description, and options rather than this text.
         With several declared programs and none selected with -p, this text

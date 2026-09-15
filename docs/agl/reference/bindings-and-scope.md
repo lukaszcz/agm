@@ -84,6 +84,11 @@ shape keeps its constructor-pattern meaning. See
 [Named scopes](scopes.md#binder-paths) for the complete disambiguation and
 for declaring a binder inside a `scope` region.
 
+A module-root or scope-region single-name binding may be marked `@param` to
+admit a host-supplied initial value. It remains an ordinary `let` or `var` in
+all language semantics; the host-facing declaration and resolution rules are
+in [Module parameters](host-environment.md#module-parameters).
+
 ## `var` — mutable binding
 
 ```ebnf

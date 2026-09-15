@@ -95,6 +95,11 @@ name-addressable parameter cannot spell an
 namespace. Full resolution and help rules:
 [Host environment](host-environment.md#program-arguments).
 
+An `@param` static binding is a separate host input owned by its declaring
+module, not a value parameter of a `program def`. A selected program exposes
+the marked bindings from its transitive import closure alongside its own
+parameters; see [Module parameters](host-environment.md#module-parameters).
+
 ## Module items
 
 ### Import declarations

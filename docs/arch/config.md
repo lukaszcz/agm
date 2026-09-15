@@ -22,10 +22,14 @@ Sections are consumed by specific features — `[loop]`, `[review]`, `[revise]`,
 
 ## AgL Settings
 
-AgL programs read two kinds of configuration, both routed through *qualified* tables named after the program's module path:
+AgL hosts resolve three kinds of configuration. Engine settings use `[exec]`
+defaults as well as selected-program routes; program arguments use the
+selected-program route; module parameters use both selected-program and
+declaration-module routes.
 
 - **Engine settings** (`default-agent`, `log`, `log-file`, `strict-json`, `max-iters`, `timeout`) are `builtin var` bindings at the root of `std/config`. Precedence is source write > CLI flag > qualified program table > `[exec]` > engine default. Agent strings use the shared host Agent-value syntax before becoming a typed setting override. Their catalog — name, value kind, config accessor, default, and which side of the host boundary consumes a write — is the pure data leaf `config/engine_keys.py`, shared with the AgL checker, IR validation, and evaluator.
 - **Program arguments** — a `program def`'s own value parameters — resolve as CLI flag > `@opt-env` environment variable > qualified config table > signature default > required error, from the selected program's own qualified table (e.g. `[workflow.main]`, the same table an engine-key override reads), using the same `QualifiedConfigKey` shape as the engine-key mechanism, keyed by each parameter's external name. A required argument with no default reachable from the selected program is a pre-execution error.
+- **Module parameters** — marked static `let`/`var` bindings — resolve as CLI flag > `@opt-env` environment variable > selected-program route > declaration-module route > initializer. `param_surface.py` resolves their external bare and dotted spellings against host flags, signature parameters, the entry module, and imports; `param_config.py` reads module/scope tables and the selected-program route independently, so the latter always wins. The REPL uses the declaration-module route only when it first loads a module.
 
 `config/qualified_keys.py` routes a config table to a module by path suffix, keeps layer provenance, and rejects ambiguous suffixes. A program a package registers as a CLI command is addressed by that command path as well (`agm dev review` reads `[dev.review]`), on every invocation rather than only through dispatch, since the address belongs to the program; the command paths, including expanded aliases, come from the owning package's manifest and are just one more spelling, so the same conflict and layering rules apply. AGM's own top-level sections stay out of module matching, while a loose file named after a command can still use its nested program table; a section keyed by AGM's own schema (`deps`, `modules`, `packages`, `params`) is excluded at every depth, so a loose file with one of those stems has no program table. How the hosts seed these values into a program is described in [agl/hosting.md](agl/hosting.md).
 
@@ -38,7 +42,7 @@ AgL programs read two kinds of configuration, both routed through *qualified* ta
 - `src/agm/config/context.py` — config context and project-directory discovery.
 - `src/agm/config/general.py` — layer loading, merging, precedence retention, and per-feature readers.
 - `src/agm/config/command_config.py` — per-command override sections.
-- `src/agm/config/engine_keys.py` — the engine-key catalog; `src/agm/config/qualified_keys.py` — qualified AgL config-key routing.
+- `src/agm/config/engine_keys.py` — the engine-key catalog; `src/agm/config/qualified_keys.py` — qualified AgL config-key routing; `src/agm/cli_support/param_config.py` — module-parameter and selected-program-route resolution.
 - `src/agm/config/module_roots.py` — AgL module roots from `[modules]` and the `AGM_STDLIB` override; `src/agm/stdlib_locator.py` — the shipped stdlib tree.
 - `src/agm/config/sandbox/` — SRT sandbox settings discovery and merging.
 - `src/agm/commands/config/` — the `agm config` commands; `config/` (repository root) — the templates `just install` copies into the AGM home.

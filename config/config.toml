@@ -54,3 +54,15 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # max-iter = 3                   # int parameter — native TOML integer
 # tags = ["bug", "audit"]       # list parameter — TOML array (or a JSON string)
 # ratio = "0.75"                # decimal parameters must be quoted strings
+#
+# Module parameters use their declaring module route. A root binding in
+# A/logging uses [A.logging]; a binding inside `scope debug` uses
+# [A.logging.debug], or the exact anchor ["A/logging".debug]. Leaves use the
+# binding's @opt-name when present. The selected program table above overrides
+# a resolving bare module parameter leaf.
+#
+# [A.logging]
+# verbose = true
+#
+# [A.logging.debug]
+# trace = false

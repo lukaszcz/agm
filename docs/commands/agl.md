@@ -224,6 +224,28 @@ An **empty `@opt-env` variable counts as unset** (`VAR= agm exec FILE` falls thr
 config table, then the default), so it cannot deliver an empty `text`; use a `""` default or
 `--x=""`.
 
+### Module parameters
+
+An `@param let` or `@param var` in the selected program's transitive import closure becomes a
+host option. The declaring module's external parameter name is used for a bare flag when it
+resolves, and for dotted qualified flags in all cases: an `A/logging` parameter `verbose` can
+be `--verbose`, `--logging.verbose`, or `--A.logging.verbose`; a `scope debug` parameter is
+`--logging.debug.trace` or `--A.logging.debug.trace`. `bool` and `Option[T]` also have the
+corresponding `--no-...` form, and `@opt-short("v")` adds `-v`. Module and scope paths are dotted
+in flags; `::` is only for declaration paths in AgL source.
+
+Bare names are claimed by the host, the selected program's value parameters, its own module
+parameters, and imported module parameters in that order. A shadowed parameter keeps its
+qualified flags. Several parameters in one level can make a bare flag ambiguous; declaring them
+is valid, but using that flag is an error that names the declarations. `@opt-name` supplies the
+external name in flags and config; `@opt-env` is the fallback after CLI flags; `@opt-hidden`
+removes the entry from help and completion without disabling it.
+
+Selected-program help shows its usual options first, then one `Parameters of MODULE` section for
+each closure module. Each visible module parameter appears under its shortest resolving spelling.
+For module parameter precedence and configuration routes, see
+[Module parameters](../agl/reference/host-environment.md#module-parameters).
+
 ### Host Agent syntax
 
 Every CLI argument or TOML string of the standard `Agent` type accepts:
@@ -307,6 +329,14 @@ reference. A `review::main` program in `review-tools/review` reads engine overri
 value parameters from `[review-tools.review.review.main]`, a shorter unambiguous suffix, or the
 exact quoted route `["review-tools/review".review.main]`. Inline `-c` programs have no route, so
 their parameters are CLI-only (CLI value, then signature default).
+
+Module parameters use the declaring module's table instead. For `A/logging`, root bindings use
+`[A.logging]`; bindings in `scope debug` use `[A.logging.debug]`, or the exact module anchor
+`["A/logging".debug]`. Leaves use `@opt-name` when present. The selected program's own table can
+override a module parameter only through a resolving bare external name, and wins over the
+module table; CLI and `@opt-env` still win over both. An inline entry's own module parameters
+have no config route, so they resolve as CLI > `@opt-env` > initializer; its imported modules
+retain their module tables.
 
 A key in the selected program's table naming neither a name-addressable parameter nor an engine
 setting (typically a misspelling) is reported on stderr and ignored; one naming a
@@ -501,6 +531,11 @@ must be closed yourself.
 
 Each loaded program gets the automatic prelude as in `agm exec`, so `Option`, `Some`, `None`,
 etc. are unqualified from a fresh prompt.
+
+When the REPL first loads a module with `@param` bindings, it seeds them from that module's
+configuration route. It does not read selected-program tables and offers no module-parameter
+flags. A seeded `var` keeps later writes for the session; `:reset` restores the configured
+initial value when the module is loaded again.
 
 An imported module's `extern def` companion ([Python FFI](../agl/reference/ffi.md)) is imported
 once per session, so its module globals last for the session; `:reset` discards the cached

@@ -128,6 +128,90 @@ prose.
 
 ## Host-configurable settings
 
+### Module parameters
+
+A static `let` or `var` marked `@param` is a **module parameter**. Its host
+surface belongs to every selected program whose transitive import closure
+contains its declaring module. The selected program's own module comes first;
+the imported modules follow. The initializer remains the fallback: a supplied
+value is bound during static initialization instead of evaluating that
+initializer. See [Attributes](attributes.md#module-parameters) for the
+declaration form and its restrictions.
+
+The parameter's **external name** is its `@opt-name`, or its declared name
+when it has none. That name is used in flags, config leaves, help, and
+completion. A root parameter in `A/logging`, such as `verbose`, has a bare
+`--verbose` spelling when it resolves, plus dotted qualified spellings such as
+`--logging.verbose` and `--A.logging.verbose`. A parameter in `scope debug`
+adds the scope path: `--logging.debug.trace` and
+`--A.logging.debug.trace`. Qualified spellings are dotted; source declaration
+paths use `::` instead. `@opt-short("v")` adds `-v` on the command line.
+
+`bool` and `Option[T]` parameters also accept their normal `--no-...` form;
+other parameter types take a value under the same type-directed rules as
+[program arguments](#program-arguments). A bare name is resolved in this
+order: host flags and engine-setting leaves, the selected program's own value
+parameters, parameters in its own module, then parameters in imported
+modules. A later level retains qualified spellings. Several parameters at the
+same level make a spelling ambiguous only when it is used; the diagnostic
+names the candidate declaration paths. The same resolution applies to a
+short spelling.
+
+For an unset module parameter, the value is chosen in this order:
+
+```
+CLI flag  >  @opt-env variable  >  selected-program route  >  module route  >  initializer
+```
+
+The selected-program route can provide a bare external name that resolves for
+the parameter, and wins over the module route even when the latter appears in
+a more-specific TOML layer. A module route addresses the binding's declaring
+module and scope, so it remains available even if its bare spelling is
+shadowed elsewhere.
+
+For example, this program imports the `A/logging` module:
+
+<!-- agl-check: fragment -->
+```agl
+import A/logging
+
+program def main() -> unit =
+  print A/logging::verbose
+```
+
+Its configuration can use the module tables below. The selected program's
+table overrides a resolving module-table leaf.
+
+```toml
+[A.logging]
+verbose = true
+
+[A.logging.debug]
+trace = true
+
+[tool.main]
+verbose = false
+```
+
+`["A/logging".debug]` is the exact quoted-module spelling of the scoped
+module table; use it instead of `[A.logging.debug]` when an exact module route
+is needed. Module and scope paths are dotted in TOML and flags, never `::`.
+Each route accepts every unambiguous module suffix, shortest first. A config
+leaf uses the external name, not the declared binding name.
+
+Help lists the selected program's own options first and then one section for
+each closure module with a visible parameter, titled by its module path. Each
+visible module parameter is shown under its shortest resolving spelling.
+`@opt-hidden` omits the parameter from help and completion without making it
+unavailable to config, environment, or an explicit resolving flag.
+
+`agm check` validates module parameter declarations but supplies no host
+values and evaluates nothing. The REPL has no selected-program route or
+parameter flags: when it first loads a module, its parameters read that
+module's route only. An inline `agm exec -c` entry has no module route for its
+own parameters, so they resolve as CLI flag > `@opt-env` variable >
+initializer; its file-backed imports keep their module routes.
+
 ### Engine settings
 
 The standard-library module `std/config` exposes the following fixed engine

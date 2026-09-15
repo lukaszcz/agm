@@ -117,18 +117,25 @@ A program outside a package registers nothing: nothing reads its `@command`.
 `@param` exposes an ordinary static `let` or `var` binding as a module
 parameter. The binding must be at module root or directly in a scope region,
 must bind exactly one name rather than `_` or a destructuring pattern, and must
-have an initializer. Its type annotation is optional.
+have an initializer. Its type annotation is optional. It is not a `builtin var`
+and cannot appear in a function, block, lambda, or other nested binding.
+Its inferred or annotated type must be closed and decodable at the host
+parameter boundary.
 
 Its initializer supplies the value when the host leaves the parameter unset;
 when the host supplies a value, that value is bound instead and the initializer
-is not evaluated.
+is not evaluated. A `var` remains mutable after that initial host value is
+bound.
 
 The presentation attributes `@opt-name`, `@opt-short`, `@opt-env`,
 `@opt-metavar`, `@opt-hidden`, and `@doc` apply to the binding. Without
 `@opt-name`, its external name is its declared name.
 
 Host command-line and configuration channels use the module parameter's
-presentation; see [Host environment](host-environment.md).
+presentation. The external name is the config leaf as well as the flag name;
+qualified module and scope spellings are dotted, while its declaration path
+uses `::`. See [Module parameters](host-environment.md#module-parameters) for
+the available routes, precedence, help, and REPL behavior.
 
 ```agl
 @param @doc("Log level") @opt-short("l") var level: int = 1
@@ -168,4 +175,5 @@ program def main(
   print "%{artifact} -> %{target}"
 ```
 
-Value resolution and help rendering: [Host environment](host-environment.md#program-arguments).
+Value resolution and help rendering: [Host environment](host-environment.md#program-arguments)
+and [Module parameters](host-environment.md#module-parameters).

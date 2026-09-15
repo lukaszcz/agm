@@ -10,8 +10,8 @@ extern def array[E]::first?(self) -> Option[E]
 extern def array[E]::last(self) -> E
 @extern-name("last_option")
 extern def array[E]::last?(self) -> Option[E]
-extern def array[E]::append(self, value: E) -> unit
 extern def array[E]::insert(self, index: int, value: E) -> unit
+extern def array[E]::push(self, value: E) -> unit
 extern def array[E]::pop(self) -> E
 @extern-name("pop_option")
 extern def array[E]::pop?(self) -> Option[E]
@@ -49,8 +49,11 @@ extern def array[E]::slice(self, start: int, end: int) -> array[E]
 extern def array[E]::take(self, count: int) -> array[E]
 extern def array[E]::drop(self, count: int) -> array[E]
 extern def array[E]::concat(self, other: array[E]) -> array[E]
-extern def array[E]::extend(self, other: array[E]) -> unit
+@extern-name("concat_in_place")
+extern def array[E]::concat!(self, other: array[E]) -> unit
 extern def array[E]::zip[F](self, other: array[F]) -> array[Pair[E, F]]
+@extern-name("zip_with")
+extern def array[E]::zip-with[F, A](self, other: array[F], function: (E, F) -> A) -> array[A]
 extern def array[E]::enumerate(self) -> array[Pair[int, E]]
 
 extern def join(values: array[text], separator: text) -> text

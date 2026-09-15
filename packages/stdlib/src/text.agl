@@ -10,7 +10,7 @@ record TextBuilder(chunks: array[text])
 def builder() -> TextBuilder = TextBuilder(chunks = [])
 
 # Amortized constant time: stores the chunk without copying accumulated text.
-def TextBuilder::append(self, chunk: text) -> unit = self.chunks.append(chunk)
+def TextBuilder::append(self, chunk: text) -> unit = self.chunks.push(chunk)
 def TextBuilder::clear(self) -> unit = self.chunks.clear()
 
 # Return an immutable snapshot, retaining chunks for further appends or reuse.

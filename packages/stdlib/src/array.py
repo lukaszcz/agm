@@ -56,7 +56,7 @@ def last_option(values: object) -> object:
     return _option(values[-1] if values else None, bool(values))
 
 
-def append(values: object, value: object) -> None:
+def push(values: object, value: object) -> None:
     values.append(value)
 
 
@@ -214,12 +214,16 @@ def concat(values: object, other: object) -> object:
     return array([*values, *other])
 
 
-def extend(values: object, other: object) -> None:
+def concat_in_place(values: object, other: object) -> None:
     values.extend(other)
 
 
 def zip(values: object, other: object) -> object:
     return array([Pair(first=left, second=right) for left, right in builtins.zip(values, other)])
+
+
+def zip_with(values: object, other: object, function: object) -> object:
+    return array([function(left, right) for left, right in builtins.zip(values, other)])
 
 
 def enumerate(values: object) -> object:
@@ -255,15 +259,14 @@ def range(start: int, end: int) -> object:
 __all__ = [
     "all",
     "any",
-    "append",
     "clear",
     "concat",
+    "concat_in_place",
     "contains",
     "count",
     "drop",
     "each",
     "enumerate",
-    "extend",
     "filter",
     "filter_in_place",
     "find",
@@ -283,6 +286,7 @@ __all__ = [
     "map_in_place",
     "pop",
     "pop_option",
+    "push",
     "range",
     "remove_at",
     "repeat",
@@ -295,4 +299,5 @@ __all__ = [
     "take",
     "unzip",
     "zip",
+    "zip_with",
 ]

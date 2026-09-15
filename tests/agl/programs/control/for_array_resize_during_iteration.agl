@@ -8,8 +8,8 @@ program def main(mode: int) -> unit =
   var seen: array[int] = []
   var iteration = 0
   for x in xs do
-    seen.append(x)
-    if mode == 1 and iteration < 2 => xs.append(xs.size() + 1)
+    seen.push(x)
+    if mode == 1 and iteration < 2 => xs.push(xs.size() + 1)
     if mode == 2 and iteration == 0 => xs.insert(0, 9)
     if mode == 3 and iteration == 0 =>
       let _ = xs.remove-at(1)

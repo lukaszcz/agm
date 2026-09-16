@@ -210,7 +210,7 @@ def _bind_host_inputs(
     )
     argument_keys = tuple(key for _info, _projected, key in argument_options)
     try:
-        param_values, route_reports = resolve_param_values(
+        param_tiers, route_reports = resolve_param_values(
             config,
             program,
             parsed_tail.params,
@@ -221,6 +221,7 @@ def _bind_host_inputs(
     except QualifiedConfigLookupError as exc:
         print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+    param_values = param_tiers.merged()
 
     if entry_segments:
         try:
@@ -558,7 +559,7 @@ def run(
         primary_table=engine_program_table,
         fallback_table=toml_dict(merged_config.get("exec")),
         cli_values=cli_values,
-    )
+    ).merged()
 
     # Load + scope the graph ONCE, against the module roots assembled above. A
     # source ``std/config::KEY := VALUE`` write takes effect at its program

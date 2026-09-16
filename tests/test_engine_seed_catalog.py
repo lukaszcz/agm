@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.runtime.engine_config import engine_default_settings, raw_option_str
+from agm.agl.runtime.engine_config import (
+    build_engine_config_seeds,
+    engine_default_settings,
+    raw_option_str,
+)
+from agm.agl.semantics.values import BoolValue
 from agm.cli_support.engine_seeds import build_host_engine_seeds
 from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, TRACE_ENGINE_KEYS
-from agm.config.general import ExecConfig
+from agm.config.general import ExecConfig, exec_config_from_merged
 from tests._agl_helpers import agent_value
 
 _CONFIG_RAW_VALUES: dict[str, object] = {
@@ -54,7 +59,7 @@ def test_each_engine_key_seed_has_the_same_cli_config_presence_matrix(
         config=_config_for(key, config_given),
         primary_table=primary_table,
         cli_values=cli_values,
-    )
+    ).merged()
 
     actual_keys = set(seeds)
     expected_keys = {key} if cli_given or config_given else set()
@@ -97,7 +102,7 @@ def test_cli_agent_values_decode_to_the_typed_agent_value(raw: str, expected: ob
         config=_config_for("default-agent", configured=False),
         primary_table={},
         cli_values={"default-agent": raw},
-    )
+    ).merged()
 
     assert seeds["default-agent"] == expected
 
@@ -115,7 +120,7 @@ def test_toml_default_agent_decodes_through_the_same_host_text_dispatch() -> Non
         config=config,
         primary_table={"default-agent": config.default_agent},
         cli_values={},
-    )
+    ).merged()
 
     assert seeds["default-agent"] == agent_value(
         "AgentClaude", model="sonnet", thinking="experimental"
@@ -131,7 +136,7 @@ def test_config_table_default_agent_is_json_shaped_data() -> None:
 
     seeds = build_host_engine_seeds(
         config=config, primary_table={"default-agent": raw}, cli_values={}
-    )
+    ).merged()
 
     assert seeds["default-agent"] == agent_value("AgentClaude", model="opus", thinking="high")
 
@@ -190,7 +195,7 @@ def test_none_config_values_do_not_suppress_a_builtin_initializer(
         config=_config_for(key, configured=False),
         primary_table={key: raw_value},
         cli_values={},
-    )
+    ).merged()
 
     assert key not in seeds
     assert set(seeds) == expected_keys
@@ -203,7 +208,7 @@ def test_explicit_empty_option_cli_value_remains_a_seed(key: str) -> None:
         config=_config_for(key, configured=False),
         primary_table={},
         cli_values={key: None},
-    )
+    ).merged()
 
     assert key in seeds
     assert set(seeds) == {key}
@@ -225,7 +230,7 @@ def test_configured_numeric_timeout_is_seeded_from_its_raw_spelling() -> None:
         ),
         primary_table={"timeout": 0.5},
         cli_values={},
-    )
+    ).merged()
 
     assert "timeout" in seeds
 
@@ -239,3 +244,233 @@ def test_engine_defaults_cover_exactly_the_catalog_keys_with_defaults() -> None:
     """A catalog addition cannot leave interpreter defaults without a value."""
     expected = {spec.name for spec in ENGINE_KEYS if spec.has_default}
     assert set(engine_default_settings()) == expected
+
+
+# ---------------------------------------------------------------------------
+# Tier split: upper (CLI + primary table) above lower ([exec]/fallback table).
+# ---------------------------------------------------------------------------
+
+
+def test_a_primary_table_value_is_in_the_upper_tier_and_absent_from_lower() -> None:
+    config = ExecConfig(strict_json=True, timeout=None, log=False, log_file=None)
+
+    tiers = build_host_engine_seeds(
+        config=config, primary_table={"strict-json": True}, cli_values={}
+    )
+
+    assert "strict-json" in tiers.upper
+    assert "strict-json" not in tiers.lower
+
+
+def test_a_fallback_table_only_value_is_in_the_lower_tier() -> None:
+    config = ExecConfig(strict_json=True, timeout=None, log=False, log_file=None)
+
+    tiers = build_host_engine_seeds(
+        config=config,
+        primary_table={},
+        fallback_table={"strict-json": True},
+        cli_values={},
+    )
+
+    assert "strict-json" in tiers.lower
+    assert "strict-json" not in tiers.upper
+
+
+def test_a_primary_table_value_shadows_the_same_key_in_the_fallback_table() -> None:
+    config = ExecConfig(strict_json=True, timeout=None, log=False, log_file=None)
+
+    tiers = build_host_engine_seeds(
+        config=config,
+        primary_table={"strict-json": True},
+        fallback_table={"strict-json": False},
+        cli_values={},
+    )
+
+    assert "strict-json" in tiers.upper
+    assert "strict-json" not in tiers.lower
+
+
+def test_a_cli_value_is_in_the_upper_tier_even_when_the_fallback_table_also_sets_it() -> None:
+    config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
+
+    tiers = build_host_engine_seeds(
+        config=config,
+        primary_table={},
+        fallback_table={"strict-json": True},
+        cli_values={"strict-json": False},
+    )
+
+    assert "strict-json" in tiers.upper
+    assert "strict-json" not in tiers.lower
+
+
+def test_an_invalid_fallback_only_value_is_absent_from_both_tiers() -> None:
+    """A fallback-table leaf that decodes to ``None`` seeds neither tier."""
+    config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
+
+    tiers = build_host_engine_seeds(
+        config=config,
+        primary_table={},
+        fallback_table={"log-file": ""},
+        cli_values={},
+    )
+
+    assert "log-file" not in tiers.upper
+    assert "log-file" not in tiers.lower
+
+
+def test_log_never_appears_directly_in_the_upper_or_lower_tier() -> None:
+    """The derived ``log`` setting is computed by ``merged``, never bucketed directly."""
+    config = ExecConfig(strict_json=False, timeout=None, log=True, log_file=None)
+
+    tiers = build_host_engine_seeds(
+        config=config, primary_table={"log": True}, cli_values={"log": True}
+    )
+
+    assert "log" not in tiers.upper
+    assert "log" not in tiers.lower
+    assert "log" in tiers.merged()
+
+
+# ---------------------------------------------------------------------------
+# ``merged(middle)``: an already-decoded settings tier ranks between ``upper``
+# and ``lower``, including for the derived ``log`` rule.
+# ---------------------------------------------------------------------------
+
+
+def test_merged_places_middle_between_upper_and_lower_for_an_ordinary_key() -> None:
+    config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
+    tiers = build_host_engine_seeds(
+        config=config,
+        primary_table={},
+        fallback_table={"strict-json": False},
+        cli_values={},
+    )
+    middle = build_engine_config_seeds({"strict-json": True})
+
+    assert tiers.merged(middle)["strict-json"] == BoolValue(True)
+    assert tiers.merged()["strict-json"] == BoolValue(False)
+
+
+def test_merged_upper_still_wins_over_middle_for_an_ordinary_key() -> None:
+    config = ExecConfig(strict_json=True, timeout=None, log=False, log_file=None)
+    tiers = build_host_engine_seeds(
+        config=config, primary_table={"strict-json": True}, cli_values={}
+    )
+    middle = build_engine_config_seeds({"strict-json": False})
+
+    assert tiers.merged(middle)["strict-json"] == BoolValue(True)
+
+
+def test_a_middle_log_file_with_no_higher_log_seeds_log_true() -> None:
+    """A middle-tier ``log-file`` with nothing above it still implies ``log``."""
+    config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
+    tiers = build_host_engine_seeds(config=config, primary_table={}, cli_values={})
+    middle = build_engine_config_seeds({"log-file": "trace.jsonl"})
+
+    assert tiers.merged(middle)["log"] == BoolValue(True)
+    assert "log" not in tiers.merged()
+
+
+def test_program_table_log_beats_middle_log_but_middle_log_file_still_applies() -> None:
+    """``log`` picks the program table's explicit value; ``log-file`` still wins from middle.
+
+    ``log`` and ``log-file`` resolve their highest tier independently: the
+    program table (``upper``) outranks ``middle`` for ``log`` even though
+    ``middle`` is the only tier setting ``log-file``.
+    """
+    config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
+    tiers = build_host_engine_seeds(config=config, primary_table={"log": False}, cli_values={})
+    middle = build_engine_config_seeds({"log": True, "log-file": "trace.jsonl"})
+
+    assert tiers.merged(middle)["log"] == BoolValue(True)
+
+
+def test_program_table_log_false_and_exec_log_file_still_seed_log_true() -> None:
+    """Regression: program-table ``log = false`` plus ``[exec] log-file`` still implies ``log``.
+
+    ``ExecConfig`` already folds the program table over ``[exec]`` for
+    ``log``/``log_file``; the tier split must not change this outcome.
+    """
+    config = ExecConfig(strict_json=False, timeout=None, log=False, log_file="p")
+    tiers = build_host_engine_seeds(
+        config=config,
+        primary_table={"log": False},
+        fallback_table={"log-file": "p"},
+        cli_values={},
+    )
+
+    assert tiers.merged()["log"] == BoolValue(True)
+
+
+def test_cli_log_wins_over_a_middle_tier_log_file() -> None:
+    config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
+    tiers = build_host_engine_seeds(config=config, primary_table={}, cli_values={"log": False})
+    middle = build_engine_config_seeds({"log-file": "trace.jsonl"})
+
+    assert tiers.merged(middle)["log"] == BoolValue(False)
+
+
+def test_log_stays_absent_when_nothing_configures_it_anywhere_including_middle() -> None:
+    config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
+    tiers = build_host_engine_seeds(config=config, primary_table={}, cli_values={})
+    middle = build_engine_config_seeds({"strict-json": True})
+
+    assert "log" not in tiers.merged(middle)
+
+
+def test_a_middle_log_file_of_none_hides_a_lower_tier_log_file() -> None:
+    """A middle tier explicitly setting ``log-file`` to ``None`` outranks ``[exec]``."""
+    fallback = {"log-file": "from-exec.jsonl"}
+    config = exec_config_from_merged({"exec": fallback})
+    tiers = build_host_engine_seeds(
+        config=config, primary_table={}, fallback_table=fallback, cli_values={}
+    )
+    middle = build_engine_config_seeds({"log-file": None})
+
+    assert tiers.merged(middle)["log"] == BoolValue(False)
+
+
+@pytest.mark.parametrize(
+    ("primary", "fallback", "cli_values"),
+    [
+        ({"log": "yes"}, {}, {}),
+        ({}, {"log-file": "   "}, {}),
+        ({"log": False}, {"log-file": "trace.jsonl"}, {}),
+        ({}, {"log": True}, {"log-file": None}),
+    ],
+    ids=[
+        "invalid_log_value_in_program_table",
+        "whitespace_only_log_file_in_exec",
+        "program_log_false_and_exec_log_file",
+        "cli_log_file_negation_with_configured_log",
+    ],
+)
+def test_merged_log_matches_config_log_or_log_file_is_set(
+    primary: dict[str, object],
+    fallback: dict[str, object],
+    cli_values: dict[str, object | None],
+) -> None:
+    """``merged()["log"]`` equals ``cfg.log or cfg.log_file is not None`` when configured.
+
+    Builds ``cfg`` through ``exec_config_from_merged`` -- the same path a real
+    caller uses -- rather than a hand-built ``ExecConfig``, so this pins the
+    derived rule against the real config layering.
+    """
+    config = exec_config_from_merged({"exec": fallback}, program_table=primary)
+
+    tiers = build_host_engine_seeds(
+        config=config, primary_table=primary, fallback_table=fallback, cli_values=cli_values
+    )
+
+    assert tiers.merged()["log"] == BoolValue(config.log or config.log_file is not None)
+
+
+def test_log_stays_absent_when_neither_log_nor_log_file_is_configured_anywhere() -> None:
+    config = exec_config_from_merged({"exec": {}}, program_table={})
+
+    tiers = build_host_engine_seeds(
+        config=config, primary_table={}, fallback_table={}, cli_values={}
+    )
+
+    assert "log" not in tiers.merged()

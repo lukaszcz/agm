@@ -149,7 +149,7 @@ def run(args: ReplArgs) -> None:
         config=config,
         primary_table=toml_dict(merged_config.get("exec")),
         cli_values=cli_values,
-    )
+    ).merged()
 
     process_environment = dict(os.environ)
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):

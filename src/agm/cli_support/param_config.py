@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import NamedTuple
 
 from agm.agl.ir.static_keys import StaticBindingKey
@@ -22,7 +23,28 @@ from agm.config.qualified_keys import (
     resolve_qualified_values,
 )
 
-__all__ = ["RouteReport", "resolve_module_param_values", "resolve_param_values"]
+__all__ = [
+    "ParamValueTiers",
+    "RouteReport",
+    "resolve_module_param_values",
+    "resolve_param_values",
+]
+
+
+@dataclass(frozen=True)
+class ParamValueTiers:
+    """Supplied/program-route values (``upper``) above module-route values (``lower``).
+
+    ``lower`` holds only keys absent from ``upper``; :meth:`merged` applies
+    the full precedence.
+    """
+
+    upper: Mapping[StaticBindingKey, object]
+    lower: Mapping[StaticBindingKey, object]
+
+    def merged(self) -> dict[StaticBindingKey, object]:
+        """Return the flattened precedence: ``upper`` over ``lower``."""
+        return {**self.lower, **self.upper}
 
 
 class RouteReport(NamedTuple):
@@ -77,7 +99,7 @@ def resolve_param_values(
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
     surface: ParamSurface,
-) -> tuple[dict[StaticBindingKey, object], list[RouteReport]]:
+) -> tuple[ParamValueTiers, list[RouteReport]]:
     """Resolve module-parameter config values beneath parsed CLI/environment values.
 
     Module routes are addressed by each binding's declaration module and
@@ -85,9 +107,10 @@ def resolve_param_values(
     any spelling it wins on *surface*: its bare name, or a qualified spelling
     when a nearer declaration claims that name. The two routes are resolved
     independently, so a program route wins even when its value comes from a
-    less-specific config layer than the module route.
+    less-specific config layer than the module route. The supplied and
+    program-route values form :attr:`ParamValueTiers.upper`; the module-route
+    values not already covered by that tier form :attr:`ParamValueTiers.lower`.
     """
-    values = dict(params)
     supplied = frozenset(params)
     entries = surface.entries
     module_params = tuple(entry.param for entry in entries)
@@ -95,16 +118,19 @@ def resolve_param_values(
     program_routes = _program_routes(program, entry_segments, command_paths, entries)
     _reject_configured_cross_route_ambiguities(config, module_routes, program_routes)
     module_values = resolve_module_param_values(config, module_params)
-    for key, value in module_values.items():
-        if key not in supplied:
-            values[key] = value
 
     _reject_configured_ambiguous_program_leaves(
         config, program, entry_segments, command_paths, surface
     )
     program_values = resolve_qualified_values(config, tuple(key for _entry, key in program_routes))
-    _merge_route_values(values, supplied, program_routes, program_values)
-    return values, _route_reports(program, entry_segments, command_paths, entries, program_routes)
+    upper = dict(params)
+    _merge_route_values(upper, supplied, program_routes, program_values)
+    lower = {key: value for key, value in module_values.items() if key not in upper}
+
+    return (
+        ParamValueTiers(upper=upper, lower=lower),
+        _route_reports(program, entry_segments, command_paths, entries, program_routes),
+    )
 
 
 def _reject_configured_cross_route_ambiguities(

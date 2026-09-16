@@ -13,6 +13,7 @@ from agm.agl.semantics.types import BoolType, IntType, TextType, Type
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.zones import ParamZone
 from agm.cli_support.param_config import (
+    ParamValueTiers,
     RouteReport,
     _report_undeclared_config_keys,
     resolve_param_values,
@@ -85,7 +86,7 @@ def _resolve(
     bindings: tuple[ParamBindingInfo, ...],
     params: Mapping[tuple[ModuleId, tuple[str, ...], str], object] = {},
 ) -> tuple[dict[tuple[ModuleId, tuple[str, ...], str], object], list[RouteReport]]:
-    return resolve_param_values(
+    tiers, reports = resolve_param_values(
         config,
         program,
         params,
@@ -93,6 +94,7 @@ def _resolve(
         command_paths=(),
         surface=_surface(program, bindings),
     )
+    return tiers.merged(), reports
 
 
 def test_resolves_a_module_route() -> None:
@@ -401,7 +403,7 @@ def test_anonymous_entry_params_do_not_read_a_module_route() -> None:
     binding = _binding(ENTRY_ID, "verbose")
     program = _program(module=ENTRY_ID)
 
-    values, _reports = resolve_param_values(
+    tiers, _reports = resolve_param_values(
         _config({"workflow": {"run": {"verbose": True}}}),
         program,
         {},
@@ -410,7 +412,7 @@ def test_anonymous_entry_params_do_not_read_a_module_route() -> None:
         surface=_surface(program, (binding,)),
     )
 
-    assert values == {}
+    assert tiers.merged() == {}
 
 
 def test_cli_or_environment_values_are_not_overwritten() -> None:
@@ -588,3 +590,93 @@ def test_reports_surface_modules_missing_from_the_recorded_closure() -> None:
     _values, reports = _resolve(_config(), program, (binding,))
 
     assert RouteReport(("A", "logging"), (), (), frozenset({"verbose"}), frozenset()) in reports
+
+
+def _resolve_tiers(
+    config: GeneralConfig,
+    program: ProgramDeclInfo,
+    bindings: tuple[ParamBindingInfo, ...],
+    params: Mapping[tuple[ModuleId, tuple[str, ...], str], object] = {},
+) -> ParamValueTiers:
+    tiers, _reports = resolve_param_values(
+        config,
+        program,
+        params,
+        entry_segments=("workflow",),
+        command_paths=(),
+        surface=_surface(program, bindings),
+    )
+    return tiers
+
+
+def test_a_module_route_only_value_is_in_the_lower_tier() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    tiers = _resolve_tiers(_config({"A": {"logging": {"verbose": True}}}), program, (binding,))
+
+    assert tiers.lower == {binding.key: True}
+    assert tiers.upper == {}
+
+
+def test_a_program_route_value_is_in_the_upper_tier_and_absent_from_lower() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    tiers = _resolve_tiers(
+        _config({"workflow": {"run": {"logging.verbose": True}}}), program, (binding,)
+    )
+
+    assert tiers.upper == {binding.key: True}
+    assert tiers.lower == {}
+
+
+def test_a_program_route_value_shadows_a_configured_module_route_in_lower() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    tiers = _resolve_tiers(
+        _config(
+            {"workflow": {"run": {"logging.verbose": True}}},
+            {"A": {"logging": {"verbose": False}}},
+        ),
+        program,
+        (binding,),
+    )
+
+    assert tiers.upper == {binding.key: True}
+    assert binding.key not in tiers.lower
+
+
+def test_a_cli_supplied_value_is_in_the_upper_tier_and_shadows_a_module_route_in_lower() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    tiers = _resolve_tiers(
+        _config({"A": {"logging": {"verbose": False}}}),
+        program,
+        (binding,),
+        {binding.key: True},
+    )
+
+    assert tiers.upper == {binding.key: True}
+    assert tiers.lower == {}
+
+
+def test_merged_applies_supplied_and_program_route_over_module_route() -> None:
+    module_only = _binding("A/logging", "verbose")
+    program_routed = _binding("B/logging", "trace")
+    program = _program(
+        closure=(ModuleId.from_path("app/main"), module_only.module, program_routed.module)
+    )
+
+    tiers = _resolve_tiers(
+        _config(
+            {"A": {"logging": {"verbose": True}}},
+            {"workflow": {"run": {"logging.trace": True}}},
+        ),
+        program,
+        (module_only, program_routed),
+    )
+
+    assert tiers.merged() == {module_only.key: True, program_routed.key: True}

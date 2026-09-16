@@ -1114,7 +1114,7 @@ class TestExportedVarBindings:
         mylib_id = ModuleId.from_path("mylib")
         assert ("Review", "attempts") in result.modules[mylib_id].exports
 
-    def test_unannotated_var_is_not_exported(self, tmp_path: Path) -> None:
+    def test_unannotated_var_is_exported(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -1124,7 +1124,7 @@ class TestExportedVarBindings:
         )
         result = resolve_program(graph)
         mylib_id = ModuleId.from_path("mylib")
-        assert "total" not in result.modules[mylib_id].exports
+        assert "total" in result.modules[mylib_id].exports
 
     def test_cross_module_var_write_is_mutable_with_source_module_id(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(

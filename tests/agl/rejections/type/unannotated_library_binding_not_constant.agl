@@ -1,0 +1,6 @@
+# Importing a library whose unannotated exported binding is non-constant is
+# rejected in the library itself, before any importer is checked.
+import store
+
+program def main() -> unit =
+  print store::computed

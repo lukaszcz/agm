@@ -8,9 +8,9 @@ results plus whole-program pre-pass tables.
 Design
 ------
 - **Public surfaces**: declaration export maps covering top-level declarations
-  and annotated simple ``let``/``var`` bindings, plus separate named-scope
-  identity maps per module, including explicit ``export`` declarations, all
-  computed before any body is resolved.
+  and simple ``let``/``var`` bindings, plus separate named-scope identity maps
+  per module, including explicit ``export`` declarations, all computed before
+  any body is resolved.
 - **Contribution import environment per module**: built from each module's
   import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
@@ -412,7 +412,7 @@ def _item_atom(
 
 
 def _static_binding_atom(item: LetDecl | VarDecl) -> NameAtom | None:
-    """Return the exported name atom for an annotated simple ``let``/``var``, or ``None``.
+    """Return the exported name atom for a simple ``let``/``var``, or ``None``.
 
     Destructuring ``let`` patterns and the ``_`` wildcard are never exported.
     """

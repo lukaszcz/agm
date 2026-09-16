@@ -92,6 +92,67 @@ def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(
         assert capsys.readouterr().out == "5\n"
 
 
+def test_a_warm_checked_module_cache_still_resolves_an_unannotated_imported_var_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unchanged library module served from the warm cache still exports its
+    unannotated var, with its published binding type read straight off the
+    cached module instead of being re-inferred."""
+    path = tmp_path / "store.agl"
+    path.write_text("var total = 0\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import store::*\ntotal := total + 5\nprint(total)\n"
+    for _ in range(2):
+        result = run_inline_command(runtime, source, roots=roots)
+        assert result.ok, result.diagnostics
+        assert capsys.readouterr().out == "5\n"
+
+
+def test_editing_an_unannotated_exported_binding_type_invalidates_the_warm_cache(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A source edit that changes an unannotated exported binding's inferred
+    type invalidates the warm cache: the importer never sees a stale type."""
+    path = tmp_path / "store.agl"
+    path.write_text("let value = 1\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import store::*\nprint(value)\n"
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "1\n"
+
+    path.write_text('let value = "changed"\n')
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "changed\n"
+
+
+def test_warm_cached_importer_reflects_a_changed_unannotated_transitive_binding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A cached library importer's own source never changes, but its
+    transitive dependency's unannotated binding does: the importer is
+    rechecked (not served stale from cache) and observes the new type/value."""
+    store_path = tmp_path / "store.agl"
+    mid_path = tmp_path / "mid.agl"
+    mid_path.write_text("import store\ndef get() = store::value\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import mid::*\nprint(get())\n"
+
+    store_path.write_text("let value = 1\n")
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "1\n"
+
+    store_path.write_text('let value = "changed"\n')
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "changed\n"
+
+
 def test_invalid_import_edit_is_rejected_and_can_be_repaired(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

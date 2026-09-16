@@ -1,0 +1,8 @@
+# A library whose exception hierarchy redeclares an inherited field. The
+# duplicate-field diagnostic (from module-header finalization) must fire
+# before the static-binding pre-pass ever scratch-types the unannotated `e`
+# below with the not-yet-finalized exception shape.
+exception Base extends Exception(code: int)
+exception Boom extends Base(code: int)
+
+let e = Boom(message = "m", code = 1)

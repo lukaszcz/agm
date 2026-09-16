@@ -1,0 +1,7 @@
+# Writing a wrongly typed value to an unannotated imported `var` is a type
+# error, exactly like one to an annotated var: the importer still sees the
+# binding's inferred type.
+import store
+
+program def main() -> unit =
+  store::untyped := "oops"

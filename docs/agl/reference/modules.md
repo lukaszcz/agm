@@ -211,8 +211,10 @@ module-and-scope nominal identity.
 
 ## Re-exports and visibility
 
-`def`, `record`, `enum`, `exception`, and `type` declarations, plus annotated
-simple `let`/`var` bindings, are exported under their full declaration paths.
+`def`, `record`, `enum`, `exception`, and `type` declarations, plus simple
+`let`/`var` bindings, are exported under their full declaration paths. An
+unannotated binding's exported type is the one inferred from its initializer,
+exactly as an importer would see for an annotated binding's declared type.
 Grouping helpers in a [named scope](scopes.md) keeps them off a module's bare
 surface: an importer reaches such a member through its scope path or makes it
 bare with an import tail or `use` declaration.

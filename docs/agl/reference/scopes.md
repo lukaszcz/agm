@@ -130,8 +130,8 @@ re-roots every atom it forwards under the region's own path. See
 [Modules](modules.md#imports-and-use-inside-a-scope-region) for the
 complete semantics.
 
-An annotated, simple (single-name, not `_`) scoped `let`/`var` is exported
-under its declaration path exactly like a root one; see
+A simple (single-name, not `_`) scoped `let`/`var` is exported under its
+declaration path exactly like a root one; see
 [Modules](modules.md#re-exports-and-visibility). Any other scoped binding is
 static state private to its module.
 

@@ -1,0 +1,22 @@
+# Root and scoped let/var bindings, unannotated, exported with their inferred
+# types like annotated ones; importers may write the vars. A wildcard root
+# binding is never exported, even unannotated -- the static-binding pre-pass
+# skips it before ever scratch-typing it.
+let _ = 0
+var total = 0
+let fixed = 5
+let negative = -3
+let label-default = "idle"
+
+record Point(x: int, y: int)
+
+let origin = Point(x = 0, y = 0)
+let tags = ["a", "b", "c"]
+let scores = {"one": 1, "two": 2}
+
+scope Region
+  var hits = 0
+  let cap = 10
+end Region
+
+def total-doubled() -> int = total * 2

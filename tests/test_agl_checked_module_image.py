@@ -2,8 +2,9 @@
 
 Builds one multi-module program (generics, aliases, an enum with a method, a
 scoped record and function, an extern declaration, a self-method, a
-cross-module candidate-function dependency, and a static ``let``/``var`` pair),
-compiles it once, then checks that turning each non-entry module into a ``CheckedModuleImage``
+cross-module candidate-function dependency, and a static ``let``/``var`` pair with
+an unannotated ``let``), compiles it once, then checks that turning each
+non-entry module into a ``CheckedModuleImage``
 and rehydrating it onto a freshly prepared environment reproduces every query
 answer the original module gives -- and that a program reassembled from
 rehydrated modules lowers to the identical ``ExecutableProgram``.
@@ -23,6 +24,7 @@ from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import compile_program_matches
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.program import ResolvedProgram, resolve_program
+from agm.agl.semantics.types import Type
 from agm.agl.syntax.nodes import (
     LetDecl,
     VarDecl,
@@ -127,6 +129,7 @@ def increment-factorial(n: int) -> int = factorial(n) + 1
 _STATIC_LET_SRC = """\
 let default-count: int = 7
 var default-attempts: int = 0
+let default-label = "starter"
 
 def default-count-plus-one() -> int = default-count + 1
 
@@ -135,6 +138,8 @@ def default-count-as-decimal() -> decimal = default-count as decimal
 def bump-attempts() -> int =
   default-attempts := default-attempts + 1
   default-attempts
+
+def shout-default-label() -> text = default-label
 """
 
 _ENTRY_SRC = """\
@@ -402,9 +407,9 @@ class TestImageFieldsAreNonVacuous:
 
 def _published_surface(
     surface: PublishedModuleSurface,
-) -> tuple[ModuleTypeInterface, dict[int, FunctionSignatureRecord] | None]:
+) -> tuple[ModuleTypeInterface, dict[int, FunctionSignatureRecord] | None, dict[int, Type] | None]:
     """Read a module's published surface the way the pre-pass tables do."""
-    return surface.interface, surface.published_signatures
+    return surface.interface, surface.published_signatures, surface.published_binding_types
 
 
 class TestPublishedModuleSurface:

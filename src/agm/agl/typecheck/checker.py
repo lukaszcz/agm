@@ -719,6 +719,57 @@ def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
 _CONSTANT_EXPRESSION_SHAPE = "constructors, 'resource(...)', and literals only"
 
 
+def _is_constant_builtin_call(resolved: ModuleResolution, node_id: int) -> bool:
+    """Whether *node_id* is a call to a designated constant-safe builtin.
+
+    Shared by every constant-expression predicate in this module and by the
+    program-level static-binding pre-pass: only ``resource``/``resource-dir``
+    calls qualify.
+    """
+    return resolved.builtin_calls.get(node_id) in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}
+
+
+def is_static_root_module(resolved: ModuleResolution) -> bool:
+    """Whether *resolved*'s module enforces the static-root binding rule.
+
+    False for a module whose root allows bare statements/assignments (an
+    incremental REPL entry) or that carries a host-synthesized entry (an
+    inline command): such a module is never imported, and its root bindings
+    are there only because the entry transform put them there.
+    """
+    return not resolved.allows_root_statements and not declares_synthetic_entry(
+        resolved.program.body.items
+    )
+
+
+def require_static_root_constant(
+    expr: Expr, resolved: ModuleResolution, *, is_constructor: Callable[[int], bool]
+) -> None:
+    """Raise ``AglTypeError`` unless a static module-root binding initializer is constant.
+
+    Shared by the checker's own static-root check and the program-level
+    static-binding pre-pass (``typecheck/program.py``), which screens an
+    unannotated exported binding's initializer before scratch-typing it, so
+    both raise the identical diagnostic.
+    """
+    if is_constant_expression(
+        expr,
+        is_constructor=is_constructor,
+        is_constant_builtin=lambda node_id: _is_constant_builtin_call(resolved, node_id),
+    ):
+        return
+    raise AglTypeError(
+        static_root_message(
+            "Root let and var initializers must be constant expressions "
+            "(constructors and literals only).",
+            subject="bindings",
+            file_backed=resolved.origin_path is not None,
+            declares_program_entry=declares_source_entry(resolved.program.body.items),
+        ),
+        span=expr.span,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main checker
 # ---------------------------------------------------------------------------
@@ -1132,8 +1183,7 @@ class _Checker:
         self._check_block(
             program.body,
             expected=None,
-            static_root=not self._resolved.allows_root_statements
-            and not declares_synthetic_entry(program.body.items),
+            static_root=is_static_root_module(self._resolved),
         )
 
     # ------------------------------------------------------------------
@@ -1197,25 +1247,11 @@ class _Checker:
             with self._own_type_scope(item):
                 binding_type = self._check_binding(item)
             self._validate_parameter_binding(item)
-            if static_root and not is_constant_expression(
-                item.value,
-                is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
-                is_constant_builtin=lambda node_id: (
-                    self._resolved.builtin_calls.get(node_id)
-                    in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}
-                ),
-            ):
-                raise AglTypeError(
-                    static_root_message(
-                        "Root let and var initializers must be constant expressions "
-                        "(constructors and literals only).",
-                        subject="bindings",
-                        file_backed=self._resolved.origin_path is not None,
-                        declares_program_entry=declares_source_entry(
-                            self._resolved.program.body.items
-                        ),
-                    ),
-                    span=item.value.span,
+            if static_root:
+                require_static_root_constant(
+                    item.value,
+                    self._resolved,
+                    is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
                 )
             return binding_type
         if isinstance(item, AssignStmt):
@@ -1535,16 +1571,29 @@ class _Checker:
         return is_constant_expression(
             expr,
             is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
-            is_constant_builtin=lambda node_id: (
-                self._resolved.builtin_calls.get(node_id)
-                in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}
-            ),
+            is_constant_builtin=lambda node_id: _is_constant_builtin_call(self._resolved, node_id),
         )
 
     @staticmethod
     def _binder_result(value_type: Type) -> Type:
         """A binder/assignment item propagates bottom when its value always exits."""
         return BottomType() if isinstance(value_type, BottomType) else UnitType()
+
+    def infer_static_initializer_type(self, item: LetDecl | VarDecl) -> Type:
+        """Type an unannotated static binding's initializer, nothing else.
+
+        Used by the program-level static-binding pre-pass
+        (``typecheck/program.py``) to learn an unannotated exported binding's
+        type before any module body is checked. Shares
+        :meth:`_binding_declared_type` with ``_check_var_binding``/
+        ``_check_let_binding``, so the type it returns is identical to what
+        the authoritative check later installs -- but it installs no
+        binding, runs no parameter validation, and writes nothing into the
+        env beyond the initializer expression's own ordinary node types.
+        """
+        with self._own_type_scope(item):
+            value_type = self._check_boundary_expr(item.value, expected=None)
+        return self._binding_declared_type(item, value_type, ann_type=None)
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> Type:
         """Check a single-name mutable var or a complete immutable let pattern."""

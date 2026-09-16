@@ -1147,12 +1147,9 @@ def static_binding_node_id(item: LetDecl | VarDecl) -> int:
 def exported_binding_name(item: LetDecl | VarDecl) -> str | None:
     """Return a static ``let``/``var``'s exported name, or ``None`` if not exported.
 
-    Exported bindings are annotated simple ``let``/``var`` roots; an
-    unannotated binding, a wildcard root, and a destructuring ``let`` pattern
-    are never exported.
+    Exported bindings are every simple ``let``/``var`` root, annotated or not;
+    a wildcard root and a destructuring ``let`` pattern are never exported.
     """
-    if item.type_ann is None:
-        return None
     name = static_binding_name(item)
     return None if name is None or name == "_" else name
 

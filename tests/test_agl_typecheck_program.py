@@ -2748,6 +2748,52 @@ def test_importer_consumes_inferred_unannotated_dependency(tmp_path: Path) -> No
     assert checked.modules[ENTRY_ID].function_signatures["use"].result == IntType()
 
 
+def test_unannotated_binding_pre_pass_type_matches_the_authoritative_check(
+    tmp_path: Path,
+) -> None:
+    """An unannotated exported binding's static-binding pre-pass type agrees
+    with the module's own authoritative body check, across diverse initializer
+    shapes: int, negated int, text, a record constructor, an array, a dict.
+
+    Observes the pre-pass's own ``program_static_binding_table`` (via a
+    separate :func:`_prepare_program` call over the same resolved program)
+    independently of ``published_binding_types``, which is read off the
+    authoritative check and so would trivially agree with itself.
+    """
+    from agm.agl.syntax.nodes import LetDecl, VarDecl, static_binding_node_id
+    from agm.agl.typecheck.program import _prepare_program
+
+    modules = {
+        "entry": "import lib\nprint(lib::count)",
+        "lib": (
+            "record Point(x: int, y: int)\n\n"
+            "let count = 3\n"
+            "let negated = -3\n"
+            'let label = "hi"\n'
+            "let origin = Point(x = 0, y = 0)\n"
+            'let tags = ["a", "b"]\n'
+            'let scores = {"a": 1}\n'
+        ),
+    }
+    graph = _make_graph_from_files(tmp_path, modules, default_stdlib=True)
+    resolved = resolve_program(graph)
+    prepared = _prepare_program(resolved, _CAPS)
+    checked = check_program(resolved, _CAPS)
+
+    lib = checked.modules[ModuleId.from_path("lib")]
+    pre_pass_table = prepared.program_static_binding_table
+    checked_names = set()
+    for item in _module_items(lib):
+        if not isinstance(item, (LetDecl, VarDecl)):
+            continue
+        node_id = static_binding_node_id(item)
+        if node_id not in pre_pass_table:
+            continue
+        assert pre_pass_table[node_id] == lib.type_env.get_binding_type(node_id)
+        checked_names.add(node_id)
+    assert len(checked_names) == 6, "expected every diverse-shaped binding to be published"
+
+
 @pytest.mark.parametrize(
     ("import_form", "even_call", "odd_call"),
     (

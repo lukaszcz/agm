@@ -62,8 +62,9 @@ A sent region goes to the REPL unsplit. When its last line is indented the
 region leaves a block open — a layout block always accepts one more line — so
 the blank line that closes it is sent too.
 
-Sent source is not echoed back into the REPL buffer; AGM's concise result or
-definition summary remains visible. Input typed at the REPL prompt is unchanged.
+Sent source and its intermediate prompts are not echoed back into the REPL
+buffer; AGM's concise result or definition summary remains visible. Input typed
+at the REPL prompt is unchanged.
 
 The **AgL** menu provides the same run, type-check, REPL, send, reload, and
 diagnostic actions.

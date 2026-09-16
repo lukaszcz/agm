@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'ansi-color)
+(require 'cl-lib)
 (require 'comint)
 
 (defcustom agl-repl-command '("agm" "repl")
@@ -45,17 +46,50 @@ describes both.")
 (defvar-local agl-repl--sent-input-echo ""
   "Terminal input echo still expected from programmatic REPL sends.")
 
+(defvar-local agl-repl--sent-prompt-count 0
+  "REPL prompts still expected from programmatic REPL sends.")
+
+(defconst agl-repl--sent-prompt-regexp
+  "\\(?:\e\\[[0-9;]*m\\)*\\(?:agl> \\|\\.\\.\\.> \\)\\(?:\e\\[[0-9;]*m\\)*"
+  "Regexp matching a plain or styled REPL prompt in process output.")
+
+(defun agl-repl--filter-sent-prompts (output)
+  "Remove prompts emitted while source is injected into the REPL."
+  (let ((start 0)
+        (visible nil))
+    (while (and (> agl-repl--sent-prompt-count 0)
+                (string-match agl-repl--sent-prompt-regexp output start))
+      (push (substring output start (match-beginning 0)) visible)
+      (setq start (match-end 0))
+      (cl-decf agl-repl--sent-prompt-count))
+    (concat (apply #'concat (nreverse visible)) (substring output start))))
+
+(defun agl-repl--filter-sent-echo (output)
+  "Remove terminal echo from OUTPUT while retaining REPL results."
+  (let ((echo agl-repl--sent-input-echo)
+        (start 0)
+        (visible nil)
+        (done nil))
+    (while (and (not (string-empty-p echo)) (not done))
+      (let* ((line-end (string-match "\r\n" echo))
+             (line (substring echo 0 (+ line-end 2)))
+             (match (string-match (regexp-quote line) output start)))
+        (if match
+            (progn
+              (push (substring output start match) visible)
+              (setq start (+ match (length line)))
+              (setq echo (substring echo (length line))))
+          (when (string-prefix-p (substring output start) line)
+            (setq echo (concat (substring line (- (length output) start))
+                               (substring echo (length line))))
+            (setq start (length output)))
+          (setq done t))))
+    (setq agl-repl--sent-input-echo echo)
+    (concat (apply #'concat (nreverse visible)) (substring output start))))
+
 (defun agl-repl--filter-sent-input (output)
-  "Remove the terminal echo of source sent through `agl-repl-send-string'."
-  (let ((echo agl-repl--sent-input-echo))
-    (cond
-     ((string-prefix-p output echo)
-      (setq agl-repl--sent-input-echo (substring echo (length output)))
-      "")
-     ((string-prefix-p echo output)
-      (setq agl-repl--sent-input-echo "")
-      (substring output (length echo)))
-     (t output))))
+  "Remove terminal echo and prompts from `agl-repl-send-string' source."
+  (agl-repl--filter-sent-echo (agl-repl--filter-sent-prompts output)))
 
 (define-derived-mode agl-repl-mode comint-mode "AgL-REPL"
   "Major mode for an inferior AgL REPL."
@@ -63,6 +97,7 @@ describes both.")
   (setq-local comint-prompt-regexp agl-repl-prompt-regexp)
   (setq-local comint-prompt-read-only t)
   (setq-local comint-process-echoes nil)
+  (setq-local agl-repl--sent-prompt-count 0)
   (add-hook 'comint-preoutput-filter-functions #'agl-repl--filter-sent-input nil t))
 
 (defun agl-repl-process ()
@@ -112,10 +147,12 @@ a blank line instead, which is what closes that block."
         (sent-text (agl-repl--sent-text text)))
     (with-current-buffer buffer
       ;; The pty expands newlines while echoing its input before the REPL emits
-      ;; a result.  Filter exactly that echo without affecting typed input.
+      ;; a result.  Each newline also produces a prompt; filter both without
+      ;; affecting typed input after the injected source is complete.
       (setq agl-repl--sent-input-echo
             (concat agl-repl--sent-input-echo
-                    (replace-regexp-in-string "\n" "\r\n" sent-text))))
+                    (replace-regexp-in-string "\n" "\r\n" sent-text)))
+      (cl-incf agl-repl--sent-prompt-count (cl-count ?\n sent-text)))
     (comint-send-string (get-buffer-process buffer) sent-text)
     buffer))
 

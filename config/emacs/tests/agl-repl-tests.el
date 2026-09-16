@@ -90,6 +90,27 @@
       (should (equal (agl-repl--filter-sent-input "1\r\nx : int = 1\r\n")
                      "x : int = 1\r\n")))))
 
+(ert-deftest agl-repl-hides-prompts-emitted-for-sent-source ()
+  (agl-repl--with-stubs
+    (agl-repl-send-string "let x = 1\nlet y = 2")
+    (with-current-buffer (get-buffer agl-repl-buffer-name)
+      (should (equal (agl-repl--filter-sent-input "let x = 1\r\n") ""))
+      (should (equal (agl-repl--filter-sent-input "x : int = 1\r\nagl> ")
+                     "x : int = 1\r\n"))
+      (should (equal (agl-repl--filter-sent-input "let y = 2\r\n") ""))
+      (should (equal (agl-repl--filter-sent-input "y : int = 2\r\nagl> ")
+                     "y : int = 2\r\n"))
+      (should (equal (agl-repl--filter-sent-input "agl> ") "agl> ")))))
+
+(ert-deftest agl-repl-hides-styled-prompts-emitted-for-sent-source ()
+  (agl-repl--with-stubs
+    (agl-repl-send-string "let x = 1")
+    (with-current-buffer (get-buffer agl-repl-buffer-name)
+      (should (equal (agl-repl--filter-sent-input "let x = 1\r\n") ""))
+      (should (equal (agl-repl--filter-sent-input
+                      "x : int = 1\r\n\e[0;1magl> \e[0m")
+                     "x : int = 1\r\n")))))
+
 (ert-deftest agl-repl-send-buffer-sends-everything ()
   (agl-repl--with-stubs
     (with-temp-buffer

@@ -2496,7 +2496,9 @@ class _Checker:
         )
         kind = self._check_convertible(source_type, target_type, node.span, exprs=(node.expr,))
         self._record_cast_spec(node.node_id, CastSpec(target_type=target_type, kind=kind))
-        return BoolType() if node.test_only else target_type
+        if not node.test_only:
+            return target_type
+        return self._env.type_table.option_handle(target_type)
 
     def _check_convertible(
         self,

@@ -502,7 +502,7 @@ From loosest to tightest binding (the bottom binds tightest):
 | 4 | `==` `!=` `<` `<=` `>` `>=` `in` `is` `is not` | **non-associative** |
 | 5 | `+` `-` | left |
 | 6 | `*` `/` | left |
-| 7 | `as` `as?` (cast / convertibility test) | left |
+| 7 | `as` `as?` (cast / optional cast) | left |
 | 8 | `-` (unary prefix) | — |
 | 9 | function application (single-arg sugar) | **non-chaining** |
 | 10 | `.field` access, `[index]`, `( args )` call | left |

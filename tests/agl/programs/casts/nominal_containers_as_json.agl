@@ -43,7 +43,7 @@ program def main(n: int, tag: text) -> unit =
     print "round trip mismatch"
 
   # `as?` reports success for the same conversions.
-  print(rs as? json)
-  print(by-name as? json)
-  print(opts as? json)
-  print(tree as? json)
+  print((rs as? json).is-some())
+  print((by-name as? json).is-some())
+  print((opts as? json).is-some())
+  print((tree as? json).is-some())

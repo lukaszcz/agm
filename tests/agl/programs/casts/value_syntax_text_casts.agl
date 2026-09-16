@@ -1,7 +1,7 @@
 # Text casts accept AgL value syntax (constructor calls, `@name` aliases,
 # nested arrays/dicts/enums/Option, decimal widening) in addition to strict
 # JSON. Casts perform no lenient recovery: malformed input still raises
-# CastError. `as?` reports success as a bool. `Agent` reads shorthand, a
+# CastError. `as?` reports success as an `Option`. `Agent` reads shorthand, a
 # tagged JSON object, or a member constructor call — never a verbatim
 # command fallback.
 
@@ -46,4 +46,4 @@ program def main(value: text, target: text) -> unit =
   catch CastError as e =>
     print "cast error: %{e.source-type} -> %{e.target-type}"
 
-  print "as?: %{(value as? Point) as text}"
+  print "as?: %{(value as? Point).is-some()}"

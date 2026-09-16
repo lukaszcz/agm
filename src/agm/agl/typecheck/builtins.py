@@ -21,7 +21,6 @@ from agm.agl.semantics.analyses import nominal_references
 from agm.agl.semantics.type_table import DeclId, parse_classification
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
-    OPTION_TEXT_TYPE,
     BoolType,
     CastKind,
     CastSpec,
@@ -320,10 +319,8 @@ class BuiltinCallChecker:
     def check_session_open(self, node: Call) -> Type:
         """Type-check ``Session::open(agent, transport?, name?)``."""
         session_transport = self.contract_type("SessionTransport")
-        option = self._ctx._env.type_table.builtin_declaration("Option")
         assert isinstance(session_transport, EnumType)
-        assert option is not None
-        transport = option.handle((session_transport,))
+        transport = self._ctx._env.type_table.option_handle(session_transport)
         return self._check_static_call(
             node,
             "Session::open",
@@ -886,12 +883,7 @@ class BuiltinCallChecker:
 
     def _standard_option_text_type(self) -> EnumType:
         """Return the loaded ``std/option::Option[text]`` handle when present."""
-        declaration = self._ctx._env.type_table.standard_builtin_declaration("Option")
-        if declaration is None:
-            return OPTION_TEXT_TYPE
-        option = declaration.handle((TextType(),))
-        assert isinstance(option, EnumType), "Option's builtin declaration must be an enum"
-        return option
+        return self._ctx._env.type_table.option_handle(TextType(), standard=True)
 
     def contract_type(self, name: str) -> RecordType | EnumType | ExceptionType:
         """Return the type this program's own ``builtin`` declaration of *name* names.

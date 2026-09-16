@@ -1,18 +1,18 @@
-# `as?` returns whether the corresponding `as` cast would succeed. A successful
-# test can select a branch before the explicit cast produces the converted value.
+# `as?` yields `Option`: `Some(value)` carries the converted value when the
+# corresponding `as` cast would succeed, so selecting a branch on it also
+# supplies the value; `None` reports that the cast would fail.
 
 # Check if the text is a valid int before using it
 
 program def main(user-input: text, d: decimal) -> unit =
-  if user-input as? int =>
-    let n = user-input as int
-    print "got int: %{n}"
-    print "squared: %{(n * n) as text}"
-  else => print "not an int: %{user-input}"
+  case user-input as? int of
+    | Some(value) =>
+      print "got int: %{value}"
+      print "squared: %{(value * value) as text}"
+    | None => print "not an int: %{user-input}"
 
-  if d as? int =>
-    let i = d as int
-    print "decimal is integral: %{i}"
-  else => print "decimal has fraction: %{d as text}"
+  case d as? int of
+    | Some(value) => print "decimal is integral: %{value}"
+    | None => print "decimal has fraction: %{d as text}"
 
-  print(42 as? text)
+  print((42 as? text).is-some())

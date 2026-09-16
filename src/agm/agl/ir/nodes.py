@@ -603,7 +603,8 @@ class IrConvert:
     ``ConversionRecipe``).  ``failure_mode`` selects behavior on a fallible
     failure: ``RAISE_CAST_ERROR`` raises a ``CastError`` (the ``as`` operator);
     ``RAISE_VALUE_PARSE_ERROR`` raises a ``ValueParseError`` (``std/value::parse``);
-    ``RETURN_BOOL`` makes ``as?`` evaluate to whether the conversion succeeded.
+    ``RETURN_OPTION`` makes ``as?`` evaluate to ``Option::Some`` carrying the
+    converted value, or ``Option::None`` when the conversion fails.
     """
 
     location: Location
@@ -616,7 +617,8 @@ class IrConvert:
 class IrNominalCast:
     """Identity cast from an enum value to one of its member records.
 
-    ``test_only`` makes a nominal mismatch evaluate to ``false`` instead of
+    ``test_only`` (the ``as?`` operator) evaluates to ``Option::Some`` carrying
+    the member value, and to ``Option::None`` on a nominal mismatch instead of
     raising ``CastError``. The labels are statically selected source type names
     for a failed ordinary cast.
     """

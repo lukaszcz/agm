@@ -13398,17 +13398,17 @@ class TestCast:
         assert isinstance(decl, LetDecl)
         assert r.node_types[decl.value.node_id] == DecimalType()
 
-    def test_as_question_yields_bool(self) -> None:
-        r = accept_type('let b: bool = "42" as? int\nb')
+    def test_as_question_yields_option(self) -> None:
+        r = accept_type('let o: Option[int] = "42" as? int\no')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.node_types[decl.value.node_id] == BoolType()
+        assert repr(r.node_types[decl.value.node_id]) == "std/option::Option[int]"
 
-    def test_as_question_on_total_cast_yields_bool(self) -> None:
-        r = accept_type("let b: bool = 1 as? text\nb")
+    def test_as_question_on_total_cast_yields_option(self) -> None:
+        r = accept_type("let o: Option[text] = 1 as? text\no")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.node_types[decl.value.node_id] == BoolType()
+        assert repr(r.node_types[decl.value.node_id]) == "std/option::Option[text]"
 
     def test_bool_to_int_rejected(self) -> None:
         """bool as int is a static error."""
@@ -13439,8 +13439,13 @@ class TestCast:
         err = reject_type("true as? int")
         assert "cannot cast" in str(err).lower()
 
-    def test_as_question_is_a_boolean_condition(self) -> None:
-        r = accept_type('if "42" as? int => 1 else => 0')
+    def test_as_question_result_is_not_a_condition(self) -> None:
+        """An `as?` result carries its value, so it is not itself a condition."""
+        err = reject_type('if "42" as? int => 1 else => 0')
+        assert "bool" in str(err).lower()
+
+    def test_as_question_result_matches_as_an_option(self) -> None:
+        r = accept_type('case "42" as? int of\n  | Some(value) => value\n  | None => 0')
         test = r.resolved.program.body.items[0]
         assert r.node_types[test.node_id] == IntType()
 

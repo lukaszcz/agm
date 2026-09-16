@@ -3930,7 +3930,7 @@ class TestCaseNeutralPatterns:
 
 
 class TestCastParsing:
-    """Tests for `as` (cast) and `as?` (convertibility test) operator parsing.
+    """Tests for `as` (cast) and `as?` (optional cast) operator parsing.
 
     Precedence: unary(-) > [cast] > * / > + -
     So:

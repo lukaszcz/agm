@@ -1446,7 +1446,7 @@ class _Lowerer:
                     spec.kind,
                     span,
                     failure_mode=(
-                        ConversionFailureMode.RETURN_BOOL
+                        ConversionFailureMode.RETURN_OPTION
                         if test_only
                         else ConversionFailureMode.RAISE_CAST_ERROR
                     ),

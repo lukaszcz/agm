@@ -216,9 +216,9 @@ and `as json` walk a value and raise the catchable `CyclicValueError`
 ([Exceptions](exceptions.md#cyclicvalueerror)) if the walk re-enters a value
 already on its own path. An `extern def` call can pass a cyclic array,
 dictionary, or mutable record as a live view; rendering that view in its
-companion raises `CyclicValueError`. `as?` never raises: it returns `false`
+companion raises `CyclicValueError`. `as?` never raises: it yields `None`
 when the corresponding conversion fails, so `as? text` and `as? json` on a
-cyclic value evaluate to `false` instead. `copy` is the exception: it is the
+cyclic value evaluate to `None` instead. `copy` is the exception: it is the
 one deep, structure-rebuilding walk that traverses a cyclic value to completion
 instead of raising — see [Copying values](#copying-values) below. A **shared**
 (diamond) structure — the same value reachable twice from different paths, but
@@ -991,8 +991,9 @@ AgL provides two cast operators:
 - **`EXPR as T`** — converts the value of `EXPR` to type `T`. If the
   conversion cannot succeed at runtime it raises `CastError`
   ([Exceptions](exceptions.md)).
-- **`EXPR as? T`** — tests whether the same conversion would succeed without
-  raising. It yields `bool`: `true` on success and `false` on failure.
+- **`EXPR as? T`** — performs the same conversion without raising. It yields
+  `Option[T]`: `Some(value)` carrying the converted value on success, `None`
+  on failure.
 
 For an enum member record, these operators are identity casts rather than
 parsing conversions. A member value may be cast up to an enum that declares
@@ -1081,7 +1082,7 @@ know whether the eventual instantiation of `T` will carry a non-data value.
 
 A **total** cast has no conformance failure, so it does not raise `CastError`.
 Rendering or JSON conversion still raises `CyclicValueError` when it walks a
-reference cycle; the corresponding `as?` expression yields `false` instead.
+reference cycle; the corresponding `as?` expression yields `None` instead.
 Redundant casts to the same type are accepted with no warning and are no-ops;
 `int as decimal` is the accepted widening conversion. Casting an array or dict
 to its own type (`xs as array[int]`) is a true no-op: it yields the *same*
@@ -1091,12 +1092,12 @@ independent snapshot (see [`array[T]` and `dict[text, T]`](#arrayt-and-dicttext-
 above).
 
 A **fallible** cast may raise `CastError` if the value does not conform to
-the target type. The `as?` form instead returns whether that cast would
-succeed, without handling an exception:
+the target type. The `as?` form instead yields the converted value as an
+`Option`, without handling an exception:
 
 <!-- agl-check: fragment -->
 ```agl
-let parses-as-int: bool = some-json as? int
+let parsed: Option[int] = some-json as? int
 ```
 
 ### Strict parsing in text and json casts

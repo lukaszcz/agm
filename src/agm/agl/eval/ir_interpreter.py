@@ -841,10 +841,18 @@ class IrInterpreter:
                 raise self._cast_conversion_raise("CastError", exc)
             case ConversionFailureMode.RAISE_VALUE_PARSE_ERROR:
                 raise self._cast_conversion_raise("ValueParseError", exc)
-            case ConversionFailureMode.RETURN_BOOL:
-                return BoolValue(False)
+            case ConversionFailureMode.RETURN_OPTION:
+                return self._option_none()
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    def _option_some(self, value: Value) -> Value:
+        """Build the ``Option::Some`` an ``as?`` conversion evaluates to."""
+        return some_value(value, nominals=self._program.builtin_nominals, declared=True)
+
+    def _option_none(self) -> Value:
+        """Build the ``Option::None`` a failed ``as?`` conversion evaluates to."""
+        return none_value(nominals=self._program.builtin_nominals, declared=True)
 
     def _cast_conversion_raise(self, exception_name: str, exc: AglCastConversion) -> AglRaise:
         """Build the ``AglRaise`` for a failed cast-like conversion, by exception name.
@@ -1631,9 +1639,9 @@ class IrInterpreter:
                         f"IrNominalCast: value is not a record, got {type(value).__name__}"
                     )
                 if value.nominal == nominal:
-                    return BoolValue(True) if test_only else value
+                    return self._option_some(value) if test_only else value
                 if test_only:
-                    return BoolValue(False)
+                    return self._option_none()
                 raise AglRaise(
                     _make_exc_value(
                         "CastError",
@@ -1664,11 +1672,11 @@ class IrInterpreter:
                 except AglCyclicValue:
                     # A conversion test reports a cycle as failure; ordinary
                     # `as` still reports the catchable CyclicValueError.
-                    if failure_mode is ConversionFailureMode.RETURN_BOOL:
-                        return BoolValue(False)
+                    if failure_mode is ConversionFailureMode.RETURN_OPTION:
+                        return self._option_none()
                     raise self._cyclic_failure()
-                if failure_mode is ConversionFailureMode.RETURN_BOOL:
-                    return BoolValue(True)
+                if failure_mode is ConversionFailureMode.RETURN_OPTION:
+                    return self._option_some(converted)
                 return converted
 
             case IrIf(branches=branches, has_else=has_else):

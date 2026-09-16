@@ -1,7 +1,7 @@
-# `as?` predicts whether the corresponding `as` would succeed. Only a value
-# that actually holds a reference cycle tests `false`: scalars, nominals,
+# `as?` yields `Some` where the corresponding `as` would succeed. Only a value
+# that actually holds a reference cycle yields `None`: scalars, nominals,
 # enums, and generic instantiations — including one whose type argument is an
-# array — all test `true`, whether or not a cycle exists elsewhere in the
+# array — all convert, whether or not a cycle exists elsewhere in the
 # program.
 
 record Scalar(value: int)
@@ -23,15 +23,15 @@ program def main(close-cycle: bool) -> unit =
   if close-cycle =>
     nodes[0] := node
 
-  print(1 as? text)
-  print(1 as? json)
-  print(scalar as? text)
-  print(scalar as? json)
-  print(tree as? text)
-  print(tree as? json)
-  print(boxed-int as? text)
-  print(boxed-int as? json)
-  print(boxed-array as? text)
-  print(boxed-array as? json)
-  print(node as? text)
-  print(node as? json)
+  print((1 as? text).is-some())
+  print((1 as? json).is-some())
+  print((scalar as? text).is-some())
+  print((scalar as? json).is-some())
+  print((tree as? text).is-some())
+  print((tree as? json).is-some())
+  print((boxed-int as? text).is-some())
+  print((boxed-int as? json).is-some())
+  print((boxed-array as? text).is-some())
+  print((boxed-array as? json).is-some())
+  print((node as? text).is-some())
+  print((node as? json).is-some())

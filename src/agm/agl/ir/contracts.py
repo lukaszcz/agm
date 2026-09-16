@@ -402,7 +402,7 @@ class ConversionFailureMode(enum.Enum):
 
     RAISE_CAST_ERROR = "raise_cast_error"  # `as`
     RAISE_VALUE_PARSE_ERROR = "raise_value_parse_error"  # `std/value::parse`
-    RETURN_BOOL = "return_bool"  # `as?`
+    RETURN_OPTION = "return_option"  # `as?`
 
 
 @dataclass(frozen=True, slots=True)

@@ -20,5 +20,5 @@ program def main(code: int, note: text) -> unit =
   let deep = Nested(message = note, code = code, causes = [one])
   print(deep as json)
 
-  print(one as? json)
-  print(many as? json)
+  print((one as? json).is-some())
+  print((many as? json).is-some())

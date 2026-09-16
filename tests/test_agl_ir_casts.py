@@ -14,6 +14,7 @@ import pytest
 
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.conversions import decode_value as _decode
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.contracts import (
     ArrayDecode,
     ArrayEncode,
@@ -43,6 +44,7 @@ from agm.agl.ir.nodes import IrBind, IrConvert, IrNominalCast, IrSequence
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors, VariantDescriptor
 from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.runtime.option import none_value, some_value
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -51,6 +53,7 @@ from agm.agl.semantics.values import (
     JsonValue,
     RecordValue,
     TextValue,
+    Value,
 )
 from agm.agl.zones import ParamZone
 from tests.agl.ir_harness import (
@@ -271,32 +274,45 @@ def test_cast_rejects_undeclared_property(shape: str) -> None:
 
 
 @pytest.mark.parametrize("shape", sorted(_UNDECLARED_PROPERTY_SOURCES))
-def test_as_question_is_false_for_undeclared_property(shape: str) -> None:
+def test_as_question_is_none_for_undeclared_property(shape: str) -> None:
     """The total form of the same cast reports failure instead of raising."""
     source = _UNDECLARED_PROPERTY_SOURCES[shape].replace(" as ", " as? ", 1)
-    assert evaluate_ir(source)["x"] == BoolValue(False)
+    assert evaluate_ir(source, default_stdlib=False)["x"] == _none()
 
 
 # ---------------------------------------------------------------------------
-# IR evaluation tests — boolean `as?`
+# IR evaluation tests — `as?` yields `Option`
+#
+# These run without the standard library, so the minted members carry the
+# reserved fallback identities the same helpers build here.
 # ---------------------------------------------------------------------------
+
+
+def _some(payload: Value) -> RecordValue:
+    """The ``Option::Some`` a successful `as?` conversion yields."""
+    return some_value(payload, nominals=NO_BUILTIN_DECLARATIONS, declared=True)
+
+
+def _none() -> RecordValue:
+    """The ``Option::None`` a failed `as?` conversion yields."""
+    return none_value(nominals=NO_BUILTIN_DECLARATIONS, declared=True)
 
 
 @pytest.mark.parametrize(
     "source,expected",
     [
-        ("let r = 42 as? text\n()\n", True),
-        ("let r = 42 as? json\n()\n", True),
-        ("let r = 3 as? decimal\n()\n", True),
-        ('let r = "42" as? int\n()\n', True),
-        ('let r = "nope" as? int\n()\n', False),
-        ("let r = 4.5 as? int\n()\n", False),
-        ("let r = 4.0 as? int\n()\n", True),
+        ("let r = 42 as? text\n()\n", _some(TextValue("42"))),
+        ("let r = 42 as? json\n()\n", _some(JsonValue(42))),
+        ("let r = 3 as? decimal\n()\n", _some(DecimalValue(Decimal(3)))),
+        ('let r = "42" as? int\n()\n', _some(IntValue(42))),
+        ('let r = "nope" as? int\n()\n', _none()),
+        ("let r = 4.5 as? int\n()\n", _none()),
+        ("let r = 4.0 as? int\n()\n", _some(IntValue(4))),
     ],
 )
-def test_as_question_returns_bool(source: str, expected: bool) -> None:
-    ir = evaluate_ir(source)
-    assert ir["r"] == BoolValue(expected)
+def test_as_question_returns_option(source: str, expected: RecordValue) -> None:
+    ir = evaluate_ir(source, default_stdlib=False)
+    assert ir["r"] == expected
 
 
 def test_total_as_question_evaluates_source() -> None:
@@ -305,8 +321,8 @@ let x = 5
 let r = x as? text
 ()
 """
-    ir = evaluate_ir(source)
-    assert ir["r"] == BoolValue(True)
+    ir = evaluate_ir(source, default_stdlib=False)
+    assert ir["r"] == _some(TextValue("5"))
     assert ir["x"] == IntValue(5)
 
 
@@ -358,7 +374,7 @@ def test_golden_as_lowers_to_ir_convert_raise() -> None:
 def test_golden_fallible_as_question_lowers_to_ir_convert_return_bool() -> None:
     value = _bound_value('let r = "42" as? int\n()\n', "r")
     assert isinstance(value, IrConvert)
-    assert value.failure_mode is ConversionFailureMode.RETURN_BOOL
+    assert value.failure_mode is ConversionFailureMode.RETURN_OPTION
 
 
 def test_nominal_downcasts_lower_to_identity_checks() -> None:
@@ -371,7 +387,9 @@ let is-square = shape as? Shape::Square
 let upcast = Circle(radius = 3) as? Shape
 ()
 """
-    program = _lower(source)
+    # Lowered and evaluated without the standard library, so the enum's own
+    # identities and the minted Option members agree across both runs.
+    program = lower_inline_ir(source, default_stdlib=False)
     circle = _program_bound_value(program, "circle")
     is_circle = _program_bound_value(program, "is-circle")
     is_square = _program_bound_value(program, "is-square")
@@ -381,17 +399,17 @@ let upcast = Circle(radius = 3) as? Shape
     assert isinstance(is_square, IrNominalCast) and is_square.test_only is True
     assert isinstance(upcast, IrConvert)
     validate_ir(program, deep=True)
-    values = evaluate_ir(source)
+    values = evaluate_ir(source, default_stdlib=False)
     assert values["circle"] == RecordValue(circle.nominal, {"radius": IntValue(2)})
-    assert values["is-circle"] == BoolValue(True)
-    assert values["is-square"] == BoolValue(False)
-    assert values["upcast"] == BoolValue(True)
+    assert values["is-circle"] == _some(RecordValue(circle.nominal, {"radius": IntValue(2)}))
+    assert values["is-square"] == _none()
+    assert values["upcast"] == _some(RecordValue(circle.nominal, {"radius": IntValue(3)}))
 
 
 def test_golden_total_as_question_lowers_to_ir_convert() -> None:
     value = _bound_value("let r = 3 as? decimal\n()\n", "r")
     assert isinstance(value, IrConvert)
-    assert value.failure_mode is ConversionFailureMode.RETURN_BOOL
+    assert value.failure_mode is ConversionFailureMode.RETURN_OPTION
     assert value.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
 
 

@@ -18,7 +18,7 @@ program def main(bad-input: text) -> unit =
     print(e as json)
 
   # --- as? cast: check convertibility without exception ---
-  if bad-input as? int => print "got int" else => print "no int"
+  if (bad-input as? int).is-some() => print "got int" else => print "no int"
 
   # --- ArithmeticError rendered via print ---
   try

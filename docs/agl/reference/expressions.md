@@ -687,13 +687,14 @@ Operands must be `bool`. `and` and `or` short-circuit.
 <!-- agl-check: fragment -->
 ```agl
 EXPR as T     # cast: convert EXPR to type T
-EXPR as? T    # convertibility test: bool, never raises
+EXPR as? T    # optional cast: Option[T], never raises
 ```
 
-`as` converts the value to the named type; `as?` tests whether the same `as`
-conversion would succeed, returning `true` on success and `false` on failure.
+`as` converts the value to the named type; `as?` performs the same conversion
+without raising, yielding `Some(value)` carrying the converted value on
+success and `None` on failure — so a successful test also supplies the value.
 `as text` and `as json` raise `CyclicValueError` when conversion walks a
-reference cycle; their `as?` forms return `false` instead. Casting from an enum
+reference cycle; their `as?` forms yield `None` instead. Casting from an enum
 to one of its member records is an identity downcast;
 casting a member record to a containing enum is an identity upcast.
 The full conversion matrix and semantics are in
@@ -709,7 +710,7 @@ The full conversion matrix and semantics are in
 | `1 + 2 as text` | `1 + (2 as text)` — `+` is looser than cast |
 | `f x as int` | `(f x) as int` — application binds tighter |
 | `x as json as text` | `(x as json) as text` — left-associative |
-| `a as? int and b` | `(a as? int) and b` — `and` is looser than cast |
+| `a as? int == b` | `(a as? int) == b` — `==` is looser than cast |
 
 **`as?` is a single token**: the `?` is part of the keyword and must be
 adjacent to `as` (no whitespace). `as` and `as?` are always reserved
@@ -720,12 +721,11 @@ Examples:
 <!-- agl-check: fragment -->
 ```agl
 let n: int = raw-value as int          # raises CastError if not an int
-let is-int: bool = raw-value as? int
+let parsed: Option[int] = raw-value as? int
 
-if is-int =>
-  let n = raw-value as int
-  print n
-else => print "not an int"
+case parsed of
+  | Some(value) => print value
+  | None => print "not an int"
 
 let s: text = some-int as text         # total — always succeeds
 let j: json = my-record.count as json  # total — int is JSON-shaped
@@ -733,9 +733,10 @@ let j: json = my-record.count as json  # total — int is JSON-shaped
 # left-associativity chains
 let t: text = some-int as json as text   # (some-int as json) as text
 
-# convertibility test without exception handling
-if count-json as? int => print(count-json as int)
-else => print "not an int"
+# the optional cast carries its value, so no second cast is needed
+case count-json as? int of
+  | Some(value) => print value
+  | None => print "not an int"
 ```
 
 A `text` cast from a fallible source reads the value and formats it as text;

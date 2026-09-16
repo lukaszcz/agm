@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "convertible_int_and_point",
+      "params": {
+        "raw": "42",
+        "point-text": "{\"x\": 1, \"y\": 2}"
+      },
+      "expect": {
+        "stdout": "int: 42\n42\ntrue\nOption::Some(value = 84)\npoint: 1,2\nOption::Some(value = \"42\")\ncircle: 3\nOption::None\nOption::Some(value = Shape::Circle(radius = 1))\n"
+      }
+    },
+    {
+      "name": "inconvertible_int_and_point",
+      "params": {
+        "raw": "nope",
+        "point-text": "{\"x\": 1}"
+      },
+      "expect": {
+        "stdout": "not an int: nope\n0\nfalse\nOption::None\nnot a point\nOption::Some(value = \"42\")\ncircle: 3\nOption::None\nOption::Some(value = Shape::Circle(radius = 1))\n"
+      }
+    },
+    {
+      "name": "zero_int_and_negative_point",
+      "params": {
+        "raw": "0",
+        "point-text": "{\"x\": -3, \"y\": 0}"
+      },
+      "expect": {
+        "stdout": "int: 0\n0\ntrue\nOption::Some(value = 0)\npoint: -3,0\nOption::Some(value = \"42\")\ncircle: 3\nOption::None\nOption::Some(value = Shape::Circle(radius = 1))\n"
+      }
+    }
+  ]
+}

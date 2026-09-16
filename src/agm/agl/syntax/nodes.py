@@ -373,10 +373,10 @@ class UnaryNeg:
 
 @dataclass(frozen=True, slots=True)
 class Cast:
-    """A type cast (``expr as T``) or convertibility test (``expr as? T``).
+    """A type cast (``expr as T``) or optional cast (``expr as? T``).
 
     ``test_only=False`` — the ``as`` operator; yields a value of type T.
-    ``test_only=True``  — the ``as?`` operator; yields ``bool``.
+    ``test_only=True``  — the ``as?`` operator; yields ``Option[T]``.
     """
 
     expr: Expr

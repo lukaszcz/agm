@@ -28,7 +28,7 @@ program def main() -> unit =
   print(shared-again.double())
   let narrow = node as Tree[int]::Node
   print(narrow.value)
-  print(leaf as? Tree[int]::Node)
+  print((leaf as? Tree[int]::Node).is-some())
   try
     let _ = leaf as Tree[int]::Node
     print "unreachable"

@@ -50,7 +50,7 @@ def _run(
 def _assert_agent_shape(actual: Value, is_variant: Value, expected: RecordValue) -> None:
     """Verify *actual* is the expected ``Agent`` variant with the expected payload.
 
-    *is_variant* is an ``as?`` identity check run inside the program's own
+    *is_variant* is an ``is`` member test run inside the program's own
     source (bound alongside *actual*): the running program loads real stdlib,
     so its own ``Agent`` enum carries that program's own nominal identity,
     distinct from the reserved-fallback identity *expected* (built by the
@@ -90,10 +90,10 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
     result = _run(
         "import std/config\n"
         "let initial = std/config::default-agent\n"
-        "let initial-is-claude = initial as? Agent::AgentClaude\n"
+        "let initial-is-claude = initial is Agent::AgentClaude\n"
         'std/config::default-agent := AgentCommand("command")\n'
         "let updated = std/config::default-agent\n"
-        "let updated-is-command = updated as? Agent::AgentCommand\n"
+        "let updated-is-command = updated is Agent::AgentCommand\n"
         "updated\n"
     )
 
@@ -182,10 +182,10 @@ def test_host_seed_overrides_initializer_until_source_write() -> None:
     result = _run(
         "import std/config\n"
         "let seeded = std/config::default-agent\n"
-        "let seeded-is-codex = seeded as? Agent::AgentCodex\n"
+        "let seeded-is-codex = seeded is Agent::AgentCodex\n"
         'std/config::default-agent := AgentPi("openai", "gpt", "high")\n'
         "let written = std/config::default-agent\n"
-        "let written-is-pi = written as? Agent::AgentPi\n"
+        "let written-is-pi = written is Agent::AgentPi\n"
         "written\n",
         seed={"default-agent": agent_value("AgentCodex", model="o3", thinking="medium")},
     )

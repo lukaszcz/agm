@@ -1,0 +1,39 @@
+# `as?` yields `Option[T]`: `Some(value)` carrying the converted value when the
+# corresponding `as` cast would succeed, `None` when it would fail. The single
+# conversion produces the value, so a successful test needs no second cast, and
+# the result composes with the ordinary `Option` methods.
+
+record Point
+  x: int
+  y: int
+
+enum Shape
+  | Circle(radius: int)
+  | Square(side: int)
+
+program def main(raw: text, point-text: text) -> unit =
+  # A fallible text -> int cast carries its converted value on success.
+  case raw as? int of
+    | Some(value) => print "int: %{value}"
+    | None => print "not an int: %{raw}"
+
+  # The same result composes with Option's own methods.
+  print((raw as? int).unwrap-or(0))
+  print((raw as? int).is-some())
+  print((raw as? int).map(fn(n: int) => n * 2))
+
+  # A structured target decodes once and hands the record back.
+  case point-text as? Point of
+    | Some(value) => print "point: %{value.x},%{value.y}"
+    | None => print "not a point"
+
+  # A total cast always yields Some.
+  print(42 as? text)
+
+  # An enum-member downcast carries the member value; the upcast always succeeds.
+  let shape: Shape = Circle(radius = 3)
+  case shape as? Shape::Circle of
+    | Some(value) => print "circle: %{value.radius}"
+    | None => print "not a circle"
+  print(shape as? Shape::Square)
+  print(Circle(radius = 1) as? Shape)

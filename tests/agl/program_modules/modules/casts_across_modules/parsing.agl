@@ -1,5 +1,5 @@
 # Library module imported by programs/modules/casts_across_modules.agl. Exports
-# cast-based helpers: a boolean text→int conversion test with a fallback, and a
+# cast-based helpers: an optional text→int conversion with a fallback, and a
 # fallible `json → Point` validation that raises CastError on a schema mismatch.
 import std/json
 
@@ -7,7 +7,6 @@ record Point
   x: int
   y: int
 
-def to-int-or(s: text, fallback: int) -> int =
-  if s as? int => s as int else => fallback
+def to-int-or(s: text, fallback: int) -> int = (s as? int).unwrap-or(fallback)
 
 def parse-point(raw: text) -> Point = json::parse(raw) as Point

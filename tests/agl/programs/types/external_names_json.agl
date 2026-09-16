@@ -2,7 +2,7 @@
 # `@name` ?? declared) keys `as`/`as?` JSON casts, enum `$case` tags, and
 # program parameters decoded from JSON. Rendering and field access always
 # use the declared name. A declared field key or `$case` tag, where a rename
-# exists, is rejected by both `as` (via `as?` testing `false`) and by
+# exists, is rejected by both `as` (via `as?` yielding `None`) and by
 # program-parameter decoding (a host error).
 import std/json
 
@@ -72,10 +72,10 @@ program def main(
     | Square(side)    => print "text-square: %{side}"
     | Circle(radius)  => print "text-circle: %{radius}"
 
-  # `as?` tests `false` for a declared field key, and for a declared
+  # `as?` yields `None` for a declared field key, and for a declared
   # `$case` tag, where a rename exists.
-  print ("{\"x\": 1, \"y-name\": 2}" as? Point)
-  print ("{\"$case\": \"Square\", \"side\": 3}" as? Shape)
+  print (("{\"x\": 1, \"y-name\": 2}" as? Point).is-some())
+  print (("{\"$case\": \"Square\", \"side\": 3}" as? Shape).is-some())
 
   # A record-typed and an enum-typed program parameter decode via their
   # renamed JSON keys/tags.

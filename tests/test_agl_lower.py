@@ -3194,14 +3194,14 @@ class TestOneLevelCaseLowering:
 
 
 # ---------------------------------------------------------------------------
-# Structural lowering: IrConvert boolean `as?` failure modes
+# Structural lowering: IrConvert optional `as?` failure modes
 # ---------------------------------------------------------------------------
 
 
 class TestIrConvertLowering:
     """Structural tests for cast lowering and conversion recipe selection.
 
-    Ordinary casts and boolean ``as?`` convertibility tests share an ``IrConvert``
+    Ordinary casts and optional ``as?`` casts share an ``IrConvert``
     recipe while selecting their respective failure modes.
     """
 
@@ -3223,7 +3223,7 @@ class TestIrConvertLowering:
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
         assert isinstance(conv, IrConvert)
-        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.failure_mode is ConversionFailureMode.RETURN_OPTION
         assert conv.recipe.strategy is ConversionStrategy.NARROW_DECIMAL_TO_INT
 
     def test_total_as_test_lowers_to_ir_convert_return_bool(self) -> None:
@@ -3231,7 +3231,7 @@ class TestIrConvertLowering:
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
         assert isinstance(conv, IrConvert)
-        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.failure_mode is ConversionFailureMode.RETURN_OPTION
         assert conv.recipe.strategy is ConversionStrategy.WIDEN_INT_TO_DECIMAL
 
     def test_render_to_text_as_lowers_to_ir_convert_render_strategy(self) -> None:
@@ -3244,14 +3244,14 @@ class TestIrConvertLowering:
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
     def test_render_as_test_lowers_to_ir_convert_return_bool(self) -> None:
-        """`as? text` returns whether its conversion trial succeeds."""
+        """`as? text` returns an `Option` over its conversion trial."""
         prog = _lower("let r = 42 as? text\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
         assert isinstance(conv, IrConvert), (
             f"'as? text' must emit IrConvert, not {type(conv).__name__}"
         )
-        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.failure_mode is ConversionFailureMode.RETURN_OPTION
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
     def test_member_record_json_cast_uses_its_exact_record_encode_plan(self) -> None:
@@ -3263,14 +3263,14 @@ class TestIrConvertLowering:
         assert isinstance(conv.recipe.encode, RecordEncode)
 
     def test_json_as_test_lowers_to_ir_convert_return_bool(self) -> None:
-        """`as? json` returns whether its conversion trial succeeds."""
+        """`as? json` returns an `Option` over its conversion trial."""
         prog = _lower("let r = 42 as? json\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
         assert isinstance(conv, IrConvert), (
             f"'as? json' must emit IrConvert, not {type(conv).__name__}"
         )
-        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.failure_mode is ConversionFailureMode.RETURN_OPTION
         assert conv.recipe.strategy is ConversionStrategy.TO_JSON
 
 

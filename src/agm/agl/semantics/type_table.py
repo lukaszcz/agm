@@ -1041,6 +1041,26 @@ class TypeTable:
         """
         return self.standard_builtin_declarations().get(name)
 
+    def option_handle(self, argument: Type, *, standard: bool = False) -> EnumType:
+        """Return the ``Option[argument]`` handle this program's ``Option`` names.
+
+        The default follows :meth:`builtin_declaration`, so a program's own
+        ``builtin enum Option`` owns the values the language itself produces
+        (an ``as?`` result). *standard* instead selects the loaded
+        standard-library declaration, the identity an ``Option`` nested in a
+        fixed host representation carries. Either way a program with no
+        registered declaration — one loaded without the standard library —
+        falls back to the seeded generic shape.
+        """
+        declaration = (
+            self.standard_builtin_declaration("Option")
+            if standard
+            else self.builtin_declaration("Option")
+        ) or OPTION_TYPE_DEF
+        handle = declaration.handle((argument,))
+        assert isinstance(handle, EnumType), "Option's declaration must be an enum"
+        return handle
+
     def standard_builtin_declarations(self) -> Mapping[str, TypeDef]:
         """Return all loaded standard-library source builtin declarations."""
         result = self._standard_builtins

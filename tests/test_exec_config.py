@@ -13,7 +13,6 @@ from agm.config.context import ConfigContext
 from agm.config.general import (
     ExecConfig,
     exec_config_from_merged,
-    load_exec_config,
     load_merged_config,
 )
 from tests._package_helpers import write_installed_package
@@ -43,22 +42,27 @@ class TestExecConfig:
             cfg.strict_json = True
 
 
-class TestLoadExecConfig:
+class TestExecConfigFromConfigFiles:
+    """The ``[exec]`` section as every exec host reads it: merge, then resolve."""
+
+    def _config(self, home: Path, cwd: Path, proj_dir: Path | None = None) -> ExecConfig:
+        return exec_config_from_merged(load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd))
+
     def test_load_defaults_when_no_config(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        cfg = self._config(home, tmp_path)
         assert cfg.strict_json is False
         assert cfg.timeout is None
         assert cfg.log is False
         assert cfg.log_file is None
 
-    def test_load_exec_config_from_toml(self, tmp_path: Path) -> None:
+    def test_exec_settings_load_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         config = home / ".agm" / "config.toml"
         config.parent.mkdir(parents=True)
         config.write_text('[exec]\nstrict-json = true\ntimeout = "30m"\n')
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        cfg = self._config(home, tmp_path)
         assert cfg.strict_json is True
         assert cfg.timeout == pytest.approx(1800.0)
 
@@ -69,23 +73,15 @@ class TestLoadExecConfig:
         proj_dir = tmp_path / "proj"
         (proj_dir / "config").mkdir(parents=True)
         (proj_dir / "config" / "config.toml").write_text("[exec]\ntimeout = 7\n")
-        cfg = load_exec_config(home=home, proj_dir=proj_dir, cwd=tmp_path)
+        cfg = self._config(home, tmp_path, proj_dir)
         assert cfg.timeout == pytest.approx(7.0)
 
-    def test_command_name_selects_sub_table(self, tmp_path: Path) -> None:
+    def test_a_nested_exec_sub_table_supplies_nothing(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         config = home / ".agm" / "config.toml"
         config.parent.mkdir(parents=True)
         config.write_text("[exec]\ntimeout = 3\n\n[exec.myflow]\ntimeout = 7\n")
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name="myflow")
-        assert cfg.timeout == pytest.approx(7.0)
-
-    def test_command_name_none_uses_base_table(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        config = home / ".agm" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text("[exec]\ntimeout = 3\n\n[exec.myflow]\ntimeout = 7\n")
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        cfg = self._config(home, tmp_path)
         assert cfg.timeout == pytest.approx(3.0)
 
     def test_numeric_timeout(self, tmp_path: Path) -> None:
@@ -93,7 +89,7 @@ class TestLoadExecConfig:
         config = home / ".agm" / "config.toml"
         config.parent.mkdir(parents=True)
         config.write_text("[exec]\ntimeout = 60\n")
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        cfg = self._config(home, tmp_path)
         assert cfg.timeout == pytest.approx(60.0)
 
     def test_log_settings_loaded_from_config(self, tmp_path: Path) -> None:
@@ -102,7 +98,7 @@ class TestLoadExecConfig:
         config.parent.mkdir(parents=True)
         log_path = tmp_path / "trace.jsonl"
         config.write_text(f"[exec]\nlog = true\nlog-file = {str(log_path)!r}\n")
-        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        cfg = self._config(home, tmp_path)
         assert cfg.log is True
         assert cfg.log_file == str(log_path)
 
@@ -115,24 +111,11 @@ class TestLoadExecConfig:
         literal_dir = config_dir / "%{NAME}"
         literal_dir.mkdir(parents=True)
         (literal_dir / "base.jsonl").touch()
-        (literal_dir / "nested.jsonl").touch()
-        (config_dir / "config.toml").write_text(
-            "\n".join(
-                [
-                    "[exec]",
-                    'log-file = "\\\\%{NAME}/base.jsonl"',
-                    "",
-                    "[exec.myflow]",
-                    'log-file = "\\\\%{NAME}/nested.jsonl"',
-                ]
-            )
-        )
+        (config_dir / "config.toml").write_text('[exec]\nlog-file = "\\\\%{NAME}/base.jsonl"\n')
 
-        base = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
-        nested = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name="myflow")
+        cfg = self._config(home, tmp_path)
 
-        assert base.log_file == str(literal_dir / "base.jsonl")
-        assert nested.log_file == str(literal_dir / "nested.jsonl")
+        assert cfg.log_file == str(literal_dir / "base.jsonl")
 
 
 class TestExecConfigProgramTableOverride:

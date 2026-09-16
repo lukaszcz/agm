@@ -672,49 +672,24 @@ class ExecConfig:
     max_call_depth: int | None = None
 
 
-def load_exec_config(
-    *,
-    home: Path,
-    proj_dir: Path | None,
-    cwd: Path,
-    command_name: str | None = None,
-) -> ExecConfig:
-    """Load and resolve the ``[exec]`` configuration section.
-
-    Follows the same layering pattern as ``load_loop_config``:
-    - home/.agm/config.toml
-    - project config/config.toml
-    - cwd/.agm/config.toml
-
-    When ``command_name`` is provided, the ``[exec.<command_name>]`` sub-table
-    is merged over the base ``[exec]`` table.
-    """
-    merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
-    return exec_config_from_merged(merged, command_name=command_name)
-
-
 def exec_config_from_merged(
     merged: TomlDict,
     *,
-    command_name: str | None = None,
     program_table: dict[str, object] | None = None,
 ) -> ExecConfig:
     """Build :class:`ExecConfig` from an already-merged config dict.
 
-    Split out from :func:`load_exec_config` so a caller that already holds a
-    merged config can derive the ``[exec]`` section without re-reading and
-    re-merging the files.
+    Every exec host already holds a merged config, so the ``[exec]`` section is
+    derived from it rather than re-read. ``[exec]`` has no named sub-tables: a
+    per-program override comes from the program's own qualified table, because
+    an AgL program is identified by its module route rather than by a flat
+    name the way ``[loop.<command>]``'s runner is.
 
     When *program_table* is supplied, each engine key present in that already
     resolved qualified program table overrides the global ``[exec]`` value.
     Engine keys use kebab-case names: ``strict-json``, ``log-file``.
     """
-    exec_table = _select_command_table(
-        toml_dict(merged.get("exec")),
-        section_name="exec",
-        command_name=command_name,
-        require_command=False,
-    )
+    exec_table = toml_dict(merged.get("exec"))
 
     # Qualified per-program engine-key overrides win over [exec].KEY.
     # Engine keys use kebab-case names.

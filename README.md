@@ -52,6 +52,9 @@ just install /usr/local
 just install /usr/local --force
 ```
 
+`--force` preserves each replaced, differing config file as `<file>.bak`; existing
+different backups are preserved recursively as `<file>.bak.bak`.
+
 An explicit prefix installs the executable link into `<prefix>/bin` and the complete
 runtime tree into `<prefix>/.agm`; add `<prefix>/bin` to `PATH`. That prefix takes
 precedence over `AGM_HOME` while installing. At runtime, `AGM_HOME` explicitly overrides

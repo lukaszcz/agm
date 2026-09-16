@@ -202,6 +202,17 @@ def copy_file(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
+def backup_file(path: Path) -> None:
+    """Copy *path* to ``.bak``, preserving distinct backups recursively."""
+
+    backup = path.with_name(f"{path.name}.bak")
+    if backup.exists():
+        if backup.read_bytes() == path.read_bytes():
+            return
+        backup_file(backup)
+    copy_file(path, backup)
+
+
 def move(source: Path, destination: Path) -> None:
     """Move a file or directory unless dry-run is enabled."""
 

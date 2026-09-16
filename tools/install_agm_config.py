@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from agm.config.general import agm_home_dir
+from agm.core.fs import backup_file
 from agm.packages.install import refresh_managed_stdlib
 
 
@@ -44,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
 def _install_file(*, source: Path, destination: Path, force: bool) -> bool:
     if destination.exists() and not force:
         return False
+    if destination.exists() and source.read_bytes() != destination.read_bytes():
+        backup_file(destination)
     shutil.copy2(source, destination)
     return True
 

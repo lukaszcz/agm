@@ -136,6 +136,34 @@ def test_copy_tree_rejects_a_symlink_destination_ancestor_before_writing(tmp_pat
     assert not (outside / "package").exists()
 
 
+def test_backup_file_preserves_differing_existing_backups(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    backup = tmp_path / "config.toml.bak"
+    older_backup = tmp_path / "config.toml.bak.bak"
+    path.write_text("current\n", encoding="utf-8")
+    backup.write_text("previous\n", encoding="utf-8")
+    older_backup.write_text("older\n", encoding="utf-8")
+
+    fs.backup_file(path)
+
+    assert path.read_text(encoding="utf-8") == "current\n"
+    assert backup.read_text(encoding="utf-8") == "current\n"
+    assert older_backup.read_text(encoding="utf-8") == "previous\n"
+    assert (tmp_path / "config.toml.bak.bak.bak").read_text(encoding="utf-8") == "older\n"
+
+
+def test_backup_file_keeps_an_identical_existing_backup(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    backup = tmp_path / "config.toml.bak"
+    path.write_text("current\n", encoding="utf-8")
+    backup.write_text("current\n", encoding="utf-8")
+
+    fs.backup_file(path)
+
+    assert backup.read_text(encoding="utf-8") == "current\n"
+    assert not (tmp_path / "config.toml.bak.bak").exists()
+
+
 _COPY_CASES: list[tuple[Callable[[Path, Path], None], str, str, str]] = [
     (fs.copy_tree, "source", "destination", "copy-tree"),
 ]

@@ -75,7 +75,7 @@
 (ert-deftest agl-mode-binds-repl-commands ()
   (should (eq (lookup-key agl-mode-map (kbd "C-c C-r"))
               #'agl-repl-reload-buffer))
-  (should (eq (lookup-key agl-mode-map (kbd "C-c C-s"))
+  (should (eq (lookup-key agl-mode-map (kbd "M-RET"))
               #'agl-send-region))
   (should (eq (lookup-key agl-mode-map (kbd "C-<return>"))
               #'agl-send-region)))
@@ -83,25 +83,28 @@
 (ert-deftest agl-mode-menu-shows-the-send-region-shortcut ()
   (let* ((menu (lookup-key agl-mode-map [menu-bar agl]))
          (item (assq 'Send\ region\ to\ REPL (cdr menu))))
-    (should (equal (plist-get (nthcdr 4 item) :keys) "C-c C-s"))))
+    (should (equal (plist-get (nthcdr 4 item) :keys) "M-RET"))))
 
-(ert-deftest agl-mode-sends-the-active-region-with-the-portable-shortcut ()
+(ert-deftest agl-mode-sends-a-cua-region-with-the-portable-shortcut ()
   (let ((agl-flymake-enable nil)
         (sent nil))
-    (with-temp-buffer
-      (save-window-excursion
-        (switch-to-buffer (current-buffer))
-        (insert "let x = 1")
-        (agl-mode)
-        (set-mark (point-min))
-        (goto-char (point-max))
-        (activate-mark)
-        (cl-letf (((symbol-function 'agl-send-region)
-                   (lambda (start end)
-                     (interactive "r")
-                     (setq sent (buffer-substring-no-properties start end)))))
-          (execute-kbd-macro (kbd "C-c C-s"))))
-      (should (equal sent "let x = 1")))))
+    (cua-mode 1)
+    (unwind-protect
+        (with-temp-buffer
+          (save-window-excursion
+            (switch-to-buffer (current-buffer))
+            (insert "let x = 1")
+            (agl-mode)
+            (set-mark (point-min))
+            (goto-char (point-max))
+            (activate-mark)
+            (cl-letf (((symbol-function 'agl-send-region)
+                       (lambda (start end)
+                         (interactive "r")
+                         (setq sent (buffer-substring-no-properties start end)))))
+              (execute-kbd-macro (kbd "M-RET"))))
+          (should (equal sent "let x = 1")))
+      (cua-mode -1))))
 
 ;; --- AGM diagnostics are clickable in a compilation buffer ---
 

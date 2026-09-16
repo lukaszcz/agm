@@ -1529,7 +1529,7 @@ function."
 (define-key agl-mode-map (kbd "C-c C-k") #'agl-check)
 (define-key agl-mode-map (kbd "C-c C-z") #'agl-repl)
 (define-key agl-mode-map (kbd "C-c C-r") #'agl-repl-reload-buffer)
-(define-key agl-mode-map (kbd "C-c C-s") #'agl-send-region)
+(define-key agl-mode-map (kbd "M-RET") #'agl-send-region)
 (define-key agl-mode-map (kbd "C-<return>") #'agl-send-region)
 (define-key agl-mode-map (kbd "C-c C-b") #'agl-send-buffer)
 (define-key agl-mode-map (kbd "C-c C-l") #'flymake-show-buffer-diagnostics)
@@ -1541,7 +1541,7 @@ function."
     ["Type-check file" agl-check t]
     "---"
     ["Open REPL" agl-repl t]
-    ["Send region to REPL" agl-send-region :enable (use-region-p) :keys "C-c C-s"]
+    ["Send region to REPL" agl-send-region :enable (use-region-p) :keys "M-RET"]
     ["Send buffer to REPL" agl-send-buffer t]
     ["Reset and reload buffer in REPL" agl-repl-reload-buffer t]
     "---"

@@ -7,7 +7,6 @@ import pytest
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
-from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
@@ -40,7 +39,7 @@ from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
 from agm.agl.zones import ParamZone
 from tests._agl_helpers import agl_roots, run_inline_command
-from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
+from tests.agl.module_graph import load_graph, resolve_and_check_inline_entry, resolve_inline_entry
 
 _ROOTS = agl_roots()
 _CAPS = HostCapabilities()

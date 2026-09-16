@@ -729,7 +729,7 @@ class TestProgramSignatures:
         import os
 
         from agm.agl.lower.program import lower_program
-        from agm.agl.modules.loader import load_graph
+        from tests.agl.module_graph import load_graph
 
         lib_source = "record Coord\n  x: int\n  y: int\n\ntype Ints = array[int]\n"
         entry_source = (
@@ -2131,7 +2131,7 @@ let result = make(10).add(2)
     ) -> None:
         """Foreign receiver methods retain direct calls and receiver-bound closures."""
         from agm.agl.lower.program import lower_program
-        from agm.agl.modules.loader import load_graph
+        from tests.agl.module_graph import load_graph
 
         (tmp_path / "geometry.agl").write_text("record Point(x: int, y: int)\n", encoding="utf-8")
         (tmp_path / "metrics.agl").write_text(
@@ -2412,9 +2412,9 @@ class TestLowerGraph:
 
         from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
-        from agm.agl.modules.loader import load_graph
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
+        from tests.agl.module_graph import load_graph
 
         # Library defines a record type + a function using it.
         # Entry defines its own record type + imports lib's function.
@@ -2506,9 +2506,9 @@ class TestLowerGraph:
         from agm.agl.lower.lowerer import _LinkState
         from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
-        from agm.agl.modules.loader import load_graph
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
+        from tests.agl.module_graph import load_graph
 
         lib_source = "let retained = 1\ndef first() -> int = 1\ndef second() -> int = 2\n"
         entry_source = "import lib\nprogram def main() -> unit =\n  let value = lib::first()\n"
@@ -2568,9 +2568,9 @@ class TestLowerGraph:
 
         from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
-        from agm.agl.modules.loader import load_graph
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
+        from tests.agl.module_graph import load_graph
 
         # Library defines a record and an enum, each with an alias pointing to them.
         # Exercises both the RecordType and EnumType alias-skip guards in graph.py.

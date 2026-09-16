@@ -10,7 +10,6 @@ import semver
 
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import _wire_extern_registry
 from agm.agl.runtime.externs import ExternRegistry
@@ -20,6 +19,7 @@ from agm.core import dry_run
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import agl_roots
+from tests.agl.module_graph import load_graph
 
 _STDLIB = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 

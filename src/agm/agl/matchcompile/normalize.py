@@ -508,7 +508,6 @@ def normalize_pattern(
                     arguments.append(
                         WildcardCell(
                             provenance=OmittedFieldProvenance(
-                                constructor_pattern_id=pattern.node_id,
                                 field_name=field.name,
                                 span=pattern.span,
                             ),
@@ -556,7 +555,6 @@ def normalize_case(
         type=subject_type,
         provenance=RootOccurrenceProvenance(
             site_node_id=case.node_id,
-            subject_node_id=case.subject.node_id,
             span=case.subject.span,
         ),
     )
@@ -577,7 +575,6 @@ def normalize_case(
             action_id=branch.node_id,
             source_index=index,
             body_node_id=branch.body.node_id,
-            branch_span=branch.span,
             pattern_span=branch.pattern.span,
         )
         for index, branch in enumerate(case.branches)
@@ -617,7 +614,6 @@ def normalize_let(
         type=matched_type,
         provenance=RootOccurrenceProvenance(
             site_node_id=let.node_id,
-            subject_node_id=let.value.node_id,
             span=let.value.span,
         ),
     )

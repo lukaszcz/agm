@@ -833,7 +833,7 @@ def resolve_program(
     Parameters
     ----------
     graph:
-        A loaded module graph from :func:`~agm.agl.modules.loader.load_graph`.
+        A loaded module graph from :func:`~agm.agl.modules.loader.build_repl_graph`.
     entry_ambient_constructor_candidates:
         Constructor candidates from prior REPL entries.  These are merged with
         import-tail-exposed constructor candidates for the entry module.

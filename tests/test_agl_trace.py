@@ -896,11 +896,15 @@ class TestTraceStoreProperties:
         ts = TraceStore(path=None)
         assert ts.path is None
 
-    def test_trace_store_run_id_property(self, tmp_path: Path) -> None:
+    def test_trace_store_run_id_in_records(self, tmp_path: Path) -> None:
         from agm.agl.runtime.trace import TraceStore
 
-        ts = TraceStore(path=tmp_path / "t.jsonl")
-        assert isinstance(ts.run_id, str) and ts.run_id
+        p = tmp_path / "t.jsonl"
+        ts = TraceStore(path=p)
+        ts.run_start()
+        records = _load_jsonl(p)
+        run_id = records[0]["run_id"]
+        assert isinstance(run_id, str) and run_id
 
     def test_trace_store_records_without_span(self, tmp_path: Path) -> None:
         """Methods called with span=None still emit valid JSONL (no line/col keys)."""

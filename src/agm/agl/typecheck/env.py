@@ -992,11 +992,10 @@ class TypeEnvironment:
         self._resolved_aliases: dict[str, GenericAliasDef] = {}
         # Binding node_id → Type (populated as declarations are checked).
         self._binding_types: PersistentDict[int, Type] = PersistentDict()
-        # Function signatures indexed by their owner path and member name. The
-        # root compatibility map remains for standalone callers that only know
-        # an unqualified spelling; resolved calls use declaration ids.
+        # Root-scope function signatures by unqualified name: a compatibility
+        # map for standalone callers that only know an unqualified spelling;
+        # resolved calls use declaration ids.
         self._function_signatures: dict[str, FunctionSignature] = {}
-        self._function_signatures_by_path: dict[tuple[ScopePath, str], FunctionSignature] = {}
         # Generic type definitions — name → GenericTypeDef.
         self._generic_types: dict[str, GenericTypeDef] = {}
         # Constructor signatures — ((module, scope path, owner), variant) → signature.
@@ -1230,9 +1229,6 @@ class TypeEnvironment:
 
     # --- Type namespace queries ---
 
-    def has_type(self, name: str) -> bool:
-        return name in self._types
-
     def get_type(self, name: str) -> Type | None:
         return self._types.get(name)
 
@@ -1449,10 +1445,6 @@ class TypeEnvironment:
         self._assert_mutable()
         self._resolved_aliases[name] = GenericAliasDef(type_params=type_params, template=template)
 
-    def get_alias_type_params(self, name: str) -> tuple[str, ...]:
-        """Return the type-parameter names for a parameterized alias, or ``()``."""
-        return self._alias_type_params.get(name, ())
-
     # --- Generic type registry ---
 
     def register_generic_type(self, name: str, gdef: GenericTypeDef) -> None:
@@ -1588,22 +1580,6 @@ class TypeEnvironment:
             self._constructor_key(self._module_id, owner_name, scope_path)
         )
 
-    def resolve_constructor_owner_name(self, name: str) -> str | None:
-        """Resolve local nominal aliases to the name holding their constructor metadata."""
-        from agm.agl.syntax.types import AppliedT, NameT
-
-        seen: set[str] = set()
-        while name not in seen:
-            seen.add(name)
-            target = self._alias_targets.get(name)
-            if target is None:
-                return name
-            if isinstance(target, (NameT, AppliedT)) and target.qualifier is None:
-                name = target.name
-                continue
-            return None
-        return None
-
     def resolve_named_type(self, name: str, *, span: SourceSpan | None = None) -> Type | None:
         """Resolve a type *name* alias-transparently to a semantic ``Type``.
 
@@ -1731,20 +1707,16 @@ class TypeEnvironment:
     def register_function_signature(
         self, name: str, sig: FunctionSignature, *, scope_path: ScopePath = ()
     ) -> None:
-        """Register a signature under its declaration path and member name."""
+        """Register a root-scope signature under its unqualified name.
+
+        Non-root registrations (``scope_path`` set) record the fact for replay
+        but leave the compatibility map alone; resolved calls to a scoped
+        function use its declaration id instead.
+        """
         self._assert_mutable()
-        self._function_signatures_by_path[(scope_path, name)] = sig
         if not scope_path:
             self._function_signatures[name] = sig
         self._record_fact(FunctionSignatureFact(name=name, sig=sig, scope_path=scope_path))
-
-    def get_function_signature(
-        self, name: str, *, scope_path: ScopePath = ()
-    ) -> FunctionSignature | None:
-        """Return a signature selected by its declaration path and member name."""
-        if scope_path:
-            return self._function_signatures_by_path.get((scope_path, name))
-        return self._function_signatures.get(name)
 
     def all_function_signatures(self) -> dict[str, FunctionSignature]:
         return dict(self._function_signatures)
@@ -3204,7 +3176,6 @@ class TypeEnvironment:
         self._resolved_aliases.update(other._resolved_aliases)
         self._binding_types = other._binding_types.fork()
         self._function_signatures.update(other._function_signatures)
-        self._function_signatures_by_path.update(other._function_signatures_by_path)
         self._generic_types.update(other._generic_types)
         self._constructor_sigs.update(other._constructor_sigs)
         self._constructor_field_kinds.update(other._constructor_field_kinds)

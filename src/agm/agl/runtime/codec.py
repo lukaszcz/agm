@@ -40,7 +40,7 @@ from agm.agl.runtime.convert import (
 )
 from agm.agl.runtime.request import ValidationError
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import TextType, Type
+from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import TextValue, Value
 from agm.agl.type_schema import build_format_instructions, derive_schema_and_decode
 
@@ -120,7 +120,6 @@ class OutputCodec(Protocol):
     - ``name`` — the codec identifier (e.g. ``"text"``, ``"json"``).
     - ``supported_kinds`` — frozenset of semantic type-kind strings this codec handles.
       This is the authoritative source for ``HostCapabilities.codec_kinds``.
-    - ``supports_type(t)`` — True iff this codec can handle the given type.
     - ``make_contract(type_ref, type_table)`` — build an ``OutputContract``.
       Runs at check time (or REPL contract-preview time), when a real checker
       ``Type`` is in hand.  ``type_table`` resolves record/enum field/variant
@@ -139,8 +138,6 @@ class OutputCodec(Protocol):
 
     @property
     def supported_kinds(self) -> frozenset[str]: ...
-
-    def supports_type(self, t: Type) -> bool: ...
 
     def make_contract(
         self, type_ref: Type, type_table: TypeTable | None = None
@@ -190,9 +187,6 @@ class TextCodec:
         avoiding a duplicated literal at the host-environment assembly site.
         """
         return frozenset({"text"})
-
-    def supports_type(self, t: Type) -> bool:
-        return isinstance(t, TextType)
 
     def make_contract(
         self, type_ref: Type, type_table: TypeTable | None = None
@@ -731,13 +725,10 @@ class JsonCodec:
 
         Single source of truth for ``HostCapabilities.codec_kinds["json"]``,
         avoiding a duplicated literal at the host-environment assembly site.
-        Matches ``_JSON_CODEC_KINDS`` (kept in this module as a local constant
-        to drive ``supports_type``, and read from here by the runtime).
+        Matches ``_JSON_CODEC_KINDS`` (kept in this module as a local constant,
+        read from here by the runtime).
         """
         return _JSON_CODEC_KINDS
-
-    def supports_type(self, t: Type) -> bool:
-        return t.kind in _JSON_CODEC_KINDS
 
     def make_contract(
         self, type_ref: Type, type_table: TypeTable | None = None

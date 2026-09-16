@@ -24,16 +24,17 @@ from pathlib import Path
 import pytest
 
 from agm.agl.lexer import tokenize
-from agm.agl.modules.loader import build_repl_graph, load_graph
+from agm.agl.modules.loader import build_repl_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program, parse_program_seeded
 from agm.agl.scope import AglScopeError, ModuleResolution
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import BinderKind
 from agm.agl.syntax.nodes import FuncDef
 from agm.agl.syntax.visitor import walk
 from tests._agl_helpers import agl_roots
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
-from tests.agl.module_graph import resolve_program_ast
+from tests.agl.module_graph import load_graph, resolve_program_ast
 
 _SCOPE_REJECTIONS_DIR = Path(__file__).resolve().parent / "agl" / "rejections" / "scope"
 
@@ -56,6 +57,15 @@ def parse_and_resolve(source: str, *, origin_path: Path | None = None) -> object
     that loader check first and mask the one this helper means to test.
     """
     return resolve_program_ast(parse_program(source.strip()), origin_path=origin_path)
+
+
+def _function_binding_names(resolved: ModuleResolution) -> set[str]:
+    """Return the names of root-level function-kind bindings."""
+    return {
+        name
+        for name, ref in resolved.root_scope.bindings.items()
+        if ref.kind is BinderKind.function_binding
+    }
 
 
 def reject_scope(source: str, *, origin_path: Path | None = None) -> AglScopeError:
@@ -156,12 +166,12 @@ class TestScope:
 
     def test_extern_collected_and_callable(self) -> None:
         resolved = parse_and_resolve("extern def f(x: int) -> int", origin_path=self._PATH)
-        assert "f" in resolved.declared_functions
+        assert "f" in _function_binding_names(resolved)
 
     def test_extern_forward_reference_mutual_recursion(self) -> None:
         source = "def f(x: int) -> int = helper(x)\nextern def helper(x: int) -> int\n"
         resolved = parse_and_resolve(source, origin_path=self._PATH)
-        assert set(resolved.declared_functions) == {"f", "helper"}
+        assert _function_binding_names(resolved) == {"f", "helper"}
 
     def test_extern_cannot_reuse_reserved_builtin_name(self) -> None:
         err = reject_scope("extern def print(x: int) -> int", origin_path=self._PATH)
@@ -372,7 +382,7 @@ class TestPlacement:
         resolved = parse_and_resolve(
             "extern def f(x: int) -> int", origin_path=Path("/virtual/mod.agl")
         )
-        assert "f" in resolved.declared_functions
+        assert "f" in _function_binding_names(resolved)
 
     def test_graph_resolution_of_file_backed_entry_accepts_extern(self, tmp_path: Path) -> None:
         entry_path = tmp_path / "entry.agl"
@@ -384,7 +394,7 @@ class TestPlacement:
             default_stdlib=False,
         )
         resolved = resolve_program(graph)
-        assert "f" in resolved.modules[graph.entry_id].resolved.declared_functions
+        assert "f" in _function_binding_names(resolved.modules[graph.entry_id].resolved)
 
     def test_graph_resolution_of_inline_entry_rejects_extern(self) -> None:
         graph = load_graph(

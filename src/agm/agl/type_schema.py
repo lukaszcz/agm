@@ -1,7 +1,8 @@
 """Compile-time JSON Schema, decode-schema, and encode-plan derivation.
 
-:func:`derive_schema` produces a JSON Schema ``dict[str, object]`` from a
-semantic :class:`~agm.agl.semantics.types.Type`. Every entry point in this
+:func:`derive_schema_and_decode` produces a JSON Schema ``dict[str, object]``
+and a typeless :class:`~agm.agl.ir.contracts.DecodePlan` from a semantic
+:class:`~agm.agl.semantics.types.Type`. Every entry point in this
 module takes an explicit :class:`~agm.agl.semantics.type_table.TypeTable` and
 resolves record fields and enum member sets through it
 (``table.record_fields``/``table.enum_members``) rather than through the
@@ -14,13 +15,9 @@ only its declaration identity.  The derived schema is used:
 2. For schema validation via the ``jsonschema`` library inside
    :class:`~agm.agl.runtime.codec.JsonCodec`.
 
-:func:`build_decode_schema` compiles a ``Type`` into a typeless
-:class:`~agm.agl.ir.contracts.DecodePlan` (a
-:class:`~agm.agl.ir.contracts.DecodeSchema` root plus its ``$defs`` table)
-used by the IR evaluator to reconstruct typed ``Value`` objects from
-validated JSON without holding checker ``Type`` references.
-:func:`derive_schema_and_decode` derives both from one shared recursion plan
-for call sites that need both back-to-back.
+The decode plan (a :class:`~agm.agl.ir.contracts.DecodeSchema` root plus its
+``$defs`` table) is used by the IR evaluator to reconstruct typed ``Value``
+objects from validated JSON without holding checker ``Type`` references.
 
 Derivation rules:
 - ``text``    → ``{"type": "string"}``
@@ -38,13 +35,12 @@ Derivation rules:
                 effective JSON tag) and any payload fields, JSON-keyed the
                 same way.
 
-Recursive types: ``derive_schema`` and ``build_decode_schema`` both expand the
+Recursive types: both derivations expand the
 concrete *instantiation graph* reachable from *typ* (nodes are concrete
 ``RecordType``/``EnumType`` handles, edges are the nominal handles occurring
 in a node's own substituted fields/variants, memoized on handle equality) and
 find its strongly-connected components — computed ONCE per call as a shared
-``_SchemaPlan`` (see ``_plan_schema``; ``derive_schema_and_decode`` computes it
-only once even when both derivations are needed). An instantiation is
+``_SchemaPlan`` (see ``_plan_schema``) that drives both derivations. An instantiation is
 *recursive for this root* iff it sits in a non-trivial component or has a
 self-loop; every such instantiation gets one entry under a top-level
 ``"$defs"`` object (JSON Schema) / ``DecodePlan.defs`` table (decode schema),
@@ -164,41 +160,10 @@ def _emit_field_encodes(
     )
 
 
-def derive_schema(typ: Type, type_table: TypeTable) -> dict[str, object]:
-    """Derive a JSON Schema from a semantic AgL *typ*.
-
-    The returned dictionary is a valid JSON Schema object.  ``Decimal`` and
-    ``int`` values round-trip correctly through JSON Schema validation (both
-    are acceptable for ``"type": "number"``; ``"type": "integer"`` accepts
-    only whole numbers).  *type_table* resolves record/enum field and variant
-    shapes for a ``RecordType``/``EnumType`` *typ* (or one nested inside it).
-
-    Recursive instantiations reachable from *typ* (see the module docstring)
-    are emitted once under a top-level ``"$defs"`` object and referenced via
-    ``{"$ref": "#/$defs/<key>"}`` everywhere they occur, including *typ*
-    itself; a non-recursive *typ* gets no ``"$defs"`` key at all, so its
-    output is identical to a plain inlining derivation.
-
-    :raises TypeError: if *typ* is an ``ExceptionType`` (exceptions are not
-        wire-serialised and have no JSON Schema), or if *typ* has no finite
-        JSON schema at all (callers are expected to reject such types before
-        calling this function — see ``TypeTable.has_finite_schema``).
-    """
-    if isinstance(typ, ExceptionType):
-        raise TypeError(
-            f"ExceptionType {typ.name!r} has no JSON Schema; exceptions are not "
-            "wire-serialised by the JSON codec."
-        )
-    _require_finite_schema(typ, type_table, "derive a JSON Schema")
-    plan = _plan_schema(typ, type_table)
-    return _emit_schema_with_plan(typ, type_table, plan)
-
-
 def _require_finite_schema(typ: Type, type_table: TypeTable, action: str) -> None:
     """Raise ``TypeError`` if *typ*'s reachable instantiation closure is infinite.
 
-    Shared guard for :func:`derive_schema`, :func:`build_decode_schema`, and
-    :func:`derive_schema_and_decode`: a type whose recursive instantiations
+    Guard for :func:`derive_schema_and_decode`: a type whose recursive instantiations
     never close has no finite schema/decode walk to derive at all. Callers
     are expected to reject such types at the use site (JSON-decoded agent
     output target, fallible cast target, parameter type, extern signature — see
@@ -210,7 +175,7 @@ def _require_finite_schema(typ: Type, type_table: TypeTable, action: str) -> Non
             f"cannot {action} for {typ!r}: its recursive instantiations "
             "never close, so it has no finite schema. Callers must reject such types "
             "at the use site (see TypeTable.has_finite_schema) before calling "
-            "derive_schema/build_decode_schema."
+            "derive_schema_and_decode."
         )
 
 
@@ -230,14 +195,18 @@ def _emit_schema_with_plan(
 def derive_schema_and_decode(
     typ: Type, type_table: TypeTable
 ) -> tuple[dict[str, object], DecodePlan]:
-    """Derive both the JSON Schema and the decode plan for *typ* from ONE shared recursion plan.
+    """Derive the JSON Schema and the decode plan for *typ* from one shared recursion plan.
 
-    Equivalent to calling :func:`derive_schema` and :func:`build_decode_schema`
-    separately — same results — but computes the instantiation-graph plan
-    (:func:`_plan_schema`) only once. Use this at call sites that need both
-    derivations back-to-back (the lowerer's ask/exec contract building,
-    :func:`build_param_decoder`, ``JsonCodec.make_contract``) rather than
-    calling the two public functions in sequence.
+    The schema is a valid JSON Schema object; ``Decimal`` and ``int`` values
+    round-trip through its validation. *type_table* resolves record/enum field
+    and variant shapes. Recursive instantiations reachable from *typ* (see the
+    module docstring) are emitted once under a top-level ``"$defs"`` object and
+    referenced via ``{"$ref": "#/$defs/<key>"}``, with the decode plan's
+    ``defs`` keyed identically; a non-recursive *typ* gets neither.
+
+    :raises TypeError: if *typ* is an ``ExceptionType`` (exceptions are not
+        wire-serialised), or if *typ* has no finite JSON schema (see
+        ``TypeTable.has_finite_schema``).
     """
     if isinstance(typ, ExceptionType):
         raise TypeError(
@@ -568,29 +537,6 @@ def _assign_defs_keys(
     return assigned
 
 
-def build_decode_schema(typ: Type, type_table: TypeTable) -> DecodePlan:
-    """Compile a checker ``Type`` into a typeless ``DecodePlan``.
-
-    Mirrors :func:`derive_schema`'s recursion handling exactly: the SAME
-    recursion plan (:func:`_plan_schema`) drives both, so a recursive
-    instantiation's ``DecodePlan.defs`` key matches its JSON Schema ``$defs``
-    key one-to-one, and every occurrence of it — including the root itself,
-    if recursive — becomes a ``RefDecode(key)`` instead of being inlined.  A
-    non-recursive *typ* gets an empty ``defs`` and a ``root`` identical to
-    what a plain (non-plan-aware) recursive walk would have produced, so
-    non-recursive decode output is unchanged.
-
-    *type_table* resolves record/enum field and variant shapes.
-
-    :raises TypeError: if *typ* has no finite JSON schema at all (see
-        ``TypeTable.has_finite_schema``); callers are expected to reject such
-        types at the use site before calling this function.
-    """
-    _require_finite_schema(typ, type_table, "build a decode schema")
-    plan = _plan_schema(typ, type_table)
-    return _build_decode_plan(typ, type_table, plan)
-
-
 def _build_decode_plan(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> DecodePlan:
     """Build *typ*'s ``DecodePlan`` (root + ``$defs`` entries) from an already-built plan."""
     # One memo per plan, as in :func:`build_encode_plan`: a type reachable by
@@ -681,7 +627,7 @@ def _emit_decode_body(
     # Non-data targets (unit/function/exception/bottom/typevar) are not
     # decodable from JSON and are rejected by the checker before lowering.
     raise AssertionError(  # pragma: no cover
-        f"build_decode_schema: undecodable type {typ!r}"
+        f"undecodable type {typ!r}"
     )
 
 
@@ -883,12 +829,13 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
     value is read through the shared host-text dispatch
     (``runtime.value_decode.host_text_to_json``), which derives ``text``-verbatim
     and standard-``Agent`` handling from ``decode`` itself; every other type
-    round-trips through the canonical JSON boundary (``derive_schema`` for
-    validation, ``build_decode_schema`` for the typeless decode walk).
+    round-trips through the canonical JSON boundary
+    (:func:`derive_schema_and_decode`: schema validation, then the typeless
+    decode walk).
     *type_table* resolves record/enum shapes.
 
     :raises TypeError: if *typ* has no wire schema (unit/exception/…);
-        :func:`derive_schema` rejects such types.
+        :func:`derive_schema_and_decode` rejects such types.
     """
     schema, decode_plan = derive_schema_and_decode(typ, type_table)
     return ParamDecoder(

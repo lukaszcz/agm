@@ -242,7 +242,7 @@ class TestConfigCopyRun:
         (project / "config" / ".env").write_text("CONFIG_KEY=value\n", encoding="utf-8")
         monkeypatch.chdir(project)
 
-        config_copy_cmd.run(ConfigCopyArgs(config_command=None, dirname=str(target)))
+        config_copy_cmd.run(ConfigCopyArgs(dirname=str(target)))
 
         assert (target / ".env").read_text(encoding="utf-8") == "CONFIG_KEY=value\n"
 

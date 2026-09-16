@@ -146,10 +146,10 @@ class ProgramDeclInfo:
     """Static summary of one ``program def`` declaration.
 
     ``module`` and ``scope_path`` retain the declaration identity in structured
-    form. ``declaration_path`` is the external spelling within that module;
-    ``qualified_path`` prefixes it with a non-entry module route. ``is_entry``
-    records whether the declaration belongs to the graph's host-selected entry,
-    independently of whether that entry has an ordinary package module id.
+    form. ``declaration_path`` is the external spelling within that module.
+    ``is_entry`` records whether the declaration belongs to the graph's
+    host-selected entry, independently of whether that entry has an ordinary
+    package module id.
     ``span`` is the declaration's own span, the anchor for a diagnostic that
     names no single parameter (an unknown argument name, or an excess
     positional argument). ``parameters`` is the program's own value-parameter
@@ -172,10 +172,3 @@ class ProgramDeclInfo:
     def declaration_path(self) -> str:
         """Return the program's scope-qualified declaration spelling."""
         return "::".join((*self.scope_path, self.name))
-
-    @property
-    def qualified_path(self) -> str:
-        """Return the program spelling qualified by its module when available."""
-        if self.is_entry:
-            return self.declaration_path
-        return f"{self.module.path_str()}::{self.declaration_path}"

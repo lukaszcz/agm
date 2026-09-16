@@ -8,8 +8,8 @@ from click.testing import CliRunner
 from typer.main import get_command
 
 from agm.cli import app
-from agm.packages.install import install_directory
 from agm.packages.manifest import ManifestError, load_manifest_text
+from tests._package_helpers import install_directory
 
 MANIFEST = """[package]
 name = "tools"

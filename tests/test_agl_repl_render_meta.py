@@ -5,7 +5,7 @@ These are pure-data modules (no terminal), so they are tested directly:
 - :func:`agm.agl.repl.render.render_entry_result` for each entry kind, warnings,
   pre-execution diagnostics, and runtime-error rendering;
 - :func:`agm.agl.repl.meta.dispatch_meta` for ``:help`` / ``:quit`` / ``:exit`` /
-  unknown commands, plus the ``register_meta_command`` extension hook.
+  unknown commands.
 """
 
 from __future__ import annotations
@@ -425,30 +425,6 @@ class TestDispatchMeta:
         assert ":quit" in names
         assert ":exit" in names
 
-    def test_register_meta_command_extends_registry(self) -> None:
-        # Extension hook: a newly registered command becomes dispatchable and
-        # is offered by ``meta_command_names`` (the completer's source).
-        seen: list[str] = []
-
-        def handler(arg: str, ctx: meta_mod.MetaContext) -> meta_mod.MetaOutcome:
-            seen.append(arg)
-            return meta_mod.MetaOutcome(text="did thing")
-
-        command = meta_mod.MetaCommand(
-            names=("xtest",),
-            usage=":xtest",
-            summary="A test command.",
-            handler=handler,
-        )
-        meta_mod.register_meta_command(command)
-        try:
-            outcome = meta_mod.dispatch_meta(":xtest arg1", _ctx())
-            assert outcome.text == "did thing"
-            assert seen == ["arg1"]
-            assert ":xtest" in meta_mod.meta_command_names()
-        finally:
-            meta_mod._COMMANDS.remove(command)
-
     def test_dispatch_tab_separated_command(self) -> None:
         # Issue #3: tab (or other whitespace) between command word and arg must
         # dispatch correctly, not produce "Unknown command".
@@ -472,34 +448,6 @@ class TestDispatchMeta:
             assert ":help" in idx or "help" in idx
         finally:
             meta_mod._command_index_cache = original
-
-    def test_register_meta_command_cache_invalidation(self) -> None:
-        # Issue #6: after registering a new command, dispatch and meta_command_names
-        # must reflect the new entry (cache must be invalidated).
-        seen: list[str] = []
-
-        def handler2(arg: str, ctx: meta_mod.MetaContext) -> meta_mod.MetaOutcome:
-            seen.append(arg)
-            return meta_mod.MetaOutcome(text="cache-test")
-
-        command2 = meta_mod.MetaCommand(
-            names=("xcachetest",),
-            usage=":xcachetest",
-            summary="Cache invalidation test.",
-            handler=handler2,
-        )
-        meta_mod.register_meta_command(command2)
-        try:
-            # Must be dispatchable immediately (cache invalidated on register).
-            outcome = meta_mod.dispatch_meta(":xcachetest hello", _ctx())
-            assert outcome.text == "cache-test"
-            assert seen == ["hello"]
-            # Must appear in names immediately.
-            assert ":xcachetest" in meta_mod.meta_command_names()
-        finally:
-            meta_mod._COMMANDS.remove(command2)
-            # Force cache rebuild by resetting (implementation detail: the cache
-            # must reflect removal too — call meta_command_names after removal).
 
     def test_command_index_lazy_build_on_cold_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Verify the lazy-build branch of _command_index() is reachable: when both

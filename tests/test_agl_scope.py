@@ -235,6 +235,16 @@ def _ref(r: ModuleResolution, name: str, occurrence: int = -1) -> BindingRef:
     return r.resolution[vr.node_id]
 
 
+def _root_type_names(r: ModuleResolution) -> frozenset[str]:
+    """Return the bare names of *r*'s root-level type declarations.
+
+    Mirrors what a REPL host threads as ``ambient_type_names`` into a later
+    entry's resolution: root paths in ``declared_type_paths`` are exactly the
+    single-segment ones.
+    """
+    return frozenset(path[0] for path in r.declared_type_paths if len(path) == 1)
+
+
 # ---------------------------------------------------------------------------
 # AST construction helpers (for hand-built node tests)
 # ---------------------------------------------------------------------------
@@ -1090,7 +1100,7 @@ class TestAcceptance:
 
     def test_type_alias_at_root(self) -> None:
         r = parse_and_resolve("type MyText = text\n()")
-        assert "MyText" in r.declared_type_names
+        assert ("MyText",) in r.declared_type_paths
 
     def test_record_def_at_root(self) -> None:
         r = parse_and_resolve("record P\n  n: int\n()")
@@ -1970,7 +1980,6 @@ class TestFuncDefMutualRecursion:
     def test_def_at_root_accepted(self) -> None:
         r = parse_and_resolve("def f(n: int) -> int = n\nf(1)")
         assert _ref(r, "f").kind == BinderKind.function_binding
-        assert "f" in r.declared_functions
 
     def test_def_self_recursion(self) -> None:
         r = parse_and_resolve(
@@ -1986,8 +1995,7 @@ class TestFuncDefMutualRecursion:
             "even(4)"
         )
         assert _ref(r, "even").kind == BinderKind.function_binding
-        assert "even" in r.declared_functions
-        assert "odd" in r.declared_functions
+        assert _ref(r, "odd").kind == BinderKind.function_binding
 
     def test_def_forward_reference(self) -> None:
         """A def can call another def declared AFTER it (pre-pass collects all)."""
@@ -2527,7 +2535,7 @@ class TestParentScopeSeam:
                     entry_source,
                     parent_scope=prior.root_scope,
                     ambient_constructor_candidates=prior.constructor_candidates,
-                    ambient_type_names=prior.declared_type_names,
+                    ambient_type_names=_root_type_names(prior),
                 )
             else:
                 parse_and_resolve(f"{declaration}\n{entry_source}")
@@ -2584,7 +2592,7 @@ class TestParentScopeSeam:
         ambient_candidates: dict[str, tuple[ConstructorRef, ...]] = {
             name: crefs for name, crefs in prior.constructor_candidates.items()
         }
-        ambient_type_names = prior.declared_type_names
+        ambient_type_names = _root_type_names(prior)
         session_scope = prior.root_scope
         entry = resolve_entry(
             "Review::Pass()",
@@ -3135,19 +3143,21 @@ class TestDirectASTConstruction:
 
 
 # ---------------------------------------------------------------------------
-# ModuleResolution.declared_functions
+# Root-level function declarations become function-kind root bindings
 # ---------------------------------------------------------------------------
 
 
 class TestDeclaredFunctions:
     def test_declared_functions_populated(self) -> None:
         r = parse_and_resolve("def f(x: int) -> int = x\ndef g(x: int) -> int = x\nf(1)")
-        assert "f" in r.declared_functions
-        assert "g" in r.declared_functions
+        assert r.root_scope.bindings["f"].kind is BinderKind.function_binding
+        assert r.root_scope.bindings["g"].kind is BinderKind.function_binding
 
     def test_declared_functions_empty_when_no_defs(self) -> None:
         r = parse_and_resolve_file("let x = 1")
-        assert r.declared_functions == {}
+        assert not any(
+            ref.kind is BinderKind.function_binding for ref in r.root_scope.bindings.values()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3700,19 +3710,19 @@ class TestConstructorBindings:
         assert lookup_pair is not None
         assert lookup_pair.kind == BinderKind.constructor_binding
 
-    # --- declared_type_names populated ---
+    # --- root-level type declarations populate declared_type_paths ---
 
     def test_declared_type_names_includes_record(self) -> None:
         r = parse_and_resolve("record Foo\n  n: int\n()")
-        assert "Foo" in r.declared_type_names
+        assert "Foo" in _root_type_names(r)
 
     def test_declared_type_names_includes_enum(self) -> None:
         r = parse_and_resolve("enum Color\n  | red\n  | blue\n()")
-        assert "Color" in r.declared_type_names
+        assert "Color" in _root_type_names(r)
 
     def test_declared_type_names_includes_alias(self) -> None:
         r = parse_and_resolve("type MyInt = int\n()")
-        assert "MyInt" in r.declared_type_names
+        assert "MyInt" in _root_type_names(r)
 
     def test_alias_with_unresolvable_unqualified_target_is_presumed_constructible(
         self,
@@ -3741,10 +3751,10 @@ class TestConstructorBindings:
         assert candidates[0].owner_path == ()
 
     def test_declared_type_names_excludes_variants(self) -> None:
-        """Enum variant names are NOT in declared_type_names (they are values)."""
+        """Enum variant names are NOT root-level type names (they are values)."""
         r = parse_and_resolve("enum Color\n  | red\n  | blue\n()")
-        assert "red" not in r.declared_type_names
-        assert "blue" not in r.declared_type_names
+        assert "red" not in _root_type_names(r)
+        assert "blue" not in _root_type_names(r)
 
     # --- Direct AST construction tests ---
 

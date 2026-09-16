@@ -11,7 +11,6 @@ import agm.core.dry_run as dry_run
 import agm.project.layout as layout_module
 from agm.project.layout import (
     _copy_existing_config_files,
-    _merge_branch_env_file,
     _project_dir_from_env,
     _project_dir_from_workspace,
     _resolved_cwd,
@@ -28,7 +27,6 @@ from agm.project.layout import (
     is_main_workspace_branch,
     is_project_dir,
     is_split_project,
-    main_repo_dir,
     project_config_dir,
     project_deps_dir,
     project_name,
@@ -390,31 +388,6 @@ def test_project_repo_dir_returns_input_when_no_layout_markers(tmp_path: Path) -
 
 
 # ---------------------------------------------------------------------------
-# main_repo_dir
-# ---------------------------------------------------------------------------
-
-
-def test_main_repo_dir_is_alias_for_project_repo_dir_workspace(tmp_path: Path) -> None:
-    project = tmp_path / "proj"
-    project.mkdir()
-    (project / "repo").mkdir()
-
-    assert main_repo_dir(project) == project_repo_dir(project)
-
-
-def test_main_repo_dir_is_alias_for_project_repo_dir_embedded(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
-    project = tmp_path / "proj"
-    project.mkdir()
-    agm_dir = project / ".agm"
-    agm_dir.mkdir()
-    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
-
-    assert main_repo_dir(agm_dir) == project_repo_dir(agm_dir)
-
-
-# ---------------------------------------------------------------------------
 # default_worktrees_dir
 # ---------------------------------------------------------------------------
 
@@ -747,71 +720,6 @@ def test_copy_existing_config_files_does_nothing_when_source_is_empty(tmp_path: 
 
 
 # ---------------------------------------------------------------------------
-# _merge_branch_env_file
-# ---------------------------------------------------------------------------
-
-
-def test_merge_branch_env_file_merges_keys_into_existing_target(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    target = tmp_path / "target"
-    source.mkdir()
-    target.mkdir()
-
-    (source / ".env").write_text("NEW_KEY=value\n", encoding="utf-8")
-    (target / ".env").write_text("EXISTING=old\n", encoding="utf-8")
-
-    _merge_branch_env_file(source, target)
-
-    content = (target / ".env").read_text(encoding="utf-8")
-    assert "EXISTING=old" in content
-    assert "NEW_KEY=value" in content
-
-
-def test_merge_branch_env_file_creates_target_env_when_missing(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    target = tmp_path / "target"
-    source.mkdir()
-    target.mkdir()
-
-    (source / ".env").write_text("MY_KEY=abc\n", encoding="utf-8")
-
-    _merge_branch_env_file(source, target)
-
-    content = (target / ".env").read_text(encoding="utf-8")
-    assert "MY_KEY=abc" in content
-
-
-def test_merge_branch_env_file_overwrites_existing_key(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    target = tmp_path / "target"
-    source.mkdir()
-    target.mkdir()
-
-    (source / ".env").write_text("KEY=new_value\n", encoding="utf-8")
-    (target / ".env").write_text("KEY=old_value\n", encoding="utf-8")
-
-    _merge_branch_env_file(source, target)
-
-    content = (target / ".env").read_text(encoding="utf-8")
-    assert "KEY=new_value" in content
-    assert "KEY=old_value" not in content
-
-
-def test_merge_branch_env_file_does_nothing_when_source_env_missing(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    target = tmp_path / "target"
-    source.mkdir()
-    target.mkdir()
-
-    (target / ".env").write_text("PRESERVED=1\n", encoding="utf-8")
-
-    _merge_branch_env_file(source, target)
-
-    content = (target / ".env").read_text(encoding="utf-8")
-    assert "PRESERVED=1" in content
-
-
-# ---------------------------------------------------------------------------
 # copy_config
 # ---------------------------------------------------------------------------
 
@@ -1076,7 +984,6 @@ def test_copy_config_detects_current_workspace_branch_when_branch_not_given(
         lambda _project_dir, *, cwd=None, env=None: layout_module.CurrentWorkspace(
             workspace_dir=workspace_dir,
             branch="feat",
-            is_main=False,
         ),
     )
 
@@ -1351,7 +1258,6 @@ class TestCurrentWorkspace:
         assert result is not None
         assert result.workspace_dir == project.resolve(strict=False)
         assert result.branch is None
-        assert result.is_main is True
 
 
 class TestCurrentProjectDirIgnoresGitCommonDir:
@@ -1500,7 +1406,6 @@ class TestCurrentWorkspaceEdgeCases:
         assert result is not None
         assert result.workspace_dir == repo.resolve(strict=False)
         assert result.branch is None
-        assert result.is_main is True
 
     def test_workspace_dir_current_returns_main_when_same_as_repo_dir(
         self, tmp_path: Path, env: dict[str, str]
@@ -1514,7 +1419,6 @@ class TestCurrentWorkspaceEdgeCases:
 
         result = current_workspace(project, cwd=repo)
         assert result is not None
-        assert result.is_main is True
 
 
 class TestCurrentWorkspaceWithRepoDirEnv:
@@ -1543,7 +1447,6 @@ class TestCurrentWorkspaceWithRepoDirEnv:
         assert result is not None
         assert result.workspace_dir == worktree_dir.resolve(strict=False)
         assert result.branch == "feat"
-        assert result.is_main is False
 
     def test_repo_dir_env_var_points_to_repo_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         """When REPO_DIR points to the main repo_dir, checkout is main."""
@@ -1554,7 +1457,6 @@ class TestCurrentWorkspaceWithRepoDirEnv:
 
         result = current_workspace(project, env={"REPO_DIR": str(repo)})
         assert result is not None
-        assert result.is_main is True
         assert result.branch is None
 
 
@@ -1594,7 +1496,6 @@ class TestCurrentWorkspaceCheckoutRootFailure:
         assert result is not None
         assert result.workspace_dir == project.resolve(strict=False)
         assert result.branch == "some-branch"
-        assert result.is_main is False
 
 
 class TestCurrentWorkspaceReturnsNoneWhenCwdNotInProject:

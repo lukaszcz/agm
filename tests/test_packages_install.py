@@ -30,15 +30,12 @@ from agm.packages.activation import (
     CommandRegistration,
     PackageActivationError,
     load_activation_index,
-    rebuild_activation_index,
     write_activation_index,
 )
 from agm.packages.archive import extract_archive, write_archive
 from agm.packages.install import (
     PackageInstallError,
-    install_archive,
     install_archive_with_plan,
-    install_directory,
     install_directory_with_plan,
     installed_packages,
     refresh_managed_stdlib,
@@ -56,7 +53,13 @@ from agm.packages.record import (
     write_record,
 )
 from agm.version import AGM_VERSION
-from tests._package_helpers import archive_contents, older_incompatible_std_requirement, write_zip
+from tests._package_helpers import (
+    archive_contents,
+    install_archive,
+    install_directory,
+    older_incompatible_std_requirement,
+    write_zip,
+)
 from tests._parse_counts import parse_counts
 
 
@@ -1280,7 +1283,7 @@ def test_shadowed_command_is_restored_when_the_winning_package_is_uninstalled(
     }
 
 
-def test_install_allocates_after_inactive_provenance_so_rebuild_stays_unambiguous(
+def test_install_allocates_after_inactive_provenance(
     tmp_path: Path, prebuilt_store: Callable[..., Path]
 ) -> None:
     home = prebuilt_store(_Preinstalled("alpha", "1.0.0"), _Preinstalled("alpha", "2.0.0"))
@@ -1290,54 +1293,6 @@ def test_install_allocates_after_inactive_provenance_so_rebuild_stays_unambiguou
 
     index = load_activation_index(home=home, env={})
     assert index.packages["bravo"].registration_order == 2
-    rebuilt = rebuild_activation_index(home=home, env={})
-    assert rebuilt.packages["alpha"].registration_order == 1
-    assert rebuilt.packages["bravo"].registration_order == 2
-
-
-def test_rebuild_after_index_loss_preserves_a_shadow_winner_installed_in_reverse_name_order(
-    tmp_path: Path,
-) -> None:
-    bravo = _package(
-        tmp_path / "bravo",
-        "bravo",
-        "1.0.0",
-        '\n[commands]\nlaunch = { program = "bravo/main::main" }\n',
-    )
-    alpha = _package(
-        tmp_path / "alpha",
-        "alpha",
-        "1.0.0",
-        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
-    )
-    home = tmp_path / "home"
-    install_directory(bravo, home=home, env={})
-    install_directory(alpha, home=home, env={}, shadow=True)
-
-    index_path = home / ".agm" / "packages" / "index.toml"
-    index_path.unlink()
-
-    rebuilt = rebuild_activation_index(home=home, env={})
-
-    assert rebuilt.commands == {"launch": CommandRegistration("alpha", "alpha/main::main")}
-
-
-def test_rebuild_after_index_loss_refuses_corrupt_command_provenance(tmp_path: Path) -> None:
-    source = _package(
-        tmp_path / "source",
-        "alpha",
-        "1.0.0",
-        '\n[commands]\nlaunch = { program = "alpha/main::main" }\n',
-    )
-    home = tmp_path / "home"
-    install_directory(source, home=home, env={})
-    (home / ".agm" / "packages" / "index.toml").unlink()
-    (home / ".agm" / "packages" / "alpha" / ".provenance" / "1.0.0.toml").write_text(
-        "not valid = [", encoding="utf-8"
-    )
-
-    with pytest.raises(PackageActivationError, match="provenance"):
-        rebuild_activation_index(home=home, env={})
 
 
 def test_package_update_retains_a_displaced_owner_conflict_without_shadow(tmp_path: Path) -> None:
@@ -2296,40 +2251,6 @@ def test_install_archive_rejects_a_different_content_hash_for_an_existing_identi
     assert (
         home / ".agm" / "packages" / "alpha" / "1.0.0" / MODULE_TREE_DIRNAME / "main.agl"
     ).read_text(encoding="utf-8") == "program def main() -> unit = ()\n"
-
-
-def test_install_archive_does_not_reopen_an_archive_after_verification(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = _package(tmp_path / "source", "alpha", "1.0.0")
-    replacement_source = _package(tmp_path / "replacement-source", "alpha", "1.0.0")
-    (replacement_source / MODULE_TREE_DIRNAME / "main.agl").write_text(
-        "program def main() -> unit = ()\n// replacement\n", encoding="utf-8"
-    )
-    archive = tmp_path / "alpha.agmpkg"
-    replacement = tmp_path / "replacement.agmpkg"
-    write_archive(source, archive)
-    write_archive(replacement_source, replacement)
-
-    def replace_after_verification(path: Path) -> object:
-        path.write_bytes(replacement.read_bytes())
-        raise AssertionError("archive verification must be bound to extraction")
-
-    monkeypatch.setattr(package_archive, "verify_archive", replace_after_verification)
-
-    install_archive(archive, home=tmp_path / "home", env={})
-
-    installed_module = (
-        tmp_path
-        / "home"
-        / ".agm"
-        / "packages"
-        / "alpha"
-        / "1.0.0"
-        / MODULE_TREE_DIRNAME
-        / "main.agl"
-    )
-    assert installed_module.read_text(encoding="utf-8") == "program def main() -> unit = ()\n"
 
 
 def test_dry_run_archive_install_reports_a_verification_failure_without_writing(

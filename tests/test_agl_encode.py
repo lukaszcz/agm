@@ -903,7 +903,7 @@ def test_encode_plan_renames_field_in_recursive_hoisted_type() -> None:
 
 def test_encode_definition_keys_match_the_schema_and_decode_defs_keys() -> None:
     """One recursion plan keys the JSON Schema, the decode walk, and the encode walk alike."""
-    from agm.agl.type_schema import build_decode_schema, derive_schema
+    from tests._agl_helpers import build_decode_schema, derive_schema
 
     tree_id = next_decl_id()
     tree_ref = EnumType(name="Tree", decl_id=tree_id)

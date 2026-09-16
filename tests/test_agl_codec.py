@@ -2,8 +2,7 @@
 
 Covers (per the AgL DSL contract):
 1. Schema derivation (schema.py): every Type kind → JSON Schema dict.
-2. JsonCodec.supports_type: json/record/enum/array/dict/int/decimal/bool;
-   NOT text (text stays TextCodec).
+2. JsonCodec identity (name).
 3. Lenient default parsing: bare JSON, fenced ```json``` blocks, prose-wrapped,
    trailing-comma / single-quote trivial repairs, extracted and re-parsed with
    parse_float=Decimal (decimal exactness).
@@ -92,11 +91,12 @@ from agm.agl.syntax.nodes import (
     TemplateSegment,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
 from agm.agl.zones import ParamZone
 from tests._agl_helpers import (
     agl_roots,
+    build_decode_schema,
+    derive_schema,
     enum_type,
     enum_typedef,
     next_decl_id,
@@ -594,6 +594,7 @@ class TestDeriveSchema:
             name="Renamed",
             module_id=ENTRY_ID,
             fields=(("value", IntType()),),
+            field_kinds=(ParamZone.STANDARD,),
             field_external_names=(("value", ExternalName(json_name="val")),),
             decl_node_id=decl_id,
         )
@@ -862,6 +863,7 @@ class TestRecursiveSchemaDerivation:
             module_id=ENTRY_ID,
             type_params=("T",),
             fields=(("children", ArrayType(recursive)),),
+            field_kinds=(ParamZone.STANDARD,),
             decl_node_id=r_id,
         )
         schema = derive_schema(root, type_table_for(r_def))
@@ -1556,38 +1558,11 @@ class TestRecursiveSchemaValidatorRoundtrip:
 
 
 # ---------------------------------------------------------------------------
-# 2. JsonCodec.supports_type
+# 2. JsonCodec identity
 # ---------------------------------------------------------------------------
 
 
-class TestJsonCodecSupportsType:
-    def test_supports_json(self) -> None:
-        assert JsonCodec().supports_type(JsonType()) is True
-
-    def test_supports_int(self) -> None:
-        assert JsonCodec().supports_type(IntType()) is True
-
-    def test_supports_decimal(self) -> None:
-        assert JsonCodec().supports_type(DecimalType()) is True
-
-    def test_supports_bool(self) -> None:
-        assert JsonCodec().supports_type(BoolType()) is True
-
-    def test_supports_array(self) -> None:
-        assert JsonCodec().supports_type(ArrayType(elem=TextType())) is True
-
-    def test_supports_dict(self) -> None:
-        assert JsonCodec().supports_type(DictType(value=TextType())) is True
-
-    def test_supports_record(self) -> None:
-        assert JsonCodec().supports_type(_make_issue_type()) is True
-
-    def test_supports_enum(self) -> None:
-        assert JsonCodec().supports_type(_make_review_type()) is True
-
-    def test_does_not_support_text(self) -> None:
-        assert JsonCodec().supports_type(TextType()) is False
-
+class TestJsonCodecName:
     def test_name_is_json(self) -> None:
         assert JsonCodec().name == "json"
 
@@ -3469,38 +3444,6 @@ class TestCodecSupportedKinds:
             {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
         )
 
-    def test_supported_kinds_consistent_with_supports_type(self) -> None:
-        """Every kind in supported_kinds matches a Type that supports_type returns True for."""
-        from agm.agl.semantics.types import (
-            ArrayType,
-            BoolType,
-            DecimalType,
-            DictType,
-            EnumType,
-            IntType,
-            JsonType,
-            RecordType,
-            TextType,
-        )
-
-        kind_to_type: dict[str, Type] = {
-            "text": TextType(),
-            "int": IntType(),
-            "decimal": DecimalType(),
-            "bool": BoolType(),
-            "json": JsonType(),
-            "array": ArrayType(elem=TextType()),
-            "dict": DictType(value=TextType()),
-            "record": RecordType(name="R"),
-            "enum": EnumType(name="E"),
-        }
-        for codec in (TextCodec(), JsonCodec()):
-            for kind in codec.supported_kinds:
-                typ = kind_to_type[kind]
-                assert codec.supports_type(typ), (
-                    f"{codec.name}.supports_type({kind}) should be True"
-                )
-
 
 # ---------------------------------------------------------------------------
 # 20. register_codec public API
@@ -3546,9 +3489,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset()
-
-            def supports_type(self, t: Type) -> bool:
-                return False
 
             def make_contract(self, type_ref: Type, type_table: TypeTable | None = None) -> OC:
                 raise NotImplementedError
@@ -3597,11 +3537,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
-
-            def supports_type(self, t: Type) -> bool:
-                from agm.agl.semantics.types import TextType as TT
-
-                return isinstance(t, TT)
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
@@ -3661,9 +3596,6 @@ class TestRegisterCodec:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"int"})
 
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, IntType)
-
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> OutputContract:
@@ -3707,9 +3639,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"int"})
-
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, IntType)
 
             def make_contract(self, type_ref: Type) -> OutputContract:
                 seen_contract_targets.append(repr(type_ref))
@@ -3762,9 +3691,6 @@ class TestRegisterCodec:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"record"})
 
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, RecordType)
-
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> OutputContract:
@@ -3813,9 +3739,6 @@ class TestRegisterCodec:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
 
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, TextType)
-
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> OutputContract:
@@ -3852,9 +3775,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
-
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, TextType)
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
@@ -3898,9 +3818,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"record"})
-
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, RecordType)
 
             def make_contract(
                 self, type_ref: Type, *, type_table: TypeTable | None = None
@@ -3948,9 +3865,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"record"})
-
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, RecordType)
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None, /
@@ -4012,9 +3926,6 @@ class TestRegisterCodec:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"int"})
 
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, IntType)
-
             def parse(
                 self,
                 raw: str,
@@ -4048,9 +3959,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"array"})
-
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, ArrayType)
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
@@ -4109,9 +4017,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"record"})
-
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, RecordType)
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
@@ -4222,9 +4127,6 @@ class TestRegisterCodec:
                     }
                 )
 
-            def supports_type(self, t: Type) -> bool:
-                return True
-
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> OutputContract:
@@ -4270,9 +4172,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"record"})
-
-            def supports_type(self, t: Type) -> bool:
-                return True
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
@@ -4325,9 +4224,6 @@ class TestRegisterCodec:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"record"})
 
-            def supports_type(self, t: Type) -> bool:
-                return True
-
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> OutputContract:
@@ -4378,9 +4274,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"record"})
-
-            def supports_type(self, t: Type) -> bool:
-                return True
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
@@ -4465,9 +4358,6 @@ class TestRegisterCodec:
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
 
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, TextType)
-
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
             ) -> OutputContract:
@@ -4526,9 +4416,6 @@ class TestRegisterCodec:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"record"})
-
-            def supports_type(self, t: Type) -> bool:
-                return True
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None

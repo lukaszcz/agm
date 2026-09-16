@@ -109,7 +109,6 @@ def test_orphaned_declaration_releases_its_current_name() -> None:
     table.orphan(typedef.decl_node_id)
 
     assert table.get(ENTRY_ID, "Point") is None
-    assert table.is_orphaned(typedef.decl_node_id)
 
 
 def test_builtin_member_identity_falls_back_for_non_enum_prelude_types() -> None:
@@ -126,7 +125,7 @@ def test_builtin_member_identity_falls_back_for_non_enum_prelude_types() -> None
     )
 
 
-def test_enum_owner_for_member_recovers_only_captured_type_arguments() -> None:
+def test_enum_owners_for_member_recovers_only_captured_type_arguments() -> None:
     table = TypeTable()
     outcome = TypeDef(
         kind="enum",
@@ -142,11 +141,11 @@ def test_enum_owner_for_member_recovers_only_captured_type_arguments() -> None:
     table.register(outcome)
     members = table.enum_members(outcome.handle((IntType(), TextType())))
 
-    assert table.enum_owner_for_member(members[0]) is None
-    assert table.enum_owner_for_member(members[1]) is None
+    assert table.enum_owners_for_member(members[0]) == ()
+    assert table.enum_owners_for_member(members[1]) == ()
 
 
-def test_enum_owner_for_referenced_member_requires_its_full_type_template() -> None:
+def test_enum_owners_for_referenced_member_require_its_full_type_template() -> None:
     table = TypeTable()
     box = TypeDef(
         kind="record",
@@ -166,8 +165,10 @@ def test_enum_owner_for_referenced_member_requires_its_full_type_template() -> N
     table.register(box)
     table.register(enum)
 
-    assert table.enum_owner_for_member(RecordType("Box", (IntType(),), decl_id=10)) == enum.handle()
-    assert table.enum_owner_for_member(RecordType("Box", (TextType(),), decl_id=10)) is None
+    assert table.enum_owners_for_member(RecordType("Box", (IntType(),), decl_id=10)) == (
+        enum.handle(),
+    )
+    assert table.enum_owners_for_member(RecordType("Box", (TextType(),), decl_id=10)) == ()
     assert not table.record_matches_enum_member(
         enum.handle(), "Missing", RecordType("Box", (IntType(),), decl_id=10)
     )
@@ -3252,7 +3253,12 @@ class TestFiniteClosure:
                 decl_node_id=700028,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "Tree") is True
+        assert (
+            table.has_finite_schema(
+                RecordType("Tree", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700028)
+            )
+            is True
+        )
 
     def test_argument_constant_reference_is_finite(self) -> None:
         # R[int] referenced from R[T]'s own body: the argument template
@@ -3275,7 +3281,12 @@ class TestFiniteClosure:
                 decl_node_id=700035,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "R") is True
+        assert (
+            table.has_finite_schema(
+                RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035)
+            )
+            is True
+        )
 
     def test_permutation_cycle_is_finite(self) -> None:
         # Swap[A, B] referencing Swap[B, A]: each parameter is passed through
@@ -3301,7 +3312,14 @@ class TestFiniteClosure:
                 decl_id=700036,
             ),
         )
-        assert table.has_finite_closure(ENTRY_ID, "Swap") is True
+        assert (
+            table.has_finite_schema(
+                EnumType(
+                    "Swap", type_args=(IntType(), IntType()), module_id=ENTRY_ID, decl_id=700036
+                )
+            )
+            is True
+        )
 
     def test_growing_via_nominal_argument_is_infinite(self) -> None:
         # Perfect[T] referencing Perfect[Pair[T, T]]: T occurs nested inside
@@ -3337,9 +3355,21 @@ class TestFiniteClosure:
                 decl_node_id=700037,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "Perfect") is False
+        assert (
+            table.has_finite_schema(
+                RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700037)
+            )
+            is False
+        )
         # Pair itself is unrelated (non-recursive) and stays finite.
-        assert table.has_finite_closure(ENTRY_ID, "Pair") is True
+        assert (
+            table.has_finite_schema(
+                RecordType(
+                    "Pair", type_args=(IntType(), IntType()), module_id=ENTRY_ID, decl_id=700200
+                )
+            )
+            is True
+        )
 
     def test_growing_via_array_is_infinite(self) -> None:
         # P[T] referencing P[array[T]]: T occurs under the array constructor,
@@ -3366,7 +3396,12 @@ class TestFiniteClosure:
                 decl_node_id=700038,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "P") is False
+        assert (
+            table.has_finite_schema(
+                RecordType("P", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700038)
+            )
+            is False
+        )
 
     def test_mutual_growing_across_two_declarations_is_infinite(self) -> None:
         # A[T] references B[Pair[T, T]]; B[T] references A[T] — the growing
@@ -3419,8 +3454,18 @@ class TestFiniteClosure:
                 decl_node_id=700015,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "A") is False
-        assert table.has_finite_closure(ENTRY_ID, "B") is False
+        assert (
+            table.has_finite_schema(
+                RecordType("A", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700014)
+            )
+            is False
+        )
+        assert (
+            table.has_finite_schema(
+                RecordType("B", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700015)
+            )
+            is False
+        )
 
     def test_growing_edge_in_one_scc_member_poisons_whole_scc(self) -> None:
         # C[T] references D[T] (uniform, non-growing); D[T] references
@@ -3474,13 +3519,30 @@ class TestFiniteClosure:
                 decl_node_id=700040,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "C") is False
-        assert table.has_finite_closure(ENTRY_ID, "D") is False
+        assert (
+            table.has_finite_schema(
+                RecordType("C", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700039)
+            )
+            is False
+        )
+        assert (
+            table.has_finite_schema(
+                RecordType("D", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700040)
+            )
+            is False
+        )
 
     def test_non_recursive_generic_is_finite(self) -> None:
         table = TypeTable()
         table.register(_pair_def())
-        assert table.has_finite_closure(ENTRY_ID, "Pair") is True
+        assert (
+            table.has_finite_schema(
+                RecordType(
+                    "Pair", type_args=(IntType(), IntType()), module_id=ENTRY_ID, decl_id=700200
+                )
+            )
+            is True
+        )
 
     def test_non_generic_exception_is_finite(self) -> None:
         # Exceptions are never generic, so they contribute no
@@ -3503,11 +3565,16 @@ class TestFiniteClosure:
                 decl_node_id=700041,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "Chain") is True
+        assert (
+            table.has_finite_schema(ExceptionType("Chain", module_id=ENTRY_ID, decl_id=700041))
+            is True
+        )
 
     def test_unregistered_declaration_defaults_to_finite(self) -> None:
         table = TypeTable()
-        assert table.has_finite_closure(ENTRY_ID, "Ghost") is True
+        assert (
+            table.has_finite_schema(RecordType("Ghost", module_id=ENTRY_ID, decl_id=999999)) is True
+        )
 
     def test_has_finite_schema_reports_infinite_for_nested_perfect_field(self) -> None:
         # A non-recursive record containing a Perfect[int] field: the
@@ -3637,7 +3704,6 @@ class TestFiniteClosure:
                 decl_node_id=700035,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "R") is True
         assert (
             table.has_finite_schema(
                 RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035)
@@ -3684,7 +3750,6 @@ class TestFiniteClosure:
             ),
         )
 
-        assert table.has_finite_closure(ENTRY_ID, "E") is True
         assert (
             table.has_finite_schema(
                 EnumType("E", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700031)
@@ -3721,7 +3786,12 @@ class TestFiniteClosure:
                 decl_node_id=700035,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "R") is False
+        assert (
+            table.has_finite_schema(
+                RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035)
+            )
+            is False
+        )
 
     def test_extra_nested_nominal_argument_counts_as_schema_growth(self) -> None:
         table = TypeTable()
@@ -3763,7 +3833,12 @@ class TestFiniteClosure:
                 decl_node_id=700035,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "R") is False
+        assert (
+            table.has_finite_schema(
+                RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035)
+            )
+            is False
+        )
 
     def test_has_finite_schema_reports_finite_for_nested_tree_field(self) -> None:
         table = TypeTable()
@@ -3862,7 +3937,14 @@ class TestFiniteClosure:
         # merely by a change under an existing identity.
         table = TypeTable()
         table.register(_pair_def())
-        assert table.has_finite_closure(ENTRY_ID, "Pair") is True
+        assert (
+            table.has_finite_schema(
+                RecordType(
+                    "Pair", type_args=(IntType(), IntType()), module_id=ENTRY_ID, decl_id=700200
+                )
+            )
+            is True
+        )
         table.register(
             TypeDef(
                 kind="record",
@@ -3884,7 +3966,12 @@ class TestFiniteClosure:
                 decl_node_id=700201,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "Pair") is False
+        assert (
+            table.has_finite_schema(
+                RecordType("Pair", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700201)
+            )
+            is False
+        )
 
     def test_growing_via_dict_is_infinite(self) -> None:
         # Q[T] referencing Q[dict[T]]: T occurs under the dict constructor,
@@ -3911,7 +3998,12 @@ class TestFiniteClosure:
                 decl_node_id=700043,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "Q") is False
+        assert (
+            table.has_finite_schema(
+                RecordType("Q", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700043)
+            )
+            is False
+        )
 
     def test_growing_via_function_type_is_infinite(self) -> None:
         # F[T] referencing F[(T) -> T]: T occurs under the function
@@ -3940,7 +4032,12 @@ class TestFiniteClosure:
                 decl_node_id=700044,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "F") is False
+        assert (
+            table.has_finite_schema(
+                RecordType("F", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700044)
+            )
+            is False
+        )
 
     def test_exception_with_base_contributes_no_parameter_edges(self) -> None:
         # The `extends` base is a reference edge like any other, but
@@ -3960,8 +4057,14 @@ class TestFiniteClosure:
                 decl_node_id=700045,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "Root") is True
-        assert table.has_finite_closure(ENTRY_ID, "Derived") is True
+        assert (
+            table.has_finite_schema(ExceptionType("Root", module_id=ENTRY_ID, decl_id=700008))
+            is True
+        )
+        assert (
+            table.has_finite_schema(ExceptionType("Derived", module_id=ENTRY_ID, decl_id=700045))
+            is True
+        )
 
     def test_dangling_reference_defaults_to_finite(self) -> None:
         # A field referencing a declaration that was never registered (same
@@ -3978,7 +4081,7 @@ class TestFiniteClosure:
                 decl_node_id=700027,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "Y") is True
+        assert table.has_finite_schema(RecordType("Y", module_id=ENTRY_ID, decl_id=700027)) is True
 
     def test_schema_canonical_type_preserves_unregistered_reference_args(self) -> None:
         table = TypeTable()
@@ -4052,8 +4155,18 @@ class TestFiniteClosure:
                 decl_node_id=700015,
             )
         )
-        assert table.has_finite_closure(ENTRY_ID, "A") is True
-        assert table.has_finite_closure(ENTRY_ID, "B") is True
+        assert (
+            table.has_finite_schema(
+                RecordType("A", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700014)
+            )
+            is True
+        )
+        assert (
+            table.has_finite_schema(
+                RecordType("B", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700015)
+            )
+            is True
+        )
 
     def test_has_finite_schema_walks_into_root_type_args(self) -> None:
         # The reachability query's initial walk must look INSIDE the root

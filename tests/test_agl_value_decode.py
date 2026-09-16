@@ -17,9 +17,10 @@ from agm.agl.runtime.value_decode import (
 )
 from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import BoolType, DecimalType, IntType, JsonType, TextType, Type
-from agm.agl.type_schema import build_decode_schema, build_param_decoder
+from agm.agl.type_schema import build_param_decoder
 from agm.agl.typecheck import CheckedModule
 from agm.agl.value_syntax.reader import read_value
+from tests._agl_helpers import build_decode_schema
 from tests.agl.module_graph import resolve_and_check_repl_entry
 
 # ---------------------------------------------------------------------------

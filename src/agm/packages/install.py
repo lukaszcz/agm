@@ -155,30 +155,6 @@ class _InstallState:
     resolved_active: tuple[PackageInfo, ...] | None = None
 
 
-def install_directory(
-    source: Path,
-    *,
-    home: Path,
-    env: Mapping[str, str] | None = None,
-    editable: bool = False,
-    shadow: bool = False,
-) -> PackageInfo:
-    """Install a package directory or activate it as an editable package.
-
-    Dependencies use MVS: an installed satisfying version is selected first;
-    otherwise a declared local path is installed recursively or a URL archive
-    is fetched, hash-verified, and installed.
-    """
-
-    return install_directory_with_plan(
-        source,
-        home=home,
-        env=env,
-        editable=editable,
-        shadow=shadow,
-    ).package
-
-
 def install_directory_with_plan(
     source: Path,
     *,
@@ -187,7 +163,12 @@ def install_directory_with_plan(
     editable: bool = False,
     shadow: bool = False,
 ) -> PackageInstallPlan:
-    """Install a directory package and return its resulting activation plan."""
+    """Install a package directory, or activate it as an editable package.
+
+    Dependencies use MVS: an installed satisfying version is selected first;
+    otherwise a declared local path is installed recursively or a URL archive
+    is fetched, hash-verified, and installed. Returns the activation plan.
+    """
 
     return _install_with_plan(
         lambda state: _install_directory(source, state=state, editable=editable, shadow=shadow),
@@ -291,18 +272,6 @@ def refresh_managed_stdlib(
                 fs.rmtree(staging)
 
 
-def install_archive(
-    archive: Path,
-    *,
-    home: Path,
-    env: Mapping[str, str] | None = None,
-    shadow: bool = False,
-) -> PackageInfo:
-    """Verify, atomically extract, and activate a portable package archive."""
-
-    return install_archive_with_plan(archive, home=home, env=env, shadow=shadow).package
-
-
 def install_archive_with_plan(
     archive: Path,
     *,
@@ -310,7 +279,7 @@ def install_archive_with_plan(
     env: Mapping[str, str] | None = None,
     shadow: bool = False,
 ) -> PackageInstallPlan:
-    """Install a portable package archive and return its resulting activation plan."""
+    """Verify, atomically extract, and activate a portable package archive; return its plan."""
 
     return _install_with_plan(
         lambda state: _install_archive(archive, state=state, shadow=shadow),

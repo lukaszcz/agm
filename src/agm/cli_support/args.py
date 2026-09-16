@@ -6,14 +6,7 @@ from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
-class HelpArgs:
-    command: str | None
-    help_command: list[str]
-
-
-@dataclass(slots=True)
 class ConfigCopyArgs:
-    config_command: str | None
     dirname: str
 
 

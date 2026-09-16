@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
-from agm.core.dotenv import set_dotenv_values, write_dotenv_values
+from agm.core.dotenv import write_dotenv_values
 from agm.core.env import load_config_dotenv_files, resolve_env
 from agm.core.process import require_success
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
@@ -20,7 +20,6 @@ class CurrentWorkspace:
 
     workspace_dir: Path
     branch: str | None
-    is_main: bool
 
 
 _DOTENV_CONFIG_FILES = frozenset({".env", ".env.local"})
@@ -55,14 +54,6 @@ def _merge_config_dotenv_files(config_dirs: list[Path], target_dir: Path) -> Non
         return
     target_env = target_dir / ".env.local"
     write_dotenv_values(target_env, merged_env)
-
-
-def _merge_branch_env_file(source_dir: Path, target_dir: Path) -> None:
-    merged_env = load_config_dotenv_files([source_dir], env={})
-    if not merged_env:
-        return
-    target_env = target_dir / ".env"
-    set_dotenv_values(target_env, merged_env)
 
 
 def _resolved_cwd(cwd: Path | None = None) -> Path:
@@ -249,12 +240,12 @@ def current_workspace(
                 else:
                     workspace_dir = current
 
-    # --- Determine workspace branch / is_main ---
+    # --- Determine workspace branch ---
     if workspace_dir == repo_dir or repo_dir in workspace_dir.parents:
-        return CurrentWorkspace(workspace_dir=workspace_dir, branch=None, is_main=True)
+        return CurrentWorkspace(workspace_dir=workspace_dir, branch=None)
 
     branch = git_helpers.current_branch(workspace_dir, env=env)
-    return CurrentWorkspace(workspace_dir=workspace_dir, branch=branch, is_main=False)
+    return CurrentWorkspace(workspace_dir=workspace_dir, branch=branch)
 
 
 def project_root(project_dir: Path) -> Path:
@@ -304,12 +295,6 @@ def project_repo_dir(project_dir: Path) -> Path:
     if is_embedded_project(project_dir):
         return project_dir.parent
     return project_dir
-
-
-def main_repo_dir(project_dir: Path) -> Path:
-    """Backward-compatible alias for ``project_repo_dir``."""
-
-    return project_repo_dir(project_dir)
 
 
 def default_worktrees_dir(project_dir: Path) -> Path:

@@ -1,9 +1,10 @@
 """AgL module-graph loader.
 
-This module provides :func:`load_graph`, which drives the full load-and-graph
-phase of the AgL module system:
+:func:`parse_entry_module` parses an entry source (inline ``-c`` or a file on
+disk), and :func:`build_repl_graph` drives the rest of the load-and-graph phase
+of the AgL module system from the parsed entry:
 
-1. Parse the entry source (inline ``-c`` or a file on disk).
+1. Inject the standard-library prelude import into the entry.
 2. Extract import and export declarations from the module and its named scope regions.
 3. BFS over transitive import and export declarations, resolving each module id
    to its canonical file via :func:`~agm.agl.modules.resolver.resolve_module` (or
@@ -78,7 +79,6 @@ from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.core import fs
 from agm.packages.model import owning_package
 from agm.util.graph import sccs as _compute_sccs
-from agm.util.text import normalize_newlines
 
 
 @dataclass(frozen=True, slots=True)
@@ -1034,7 +1034,7 @@ def _load_into_graph(
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """BFS the transitive module graph from *entry_loaded*.
 
-    Shared core of :func:`load_graph` and :func:`build_repl_graph`.  *seed_modules*
+    Core of :func:`build_repl_graph`.  *seed_modules*
     are already-loaded library modules reused without re-parsing (empty for a
     fresh whole-program load; the REPL cache otherwise).  Newly-discovered
     modules are parsed with node ids seeded from *start_id* so ids stay disjoint
@@ -1234,9 +1234,7 @@ def _build_entry_loaded_module(
 ) -> tuple[LoadedModule, int]:
     """Build the entry :class:`LoadedModule` from an already-parsed program.
 
-    Shared by :func:`load_graph` (parses the entry itself first) and
-    :func:`build_repl_graph` (given an already-parsed entry from the REPL's
-    own per-entry parse). Injects the ``std/prelude`` prelude import when
+    Used by :func:`build_repl_graph`. Injects the ``std/prelude`` prelude import when
     *default_stdlib* is set, consuming one more node id, and derives the
     companion path for a declared extern. The prelude never imports itself, so
     an entry that *is* ``std/prelude`` is exempt exactly as the library path
@@ -1260,70 +1258,6 @@ def _build_entry_loaded_module(
     return entry_loaded, next_id
 
 
-def load_graph(
-    entry_source: str,
-    *,
-    entry_path: Path | None,
-    roots: RootSet,
-    default_stdlib: bool = True,
-) -> ModuleGraph:
-    """Parse and load the full transitive module graph.
-
-    Parameters
-    ----------
-    entry_source:
-        The AgL source text of the entry program.
-    entry_path:
-        Canonical file path of the entry program, or ``None`` for an inline
-        ``-c`` invocation.  When supplied, its canonical form is used to
-        detect and reject any import that resolves to the same file.
-    roots:
-        The assembled :class:`~agm.agl.modules.roots.RootSet` to search.
-
-    Returns
-    -------
-    ModuleGraph
-        The fully loaded module graph.
-
-    Raises
-    ------
-    ModuleNotFound
-        When a non-wildcard import cannot be resolved.
-    AmbiguousModule
-        When a module id (or a wildcard-expanded id) resolves to ≥2 distinct
-        canonical files.
-    ModulePrefixNotFound
-        When a wildcard import prefix matches no module.
-    ImportEntryError
-        When an import resolves to the entry file's canonical identity.
-    agm.agl.parser.errors.AglSyntaxError
-        When any module's source text fails to parse.
-    """
-    parsed_entry = parse_entry_module(entry_source, entry_path=entry_path)
-    entry_id = _entry_module_id(parsed_entry.canonical_path, roots)
-    entry_loaded, next_id = _build_entry_loaded_module(
-        parsed_entry.program,
-        parsed_entry.next_id,
-        entry_id=entry_id,
-        canonical_entry_path=parsed_entry.canonical_path,
-        entry_source_id=parsed_entry.source_id,
-        default_stdlib=default_stdlib,
-        spaced_qualifiers=parsed_entry.spaced_qualifiers,
-        source_text=normalize_newlines(entry_source),
-    )
-
-    graph, _next_id, _newly_loaded = _load_into_graph(
-        entry_loaded,
-        entry_id=entry_id,
-        roots=roots,
-        canonical_entry_path=parsed_entry.canonical_path,
-        seed_modules={},
-        start_id=next_id,
-        default_stdlib=default_stdlib,
-    )
-    return graph
-
-
 def build_repl_graph(
     program: syntax.Program,
     next_start_id: int,
@@ -1340,13 +1274,11 @@ def build_repl_graph(
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """Build a module graph from an already-parsed entry program.
 
-    Unlike :func:`load_graph`, this function accepts an already-parsed
-    ``Program`` AST (from the REPL's per-entry parse, or from a host-side
-    pipeline step that needs the parsed entry before it loads the rest of the
-    graph) and performs BFS loading only for library modules that are not
-    already cached. Node ids in newly-loaded modules are seeded from
-    *next_start_id* so they remain disjoint from the entry and from any
-    previously loaded modules.
+    Accepts an already-parsed ``Program`` AST (from the REPL's per-entry
+    parse, or from :func:`parse_entry_module` in a host pipeline) and performs
+    BFS loading only for library modules that are not already cached. Node ids
+    in newly-loaded modules are seeded from *next_start_id* so they remain
+    disjoint from the entry and from any previously loaded modules.
 
     Parameters
     ----------
@@ -1370,7 +1302,7 @@ def build_repl_graph(
         The entry source label used when *path* is ``None`` (inline entry).
         Defaults to ``"<repl>"`` for the REPL's own incremental sessions;
         callers outside the REPL (e.g. an ``exec -c`` style host pipeline)
-        pass their own label so diagnostics match :func:`load_graph`.
+        pass the label :func:`parse_entry_module` used so diagnostics match.
     source_text:
         The entry's normalized source text, recorded on the entry
         ``LoadedModule`` for deep IR-validation span checks and runtime

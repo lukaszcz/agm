@@ -10,13 +10,7 @@ The meta-command set is implemented here: ``:help``, ``:quit`` /
 ``:set``, ``:load``, ``:save``, plus a clean error for
 an unknown ``:command``.  The dispatcher is a registry/table (``_COMMANDS``), so
 the command set is a single source of truth shared by the dispatcher and the
-completer.
-
-**Runtime extension seam:** :func:`register_meta_command` registers an additional
-``MetaCommand`` at runtime (a host can extend the surface without editing this
-module).  Each handler takes ``(arg, ctx)`` and returns a :class:`MetaOutcome`.
-The completer's name list is derived from ``_COMMANDS`` automatically, so a newly
-registered command is offered in tab-completion for free.
+completer.  Each handler takes ``(arg, ctx)`` and returns a :class:`MetaOutcome`.
 """
 
 from __future__ import annotations
@@ -254,10 +248,9 @@ def _handle_theme(arg: str, ctx: MetaContext) -> MetaOutcome:
     return MetaOutcome(text=f"Theme set to {arg!r}.", setting_change=("theme", arg))
 
 
-# Registry: the authoritative table of built-in meta-commands. Extensions append to
-# this list (or calls ``register_meta_command``); both the dispatcher and the
-# completer's ``META_COMMANDS`` read from it, so there is a single source of
-# truth for the command names.
+# Registry: the authoritative table of built-in meta-commands. Both the
+# dispatcher and the completer's ``META_COMMANDS`` read from it, so there is a
+# single source of truth for the command names.
 _COMMANDS: list[MetaCommand] = [
     MetaCommand(
         names=("help",),
@@ -317,8 +310,7 @@ _COMMANDS: list[MetaCommand] = [
 
 
 # Module-level caches for the command index and name tuple.  Both are rebuilt
-# once at import time (when ``_COMMANDS`` is fully populated) and invalidated
-# by ``register_meta_command`` whenever a new command is added at runtime.
+# once at import time (when ``_COMMANDS`` is fully populated).
 _command_index_cache: dict[str, MetaCommand] | None = None
 _command_names_cache: tuple[str, ...] | None = None
 
@@ -334,12 +326,6 @@ def _rebuild_caches() -> None:
             names.append(f":{name}")
     _command_index_cache = index
     _command_names_cache = tuple(names)
-
-
-def register_meta_command(command: MetaCommand) -> None:
-    """Register an additional meta-command."""
-    _COMMANDS.append(command)
-    _rebuild_caches()
 
 
 def _command_index() -> dict[str, MetaCommand]:

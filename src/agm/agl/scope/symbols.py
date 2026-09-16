@@ -772,10 +772,6 @@ class ModuleResolution:
     ``root_scope``
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.
-    ``declared_functions``
-        Maps each source-level root ``def`` name to its :class:`FuncDef` node.
-        Host-only synthetic entries are excluded. Populated in the pre-pass;
-        useful for downstream typecheck and eval.
     ``allows_root_statements``
         Whether this entry is an incremental REPL entry, whose root retains
         executable items instead of enforcing a static module root.
@@ -788,9 +784,6 @@ class ModuleResolution:
         Root declarations use the empty path just like any other scope.
     ``scope_nodes``
         Named scope-region layers keyed by path, rooted at ``()``.
-    ``declared_type_names``
-        Names of all root-level ``RecordDef`` / ``EnumDef`` / ``TypeAlias``
-        declarations.  Used by the existing root-only constructor resolver.
     ``constructor_candidates``
         Maps each constructor name to an ordered tuple of all
         :class:`ConstructorRef` candidates (one per record/enum that declares
@@ -844,10 +837,8 @@ class ModuleResolution:
     builtin_static_calls: dict[int, BuiltinStaticKind] = field(default_factory=dict)
     declarations: dict[DeclarationKey, BindingRef] = field(default_factory=dict)
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
-    declared_functions: dict[str, FuncDef] = field(default_factory=dict)
     allows_root_statements: bool = False
     origin_path: Path | None = None
-    declared_type_names: frozenset[str] = frozenset()
     declared_type_paths: frozenset[ScopePath] = frozenset()
     constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)
     constructor_candidates_by_path: dict[tuple[ScopePath, str], tuple[ConstructorRef, ...]] = field(
@@ -865,7 +856,6 @@ class ModuleResolution:
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
     method_declarations: dict[DeclarationKey, ReceiverOwner] = field(default_factory=dict)
     reachable_declarations: frozenset[DeclarationKey] = frozenset()
-    use_targets: dict[int, ResolvedUseTarget] = field(default_factory=dict)
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:

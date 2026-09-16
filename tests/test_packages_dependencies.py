@@ -10,11 +10,11 @@ import semver
 
 import agm.packages.model as package_model
 from agm.packages.dependencies import DependencyError, validate_dependencies
-from agm.packages.install import install_directory
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import DependencySpec, distribution_manifest, load_manifest
 from agm.packages.model import PackageInfo
 from agm.version import AGM_VERSION
+from tests._package_helpers import install_directory
 
 
 def _package(root: Path, name: str, version: str, dependencies: str = "") -> PackageInfo:

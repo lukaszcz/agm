@@ -1,6 +1,6 @@
 # Generic recursive instantiation at the agent boundary: `Tree[T]` derives a
 # distinct $defs key per concrete instantiation (e.g. `Tree_int`) — the same
-# collision-free generic-instantiation keying `derive_schema` uses, mirrored
+# collision-free generic-instantiation keying `derive_schema_and_decode` uses, mirrored
 # one-to-one on the `RefDecode` decode side — separate from any non-generic
 # `Tree` or a different instantiation such as `Tree[text]`.
 enum Tree[T]

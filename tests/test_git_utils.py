@@ -24,17 +24,14 @@ from agm.vcs.git import (
     fetch,
     fetch_output,
     fetch_prune_all,
-    fetch_prune_origin,
     find_first_git_repo,
     git_common_dir,
     has_commits,
     has_staged_changes,
     is_git_repo,
     local_branch_exists,
-    local_branches,
     ls_remote_head,
     merge,
-    remote_branch_exists,
     remote_unmerged_branches,
     remotes_with_branch,
     repo_name_from_url,
@@ -264,7 +261,7 @@ class TestGitCommonDir:
 
 
 # ---------------------------------------------------------------------------
-# fetch / fetch_prune_all / fetch_prune_origin
+# fetch / fetch_prune_all
 # ---------------------------------------------------------------------------
 
 
@@ -311,20 +308,6 @@ class TestFetch:
         fetch_prune_all(repo, env=env)
 
         assert remotes_with_branch(repo, "branch-x", env=env) == []
-
-    def test_prune_origin_leaves_the_other_remotes_alone(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        repo = clone_with_fork_remote(
-            tmp_path, env, branch="branch-x", on_origin=True, on_fork=True
-        )
-        git_run(tmp_path / "origin.git", ["branch", "-D", "branch-x", "-q"], env)
-        git_run(tmp_path / "fork.git", ["branch", "-D", "branch-x", "-q"], env)
-
-        fetch_prune_origin(repo, env=env)
-
-        # Only origin was fetched, so only its stale tracking ref disappeared.
-        assert remotes_with_branch(repo, "branch-x", env=env) == ["fork"]
 
 
 # ---------------------------------------------------------------------------
@@ -377,42 +360,6 @@ class TestCurrentBranch:
         init_repo(repo, env)
         subprocess.run(["git", "checkout", "-b", "feature", "-q"], cwd=repo, env=env, check=True)
         assert current_branch(repo, env=env) == "feature"
-
-
-# ---------------------------------------------------------------------------
-# local_branches
-# ---------------------------------------------------------------------------
-
-
-class TestLocalBranches:
-    def test_returns_sorted_branches_from_real_repo(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        repo = tmp_path / "repo"
-        init_repo(repo, env)
-        subprocess.run(["git", "branch", "develop"], cwd=repo, env=env, check=True)
-        subprocess.run(["git", "branch", "feature"], cwd=repo, env=env, check=True)
-        assert local_branches(repo, env=env) == ["develop", "feature", "main"]
-
-    def test_returns_empty_list_for_repo_with_no_branches(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        # A freshly initialised repo with no commits has no branch refs yet.
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-b", "main", "-q"], cwd=repo, env=env, check=True)
-        assert local_branches(repo, env=env) == []
-
-    # Kept as a behavioral fake: real `git for-each-ref` never emits empty
-    # lines, so the defensive `if line` guard can only be exercised by feeding
-    # synthetic output directly.
-    def test_filters_empty_lines(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setattr(
-            "agm.vcs.git.require_capture",
-            lambda cmd, **kwargs: "\nmain\n\nfeature\n",
-        )
-        result = local_branches(tmp_path)
-        assert result == ["feature", "main"]
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +469,7 @@ class TestWorktreeAdd:
         repo = tmp_path / "repo"
         subprocess.run(["git", "clone", str(bare), str(repo)], env=env, check=True)
         assert local_branch_exists(repo, "cloud-native", env=env) is False
-        assert remote_branch_exists(repo, "cloud-native", env=env) is True
+        assert remotes_with_branch(repo, "cloud-native", env=env) == ["origin"]
 
         wt = tmp_path / "wt-from-remote-parent"
         worktree_add(
@@ -588,7 +535,7 @@ class TestWorktreeAdd:
         repo = tmp_path / "repo"
         subprocess.run(["git", "clone", str(bare), str(repo)], env=env, check=True)
         assert local_branch_exists(repo, "existing-remote", env=env) is False
-        assert remote_branch_exists(repo, "existing-remote", env=env) is True
+        assert remotes_with_branch(repo, "existing-remote", env=env) == ["origin"]
 
         wt = tmp_path / "wt-from-existing-remote"
         worktree_add(repo, wt, "existing-remote", env=env)
@@ -980,7 +927,7 @@ class TestBranchCanDelete:
 
 
 # ---------------------------------------------------------------------------
-# local_branch_exists / remote_branch_exists
+# local_branch_exists
 # ---------------------------------------------------------------------------
 
 
@@ -994,22 +941,6 @@ class TestLocalBranchExists:
         repo = tmp_path / "repo"
         init_repo(repo, env)
         assert local_branch_exists(repo, "nonexistent", env=env) is False
-
-
-class TestRemoteBranchExists:
-    def test_returns_true_when_a_remote_carries_the_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        repo = clone_with_fork_remote(
-            tmp_path, env, branch="branch-x", on_origin=True, on_fork=False
-        )
-        assert remote_branch_exists(repo, "branch-x", env=env) is True
-
-    def test_returns_false_when_no_remote_carries_the_branch(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        repo = clone_with_fork_remote(tmp_path, env, branch="branch-x")
-        assert remote_branch_exists(repo, "missing", env=env) is False
 
 
 # ---------------------------------------------------------------------------
@@ -1244,14 +1175,6 @@ class TestRemoteBranchResolution:
         assert remotes_with_branch(repo, "branch-x", env=env) == ["fork"]
         assert remotes_with_branch(repo, "main", env=env) == ["fork", "origin"]
         assert remotes_with_branch(repo, "absent", env=env) == []
-
-    def test_remote_branch_exists_finds_branch_on_non_origin_remote(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        repo = clone_with_fork_remote(
-            tmp_path, env, branch="branch-x", on_origin=False, on_fork=True
-        )
-        assert remote_branch_exists(repo, "branch-x", env=env) is True
 
     def test_unique_remote_branch_ref_resolves_single_remote(
         self, tmp_path: Path, env: dict[str, str]

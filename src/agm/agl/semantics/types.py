@@ -437,11 +437,6 @@ class TypeTemplateMatch:
 
     bindings: tuple[tuple[str, Type], ...]
 
-    @property
-    def type_arguments(self) -> tuple[Type, ...]:
-        """Return inferred arguments in declared parameter order."""
-        return tuple(argument for _, argument in self.bindings)
-
 
 def match_type_template(
     template: Type,

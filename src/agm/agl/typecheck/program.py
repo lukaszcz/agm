@@ -1021,9 +1021,8 @@ def _prepare_module_environment(
     #   decl_node_id, so same-name collisions across modules never matter here.
     # - _function_signatures (name-keyed, root scope only): every module's
     #   declared signatures land here under a shared bare name; nothing looks
-    #   this table up by name (``get_function_signature`` has no caller outside
-    #   ``env.py`` itself), so a same-name collision across modules is inert --
-    #   Phase 4's own re-check still calls ``register_function_signature`` for
+    #   this table up by name, so a same-name collision across modules is
+    #   inert -- Phase 4's own re-check still calls ``register_function_signature`` for
     #   this module's own declarations, but only to keep the table live for
     #   ``all_function_signatures()``, not because a later lookup depends on it.
     for node_id, record in declared_func_sig_table.items():

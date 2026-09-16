@@ -16,7 +16,6 @@ import pytest
 import agm.project.worktree as worktree_mod
 from agm.project.worktree import (
     branch_exists,
-    branch_sync,
     ensure_worktree,
     has_expected_worktree,
     remove_worktree,
@@ -162,41 +161,6 @@ class TestSyncRemoteTrackingBranches:
         sync_remote_tracking_branches(repo, env=env)
 
         assert _local_branches(repo, env) == ["feat-a", "main"]
-
-
-class TestBranchSync:
-    """``branch_sync`` fetches first, then creates the missing tracking branches."""
-
-    def test_fetches_before_creating_tracking_branches(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        project = _make_project(tmp_path, env)
-        repo = project / "repo"
-        # Publish a branch after the project clone, so only a fetch reveals it.
-        publisher = tmp_path / "publisher"
-        subprocess.run(
-            ["git", "clone", "-q", str(tmp_path / "origin.git"), str(publisher)],
-            env=env,
-            check=True,
-        )
-        _git("checkout", "-b", "late", "-q", cwd=publisher, env=env)
-        (publisher / "late.txt").write_text("late\n", encoding="utf-8")
-        _git("add", ".", cwd=publisher, env=env)
-        _git("commit", "-m", "late", "-q", cwd=publisher, env=env)
-        _git("push", "-q", "origin", "late", cwd=publisher, env=env)
-
-        branch_sync(cwd=repo, env=env)
-
-        assert _local_branches(repo, env) == ["late", "main"]
-
-    def test_finds_the_checkout_from_the_project_root(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
-        project = _make_project(tmp_path, env, branches=["feat-a"])
-
-        branch_sync(cwd=project, env=env)
-
-        assert _local_branches(project / "repo", env) == ["feat-a", "main"]
 
 
 class TestHasExpectedWorktree:

@@ -71,14 +71,11 @@ def _query_set_binding_type(env: TypeEnvironment) -> object:
 
 
 def _record_register_function_signature(env: TypeEnvironment) -> None:
-    env.register_function_signature("helper", _HELPER_SIG, scope_path=("Widgets",))
+    env.register_function_signature("helper", _HELPER_SIG)
 
 
 def _query_register_function_signature(env: TypeEnvironment) -> object:
-    return (
-        env.get_function_signature("helper", scope_path=("Widgets",)),
-        env.get_function_signature("helper"),
-    )
+    return env.all_function_signatures().get("helper")
 
 
 def _record_register_function_signature_by_node_id(env: TypeEnvironment) -> None:

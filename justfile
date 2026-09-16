@@ -73,9 +73,9 @@ agl-style:
 agl-style-fix:
     uv run python tools/agl_style.py --fix
 
-# Check for dead code in the application package
+# Check for dead code in the application package, stdlib companions, and tools
 vulture:
-    uv run vulture src/agm/ --min-confidence 80
+    uv run python tools/vulture_check.py
 
 # Install the AgL Emacs mode into the user's Emacs (requires emacs)
 setup-emacs *args:

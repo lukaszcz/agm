@@ -631,7 +631,6 @@ def config_cp(
     del _dry_run
     config_copy_command.run(
         ConfigCopyArgs(
-            config_command="cp",
             dirname=_require_value(dirname, command_path=["config", "cp"], name="dirname"),
         )
     )
@@ -653,7 +652,6 @@ def config_copy(
     del _dry_run
     config_copy_command.run(
         ConfigCopyArgs(
-            config_command="copy",
             dirname=_require_value(dirname, command_path=["config", "copy"], name="dirname"),
         )
     )

@@ -22,6 +22,7 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
 )
+from agm.agl.syntax.nodes import FuncDef
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.agl.typecheck.env import AglTypeError
 from agm.agl.typecheck.inference import (
@@ -420,7 +421,7 @@ class TestContextCompletion:
         )
 
         assert engine.is_solved(variable) is False
-        assert engine.parent_of(variable) == engine.parent_of(other)
+        assert engine.zonk(variable) == engine.zonk(other)
 
 
 def test_mixed_provisional_literal_elements_report_a_type_error() -> None:
@@ -463,7 +464,12 @@ def test_method_with_inferred_return_uses_receiver_header_type() -> None:
         HostCapabilities(),
     )
 
-    signature = checked.type_env.get_function_signature("get", scope_path=("Box",))
+    method = next(
+        item
+        for item in checked.resolved.program.body.items
+        if isinstance(item, FuncDef) and item.name == "get"
+    )
+    signature = checked.type_env.get_function_signature_by_node_id(method.node_id)
     assert signature is not None
     assert signature.result == TypeVarType("E")
     assert strip_decl_ids(signature.params[0].type) == RecordType("Box", (TypeVarType("E"),))
@@ -584,7 +590,7 @@ class TestFinalizationAndProvenance:
 
         assert zonked == FunctionType((IntType(),), ArrayType(IntType()))
         assert engine.zonk(first) == IntType()
-        assert engine.parent_of(first) == engine.parent_of(third)
+        assert engine.zonk(third) == IntType()
 
     def test_requirements_and_leak_assertions_are_owned_and_reusable(self) -> None:
         engine = InferenceEngine()

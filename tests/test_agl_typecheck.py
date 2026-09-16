@@ -617,14 +617,13 @@ class TestTypeEnvironment:
     def test_builtin_exceptions_available(self) -> None:
         env = TypeEnvironment()
         for name in BUILTIN_EXCEPTION_NAMES:
-            assert env.has_type(name)
             t = env.get_type(name)
             assert isinstance(t, ExceptionType)
 
     def test_builtin_prelude_available(self) -> None:
         env = TypeEnvironment()
         for name in BUILTIN_PRELUDE_TYPE_NAMES:
-            assert env.has_type(name)
+            assert env.get_type(name) is not None
 
     def test_register_type(self) -> None:
         env = TypeEnvironment()
@@ -831,43 +830,6 @@ class TestTypeEnvironment:
         with pytest.raises(AglTypeError, match="cycle"):
             env.resolve_type_expr(NameT(name="A", span=sp, node_id=3))
 
-    def test_constructor_owner_resolution_keeps_a_nominal_name(self) -> None:
-        assert TypeEnvironment().resolve_constructor_owner_name("Record") == "Record"
-
-    def test_constructor_owner_resolution_rejects_qualified_alias_target(self) -> None:
-        from agm.agl.syntax import QualifierChain, QualifierSegment
-        from agm.agl.syntax.types import NameT
-
-        env = TypeEnvironment()
-        span = mk_span()
-        env.register_alias(
-            "Alias",
-            NameT(
-                name="Remote",
-                span=span,
-                node_id=1,
-                qualifier=QualifierChain(
-                    anchor=None,
-                    segments=(QualifierSegment("lib", None, span, 2),),
-                    member="Remote",
-                    span=span,
-                    node_id=2,
-                ),
-            ),
-        )
-
-        assert env.resolve_constructor_owner_name("Alias") is None
-
-    def test_constructor_owner_resolution_rejects_alias_cycle(self) -> None:
-        from agm.agl.syntax.types import NameT
-
-        env = TypeEnvironment()
-        span = mk_span()
-        env.register_alias("A", NameT(name="B", span=span, node_id=1))
-        env.register_alias("B", NameT(name="A", span=span, node_id=2))
-
-        assert env.resolve_constructor_owner_name("A") is None
-
     def test_binding_type_roundtrip(self) -> None:
         env = TypeEnvironment()
         env.set_binding_type(42, IntType())
@@ -880,16 +842,15 @@ class TestTypeEnvironment:
             result=TextType(),
         )
         env.register_function_signature("f", sig)
-        assert env.get_function_signature("f") == sig
-        assert env.get_function_signature("g") is None
+        assert env.all_function_signatures().get("f") == sig
+        assert env.all_function_signatures().get("g") is None
 
-    def test_scoped_function_signature_uses_its_declaration_path(self) -> None:
+    def test_scoped_function_signature_does_not_populate_root_compatibility_map(self) -> None:
         env = TypeEnvironment()
         sig = FunctionSignature(params=(), result=IntType())
         env.register_function_signature("f", sig, scope_path=("Tools",))
 
-        assert env.get_function_signature("f", scope_path=("Tools",)) == sig
-        assert env.get_function_signature("f") is None
+        assert env.all_function_signatures().get("f") is None
 
     def test_all_function_signatures(self) -> None:
         env = TypeEnvironment()
@@ -917,7 +878,7 @@ class TestTypeEnvironment:
 
         assert current.get_binding_type(1) == IntType()
         assert current.get_function_signature_by_node_id(1) == signature
-        assert current.get_function_signature("f") == signature
+        assert current.all_function_signatures().get("f") == signature
         assert current.is_extern_node_id(1)
 
     def test_restore_binding_metadata_discards_uncommitted_function_signature(self) -> None:
@@ -929,7 +890,7 @@ class TestTypeEnvironment:
 
         current.restore_binding_metadata_from(previous, (), ("transient",))
 
-        assert current.get_function_signature("transient") is None
+        assert current.all_function_signatures().get("transient") is None
 
     def test_seed_rejects_an_environment_with_a_flexible_variable(self) -> None:
         source = TypeEnvironment()
@@ -989,14 +950,14 @@ class TestTypeEnvironment:
         env2.seed_from(env1)
         assert env2.get_type("Foo") == rt
         assert env2.get_binding_type(99) == IntType()
-        assert env2.get_function_signature("h") == sig
+        assert env2.all_function_signatures().get("h") == sig
 
     def test_seed_preserves_own_builtins(self) -> None:
         env1 = TypeEnvironment()
         env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
-        assert env2.has_type("Abort")
+        assert env2.get_type("Abort") is not None
 
     def test_restore_type_names_from_restores_all_type_metadata(self) -> None:
         previous = TypeEnvironment()
@@ -1050,7 +1011,7 @@ class TestTypeEnvironment:
             ENTRY_ID, "Restored"
         )
         assert current.get_type("Restored") == restored
-        assert current.get_alias_type_params("Restored") == ("T",)
+        assert current.has_alias_registration("Restored", IntT(span=mk_span(), node_id=1), ("T",))
         assert current.source_type_template_qname(ENTRY_ID, "Alias") == TypeTemplate(
             IntType(), ("T",)
         )
@@ -1118,7 +1079,9 @@ class TestTypeEnvironment:
         # Foo's entry: a redeclaration under this name owns the only answer
         # they may ever give.
         assert env.get_type("Foo") is None
-        assert env.get_alias_type_params("Foo") == ()
+        assert not env.has_alias_registration(
+            "Foo", IntT(span=SourceSpan(1, 1, 1, 1, 0, 0), node_id=1), ("T",)
+        )
         assert env.get_generic_type("Foo") is None
         # Constructor signatures and field kinds are untouched: they answer
         # "what shape does this SPECIFIC owner/variant have", which stays
@@ -1136,7 +1099,7 @@ class TestTypeEnvironment:
     def test_unregister_builtin_is_noop(self) -> None:
         env = TypeEnvironment()
         env.unregister_name("Abort")
-        assert env.has_type("Abort")
+        assert env.get_type("Abort") is not None
 
     def test_all_declared_type_names(self) -> None:
         env = TypeEnvironment()
@@ -2438,7 +2401,7 @@ class TestFieldZonesAcrossDeclarationForms:
 
     def test_plain_record_zones_alias_and_terminal_name(self) -> None:
         from agm.agl.ir.contracts import RecordDecode
-        from agm.agl.type_schema import build_decode_schema
+        from tests._agl_helpers import build_decode_schema
 
         r = accept_type(
             '@name("Pt")\n'
@@ -2469,7 +2432,7 @@ class TestFieldZonesAcrossDeclarationForms:
 
     def test_generic_record_zones_share_the_template_across_instantiations(self) -> None:
         from agm.agl.ir.contracts import RecordDecode
-        from agm.agl.type_schema import build_decode_schema
+        from tests._agl_helpers import build_decode_schema
 
         r = accept_type(
             "record Box[T]\n"
@@ -2498,7 +2461,7 @@ class TestFieldZonesAcrossDeclarationForms:
 
     def test_inline_enum_member_zones_alias_and_variant_name(self) -> None:
         from agm.agl.ir.contracts import EnumDecode
-        from agm.agl.type_schema import build_decode_schema
+        from tests._agl_helpers import build_decode_schema
 
         r = accept_type(
             "enum Shape =\n"
@@ -2527,7 +2490,7 @@ class TestFieldZonesAcrossDeclarationForms:
         assert variants["Circle"].fields[0].zone == ParamZone.NAMED_ONLY
 
     def test_referenced_enum_member_zones_and_alias_come_from_its_own_record(self) -> None:
-        from agm.agl.type_schema import build_decode_schema
+        from tests._agl_helpers import build_decode_schema
 
         r = accept_type(
             '@name("sq")\n'
@@ -9290,7 +9253,9 @@ def test_nullary_candidate_defers_duplicate_pattern_binder_until_typecheck_selec
             default_capabilities(),
             parent_scope=prior.resolved.root_scope,
             ambient_constructor_candidates=prior.resolved.constructor_candidates,
-            ambient_type_names=prior.resolved.declared_type_names,
+            ambient_type_names=frozenset(
+                path[0] for path in prior.resolved.declared_type_paths if len(path) == 1
+            ),
             seed_env=prior.type_env,
         )
 
@@ -10024,7 +9989,6 @@ class TestDefensiveGuards:
         program: Program,
         resolution: dict[int, BindingRef] | None = None,
         builtin_calls: dict[int, object] | None = None,
-        declared_functions: dict[str, FuncDef] | None = None,
     ) -> _ModuleResolution:
         from agm.agl.scope.symbols import AttributeFacts as _AttributeFacts
         from agm.agl.scope.symbols import BuiltinKind as _BuiltinKind
@@ -10036,7 +10000,6 @@ class TestDefensiveGuards:
             resolution=resolution or {},
             builtin_calls=bc,
             root_scope=root,
-            declared_functions=declared_functions or {},
             attributes=_AttributeFacts(param_zones=_standard_zones(program)),
         )
 
@@ -10086,7 +10049,7 @@ class TestDefensiveGuards:
         )
         block = Block(items=(fd,), span=sp, node_id=_mk_node_id())
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
-        resolved = self._mk_resolved(prog, declared_functions={"print": fd})
+        resolved = self._mk_resolved(prog)
         with pytest.raises(AglTypeError, match="built-in function"):
             check_resolved(resolved)
 
@@ -10119,17 +10082,7 @@ class TestDefensiveGuards:
         # A function binding without a registered signature now reports a user-facing
         # inference error instead of falling through to an internal assertion.
         sp = mk_span()
-        body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
-        ret_type = IntT(span=sp, node_id=_mk_node_id())
         fd_nid = _mk_node_id()
-        fd = FuncDef(
-            name="h",
-            params=(),
-            return_type=ret_type,
-            body=body_expr,
-            span=sp,
-            node_id=fd_nid,
-        )
         callee_nid = _mk_node_id()
         callee = VarRef(name="h", span=sp, node_id=callee_nid)
         call = Call(callee=callee, args=(), named_args=(), span=sp, node_id=_mk_node_id())
@@ -10146,24 +10099,13 @@ class TestDefensiveGuards:
         resolved = self._mk_resolved(
             prog,
             resolution={callee_nid: binding_ref},
-            declared_functions={"h": fd},
         )
         with pytest.raises(AglTypeError, match="Cannot infer return type"):
             check_resolved(resolved)
 
     def test_function_value_without_registered_type_reports_inference_error(self) -> None:
         sp = mk_span()
-        body_expr = IntLit(value=1, span=sp, node_id=_mk_node_id())
-        ret_type = IntT(span=sp, node_id=_mk_node_id())
         fd_nid = _mk_node_id()
-        fd = FuncDef(
-            name="h",
-            params=(),
-            return_type=ret_type,
-            body=body_expr,
-            span=sp,
-            node_id=fd_nid,
-        )
         ref_nid = _mk_node_id()
         ref = VarRef(name="h", span=sp, node_id=ref_nid)
         block = Block(items=(ref,), span=sp, node_id=_mk_node_id())
@@ -10178,7 +10120,6 @@ class TestDefensiveGuards:
         resolved = self._mk_resolved(
             prog,
             resolution={ref_nid: binding_ref},
-            declared_functions={"h": fd},
         )
 
         with pytest.raises(AglTypeError, match="Cannot infer return type"):
@@ -10197,7 +10138,7 @@ class TestDefensiveGuards:
         )
         block = Block(items=(fd,), span=sp, node_id=_mk_node_id())
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
-        resolved = self._mk_resolved(prog, declared_functions={"print": fd})
+        resolved = self._mk_resolved(prog)
 
         with pytest.raises(AglTypeError, match="must declare a return type"):
             check_resolved(resolved)
@@ -10251,7 +10192,6 @@ class TestDefensiveGuards:
         resolved = self._mk_resolved(
             prog,
             resolution={callee_nid: binding_ref},
-            declared_functions={"g": fd},
         )
         with pytest.raises(AglTypeError, match="Duplicate argument"):
             check_resolved(resolved)
@@ -10360,8 +10300,8 @@ class TestDefensiveGuards:
 
 class TestCallDispatchScopeAware:
     """Verify that the declared-name/value-call dispatch uses BindingRef.kind,
-    not the flat declared_functions name map, so that a let-bound function value
-    that shadows a top-level def name is treated as a value call."""
+    so that a let-bound function value that shadows a top-level def name is
+    treated as a value call."""
 
     def test_shadow_def_with_let_fn_is_value_call(self) -> None:
         # 'classify' is a top-level def(a, b) -> text; inside wrap() a let
@@ -10587,7 +10527,12 @@ class TestMethodHeaders:
             "let point = Point(x = 1)\n"
             "Point::radius(point)"
         )
-        signature = checked.type_env.get_function_signature("radius", scope_path=("Point",))
+        method = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, FuncDef) and item.name == "radius"
+        )
+        signature = checked.type_env.get_function_signature_by_node_id(method.node_id)
         assert signature is not None
         receiver = replace(signature.params[0], type=strip_decl_ids(signature.params[0].type))
         assert receiver == ParamSpec("self", RecordType("Point"), ParamZone.POSITIONAL_ONLY, False)
@@ -10599,7 +10544,12 @@ class TestMethodHeaders:
             "def Box::get[E](self: Box[E]) -> E = self.value\n"
             "Box(value = 1)"
         )
-        signature = checked.type_env.get_function_signature("get", scope_path=("Box",))
+        method = next(
+            item
+            for item in checked.resolved.program.body.items
+            if isinstance(item, FuncDef) and item.name == "get"
+        )
+        signature = checked.type_env.get_function_signature_by_node_id(method.node_id)
         assert signature is not None
         assert strip_decl_ids(signature.params[0].type) == RecordType("Box", (TypeVarType("E"),))
         assert signature.params[0].kind is ParamZone.POSITIONAL_ONLY
@@ -11045,15 +10995,12 @@ class TestResolveTypeExprTypeVars:
 
         env1 = TypeEnvironment()
         sp = mk_span()
-        env1.register_alias(
-            "Wrapper",
-            _ListT(elem=NameT(name="T", span=sp, node_id=1), span=sp, node_id=2),
-            type_params=("T",),
-        )
+        target_expr = _ListT(elem=NameT(name="T", span=sp, node_id=1), span=sp, node_id=2)
+        env1.register_alias("Wrapper", target_expr, type_params=("T",))
         env1.seal()
         env2 = TypeEnvironment()
         env2.seed_from(env1)
-        assert env2.get_alias_type_params("Wrapper") == ("T",)
+        assert env2.has_alias_registration("Wrapper", target_expr, ("T",))
 
     def test_instantiate_nominal_unknown_raises(self) -> None:
         env = TypeEnvironment()
@@ -11123,7 +11070,7 @@ class TestResolveTypeExprTypeVars:
 class TestTypeVarTypeSchema:
     def test_typevar_type_not_wire_serialisable(self) -> None:
         from agm.agl.semantics.type_table import create_seeded_type_table
-        from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import derive_schema
 
         with pytest.raises(TypeError, match="TypeVarType"):
             derive_schema(TypeVarType("T"), create_seeded_type_table())

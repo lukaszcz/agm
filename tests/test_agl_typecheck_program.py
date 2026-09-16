@@ -3758,8 +3758,8 @@ def test_generic_def_as_value_single_module(tmp_path: Path) -> None:
     """A generic def used as a value resolves through the node-id signature lookup.
 
     The fix changes _check_varref to consult get_function_signature_by_node_id
-    (globally unique, correct for cross-module) BEFORE falling back to
-    get_function_signature (name-keyed).
+    (globally unique, correct for cross-module) BEFORE falling back to the
+    name-keyed compatibility table (``all_function_signatures()``).
 
     This e2e test verifies the fix works for a single-module program: a
     generic function used as a value must typecheck when an expected
@@ -3779,8 +3779,8 @@ def test_generic_def_as_value_single_module(tmp_path: Path) -> None:
 
     # The cross-module  case (lib::id as a value in entry) is tested at the
     # env level: verify that get_function_signature_by_node_id takes priority.
-    # This is the path the fixed checker takes; before the fix it only called
-    # get_function_signature(ref.name) which returns wrong/None cross-module.
+    # This is the path the fixed checker takes; before the fix it only
+    # consulted the name-keyed table, which returns wrong/None cross-module.
     from agm.agl.typecheck.env import FunctionSignature as FS
     from agm.agl.typecheck.env import TypeEnvironment
 
@@ -3793,8 +3793,8 @@ def test_generic_def_as_value_single_module(tmp_path: Path) -> None:
     # The fix also consults node-id lookup first; seed it with the correct generic sig.
     env.register_function_signature_by_node_id(42, generic_sig)
 
-    # Before the fix: get_function_signature("id") returns wrong sig (no type_params).
-    assert env.get_function_signature("id") is wrong_non_generic_sig
+    # Before the fix: the name-keyed table returned the wrong sig (no type_params).
+    assert env.all_function_signatures()["id"] is wrong_non_generic_sig
     # After the fix: get_function_signature_by_node_id(42) returns correct generic sig.
     sig_by_id = env.get_function_signature_by_node_id(42)
     assert sig_by_id is generic_sig
@@ -4039,11 +4039,7 @@ def test_checked_modules_publish_only_their_own_function_signatures(tmp_path: Pa
     assert set(graph.modules[ModuleId.from_path("app")].function_signatures) == {"shared"}
     app_signatures = graph.modules[ModuleId.from_path("app")].function_signatures
     assert app_signatures["shared"].result == TextType()
-    assert {
-        name
-        for name, decl in graph.modules[ENTRY_ID].resolved.declared_functions.items()
-        if not decl.is_synthetic
-    } == set()
+    assert set(graph.modules[ENTRY_ID].function_signatures) == set()
 
 
 # ---------------------------------------------------------------------------

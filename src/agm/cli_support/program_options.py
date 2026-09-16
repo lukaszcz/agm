@@ -1617,19 +1617,6 @@ class ProgramCommand:
         """
         return frozenset(param.name for param in self.positional[:count])
 
-    def positional_only_names(self) -> frozenset[str]:
-        """Return the external names of this program's positional-only parameters.
-
-        A positional-only parameter exposes no name in the CLI/config
-        namespace — it fills an ``ARG`` slot only, never a ``--name`` flag or
-        a config-table key — so callers that report on the name-addressable
-        surface (config-key diagnostics, completions) use this to tell those
-        parameters apart from a genuinely undeclared name.
-        """
-        return frozenset(
-            param.cli.name for param in self.positional if param.kind is ParamZone.POSITIONAL_ONLY
-        )
-
 
 def _check_reservation(
     options: "tuple[tuple[ProgramParamInfo, ProjectedOption], ...]",

@@ -39,8 +39,8 @@ questions — may ``=``/``!=`` be applied (``comparable_types``)? and is there
 a JSON representation (:meth:`TypeTable.nominal_is_json_convertible`)? —
 which is why it is named for the fact rather than for either consumer.
 
-:meth:`TypeTable.has_finite_closure`/:meth:`TypeTable.has_finite_schema`
-answer a related but distinct whole-type question: not "does this type
+:meth:`TypeTable.has_finite_schema` answers a related but distinct
+whole-type question: not "does this type
 support ``=``?" but "is this type's reachable *instantiation closure* finite
 (so it has a finite JSON schema)?" — a generic recursive declaration may
 reference itself at ever-larger arguments (polymorphic recursion), which
@@ -420,10 +420,6 @@ class TypeTable:
             del self._name_index[key]
         self._invalidate_cache_for(decl_id)
 
-    def is_orphaned(self, decl_id: DeclId) -> bool:
-        """Return whether *decl_id* was orphaned (see :meth:`orphan`)."""
-        return decl_id in self._orphaned
-
     def is_current(self, typedef: TypeDef) -> bool:
         """Return whether *typedef*'s identity is the one its name path currently resolves to.
 
@@ -789,15 +785,6 @@ class TypeTable:
             owners.append(result)
         return tuple(owners)
 
-    def enum_owner_for_member(self, handle: RecordType) -> EnumType | None:
-        """Return the first concrete enum containing *handle*, if one exists.
-
-        This compatibility query is suitable only for callers that need any
-        owner.  Validation of an explicit owner must use
-        :meth:`enum_owners_for_member`.
-        """
-        return next(iter(self.enum_owners_for_member(handle)), None)
-
     def record_matches_enum_member(
         self, enum: EnumType, member_name: str, record: RecordType
     ) -> bool:
@@ -816,9 +803,9 @@ class TypeTable:
     def is_enum_member(self, handle: RecordType) -> bool:
         """Return whether *handle* names a declaration registered as an enum member.
 
-        Unlike :meth:`enum_owner_for_member`, this is a declaration-membership
-        query. It therefore remains true for a fieldless generic member whose
-        record handle cannot reconstruct its owning enum's phantom arguments.
+        This is a declaration-membership query: it remains true for a
+        fieldless generic member whose record handle cannot reconstruct its
+        owning enum's phantom arguments.
         """
         return handle.decl_id in self._member_enum_owner_index()
 
@@ -1153,23 +1140,6 @@ class TypeTable:
 
             self._non_data_caps = compute_non_data_reachability(self)
         return self._non_data_caps
-
-    def has_finite_closure(
-        self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
-    ) -> bool:
-        """Return whether the named declaration has a finite closure.
-
-        Declaration-level only (no ``type_args``): see
-        :func:`~agm.agl.semantics.analyses.compute_finite_closure` for what
-        "finite closure" means and how it is decided. Resolves *name* through
-        the name index to the newest declaration bearing it; a name that is
-        not registered at all defaults to ``True`` (finite), matching the
-        defensive default of every other declaration-level query here.
-        """
-        decl_id = self._name_index.get((module_id, scope_path, name))
-        if decl_id is None:
-            return True
-        return decl_id not in self._finite_closure_result().infinite
 
     def has_finite_schema(self, t: Type) -> bool:
         """Return ``True`` if every declaration reachable from *t* has a finite closure.

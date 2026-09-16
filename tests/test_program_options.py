@@ -1171,15 +1171,6 @@ class TestParseHelpRequest:
         assert exc_info.value.command is command
 
 
-class TestPositionalOnlyNames:
-    def test_only_positional_only_parameters_are_listed(self) -> None:
-        command = _command(
-            _param("first", TextType(), ParamZone.POSITIONAL_ONLY),
-            _param("second", TextType(), ParamZone.STANDARD),
-        )
-        assert command.positional_only_names() == frozenset({"first"})
-
-
 class TestDefaultMetavar:
     """A value-taking option's placeholder names how its token is read."""
 

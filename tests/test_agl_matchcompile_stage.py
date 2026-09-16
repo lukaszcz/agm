@@ -368,7 +368,6 @@ def test_artifact_rejects_a_match_site_with_the_wrong_source_payload() -> None:
         action_id=site.source.action.action_id,
         source_index=0,
         body_node_id=site.source.action.action_id,
-        branch_span=site.normalized.span,
         pattern_span=site.normalized.span,
     )
     wrong_payload = replace(

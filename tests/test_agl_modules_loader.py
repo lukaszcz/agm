@@ -19,7 +19,7 @@ from agm.agl.modules.errors import (
     PackageImportVisibilityError,
 )
 from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID, ModuleId
-from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph, load_graph
+from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph
 from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
@@ -28,6 +28,7 @@ from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import agl_roots, agl_std_package_roots
 from tests._timeouts import fail_if_slow
+from tests.agl.module_graph import load_graph
 
 # ---------------------------------------------------------------------------
 # Helpers

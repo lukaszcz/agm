@@ -138,7 +138,6 @@ def test_let_normalization_retains_its_initializer_pattern_and_matched_type() ->
     assert normalized.source.action.action_id == normalized.rows[0].action_id
     assert normalized.source.actions == (normalized.source.action,)
     assert len(normalized.rows) == len(normalized.source.actions) == 1
-    assert normalized.root.provenance.subject_node_id == let.value.node_id
     assert normalized.rows[0].source_pattern_id == let.pattern.node_id
     assert normalized.root.provenance.site_node_id == let.node_id
     with pytest.raises(MatchCompileInvariantError, match="matched type"):
@@ -569,7 +568,6 @@ def test_constructor_normalization_expands_omitted_generic_fields_in_declaration
     assert isinstance(second, WildcardCell)
     assert second.binders == ()
     assert second.provenance == OmittedFieldProvenance(
-        constructor_pattern_id=case.branches[0].pattern.node_id,
         field_name="second",
         span=case.branches[0].pattern.span,
     )

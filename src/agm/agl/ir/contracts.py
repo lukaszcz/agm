@@ -171,7 +171,7 @@ class RefDecode:
     """Reference to a recursive instantiation's entry in an enclosing ``defs`` table.
 
     Mirrors a ``{"$ref": "#/$defs/<key>"}`` node in the JSON Schema derived by
-    ``derive_schema`` (``type_schema.py``): both are emitted from the SAME
+    ``derive_schema_and_decode`` (``type_schema.py``): both are emitted from the SAME
     recursion plan, so ``key`` matches the JSON Schema's own ``$defs`` key for
     the same instantiation one-to-one.  Resolved against the ``defs`` table
     carried alongside the decode schema (see ``DecodePlan``) wherever the walk
@@ -189,12 +189,12 @@ DecodeSchema = ScalarDecode | ArrayDecode | DictDecode | RecordDecode | EnumDeco
 
 @dataclass(frozen=True, slots=True)
 class DecodePlan:
-    """A decode schema paired with its ``$defs`` table, as ``build_decode_schema`` returns it.
+    """A decode schema paired with its ``$defs`` table, as ``derive_schema_and_decode`` returns it.
 
     ``root`` is the decode schema for the requested type itself (a
     ``RefDecode`` when the type's own root instantiation is recursive).
     ``defs`` holds one entry per recursive instantiation reachable from
-    *root*, keyed identically to ``derive_schema``'s own ``$defs`` keys for
+    *root*, keyed identically to the JSON Schema's own ``$defs`` keys for
     the same type (same recursion plan, see ``type_schema._plan_schema``) — a
     tuple of ``(key, schema)`` pairs (not a ``dict``) so the plan stays
     hashable like every other IR descriptor.  Empty for a non-recursive type,

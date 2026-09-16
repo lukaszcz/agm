@@ -172,7 +172,6 @@ class SourcePatternProvenance:
 class OmittedFieldProvenance:
     """A wildcard synthesized for an omitted constructor field."""
 
-    constructor_pattern_id: int
     field_name: str
     span: SourceSpan
 
@@ -185,7 +184,6 @@ class RootOccurrenceProvenance:
     """Provenance for the root value occurrence of one source match site."""
 
     site_node_id: int
-    subject_node_id: int
     span: SourceSpan
 
 
@@ -275,7 +273,6 @@ class SourceAction:
     action_id: int
     source_index: int
     body_node_id: int
-    branch_span: SourceSpan
     pattern_span: SourceSpan
 
 

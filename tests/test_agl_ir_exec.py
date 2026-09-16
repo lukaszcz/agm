@@ -38,7 +38,6 @@ def _ok(stdout: str, *, returncode: int = 0, stderr: str = "") -> ProcessCapture
         elapsed=0.01,
         timed_out=False,
         spawn_error=None,
-        spawn_errno=None,
     )
 
 
@@ -56,7 +55,6 @@ def _timed_out(
         elapsed=0.5,
         timed_out=True,
         spawn_error=None,
-        spawn_errno=None,
     )
 
 
@@ -69,7 +67,6 @@ def _spawn_failed(msg: str = "No such file or directory") -> ProcessCaptureResul
         elapsed=0.0,
         timed_out=False,
         spawn_error=msg,
-        spawn_errno=2,
     )
 
 
@@ -82,7 +79,6 @@ def _fail(returncode: int, stdout: str = "", stderr: str = "") -> ProcessCapture
         elapsed=0.01,
         timed_out=False,
         spawn_error=None,
-        spawn_errno=None,
     )
 
 
@@ -435,7 +431,6 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         elapsed=0.01,
         timed_out=False,
         spawn_error=None,
-        spawn_errno=None,
     )
     from agm.agl.runtime.codec import ParseResult
 

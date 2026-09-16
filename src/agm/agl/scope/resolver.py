@@ -693,10 +693,8 @@ class _Resolver:
             root_scope=root,
             declarations=dict(self._declarations),
             scope_nodes=dict(self._scope_nodes),
-            declared_functions=dict(self._declared_functions),
             allows_root_statements=self._allow_root_statements,
             origin_path=self._origin_path,
-            declared_type_names=frozenset(self._declared_type_names),
             declared_type_paths=frozenset(self._type_paths),
             constructor_candidates={
                 name: tuple(refs) for name, refs in self._constructor_candidates.items()
@@ -712,7 +710,6 @@ class _Resolver:
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
             method_declarations=dict(self._method_declarations),
             reachable_declarations=self._reachable_declarations(),
-            use_targets=dict(self._use_targets),
             attributes=attribute_facts,
         )
 

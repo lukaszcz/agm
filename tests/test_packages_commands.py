@@ -28,13 +28,17 @@ from agm.packages.activation import (
     write_activation_index,
 )
 from agm.packages.archive import write_archive
-from agm.packages.install import install_archive, install_directory
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
 from agm.version import AGM_VERSION
-from tests._package_helpers import older_incompatible_std_requirement, std_compatibility_bound
+from tests._package_helpers import (
+    install_archive,
+    install_directory,
+    older_incompatible_std_requirement,
+    std_compatibility_bound,
+)
 
 _PARAM_SURFACE_PACKAGE = Path(__file__).parent / "agl" / "packages" / "param_surface"
 

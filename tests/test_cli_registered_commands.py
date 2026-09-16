@@ -23,12 +23,11 @@ from agm.packages.activation import (
     PackageActivationError,
     write_activation_index,
 )
-from agm.packages.install import install_directory
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import CommandSpec, PackageManifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
-from tests._package_helpers import write_installed_package
+from tests._package_helpers import install_directory, write_installed_package
 
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo

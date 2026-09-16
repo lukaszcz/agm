@@ -155,7 +155,6 @@ def test_stdin_delivered_run_sends_prompt_as_stdin_and_appends_no_target(
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
@@ -209,7 +208,6 @@ def test_stdin_delivered_prompt_does_not_read_the_prompt_back_off_disk(
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
@@ -262,7 +260,6 @@ def test_file_delivered_run_is_unchanged_by_the_stdin_delivery_mode(
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
@@ -356,7 +353,6 @@ def test_prepared_runner_maps_process_capture_result(
         elapsed=1.0,
         timed_out=timed_out,
         spawn_error=spawn_error,
-        spawn_errno=None,
     )
     monkeypatch.setattr("agm.agent.runner.run_capture_result", lambda *args, **kwargs: capture)
     prepared = PreparedPromptRun(
@@ -420,7 +416,7 @@ def test_prepared_result_closes_stdin_for_no_prompt_delivery(
     def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
         captured["argv"] = argv
         captured["stdin_text"] = kwargs.get("stdin_text")
-        return ProcessCaptureResult(0, "", "", 0.0, False, None, None)
+        return ProcessCaptureResult(0, "", "", 0.0, False, None)
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
     prepared = PreparedPromptRun(

@@ -58,7 +58,6 @@ class CaptureTransport:
                 elapsed=0.1,
                 timed_out=outcome.timed_out,
                 spawn_error=outcome.spawn_error,
-                spawn_errno=None,
             )
 
         monkeypatch.setattr("agm.agent.runner.run_capture_result", run)

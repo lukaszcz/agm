@@ -2400,7 +2400,6 @@ class TestIrExec:
             elapsed=0.01,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
         # Use a bool command (non-text) — render_value("True") is "True"
         prog = self._make_exec_program(IrConstBool(_LOC, True))
@@ -2508,7 +2507,6 @@ class TestIrExec:
                     elapsed=0.01,
                     timed_out=False,
                     spawn_error=None,
-                    spawn_errno=None,
                 )
             # Second call: spawn error
             return ProcessCaptureResult(
@@ -2518,7 +2516,6 @@ class TestIrExec:
                 elapsed=0.0,
                 timed_out=False,
                 spawn_error="No such file or directory",
-                spawn_errno=2,
             )
 
         # Use int codec so parse fails and retry triggers
@@ -2529,7 +2526,7 @@ class TestIrExec:
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
-        from agm.agl.type_schema import build_decode_schema
+        from tests._agl_helpers import build_decode_schema
 
         cid = ContractId(value=0)
         decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
@@ -2614,7 +2611,6 @@ class TestIrExec:
             elapsed=0.0,
             timed_out=False,
             spawn_error="No such file or directory",
-            spawn_errno=2,
         )
         prog = self._make_exec_program(IrConstText(_LOC, "dummy"))
         trace_path = tmp_path / "trace.jsonl"
@@ -2668,8 +2664,8 @@ class TestIrExec:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
-        from agm.agl.type_schema import build_decode_schema
         from agm.core.process import ProcessCaptureResult
+        from tests._agl_helpers import build_decode_schema
 
         call_count = [0]
 
@@ -2691,7 +2687,6 @@ class TestIrExec:
                     elapsed=0.01,
                     timed_out=False,
                     spawn_error=None,
-                    spawn_errno=None,
                 )
             # Second call: timeout
             return ProcessCaptureResult(
@@ -2701,7 +2696,6 @@ class TestIrExec:
                 elapsed=5.0,
                 timed_out=True,
                 spawn_error=None,
-                spawn_errno=None,
             )
 
         cid = ContractId(value=0)
@@ -2753,8 +2747,8 @@ class TestIrExec:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
-        from agm.agl.type_schema import build_decode_schema
         from agm.core.process import ProcessCaptureResult
+        from tests._agl_helpers import build_decode_schema
 
         call_count = [0]
 
@@ -2776,7 +2770,6 @@ class TestIrExec:
                     elapsed=0.01,
                     timed_out=False,
                     spawn_error=None,
-                    spawn_errno=None,
                 )
             # Second call: non-zero exit
             return ProcessCaptureResult(
@@ -2786,7 +2779,6 @@ class TestIrExec:
                 elapsed=0.01,
                 timed_out=False,
                 spawn_error=None,
-                spawn_errno=None,
             )
 
         cid = ContractId(value=0)
@@ -2835,8 +2827,8 @@ class TestIrExec:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
-        from agm.agl.type_schema import build_decode_schema
         from agm.core.process import ProcessCaptureResult
+        from tests._agl_helpers import build_decode_schema
 
         # JSON parse of a string where int is expected yields structured errors
         def fake_rcr(
@@ -2856,7 +2848,6 @@ class TestIrExec:
                 elapsed=0.01,
                 timed_out=False,
                 spawn_error=None,
-                spawn_errno=None,
             )
 
         cid = ContractId(value=0)

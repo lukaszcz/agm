@@ -5118,7 +5118,6 @@ print exec$ true
             elapsed=0.0,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
         from agm.agl import PipelineDriver
 

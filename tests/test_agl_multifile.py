@@ -108,7 +108,11 @@ def test_selected_program_preflight_excludes_unreachable_call_sites(tmp_path: Pa
     runtime = PipelineDriver()
     discovery = runtime.discover_programs(prepared)
     assert discovery.compiled is not None, discovery.diagnostics
-    selected = next(program for program in discovery.programs if program.qualified_path == "a::run")
+    selected = next(
+        program
+        for program in discovery.programs
+        if program.module.path_str() == "a" and program.name == "run"
+    )
 
     preflight = runtime.preflight_arguments(
         prepared,
@@ -137,7 +141,11 @@ def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> No
     )
     runtime = PipelineDriver()
     discovery = runtime.discover_programs(prepared)
-    selected = next(program for program in discovery.programs if program.qualified_path == "a::run")
+    selected = next(
+        program
+        for program in discovery.programs
+        if program.module.path_str() == "a" and program.name == "run"
+    )
     preflight = runtime.preflight_arguments(
         prepared,
         selected,

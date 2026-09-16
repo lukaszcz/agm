@@ -171,8 +171,7 @@ class ParsedEntry:
         module-graph loading.
     ``spaced_qualifiers``
         Lexical advisories collected while parsing the entry, threaded into
-        module-graph loading exactly as :func:`~agm.agl.modules.loader.load_graph`
-        does.
+        module-graph loading.
     ``diagnostics``
         A parse failure, or empty on success.
     ``warnings``
@@ -652,10 +651,9 @@ class PipelineDriver:
 
         The first half of :meth:`prepare_program`, split out before module
         loading so a host can transform an entry AST before scope resolution.
-        Collects TAB and spaced-qualifier advisories exactly as
-        :func:`~agm.agl.modules.loader.load_graph` does for its own entry
-        parse.  Non-raising: an ``AglSyntaxError`` is captured into
-        :attr:`ParsedEntry.diagnostics` with ``program`` left ``None``.
+        Collects TAB and spaced-qualifier advisories.  Non-raising: an
+        ``AglSyntaxError`` is captured into :attr:`ParsedEntry.diagnostics`
+        with ``program`` left ``None``.
         *inline_command* applies the ``agm exec -c`` synthetic-entry wrap.
         """
         from agm.agl.lexer import tab_warning_collector

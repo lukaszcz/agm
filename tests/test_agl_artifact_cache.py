@@ -344,11 +344,11 @@ def test_prepared_environments_match_cache_free_across_every_module(tmp_path: Pa
 
     Table contents are compared by reading ``TypeEnvironment`` instance
     attributes directly (via ``vars()``), because several of the tables this
-    bug touches (``_binding_types``, ``_function_signatures_by_path``,
-    ``_function_signatures_by_node_id``) have no public enumeration accessor
-    -- only single-key lookups (``get_binding_type``, ``get_function_signature``,
-    ``get_function_signature_by_node_id``) -- and ``all_function_signatures()``
-    exposes only the root-scope name-keyed table, not the other three.
+    bug touches (``_binding_types``, ``_function_signatures_by_node_id``) have
+    no public enumeration accessor -- only single-key lookups
+    (``get_binding_type``, ``get_function_signature_by_node_id``) -- and
+    ``all_function_signatures()`` exposes only the root-scope name-keyed
+    table, not the other two.
     ``_import_env``/``_scope_nodes`` are excluded: both preparations share the
     identical input objects for them by construction, so they carry no
     information about this bug. Every module is compared, the entry included.

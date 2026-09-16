@@ -15,8 +15,7 @@ generic-template strategy because it has no finite concrete plan. Fallible casts
 (``decimal → int`` narrowing, ``text → T``, ``json → T``) carry
 the derived JSON schema and the ``decode_value`` decode walk.
 
-``derive_schema_and_decode`` lives in :mod:`agm.agl.type_schema` (alongside
-``derive_schema``/``build_decode_schema``) so both the lowerer and the runtime
+``derive_schema_and_decode`` lives in :mod:`agm.agl.type_schema` so both the lowerer and the runtime
 codec can import it without a cycle; it derives the JSON schema and the
 typeless decode plan (``DecodePlan`` — a decode schema plus its ``$defs``
 table for a recursive target type) from one shared recursion plan.

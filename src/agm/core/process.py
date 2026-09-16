@@ -637,9 +637,6 @@ class ProcessCaptureResult:
       started (any ``OSError`` at the spawn boundary — ``FileNotFoundError``,
       ``PermissionError``, ``OSError(ENOEXEC)``, etc.); in that case ``returncode``
       is ``None`` and both streams are empty.
-    - ``spawn_errno`` mirrors the OS ``errno`` of the spawn exception (e.g. ``ENOENT``,
-      ``EACCES``, ``ENOEXEC``) so callers can identify the cause.  It is ``None`` when
-      there was no spawn error, or when the error was a ``ValueError`` (no OS errno).
     - ``timed_out`` is ``True`` when the idle timeout fired; ``returncode`` then
       reflects the kill exit code (nonzero).
     - In all normal-completion cases ``spawn_error`` is ``None``, ``timed_out`` is
@@ -652,7 +649,6 @@ class ProcessCaptureResult:
     elapsed: float
     timed_out: bool
     spawn_error: str | None
-    spawn_errno: int | None
 
 
 def _run_capture_result_impl(
@@ -708,7 +704,6 @@ def _run_capture_result_impl(
                     elapsed=elapsed,
                     timed_out=False,
                     spawn_error=str(exc),
-                    spawn_errno=exc.errno,
                 ),
                 exc,
             )
@@ -717,9 +712,9 @@ def _run_capture_result_impl(
             # before the child is launched for malformed arguments — most notably
             # ``ValueError('embedded null byte')`` when an argv element contains a
             # NUL.  Map it to the same spawn-failure result as the OS-level spawn
-            # errors; ``spawn_errno`` is ``None`` since there is no OS error number.
-            # The original exception object is returned so ``run_capture`` can
-            # re-raise it, preserving original exception semantics for all callers.
+            # errors. The original exception object is returned so ``run_capture``
+            # can re-raise it, preserving original exception semantics for all
+            # callers.
             elapsed = time.monotonic() - start
             return (
                 ProcessCaptureResult(
@@ -729,7 +724,6 @@ def _run_capture_result_impl(
                     elapsed=elapsed,
                     timed_out=False,
                     spawn_error=str(exc),
-                    spawn_errno=None,
                 ),
                 exc,
             )
@@ -757,7 +751,6 @@ def _run_capture_result_impl(
                 elapsed=elapsed,
                 timed_out=timed_out,
                 spawn_error=None,
-                spawn_errno=None,
             ),
             None,
         )

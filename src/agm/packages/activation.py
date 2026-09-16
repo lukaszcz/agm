@@ -6,7 +6,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
-from typing import cast
 
 import semver
 import tomlkit
@@ -30,15 +29,11 @@ from agm.packages.model import (
     PackageInfo,
     canonical_package_identity,
     is_std_package_name,
-    select_satisfying,
     unmet_std_requirement,
 )
 from agm.packages.store import (
-    StoreIdentityError,
     canonical_package_provenance_path,
     canonical_package_store_path,
-    iter_installed_packages,
-    iter_store_package_dirs,
 )
 
 
@@ -249,89 +244,6 @@ def validate_activation_index(
             index, packages, home=home, env=env, transient_packages=transient_packages
         )
     )
-
-
-def rebuild_activation_index(
-    *, home: Path, env: Mapping[str, str] | None = None
-) -> ActivationIndex:
-    """Build the deterministic installed-package selection from store manifests.
-
-    Store versions are side-by-side, so the highest semantic version for each
-    package is active after a rebuild. Package-local provenance sidecars retain
-    command priority independently of package-name iteration. Editable
-    selections are not inferable from the immutable store.
-    """
-
-    previous = load_activation_index(home=home, env=env)
-    for name_dir in iter_store_package_dirs(home=home, env=env):
-        _validate_package_name(name_dir.name)
-
-    candidates_by_name: dict[str, list[PackageInfo]] = {}
-    try:
-        for installed in iter_installed_packages(
-            home=home,
-            env=env,
-            on_manifest_error=lambda exc, version_dir: PackageActivationError(
-                f"cannot load active package at {version_dir}: {exc}"
-            ),
-        ):
-            candidates_by_name.setdefault(installed.manifest.name, []).append(installed)
-    except StoreIdentityError as exc:
-        raise PackageActivationError(str(exc)) from exc
-
-    active: dict[str, ActivePackage] = {}
-    for name, candidates in candidates_by_name.items():
-        # ``candidates`` is only ever created together with its first
-        # element, so it is always non-empty and ``select_satisfying`` always
-        # returns a winner.
-        selected = cast(PackageInfo, select_satisfying(candidates, previous.packages.get(name)))
-        active[name] = ActivePackage(selected.manifest.version)
-
-    provenance = {
-        name: load_package_provenance(name, package.version, home=home, env=env)
-        for name, package in active.items()
-    }
-    _validate_rebuild_provenance(provenance)
-    persisted_orders = {item.registration_order for item in provenance.values() if item is not None}
-    next_order = max(
-        (
-            *(package.registration_order for package in previous.packages.values()),
-            *persisted_orders,
-        ),
-        default=0,
-    )
-    used_orders = set(persisted_orders)
-    rebuilt: dict[str, ActivePackage] = {}
-    for name, package in sorted(active.items()):
-        persisted = provenance[name]
-        previous_package = previous.packages.get(name)
-        if persisted is not None:
-            rebuilt[name] = ActivePackage(
-                package.version,
-                shadow=persisted.shadow,
-                registration_order=persisted.registration_order,
-            )
-        elif (
-            previous_package is not None
-            and previous_package.editable is None
-            and previous_package.registration_order not in used_orders
-            and canonical_package_identity(name, previous_package.version)
-            == canonical_package_identity(name, package.version)
-        ):
-            rebuilt[name] = ActivePackage(
-                package.version,
-                shadow=previous_package.shadow,
-                registration_order=previous_package.registration_order,
-            )
-            used_orders.add(previous_package.registration_order)
-        else:
-            next_order += 1
-            rebuilt[name] = ActivePackage(package.version, registration_order=next_order)
-            used_orders.add(next_order)
-    index = ActivationIndex(packages=rebuilt)
-    packages = resolve_indexed_packages(index, home=home, env=env)
-    _validate_requirements(packages)
-    return _reconciled_commands(index, packages, provenance=provenance)
 
 
 def load_package_pins(
@@ -732,12 +644,6 @@ def _parse_package_provenance(raw: TomlDict, path: Path) -> PackageProvenance:
     ):
         raise PackageActivationError(f"package provenance {path} has invalid activation metadata")
     return PackageProvenance(registration_order, shadow)
-
-
-def _validate_rebuild_provenance(provenance: Mapping[str, PackageProvenance | None]) -> None:
-    orders = [item.registration_order for item in provenance.values() if item is not None]
-    if len(orders) != len(set(orders)):
-        raise PackageActivationError("package provenance has duplicate registration order")
 
 
 def _command_owners(packages: Iterable[PackageInfo]) -> dict[str, list[PackageInfo]]:

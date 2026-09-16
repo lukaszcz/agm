@@ -1002,7 +1002,6 @@ class TestCapabilitiesBuiltFromRegistrations:
         from agm.agl.runtime.codec import ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
         from agm.agl.semantics.type_table import TypeTable
-        from agm.agl.semantics.types import TextType
         from agm.agl.semantics.values import TextValue as TV
 
         class FooCodec:
@@ -1013,9 +1012,6 @@ class TestCapabilitiesBuiltFromRegistrations:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
-
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, TextType)
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
@@ -2623,27 +2619,26 @@ class TestDeriveSchema:
 
     def test_bool_type(self) -> None:
         from agm.agl.semantics.types import BoolType
-        from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import derive_schema
 
         assert derive_schema(BoolType(), type_table_for()) == {"type": "boolean"}
 
     def test_json_type(self) -> None:
         from agm.agl.semantics.types import JsonType
-        from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import derive_schema
 
         assert derive_schema(JsonType(), type_table_for()) == {}
 
     def test_dict_type(self) -> None:
         from agm.agl.semantics.types import DictType, IntType
-        from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import derive_schema
 
         result = derive_schema(DictType(value=IntType()), type_table_for())
         assert result == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_type(self) -> None:
         from agm.agl.semantics.types import TextType
-        from agm.agl.type_schema import derive_schema
-        from tests._agl_helpers import record_type
+        from tests._agl_helpers import derive_schema, record_type
 
         typ, typedef = record_type("Point", {"x": TextType()})
         result = derive_schema(typ, type_table_for(typedef))
@@ -2653,8 +2648,7 @@ class TestDeriveSchema:
 
     def test_enum_type_with_payload(self) -> None:
         from agm.agl.semantics.types import TextType
-        from agm.agl.type_schema import derive_schema
-        from tests._agl_helpers import enum_type
+        from tests._agl_helpers import derive_schema, enum_type
 
         typ, typedef = enum_type("Status", {"Pass": {}, "Fail": {"reason": TextType()}})
         result = derive_schema(typ, type_table_for(typedef))
@@ -2663,28 +2657,28 @@ class TestDeriveSchema:
 
     def test_exception_type_raises(self) -> None:
         from agm.agl.semantics.types import ExceptionType
-        from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import derive_schema
 
         with pytest.raises(TypeError, match="ExceptionType"):
             derive_schema(ExceptionType(name="MyErr"), type_table_for())
 
     def test_unit_type_raises(self) -> None:
         from agm.agl.semantics.types import UnitType
-        from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import derive_schema
 
         with pytest.raises(TypeError, match="UnitType"):
             derive_schema(UnitType(), type_table_for())
 
     def test_function_type_raises(self) -> None:
         from agm.agl.semantics.types import FunctionType, TextType
-        from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import derive_schema
 
         with pytest.raises(TypeError, match="FunctionType"):
             derive_schema(FunctionType(params=(TextType(),), result=TextType()), type_table_for())
 
     def test_bottom_type_raises(self) -> None:
         from agm.agl.semantics.types import BottomType
-        from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import derive_schema
 
         with pytest.raises(TypeError, match="BottomType"):
             derive_schema(BottomType(), type_table_for())
@@ -2729,7 +2723,8 @@ class TestBuildParamDecoder:
         import json
 
         from agm.agl.semantics.types import IntType
-        from agm.agl.type_schema import build_param_decoder, derive_schema
+        from agm.agl.type_schema import build_param_decoder
+        from tests._agl_helpers import derive_schema
 
         typ = IntType()
         table = type_table_for()
@@ -2745,8 +2740,8 @@ class TestBuildParamDecoder:
         import json
 
         from agm.agl.semantics.types import TextType
-        from agm.agl.type_schema import build_param_decoder, derive_schema
-        from tests._agl_helpers import record_type
+        from agm.agl.type_schema import build_param_decoder
+        from tests._agl_helpers import derive_schema, record_type
 
         typ, typedef = record_type("Point", {"x": TextType()})
         table = type_table_for(typedef)
@@ -2965,7 +2960,6 @@ class TestRegisterCodecErrors:
         from agm.agl.runtime.codec import OutputCodec, ParseResult, TextCodec
         from agm.agl.runtime.contract import OutputContract
         from agm.agl.semantics.type_table import TypeTable
-        from agm.agl.semantics.types import TextType
         from agm.agl.semantics.values import TextValue
 
         class _Codec(OutputCodec):
@@ -2976,9 +2970,6 @@ class TestRegisterCodecErrors:
             @property
             def supported_kinds(self) -> frozenset[str]:
                 return frozenset({"text"})
-
-            def supports_type(self, t: Type) -> bool:
-                return isinstance(t, TextType)
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
@@ -3328,8 +3319,6 @@ class TestDiscoverProgramsGraph:
             ("<entry>", (), "top", "top"),
             ("helper", (), "helper", "helper"),
         ]
-        assert discovery.programs[0].qualified_path == "review::main"
-        assert discovery.programs[-1].qualified_path == "helper::helper"
 
     def test_discover_programs_failure_returns_diagnostics(self, tmp_path: pathlib.Path) -> None:
         """discover_programs returns diagnostics when the prepare phase failed."""

@@ -52,11 +52,6 @@ class TraceStore:
         """Whether an I/O failure, rather than settings, disabled this store."""
         return self._disabled
 
-    @property
-    def run_id(self) -> str:
-        """The identifier shared by records written during this run."""
-        return self._run_id
-
     def _emit(self, kind: str, extra: dict[str, object]) -> None:
         """Append a record, disabling this best-effort service on I/O failure."""
         timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")

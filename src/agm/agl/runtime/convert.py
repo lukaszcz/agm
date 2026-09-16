@@ -215,7 +215,7 @@ def decode_value(
     appropriate domain error (``AglCastConversion``, ``ValidationError``, etc.).
 
     *defs* resolves ``RefDecode`` nodes for a recursive target type — the
-    ``$defs`` table built alongside *schema* by ``type_schema.build_decode_schema``
+    ``$defs`` table built alongside *schema* by ``type_schema.derive_schema_and_decode``
     (see ``DecodePlan``); empty for a non-recursive *schema*, which then never
     contains a ``RefDecode`` node. Ref resolution follows chains until a
     non-ref body is reached, then decodes that body; this allows ordinary

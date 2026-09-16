@@ -61,7 +61,7 @@ def test_record_and_enum_member_signatures_use_nominal_record_constructors() -> 
                 OccurrenceId(0),
                 0,
                 record_type,
-                RootOccurrenceProvenance(0, 0, SourceSpan(1, 1, 1, 1, 0, 0)),
+                RootOccurrenceProvenance(0, SourceSpan(1, 1, 1, 1, 0, 0)),
             ),
             checked.type_env.type_table,
         )

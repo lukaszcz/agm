@@ -31,7 +31,6 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.errors import MissingExternCompanion
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, _wire_extern_registry
 from agm.agl.runtime import externs
@@ -46,6 +45,7 @@ from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core import fs
 from tests._agl_helpers import file_program, prepare_inline_command
 from tests.agl.ir_harness import age_file, write_companion_file, write_module_file
+from tests.agl.module_graph import load_graph
 
 _CAPS = HostCapabilities(
     supports_shell_exec=True,

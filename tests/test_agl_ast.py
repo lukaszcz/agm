@@ -12,7 +12,7 @@ Covers:
   AbortPolicy, RetryPolicy)
 - Equality semantics: equal structure with different spans/node_ids compare equal
 - Immutability: frozen dataclasses reject mutation
-- Visitor/walk traversal visits every node kind
+- walk traversal visits every node kind
 - Tuple-typed children (not lists)
 - ELSE sentinel type for IfBranch.cond
 - BinaryOp with closed operator set
@@ -1374,11 +1374,11 @@ class TestProgram:
 
 
 # ---------------------------------------------------------------------------
-# Visitor / walk
+# walk
 # ---------------------------------------------------------------------------
 
 
-class TestVisitorWalk:
+class TestWalk:
     """Verify that walk() visits every node kind in a tree."""
 
     def _s(self) -> SourceSpan:
@@ -2228,9 +2228,8 @@ class TestVisitorWalk:
         walk(node, visited.append)
         assert visited == [node]
 
-    def test_visitor_subclass_new_nodes(self) -> None:
-        """Subclassing Visitor and overriding visit_Call should be called."""
-        from agm.agl.syntax.visitor import Visitor, walk
+    def test_walk_reaches_call_nodes(self) -> None:
+        from agm.agl.syntax.visitor import walk
 
         s = self._s()
         callee = VarRef(name="f", span=s, node_id=2)
@@ -2238,31 +2237,9 @@ class TestVisitorWalk:
         blk = Block(items=(call,), span=s, node_id=3)
         prog = Program(body=blk, span=s, node_id=0)
 
-        class CountCalls(Visitor):
-            def __init__(self) -> None:
-                self.count = 0
-
-            def visit_Call(self, node: Call) -> None:
-                self.count += 1
-
-        counter = CountCalls()
-        walk(prog, counter.dispatch)
-        assert counter.count == 1
-
-    def test_visitor_dispatch_unknown_type_raises(self) -> None:
-        """Visitor.dispatch on an unknown type should raise loudly."""
-        from agm.agl.syntax.visitor import Visitor
-
-        class MyVisitor(Visitor):
-            pass
-
-        v = MyVisitor()
-
-        class NotANode:
-            pass
-
-        with pytest.raises(TypeError):
-            v.dispatch(NotANode())
+        visited: list[object] = []
+        walk(prog, visited.append)
+        assert [node for node in visited if isinstance(node, Call)] == [call]
 
     def test_walk_unknown_type_raises(self) -> None:
         """walk() on an unknown type should raise TypeError."""
@@ -2897,17 +2874,10 @@ class TestDeclarationAttributes:
         assert visited[0] is attribute
         assert value in visited
 
-    def test_visitor_dispatches_attribute_nodes(self) -> None:
-        from agm.agl.syntax.visitor import Visitor, walk
+    def test_walk_reaches_declaration_attributes(self) -> None:
+        from agm.agl.syntax.visitor import walk
 
-        class Collector(Visitor):
-            def __init__(self) -> None:
-                self.names: list[str] = []
-
-            def visit_Attribute(self, node: Attribute) -> None:
-                self.names.append(node.name)
-
-        collector = Collector()
+        visited: list[object] = []
         walk(
             FuncDef(
                 name="f",
@@ -2918,6 +2888,6 @@ class TestDeclarationAttributes:
                 node_id=nid(),
                 attributes=(self._attribute("arg-named"),),
             ),
-            collector.dispatch,
+            visited.append,
         )
-        assert collector.names == ["arg-named"]
+        assert [node.name for node in visited if isinstance(node, Attribute)] == ["arg-named"]

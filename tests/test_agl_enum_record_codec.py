@@ -28,13 +28,16 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
-from agm.agl.type_schema import (
+from agm.agl.type_schema import build_encode_plan, build_param_decoder
+from agm.agl.zones import ParamZone
+from tests._agl_helpers import (
     build_decode_schema,
-    build_encode_plan,
-    build_param_decoder,
     derive_schema,
+    enum_type,
+    next_decl_id,
+    record_type,
+    type_table_for,
 )
-from tests._agl_helpers import enum_type, next_decl_id, record_type, type_table_for
 from tests.agl.ir_harness import (
     evaluate_ir_raises_with_agents,
     evaluate_ir_with_agents,
@@ -80,6 +83,7 @@ def test_inline_enum_wire_corpus_preserves_schema_and_value_bytes() -> None:
         module_id=empty.module_id,
         scope_path=("Tree",),
         fields=(("children", ArrayType(tree)),),
+        field_kinds=(ParamZone.STANDARD,),
         decl_node_id=tree_node_id,
     )
     tree_def = TypeDef(
@@ -260,6 +264,7 @@ def test_recursive_defs_share_a_non_generic_member_across_enum_instantiations() 
         name="Leaf",
         module_id=tree_int.module_id,
         fields=(("children", ArrayType(leaf)),),
+        field_kinds=(ParamZone.STANDARD,),
         decl_node_id=leaf_id,
     )
     node_def = TypeDef(
@@ -272,6 +277,7 @@ def test_recursive_defs_share_a_non_generic_member_across_enum_instantiations() 
             ("value", TypeVarType("T")),
             ("next", EnumType("Tree", type_args=(TypeVarType("T"),), decl_id=tree_id)),
         ),
+        field_kinds=(ParamZone.STANDARD,) * 2,
         decl_node_id=node_id,
     )
     tree_def = TypeDef(

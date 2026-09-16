@@ -128,7 +128,7 @@ def module_node_id_base(
 ) -> int:
     """Allocate a reproducible node namespace for a module's source version."""
     identity = repr(((str(path), module_id, default_stdlib), source_text)).encode()
-    return (int.from_bytes(hashlib.sha256(identity).digest()[:16]) + 1) << 40
+    return (int.from_bytes(hashlib.sha256(identity).digest()[:16]) + 1) * RESERVED_NODE_ID_BASE
 
 
 class ParsedModuleCache:

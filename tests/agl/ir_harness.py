@@ -19,7 +19,7 @@ from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram, compile_program_matches
 from agm.agl.matchcompile.stage import _compile_owner_sites
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import ModuleGraph, build_repl_graph, load_graph, parse_entry_module
+from agm.agl.modules.loader import ModuleGraph, build_repl_graph, parse_entry_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded
 from agm.agl.pipeline import PipelineDriver, RunError, RunResult
@@ -32,7 +32,7 @@ from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import agl_roots, run_inline_command
-from tests.agl.module_graph import build_module_graph, build_module_graph_from_program
+from tests.agl.module_graph import build_module_graph, build_module_graph_from_program, load_graph
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "packages" / "stdlib"
 

@@ -17,7 +17,6 @@ from agm.project.layout import (
     current_workspace,
     discover_current_project_dir,
     is_main_workspace_branch,
-    main_repo_dir,
 )
 from agm.project.workspace_env import load_current_workspace_env, load_workspace_env
 
@@ -77,14 +76,6 @@ def test_current_project_dir_from_embedded_project_subdir(
     subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
     assert discover_current_project_dir(subdir) == agm_dir
-
-
-def test_main_repo_dir_for_embedded_project(tmp_path: Path) -> None:
-    project = tmp_path / "proj"
-    project.mkdir()
-    (project / ".agm").mkdir()
-
-    assert main_repo_dir(project) == project
 
 
 def test_main_workspace_branch_helpers_for_repo_name(tmp_path: Path) -> None:
@@ -351,7 +342,6 @@ def test_current_workspace_returns_main_for_workspace_project_root(
     result = current_workspace(project, cwd=project, env=env)
 
     assert result is not None
-    assert result.is_main is True
     assert result.branch is None
     assert result.workspace_dir == repo_dir
 
@@ -366,7 +356,6 @@ def test_current_workspace_returns_main_for_repo_dir(tmp_path: Path, env: dict[s
     result = current_workspace(project, cwd=repo_dir, env=env)
 
     assert result is not None
-    assert result.is_main is True
     assert result.branch is None
     assert result.workspace_dir == repo_dir
 
@@ -394,7 +383,6 @@ def test_current_workspace_returns_branch_for_worktree(tmp_path: Path, env: dict
     result = current_workspace(project, cwd=worktree_dir, env=env)
 
     assert result is not None
-    assert result.is_main is False
     assert result.branch == "feat"
     assert result.workspace_dir == worktree_dir
 
@@ -415,7 +403,6 @@ def test_current_workspace_uses_repo_dir_env_var_for_main_workspace(
     result = current_workspace(project, cwd=other_dir, env=env_with_repo)
 
     assert result is not None
-    assert result.is_main is True
     assert result.branch is None
     assert result.workspace_dir == repo_dir
 
@@ -447,7 +434,6 @@ def test_current_workspace_uses_repo_dir_env_var_for_worktree(
     result = current_workspace(project, cwd=other_dir, env=env_with_repo)
 
     assert result is not None
-    assert result.is_main is False
     assert result.branch == "feat"
     assert result.workspace_dir == worktree_dir
 
@@ -469,7 +455,6 @@ def test_current_workspace_ignores_repo_dir_outside_project(
     result = current_workspace(project, cwd=repo_dir, env=env_with_outside)
 
     assert result is not None
-    assert result.is_main is True
     assert result.branch is None
     # Falls back to cwd-based detection instead of REPO_DIR
     assert result.workspace_dir == repo_dir
@@ -486,7 +471,6 @@ def test_current_workspace_ignores_missing_repo_dir(tmp_path: Path, env: dict[st
     result = current_workspace(project, cwd=repo_dir, env=env_with_bad)
 
     assert result is not None
-    assert result.is_main is True
     assert result.branch is None
     assert result.workspace_dir == repo_dir
 
@@ -505,12 +489,11 @@ def test_current_workspace_ignores_non_git_repo_dir(tmp_path: Path, env: dict[st
     result = current_workspace(project, cwd=repo_dir, env=env_with_non_git)
 
     assert result is not None
-    assert result.is_main is True
     assert result.branch is None
     assert result.workspace_dir == repo_dir
 
 
-def test_current_workspace_subdir_under_repo_dir_is_main(
+def test_current_workspace_subdir_under_repo_dir_is_main_workspace(
     tmp_path: Path, env: dict[str, str]
 ) -> None:
     project = tmp_path / "proj"
@@ -525,5 +508,4 @@ def test_current_workspace_subdir_under_repo_dir_is_main(
     result = current_workspace(project, cwd=sub_dir, env=env)
 
     assert result is not None
-    assert result.is_main is True
     assert result.branch is None

@@ -45,6 +45,10 @@ because nothing else is re-keyed: every side table on ``ModuleResolution``
 (and every table on ``CheckedModule``) is keyed by ``node_id``, not by
 position in ``items``, so dropping the item from the list does not change
 what any lookup returns.
+
+:func:`load_graph` parses and loads a complete entry graph without the cached
+standard library, through the same parse-then-``build_repl_graph`` sequence
+``PipelineDriver.prepare_program`` runs.
 """
 
 from __future__ import annotations
@@ -73,6 +77,7 @@ from agm.agl.typecheck import CheckedModule
 from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.program import check_program
+from agm.util.text import normalize_newlines
 from tests._agl_helpers import agl_roots
 
 # A general-purpose capability set (default agent, shell exec, json/text
@@ -173,6 +178,29 @@ def build_module_graph_from_program(
         spaced_qualifiers=spaced_qualifiers,
     )
     return graph, import_node_id
+
+
+def load_graph(
+    entry_source: str,
+    *,
+    entry_path: Path | None,
+    roots: RootSet,
+    default_stdlib: bool = True,
+) -> ModuleGraph:
+    """Parse *entry_source* and load its full transitive module graph from *roots*."""
+    parsed = parse_entry_module(entry_source, entry_path=entry_path)
+    graph, _next_id, _new_modules = build_repl_graph(
+        parsed.program,
+        parsed.next_id,
+        path=entry_path,
+        cached={},
+        roots=roots,
+        default_stdlib=default_stdlib,
+        spaced_qualifiers=parsed.spaced_qualifiers,
+        default_label="<command>",
+        source_text=normalize_newlines(entry_source),
+    )
+    return graph
 
 
 def _parse_repl_entry(source: str) -> tuple[Program, int, tuple[SpacedQualifier, ...]]:

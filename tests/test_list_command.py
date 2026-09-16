@@ -201,7 +201,6 @@ class TestListWorkspaces:
             lambda pd, cwd=None, env=None: CurrentWorkspace(
                 workspace_dir=feat_path,
                 branch="feat",
-                is_main=False,
             ),
         )
 
@@ -245,7 +244,6 @@ class TestListWorkspaces:
             lambda pd, cwd=None, env=None: CurrentWorkspace(
                 workspace_dir=repo_dir,
                 branch=None,
-                is_main=True,
             ),
         )
 

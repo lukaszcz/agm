@@ -12,6 +12,9 @@ tests keep testing the rule rather than one release's literals.
 ``archive_contents`` and ``write_zip`` read and rewrite a ``.agmpkg`` archive's
 raw ZIP entries, so tests can graft tampered or hand-built content onto an
 otherwise valid archive.
+
+``install_directory`` and ``install_archive`` install a package and return only
+its ``PackageInfo``.
 """
 
 from __future__ import annotations
@@ -24,7 +27,9 @@ import semver
 
 import agm.packages.archive as package_archive
 from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
+from agm.packages.install import install_archive_with_plan, install_directory_with_plan
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
 from agm.version import AGM_VERSION
 
@@ -99,3 +104,28 @@ def write_zip(path: Path, contents: list[tuple[str, bytes]]) -> None:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for name, content in contents:
             archive.writestr(package_archive._zip_info(name), content)
+
+
+def install_directory(
+    source: Path,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    editable: bool = False,
+    shadow: bool = False,
+) -> PackageInfo:
+    """Install a package directory and return the installed package."""
+    return install_directory_with_plan(
+        source, home=home, env=env, editable=editable, shadow=shadow
+    ).package
+
+
+def install_archive(
+    archive: Path,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    shadow: bool = False,
+) -> PackageInfo:
+    """Install a package archive and return the installed package."""
+    return install_archive_with_plan(archive, home=home, env=env, shadow=shadow).package

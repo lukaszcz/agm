@@ -20,7 +20,6 @@ def process_result(
     elapsed: float = 0.01,
     timed_out: bool = False,
     spawn_error: str | None = None,
-    spawn_errno: int | None = None,
 ) -> ProcessCaptureResult:
     """Build a process result with normal-completion defaults."""
     return ProcessCaptureResult(
@@ -30,7 +29,6 @@ def process_result(
         elapsed=elapsed,
         timed_out=timed_out,
         spawn_error=spawn_error,
-        spawn_errno=spawn_errno,
     )
 
 
@@ -84,7 +82,6 @@ class FakeShell:
             stderr=spec.get("stderr", ""),
             timed_out=spec.get("timed_out", False),
             spawn_error=spec.get("spawn_error"),
-            spawn_errno=spec.get("spawn_errno"),
         )
 
     def assert_complete(self) -> None:

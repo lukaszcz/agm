@@ -12,7 +12,7 @@ import pytest
 from agm.agl.modules import loader as loader_module
 from agm.agl.modules.errors import MissingExternCompanion
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.modules.loader import LoadedModule, load_graph
+from agm.agl.modules.loader import LoadedModule
 from agm.agl.modules.parsed_module_cache import (
     RESERVED_NODE_ID_BASE,
     ModuleDerivationCache,
@@ -22,6 +22,7 @@ from agm.agl.modules.parsed_module_cache import (
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
 from tests._agl_helpers import all_node_ids, prepare_inline_command, run_inline_command
+from tests.agl.module_graph import load_graph
 
 _LIB_ID = ModuleId.from_path("lib/a")
 _ENTRY_SOURCE = "import lib/a\n"

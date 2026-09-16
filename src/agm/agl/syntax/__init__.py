@@ -125,7 +125,7 @@ from agm.agl.syntax.types import (
     UnitT,
     render_type_expr,
 )
-from agm.agl.syntax.visitor import Visitor, walk
+from agm.agl.syntax.visitor import walk
 
 __all__ = [
     # spans
@@ -248,6 +248,5 @@ __all__ = [
     "Pattern",
     "TemplateSegment",
     # visitor
-    "Visitor",
     "walk",
 ]

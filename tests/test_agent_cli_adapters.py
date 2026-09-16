@@ -32,7 +32,6 @@ def _capture_result() -> ProcessCaptureResult:
         elapsed=0.1,
         timed_out=False,
         spawn_error=None,
-        spawn_errno=None,
     )
 
 
@@ -215,7 +214,6 @@ def test_ask_preserves_failed_process_diagnostics(
             elapsed=0.1,
             timed_out=timed_out,
             spawn_error=spawn_error,
-            spawn_errno=None,
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
@@ -247,7 +245,6 @@ def test_ask_preserves_failed_process_diagnostics_when_cleanup_fails(
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
 
     def failing_cleanup(temp_files: list[Path]) -> None:

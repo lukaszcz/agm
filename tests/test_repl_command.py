@@ -747,6 +747,7 @@ class TestReplRun:
         expected_file: str | None,
     ) -> None:
         from agm.agl.semantics.values import BoolValue, RecordValue, TextValue
+        from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(
@@ -754,11 +755,16 @@ class TestReplRun:
         )
         repl_command.run(args)
         session: ReplSession = fake_plain_console[0]["session"]
-        assert session._persisted_host_settings["log"] == BoolValue(expected_log)
+        host_settings = {
+            key: value
+            for key, value in session._current.items()
+            if key in HOST_CONSUMED_ENGINE_KEYS
+        }
+        assert host_settings["log"] == BoolValue(expected_log)
         if expected_file is None:
-            assert "log-file" not in session._persisted_host_settings
+            assert "log-file" not in host_settings
         else:
-            log_file = session._persisted_host_settings["log-file"]
+            log_file = host_settings["log-file"]
             assert isinstance(log_file, RecordValue)
             assert log_file.fields["value"] == TextValue(expected_file)
 

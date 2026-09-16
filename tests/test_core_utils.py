@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 import agm.core.dry_run as dry_run
-from agm.core.dotenv import set_dotenv_value, set_dotenv_values
+from agm.core.dotenv import write_dotenv_values
 from agm.core.env import load_dotenv_file
 from agm.core.fs import (
     access,
@@ -245,6 +245,25 @@ class TestFsReadOnly:
     def test_access_non_existent(self, tmp_path: Path) -> None:
         assert access(tmp_path / "ghost", os.R_OK) is False
 
+    def test_stat_returns_correct_size(self, tmp_path: Path) -> None:
+        """fs.stat reports the right byte-size for a file."""
+        f = tmp_path / "measured.txt"
+        text = "hello\n"
+        f.write_text(text, encoding="utf-8")
+        result = fs_stat(f)
+        assert result.st_size == len(text.encode("utf-8"))
+
+    def test_access_write_permission(self, tmp_path: Path) -> None:
+        f = tmp_path / "writable.txt"
+        f.write_text("data", encoding="utf-8")
+        assert access(f, os.W_OK) is True
+
+    def test_access_execute_permission_on_script(self, tmp_path: Path) -> None:
+        f = tmp_path / "run.sh"
+        f.write_text("#!/bin/sh\n", encoding="utf-8")
+        f.chmod(stat.S_IRWXU)
+        assert access(f, os.X_OK) is True
+
 
 # ===========================================================================
 # agm.core.fs — write operations (normal mode)
@@ -425,92 +444,16 @@ class TestFsWriteDryRun:
 # ===========================================================================
 
 
-class TestSetDotenvValue:
-    def test_creates_new_file_with_key(self, tmp_path: Path) -> None:
+class TestWriteDotenvValues:
+    def test_writes_sorted_assignments(self, tmp_path: Path) -> None:
         env_file = tmp_path / ".env"
-        set_dotenv_value(env_file, "FOO", "bar")
-        assert env_file.read_text(encoding="utf-8") == "FOO=bar\n"
+        write_dotenv_values(env_file, {"B": "2", "A": "1"})
+        assert env_file.read_text(encoding="utf-8") == "A=1\nB=2\n"
 
     def test_creates_parent_directories(self, tmp_path: Path) -> None:
         env_file = tmp_path / "a" / "b" / ".env"
-        set_dotenv_value(env_file, "KEY", "val")
-        assert env_file.exists()
-        assert "KEY=val" in env_file.read_text(encoding="utf-8")
-
-    def test_appends_new_key_to_existing_file(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text("EXISTING=yes\n", encoding="utf-8")
-        set_dotenv_value(env_file, "NEW", "value")
-        content = env_file.read_text(encoding="utf-8")
-        assert "EXISTING=yes\n" in content
-        assert "NEW=value\n" in content
-
-    def test_replaces_existing_key(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text("FOO=old\nBAR=keep\n", encoding="utf-8")
-        set_dotenv_value(env_file, "FOO", "new")
-        content = env_file.read_text(encoding="utf-8")
-        assert "FOO=new\n" in content
-        assert "FOO=old" not in content
-        assert "BAR=keep\n" in content
-
-    def test_replaces_key_with_export_prefix(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text("export FOO=old\nBAR=keep\n", encoding="utf-8")
-        set_dotenv_value(env_file, "FOO", "updated")
-        content = env_file.read_text(encoding="utf-8")
-        assert "FOO=updated\n" in content
-        assert "export FOO=old" not in content
-        assert "BAR=keep\n" in content
-
-    def test_replaces_only_first_occurrence_of_duplicate_key(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text("FOO=first\nFOO=second\n", encoding="utf-8")
-        set_dotenv_value(env_file, "FOO", "once")
-        content = env_file.read_text(encoding="utf-8")
-        assert content.count("FOO=") == 1
-        assert "FOO=once\n" in content
-
-    def test_ensures_trailing_newline_before_append(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_bytes(b"NOEOL=yes")  # no trailing newline
-        set_dotenv_value(env_file, "ADDED", "val")
-        content = env_file.read_text(encoding="utf-8")
-        lines = content.splitlines()
-        assert "NOEOL=yes" in lines
-        assert "ADDED=val" in lines
-
-    def test_key_not_partially_matched(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text("FOOBAR=oops\n", encoding="utf-8")
-        set_dotenv_value(env_file, "FOO", "new")
-        content = env_file.read_text(encoding="utf-8")
-        assert "FOOBAR=oops\n" in content
-        assert "FOO=new\n" in content
-
-    def test_replaces_key_with_spaces_around_equals(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text("FOO =old\n", encoding="utf-8")
-        set_dotenv_value(env_file, "FOO", "trimmed")
-        content = env_file.read_text(encoding="utf-8")
-        assert "FOO=trimmed\n" in content
-        assert "FOO =old" not in content
-
-    def test_dry_run_does_not_write_file(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        env_file = tmp_path / ".env"
-        dry_run.set_enabled(True)
-        set_dotenv_value(env_file, "KEY", "value")
-        assert not env_file.exists()
-        captured = capsys.readouterr()
-        assert "dry-run" in captured.out
-
-    def test_value_with_special_characters(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        set_dotenv_value(env_file, "URL", "https://example.com/path?q=1&r=2")
-        content = env_file.read_text(encoding="utf-8")
-        assert "URL=https://example.com/path?q=1&r=2\n" in content
+        write_dotenv_values(env_file, {"KEY": "val"})
+        assert env_file.read_text(encoding="utf-8") == "KEY=val\n"
 
     @pytest.mark.parametrize(
         "value",
@@ -519,6 +462,8 @@ class TestSetDotenvValue:
             "first line\nsecond line",
             "first line\rsecond line",
             "first line\r\nsecond line",
+            " leading space",
+            "trailing space ",
             "'literal single quotes'",
             '"literal double quotes"',
             "  both 'quotes' and \"quotes\" with \\slashes # intact  ",
@@ -526,85 +471,8 @@ class TestSetDotenvValue:
     )
     def test_value_round_trips_through_dotenv_loader(self, tmp_path: Path, value: str) -> None:
         env_file = tmp_path / ".env"
-
-        set_dotenv_value(env_file, "VALUE", value)
-
-        assert load_dotenv_file(env_file)["VALUE"] == value
-
-    def test_replaces_entire_multiline_assignment(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text(
-            "KEEP=before\nVALUE='old first line\nold second line'\nTAIL=after\n",
-            encoding="utf-8",
-        )
-
-        set_dotenv_value(env_file, "VALUE", "replacement")
-
-        assert load_dotenv_file(env_file) == {
-            "KEEP": "before",
-            "VALUE": "replacement",
-            "TAIL": "after",
-        }
-        assert "old second line" not in env_file.read_text(encoding="utf-8")
-
-    def test_preserves_blank_lines_around_replaced_duplicate_assignments(
-        self, tmp_path: Path
-    ) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text(
-            "KEEP=before\n\nVALUE=first\n\nVALUE=duplicate\nTAIL=after\n",
-            encoding="utf-8",
-        )
-
-        set_dotenv_value(env_file, "VALUE", "replacement")
-
-        assert env_file.read_text(encoding="utf-8") == (
-            "KEEP=before\n\nVALUE=replacement\n\nTAIL=after\n"
-        )
-
-    def test_batch_upsert_after_duplicate_does_not_add_blank_line(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text("VALUE=first\nVALUE=duplicate\n", encoding="utf-8")
-
-        set_dotenv_values(env_file, {"VALUE": "replacement", "NEW": "added"})
-
-        assert env_file.read_text(encoding="utf-8") == "VALUE=replacement\nNEW=added\n"
-
-    def test_empty_file_gets_key_appended(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text("", encoding="utf-8")
-        set_dotenv_value(env_file, "EMPTY_FILE_KEY", "yes")
-        content = env_file.read_text(encoding="utf-8")
-        assert "EMPTY_FILE_KEY=yes\n" in content
-
-    def test_preserves_comments_and_blank_lines(self, tmp_path: Path) -> None:
-        env_file = tmp_path / ".env"
-        env_file.write_text("# comment\n\nFOO=bar\n", encoding="utf-8")
-        set_dotenv_value(env_file, "NEW", "val")
-        content = env_file.read_text(encoding="utf-8")
-        assert "# comment\n" in content
-        assert "\n" in content
-        assert "FOO=bar\n" in content
-        assert "NEW=val\n" in content
-
-    def test_stat_returns_correct_size(self, tmp_path: Path) -> None:
-        """fs.stat reports the right byte-size for a file."""
-        f = tmp_path / "measured.txt"
-        text = "hello\n"
-        f.write_text(text, encoding="utf-8")
-        result = fs_stat(f)
-        assert result.st_size == len(text.encode("utf-8"))
-
-    def test_access_write_permission(self, tmp_path: Path) -> None:
-        f = tmp_path / "writable.txt"
-        f.write_text("data", encoding="utf-8")
-        assert access(f, os.W_OK) is True
-
-    def test_access_execute_permission_on_script(self, tmp_path: Path) -> None:
-        f = tmp_path / "run.sh"
-        f.write_text("#!/bin/sh\n", encoding="utf-8")
-        f.chmod(stat.S_IRWXU)
-        assert access(f, os.X_OK) is True
+        write_dotenv_values(env_file, {"VALUE": value})
+        assert load_dotenv_file(env_file) == {"VALUE": value}
 
 
 # ===========================================================================

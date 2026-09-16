@@ -14,9 +14,9 @@ from click.shell_completion import ShellComplete
 
 import agm.completion as completion
 import agm.vcs.git as git_helpers
-from agm.packages.install import install_directory
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.record import write_record
+from tests._package_helpers import install_directory
 
 _PARAM_SURFACE_PACKAGE = Path(__file__).parent / "agl" / "packages" / "param_surface"
 

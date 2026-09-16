@@ -357,7 +357,6 @@ def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.Monk
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
@@ -399,7 +398,6 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)

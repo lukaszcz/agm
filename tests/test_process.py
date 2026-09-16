@@ -196,7 +196,6 @@ class TestProcessCaptureResultDataclass:
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
         with pytest.raises((AttributeError, TypeError)):
             setattr(result, "returncode", 1)
@@ -209,7 +208,6 @@ class TestProcessCaptureResultDataclass:
             elapsed=1.5,
             timed_out=True,
             spawn_error="No such file",
-            spawn_errno=2,
         )
         assert result.returncode == 42
         assert result.stdout == "out"
@@ -217,7 +215,6 @@ class TestProcessCaptureResultDataclass:
         assert result.elapsed == 1.5
         assert result.timed_out is True
         assert result.spawn_error == "No such file"
-        assert result.spawn_errno == 2
 
     def test_spawn_error_none_by_default(self) -> None:
         result = ProcessCaptureResult(
@@ -227,33 +224,8 @@ class TestProcessCaptureResultDataclass:
             elapsed=0.0,
             timed_out=False,
             spawn_error=None,
-            spawn_errno=None,
         )
         assert result.spawn_error is None
-
-    def test_spawn_errno_accessible(self) -> None:
-        result = ProcessCaptureResult(
-            returncode=None,
-            stdout="",
-            stderr="",
-            elapsed=0.0,
-            timed_out=False,
-            spawn_error="Permission denied",
-            spawn_errno=13,
-        )
-        assert result.spawn_errno == 13
-
-    def test_spawn_errno_none_when_no_spawn_error(self) -> None:
-        result = ProcessCaptureResult(
-            returncode=0,
-            stdout="",
-            stderr="",
-            elapsed=0.0,
-            timed_out=False,
-            spawn_error=None,
-            spawn_errno=None,
-        )
-        assert result.spawn_errno is None
 
 
 class TestRunCaptureResultZeroExit:
@@ -374,7 +346,6 @@ class TestRunCaptureResultEmbeddedNullByte:
         # Must not raise ValueError("embedded null byte") or anything else.
         result = run_capture_result(["sh", "-c", "echo \x00bad"])
         assert result.spawn_error is not None
-        assert result.spawn_errno is None
 
     def test_null_byte_arg_streams_empty(self) -> None:
         result = run_capture_result(["sh", "-c", "echo \x00bad"])
@@ -560,14 +531,6 @@ class TestRunCaptureResultEnoexec:
         result = run_capture_result([str(script)])
         assert result.stdout == ""
         assert result.stderr == ""
-
-    def test_enoexec_spawn_errno_is_set(self, tmp_path: Path) -> None:
-        """spawn_errno should be ENOEXEC (8) so callers can distinguish the cause."""
-        import errno as errno_mod
-
-        script = self._make_enoexec_script(tmp_path)
-        result = run_capture_result([str(script)])
-        assert result.spawn_errno == errno_mod.ENOEXEC
 
 
 class TestRunCaptureEnoexecReraise:

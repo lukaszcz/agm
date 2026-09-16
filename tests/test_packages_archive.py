@@ -18,11 +18,9 @@ import agm.packages.archive as package_archive
 import agm.packages.distribution as package_distribution
 from agm.packages.archive import (
     ArchiveError,
+    ArchiveMetadata,
     extract_archive,
-    read_archive_manifest,
-    read_archive_metadata,
     validate_archive_source,
-    verify_archive,
     verify_archive_discipline,
     write_archive,
 )
@@ -43,6 +41,12 @@ def _package_tree(tmp_path: Path) -> Path:
         "program def main() -> unit = ()\n", encoding="utf-8"
     )
     return root
+
+
+def _verify(archive_path: Path) -> ArchiveMetadata:
+    """Verify *archive_path* through the production verify-and-extract path."""
+    destination = Path(tempfile.mkdtemp(dir=archive_path.parent))
+    return extract_archive(archive_path, destination)
 
 
 def test_write_archive_is_deterministic_and_independent_of_git_directory(tmp_path: Path) -> None:
@@ -127,7 +131,7 @@ def test_write_archive_bakes_a_source_declared_command_into_the_manifest(tmp_pat
         "tools launch": CommandSpec(program="review_tools/main::main", description="Launch review")
     }
     assert metadata.manifest.commands == expected
-    assert read_archive_manifest(archive_path).commands == expected
+    assert _verify(archive_path).manifest.commands == expected
 
 
 def test_validate_archive_source_reports_overlapping_manifest_and_source_commands(
@@ -271,27 +275,26 @@ def test_archive_source_operations_reject_a_fifo(tmp_path: Path) -> None:
         write_archive(root, tmp_path / "package.agmpkg")
 
 
-def test_archive_metadata_and_manifest_are_read_without_leaving_an_open_archive(
+def test_extraction_returns_the_written_archive_metadata(
     tmp_path: Path,
 ) -> None:
     root = _package_tree(tmp_path)
     archive_path = tmp_path / "package.agmpkg"
     metadata = write_archive(root, archive_path)
 
-    read_metadata = read_archive_metadata(archive_path)
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    read_metadata = extract_archive(archive_path, extracted)
 
     assert read_metadata == metadata
     assert read_metadata.manifest.name == "review_tools"
     assert str(read_metadata.manifest.version) == "1.2.3"
-    assert read_archive_manifest(archive_path) == read_metadata.manifest
-    assert verify_archive(archive_path) == read_metadata
-    extracted = tmp_path / "extracted"
-    extracted.mkdir()
-    assert extract_archive(archive_path, extracted) == metadata
     assert (extracted / MODULE_TREE_DIRNAME / "main.agl").is_file()
 
 
-def test_verify_archive_rejects_a_record_that_does_not_match_its_contents(tmp_path: Path) -> None:
+def test_archive_verification_rejects_a_record_that_does_not_match_its_contents(
+    tmp_path: Path,
+) -> None:
     root = _package_tree(tmp_path)
     archive_path = tmp_path / "package.agmpkg"
     write_archive(root, archive_path)
@@ -302,7 +305,7 @@ def test_verify_archive_rejects_a_record_that_does_not_match_its_contents(tmp_pa
     write_zip(archive_path, list(contents.items()))
 
     with pytest.raises(ArchiveError, match="RECORD"):
-        verify_archive(archive_path)
+        _verify(archive_path)
 
 
 def test_write_archive_refuses_destinations_inside_the_source_tree(tmp_path: Path) -> None:
@@ -376,7 +379,7 @@ def test_write_archive_atomically_replaces_a_destination_hardlinked_at_replace_s
 
     assert source.read_bytes() == original_source
     assert destination.stat().st_ino != source.stat().st_ino
-    assert verify_archive(destination) == metadata
+    assert _verify(destination) == metadata
 
 
 def test_write_archive_enforces_the_archive_entry_limit(
@@ -488,7 +491,7 @@ def test_write_archive_replaces_a_destination_symlink_without_writing_its_target
 
     assert target.read_text(encoding="utf-8") == "unrelated"
     assert not destination.is_symlink()
-    assert verify_archive(destination) == metadata
+    assert _verify(destination) == metadata
 
 
 def test_write_archive_keeps_publication_in_opened_parent_after_parent_symlink_swap(
@@ -518,7 +521,7 @@ def test_write_archive_keeps_publication_in_opened_parent_after_parent_symlink_s
     metadata = write_archive(root, destination)
 
     assert not (root / "package.agmpkg").exists()
-    assert verify_archive(displaced_parent / "package.agmpkg") == metadata
+    assert _verify(displaced_parent / "package.agmpkg") == metadata
 
 
 def test_write_archive_rejects_source_root_rebound_to_publication_parent_after_collection(
@@ -1050,7 +1053,7 @@ version = "1.2.3"
         b'"caf\xc3\xa9" = { program = "review_tools/main::main" }'
         in contents["review_tools-1.2.3/package.toml"]
     )
-    assert verify_archive(archive_path) == metadata
+    assert _verify(archive_path) == metadata
 
 
 def test_nested_gitignore_preserves_basename_wildcard_and_negation_semantics(
@@ -1135,27 +1138,27 @@ def test_gitignore_pattern_prefixing_handles_comments_empty_and_negation() -> No
         ],
     ],
 )
-def test_read_archive_metadata_rejects_unsafe_layouts(
+def test_archive_verification_rejects_unsafe_layouts(
     tmp_path: Path, contents: list[tuple[str, bytes]]
 ) -> None:
     archive_path = tmp_path / "invalid.agmpkg"
     write_zip(archive_path, contents)
 
     with pytest.raises(ArchiveError):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
-def test_read_archive_metadata_rejects_a_current_directory_entry(tmp_path: Path) -> None:
+def test_archive_verification_rejects_a_current_directory_entry(tmp_path: Path) -> None:
     """A ``"."`` entry names no path component, so it has no directory prefix."""
 
     archive_path = tmp_path / "dot.agmpkg"
     write_zip(archive_path, [(".", b"")])
 
     with pytest.raises(ArchiveError):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
-def test_read_archive_metadata_rejects_file_descendant_conflicts(tmp_path: Path) -> None:
+def test_archive_verification_rejects_file_descendant_conflicts(tmp_path: Path) -> None:
     archive_path = tmp_path / "conflict.agmpkg"
     write_zip(
         archive_path,
@@ -1168,10 +1171,10 @@ def test_read_archive_metadata_rejects_file_descendant_conflicts(tmp_path: Path)
     )
 
     with pytest.raises(ArchiveError, match="file conflicts"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
-def test_read_archive_metadata_rejects_repeated_entries(tmp_path: Path) -> None:
+def test_archive_verification_rejects_repeated_entries(tmp_path: Path) -> None:
     archive_path = tmp_path / "duplicate.agmpkg"
     with pytest.warns(UserWarning, match="Duplicate name"):
         write_zip(
@@ -1184,10 +1187,10 @@ def test_read_archive_metadata_rejects_repeated_entries(tmp_path: Path) -> None:
         )
 
     with pytest.raises(ArchiveError, match="repeats"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
-def test_read_archive_metadata_rejects_a_symlink_entry(tmp_path: Path) -> None:
+def test_archive_verification_rejects_a_symlink_entry(tmp_path: Path) -> None:
     archive_path = tmp_path / "symlink.agmpkg"
     with zipfile.ZipFile(archive_path, "w") as archive:
         record = zipfile.ZipInfo("review_tools-1.2.3/RECORD")
@@ -1196,16 +1199,14 @@ def test_read_archive_metadata_rejects_a_symlink_entry(tmp_path: Path) -> None:
         archive.writestr("review_tools-1.2.3/package.toml", b"")
 
     with pytest.raises(ArchiveError, match="symlink"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 def test_archive_readers_wrap_unreadable_archives(tmp_path: Path) -> None:
     missing = tmp_path / "missing.agmpkg"
 
     with pytest.raises(ArchiveError, match="cannot read"):
-        read_archive_metadata(missing)
-    with pytest.raises(ArchiveError, match="cannot read"):
-        verify_archive(missing)
+        _verify(missing)
 
 
 def test_archive_reader_rejects_manifest_prefix_and_record_errors(tmp_path: Path) -> None:
@@ -1218,21 +1219,21 @@ def test_archive_reader_rejects_manifest_prefix_and_record_errors(tmp_path: Path
     contents[prefix + "package.toml"] = b"[package\n"
     write_zip(archive_path, list(contents.items()))
     with pytest.raises(ArchiveError, match="manifest"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
     write_archive(root, archive_path)
     contents = archive_contents(archive_path)
     contents[prefix + "RECORD"] = b"\xff"
     write_zip(archive_path, list(contents.items()))
     with pytest.raises(ArchiveError, match="RECORD"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
     write_archive(root, archive_path)
     contents = archive_contents(archive_path)
     contents[prefix + "RECORD"] = contents[prefix + "RECORD"].replace(b"\n", b"\r\n")
     write_zip(archive_path, list(contents.items()))
     with pytest.raises(ArchiveError, match="canonical"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 def test_archive_reader_rejects_unsorted_record_and_mismatched_prefix(tmp_path: Path) -> None:
@@ -1245,14 +1246,14 @@ def test_archive_reader_rejects_unsorted_record_and_mismatched_prefix(tmp_path: 
     contents[prefix + "RECORD"] = ("\n".join(reversed(record)) + "\n").encode()
     write_zip(archive_path, list(contents.items()))
     with pytest.raises(ArchiveError, match="sorted"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
     write_archive(root, archive_path)
     contents = archive_contents(archive_path)
     renamed = {name.replace(prefix, "other-1.2.3/"): value for name, value in contents.items()}
     write_zip(archive_path, list(renamed.items()))
     with pytest.raises(ArchiveError, match="prefix"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 @pytest.mark.parametrize("component", ["CON", "aux.txt", "trailing.", "trailing ", "bad?.txt"])
@@ -1292,7 +1293,7 @@ def test_archive_readers_reject_noncanonical_zip_entry_metadata_and_flags(tmp_pa
     archive_path.write_bytes(raw)
 
     with pytest.raises(ArchiveError, match="metadata"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 def test_archive_readers_reject_zip_archive_comments(tmp_path: Path) -> None:
@@ -1303,7 +1304,7 @@ def test_archive_readers_reject_zip_archive_comments(tmp_path: Path) -> None:
         archive.comment = b"noncanonical"
 
     with pytest.raises(ArchiveError, match="metadata"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 def test_archive_readers_reject_windows_invalid_names_and_record_paths(tmp_path: Path) -> None:
@@ -1316,7 +1317,7 @@ def test_archive_readers_reject_windows_invalid_names_and_record_paths(tmp_path:
     write_zip(archive_path, list(contents.items()))
 
     with pytest.raises(ArchiveError, match="component"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
     write_archive(root, archive_path)
     contents = archive_contents(archive_path)
@@ -1324,10 +1325,10 @@ def test_archive_readers_reject_windows_invalid_names_and_record_paths(tmp_path:
     write_zip(archive_path, list(contents.items()))
 
     with pytest.raises(ArchiveError, match="component"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
-def test_verify_archive_streams_entries_without_zipfile_read(
+def test_archive_extraction_streams_entries_without_zipfile_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = _package_tree(tmp_path)
@@ -1340,7 +1341,7 @@ def test_verify_archive_streams_entries_without_zipfile_read(
 
     monkeypatch.setattr(zipfile.ZipFile, "read", fail_read)
 
-    assert verify_archive(archive_path) == metadata
+    assert _verify(archive_path) == metadata
 
 
 def test_archive_readers_enforce_explicit_entry_and_size_limits(
@@ -1352,22 +1353,22 @@ def test_archive_readers_enforce_explicit_entry_and_size_limits(
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRIES", 2)
     with pytest.raises(ArchiveError, match="entries"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRIES", 10_000)
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE", 1)
     with pytest.raises(ArchiveError, match="central directory"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE", 16 * 1024 * 1024)
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRY_SIZE", 1)
     with pytest.raises(ArchiveError, match="size"):
-        verify_archive(archive_path)
+        _verify(archive_path)
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRY_SIZE", 64 * 1024 * 1024)
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_TOTAL_SIZE", 1)
     with pytest.raises(ArchiveError, match="total"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 def test_archive_limit_preflight_ignores_invalid_end_records(tmp_path: Path) -> None:
@@ -1415,7 +1416,7 @@ def test_archive_preflight_rejects_zip64_before_zipfile_loads_directory(
 
     monkeypatch.setattr(zipfile, "ZipFile", fail_open)
     with pytest.raises(ArchiveError):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 def test_archive_metadata_preflight_and_zip_parsing_share_one_open_file(
@@ -1439,7 +1440,7 @@ def test_archive_metadata_preflight_and_zip_parsing_share_one_open_file(
         package_archive, "_validate_central_directory_limits", replace_path_after_preflight
     )
 
-    assert read_archive_metadata(archive_path) == original_metadata
+    assert _verify(archive_path) == original_metadata
 
 
 def test_archive_entry_limit_is_checked_before_zipfile_loads_the_directory(
@@ -1455,7 +1456,7 @@ def test_archive_entry_limit_is_checked_before_zipfile_loads_the_directory(
 
     monkeypatch.setattr(zipfile, "ZipFile", fail_open)
     with pytest.raises(ArchiveError, match="entries"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 def test_archive_entry_limit_preflight_counts_records_instead_of_trusting_end_record(
@@ -1475,7 +1476,7 @@ def test_archive_entry_limit_preflight_counts_records_instead_of_trusting_end_re
 
     monkeypatch.setattr(zipfile, "ZipFile", fail_open)
     with pytest.raises(ArchiveError, match="entries"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 @pytest.mark.parametrize("corruption", ("start", "signature", "length", "count"))
@@ -1504,7 +1505,7 @@ def test_archive_preflight_rejects_malformed_central_directory(
 
     monkeypatch.setattr(zipfile, "ZipFile", fail_open)
     with pytest.raises(ArchiveError):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 def test_archive_readers_reject_directory_entries(tmp_path: Path) -> None:
@@ -1513,7 +1514,7 @@ def test_archive_readers_reject_directory_entries(tmp_path: Path) -> None:
         archive.writestr("review_tools-1.2.3/directory/", b"")
 
     with pytest.raises(ArchiveError, match="directory"):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 class _BytesArchive:
@@ -1548,7 +1549,7 @@ def test_stream_reading_rejects_entries_that_exceed_or_misstate_their_limit(
         package_archive._entry_digest(archive, short)
 
 
-def test_verify_archive_rejects_a_non_normalized_manifest_with_a_matching_record(
+def test_archive_verification_rejects_a_non_normalized_manifest_with_a_matching_record(
     tmp_path: Path,
 ) -> None:
     root = _package_tree(tmp_path)
@@ -1567,7 +1568,7 @@ def test_verify_archive_rejects_a_non_normalized_manifest_with_a_matching_record
     write_zip(archive_path, list(contents.items()))
 
     with pytest.raises(ArchiveError, match="not normalized"):
-        verify_archive(archive_path)
+        _verify(archive_path)
 
 
 def _entry_sizes(archive_path: Path) -> list[int]:
@@ -1594,14 +1595,14 @@ def test_archive_entry_count_limit_admits_exactly_the_limit(
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRIES", entries)
     accepted = tmp_path / "accepted.agmpkg"
     assert write_archive(root, accepted) == expected
-    assert read_archive_metadata(accepted) == expected
+    assert _verify(accepted) == expected
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRIES", entries - 1)
     rejected = tmp_path / "rejected.agmpkg"
     with pytest.raises(ArchiveError):
         write_archive(root, rejected)
     with pytest.raises(ArchiveError):
-        read_archive_metadata(baseline)
+        _verify(baseline)
     assert not rejected.exists()
 
 
@@ -1618,14 +1619,14 @@ def test_archive_entry_size_limit_admits_exactly_the_largest_entry(
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRY_SIZE", largest)
     accepted = tmp_path / "accepted.agmpkg"
     assert write_archive(root, accepted) == expected
-    assert verify_archive(accepted) == expected
+    assert _verify(accepted) == expected
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_ENTRY_SIZE", largest - 1)
     rejected = tmp_path / "rejected.agmpkg"
     with pytest.raises(ArchiveError):
         write_archive(root, rejected)
     with pytest.raises(ArchiveError):
-        verify_archive(baseline)
+        _verify(baseline)
     assert not rejected.exists()
 
 
@@ -1640,14 +1641,14 @@ def test_archive_total_size_limit_admits_exactly_the_expanded_total(
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_TOTAL_SIZE", total)
     accepted = tmp_path / "accepted.agmpkg"
     assert write_archive(root, accepted) == expected
-    assert verify_archive(accepted) == expected
+    assert _verify(accepted) == expected
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_TOTAL_SIZE", total - 1)
     rejected = tmp_path / "rejected.agmpkg"
     with pytest.raises(ArchiveError):
         write_archive(root, rejected)
     with pytest.raises(ArchiveError):
-        verify_archive(baseline)
+        _verify(baseline)
     assert not rejected.exists()
 
 
@@ -1660,11 +1661,11 @@ def test_archive_central_directory_limit_admits_exactly_the_recorded_size(
     directory_size = _central_directory_size(archive_path)
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE", directory_size)
-    assert read_archive_metadata(archive_path) == expected
+    assert _verify(archive_path) == expected
 
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_CENTRAL_DIRECTORY_SIZE", directory_size - 1)
     with pytest.raises(ArchiveError):
-        read_archive_metadata(archive_path)
+        _verify(archive_path)
 
 
 def test_archive_path_depth_limit_admits_exactly_the_deepest_component_count(
@@ -1674,7 +1675,7 @@ def test_archive_path_depth_limit_admits_exactly_the_deepest_component_count(
     monkeypatch.setattr(package_archive, "MAX_ARCHIVE_PATH_COMPONENTS", 3)
     accepted = tmp_path / "accepted.agmpkg"
     expected = write_archive(root, accepted)
-    assert read_archive_metadata(accepted) == expected
+    assert _verify(accepted) == expected
 
     nested = root / "one" / "two"
     nested.mkdir(parents=True)

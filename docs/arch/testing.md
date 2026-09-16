@@ -21,6 +21,7 @@ Tests assert observable behavior, never exact help, warning, or error text. Impo
 - **Self-validation** — the compiler's invariant self-checks (checked-output closure, match-artifact validation, deep IR validation, FFI class shape) are gated by one toggle, `agm.agl.self_validation`; `tests/conftest.py` turns it on for the whole suite so every compilation doubles as an oracle while production pays nothing. The `self_validation_disabled` fixture pins the production path.
 - **Hermeticity** — a run never reads or writes installed AGM files: autouse fixtures strip inherited `AGM_*` variables, pin `AGM_STDLIB` to the in-repo `packages/stdlib/`, and report the installation prefix as absent. Tests of the prefix fallback take the `installed_agm_prefix` fixture.
 - **No real agents** — an autouse fixture refuses any process spawn that resolves an external agent or sandbox CLI (`tests/_external_agent_clis.py`) outside the test temp tree, so only fake binaries a test writes can run.
+- **Dead code** — `just vulture` runs `tools/vulture_check.py`: vulture at 60% confidence over `src/agm/`, `packages/stdlib/src/`, and `tools/`, where use by tests alone does not count. Its whitelist is built each run from the grammar's rule and alias names (Lark's transformer callbacks) plus a short list of other framework and test hooks in the script; `pyproject.toml` ignores Typer- and key-binding-decorated functions.
 - **Vacuous-assertion guard** — `just test-neutral-tmp` re-runs the suite with neutrally named temp directories, so an assertion cannot pass on a path that happens to contain its own test's name.
 
 ## Test Cost
@@ -37,4 +38,4 @@ The Emacs mode (`config/emacs/`) and micro rules (`config/micro/`) carry their o
 - `tests/test_e2e.py` — the command e2e suite; its `run_agm` helper invokes the staged checkout CLI, also placed on PATH for nested AGM calls.
 - `tests/conftest.py`, `_agl_helpers.py`, `_process_helpers.py`, `_package_helpers.py`, `_git_helpers.py` — shared fixtures and fakes.
 - `tests/_command_coverage.py`, `tests/_durations.py` — the command-coverage and CPU-cost plugins.
-- `justfile` — the `test`, `test-budget`, `test-neutral-tmp`, `lint`, `typecheck`, `vulture`, `test-emacs`, `test-micro`, and `check` recipes.
+- `justfile` — the `test`, `test-budget`, `test-neutral-tmp`, `lint`, `typecheck`, `vulture`, `test-emacs`, `test-micro`, and `check` recipes; `tools/vulture_check.py` — the dead-code gate.

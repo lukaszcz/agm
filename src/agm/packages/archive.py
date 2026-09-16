@@ -353,31 +353,6 @@ def _remove_temporary_at(
         write_error.add_note(f"cannot remove temporary package archive {temporary}: {exc}")
 
 
-def read_archive_manifest(archive_path: Path) -> PackageManifest:
-    """Read a validated archive manifest without extracting the archive."""
-
-    return read_archive_metadata(archive_path).manifest
-
-
-def read_archive_metadata(archive_path: Path) -> ArchiveMetadata:
-    """Read bounded, validated archive identity metadata without extracting it."""
-
-    def read_metadata(archive: zipfile.ZipFile) -> ArchiveMetadata:
-        prefix, manifest_name, record_name, infos = _archive_layout(archive.infolist())
-        manifest = _manifest_from_bytes(_read_entry(archive, infos[manifest_name]))
-        _validate_prefix(prefix, manifest)
-        entries = _record_from_bytes(_read_entry(archive, infos[record_name]))
-        return ArchiveMetadata(manifest, content_hash(entries))
-
-    return _read_archive(archive_path, read_metadata)
-
-
-def verify_archive(archive_path: Path) -> ArchiveMetadata:
-    """Stream-verify layout, normalized manifest, and every ``RECORD`` digest."""
-
-    return _read_archive(archive_path, _verify_open_archive)
-
-
 def verify_archive_discipline(
     archive_path: Path, *, dependency_packages: Iterable[PackageInfo] = ()
 ) -> ArchiveMetadata:

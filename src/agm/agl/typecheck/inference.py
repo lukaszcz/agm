@@ -49,7 +49,6 @@ class ConstraintRole(StrEnum):
     FUNCTION_ARGUMENT = "function argument"
     CONSTRUCTOR_FIELD = "constructor field"
     EXPECTED_RESULT = "expected result"
-    PARTIAL_HOLE = "partial hole"
     LITERAL_ELEMENT = "literal element"
     EXPLICIT_INSTANTIATION = "explicit instantiation"
 
@@ -190,10 +189,6 @@ class InferenceEngine:
     def is_solved(self, variable: InferenceVarType) -> bool:
         """Return whether ``variable`` has a fully resolved final solution."""
         return not self._contains_unresolved_variable(variable)
-
-    def parent_of(self, variable: InferenceVarType) -> InferenceVarType:
-        """Return the compressed union-find representative for testable introspection."""
-        return self._find(variable)
 
     def require_solved(self, variable: InferenceVarType, origin: ConstraintOrigin) -> None:
         """Register an ordered requirement that this quantified variable resolves."""

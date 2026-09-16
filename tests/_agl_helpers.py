@@ -35,6 +35,9 @@ participates in ``RecordType``/``EnumType``/``ExceptionType`` equality.
 tests that need one as an expected value, a seeded host setting, or a request
 payload without going through source parsing.
 
+``derive_schema``/``build_decode_schema`` return one half of
+``derive_schema_and_decode``, the derivation production runs.
+
 ``dummy_span`` returns a fixed placeholder ``SourceSpan`` for tests that must
 supply one but don't assert on its content.
 """
@@ -47,6 +50,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from agm.agl import PipelineDriver
+from agm.agl.ir.contracts import DecodePlan
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
 from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
@@ -90,12 +94,23 @@ from agm.agl.syntax import (
     VarDecl,
 )
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
+from agm.agl.type_schema import derive_schema_and_decode
 from agm.agl.zones import ParamZone
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
 # ids (which start at 0) and from every reserved identity (<= -2, see
 # ir.reserved_nominals) so an ad-hoc type never collides with either.
 _decl_ids = itertools.count(900_000)
+
+
+def derive_schema(typ: Type, type_table: TypeTable) -> dict[str, object]:
+    """Return *typ*'s JSON Schema."""
+    return derive_schema_and_decode(typ, type_table)[0]
+
+
+def build_decode_schema(typ: Type, type_table: TypeTable) -> DecodePlan:
+    """Return *typ*'s decode plan."""
+    return derive_schema_and_decode(typ, type_table)[1]
 
 
 def dummy_span() -> SourceSpan:

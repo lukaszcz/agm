@@ -34,14 +34,6 @@ def sync_remote_tracking_branches(repo_dir: Path, *, env: dict[str, str] | None 
             git_helpers.create_tracking_branch(repo_dir, local_branch, remote_branch, env=env)
 
 
-def branch_sync(*, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
-    """Create local tracking branches not merged into origin's default branch."""
-
-    repo_dir = git_helpers.checkout_root(cwd)
-    git_helpers.fetch_prune_origin(repo_dir, env=env)
-    sync_remote_tracking_branches(repo_dir, env=env)
-
-
 def has_expected_worktree(
     project_dir: Path, branch: str, *, env: dict[str, str] | None = None
 ) -> bool:

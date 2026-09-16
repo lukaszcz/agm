@@ -139,12 +139,6 @@ def fetch_prune_all(repo_dir: Path, *, env: dict[str, str] | None = None) -> Non
     require_success([*_git_args(repo_dir), "fetch", "--all", "--prune"], env=env)
 
 
-def fetch_prune_origin(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
-    """Run git fetch --prune origin."""
-
-    require_success([*_git_args(repo_dir), "fetch", "--prune", "origin"], env=env)
-
-
 def merge(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
     """Run git merge using the current branch's configured upstream."""
 
@@ -158,16 +152,6 @@ def current_branch(repo_dir: Path, *, env: dict[str, str] | None = None) -> str:
         [*_git_args(repo_dir), "rev-parse", "--abbrev-ref", "HEAD"],
         env=env,
     ).strip()
-
-
-def local_branches(repo_dir: Path, *, env: dict[str, str] | None = None) -> list[str]:
-    """Return local branch names for *repo_dir*."""
-
-    output = require_capture(
-        [*_git_args(repo_dir), "for-each-ref", "--format=%(refname:short)", "refs/heads"],
-        env=env,
-    )
-    return sorted(line for line in output.splitlines() if line)
 
 
 def _worktree_create_start_point(
@@ -372,12 +356,6 @@ def remotes_with_branch(
         )
         == 0
     ]
-
-
-def remote_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = None) -> bool:
-    """Return whether any remote carries *branch*."""
-
-    return bool(remotes_with_branch(repo_dir, branch, env=env))
 
 
 def unique_remote_branch_ref(

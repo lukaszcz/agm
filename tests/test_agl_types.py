@@ -586,18 +586,6 @@ class TestTypeEnvironmentPrelude:
             is None
         )
 
-    def test_has_type_exec_result(self) -> None:
-        env = TypeEnvironment()
-        assert env.has_type("ExecResult") is True
-
-    def test_has_type_parse_policy(self) -> None:
-        env = TypeEnvironment()
-        assert env.has_type("ParsePolicy") is True
-
-    def test_has_type_recursion_error(self) -> None:
-        env = TypeEnvironment()
-        assert env.has_type("RecursionError") is True
-
 
 # ---------------------------------------------------------------------------
 # seed_from — does not duplicate or clobber prelude types
@@ -693,28 +681,28 @@ class TestUnregisterName:
         env = TypeEnvironment()
         env.unregister_name("ExecResult")
         # Still present.
-        assert env.has_type("ExecResult") is True
+        assert env.get_type("ExecResult") is not None
 
     def test_cannot_unregister_parse_policy(self) -> None:
         env = TypeEnvironment()
         env.unregister_name("ParsePolicy")
-        assert env.has_type("ParsePolicy") is True
+        assert env.get_type("ParsePolicy") is not None
 
     def test_cannot_unregister_builtin_exception(self) -> None:
         env = TypeEnvironment()
         env.unregister_name("ExecError")
-        assert env.has_type("ExecError") is True
+        assert env.get_type("ExecError") is not None
 
     def test_cannot_unregister_recursion_error(self) -> None:
         env = TypeEnvironment()
         env.unregister_name("RecursionError")
-        assert env.has_type("RecursionError") is True
+        assert env.get_type("RecursionError") is not None
 
     def test_can_unregister_user_type(self) -> None:
         env = TypeEnvironment()
         env.register_type("UserRec", RecordType(name="UserRec"))
         env.unregister_name("UserRec")
-        assert env.has_type("UserRec") is False
+        assert env.get_type("UserRec") is None
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +804,7 @@ class TestInferenceVarType:
         assert contains_inference_var(variable) is True
 
     def test_is_not_registered_as_a_source_type(self) -> None:
-        assert TypeEnvironment().has_type("InferenceVarType") is False
+        assert TypeEnvironment().get_type("InferenceVarType") is None
 
     def test_is_not_reexported_by_the_public_typecheck_package(self) -> None:
         import agm.agl.typecheck as typecheck
@@ -901,7 +889,7 @@ class TestInferenceVarType:
 
     def test_schema_walkers_reject_flexible_variables(self) -> None:
         from agm.agl.semantics.type_table import create_seeded_type_table
-        from agm.agl.type_schema import derive_schema
+        from tests._agl_helpers import derive_schema
 
         variable = InferenceVarType("T")
         table = create_seeded_type_table()
@@ -996,7 +984,6 @@ class TestTypeTemplateMatch:
         match = match_type_template(template, concrete, ("A", "B"))
 
         assert match == TypeTemplateMatch((("A", TextType()), ("B", IntType())))
-        assert match.type_arguments == (TextType(), IntType())
 
     def test_nested_containers_and_functions_require_consistent_binding(self) -> None:
         variable = TypeVarType("T")

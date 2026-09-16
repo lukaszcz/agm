@@ -56,22 +56,14 @@ from __future__ import annotations
 
 from agm.agl.keywords import (
     KEYWORDS,
-    KW_AND,
     KW_AS_QUESTION,
-    KW_DOWNTO,
     KW_END,
     KW_EXPORT,
     KW_HIDING,
     KW_IMPORT,
-    KW_IN,
-    KW_IS,
     KW_NOT,
-    KW_OR,
     KW_SCOPE,
-    KW_STEP,
-    KW_TO,
     KW_USE,
-    KW_WITH,
     SOFT_KEYWORDS,
 )
 
@@ -163,15 +155,7 @@ HIDING = KW_HIDING.upper()  # contextual: 'hiding' in a module header
 EXPORT = KW_EXPORT.upper()  # contextual: 'export' at item-start
 SCOPE = KW_SCOPE.upper()  # contextual: 'scope' at item-start before a scope path
 END = KW_END.upper()  # contextual: 'end' at item-start while a scope region is open
-OR = KW_OR.upper()  # contextual: 'or' after an operand
-AND = KW_AND.upper()  # contextual: 'and' after an operand
 NOT = KW_NOT.upper()  # contextual: 'not' before an operand
-IS = KW_IS.upper()  # contextual: 'is' after an operand
-IN = KW_IN.upper()  # contextual: 'in' after an operand
-TO = KW_TO.upper()  # contextual: 'to' after a range start
-DOWNTO = KW_DOWNTO.upper()  # contextual: 'downto' after a range start
-STEP = KW_STEP.upper()  # contextual: 'step' after a range end
-WITH = KW_WITH.upper()  # contextual: 'with' after a record operand
 MODQUAL = "MODQUAL"  # synthetic: merged qualifier prefix (e.g. "foo/bar::")
 MODPATH = "MODPATH"  # synthetic: merged module path in a header (e.g. "foo/bar")
 WILDCARD = "WILDCARD"  # synthetic: adjacent "/*" tail of a wildcard module header

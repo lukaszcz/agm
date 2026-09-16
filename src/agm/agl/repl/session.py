@@ -30,7 +30,6 @@ from agm.agl.repl.entry_pipeline import EntryPipeline
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.scope.symbols import dedupe_constructor_candidates
 from agm.agl.self_validation import self_validation_enabled
-from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -866,18 +865,6 @@ class ReplSession:
 
         assert isinstance(seed, BoolValue)
         return seed.value
-
-    @property
-    def _persisted_host_settings(self) -> "dict[str, Value]":
-        """The current register, filtered to the three host-consumed keys.
-
-        Exposed for introspection (tests, ``EntryPipeline``): ``_current`` also
-        carries ``strict-json``/``timeout``, which have no host-consumed
-        register of their own and must never appear here.
-        """
-        return {
-            key: value for key, value in self._current.items() if key in HOST_CONSUMED_ENGINE_KEYS
-        }
 
     @staticmethod
     def _resolve_timeout_seconds(seed: "RecordValue | None") -> float | None:

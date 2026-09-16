@@ -70,6 +70,10 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
+[tool.vulture]
+min_confidence = 60
+ignore_decorators = ["@*.command", "@*.callback", "@bindings.add"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

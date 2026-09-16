@@ -178,7 +178,25 @@ scope_path: MODQUAL* NAME
 // expression, so an attributed `let` inside a block stays unambiguous.
 attributes: attribute+
 
-attribute: AT NAME (LPAR arg_list? RPAR)? _NEWLINE?
+attribute: AT NAME (LPAR attr_arg_list? RPAR)? _NEWLINE?
+
+// An attribute's own argument list: an ordinary positional argument, or a
+// keyed argument whose key is a reference — bare, suffix-qualified
+// (`mod::x`), slash-qualified (`a/b::x`), module-anchored (`/a/b::x`), or
+// current-module anchored (`::x`), and may chain several scope segments
+// (`a::b::x`) — never a placeholder. A type-applied segment (`Foo[int]::x`)
+// parses here but is rejected once built: an attribute key names a binding,
+// not a generic instantiation. Kept separate from arg_list so the call
+// site's grammar stays untouched.
+attr_arg_list: attr_arg (COMMA attr_arg)* COMMA?
+
+?attr_arg: pos_arg | attr_keyed_arg
+
+attr_keyed_arg: attr_key EQ arg_expr
+
+// Reuse the same VarRef-building rules as an ordinary reference expression,
+// rather than re-deriving a VarRef from qual_ref_chain/field_name here.
+?attr_key: qual_var_ref | var_ref
 
 // ---------------------------------------------------------------------------
 // Type declarations

@@ -35,6 +35,7 @@ from agm.agl.artifact_cache import (
     retained_module_sources,
     retained_resolved_modules,
 )
+from agm.agl.attributes import is_param_declaration
 from agm.agl.modules.ids import ModuleId, expand_module_wildcard
 
 if TYPE_CHECKING:
@@ -60,6 +61,7 @@ from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
     ConstructorRef,
+    DeclInfo,
     ModuleResolution,
     ReceiverOwner,
     ScopeNode,
@@ -93,7 +95,6 @@ from agm.agl.syntax.nodes import (
     simple_let_pattern_name,
     static_items,
 )
-from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, member_type_params
 
 
@@ -790,9 +791,9 @@ def _decl_to_import_target(decl: ImportDecl | ExportDecl, graph: ModuleGraph) ->
 # Cross-module decl info type aliases
 # ---------------------------------------------------------------------------
 
-# Maps (module_id, name) → (decl_node_id, decl_span, binder_kind, is_builtin)
-# for building BindingRef values for cross-module references.
-_DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind, bool, bool]]
+# Maps (module_id, name) → DeclInfo, for building BindingRef values for
+# cross-module references.
+_DeclInfo = dict[QName, DeclInfo]
 
 
 # ---------------------------------------------------------------------------
@@ -951,12 +952,12 @@ def resolve_program(
                     continue
                 key = (mid, _item_atom(item))
                 all_public_funcs[key] = item
-                decl_info[key] = (
-                    item.node_id,
-                    item.span,
-                    BinderKind.function_binding,
-                    item.is_builtin,
-                    bool(item.params) and item.params[0].name == "self",
+                decl_info[key] = DeclInfo(
+                    decl_node_id=item.node_id,
+                    decl_span=item.span,
+                    kind=BinderKind.function_binding,
+                    is_builtin=item.is_builtin,
+                    is_method=bool(item.params) and item.params[0].name == "self",
                 )
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 key = (mid, _item_atom(item))
@@ -967,26 +968,23 @@ def resolve_program(
                     or isinstance(item.type_expr, (NameT, AppliedT))
                     else BinderKind.let_binding
                 )
-                decl_info[key] = (item.node_id, item.span, kind, False, False)
+                decl_info[key] = DeclInfo(decl_node_id=item.node_id, decl_span=item.span, kind=kind)
             elif isinstance(item, BuiltinVarDecl):
                 key = (mid, _item_atom(item))
-                decl_info[key] = (
-                    item.node_id,
-                    item.span,
-                    BinderKind.builtin_var_binding,
-                    False,
-                    False,
+                decl_info[key] = DeclInfo(
+                    decl_node_id=item.node_id,
+                    decl_span=item.span,
+                    kind=BinderKind.builtin_var_binding,
                 )
             elif isinstance(item, LetDecl):
                 let_atom = _let_atom(item)
                 if let_atom is not None:
                     key = (mid, let_atom)
-                    decl_info[key] = (
-                        item.pattern.node_id,
-                        item.span,
-                        BinderKind.let_binding,
-                        False,
-                        False,
+                    decl_info[key] = DeclInfo(
+                        decl_node_id=item.pattern.node_id,
+                        decl_span=item.span,
+                        kind=BinderKind.let_binding,
+                        is_param=is_param_declaration(item.attributes),
                     )
 
     prelude_static_decl_node_ids = _builtin_static_decl_node_ids(all_public_funcs, all_public_types)

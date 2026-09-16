@@ -52,7 +52,7 @@ from typing import Literal, Protocol, TypeGuard, assert_never, cast
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic, static_root_message
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import ENTRY_ID, ModuleId, is_std_config_root, spell_declaration
 from agm.agl.scope.imports import (
     qualification_repair_guidance,
 )
@@ -714,6 +714,11 @@ def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
     return isinstance(node, (IndexAccess, IndexTarget))
 
 
+#: Shared wording for a constant-expression diagnostic: a ``builtin var``
+#: initializer and a ``@config`` value both require this shape.
+_CONSTANT_EXPRESSION_SHAPE = "constructors, 'resource(...)', and literals only"
+
+
 # ---------------------------------------------------------------------------
 # Main checker
 # ---------------------------------------------------------------------------
@@ -1176,6 +1181,8 @@ class _Checker:
             # Signature already registered in pre-pass; check body now.
             with self._env.type_scope(self._declaration_scope_path(item)):
                 self._check_funcdef_body(item)
+                if item.is_program:
+                    self._check_program_config(item)
             return UnitType()
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             return UnitType()
@@ -1313,6 +1320,52 @@ class _Checker:
         finally:
             self._current_type_vars = old_type_vars
 
+    def _check_program_config(self, node: FuncDef) -> None:
+        """Check a ``program def``'s ``@config`` entries, if it carries one.
+
+        Each entry's key must resolve to a legal target — a root ``std/config``
+        engine setting or a whole-program ``@param`` binding — with no two
+        entries naming the same target under different spellings. A target's
+        type is read the ordinary way a reference to it is checked; its value
+        is checked against that type and must be a constant expression.
+        """
+        entries = self._resolved.attributes.program_configs.get(node.node_id, ())
+        seen_targets: set[tuple[ModuleId, tuple[str, ...], str]] = set()
+        for entry in entries:
+            ref = self._binding_for(entry.key.node_id)
+            target_key = (ref.module_id, ref.scope_path, ref.name)
+            if not self._is_config_target(ref):
+                raise AglTypeError(
+                    f"'{ref.name}' is not a '@param' binding or an engine setting, so it cannot "
+                    "be a '@config' target.",
+                    span=entry.key.span,
+                )
+            if target_key in seen_targets:
+                raise AglTypeError(
+                    f"'@config' already has an entry for '{ref.name}'.",
+                    span=entry.key.span,
+                )
+            seen_targets.add(target_key)
+            key_type = self._check_boundary_expr(entry.key, expected=None)
+            value_type = self._check_boundary_expr(entry.value, expected=key_type)
+            self._assert_assignable_from(value_type, key_type, entry.value.span, entry.value)
+            if not self._is_constant_expr(entry.value):
+                raise AglTypeError(
+                    "'@config' value must be a constant expression "
+                    f"({_CONSTANT_EXPRESSION_SHAPE}).",
+                    span=entry.value.span,
+                )
+
+    def _is_config_target(self, ref: BindingRef) -> bool:
+        """Whether *ref* names a legal ``@config`` target.
+
+        Either a root ``std/config`` engine setting, or a ``let``/``var``
+        binding recognized as ``@param``.
+        """
+        if ref.kind is BinderKind.builtin_var_binding:
+            return is_std_config_root(ref.module_id, ref.scope_path)
+        return ref.kind in (BinderKind.let_binding, BinderKind.var_binding) and ref.is_param
+
     def check_candidate_funcdef_body(
         self,
         node: FuncDef,
@@ -1437,11 +1490,11 @@ class _Checker:
 
     def _check_builtin_var(self, node: BuiltinVarDecl) -> None:
         """Check a host-backed binding and preserve ``std/config`` engine rules."""
-        from agm.agl.modules.ids import STD_CONFIG_ID
         from agm.agl.semantics.engine_keys import get_engine_key_type
 
         declared = self._env.resolve_type_expr(node.type_ann, span=node.span, type_vars=frozenset())
-        if self._module_id == STD_CONFIG_ID and not node.scope_path:
+        node_scope_path = tuple(segment.name for segment in node.scope_path)
+        if is_std_config_root(self._module_id, node_scope_path):
             key_type = get_engine_key_type(node.name)
             if key_type is None:
                 raise AglTypeError(
@@ -1466,19 +1519,27 @@ class _Checker:
         if node.default is not None:
             default_type = self._check_boundary_expr(node.default, expected=key_type)
             self._assert_assignable_from(default_type, key_type, node.default.span, node.default)
-            if not is_constant_expression(
-                node.default,
-                is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
-                is_constant_builtin=lambda node_id: (
-                    self._resolved.builtin_calls.get(node_id)
-                    in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}
-                ),
-            ):
+            if not self._is_constant_expr(node.default):
                 raise AglTypeError(
                     "builtin var initializer must be a constant expression "
-                    "(constructors and literals only).",
+                    f"({_CONSTANT_EXPRESSION_SHAPE}).",
                     span=node.default.span,
                 )
+
+    def _is_constant_expr(self, expr: Expr) -> bool:
+        """Whether *expr* is a constant expression (see ``_CONSTANT_EXPRESSION_SHAPE``).
+
+        Shared by a ``builtin var`` initializer and a ``@config`` value: both
+        require a value that a host can compute without running arbitrary code.
+        """
+        return is_constant_expression(
+            expr,
+            is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
+            is_constant_builtin=lambda node_id: (
+                self._resolved.builtin_calls.get(node_id)
+                in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}
+            ),
+        )
 
     @staticmethod
     def _binder_result(value_type: Type) -> Type:
@@ -1555,6 +1616,7 @@ class _Checker:
                     decl_node_id=stmt.pattern.node_id,
                     kind=BinderKind.let_binding,
                     module_id=self._module_id,
+                    is_param=stmt.pattern.node_id in self._resolved.attributes.params,
                 ),
             )
         self._propagate_pattern_callable_metadata(stmt.pattern, stmt.value)

@@ -1182,17 +1182,36 @@ Binder = LetDecl | VarDecl | AssignStmt
 
 
 @dataclass(frozen=True, slots=True)
+class AttributeKeyedArg:
+    """A keyed argument in an attribute's argument list: ``key = value``.
+
+    Unlike :class:`NamedArg`, an attribute's key is a reference — see
+    :class:`VarRef` — that may carry a qualifier: bare, suffix-qualified
+    (``mod::x``), slash-qualified (``a/b::x``), module-anchored
+    (``/a/b::x``), current-module anchored (``::x``), or a chain of several
+    scope segments (``a::b::x``). A type-applied segment (``Foo[int]::x``)
+    is rejected when the argument is built.
+    """
+
+    key: VarRef
+    value: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class Attribute:
     """``@name`` or ``@name(args)`` in front of a defining declaration.
 
-    The AST keeps an attribute exactly as written: its name and the ordinary
-    call arguments it was given. Which attributes exist, where they may sit,
-    and what they mean are decided later, against the attribute catalog.
+    The AST keeps an attribute exactly as written: its name, positional
+    arguments, and reference-keyed arguments. Which attributes exist, where
+    they may sit, and what they mean are decided later, against the
+    attribute catalog.
     """
 
     name: str
     args: tuple[Expr, ...]
-    named_args: tuple[NamedArg, ...]
+    keyed_args: tuple[AttributeKeyedArg, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 

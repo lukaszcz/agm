@@ -19,6 +19,7 @@ from agm.agl.syntax.nodes import (
     AssignStmt,
     AssignTarget,
     Attribute,
+    AttributeKeyedArg,
     BinaryOp,
     Binder,
     BinOp,
@@ -158,6 +159,7 @@ __all__ = [
     "Program",
     # declarations
     "Attribute",
+    "AttributeKeyedArg",
     "FuncDef",
     "RecordDef",
     "RecordUpdate",

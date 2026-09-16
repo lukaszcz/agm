@@ -1373,6 +1373,35 @@ def _session_with_import_root(
 
 
 # ---------------------------------------------------------------------------
+# @config targets across entries
+# ---------------------------------------------------------------------------
+
+
+class TestProgramConfigAcrossEntries:
+    """A ``@config`` target's ``@param``-ness is a binding fact, not a whole-program set."""
+
+    def test_an_earlier_entrys_param_binding_is_a_legal_config_target(self) -> None:
+        session = open_session()
+        assert session.eval_entry("@param let v: int = 1").ok
+
+        accepted = session.eval_entry(
+            "import std/config\n\n@config(v = 2)\nprogram def p() -> unit = ()\n"
+        )
+
+        assert accepted.ok, accepted.diagnostics
+
+    def test_an_earlier_entrys_plain_let_is_not_a_legal_config_target(self) -> None:
+        session = open_session()
+        assert session.eval_entry("let v: int = 1").ok
+
+        rejected = session.eval_entry(
+            "import std/config\n\n@config(v = 2)\nprogram def p() -> unit = ()\n"
+        )
+
+        assert not rejected.ok
+
+
+# ---------------------------------------------------------------------------
 # Module parameter seeds
 # ---------------------------------------------------------------------------
 

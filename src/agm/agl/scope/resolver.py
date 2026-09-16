@@ -48,9 +48,10 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, TypeVar, cast
 
+from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
 from agm.agl.diagnostics import static_root_message
 from agm.agl.modules.ids import RESERVED_ID, ModuleId, spell_declaration
-from agm.agl.scope.attributes import recognize_attributes
+from agm.agl.scope.attributes import recognize_attributes, recognize_program_command
 from agm.agl.scope.imports import (
     EMPTY_IMPORT_ENV,
     BareRoute,
@@ -83,6 +84,7 @@ from agm.agl.scope.symbols import (
     BuiltinStaticKind,
     ConstructorRef,
     DeclarationKey,
+    DeclInfo,
     ImportedUseContribution,
     LocalUseContribution,
     ModuleResolution,
@@ -344,8 +346,7 @@ class _Resolver:
         all_public_types: dict[
             tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
         ],
-        decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind, bool, bool]]
-        | None = None,
+        decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo] | None = None,
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
         builtin_static_decl_node_ids: frozenset[int] = frozenset(),
@@ -375,9 +376,9 @@ class _Resolver:
             {module_id: import_env} if program_import_envs is None else program_import_envs
         )
         # Declaration metadata used to build cross-module references.
-        self._decl_info: dict[
-            tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind, bool, bool]
-        ] = decl_info if decl_info is not None else {}
+        self._decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo] = (
+            decl_info if decl_info is not None else {}
+        )
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
             cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
         )
@@ -2814,6 +2815,7 @@ class _Resolver:
             with self._named_scope(tuple(segment.name for segment in node.scope_path)):
                 self._classify_method_declaration(node)
                 self._validate_qualifier_chains(node)
+                self._resolve_program_config(node)
                 self._resolve_params_and_body(node)
             return
         if not self._at_root:
@@ -2826,6 +2828,7 @@ class _Resolver:
         # evaluated in the function's definition scope.
         self._classify_method_declaration(node)
         self._validate_qualifier_chains(node)
+        self._resolve_program_config(node)
         previous_synthetic_entry = self._in_synthetic_entry
         previous_entry_items = self._synthetic_entry_items
         self._in_synthetic_entry = node.is_synthetic
@@ -2836,6 +2839,24 @@ class _Resolver:
         finally:
             self._in_synthetic_entry = previous_synthetic_entry
             self._synthetic_entry_items = previous_entry_items
+
+    def _resolve_program_config(self, node: FuncDef) -> None:
+        """Resolve a ``program def``'s ``@config`` keys and values, if it carries one.
+
+        Both resolve in the scope that declares the program, before its
+        parameter scope opens. Validates the attribute prefix first, so a
+        malformed, misplaced, or repeated attribute is reported ahead of an
+        unresolved key or value inside it.
+        """
+        if not node.is_program:
+            return
+        recognize_program_command(node)
+        for attribute in node.attributes:
+            if attribute.name != CONFIG_ATTRIBUTE:
+                continue
+            for entry in attribute.keyed_args:
+                self._resolve_varref(entry.key)
+                self._resolve_expr(entry.value)
 
     def _resolve_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
         """Reject type declarations outside the program root."""
@@ -2952,6 +2973,7 @@ class _Resolver:
                 decl_node_id=decl_node_id,
                 kind=kind,
                 module_id=self._module_id,
+                is_param=is_param_declaration(node.attributes),
             ),
         )
 
@@ -4224,8 +4246,8 @@ class _Resolver:
             Source span of the reference site (for synthetic decl_span).
         """
         key = (owning_module, src_name)
-        decl_node_id, decl_span, kind, is_builtin, is_method = self._decl_info.get(
-            key, (-1, span, BinderKind.function_binding, False, False)
+        info = self._decl_info.get(
+            key, DeclInfo(decl_node_id=-1, decl_span=span, kind=BinderKind.function_binding)
         )
         path = (src_name,) if isinstance(src_name, str) else src_name
         return BindingRef(
@@ -4233,14 +4255,15 @@ class _Resolver:
             # Only ``builtin var`` bindings are mutable across a module boundary;
             # every other exported binding (functions, constructors, …) is
             # immutable at the reference site.
-            mutable=kind is BinderKind.builtin_var_binding,
-            decl_span=decl_span,
-            decl_node_id=decl_node_id,
-            kind=kind,
+            mutable=info.kind is BinderKind.builtin_var_binding,
+            decl_span=info.decl_span,
+            decl_node_id=info.decl_node_id,
+            kind=info.kind,
             module_id=owning_module,
             scope_path=path[:-1],
-            is_builtin=is_builtin,
-            is_method=is_method,
+            is_builtin=info.is_builtin,
+            is_method=info.is_method,
+            is_param=info.is_param,
         )
 
     def _spaced_qualifier_repair(
@@ -4263,11 +4286,13 @@ class _Resolver:
         if not isinstance(result, QualResolutionFound):
             return None
         if advisory.type_qualified:
-            _node_id, _span, kind, _is_builtin, _is_method = self._decl_info.get(
+            info = self._decl_info.get(
                 result.qname,
-                (-1, advisory.dcolon_span, BinderKind.let_binding, False, False),
+                DeclInfo(
+                    decl_node_id=-1, decl_span=advisory.dcolon_span, kind=BinderKind.let_binding
+                ),
             )
-            if kind is not BinderKind.constructor_binding:
+            if info.kind is not BinderKind.constructor_binding:
                 return None
         rendered = render_qualifier(advisory.segments, anchored=advisory.anchored)
         return AglScopeError(
@@ -4582,18 +4607,19 @@ class _Resolver:
                 # ordinary imported member; its declaration kind is what makes it
                 # a constructor spelling.
                 atom_path = _bare_path(qname[1])
-                decl_node_id, _decl_span, kind, _is_builtin, _is_method = self._decl_info.get(
-                    qname, (-1, node.span, BinderKind.let_binding, False, False)
+                fallback = DeclInfo(
+                    decl_node_id=-1, decl_span=node.span, kind=BinderKind.let_binding
                 )
-                if kind is BinderKind.constructor_binding:
+                info = self._decl_info.get(qname, fallback)
+                if info.kind is BinderKind.constructor_binding:
                     return (
                         ConstructorRef(
                             owner_name=atom_path[-1],
-                            owner_decl_node_id=decl_node_id,
+                            owner_decl_node_id=info.decl_node_id,
                             type_params=(),
                             owner_module_id=qname[0],
                             owner_path=atom_path[:-1],
-                            is_builtin=_is_builtin,
+                            is_builtin=info.is_builtin,
                         ),
                     )
         if self._resolve_constructor_chain(

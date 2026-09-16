@@ -1687,7 +1687,9 @@ class _Checker:
             ref = self._binding_for(stmt.node_id)
             if not ref.mutable:
                 raise AglTypeError(
-                    immutable_assignment_message(ref.name, ref.kind),
+                    immutable_assignment_message(
+                        ref.name, ref.kind, cross_module=ref.module_id != self._module_id
+                    ),
                     span=stmt.target.span,
                 )
             target_type = self._require_binding_type(ref)

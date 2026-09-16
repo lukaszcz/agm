@@ -437,8 +437,9 @@ Assignment has type `unit` and returns `()`. `assign_target`'s qualifier
 accepts any number of segments: a local scope path (`A::B::count`) reaches a
 scoped `var` exactly as a qualified read does, while a bare (non-indexed)
 cross-module target — written with a qualifier, or bare when an import tail or
-`use` puts the name in scope — is valid only when it resolves to a `builtin var`;
-type-qualified constructor forms are not assignment targets. An indexed
+`use` puts the name in scope — is valid only when it resolves to an exported
+`var` or a `builtin var`; type-qualified constructor forms are not assignment
+targets. An indexed
 assignment target's object expression is evaluated like any other read, so
 `assign_target` accepts any array- or dict-typed expression there; a field
 assignment likewise accepts any record-typed postfix receiver, provided its

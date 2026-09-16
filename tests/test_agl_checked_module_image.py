@@ -2,8 +2,8 @@
 
 Builds one multi-module program (generics, aliases, an enum with a method, a
 scoped record and function, an extern declaration, a self-method, a
-cross-module candidate-function dependency, and a static ``let``), compiles it
-once, then checks that turning each non-entry module into a ``CheckedModuleImage``
+cross-module candidate-function dependency, and a static ``let``/``var`` pair),
+compiles it once, then checks that turning each non-entry module into a ``CheckedModuleImage``
 and rehydrating it onto a freshly prepared environment reproduces every query
 answer the original module gives -- and that a program reassembled from
 rehydrated modules lowers to the identical ``ExecutableProgram``.
@@ -25,6 +25,8 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.program import ResolvedProgram, resolve_program
 from agm.agl.syntax.nodes import (
     LetDecl,
+    VarDecl,
+    static_binding_node_id,
     static_function_items,
     static_items,
     static_type_items,
@@ -124,10 +126,15 @@ def increment-factorial(n: int) -> int = factorial(n) + 1
 
 _STATIC_LET_SRC = """\
 let default-count: int = 7
+var default-attempts: int = 0
 
 def default-count-plus-one() -> int = default-count + 1
 
 def default-count-as-decimal() -> decimal = default-count as decimal
+
+def bump-attempts() -> int =
+  default-attempts := default-attempts + 1
+  default-attempts
 """
 
 _ENTRY_SRC = """\
@@ -258,18 +265,19 @@ class TestRehydrationParity:
                     mid, item.name, scope_path=scope_path
                 ) == cm.type_env.source_type_template_qname(mid, item.name, scope_path=scope_path)
 
-    def test_static_let_binding_types_match(
+    def test_static_let_and_var_binding_types_match(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]
     ) -> None:
         for mid in _non_entry_module_ids(compiled):
             rehydrated_module = rehydrated[mid]
             cm = compiled.checked.modules[mid]
             for item in static_items(cm.resolved.program.body.items):
-                if not isinstance(item, LetDecl):
+                if not isinstance(item, (LetDecl, VarDecl)):
                     continue
+                node_id = static_binding_node_id(item)
                 assert rehydrated_module.type_env.get_binding_type(
-                    item.pattern.node_id
-                ) == cm.type_env.get_binding_type(item.pattern.node_id)
+                    node_id
+                ) == cm.type_env.get_binding_type(node_id)
 
     def test_enum_and_generic_whole_environment_queries_match(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]

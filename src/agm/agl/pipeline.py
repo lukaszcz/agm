@@ -1566,27 +1566,26 @@ def _module_param_infos(
     checked: "CheckedProgram",
 ) -> dict["ModuleId", tuple[ParamBindingInfo, ...]]:
     """Return each checked module's marked static bindings in source order."""
-    from agm.agl.syntax.nodes import LetDecl, VarDecl, simple_let_pattern_name, static_items
+    from agm.agl.syntax.nodes import (
+        LetDecl,
+        VarDecl,
+        static_binding_name,
+        static_binding_node_id,
+        static_items,
+    )
 
     module_params: dict[ModuleId, tuple[ParamBindingInfo, ...]] = {}
     for module_id, checked_module in checked.modules.items():
         attributes = checked_module.resolved.attributes
         params: list[ParamBindingInfo] = []
         for item in static_items(checked_module.resolved.program.body.items):
-            name: str | None
-            if isinstance(item, VarDecl):
-                binding_node_id = item.node_id
-                name = item.name
-                type_ann = item.type_ann
-            elif isinstance(item, LetDecl):
-                binding_node_id = item.pattern.node_id
-                name = simple_let_pattern_name(item.pattern)
-                type_ann = item.type_ann
-            else:
+            if not isinstance(item, (LetDecl, VarDecl)):
                 continue
+            binding_node_id = static_binding_node_id(item)
             cli = attributes.params.get(binding_node_id)
             if cli is None:
                 continue
+            name = static_binding_name(item)
             assert name is not None
             binding_type = checked_module.type_env.get_binding_type(binding_node_id)
             assert binding_type is not None
@@ -1605,7 +1604,7 @@ def _module_param_infos(
                         checked,
                         module_id,
                         tuple(segment.name for segment in item.scope_path),
-                        type_ann,
+                        item.type_ann,
                         binding_type,
                     ),
                 )

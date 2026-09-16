@@ -171,7 +171,8 @@ parameter boundary.
 Its initializer supplies the value when the host leaves the parameter unset;
 when the host supplies a value, that value is bound instead and the initializer
 is not evaluated. A `var` remains mutable after that initial host value is
-bound.
+bound. When exported (see [Modules](modules.md#re-exports-and-visibility)), an
+importer may also write it.
 
 The presentation attributes `@opt-name`, `@opt-short`, `@opt-env`,
 `@opt-metavar`, `@opt-hidden`, and `@doc` apply to the binding. Without

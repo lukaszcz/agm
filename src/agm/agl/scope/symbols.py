@@ -318,19 +318,18 @@ def immutable_binder_phrase(kind: BinderKind) -> str:
     return _IMMUTABLE_BINDER_PHRASES[kind]
 
 
-def immutable_assignment_message(name: str, kind: BinderKind) -> str:
+def immutable_assignment_message(name: str, kind: BinderKind, *, cross_module: bool = False) -> str:
     """Return the canonical ``:=``-on-immutable rejection message for *name*.
 
     Type checking is the only caller: a field-directed pattern slot's final
     binding is selected there, so only it can judge an unqualified target.
     The wording lives here beside :func:`immutable_binder_phrase`, which the
     resolver also uses for the cross-module qualified-assignment rejection.
+    *cross_module* drops the "declare with 'var'" hint: an importer cannot
+    change how another module declared its own binding.
     """
-    return (
-        f"Cannot assign to '{name}': "
-        f"{immutable_binder_phrase(kind)} (immutable). "
-        f"Declare with 'var' to make the variable mutable."
-    )
+    hint = "" if cross_module else " Declare with 'var' to make the variable mutable."
+    return f"Cannot assign to '{name}': {immutable_binder_phrase(kind)} (immutable).{hint}"
 
 
 def duplicate_binder_message(name: str) -> str:

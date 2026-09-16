@@ -74,7 +74,8 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
     VarDecl,
     VariantDef,
-    simple_let_pattern_name,
+    static_binding_name,
+    static_binding_node_id,
     static_items,
 )
 from agm.agl.syntax.visitor import walk
@@ -302,13 +303,13 @@ class _Recognizer:
         marker = recognized.nodes.get(PARAM_ATTRIBUTE)
         if marker is None:
             return
-        name = node.name if isinstance(node, VarDecl) else simple_let_pattern_name(node.pattern)
+        name = static_binding_name(node)
         if name is None or name == "_":
             raise AglScopeError(
                 "Attribute '@param' requires a binding with a single name.",
                 span=marker.span,
             )
-        binding_node_id = node.node_id if isinstance(node, VarDecl) else node.pattern.node_id
+        binding_node_id = static_binding_node_id(node)
         self.params[binding_node_id] = _option_spec(name, recognized)
 
     # ------------------------------------------------------------------

@@ -212,10 +212,15 @@ module-and-scope nominal identity.
 ## Re-exports and visibility
 
 `def`, `record`, `enum`, `exception`, and `type` declarations, plus annotated
-simple `let` bindings, are exported under their full declaration paths. Grouping helpers in a
-[named scope](scopes.md) keeps them off a module's bare surface: an importer
-reaches such a member through its scope path or makes it bare with an import
-tail or `use` declaration.
+simple `let`/`var` bindings, are exported under their full declaration paths.
+Grouping helpers in a [named scope](scopes.md) keeps them off a module's bare
+surface: an importer reaches such a member through its scope path or makes it
+bare with an import tail or `use` declaration.
+
+An exported `var` is writable across a module boundary the same way it is
+read: a qualified target, or a bare target reached through an import tail or
+`use`. An exported `let` remains immutable at every reference site, including
+one reached through a re-export.
 
 `export` forwards public declarations without injecting them into the exporting
 module's local scope. A brace tail selects the declarations to forward; a plain

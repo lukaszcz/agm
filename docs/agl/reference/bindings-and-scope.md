@@ -312,15 +312,16 @@ program def main() -> unit =
   let strict = std/config::strict-json  # read a setting
 ```
 
-An engine setting is an ordinary mutable binding in another module, so an
+An engine setting is a host-backed mutable binding in another module, so an
 assignment target names it exactly as a read does: a qualifier always works,
-and an import tail or `use` declaration can contribute a bare name. See
-[Modules](modules.md) for import and `use` contributions. When the host
-supplies no initial value, the declared default is used; a host seed wins over
-it. Reading another standard-library binding with neither a host seed nor a
-declared default instead reports an error. A write takes effect from its
-program point onward, exactly like any `var` mutation. The optional settings
-are set with `Some("…")` or `None`.
+and an import tail or `use` declaration can contribute a bare name. An exported
+ordinary `var` (see [Modules](modules.md#re-exports-and-visibility)) is
+writable across a module boundary the same way; an exported `let` is not.
+When the host supplies no initial value, the declared default is used; a host
+seed wins over it. Reading another standard-library binding with neither a
+host seed nor a declared default instead reports an error. A write takes
+effect from its program point onward, exactly like any `var` mutation. The
+optional settings are set with `Some("…")` or `None`.
 
 Other standard-library modules may use `builtin var` for their own ambient
 host values. For example, `std/env` exposes an in-memory

@@ -130,9 +130,10 @@ re-roots every atom it forwards under the region's own path. See
 [Modules](modules.md#imports-and-use-inside-a-scope-region) for the
 complete semantics.
 
-Scoped bindings are never exported. Library modules may use root or scoped
-`let`/`var` bindings as static state captured by their functions, but those
-bindings have no cross-module import or export story.
+An annotated, simple (single-name, not `_`) scoped `let`/`var` is exported
+under its declaration path exactly like a root one; see
+[Modules](modules.md#re-exports-and-visibility). Any other scoped binding is
+static state private to its module.
 
 ## Builtin declarations
 
@@ -198,9 +199,10 @@ declares the binding still
 exposes it to a later reference, just not to an earlier one.
 
 A scoped `var` is assigned through its path (`A::count := 1`) or, inside its
-region or after a `use`, through its bare name. A scoped `let` is not
-assignable: `:=` on it is the same immutable-binder error a root-level `let`
-raises. Assigning to a path that names a `def` or a type is
+region or after a `use`, through its bare name — the same forms that read it,
+including through an import when the scope belongs to another module. A
+scoped `let` is not assignable: `:=` on it is the same immutable-binder error
+a root-level `let` raises. Assigning to a path that names a `def` or a type is
 likewise rejected as immutable, and a path with no such member is a focused
 error.
 

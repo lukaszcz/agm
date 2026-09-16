@@ -77,6 +77,21 @@ def test_edited_imports_change_the_next_execution(
     assert capsys.readouterr().out == expected
 
 
+def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unchanged library module served from the warm cache still exports its var."""
+    path = tmp_path / "store.agl"
+    path.write_text("var total: int = 0\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import store::*\ntotal := total + 5\nprint(total)\n"
+    for _ in range(2):
+        result = run_inline_command(runtime, source, roots=roots)
+        assert result.ok, result.diagnostics
+        assert capsys.readouterr().out == "5\n"
+
+
 def test_invalid_import_edit_is_rejected_and_can_be_repaired(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

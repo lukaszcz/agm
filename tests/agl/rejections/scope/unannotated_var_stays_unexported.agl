@@ -1,0 +1,5 @@
+# An unannotated var stays unexported: only annotated bindings are importable.
+import store
+
+program def main() -> unit =
+  print store::untyped

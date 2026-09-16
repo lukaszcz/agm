@@ -1,0 +1,10 @@
+# std/log: an importer writes the exported `log::level` var to raise it above
+# its default and unsuppress a `log::debug` call already in the module.
+import std/log
+
+program def main(raise-level: bool) -> unit =
+  log::debug("hidden-by-default")
+  if raise-level =>
+    log::level := log::Level::Debug
+  log::debug("shown-when-raised")
+  print "done"

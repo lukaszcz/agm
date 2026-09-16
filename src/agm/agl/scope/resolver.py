@@ -16,8 +16,9 @@ Scope rules
 2. A bare-name ``:=`` resolves to the nearest visible binding; ``:=`` on an
    undeclared name → error.  Whether that binding is assignable is decided by
    type checking, which alone knows a pattern slot's selected meaning.  A
-   *qualified* target is settled here: only ``builtin var`` is assignable
-   across a module boundary, and no qualified name is ever a pattern slot.
+   *qualified* target is settled here: only an exported ``var`` or a
+   ``builtin var`` is assignable across a module boundary, and no qualified
+   name is ever a pattern slot.
    Indexed and field targets (``target[index] := value`` and
    ``target.field := value``) create no assignment binding: their receivers
    (and an index target's index) are resolved as ordinary expressions, and no
@@ -190,7 +191,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
     declares_source_entry,
     pattern_binder_candidates,
-    simple_let_pattern_name,
+    static_binding_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, AppliedT, NameT, render_type_expr
@@ -779,11 +780,7 @@ class _Resolver:
                 # member itself to be registered during the body walk, which is
                 # what makes textual precedence fall out of the mechanism.
                 self._ensure_scope_path(path, item.node_id, item.span)
-                name = (
-                    item.name
-                    if isinstance(item, VarDecl)
-                    else simple_let_pattern_name(item.pattern)
-                )
+                name = static_binding_name(item)
                 if name is not None and name != "_":
                     self._ordered_binding_paths.add((*path, name))
 
@@ -3029,9 +3026,9 @@ class _Resolver:
         through its path while a scoped ``let`` -- or a ``def``, a type, or
         an agent sharing its path -- reuses the immutable-binder diagnostic
         below. Only when the qualifier does not name a local scope path is a
-        cross-module target attempted; only a ``builtin var`` binding is
-        assignable across a module boundary (the sole mutable exported
-        binding kind).
+        cross-module target attempted; only an exported ``var`` -- ordinary or
+        ``builtin var`` -- is assignable across a module boundary (a
+        cross-module ``let`` reuses the immutable-binder diagnostic too).
         """
         assert target.qualifier is not None
         qualifier = target.qualifier
@@ -4252,10 +4249,10 @@ class _Resolver:
         path = (src_name,) if isinstance(src_name, str) else src_name
         return BindingRef(
             name=path[-1],
-            # Only ``builtin var`` bindings are mutable across a module boundary;
-            # every other exported binding (functions, constructors, …) is
-            # immutable at the reference site.
-            mutable=info.kind is BinderKind.builtin_var_binding,
+            # Only ``var``/``builtin var`` bindings are mutable across a module
+            # boundary; every other exported binding (functions, constructors,
+            # exported ``let``s, …) is immutable at the reference site.
+            mutable=info.kind in (BinderKind.builtin_var_binding, BinderKind.var_binding),
             decl_span=info.decl_span,
             decl_node_id=info.decl_node_id,
             kind=info.kind,

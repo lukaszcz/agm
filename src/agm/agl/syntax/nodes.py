@@ -1125,6 +1125,38 @@ class VarDecl:
     attributes: tuple[Attribute, ...] = ()
 
 
+def static_binding_name(item: LetDecl | VarDecl) -> str | None:
+    """Return a static ``let``/``var``'s simple name, or ``None`` for a destructuring let.
+
+    ``var`` always names a simple binding; ``let`` names one only through a
+    simple root pattern (see ``simple_let_pattern_name``), which may itself be
+    ``"_"`` for a wildcard root.
+    """
+    return item.name if isinstance(item, VarDecl) else simple_let_pattern_name(item.pattern)
+
+
+def static_binding_node_id(item: LetDecl | VarDecl) -> int:
+    """Return a static ``let``/``var``'s own identity node id.
+
+    For ``var`` this is the declaration node; for ``let`` it is the pattern
+    node, since binder identity lives on the pattern (see ``LetDecl``).
+    """
+    return item.node_id if isinstance(item, VarDecl) else item.pattern.node_id
+
+
+def exported_binding_name(item: LetDecl | VarDecl) -> str | None:
+    """Return a static ``let``/``var``'s exported name, or ``None`` if not exported.
+
+    Exported bindings are annotated simple ``let``/``var`` roots; an
+    unannotated binding, a wildcard root, and a destructuring ``let`` pattern
+    are never exported.
+    """
+    if item.type_ann is None:
+        return None
+    name = static_binding_name(item)
+    return None if name is None or name == "_" else name
+
+
 @dataclass(frozen=True, slots=True)
 class NameTarget:
     """Assignment target for ``name := expr``.

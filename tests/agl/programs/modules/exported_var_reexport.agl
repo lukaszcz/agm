@@ -1,0 +1,8 @@
+# Modules: a re-export facade forwards a var binding, writable bare through
+# the facade's own import tail, exactly like any other re-exported name.
+import facade::*
+
+program def main(delta: int) -> unit =
+  total := delta
+  print total
+  print total-doubled()

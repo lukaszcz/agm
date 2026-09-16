@@ -101,7 +101,9 @@ from agm.agl.syntax.nodes import (
     Program,
     RecordDef,
     TypeAlias,
-    simple_let_pattern_name,
+    VarDecl,
+    exported_binding_name,
+    static_binding_node_id,
     static_function_items,
     static_items,
     static_type_items,
@@ -844,27 +846,27 @@ def _build_program_func_sig_table(
     return result
 
 
-def _build_program_static_let_table(
+def _build_program_static_binding_table(
     resolved: ResolvedProgram, module_envs: Mapping[ModuleId, TypeEnvironment]
 ) -> dict[int, Type]:
-    """Resolve annotated static ``let`` bindings for cross-module access.
+    """Resolve annotated static ``let``/``var`` bindings for cross-module access.
 
-    Module-root lets initialize before importers execute. An annotation makes
-    their type available in the whole-program header phase, while the ordinary
-    body check remains responsible for validating the initializer.
+    Module-root bindings initialize before importers execute. An annotation
+    makes their type available in the whole-program header phase, while the
+    ordinary body check remains responsible for validating the initializer.
     """
     result: dict[int, Type] = {}
     for mid, loaded in resolved.modules.items():
         env = module_envs[mid]
         for item in static_items(loaded.resolved.program.body.items):
-            if not isinstance(item, LetDecl) or item.type_ann is None:
+            if not isinstance(item, (LetDecl, VarDecl)) or item.type_ann is None:
                 continue
-            name = simple_let_pattern_name(item.pattern)
-            if name is None or name == "_":
+            if exported_binding_name(item) is None:
                 continue
+            decl_node_id = static_binding_node_id(item)
             scope_path = tuple(segment.name for segment in item.scope_path)
             with env.type_scope(scope_path):
-                result[item.pattern.node_id] = env.resolve_type_expr(
+                result[decl_node_id] = env.resolve_type_expr(
                     item.type_ann, span=item.span, type_vars=frozenset()
                 )
     return result
@@ -1141,16 +1143,17 @@ def _prepare_program(
             entry_seed_env=entry_seed_env if mid == resolved.entry_id else None,
         )
 
-    # Annotated static lets and builtin vars need each module's complete type
-    # environment, while the environments themselves need those types only for
-    # later body checks. Build the environments first, then seed their completed
-    # binding tables into every module for cross-module references.
-    program_static_let_table = _build_program_static_let_table(resolved, module_envs)
+    # Annotated static let/var bindings and builtin vars need each module's
+    # complete type environment, while the environments themselves need those
+    # types only for later body checks. Build the environments first, then
+    # seed their completed binding tables into every module for cross-module
+    # references.
+    program_static_binding_table = _build_program_static_binding_table(resolved, module_envs)
     program_builtin_var_table = _build_program_builtin_var_table(
         resolved, module_envs, shared_type_table
     )
     for env in module_envs.values():
-        for binding_node_id, binding_type in program_static_let_table.items():
+        for binding_node_id, binding_type in program_static_binding_table.items():
             env.set_binding_type(binding_node_id, binding_type)
         for var_node_id, var_type in program_builtin_var_table.items():
             env.set_binding_type(var_node_id, var_type)

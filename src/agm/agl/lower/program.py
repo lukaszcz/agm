@@ -48,7 +48,8 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     LetDecl,
     VarDecl,
-    simple_let_pattern_name,
+    static_binding_name,
+    static_binding_node_id,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -147,17 +148,12 @@ def _param_tables(
     for module_id, checked_module in modules.items():
         attributes = checked_module.resolved.attributes
         for item in static_items(checked_module.resolved.program.body.items):
-            if isinstance(item, VarDecl):
-                binding_node_id = item.node_id
-                name = item.name
-            elif isinstance(item, LetDecl):
-                binding_node_id = item.pattern.node_id
-                let_name = simple_let_pattern_name(item.pattern)
-                if let_name is None:
-                    continue
-                name = let_name
-            else:
+            if not isinstance(item, (LetDecl, VarDecl)):
                 continue
+            name = static_binding_name(item)
+            if name is None:
+                continue
+            binding_node_id = static_binding_node_id(item)
             if binding_node_id not in attributes.params:
                 continue
             key = static_binding_key(module_id, (segment.name for segment in item.scope_path), name)

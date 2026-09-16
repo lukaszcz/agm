@@ -1,0 +1,2 @@
+# Re-exports store's names except the `total` var, making it unreachable.
+export store hiding total

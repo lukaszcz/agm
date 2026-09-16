@@ -1,0 +1,4 @@
+{
+  "module_roots": ["program_modules/modules/exported_vars"],
+  "diagnostic": {"line": 5}
+}

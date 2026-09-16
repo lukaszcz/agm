@@ -8,9 +8,9 @@ results plus whole-program pre-pass tables.
 Design
 ------
 - **Public surfaces**: declaration export maps covering top-level declarations
-  and named immutable bindings, plus separate named-scope identity maps per
-  module, including explicit ``export`` declarations, all computed before any
-  body is resolved.
+  and annotated simple ``let``/``var`` bindings, plus separate named-scope
+  identity maps per module, including explicit ``export`` declarations, all
+  computed before any body is resolved.
 - **Contribution import environment per module**: built from each module's
   import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
@@ -92,7 +92,8 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VariantDef,
     VariantRef,
-    simple_let_pattern_name,
+    exported_binding_name,
+    static_binding_node_id,
     static_items,
 )
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, member_type_params
@@ -410,11 +411,13 @@ def _item_atom(
     return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
 
 
-def _let_atom(item: LetDecl) -> NameAtom | None:
-    if item.type_ann is None:
-        return None
-    name = simple_let_pattern_name(item.pattern)
-    if name is None or name == "_":
+def _static_binding_atom(item: LetDecl | VarDecl) -> NameAtom | None:
+    """Return the exported name atom for an annotated simple ``let``/``var``, or ``None``.
+
+    Destructuring ``let`` patterns and the ``_`` wildcard are never exported.
+    """
+    name = exported_binding_name(item)
+    if name is None:
         return None
     return _atom((*tuple(segment.name for segment in item.scope_path), name))
 
@@ -475,10 +478,10 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
         elif isinstance(item, BuiltinVarDecl):
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
-        elif isinstance(item, LetDecl):
-            let_atom = _let_atom(item)
-            if let_atom is not None:
-                result[let_atom] = (self_id, let_atom)
+        elif isinstance(item, (LetDecl, VarDecl)):
+            binding_atom = _static_binding_atom(item)
+            if binding_atom is not None:
+                result[binding_atom] = (self_id, binding_atom)
     return result
 
 
@@ -976,14 +979,18 @@ def resolve_program(
                     decl_span=item.span,
                     kind=BinderKind.builtin_var_binding,
                 )
-            elif isinstance(item, LetDecl):
-                let_atom = _let_atom(item)
-                if let_atom is not None:
-                    key = (mid, let_atom)
+            elif isinstance(item, (LetDecl, VarDecl)):
+                binding_atom = _static_binding_atom(item)
+                if binding_atom is not None:
+                    key = (mid, binding_atom)
                     decl_info[key] = DeclInfo(
-                        decl_node_id=item.pattern.node_id,
+                        decl_node_id=static_binding_node_id(item),
                         decl_span=item.span,
-                        kind=BinderKind.let_binding,
+                        kind=(
+                            BinderKind.let_binding
+                            if isinstance(item, LetDecl)
+                            else BinderKind.var_binding
+                        ),
                         is_param=is_param_declaration(item.attributes),
                     )
 

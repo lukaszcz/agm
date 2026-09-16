@@ -54,6 +54,18 @@ class TestImportedModules:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
 
+    def test_a_library_var_written_in_one_entry_is_observed_in_the_next(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "counter.agl").write_text("var count: int = 0\n")
+        session = _open_session(tmp_path)
+        assert session.eval_entry("import counter::*\ncount := 5").ok
+
+        result = session.eval_entry("count")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(5)
+
     def test_imported_operators_evaluate_with_declared_precedence(self, tmp_path: Path) -> None:
         (tmp_path / "ops.agl").write_text(
             "infixl <+> at 6\n"

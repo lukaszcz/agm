@@ -1,0 +1,10 @@
+# Root and scoped vars, annotated, exported like lets; importers may write them.
+var total: int = 0
+let fixed: int = 5
+var untyped = 0
+
+scope Region
+  var label: text = "idle"
+end Region
+
+def total-doubled() -> int = total * 2

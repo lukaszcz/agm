@@ -1,0 +1,2 @@
+# Re-exports every name from store, including its var bindings.
+export store

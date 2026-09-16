@@ -20,7 +20,7 @@ Dry-run is a global mode set from `--dry-run`. Because the process and filesyste
 
 ## Generic Utilities
 
-`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; and a `ContextVar` scoping guard.
+`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; a `ContextVar` scoping guard; and an overlap-safe raise of the process-global recursion limit, used by the AgL interpreter, whose runs may overlap on threads.
 
 ## Code Entry Points
 
@@ -29,4 +29,4 @@ Dry-run is a global mode set from `--dry-run`. Because the process and filesyste
 - `src/agm/core/fs.py` — dry-run-aware filesystem operations; `src/agm/core/path.py` — path resolution, display, and the safe-relative-path predicate shared by archives, `RECORD` files, and AgL resources.
 - `src/agm/core/toml.py`, `src/agm/core/dotenv.py` — round-trip TOML and dotenv helpers.
 - `src/agm/core/cleanup.py` — primary-error-preserving cleanup; `src/agm/core/dry_run.py` — global dry-run state; `src/agm/core/log.py` — logging and JSONL append.
-- `src/agm/util/graph.py`, `text.py`, `ident.py`, `interp.py`, `scoping.py` — the pure helpers.
+- `src/agm/util/graph.py`, `text.py`, `ident.py`, `interp.py`, `scoping.py`, `recursion.py` — the pure helpers.

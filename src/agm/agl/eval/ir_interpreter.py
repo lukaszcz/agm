@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import decimal
 import inspect
-import sys
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, ContextManager, Protocol, TypeVar, assert_never, cast
 
@@ -189,6 +188,7 @@ from agm.config.engine_keys import (
 from agm.core.cleanup import preserve_primary_error
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
+from agm.util.recursion import raised_recursion_limit
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
@@ -1245,29 +1245,25 @@ class IrInterpreter:
         """
         needed = _BASE_RECURSION_HEADROOM + self._max_call_depth * _PYTHON_FRAMES_PER_AGL_CALL
         target = min(needed, _MAX_PYTHON_RECURSION_LIMIT)
-        previous_limit = sys.getrecursionlimit()
-        # Never lower an already-higher limit (e.g. a nested run); only raise it.
-        sys.setrecursionlimit(max(previous_limit, target))
         cleanup = self._session_host.close_all if self._close_sessions else _noop
-        try:
-            with preserve_primary_error(cleanup, label="agent session cleanup"):
-                with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-                    self._install_function_closures()
-                    for mod in self._program.modules.values():
-                        for node in mod.initializers:
-                            self._eval_and_record_initializer(mod.module_id, node)
-                    if program_symbol is not None:
-                        try:
-                            self._invoke_program(program_symbol, arguments)
-                        except RecursionError:
-                            error = self._recursion_error()
-                            error.span = self._program_entry_location(program_symbol)
-                            raise error from None
-            return self._collect_results()
-        except RecursionError:
-            raise self._recursion_error() from None
-        finally:
-            sys.setrecursionlimit(previous_limit)
+        with raised_recursion_limit(target):
+            try:
+                with preserve_primary_error(cleanup, label="agent session cleanup"):
+                    with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+                        self._install_function_closures()
+                        for mod in self._program.modules.values():
+                            for node in mod.initializers:
+                                self._eval_and_record_initializer(mod.module_id, node)
+                        if program_symbol is not None:
+                            try:
+                                self._invoke_program(program_symbol, arguments)
+                            except RecursionError:
+                                error = self._recursion_error()
+                                error.span = self._program_entry_location(program_symbol)
+                                raise error from None
+                return self._collect_results()
+            except RecursionError:
+                raise self._recursion_error() from None
 
     def _eval_and_record_initializer(self, module_id: ModuleId, node: IrExpr) -> None:
         """Evaluate one initializer, retaining its result for result collection."""

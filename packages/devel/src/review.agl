@@ -103,10 +103,11 @@ program def revise-main(
   agent: Agent = config::default-agent)
   -> unit =
   let txt: text = fs::read(file)
-  if txt as? Review =>
-    print <| agent.revise-review(txt as Review)
-  else =>
-    print <| agent.revise-review-text(txt)
+  case txt as? Review of
+    | Some(value) =>
+      print <| agent.revise-review(value)
+    | None =>
+      print <| agent.revise-review-text(txt)
 
 program def refine-main(
   scope: text,

@@ -213,11 +213,16 @@ For an unset module parameter, the value is chosen in this order:
 CLI flag  >  @opt-env variable  >  program route  >  module route  >  initializer
 ```
 
-The **program route** is the selected program's table and can provide a bare
-external name that resolves for the parameter. It wins over the **module
-route**, even when the latter appears in a more-specific TOML layer. A module
-route addresses the binding's declaring module and scope, so it remains
-available even if its bare spelling is shadowed elsewhere.
+The **program route** is the selected program's table. It addresses a parameter
+through any spelling that resolves for it: the bare external name, or one of
+the dotted qualified spellings, written as a quoted key. A parameter whose bare
+name a nearer declaration claims — an engine setting, the signature, a nearer
+module — is therefore still configurable for one program through a qualified
+leaf. Setting two spellings of one parameter in a single layer is an error, and
+a spelling several parameters claim is rejected naming them, exactly as the
+matching flag would be. The program route wins over the **module route**, even
+when the latter appears in a more-specific TOML layer. A module route addresses
+the binding's declaring module and scope, so it remains available too.
 
 For example, this program imports the `A/logging` module:
 
@@ -241,6 +246,7 @@ trace = true
 
 [tool.main]
 verbose = false
+"A.logging.debug.trace" = false
 ```
 
 `["A/logging".debug]` is the exact quoted-module spelling of the scoped

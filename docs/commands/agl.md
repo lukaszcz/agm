@@ -332,8 +332,10 @@ their parameters are CLI-only (CLI value, then signature default).
 Module parameters use their declaring module's **module route**. For `A/logging`, root bindings
 use `[A.logging]`; bindings in `scope debug` use `[A.logging.debug]`, or the exact module anchor
 `["A/logging".debug]`. Leaves use `@opt-name` when present. The selected program's table is the
-**program route**: it can override a module parameter only through a resolving bare external
-name, and wins over the module route; CLI and `@opt-env` still win over both. An inline entry's
+**program route**: it overrides a module parameter through any resolving spelling — the bare
+external name, or a dotted qualified spelling as a quoted key such as `"A.logging.verbose"`,
+which reaches a parameter whose bare name a nearer declaration claims — and wins over the module
+route; CLI and `@opt-env` still win over both. An inline entry's
 own module parameters have no config route, so they resolve as CLI > `@opt-env` > initializer;
 its imported modules retain their module routes.
 

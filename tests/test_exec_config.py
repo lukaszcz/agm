@@ -241,6 +241,22 @@ class TestModuleParameterConfigRoutes:
 
         assert capsys.readouterr().out == "true\nfalse\n"
 
+    def test_program_table_accepts_a_qualified_module_parameter_leaf(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        source, modules = self._program(tmp_path)
+        home, _ = self._configure_context(tmp_path, monkeypatch)
+        (home / ".agm" / "config.toml").write_text(
+            '[main.main]\n"A.logging.verbose" = true\n"A.logging.debug.trace" = true\n'
+        )
+
+        self._run(source, modules)
+
+        assert capsys.readouterr().out == "true\ntrue\n"
+
     def test_undeclared_keys_are_reported_for_module_and_program_routes(
         self,
         tmp_path: Path,

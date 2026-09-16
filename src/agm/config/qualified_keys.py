@@ -30,12 +30,22 @@ class QualifiedConfigKey:
     ``scope_path`` and ``leaf`` name the declaration within that module.
     ``command_paths`` carries the CLI paths a package registers for this
     declaration, each of which addresses it as well as its module route does.
+    ``leaf_aliases`` holds further leaf spellings that address the same
+    declaration within those tables, so one key covers a module parameter's
+    bare and qualified program-table spellings under the ordinary layering
+    rules: several spellings in one layer conflict, a later layer wins.
     """
 
     module_segments: tuple[str, ...]
     scope_path: tuple[str, ...]
     leaf: str
     command_paths: tuple[tuple[str, ...], ...] = ()
+    leaf_aliases: tuple[str, ...] = ()
+
+    def leaf_spellings(self) -> tuple[str, ...]:
+        """Return every leaf spelling that addresses this declaration."""
+
+        return (self.leaf, *self.leaf_aliases)
 
     def display_name(self) -> str:
         """Return the source-style spelling used in lookup diagnostics."""
@@ -88,16 +98,19 @@ def _resolve_layer(
         tuple[tuple[str, ...], str],
         dict[tuple[tuple[str, ...], tuple[str, ...]], list[QualifiedConfigKey]],
     ] = {}
-    values_by_key: dict[QualifiedConfigKey, list[tuple[tuple[str, ...], object]]] = {}
+    values_by_key: dict[QualifiedConfigKey, list[tuple[tuple[str, ...], str, object]]] = {}
 
     for key in keys:
         for path in route_table_paths(key.module_segments, key.scope_path, key.command_paths):
             table = _table_at(layer, path)
-            if table is None or key.leaf not in table:
+            if table is None:
                 continue
-            route = (key.module_segments, key.scope_path)
-            matches_by_value.setdefault((path, key.leaf), {}).setdefault(route, []).append(key)
-            values_by_key.setdefault(key, []).append((path, table[key.leaf]))
+            for leaf in key.leaf_spellings():
+                if leaf not in table:
+                    continue
+                route = (key.module_segments, key.scope_path)
+                matches_by_value.setdefault((path, leaf), {}).setdefault(route, []).append(key)
+                values_by_key.setdefault(key, []).append((path, leaf, table[leaf]))
 
     for (path, leaf), candidates_by_route in matches_by_value.items():
         if len(candidates_by_route) > 1:
@@ -113,11 +126,11 @@ def _resolve_layer(
     resolved: dict[QualifiedConfigKey, object] = {}
     for key, values in values_by_key.items():
         if len(values) > 1:
-            spellings = ", ".join(display_table_path(path) for path, _ in values)
+            spellings = ", ".join(f"{display_table_path(path)}.{leaf}" for path, leaf, _ in values)
             raise QualifiedConfigLookupError(
                 f"config key {key.display_name()} is set by conflicting tables: {spellings}"
             )
-        resolved[key] = values[0][1]
+        resolved[key] = values[0][2]
     return resolved
 
 

@@ -141,9 +141,10 @@ The command's closure module parameters retain their declaring-module
 uses `[review-tools.logging]`; one in `scope debug` uses
 `[review-tools.logging.debug]` or `["review-tools/logging".debug]`. The
 registered command path and the selected program's own table are equivalent
-**program routes**: either can override a module parameter only when its bare
-external name resolves for that parameter. A program-route value wins over a
-module-route value; CLI and `@opt-env` values win over both. See
+**program routes**: either can override a module parameter through any spelling
+that resolves for it — its bare external name, or a dotted qualified spelling
+(as a quoted key) when a nearer declaration claims the bare one. A program-route
+value wins over a module-route value; CLI and `@opt-env` values win over both. See
 [Module parameters](host-environment.md#module-parameters) for all spelling,
 ambiguity, and precedence rules.
 

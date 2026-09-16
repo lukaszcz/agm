@@ -163,8 +163,9 @@ descendants: the example supports both `agm dev review` and `agm rev`. Aliases p
 activation conflicts, project pins, help, and completion like commands.
 
 Config tables use dots between path words: `[rev]`, `[dev.review]`, and `[devel.review]` all
-address the same program route (signature arguments, engine settings, and resolving bare module
-parameters), even via `agm exec`. Different keys in these tables combine; setting the same key
+address the same program route (signature arguments, engine settings, and resolving module
+parameters, bare or dotted-qualified), even via `agm exec`. Different keys in these tables
+combine; setting the same key
 through multiple spellings in one layer is an ambiguity error, and a later config layer overrides
 an earlier one. CLI flags still take precedence. Group tables do not supply inherited defaults.
 
@@ -193,8 +194,8 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
   `review-tools/main::review`) or a registered command path (`[pr-review]`, or `[dev.review]`
   for command `dev review`). Both name the same program regardless of how it runs, so setting
   one key through both in one config layer is an error. A module parameter also uses the module
-  route of its declaring module; a resolving bare program-route leaf overrides that
-  module-route leaf.
+  route of its declaring module; a resolving program-route leaf — its bare external name, or a
+  dotted qualified spelling as a quoted key — overrides that module-route leaf.
   CLI and `@opt-env` values win over both. See [Configuration](agl.md#configuration).
 - **`--dry-run`**, before or after the command path, runs the static pipeline and host-input
   validation without executing.

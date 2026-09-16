@@ -81,8 +81,9 @@ def resolve_param_values(
     """Resolve module-parameter config values beneath parsed CLI/environment values.
 
     Module routes are addressed by each binding's declaration module and
-    scope. A selected program's qualified table can override only a parameter
-    whose bare spelling reaches it on *surface*. The two routes are resolved
+    scope. A selected program's qualified table overrides a parameter through
+    any spelling it wins on *surface*: its bare name, or a qualified spelling
+    when a nearer declaration claims that name. The two routes are resolved
     independently, so a program route wins even when its value comes from a
     less-specific config layer than the module route.
     """
@@ -200,24 +201,46 @@ def _reject_configured_ambiguous_module_leaves(
         )
 
 
+def _program_route_spellings(entry: ParamSurfaceEntry) -> tuple[str, ...]:
+    """Return the program-table leaves that address *entry*'s binding.
+
+    Every spelling the parameter wins on the CLI surface addresses it in the
+    selected program's table too, so a parameter whose bare name is claimed by
+    a nearer declaration stays configurable per program through a qualified
+    spelling. Only the bare name yields to an engine key, which owns that leaf.
+    """
+    return tuple(
+        spelling
+        for spelling in entry.spellings
+        if spelling != entry.param.cli.name or spelling not in ENGINE_KEY_NAMES
+    )
+
+
 def _program_routes(
     program: ProgramDeclInfo,
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
     entries: Sequence[ParamSurfaceEntry],
 ) -> tuple[tuple[ParamSurfaceEntry, QualifiedConfigKey], ...]:
-    """Return selected-program routes for bare module-parameter spellings."""
+    """Return selected-program routes for resolving module-parameter spellings."""
     if not entry_segments:
         return ()
     program_path = (*program.scope_path, program.name)
-    return tuple(
-        (
-            entry,
-            QualifiedConfigKey(entry_segments, program_path, entry.param.cli.name, command_paths),
+    routes: list[tuple[ParamSurfaceEntry, QualifiedConfigKey]] = []
+    for entry in entries:
+        spellings = _program_route_spellings(entry)
+        if not spellings:
+            continue
+        leaf, *aliases = spellings
+        routes.append(
+            (
+                entry,
+                QualifiedConfigKey(
+                    entry_segments, program_path, leaf, command_paths, tuple(aliases)
+                ),
+            )
         )
-        for entry in entries
-        if entry.param.cli.name in entry.spellings and entry.param.cli.name not in ENGINE_KEY_NAMES
-    )
+    return tuple(routes)
 
 
 def _merge_route_values(
@@ -241,15 +264,18 @@ def _reject_configured_ambiguous_program_leaves(
     command_paths: tuple[tuple[str, ...], ...],
     surface: ParamSurface,
 ) -> None:
-    """Reject a configured program-table leaf claimed by peer module parameters."""
+    """Reject a configured program-table leaf claimed by peer module parameters.
+
+    Every spelling a program table may use is checked, bare or qualified: a
+    spelling several parameters claim resolves to none of them, so *using* it
+    names the candidates rather than silently picking one.
+    """
     if not entry_segments:
         return
     program_path = (*program.scope_path, program.name)
     configured = configured_leaf_tables(config, entry_segments, program_path, command_paths)
     for spelling, candidates in surface.ambiguous.items():
-        if spelling not in configured or any(
-            candidate.cli.name != spelling for candidate in candidates
-        ):
+        if spelling not in configured:
             continue
         names = ", ".join(candidate.declaration_path for candidate in candidates)
         table_name = display_table_path(configured[spelling])
@@ -301,7 +327,7 @@ def _route_reports(
         declared = frozenset(
             {
                 *(parameter.cli.name for parameter in program.parameters),
-                *(entry.param.cli.name for entry, _key in program_routes),
+                *(spelling for _entry, key in program_routes for spelling in key.leaf_spellings()),
                 *ENGINE_KEY_NAMES,
             }
         )

@@ -260,18 +260,130 @@ def test_an_inactive_ambiguous_program_leaf_does_not_prevent_resolution() -> Non
     assert values == {}
 
 
-def test_ignores_a_nonbare_ambiguous_spelling_in_the_program_table() -> None:
-    first = _binding("first/logging", "verbose")
-    second = _binding("second/logging", "verbose")
+def test_program_route_accepts_a_qualified_leaf() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    values, _reports = _resolve(
+        _config({"workflow": {"run": {"logging.verbose": True}}}), program, (binding,)
+    )
+
+    assert values == {binding.key: True}
+
+
+def test_program_route_accepts_the_longest_qualified_leaf() -> None:
+    binding = _binding("A/logging", "trace", scope_path=("debug",))
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    values, _reports = _resolve(
+        _config({"workflow": {"run": {"A.logging.debug.trace": True}}}), program, (binding,)
+    )
+
+    assert values == {binding.key: True}
+
+
+def test_a_qualified_leaf_reaches_a_param_whose_bare_name_a_signature_claims() -> None:
+    binding = _binding("A/logging", "verbose")
+    signature = ProgramParamInfo(
+        name="verbose",
+        kind=ParamZone.NAMED_ONLY,
+        type=BoolType(),
+        has_default=False,
+        span=_SPAN,
+        cli=_option("verbose"),
+    )
     program = _program(
-        closure=(ModuleId.from_path("app/main"), first.module, second.module),
+        closure=(ModuleId.from_path("app/main"), binding.module),
+        parameters=(signature,),
     )
 
     values, _reports = _resolve(
-        _config({"workflow": {"run": {"logging.verbose": True}}}), program, (first, second)
+        _config({"workflow": {"run": {"logging.verbose": True}}}), program, (binding,)
+    )
+
+    assert values == {binding.key: True}
+
+
+def test_a_qualified_leaf_reaches_a_param_named_after_an_engine_key() -> None:
+    binding = _binding("A/logging", "timeout", TextType())
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    values, _reports = _resolve(
+        _config({"workflow": {"run": {"logging.timeout": "30s"}}}), program, (binding,)
+    )
+
+    assert values == {binding.key: "30s"}
+
+
+def test_a_bare_engine_key_leaf_still_never_reaches_a_param() -> None:
+    binding = _binding("A/logging", "timeout", TextType())
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    values, _reports = _resolve(
+        _config({"workflow": {"run": {"timeout": "30s"}}}), program, (binding,)
     )
 
     assert values == {}
+
+
+def test_rejects_two_spellings_of_one_param_in_one_program_table() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    with pytest.raises(QualifiedConfigLookupError) as exc_info:
+        _resolve(
+            _config({"workflow": {"run": {"verbose": True, "logging.verbose": False}}}),
+            program,
+            (binding,),
+        )
+
+    assert "verbose" in str(exc_info.value)
+    assert "logging.verbose" in str(exc_info.value)
+
+
+def test_a_later_layer_qualified_leaf_overrides_an_earlier_bare_leaf() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    values, _reports = _resolve(
+        _config(
+            {"workflow": {"run": {"verbose": False}}},
+            {"workflow": {"run": {"logging.verbose": True}}},
+        ),
+        program,
+        (binding,),
+    )
+
+    assert values == {binding.key: True}
+
+
+def test_a_qualified_program_leaf_beats_a_module_route() -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+
+    values, _reports = _resolve(
+        _config(
+            {"workflow": {"run": {"logging.verbose": True}}},
+            {"A": {"logging": {"verbose": False}}},
+        ),
+        program,
+        (binding,),
+    )
+
+    assert values == {binding.key: True}
+
+
+def test_a_qualified_program_leaf_is_declared_and_draws_no_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    binding = _binding("A/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
+    config = _config({"workflow": {"run": {"logging.verbose": True}}})
+
+    _values, reports = _resolve(config, program, (binding,))
+    _report_undeclared_config_keys(config, reports)
+
+    assert "logging.verbose" not in capsys.readouterr().err
 
 
 def test_non_engine_key_leaf_forms_a_program_route_for_a_param() -> None:
@@ -344,7 +456,11 @@ def test_reports_each_module_route_and_the_program_route() -> None:
                 {
                     "label",
                     "quiet",
+                    "main.quiet",
+                    "app.main.quiet",
                     "verbose",
+                    "logging.verbose",
+                    "A.logging.verbose",
                     "default-agent",
                     "log",
                     "log-file",
@@ -404,6 +520,44 @@ def test_undeclared_key_reporting_uses_every_returned_route(
     reported = capsys.readouterr().err
     assert "misspelled" in reported
     assert "unexpected" in reported
+
+
+def test_a_bare_leaf_a_signature_claims_draws_no_undeclared_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    binding = _binding("A/logging", "verbose")
+    signature = ProgramParamInfo(
+        name="verbose",
+        kind=ParamZone.NAMED_ONLY,
+        type=BoolType(),
+        has_default=False,
+        span=_SPAN,
+        cli=_option("verbose"),
+    )
+    program = _program(
+        closure=(ModuleId.from_path("app/main"), binding.module),
+        parameters=(signature,),
+    )
+    config = _config({"workflow": {"run": {"verbose": True}}})
+
+    _values, reports = _resolve(config, program, (binding,))
+    _report_undeclared_config_keys(config, reports)
+
+    assert capsys.readouterr().err == ""
+
+
+def test_rejects_an_ambiguous_qualified_program_leaf_when_configured() -> None:
+    first = _binding("first/logging", "verbose")
+    second = _binding("second/logging", "verbose")
+    program = _program(closure=(ModuleId.from_path("app/main"), first.module, second.module))
+
+    with pytest.raises(QualifiedConfigLookupError) as exc_info:
+        _resolve(
+            _config({"workflow": {"run": {"logging.verbose": True}}}), program, (first, second)
+        )
+
+    assert first.declaration_path in str(exc_info.value)
+    assert second.declaration_path in str(exc_info.value)
 
 
 def test_positional_only_route_leaf_gets_its_distinct_warning(

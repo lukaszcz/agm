@@ -16,7 +16,9 @@ Lowering allocates into a persistent `LinkImage` (`lower/repl.py`), separate fro
 
 ## Front-End Seam
 
-The loop body — meta-command dispatch, entry evaluation, result rendering, the continuation predicate — exists once in the UI-free `repl/loop.py`, parameterized by a reader and a writer. Two front ends wire it: `repl/console.py`, the only module that imports prompt_toolkit, drives the real lexer for highlighting and completion; `repl/plain_console.py` is a styling-free line front end for pipes and editor buffers, chosen automatically on a non-tty or `TERM=dumb` and forced by `--plain`.
+The loop body — meta-command dispatch, entry evaluation, result rendering, the continuation predicate — exists once in the UI-free `repl/loop.py`, parameterized by a reader and a writer. Two front ends wire it: `repl/console.py`, the only module that imports prompt_toolkit, drives the real lexer for highlighting and completion; `repl/plain_console.py` is a styling-free line front end for pipes and other non-terminal consumers, chosen automatically on a non-tty or `TERM=dumb` and forced by `--plain`.
+
+The Emacs integration runs the rich REPL in a `comint-mode` pty, allowing Emacs to render the REPL's own ANSI styling without emulating its lexer.
 
 ## Introspection and Result Rendering
 

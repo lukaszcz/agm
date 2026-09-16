@@ -12,7 +12,7 @@ diagnostics from the real AGM pipeline, and an inferior REPL.
 | `agl-indent.el` | Indentation engine |
 | `agl-flymake.el` | Flymake backend over `agm check` |
 | `agl-run.el` | `agl-run` / `agl-check` through `compile` |
-| `agl-repl.el` | Inferior AgL REPL over `agm repl --plain` |
+| `agl-repl.el` | Inferior AgL REPL over `agm repl` |
 | `tests/` | ERT suites; not part of the installed package |
 
 ## Install

@@ -1843,6 +1843,17 @@ class ReplSession:
                 )
             )
 
+        signature = self._type_env.all_function_signatures().get(name)
+        if signature is not None:
+            return "\n".join(
+                (
+                    f"{name} is a function.",
+                    _format_info_section(
+                        "Signature", f"def {name}{_format_repl_signature(signature)}"
+                    ),
+                )
+            )
+
         type_path = (*scope_path, local_name)
         alias_target = self._session_type_paths.get(type_path)
         if type_path in self._session_type_paths and alias_target is not None:

@@ -302,14 +302,25 @@ class TestLexer:
     def test_info_output_is_highlighted_as_agl(self) -> None:
         session = ReplSession()
         assert session.eval_entry("record Issue()").ok
+        text = "Issue is a record type.\nType:\n  record Issue"
         fragments = _highlighted_agl_fragments(
-            "Issue is a record type.\nType:\n  record Issue", session
+            text, session, ((0, len("Issue")), (len("Issue is a record type.\nType:\n"), len(text)))
         )
         styles = {style for style, _text in fragments}
 
         assert "class:agl.keyword" in styles
         assert "class:agl.type" in styles
         assert fragments[0] == ("class:agl.type", "Issue")
+        assert ("class:agl.keyword", "is") not in fragments
+
+    def test_info_type_is_highlighted_without_lexing_its_prose(self) -> None:
+        text = "1 is a value.\nType:\n  int"
+        type_start = len("1 is a value.\nType:\n")
+        fragments = _highlighted_agl_fragments(text, agl_ranges=((0, 1), (type_start, len(text))))
+
+        assert ("class:agl.number", "1") in fragments
+        assert ("class:agl.type", "int") in fragments
+        assert ("class:agl.keyword", "is") not in fragments
 
     def test_styles_a_sample_line(self) -> None:
         lexer = AglPromptLexer()

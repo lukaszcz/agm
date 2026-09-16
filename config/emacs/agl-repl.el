@@ -4,25 +4,19 @@
 
 ;;; Commentary:
 
-;; An inferior AgL REPL over comint, running `agm repl --plain'.  Plain
-;; mode prints unstyled prompts and reads entries line by line, which is
-;; what makes the session drivable from a comint buffer; it also
-;; accumulates continuation lines until an entry is complete, so a
-;; multi-line region can be sent as-is rather than split here.  What the
-;; reader cannot decide on its own is where a layout block ends -- an
-;; indented block takes one more line however well it parses -- so a
-;; region left open by an indented last line is sent with the blank line
-;; that closes it.
+;; An inferior AgL REPL over comint.  Its pty preserves the REPL's own
+;; prompt_toolkit ANSI styling, which comint renders in the buffer.
 
 ;;; Code:
 
+(require 'ansi-color)
 (require 'comint)
 
-(defcustom agl-repl-command '("agm" "repl" "--plain")
+(defcustom agl-repl-command '("agm" "repl")
   "Command vector that starts the inferior AgL REPL.
 
-`--plain' is explicit even though the REPL auto-detects a non-terminal,
-so the front end never depends on how the process was spawned."
+The default runs the REPL's rich terminal front end so its ANSI syntax
+highlighting reaches comint."
   :type '(repeat string)
   :group 'agl)
 
@@ -41,15 +35,16 @@ it also discards expressions entered manually at the REPL prompt."
   :group 'agl)
 
 (defconst agl-repl-prompt-regexp "^\\(?:agl> \\|\\.\\.\\.> \\)"
-  "Regexp matching the plain REPL's primary and continuation prompts.
+  "Regexp matching the REPL's primary and continuation prompts.
 
-The spellings come from the REPL's own prompt constants, which the plain
-front end prints unstyled.  The continuation prompt follows the previous
-entry on the same line, so in practice only the primary prompt matches at
-line start; the alternative is kept so the regexp describes both.")
+Comint removes ANSI sequences before using this regexp.  The continuation
+prompt follows the previous entry on the same line, so in practice only the
+primary prompt matches at line start; the alternative is kept so the regexp
+describes both.")
 
 (define-derived-mode agl-repl-mode comint-mode "AgL-REPL"
   "Major mode for an inferior AgL REPL."
+  (ansi-color-for-comint-mode-on)
   (setq-local comint-prompt-regexp agl-repl-prompt-regexp)
   (setq-local comint-prompt-read-only t)
   (setq-local comint-process-echoes nil))
@@ -63,8 +58,9 @@ line start; the alternative is kept so the regexp describes both.")
   "Return the inferior AgL REPL buffer, starting the process if needed."
   (let ((buffer (get-buffer-create agl-repl-buffer-name)))
     (unless (comint-check-proc buffer)
-      (apply #'make-comint-in-buffer "AgL REPL" buffer
-             (car agl-repl-command) nil (cdr agl-repl-command))
+      (let ((process-connection-type t))
+        (apply #'make-comint-in-buffer "AgL REPL" buffer
+               (car agl-repl-command) nil (cdr agl-repl-command)))
       (with-current-buffer buffer (agl-repl-mode)))
     buffer))
 
@@ -75,12 +71,11 @@ line start; the alternative is kept so the regexp describes both.")
   (pop-to-buffer (agl-repl-buffer)))
 
 (defun agl-repl--open-block-p (text)
-  "Return non-nil when TEXT leaves the plain REPL reader inside a block.
+  "Return non-nil when TEXT leaves the REPL reader inside a block.
 
-The reader keeps an entry open while its latest line is indented, since
-a layout block accepts one more line however well what precedes it
-parses.  An indented raw-tail payload is the same case, and is closed by
-the same blank line."
+The REPL keeps an entry open while its latest line is indented, since a layout
+block accepts one more line however well what precedes it parses.  An indented
+raw-tail payload is the same case, and is closed by the same blank line."
   (let* ((lines (split-string (string-trim-right text) "\n"))
          (last (car (last lines))))
     (and (cdr lines) (string-match-p "\\`[ \t]" last))))

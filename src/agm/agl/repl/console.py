@@ -270,9 +270,25 @@ class AglPromptLexer(Lexer):
 
 
 def _highlighted_agl_fragments(
-    text: str, session: "ReplSession | None" = None
+    text: str,
+    session: "ReplSession | None" = None,
+    agl_ranges: tuple[tuple[int, int], ...] = (),
 ) -> StyleAndTextTuples:
-    """Return syntax-highlighted fragments for displayed AgL source text."""
+    """Style only the AgL fragments in a mixed ``:info`` display."""
+    fragments: StyleAndTextTuples = []
+    end = 0
+    for start, stop in agl_ranges:
+        if end < start:
+            fragments.append(("", text[end:start]))
+        fragments.extend(_agl_fragments(text[start:stop], session))
+        end = stop
+    if end < len(text):
+        fragments.append(("", text[end:]))
+    return fragments
+
+
+def _agl_fragments(text: str, session: "ReplSession | None") -> StyleAndTextTuples:
+    """Return syntax-highlighted fragments for one AgL source fragment."""
     get_line = AglPromptLexer(session).lex_document(Document(text))
     lines = text.split("\n")
     fragments: StyleAndTextTuples = []
@@ -737,9 +753,10 @@ def run_console(
         if on_setting_save is not None:
             on_setting_save(key, value)
 
-    def highlighted_writer(text: str) -> None:
+    def highlighted_writer(text: str, agl_ranges: tuple[tuple[int, int], ...]) -> None:
         print_formatted_text(
-            FormattedText(_highlighted_agl_fragments(text, session)), style=prompt_session.style
+            FormattedText(_highlighted_agl_fragments(text, session, agl_ranges)),
+            style=prompt_session.style,
         )
 
     run_repl_loop(

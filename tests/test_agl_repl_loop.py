@@ -94,7 +94,7 @@ def test_info_uses_the_rich_front_end_highlighter_when_available() -> None:
         session,
         reader=reader,
         writer=written.append,
-        highlighted_writer=highlighted.append,
+        highlighted_writer=lambda text, _ranges: highlighted.append(text),
     )
 
     assert highlighted == [

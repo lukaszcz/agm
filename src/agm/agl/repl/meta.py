@@ -15,6 +15,7 @@ completer.  Each handler takes ``(arg, ctx)`` and returns a :class:`MetaOutcome`
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,8 +53,10 @@ class MetaOutcome:
     """Structured result of dispatching one meta-command.
 
     ``text``           — text the loop should print (``None`` → print nothing).
-    ``highlight_as_agl`` — whether a rich front end should lex ``text`` as AgL
-                         before printing it. Plain front ends leave it text.
+    ``highlight_as_agl`` — whether a rich front end should style selected AgL
+                         fragments before printing it. Plain front ends leave
+                         it text.
+    ``agl_ranges``     — source ranges of those AgL fragments within ``text``.
     ``quit``           — whether the loop should exit after this command.
     ``setting_change``— ``(key, value)`` for a persisted REPL setting an
                       explicit command just targeted (the TOML key and its new
@@ -71,6 +74,7 @@ class MetaOutcome:
 
     text: str | None = None
     highlight_as_agl: bool = False
+    agl_ranges: tuple[tuple[int, int], ...] = ()
     quit: bool = False
     setting_change: tuple[str, "str | bool"] | None = None
 
@@ -139,7 +143,21 @@ def _handle_info(arg: str, ctx: MetaContext) -> MetaOutcome:
     info = ctx.session.info_of(arg)
     if info is None:
         return MetaOutcome(text=f"Unknown identifier {arg!r}.")
-    return MetaOutcome(text=info, highlight_as_agl=True)
+    return MetaOutcome(text=info, highlight_as_agl=True, agl_ranges=_info_agl_ranges(info, arg))
+
+
+_INFO_SECTION_RE = re.compile(r"^(?:Binding|Signature|Type|Value):\n", re.MULTILINE)
+_INFO_SECTION_BOUNDARY_RE = re.compile(r"^(?:Binding|Signature|Type|Value|Location):", re.MULTILINE)
+
+
+def _info_agl_ranges(text: str, name: str) -> tuple[tuple[int, int], ...]:
+    """Return the identifier and AgL code ranges in one ``:info`` result."""
+    ranges = [(0, len(name))]
+    for section in _INFO_SECTION_RE.finditer(text):
+        end_match = _INFO_SECTION_BOUNDARY_RE.search(text, section.end())
+        end = len(text) if end_match is None else end_match.start()
+        ranges.append((section.end(), end))
+    return tuple(ranges)
 
 
 def _handle_bindings(arg: str, ctx: MetaContext) -> MetaOutcome:

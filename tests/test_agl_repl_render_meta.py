@@ -615,6 +615,7 @@ class TestInfo:
         assert "Value:\n  3" in outcome.text
         assert "<repl>:1:" in outcome.text
         assert outcome.highlight_as_agl is True
+        assert outcome.agl_ranges[0] == (0, len("count"))
 
     def test_info_reports_a_function_signature_and_location(self) -> None:
         session = _open_session()
@@ -627,6 +628,13 @@ class TestInfo:
             "twice is a function.\nSignature:\n  def twice(value: int) -> int"
         )
         assert "<repl>:1:" in outcome.text
+
+    @pytest.mark.parametrize("name", ("print", "|>"))
+    def test_info_reports_a_standard_library_function_or_operator(self, name: str) -> None:
+        outcome = meta_mod.dispatch_meta(f":info {name}", _session_ctx(_open_session()))
+
+        assert outcome.text is not None
+        assert outcome.text.startswith(f"{name} is a function.\nSignature:\n  def {name}")
 
     def test_info_reports_a_type_definition(self) -> None:
         session = _open_session()

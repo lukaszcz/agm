@@ -109,7 +109,7 @@ def run_repl_loop(
     check_only: bool = False,
     theme: str = "auto",
     on_setting_change: "Callable[[str, str | bool], None] | None" = None,
-    highlighted_writer: "Callable[[str], None] | None" = None,
+    highlighted_writer: "Callable[[str, tuple[tuple[int, int], ...]], None] | None" = None,
 ) -> None:
     """Run the read-eval-print loop against *session*; the core both front ends share.
 
@@ -169,7 +169,7 @@ def run_repl_loop(
             outcome = meta_mod.dispatch_meta(entry, ctx)
             if outcome.text is not None:
                 if outcome.highlight_as_agl and highlighted_writer is not None:
-                    highlighted_writer(outcome.text)
+                    highlighted_writer(outcome.text, outcome.agl_ranges)
                 else:
                     writer(outcome.text)
             if outcome.setting_change is not None and on_setting_change is not None:

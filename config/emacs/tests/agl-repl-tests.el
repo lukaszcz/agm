@@ -66,7 +66,8 @@
 (ert-deftest agl-repl-renders-ansi-output ()
   (with-temp-buffer
     (agl-repl-mode)
-    (should (memq #'ansi-color-process-output comint-output-filter-functions))))
+    (should (memq #'ansi-color-process-output comint-output-filter-functions))
+    (should (memq #'agl-repl--filter-sent-input comint-preoutput-filter-functions))))
 
 ;; --- Sending source ---
 
@@ -76,6 +77,18 @@
       (insert "let x = 1")
       (agl-send-region (point-min) (point-max)))
     (should (equal agl-repl-tests--sent '("let x = 1\n")))))
+
+(ert-deftest agl-repl-hides-the-echo-of-sent-source ()
+  (agl-repl--with-stubs
+    (with-temp-buffer
+      (insert "let x = 1")
+      (agl-send-region (point-min) (point-max)))
+    (with-current-buffer (get-buffer agl-repl-buffer-name)
+      ;; A pty expands the submitted newline while echoing terminal input.  The
+      ;; definition summary that follows must remain visible.
+      (should (equal (agl-repl--filter-sent-input "let x = ") ""))
+      (should (equal (agl-repl--filter-sent-input "1\r\nx : int = 1\r\n")
+                     "x : int = 1\r\n")))))
 
 (ert-deftest agl-repl-send-buffer-sends-everything ()
   (agl-repl--with-stubs

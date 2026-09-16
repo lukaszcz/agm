@@ -42,12 +42,28 @@ prompt follows the previous entry on the same line, so in practice only the
 primary prompt matches at line start; the alternative is kept so the regexp
 describes both.")
 
+(defvar-local agl-repl--sent-input-echo ""
+  "Terminal input echo still expected from programmatic REPL sends.")
+
+(defun agl-repl--filter-sent-input (output)
+  "Remove the terminal echo of source sent through `agl-repl-send-string'."
+  (let ((echo agl-repl--sent-input-echo))
+    (cond
+     ((string-prefix-p output echo)
+      (setq agl-repl--sent-input-echo (substring echo (length output)))
+      "")
+     ((string-prefix-p echo output)
+      (setq agl-repl--sent-input-echo "")
+      (substring output (length echo)))
+     (t output))))
+
 (define-derived-mode agl-repl-mode comint-mode "AgL-REPL"
   "Major mode for an inferior AgL REPL."
   (ansi-color-for-comint-mode-on)
   (setq-local comint-prompt-regexp agl-repl-prompt-regexp)
   (setq-local comint-prompt-read-only t)
-  (setq-local comint-process-echoes nil))
+  (setq-local comint-process-echoes nil)
+  (add-hook 'comint-preoutput-filter-functions #'agl-repl--filter-sent-input nil t))
 
 (defun agl-repl-process ()
   "Return the live inferior AgL REPL process, or nil."
@@ -80,6 +96,11 @@ raw-tail payload is the same case, and is closed by the same blank line."
          (last (car (last lines))))
     (and (cdr lines) (string-match-p "\\`[ \t]" last))))
 
+(defun agl-repl--sent-text (text)
+  "Return the complete terminal input sent for REPL TEXT."
+  (concat (string-trim-right text "\n+")
+          (if (agl-repl--open-block-p text) "\n\n" "\n")))
+
 (defun agl-repl-send-string (text)
   "Send TEXT to the inferior AgL REPL, followed by a newline.
 
@@ -87,10 +108,15 @@ The REPL reads continuation lines until an entry is complete, so a
 multi-line TEXT is sent unchanged rather than split into entries here.
 A TEXT that leaves a block open (`agl-repl--open-block-p') is followed by
 a blank line instead, which is what closes that block."
-  (let ((buffer (agl-repl-buffer)))
-    (comint-send-string (get-buffer-process buffer)
-                        (concat (string-trim-right text "\n+")
-                                (if (agl-repl--open-block-p text) "\n\n" "\n")))
+  (let ((buffer (agl-repl-buffer))
+        (sent-text (agl-repl--sent-text text)))
+    (with-current-buffer buffer
+      ;; The pty expands newlines while echoing its input before the REPL emits
+      ;; a result.  Filter exactly that echo without affecting typed input.
+      (setq agl-repl--sent-input-echo
+            (concat agl-repl--sent-input-echo
+                    (replace-regexp-in-string "\n" "\r\n" sent-text))))
+    (comint-send-string (get-buffer-process buffer) sent-text)
     buffer))
 
 ;;;###autoload

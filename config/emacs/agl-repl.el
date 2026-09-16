@@ -89,7 +89,14 @@ describes both.")
 
 (defun agl-repl--filter-sent-input (output)
   "Remove terminal echo and prompts from `agl-repl-send-string' source."
-  (agl-repl--filter-sent-echo (agl-repl--filter-sent-prompts output)))
+  (let ((visible (agl-repl--filter-sent-prompts
+                  (agl-repl--filter-sent-echo output))))
+    ;; Prompt-toolkit disables terminal echo.  A visible final prompt therefore
+    ;; completes the send even when none of the expected echo was observed.
+    (when (and (= agl-repl--sent-prompt-count 0)
+               (string-match-p agl-repl--sent-prompt-regexp visible))
+      (setq agl-repl--sent-input-echo ""))
+    visible))
 
 (define-derived-mode agl-repl-mode comint-mode "AgL-REPL"
   "Major mode for an inferior AgL REPL."
@@ -136,26 +143,26 @@ raw-tail payload is the same case, and is closed by the same blank line."
   (concat (string-trim-right text "\n+")
           (if (agl-repl--open-block-p text) "\n\n" "\n")))
 
-(defun agl-repl-send-string (text)
+(defun agl-repl-send-string (text &optional suppress-final-prompt)
   "Send TEXT to the inferior AgL REPL, followed by a newline.
 
 The REPL reads continuation lines until an entry is complete, so a
 multi-line TEXT is sent unchanged rather than split into entries here.
 A TEXT that leaves a block open (`agl-repl--open-block-p') is followed by
-a blank line instead, which is what closes that block."
+a blank line instead, which is what closes that block.  When
+SUPPRESS-FINAL-PROMPT is non-nil, hide the prompt after the final entry too."
   (let ((buffer (agl-repl-buffer))
         (sent-text (agl-repl--sent-text text)))
     (with-current-buffer buffer
       ;; The pty expands newlines while echoing its input before the REPL emits
       ;; a result.  Hide intermediate prompts but preserve the final prompt so
       ;; the REPL is visibly ready for manually typed input.
-      (let ((had-pending-input (not (string-empty-p agl-repl--sent-input-echo)))
-            (prompt-count (cl-count ?\n sent-text)))
+      (let ((prompt-count (cl-count ?\n sent-text)))
         (setq agl-repl--sent-input-echo
               (concat agl-repl--sent-input-echo
                       (replace-regexp-in-string "\n" "\r\n" sent-text)))
         (cl-incf agl-repl--sent-prompt-count
-                 (if had-pending-input prompt-count (1- prompt-count)))))
+                 (if suppress-final-prompt prompt-count (1- prompt-count)))))
     (comint-send-string (get-buffer-process buffer) sent-text)
     buffer))
 
@@ -178,7 +185,7 @@ a blank line instead, which is what closes that block."
 The reset makes reload faithful to the buffer: declarations removed from the
 source cannot survive as stale REPL state."
   (interactive)
-  (agl-repl-send-string ":reset")
+  (agl-repl-send-string ":reset" t)
   (agl-send-buffer))
 
 (defun agl-repl--reload-after-save ()

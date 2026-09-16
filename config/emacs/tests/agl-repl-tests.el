@@ -117,16 +117,28 @@
                       "x : int = 1\r\n\e[0;1magl> \e[0m")
                      "x : int = 1\r\n\e[0;1magl> \e[0m")))))
 
+(ert-deftest agl-repl-keeps-final-prompts-after-repeated-sends-without-pty-echo ()
+  (agl-repl--with-stubs
+    (agl-repl-send-string "let x = 1")
+    (with-current-buffer (get-buffer agl-repl-buffer-name)
+      (should (equal (agl-repl--filter-sent-input "x : int = 1\r\nagl> ")
+                     "x : int = 1\r\nagl> "))
+      (should (string-empty-p agl-repl--sent-input-echo)))
+    (agl-repl-send-string "let y = 2")
+    (with-current-buffer (get-buffer agl-repl-buffer-name)
+      (should (equal (agl-repl--filter-sent-input "y : int = 2\r\nagl> ")
+                     "y : int = 2\r\nagl> ")))))
+
 (ert-deftest agl-repl-reload-keeps-the-final-prompt ()
   (agl-repl--with-stubs
     (with-temp-buffer
       (insert "let x = 1")
       (agl-repl-reload-buffer))
     (with-current-buffer (get-buffer agl-repl-buffer-name)
-      (should (equal (agl-repl--filter-sent-input ":reset\r\nagl> ") ""))
-      (should (equal (agl-repl--filter-sent-input "let x = 1\r\n") ""))
+      (should (equal (agl-repl--filter-sent-input "agl> ") ""))
       (should (equal (agl-repl--filter-sent-input "x : int = 1\r\nagl> ")
-                     "x : int = 1\r\nagl> ")))))
+                     "x : int = 1\r\nagl> "))
+      (should (string-empty-p agl-repl--sent-input-echo)))))
 
 (ert-deftest agl-repl-send-buffer-sends-everything ()
   (agl-repl--with-stubs
@@ -134,6 +146,18 @@
       (insert "let x = 1\nlet y = 2\n")
       (agl-send-buffer))
     (should (equal agl-repl-tests--sent '("let x = 1\nlet y = 2\n")))))
+
+(ert-deftest agl-repl-send-buffer-keeps-the-final-prompt-without-pty-echo ()
+  (agl-repl--with-stubs
+    (with-temp-buffer
+      (insert "let x = 1\nlet y = 2\n")
+      (agl-send-buffer))
+    (with-current-buffer (get-buffer agl-repl-buffer-name)
+      (should (equal (agl-repl--filter-sent-input "x : int = 1\r\nagl> ")
+                     "x : int = 1\r\n"))
+      (should (equal (agl-repl--filter-sent-input "y : int = 2\r\nagl> ")
+                     "y : int = 2\r\nagl> "))
+      (should (string-empty-p agl-repl--sent-input-echo)))))
 
 (ert-deftest agl-repl-reload-buffer-resets-before-sending-source ()
   (agl-repl--with-stubs

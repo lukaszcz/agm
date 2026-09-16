@@ -313,13 +313,22 @@
     (should (eq (agl-flt--face-of "%{price}") 'agl-interpolation-face))
     (should (eq (agl-flt--face-at (1- (agl-flt--pos-after "%{price}"))) 'agl-interpolation-face))))
 
-(ert-deftest agl-flt-interpolation-hole-contents-stay-string-faced ()
-  (agl-flt--with-buffer "let a = \"cost is %{price}\"\n"
-    (should (eq (agl-flt--face-of "price") 'font-lock-string-face))))
+(ert-deftest agl-flt-interpolation-hole-code-is-highlighted ()
+  (agl-flt--with-buffer "let a = \"cost is %{render(price + 1 as json)}\"\n"
+    (should (eq (agl-flt--face-of "render") 'font-lock-builtin-face))
+    (should (eq (agl-flt--face-of "+") agl--operator-face))
+    (should (eq (agl-flt--face-of "1 as") agl--number-face))
+    (should (eq (agl-flt--face-of "as json") 'font-lock-keyword-face))))
 
 (ert-deftest agl-flt-interpolation-delimiters-faced-in-raw-tail-payload ()
   (agl-flt--with-buffer "ask$ Summarize %{topic} please\n"
     (should (eq (agl-flt--face-of "%{topic}") 'agl-interpolation-face))))
+
+(ert-deftest agl-flt-raw-tail-interpolation-code-is-highlighted ()
+  (agl-flt--with-buffer "ask$ Summarize %{render(topic + 1)} please\n"
+    (should (eq (agl-flt--face-of "render") 'font-lock-builtin-face))
+    (should (eq (agl-flt--face-of "+") agl--operator-face))
+    (should (eq (agl-flt--face-of "1)}") agl--number-face))))
 
 (ert-deftest agl-flt-escaped-percent-brace-is-not-faced ()
   (agl-flt--with-buffer "let a = \"cost is \\%{100}\"\n"

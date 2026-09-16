@@ -273,6 +273,7 @@ opener and never resumes scanning from inside the payload."
         (put-text-property block-start (1+ block-start)
                             'syntax-table (string-to-syntax "|"))
         (put-text-property block-start block-end 'agl-raw-tail-payload t)
+        (agl--propertize-raw-interpolation-holes block-start block-end)
         (if (and (eq (char-before block-end) ?\n)
                  (> (1- block-end) block-start))
             (progn
@@ -298,6 +299,7 @@ The payload is the rest of the current line, starting at point."
     (put-text-property payload-start (1+ payload-start)
                         'syntax-table (string-to-syntax "|"))
     (put-text-property payload-start region-end 'agl-raw-tail-payload t)
+    (agl--propertize-raw-interpolation-holes payload-start region-end)
     (if (and has-trailing-newline (> (1- region-end) payload-start))
         (progn
           (put-text-property (1- region-end) region-end
@@ -308,6 +310,26 @@ The payload is the rest of the current line, starting at point."
       ;; of consuming its last character as a fake delimiter.
       (agl--propertize-backslashes-as-punctuation (1+ payload-start) region-end))
     (goto-char region-end)))
+
+(defun agl--propertize-raw-interpolation-holes (start end)
+  "Mark completed interpolation bodies in a raw-tail payload.
+
+START and END delimit a payload already marked with
+`agl-raw-tail-payload'.  Raw tails escape a `%{' whenever its immediately
+preceding character is `\\', so this cannot reuse the template scanner."
+  (save-excursion
+    (goto-char start)
+    (while (search-forward "%{" end t)
+      (let ((open-start (match-beginning 0)) (body-start (match-end 0)))
+        (unless (agl--escaped-interpolation-open-p open-start)
+          (let ((depth 1) (p body-start))
+            (while (and (> depth 0) (< p end))
+              (cond
+               ((eq (char-after p) ?\{) (setq depth (1+ depth)))
+               ((eq (char-after p) ?\}) (setq depth (1- depth))))
+              (setq p (1+ p)))
+            (when (= depth 0)
+              (put-text-property body-start (1- p) 'agl-interpolation-code t))))))))
 
 (defun agl--propertize-backslashes-as-punctuation (start end)
   "Give every `\\' character between START and END punctuation syntax.
@@ -352,12 +374,14 @@ call in `%{f(\"x\")}' -- for its own delimiter.  A hole may itself span
 multiple lines.  If no matching close brace is found, stop at the end
 of the buffer."
   (forward-char 2)                     ; past "%{"
-  (let ((depth 1))
+  (let ((body-start (point)) (depth 1))
     (while (and (> depth 0) (not (eobp)))
       (cond
        ((eq (char-after) ?\{) (setq depth (1+ depth)) (forward-char 1))
        ((eq (char-after) ?\}) (setq depth (1- depth)) (forward-char 1))
-       (t (forward-char 1))))))
+       (t (forward-char 1))))
+    (when (= depth 0)
+      (put-text-property body-start (1- (point)) 'agl-interpolation-code t))))
 
 (defun agl--template-hole-start-p ()
   "Return non-nil if point is at the `%' of an unescaped `%{' hole."
@@ -455,6 +479,7 @@ rule, so a bracket depth counter is threaded through the scan, seeded
 from `(car (syntax-ppss start))' -- safe to call here because
 `syntax-propertize' sets `syntax-propertize--done' to END before
 invoking this function."
+  (remove-text-properties start end '(agl-interpolation-code nil))
   (goto-char start)
   (let ((depth (car (syntax-ppss start)))
         case-fold-search)
@@ -551,12 +576,12 @@ function only ever adjusts the start of the region."
 ;; plain regexp, so matches respect AgL identifier boundaries instead of
 ;; `\\b'.  Font-lock's default OVERRIDE (nil) never replaces a face
 ;; already assigned by the syntactic (string/comment) pass, so these
-;; rules never light up text inside a template or raw-tail payload.  Two
-;; rules deliberately set OVERRIDE: `agl--match-interpolation-delims',
-;; which overrides string face for `%{' / `}' delimiters, and
-;; `agl--match-attribute', which overrides an earlier rule's face so a
-;; whole `@name' reads as one attribute and therefore rejects
-;; string/comment candidates in its own matcher.
+;; rules leave template text and raw-tail payloads string-faced.  Completed
+;; interpolation bodies are marked by the propertizer and receive the same
+;; rules again with an override, restoring code faces only there.  The
+;; interpolation-delimiter and attribute rules also deliberately override:
+;; the former faces `%{' / `}', and the latter makes a whole `@name' read as
+;; one attribute while rejecting string/comment candidates in its matcher.
 ;; ---------------------------------------------------------------------------
 
 (defconst agl--keyword-face-names
@@ -1167,36 +1192,65 @@ success."
             (setq found t)))))
     found))
 
-(defconst agl-font-lock-keywords
+(defconst agl--code-font-lock-rules
   (list
-   (cons #'agl--match-reserved-keyword ''font-lock-keyword-face)
-   (cons #'agl--match-constant-keyword ''font-lock-constant-face)
-   (cons #'agl--match-import-keyword ''font-lock-keyword-face)
-   (cons #'agl--match-use-keyword ''font-lock-keyword-face)
-   (cons #'agl--match-export-keyword ''font-lock-keyword-face)
-   (cons #'agl--match-hiding-keyword ''font-lock-keyword-face)
-   (cons #'agl--match-scope-soft-keyword ''font-lock-keyword-face)
-   (cons #'agl--match-end-keyword ''font-lock-keyword-face)
-   (cons #'agl--match-contextual-builtin ''font-lock-builtin-face)
-   (cons #'agl--match-raw-tail-name ''font-lock-builtin-face)
-   (list (lambda (limit) (agl--search-decl-head "def" limit)) '(3 'font-lock-function-name-face))
-   (list (lambda (limit) (agl--search-decl-head "record" limit)) '(3 'font-lock-type-face))
-   (list (lambda (limit) (agl--search-decl-head "enum" limit)) '(3 'font-lock-type-face))
-   (list (lambda (limit) (agl--search-decl-head "type" limit)) '(3 'font-lock-type-face))
-   (list (lambda (limit) (agl--search-decl-head "exception" limit)) '(3 'font-lock-type-face))
-   (list (lambda (limit) (agl--search-decl-head "let" limit nil t)) '(3 'font-lock-variable-name-face))
-   (list (lambda (limit) (agl--search-decl-head "var" limit nil t)) '(3 'font-lock-variable-name-face))
-   (list #'agl--search-catch-binder '(1 'font-lock-variable-name-face))
-   (list #'agl--match-type-annotation '(1 'font-lock-type-face))
-   (list #'agl--match-interpolation-delims
-         '(1 'agl-interpolation-face t)
-         '(2 'agl-interpolation-face t))
+   (list #'agl--match-reserved-keyword 'font-lock-keyword-face)
+   (list #'agl--match-constant-keyword 'font-lock-constant-face)
+   (list #'agl--match-import-keyword 'font-lock-keyword-face)
+   (list #'agl--match-use-keyword 'font-lock-keyword-face)
+   (list #'agl--match-export-keyword 'font-lock-keyword-face)
+   (list #'agl--match-hiding-keyword 'font-lock-keyword-face)
+   (list #'agl--match-scope-soft-keyword 'font-lock-keyword-face)
+   (list #'agl--match-end-keyword 'font-lock-keyword-face)
+   (list #'agl--match-contextual-builtin 'font-lock-builtin-face)
+   (list #'agl--match-raw-tail-name 'font-lock-builtin-face)
+   (list (lambda (limit) (agl--search-decl-head "def" limit)) 'font-lock-function-name-face 3)
+   (list (lambda (limit) (agl--search-decl-head "record" limit)) 'font-lock-type-face 3)
+   (list (lambda (limit) (agl--search-decl-head "enum" limit)) 'font-lock-type-face 3)
+   (list (lambda (limit) (agl--search-decl-head "type" limit)) 'font-lock-type-face 3)
+   (list (lambda (limit) (agl--search-decl-head "exception" limit)) 'font-lock-type-face 3)
+   (list (lambda (limit) (agl--search-decl-head "let" limit nil t))
+         'font-lock-variable-name-face 3)
+   (list (lambda (limit) (agl--search-decl-head "var" limit nil t))
+         'font-lock-variable-name-face 3)
+   (list #'agl--search-catch-binder 'font-lock-variable-name-face 1)
+   (list #'agl--match-type-annotation 'font-lock-type-face 1)
    ;; The operator rule precedes the number rule so that a `?N' placeholder
    ;; faces as the one token it is; otherwise its digits would already carry
    ;; the number face, which font-lock's default OVERRIDE never replaces.
-   (cons #'agl--match-operator 'agl--operator-face)
-   (cons #'agl--match-number 'agl--number-face)
-   (list #'agl--match-attribute '(0 'font-lock-preprocessor-face t)))
+   (list #'agl--match-operator 'agl--operator-face)
+   (list #'agl--match-number 'agl--number-face)
+   (list #'agl--match-attribute 'font-lock-preprocessor-face 0 t))
+  "Font-lock rules shared by ordinary code and interpolation bodies.")
+
+(defun agl--match-interpolation-code (matcher limit)
+  "Run MATCHER until it finds a match inside an interpolation body, up to LIMIT."
+  (let (found)
+    (while (and (not found) (funcall matcher limit))
+      (when (get-text-property (match-beginning 0) 'agl-interpolation-code)
+        (setq found t)))
+    found))
+
+(defun agl--font-lock-rule (rule &optional interpolation-only)
+  "Build a font-lock rule from RULE, optionally restricted to interpolation code."
+  (let* ((matcher (nth 0 rule))
+         (face (nth 1 rule))
+         (subexp (or (nth 2 rule) 0))
+         (override (or interpolation-only (nth 3 rule)))
+         (effective-matcher
+          (if interpolation-only
+              (lambda (limit) (agl--match-interpolation-code matcher limit))
+            matcher)))
+    (list effective-matcher
+          (append (list subexp face) (when override '(t))))))
+
+(defconst agl-font-lock-keywords
+  (append
+   (mapcar #'agl--font-lock-rule agl--code-font-lock-rules)
+   (list (list #'agl--match-interpolation-delims
+               '(1 'agl-interpolation-face t)
+               '(2 'agl-interpolation-face t)))
+   (mapcar (lambda (rule) (agl--font-lock-rule rule t)) agl--code-font-lock-rules))
   "Font-lock keyword rules for `agl-mode'.
 
 See the section commentary above this constant for the governing

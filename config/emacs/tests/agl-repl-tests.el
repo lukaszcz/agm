@@ -21,12 +21,16 @@
 (defvar agl-repl-tests--connection-type nil
   "The process connection type the REPL selected.")
 
+(defvar agl-repl-tests--running nil
+  "Whether the stubbed inferior REPL process is live.")
+
 (defmacro agl-repl--with-stubs (&rest body)
   "Run BODY with the comint process entry points stubbed out."
   (declare (indent 0))
   `(let ((agl-repl-tests--spawn nil)
          (agl-repl-tests--sent nil)
          (agl-repl-tests--connection-type nil)
+         (agl-repl-tests--running nil)
          (agl-flymake-enable nil)
          (agl-repl-buffer-name "*AgL REPL test*"))
      (unwind-protect
@@ -34,8 +38,10 @@
                     (lambda (_name buffer program _startfile &rest args)
                       (setq agl-repl-tests--spawn (cons program args))
                       (setq agl-repl-tests--connection-type process-connection-type)
+                      (setq agl-repl-tests--running t)
                       buffer))
-                   ((symbol-function 'comint-check-proc) (lambda (&rest _) nil))
+                   ((symbol-function 'comint-check-proc)
+                    (lambda (&rest _) agl-repl-tests--running))
                    ((symbol-function 'get-buffer-process) (lambda (&rest _) 'stub))
                    ((symbol-function 'comint-send-string)
                     (lambda (_process text)
@@ -90,7 +96,7 @@
       (should (equal (agl-repl--filter-sent-input "1\r\nx : int = 1\r\n")
                      "x : int = 1\r\n")))))
 
-(ert-deftest agl-repl-hides-prompts-emitted-for-sent-source ()
+(ert-deftest agl-repl-hides-intermediate-prompts-emitted-for-sent-source ()
   (agl-repl--with-stubs
     (agl-repl-send-string "let x = 1\nlet y = 2")
     (with-current-buffer (get-buffer agl-repl-buffer-name)
@@ -99,17 +105,28 @@
                      "x : int = 1\r\n"))
       (should (equal (agl-repl--filter-sent-input "let y = 2\r\n") ""))
       (should (equal (agl-repl--filter-sent-input "y : int = 2\r\nagl> ")
-                     "y : int = 2\r\n"))
+                     "y : int = 2\r\nagl> "))
       (should (equal (agl-repl--filter-sent-input "agl> ") "agl> ")))))
 
-(ert-deftest agl-repl-hides-styled-prompts-emitted-for-sent-source ()
+(ert-deftest agl-repl-keeps-the-final-styled-prompt-after-sent-source ()
   (agl-repl--with-stubs
     (agl-repl-send-string "let x = 1")
     (with-current-buffer (get-buffer agl-repl-buffer-name)
       (should (equal (agl-repl--filter-sent-input "let x = 1\r\n") ""))
       (should (equal (agl-repl--filter-sent-input
                       "x : int = 1\r\n\e[0;1magl> \e[0m")
-                     "x : int = 1\r\n")))))
+                     "x : int = 1\r\n\e[0;1magl> \e[0m")))))
+
+(ert-deftest agl-repl-reload-keeps-the-final-prompt ()
+  (agl-repl--with-stubs
+    (with-temp-buffer
+      (insert "let x = 1")
+      (agl-repl-reload-buffer))
+    (with-current-buffer (get-buffer agl-repl-buffer-name)
+      (should (equal (agl-repl--filter-sent-input ":reset\r\nagl> ") ""))
+      (should (equal (agl-repl--filter-sent-input "let x = 1\r\n") ""))
+      (should (equal (agl-repl--filter-sent-input "x : int = 1\r\nagl> ")
+                     "x : int = 1\r\nagl> ")))))
 
 (ert-deftest agl-repl-send-buffer-sends-everything ()
   (agl-repl--with-stubs

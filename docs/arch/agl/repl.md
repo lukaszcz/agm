@@ -20,9 +20,9 @@ The loop body — meta-command dispatch, entry evaluation, result rendering, the
 
 The Emacs integration runs the rich REPL in a `comint-mode` pty, allowing Emacs
 to render the REPL's own ANSI styling without emulating its lexer. It filters
-the terminal echo and prompts produced while it injects source for send/reload
-commands, retaining concise result and definition output while manually typed
-input and its prompt remain visible.
+the terminal echo and intermediate prompts produced while it injects source for
+send/reload commands, retaining concise result and definition output followed
+by a prompt for manually typed input.
 
 ## Introspection and Result Rendering
 

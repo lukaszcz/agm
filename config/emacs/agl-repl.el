@@ -147,12 +147,15 @@ a blank line instead, which is what closes that block."
         (sent-text (agl-repl--sent-text text)))
     (with-current-buffer buffer
       ;; The pty expands newlines while echoing its input before the REPL emits
-      ;; a result.  Each newline also produces a prompt; filter both without
-      ;; affecting typed input after the injected source is complete.
-      (setq agl-repl--sent-input-echo
-            (concat agl-repl--sent-input-echo
-                    (replace-regexp-in-string "\n" "\r\n" sent-text)))
-      (cl-incf agl-repl--sent-prompt-count (cl-count ?\n sent-text)))
+      ;; a result.  Hide intermediate prompts but preserve the final prompt so
+      ;; the REPL is visibly ready for manually typed input.
+      (let ((had-pending-input (not (string-empty-p agl-repl--sent-input-echo)))
+            (prompt-count (cl-count ?\n sent-text)))
+        (setq agl-repl--sent-input-echo
+              (concat agl-repl--sent-input-echo
+                      (replace-regexp-in-string "\n" "\r\n" sent-text)))
+        (cl-incf agl-repl--sent-prompt-count
+                 (if had-pending-input prompt-count (1- prompt-count)))))
     (comint-send-string (get-buffer-process buffer) sent-text)
     buffer))
 

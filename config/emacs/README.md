@@ -49,7 +49,7 @@ the directory directly:
 | `C-c C-k` | `agl-check` — statically check it with `agm check` |
 | `C-c C-z` | `agl-repl` — start or switch to the inferior REPL |
 | `C-c C-r` | `agl-repl-reload-buffer` — reset and reload the buffer |
-| `C-RET` | `agl-send-region` |
+| `C-c C-s` | `agl-send-region` |
 | `C-c C-b` | `agl-send-buffer` |
 | `C-c C-l` | `flymake-show-buffer-diagnostics` — list this file's diagnostics |
 
@@ -63,8 +63,8 @@ region leaves a block open — a layout block always accepts one more line — s
 the blank line that closes it is sent too.
 
 Sent source and its intermediate prompts are not echoed back into the REPL
-buffer; AGM's concise result or definition summary remains visible. Input typed
-at the REPL prompt is unchanged.
+buffer; AGM's concise result or definition summary and its final prompt remain
+visible. Input typed at the REPL prompt is unchanged.
 
 The **AgL** menu provides the same run, type-check, REPL, send, reload, and
 diagnostic actions.

@@ -87,7 +87,7 @@ def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent,
     let ct = revise-agent.revise-review(review)
   until not ct
 
-let default-aspects = "correctness, maintainability, efficency, non-duplication, adherence to relevant AGENTS.md files"
+let default-aspects = "correctness, maintainability, efficency, adherence to relevant AGENTS.md files"
 
 program def review-main(
   scope: text,

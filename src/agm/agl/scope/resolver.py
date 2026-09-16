@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
 from agm.agl.diagnostics import static_root_message
 from agm.agl.modules.ids import RESERVED_ID, ModuleId, spell_declaration
-from agm.agl.scope.attributes import recognize_attributes, recognize_program_command
+from agm.agl.scope.attributes import recognize_attributes
 from agm.agl.scope.imports import (
     EMPTY_IMPORT_ENV,
     BareRoute,
@@ -2841,13 +2841,10 @@ class _Resolver:
         """Resolve a ``program def``'s ``@config`` keys and values, if it carries one.
 
         Both resolve in the scope that declares the program, before its
-        parameter scope opens. Validates the attribute prefix first, so a
-        malformed, misplaced, or repeated attribute is reported ahead of an
-        unresolved key or value inside it.
+        parameter scope opens.
         """
         if not node.is_program:
             return
-        recognize_program_command(node)
         for attribute in node.attributes:
             if attribute.name != CONFIG_ATTRIBUTE:
                 continue

@@ -19,6 +19,6 @@ def builtin_var_key(module_id: ModuleId, scope_path: Iterable[str], name: str) -
 
 
 def is_engine_builtin_var_key(key: BuiltinVarKey) -> bool:
-    """Whether *key* names a known ``std/config`` engine-setting binding."""
+    """Whether *key* names a known root ``std/config`` engine-setting binding."""
     module_id, scope_path, name = key
     return is_std_config_root(module_id, scope_path) and name in ENGINE_KEY_NAMES

@@ -181,13 +181,11 @@ attributes: attribute+
 attribute: AT NAME (LPAR attr_arg_list? RPAR)? _NEWLINE?
 
 // An attribute's own argument list: an ordinary positional argument, or a
-// keyed argument whose key is a reference — bare, suffix-qualified
-// (`mod::x`), slash-qualified (`a/b::x`), module-anchored (`/a/b::x`), or
-// current-module anchored (`::x`), and may chain several scope segments
-// (`a::b::x`) — never a placeholder. A type-applied segment (`Foo[int]::x`)
-// parses here but is rejected once built: an attribute key names a binding,
-// not a generic instantiation. Kept separate from arg_list so the call
-// site's grammar stays untouched.
+// keyed argument whose key is a reference (see AttributeKeyedArg for the
+// legal qualifier spellings) — never a placeholder. A type-applied segment
+// (`Foo[int]::x`) parses here but is rejected once built: an attribute key
+// names a binding, not a generic instantiation. Kept separate from arg_list
+// so the call site's grammar stays untouched.
 attr_arg_list: attr_arg (COMMA attr_arg)* COMMA?
 
 ?attr_arg: pos_arg | attr_keyed_arg

@@ -714,21 +714,3 @@ class TestProgramConfigRecognition:
             resolve_entry(
                 "import std/config\n\n@config(config::log = true)\ndef helper() -> unit = ()\n"
             )
-
-    def test_a_repeated_config_wins_over_an_unresolved_key_in_the_first(self) -> None:
-        """A malformed attribute prefix is reported before an unresolved key inside it.
-
-        The first ``@config`` carries the unresolved key; the second is what
-        makes the attribute repeated. If recognition wins, as it should, the
-        raised error's span is the second attribute's, not the first key's.
-        """
-        with pytest.raises(AglScopeError) as excinfo:
-            resolve_entry(
-                "import std/config\n\n"
-                "@config(unknown-name = 1)\n"
-                "@config(config::log = true)\n"
-                "program def main() -> unit = ()\n"
-            )
-
-        assert excinfo.value.span is not None
-        assert excinfo.value.span.start_line == 4

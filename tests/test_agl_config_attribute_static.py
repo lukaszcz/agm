@@ -54,24 +54,15 @@ class TestAcceptedConfigTargets:
         )
 
     def test_own_module_param_bare_name(self) -> None:
-        _check(
-            "import std/config\n\n"
-            "@param let count: int = 1\n\n"
-            "@config(count = 2)\n"
-            "program def main() -> unit = ()\n"
-        )
+        _check("@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n")
 
     def test_own_module_param_current_module_anchored_name(self) -> None:
         _check(
-            "import std/config\n\n"
-            "@param let count: int = 1\n\n"
-            "@config(::count = 2)\n"
-            "program def main() -> unit = ()\n"
+            "@param let count: int = 1\n\n@config(::count = 2)\nprogram def main() -> unit = ()\n"
         )
 
     def test_own_module_param_declared_name_not_opt_name(self) -> None:
         _check(
-            "import std/config\n\n"
             '@param @opt-name("threshold") let count: int = 1\n\n'
             "@config(count = 2)\n"
             "program def main() -> unit = ()\n"
@@ -79,7 +70,6 @@ class TestAcceptedConfigTargets:
 
     def test_scoped_param(self) -> None:
         _check(
-            "import std/config\n\n"
             "scope Logging\n"
             "  @param let level: int = 1\n"
             "end Logging\n\n"
@@ -89,7 +79,6 @@ class TestAcceptedConfigTargets:
 
     def test_program_inside_a_scope_region(self) -> None:
         _check(
-            "import std/config\n\n"
             "@param let count: int = 1\n\n"
             "scope Tools\n"
             "\n"
@@ -101,7 +90,7 @@ class TestAcceptedConfigTargets:
 
     def test_enum_constructor_value(self) -> None:
         _check(
-            "import std/config\nimport std/agent\n\n"
+            "import std/agent\n\n"
             "@param let policy: ParsePolicy = ParsePolicy::Abort\n\n"
             "@config(policy = ParsePolicy::Retry(n = 3))\n"
             "program def main() -> unit = ()\n"
@@ -109,15 +98,11 @@ class TestAcceptedConfigTargets:
 
     def test_negative_number_value(self) -> None:
         _check(
-            "import std/config\n\n"
-            "@param let offset: int = 0\n\n"
-            "@config(offset = -5)\n"
-            "program def main() -> unit = ()\n"
+            "@param let offset: int = 0\n\n@config(offset = -5)\nprogram def main() -> unit = ()\n"
         )
 
     def test_array_value(self) -> None:
         _check(
-            "import std/config\n\n"
             "@param let names: array[text] = []\n\n"
             '@config(names = ["a", "b"])\n'
             "program def main() -> unit = ()\n"
@@ -125,7 +110,6 @@ class TestAcceptedConfigTargets:
 
     def test_dict_value(self) -> None:
         _check(
-            "import std/config\n\n"
             "@param let counts: dict[text, int] = {}\n\n"
             '@config(counts = {"a": 1})\n'
             "program def main() -> unit = ()\n"
@@ -156,16 +140,10 @@ class TestAcceptedConfigTargets:
         )
 
     def test_own_module_param_var(self) -> None:
-        _check(
-            "import std/config\n\n"
-            "@param var count: int = 1\n\n"
-            "@config(count = 2)\n"
-            "program def main() -> unit = ()\n"
-        )
+        _check("@param var count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n")
 
     def test_program_names_its_own_scope_regions_param_bare(self) -> None:
         _check(
-            "import std/config\n\n"
             "scope Tools\n"
             "  @param let level: int = 1\n\n"
             "  @config(level = 2)\n"
@@ -190,44 +168,29 @@ class TestAcceptedConfigTargets:
 class TestRejectedConfigTargets:
     def test_a_plain_var_is_not_a_legal_target(self) -> None:
         with pytest.raises(AglTypeError):
-            _check(
-                "import std/config\n\n"
-                "let count: int = 1\n\n"
-                "@config(count = 2)\n"
-                "program def main() -> unit = ()\n"
-            )
+            _check("let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n")
 
     def test_a_function_is_not_a_legal_target(self) -> None:
         with pytest.raises(AglTypeError):
             _check(
-                "import std/config\n\n"
-                "def helper() -> int = 1\n\n"
-                "@config(helper = 2)\n"
-                "program def main() -> unit = ()\n"
+                "def helper() -> int = 1\n\n@config(helper = 2)\nprogram def main() -> unit = ()\n"
             )
 
     def test_a_constructor_is_not_a_legal_target(self) -> None:
         with pytest.raises(AglTypeError):
-            _check("import std/config\n\n@config(Some = 2)\nprogram def main() -> unit = ()\n")
+            _check("@config(Some = 2)\nprogram def main() -> unit = ()\n")
 
     def test_the_program_own_signature_parameter_is_unresolved(self) -> None:
         with pytest.raises(AglScopeError):
-            _check(
-                "import std/config\n\n"
-                "@config(count = 2)\n"
-                "program def main(count: int) -> unit = ()\n"
-            )
+            _check("@config(count = 2)\nprogram def main(count: int) -> unit = ()\n")
 
     def test_an_undefined_key_is_unresolved(self) -> None:
         with pytest.raises(AglScopeError):
-            _check(
-                "import std/config\n\n@config(unknown-name = 2)\nprogram def main() -> unit = ()\n"
-            )
+            _check("@config(unknown-name = 2)\nprogram def main() -> unit = ()\n")
 
     def test_an_opt_name_spelling_does_not_name_the_param(self) -> None:
         with pytest.raises(AglScopeError):
             _check(
-                "import std/config\n\n"
                 '@param @opt-name("threshold") let count: int = 1\n\n'
                 "@config(threshold = 2)\n"
                 "program def main() -> unit = ()\n"
@@ -236,7 +199,6 @@ class TestRejectedConfigTargets:
     def test_duplicate_target_via_two_spellings_is_rejected(self) -> None:
         with pytest.raises(AglTypeError):
             _check(
-                "import std/config\n\n"
                 "@param let count: int = 1\n\n"
                 "@config(count = 2, ::count = 3)\n"
                 "program def main() -> unit = ()\n"
@@ -245,7 +207,6 @@ class TestRejectedConfigTargets:
     def test_a_non_constant_call_value_is_rejected(self) -> None:
         with pytest.raises(AglTypeError):
             _check(
-                "import std/config\n\n"
                 "@param let count: int = 1\n"
                 "def helper() -> int = 2\n\n"
                 "@config(count = helper())\n"
@@ -255,7 +216,6 @@ class TestRejectedConfigTargets:
     def test_a_reference_to_a_static_let_is_not_constant(self) -> None:
         with pytest.raises(AglTypeError):
             _check(
-                "import std/config\n\n"
                 "@param let count: int = 1\n"
                 "let other: int = 2\n\n"
                 "@config(count = other)\n"
@@ -265,7 +225,6 @@ class TestRejectedConfigTargets:
     def test_a_wrong_typed_value_is_rejected(self) -> None:
         with pytest.raises(AglTypeError):
             _check(
-                "import std/config\n\n"
                 "@param let count: int = 1\n\n"
                 '@config(count = "not a number")\n'
                 "program def main() -> unit = ()\n"
@@ -317,7 +276,6 @@ class TestRejectedConfigTargets:
     def test_a_body_local_let_is_not_in_scope_for_a_key(self) -> None:
         with pytest.raises(AglScopeError):
             _check(
-                "import std/config\n\n"
                 "def helper() -> int =\n"
                 "  let x: int = 1\n"
                 "  x\n\n"
@@ -328,7 +286,6 @@ class TestRejectedConfigTargets:
     def test_a_type_name_is_not_a_legal_key(self) -> None:
         with pytest.raises(AglScopeError):
             _check(
-                "import std/config\n\n"
                 "enum Color =\n"
                 "  | Red\n"
                 "  | Green\n\n"
@@ -339,8 +296,5 @@ class TestRejectedConfigTargets:
     def test_a_forward_reference_to_a_later_param_is_a_scope_error(self) -> None:
         with pytest.raises(AglScopeError):
             _check(
-                "import std/config\n\n"
-                "@config(count = 1)\n"
-                "program def main() -> unit = ()\n\n"
-                "@param let count: int = 0\n"
+                "@config(count = 1)\nprogram def main() -> unit = ()\n\n@param let count: int = 0\n"
             )

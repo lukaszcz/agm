@@ -1947,7 +1947,8 @@ class AstBuilder(Transformer):
         The value is ``arg_expr`` only: an attribute keyed argument never
         admits a placeholder. A type-applied qualifier segment
         (``Foo[int]::x``) is rejected: an attribute key names a binding, not
-        a generic instantiation.
+        a generic instantiation. See ``AttributeKeyedArg`` for the key's
+        legal qualifier spellings.
         """
         key = next(a for a in args if isinstance(a, syntax.VarRef))
         if key.qualifier is not None and any(

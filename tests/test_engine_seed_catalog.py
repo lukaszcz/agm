@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.runtime.engine_config import (
     build_engine_config_seeds,
     engine_default_settings,
     raw_option_str,
 )
+from agm.agl.runtime.option import option_text
 from agm.agl.semantics.values import BoolValue
 from agm.cli_support.engine_seeds import build_host_engine_seeds
 from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, TRACE_ENGINE_KEYS
@@ -180,17 +182,36 @@ def test_invalid_configured_default_agent_value_exits_naming_the_config_key(
     assert "[exec]" not in err
 
 
+def test_a_cli_value_shields_a_malformed_configured_value_from_decoding() -> None:
+    """A table value the CLI overrides is never decoded, so it cannot fail the run."""
+    config = ExecConfig(
+        strict_json=False, timeout=None, log=False, log_file=None, default_agent="   "
+    )
+
+    seeds = build_host_engine_seeds(
+        config=config,
+        primary_table={"default-agent": "   "},
+        fallback_table={"default-agent": "   "},
+        cli_values={"default-agent": "worker --flag"},
+    ).merged()
+
+    assert seeds["default-agent"] == agent_value("AgentCommand", command="worker --flag")
+
+
 @pytest.mark.parametrize(
-    ("key", "raw_value", "expected_keys"),
+    ("key", "raw_value"),
     [
-        ("log-file", "", {"log"}),
-        ("log-file", 1, {"log"}),
+        ("log-file", ""),
+        ("log-file", 1),
     ],
 )
 def test_none_config_values_do_not_suppress_a_builtin_initializer(
-    key: str, raw_value: object, expected_keys: set[str]
+    key: str, raw_value: object
 ) -> None:
-    """Invalid/empty config values remain absent instead of becoming seeds."""
+    """Invalid/empty config values remain absent instead of becoming seeds.
+
+    Nothing names ``log`` either, so the derived rule also stays absent.
+    """
     seeds = build_host_engine_seeds(
         config=_config_for(key, configured=False),
         primary_table={key: raw_value},
@@ -198,12 +219,17 @@ def test_none_config_values_do_not_suppress_a_builtin_initializer(
     ).merged()
 
     assert key not in seeds
-    assert set(seeds) == expected_keys
+    assert set(seeds) == set()
 
 
 @pytest.mark.parametrize("key", ["timeout", "log-file"])
 def test_explicit_empty_option_cli_value_remains_a_seed(key: str) -> None:
-    """Commands encode their negation flags as a present ``None`` value."""
+    """Commands encode their negation flags as a present ``None`` value.
+
+    A bare ``log-file`` negation, with no config-table ``log``/``log-file``
+    to derive from, leaves the derived ``log`` key absent -- it does not
+    manufacture an explicit ``false``.
+    """
     seeds = build_host_engine_seeds(
         config=_config_for(key, configured=False),
         primary_table={},
@@ -247,7 +273,8 @@ def test_engine_defaults_cover_exactly_the_catalog_keys_with_defaults() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tier split: upper (CLI + primary table) above lower ([exec]/fallback table).
+# Tier split: cli (explicit CLI flags), upper (primary table), lower
+# ([exec]/fallback table) -- independent tiers; cli wins the seeded value.
 # ---------------------------------------------------------------------------
 
 
@@ -290,7 +317,8 @@ def test_a_primary_table_value_shadows_the_same_key_in_the_fallback_table() -> N
     assert "strict-json" not in tiers.lower
 
 
-def test_a_cli_value_is_in_the_upper_tier_even_when_the_fallback_table_also_sets_it() -> None:
+def test_a_cli_value_sits_in_its_own_tier_over_an_undecoded_table_value() -> None:
+    """A CLI value sits in ``cli``; the table value it overrides seeds no tier."""
     config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
 
     tiers = build_host_engine_seeds(
@@ -300,8 +328,10 @@ def test_a_cli_value_is_in_the_upper_tier_even_when_the_fallback_table_also_sets
         cli_values={"strict-json": False},
     )
 
-    assert "strict-json" in tiers.upper
+    assert "strict-json" in tiers.cli
     assert "strict-json" not in tiers.lower
+    assert "strict-json" not in tiers.upper
+    assert tiers.merged()["strict-json"] == BoolValue(False)
 
 
 def test_an_invalid_fallback_only_value_is_absent_from_both_tiers() -> None:
@@ -319,17 +349,21 @@ def test_an_invalid_fallback_only_value_is_absent_from_both_tiers() -> None:
     assert "log-file" not in tiers.lower
 
 
-def test_log_never_appears_directly_in_the_upper_or_lower_tier() -> None:
-    """The derived ``log`` setting is computed by ``merged``, never bucketed directly."""
+def test_a_named_log_value_is_seeded_into_its_tier_like_any_other_key() -> None:
+    """``log`` follows the ordinary tier rule; ``merged`` still recomputes it afterward."""
     config = ExecConfig(strict_json=False, timeout=None, log=True, log_file=None)
 
-    tiers = build_host_engine_seeds(
-        config=config, primary_table={"log": True}, cli_values={"log": True}
-    )
+    upper_tiers = build_host_engine_seeds(config=config, primary_table={"log": True}, cli_values={})
+    assert "log" in upper_tiers.upper
+    assert "log" not in upper_tiers.lower
 
-    assert "log" not in tiers.upper
-    assert "log" not in tiers.lower
-    assert "log" in tiers.merged()
+    lower_tiers = build_host_engine_seeds(
+        config=config, primary_table={}, fallback_table={"log": True}, cli_values={}
+    )
+    assert "log" in lower_tiers.lower
+    assert "log" not in lower_tiers.upper
+
+    assert upper_tiers.merged()["log"] == BoolValue(True)
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +437,23 @@ def test_program_table_log_false_and_exec_log_file_still_seed_log_true() -> None
     assert tiers.merged()["log"] == BoolValue(True)
 
 
+def test_an_invalid_program_table_log_file_with_a_middle_log_file_seeds_log_true() -> None:
+    """Regression: the merged ``log-file`` value and the derived ``log`` must agree.
+
+    A program-table ``log-file`` that fails to decode is absent from the
+    value merge, so ``log-file`` in the result comes entirely from ``middle``
+    -- ``log`` must be derived from that same merged value, not from raw
+    table membership.
+    """
+    config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
+    tiers = build_host_engine_seeds(config=config, primary_table={"log-file": ""}, cli_values={})
+    middle = build_engine_config_seeds({"log-file": "trace.jsonl"})
+
+    merged = tiers.merged(middle)
+    assert merged["log-file"] == build_engine_config_seeds({"log-file": "trace.jsonl"})["log-file"]
+    assert merged["log"] == BoolValue(True)
+
+
 def test_cli_log_wins_over_a_middle_tier_log_file() -> None:
     config = ExecConfig(strict_json=False, timeout=None, log=False, log_file=None)
     tiers = build_host_engine_seeds(config=config, primary_table={}, cli_values={"log": False})
@@ -432,6 +483,40 @@ def test_a_middle_log_file_of_none_hides_a_lower_tier_log_file() -> None:
 
 
 @pytest.mark.parametrize(
+    ("primary", "fallback"),
+    [
+        ({"log-file": "path.jsonl"}, {}),
+        ({}, {"log-file": "path.jsonl"}),
+    ],
+    ids=["program_table_log_file", "exec_log_file"],
+)
+def test_cli_no_log_file_does_not_suppress_a_configured_log_file(
+    primary: dict[str, object], fallback: dict[str, object]
+) -> None:
+    """``--no-log-file`` clears only the CLI seed; a configured path still traces.
+
+    Documented in docs/agl/reference/host-environment.md ("--no-log-file
+    semantics") and docs/commands/agl.md: ``--no-log-file`` clears the
+    initial CLI ``log-file`` value only -- it does not suppress a trace a
+    program-table or ``[exec]`` ``log-file`` configures. The seeded
+    ``log-file`` register still reflects the CLI negation (``None``); the
+    derived ``log`` register still comes on because the config value
+    independently enables tracing.
+    """
+    config = exec_config_from_merged({"exec": fallback}, program_table=primary)
+    tiers = build_host_engine_seeds(
+        config=config,
+        primary_table=primary,
+        fallback_table=fallback,
+        cli_values={"log-file": None},
+    )
+
+    merged = tiers.merged()
+    assert merged["log"] == BoolValue(True)
+    assert option_text(merged["log-file"], nominals=NO_BUILTIN_DECLARATIONS) is None
+
+
+@pytest.mark.parametrize(
     ("primary", "fallback", "cli_values"),
     [
         ({"log": "yes"}, {}, {}),
@@ -451,11 +536,13 @@ def test_merged_log_matches_config_log_or_log_file_is_set(
     fallback: dict[str, object],
     cli_values: dict[str, object | None],
 ) -> None:
-    """``merged()["log"]`` equals ``cfg.log or cfg.log_file is not None`` when configured.
+    """``merged()`` names ``log`` as ``cfg.log or cfg.log_file is not None`` when configured.
 
     Builds ``cfg`` through ``exec_config_from_merged`` -- the same path a real
     caller uses -- rather than a hand-built ``ExecConfig``, so this pins the
-    derived rule against the real config layering.
+    derived rule against the real config layering. A fully invalid/unnamed
+    combination leaves ``log`` absent instead of an explicit ``false`` --
+    the same effective setting, since that is the builtin default.
     """
     config = exec_config_from_merged({"exec": fallback}, program_table=primary)
 
@@ -463,7 +550,9 @@ def test_merged_log_matches_config_log_or_log_file_is_set(
         config=config, primary_table=primary, fallback_table=fallback, cli_values=cli_values
     )
 
-    assert tiers.merged()["log"] == BoolValue(config.log or config.log_file is not None)
+    assert tiers.merged().get("log", BoolValue(False)) == BoolValue(
+        config.log or config.log_file is not None
+    )
 
 
 def test_log_stays_absent_when_neither_log_nor_log_file_is_configured_anywhere() -> None:

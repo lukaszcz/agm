@@ -609,11 +609,12 @@ class TestInfo:
         outcome = meta_mod.dispatch_meta(":info count", _session_ctx(session))
 
         assert outcome.text is not None
-        assert "binding" in outcome.text.lower()
-        assert "int" in outcome.text
-        assert "3" in outcome.text
-        assert "mutable" in outcome.text.lower()
+        assert outcome.text.startswith("count is a mutable binding.")
+        assert "Binding:\n  var count" in outcome.text
+        assert "Type:\n  int" in outcome.text
+        assert "Value:\n  3" in outcome.text
         assert "<repl>:1:" in outcome.text
+        assert outcome.highlight_as_agl is True
 
     def test_info_reports_a_function_signature_and_location(self) -> None:
         session = _open_session()
@@ -622,9 +623,9 @@ class TestInfo:
         outcome = meta_mod.dispatch_meta(":info twice", _session_ctx(session))
 
         assert outcome.text is not None
-        assert "function" in outcome.text.lower()
-        assert "value: int" in outcome.text
-        assert "-> int" in outcome.text
+        assert outcome.text.startswith(
+            "twice is a function.\nSignature:\n  def twice(value: int) -> int"
+        )
         assert "<repl>:1:" in outcome.text
 
     def test_info_reports_a_type_definition(self) -> None:
@@ -634,8 +635,7 @@ class TestInfo:
         outcome = meta_mod.dispatch_meta(":info Point", _session_ctx(session))
 
         assert outcome.text is not None
-        assert "type" in outcome.text.lower()
-        assert "record Point" in outcome.text
+        assert outcome.text.startswith("Point is a record type.\nType:\n  record Point")
         assert "x: int" in outcome.text
 
     def test_info_reports_alias_and_generic_type_definitions(self) -> None:
@@ -647,11 +647,9 @@ class TestInfo:
         generic = meta_mod.dispatch_meta(":info Box", _session_ctx(session))
 
         assert alias.text is not None
-        assert "alias" in alias.text.lower()
-        assert "Count = int" in alias.text
+        assert alias.text == "Count is a type alias.\nType:\n  type Count = int"
         assert generic.text is not None
-        assert "generic" in generic.text.lower()
-        assert "record Box[T]" in generic.text
+        assert generic.text.startswith("Box is a generic record type.\nType:\n  record Box[T]")
 
     def test_info_rejects_an_invalid_qualified_name(self) -> None:
         assert _open_session().info_of("Count::") is None
@@ -663,8 +661,7 @@ class TestInfo:
         outcome = meta_mod.dispatch_meta(":info std/config::strict-json", _session_ctx(session))
 
         assert outcome.text is not None
-        assert "value" in outcome.text.lower()
-        assert "bool" in outcome.text
+        assert outcome.text == "std/config::strict-json is a value.\nType:\n  bool"
 
     def test_info_requires_one_known_identifier(self) -> None:
         assert "usage" in (meta_mod.dispatch_meta(":info", _session_ctx()).text or "").lower()
@@ -691,10 +688,7 @@ class TestInfo:
 
         rendered = _format_repl_signature(signature)
 
-        assert "[T]" in rendered
-        assert "positional-only" in rendered
-        assert "= …" in rendered
-        assert "named-only" in rendered
+        assert rendered == "[T](first: int, second: text, third: bool) -> int"
 
 
 class TestBindings:

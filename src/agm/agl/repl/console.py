@@ -31,10 +31,10 @@ import sys
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
-from prompt_toolkit import PromptSession
+from prompt_toolkit import PromptSession, print_formatted_text
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
-from prompt_toolkit.formatted_text import StyleAndTextTuples
+from prompt_toolkit.formatted_text import FormattedText, StyleAndTextTuples
 from prompt_toolkit.history import FileHistory, History, InMemoryHistory
 from prompt_toolkit.input import Input
 from prompt_toolkit.key_binding import KeyBindings
@@ -267,6 +267,20 @@ class AglPromptLexer(Lexer):
             per_line[line_index].append((start - base, end - base, style))
 
         return [_fragments_for_line(line, per_line[i]) for i, line in enumerate(lines)]
+
+
+def _highlighted_agl_fragments(
+    text: str, session: "ReplSession | None" = None
+) -> StyleAndTextTuples:
+    """Return syntax-highlighted fragments for displayed AgL source text."""
+    get_line = AglPromptLexer(session).lex_document(Document(text))
+    lines = text.split("\n")
+    fragments: StyleAndTextTuples = []
+    for lineno in range(len(lines)):
+        fragments.extend(get_line(lineno))
+        if lineno < len(lines) - 1:
+            fragments.append(("", "\n"))
+    return fragments
 
 
 def _styled_spans(
@@ -723,6 +737,11 @@ def run_console(
         if on_setting_save is not None:
             on_setting_save(key, value)
 
+    def highlighted_writer(text: str) -> None:
+        print_formatted_text(
+            FormattedText(_highlighted_agl_fragments(text, session)), style=prompt_session.style
+        )
+
     run_repl_loop(
         session,
         reader=prompt_session.prompt,
@@ -732,4 +751,5 @@ def run_console(
         check_only=check_only,
         theme=theme,
         on_setting_change=on_setting_change,
+        highlighted_writer=highlighted_writer,
     )

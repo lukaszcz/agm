@@ -36,6 +36,7 @@ from agm.agl.repl import ReplSession as _ReplSession
 from agm.agl.repl.console import (
     AglCompleter,
     AglPromptLexer,
+    _highlighted_agl_fragments,
     _make_history,
     build_prompt_session,
     run_console,
@@ -298,6 +299,18 @@ class TestMultiline:
 
 
 class TestLexer:
+    def test_info_output_is_highlighted_as_agl(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Issue()").ok
+        fragments = _highlighted_agl_fragments(
+            "Issue is a record type.\nType:\n  record Issue", session
+        )
+        styles = {style for style, _text in fragments}
+
+        assert "class:agl.keyword" in styles
+        assert "class:agl.type" in styles
+        assert fragments[0] == ("class:agl.type", "Issue")
+
     def test_styles_a_sample_line(self) -> None:
         lexer = AglPromptLexer()
         fragments = lexer.lex_document(Document("let x = 1 + foo"))(0)

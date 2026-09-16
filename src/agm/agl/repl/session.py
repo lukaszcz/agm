@@ -173,21 +173,17 @@ def _format_repl_location(span: "SourceSpan") -> str:
 
 
 def _format_repl_signature(signature: "FunctionSignature") -> str:
-    """Render a source-oriented function signature for ``:info``."""
-    from agm.agl.zones import ParamZone
-
-    params: list[str] = []
-    for param in signature.params:
-        rendered = f"{param.name}: {param.type!r}"
-        if param.has_default:
-            rendered += " = …"
-        if param.kind is ParamZone.POSITIONAL_ONLY:
-            rendered += " (positional-only)"
-        elif param.kind is ParamZone.NAMED_ONLY:
-            rendered += " (named-only)"
-        params.append(rendered)
+    """Render the AgL source surface of a function signature for ``:info``."""
+    params = [f"{param.name}: {param.type!r}" for param in signature.params]
     generic = f"[{', '.join(signature.type_params)}]" if signature.type_params else ""
     return f"{generic}({', '.join(params)}) -> {signature.result!r}"
+
+
+def _format_info_section(label: str, code: str, location: str | None = None) -> str:
+    """Format one labelled ``:info`` code section and an optional location."""
+    indented_code = "\n".join(f"  {line}" for line in code.splitlines())
+    location_line = "" if location is None else f"\nLocation: {location}"
+    return f"{label}:\n{indented_code}{location_line}"
 
 
 # ---------------------------------------------------------------------------
@@ -1792,7 +1788,7 @@ class ReplSession:
         return result
 
     def info_of(self, name: str) -> str | None:
-        """Return a readable description of one session identifier, if known.
+        """Return a compact AgL-shaped description of one known identifier.
 
         This is introspection over promoted state only: it never parses,
         evaluates, or changes the session.  Names may address root or named
@@ -1816,15 +1812,16 @@ class ReplSession:
             if scope is None
             else (scope.bindings.get(local_name) or scope.members.get(local_name))
         )
+        location = None if ref is None else _format_repl_location(ref.decl_span)
         if ref is not None and ref.kind.value != "constructor_binding":
-            location = _format_repl_location(ref.decl_span)
             signature = self._type_env.get_function_signature_by_node_id(ref.decl_node_id)
             if signature is not None:
                 return "\n".join(
                     (
-                        f"{name}: {'method' if ref.is_method else 'function'}",
-                        f"Signature: {_format_repl_signature(signature)}",
-                        f"Declared: {location}",
+                        f"{name} is a function.",
+                        _format_info_section(
+                            "Signature", f"def {name}{_format_repl_signature(signature)}", location
+                        ),
                     )
                 )
             typ = self._type_env.get_binding_type(ref.decl_node_id)
@@ -1836,39 +1833,41 @@ class ReplSession:
             rendered = _render_value_or_cyclic_message(
                 value, self.descriptors(), pretty=True, quote_strings=True
             )
+            keyword = "var" if ref.mutable else "let"
             return "\n".join(
                 (
-                    f"{name}: binding",
-                    f"Type: {typ!r}",
-                    f"Value: {rendered}",
-                    f"Mutable: {'yes' if ref.mutable else 'no'}",
-                    f"Declared: {location}",
+                    f"{name} is a {'mutable ' if ref.mutable else ''}binding.",
+                    _format_info_section("Binding", f"{keyword} {name}"),
+                    _format_info_section("Type", repr(typ)),
+                    _format_info_section("Value", rendered, location),
                 )
             )
 
         type_path = (*scope_path, local_name)
         alias_target = self._session_type_paths.get(type_path)
         if type_path in self._session_type_paths and alias_target is not None:
-            return f"{name}: type alias\nDefinition: type {name} = {alias_target}"
+            definition = f"type {name} = {alias_target}"
+            return f"{name} is a type alias.\n{_format_info_section('Type', definition)}"
         type_name = "::".join(type_path)
         typ = self._type_env.get_type(type_name)
         if typ is not None:
             definition = format_type_for_repl(typ, self._type_env.type_table)
-            return f"{name}: {typ.kind} type\nDefinition:\n{definition}"
+            display = _format_info_section("Type", definition, location)
+            return f"{name} is a {typ.kind} type.\n{display}"
         generic = self._type_env.get_generic_type(type_name)
         if generic is not None:
+            definition = format_generic_type_def_for_repl(name, generic, self._type_env.type_table)
             return "\n".join(
                 (
-                    f"{name}: generic {generic.kind} type",
-                    "Definition:",
-                    format_generic_type_def_for_repl(name, generic, self._type_env.type_table),
+                    f"{name} is a generic {generic.kind} type.",
+                    _format_info_section("Type", definition, location),
                 )
             )
         try:
             value_type = self.type_of(name)
         except AglError:
             return None
-        return f"{name}: value\nType: {value_type}"
+        return f"{name} is a value.\n{_format_info_section('Type', value_type)}"
 
     def type_names(self) -> frozenset[str]:
         """Return the names of types declared in prior promoted entries.

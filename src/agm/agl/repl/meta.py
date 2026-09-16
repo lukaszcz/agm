@@ -52,6 +52,8 @@ class MetaOutcome:
     """Structured result of dispatching one meta-command.
 
     ``text``           — text the loop should print (``None`` → print nothing).
+    ``highlight_as_agl`` — whether a rich front end should lex ``text`` as AgL
+                         before printing it. Plain front ends leave it text.
     ``quit``           — whether the loop should exit after this command.
     ``setting_change``— ``(key, value)`` for a persisted REPL setting an
                       explicit command just targeted (the TOML key and its new
@@ -68,6 +70,7 @@ class MetaOutcome:
     """
 
     text: str | None = None
+    highlight_as_agl: bool = False
     quit: bool = False
     setting_change: tuple[str, "str | bool"] | None = None
 
@@ -130,13 +133,13 @@ def _handle_type(arg: str, ctx: MetaContext) -> MetaOutcome:
 
 
 def _handle_info(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:info NAME`` — display the current binding, function, or type details."""
+    """``:info NAME`` — display the current binding, function, or type as AgL."""
     if not arg or len(arg.split()) != 1:
         return MetaOutcome(text="usage: :info NAME")
     info = ctx.session.info_of(arg)
     if info is None:
         return MetaOutcome(text=f"Unknown identifier {arg!r}.")
-    return MetaOutcome(text=info)
+    return MetaOutcome(text=info, highlight_as_agl=True)
 
 
 def _handle_bindings(arg: str, ctx: MetaContext) -> MetaOutcome:
@@ -289,7 +292,7 @@ _COMMANDS: list[MetaCommand] = [
     MetaCommand(
         names=("info",),
         usage=":info NAME",
-        summary="Show a binding, function, or type's current details.",
+        summary="Show a binding, function, or type as AgL.",
         handler=_handle_info,
     ),
     MetaCommand(

@@ -109,13 +109,16 @@ def run_repl_loop(
     check_only: bool = False,
     theme: str = "auto",
     on_setting_change: "Callable[[str, str | bool], None] | None" = None,
+    highlighted_writer: "Callable[[str], None] | None" = None,
 ) -> None:
     """Run the read-eval-print loop against *session*; the core both front ends share.
 
     *reader* returns the next (possibly multiline) entry; it must raise
     ``EOFError`` on end of input (Ctrl-D, or closed stdin in plain mode) and may
     raise ``KeyboardInterrupt`` to cancel the entry in progress (Ctrl-C) without
-    exiting the loop. *writer* prints one block of output text. Both are the
+    exiting the loop. *writer* prints one block of output text. A rich front
+    end may supply *highlighted_writer* for ``:info``'s AgL-shaped output.
+    Together they are the
     front end's whole UI seam: the prompt_toolkit console wires
     ``prompt_session.prompt`` and ``print``; the plain console wires a
     line-accumulating reader over plain stdin/stdout and a plain ``print``-alike.
@@ -165,7 +168,10 @@ def run_repl_loop(
         if entry.lstrip().startswith(":"):
             outcome = meta_mod.dispatch_meta(entry, ctx)
             if outcome.text is not None:
-                writer(outcome.text)
+                if outcome.highlight_as_agl and highlighted_writer is not None:
+                    highlighted_writer(outcome.text)
+                else:
+                    writer(outcome.text)
             if outcome.setting_change is not None and on_setting_change is not None:
                 on_setting_change(*outcome.setting_change)
             if outcome.quit:

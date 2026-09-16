@@ -84,6 +84,26 @@ def test_on_setting_change_reports_echo_and_echo_unit_changes() -> None:
     assert changes == [("echo", False), ("echo-unit", True)]
 
 
+def test_info_uses_the_rich_front_end_highlighter_when_available() -> None:
+    session = ReplSession()
+    written: list[str] = []
+    highlighted: list[str] = []
+    reader = _scripted_reader(["let count = 1", ":info count", ":quit"])
+
+    run_repl_loop(
+        session,
+        reader=reader,
+        writer=written.append,
+        highlighted_writer=highlighted.append,
+    )
+
+    assert highlighted == [
+        "count is a binding.\nBinding:\n  let count\nType:\n  int\nValue:\n  1\n"
+        "Location: <repl>:1:5"
+    ]
+    assert all("count is a binding" not in text for text in written)
+
+
 def test_unit_entries_echo_nothing_by_default() -> None:
     session = ReplSession()
     written: list[str] = []

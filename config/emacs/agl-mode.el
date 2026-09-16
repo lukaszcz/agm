@@ -27,8 +27,8 @@
 ;;   the rest of the line, or a following indented block.
 ;;
 ;; Key bindings: `C-c C-c' runs the file (`agm exec'), `C-c C-k' checks it
-;; (`agm check'), `C-c C-z' opens the inferior REPL, and `C-c C-r' /
-;; `C-c C-b' send the region or buffer to it.
+;; (`agm check'), `C-c C-z' opens the inferior REPL, `C-c C-r' reloads the
+;; buffer into it, and `C-c C-s' / `C-c C-b' send the region or buffer.
 ;;
 ;; Font-lock is structural only : capitalization is semantically
 ;; meaningless in AgL, so faces derive from declaration and annotation
@@ -1514,7 +1514,8 @@ function."
   ;; deliberately indented wider than `agl-indent-offset'.
   (setq-local electric-indent-inhibit t)
   (add-hook 'post-self-insert-hook #'agl-indent-post-self-insert nil t)
-  (agl-flymake-setup))
+  (agl-flymake-setup)
+  (agl-repl-setup-reload-on-save))
 
 ;; Loaded after the mode definition: these require this file.
 (require 'agl-indent)
@@ -1527,9 +1528,23 @@ function."
 (define-key agl-mode-map (kbd "C-c C-c") #'agl-run)
 (define-key agl-mode-map (kbd "C-c C-k") #'agl-check)
 (define-key agl-mode-map (kbd "C-c C-z") #'agl-repl)
-(define-key agl-mode-map (kbd "C-c C-r") #'agl-send-region)
+(define-key agl-mode-map (kbd "C-c C-r") #'agl-repl-reload-buffer)
+(define-key agl-mode-map (kbd "C-c C-s") #'agl-send-region)
 (define-key agl-mode-map (kbd "C-c C-b") #'agl-send-buffer)
 (define-key agl-mode-map (kbd "C-c C-l") #'flymake-show-buffer-diagnostics)
+
+(easy-menu-define agl-mode-menu agl-mode-map
+  "Menu for AgL source buffers."
+  '("AgL"
+    ["Run file" agl-run t]
+    ["Type-check file" agl-check t]
+    "---"
+    ["Open REPL" agl-repl t]
+    ["Send region to REPL" agl-send-region (use-region-p)]
+    ["Send buffer to REPL" agl-send-buffer t]
+    ["Reset and reload buffer in REPL" agl-repl-reload-buffer t]
+    "---"
+    ["Show diagnostics" flymake-show-buffer-diagnostics t]))
 
 (provide 'agl-mode)
 ;;; agl-mode.el ends here

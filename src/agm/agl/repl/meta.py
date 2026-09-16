@@ -8,7 +8,7 @@ character.
 The meta-command set is implemented here: ``:help``, ``:quit`` /
 ``:exit``, ``:reset``, ``:type``, ``:bindings`` / ``:env``,
 ``:set``, ``:load``, ``:save``, plus a clean error for
-an unknown ``:command``.  The dispatcher is a registry/table (``_COMMANDS``), so
+``:info``, and an unknown ``:command``.  The dispatcher is a registry/table (``_COMMANDS``), so
 the command set is a single source of truth shared by the dispatcher and the
 completer.  Each handler takes ``(arg, ctx)`` and returns a :class:`MetaOutcome`.
 """
@@ -127,6 +127,16 @@ def _handle_type(arg: str, ctx: MetaContext) -> MetaOutcome:
     except AglError as exc:
         return MetaOutcome(text=format_diagnostic(exc.to_diagnostic(), source_name=None))
     return MetaOutcome(text=type_str)
+
+
+def _handle_info(arg: str, ctx: MetaContext) -> MetaOutcome:
+    """``:info NAME`` — display the current binding, function, or type details."""
+    if not arg or len(arg.split()) != 1:
+        return MetaOutcome(text="usage: :info NAME")
+    info = ctx.session.info_of(arg)
+    if info is None:
+        return MetaOutcome(text=f"Unknown identifier {arg!r}.")
+    return MetaOutcome(text=info)
 
 
 def _handle_bindings(arg: str, ctx: MetaContext) -> MetaOutcome:
@@ -275,6 +285,12 @@ _COMMANDS: list[MetaCommand] = [
         usage=":type EXPR",
         summary="Type-check EXPR against the session; print its type (no eval).",
         handler=_handle_type,
+    ),
+    MetaCommand(
+        names=("info",),
+        usage=":info NAME",
+        summary="Show a binding, function, or type's current details.",
+        handler=_handle_info,
     ),
     MetaCommand(
         names=("bindings", "env"),

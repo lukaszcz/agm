@@ -61,8 +61,9 @@ if TYPE_CHECKING:
         ScopeRegion,
         TypeAlias,
     )
+    from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
-    from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
+    from agm.agl.typecheck.env import CheckedModule, FunctionSignature, TypeEnvironment
     from agm.packages.model import PackageInfo
 
 
@@ -163,6 +164,30 @@ def _region_path(region: "ScopeRegion") -> tuple[str, ...]:
         current = current.items[0]
         path.append(current.segment.name)
     return tuple(path)
+
+
+def _format_repl_location(span: "SourceSpan") -> str:
+    """Render a declaration source location for REPL introspection."""
+    label = "<repl>" if span.source.label == "<agl>" else span.source.label
+    return f"{label}:{span.start_line}:{span.start_col}"
+
+
+def _format_repl_signature(signature: "FunctionSignature") -> str:
+    """Render a source-oriented function signature for ``:info``."""
+    from agm.agl.zones import ParamZone
+
+    params: list[str] = []
+    for param in signature.params:
+        rendered = f"{param.name}: {param.type!r}"
+        if param.has_default:
+            rendered += " = …"
+        if param.kind is ParamZone.POSITIONAL_ONLY:
+            rendered += " (positional-only)"
+        elif param.kind is ParamZone.NAMED_ONLY:
+            rendered += " (named-only)"
+        params.append(rendered)
+    generic = f"[{', '.join(signature.type_params)}]" if signature.type_params else ""
+    return f"{generic}({', '.join(params)}) -> {signature.result!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1765,6 +1790,85 @@ class ReplSession:
             value = slot.value if isinstance(slot, Cell) else slot
             result.append((name, typ, value))
         return result
+
+    def info_of(self, name: str) -> str | None:
+        """Return a readable description of one session identifier, if known.
+
+        This is introspection over promoted state only: it never parses,
+        evaluates, or changes the session.  Names may address root or named
+        scope bindings and types (``Deploy::worker`` and ``Deploy::Config``).
+        """
+        from agm.agl.repl.render import _render_value_or_cyclic_message
+        from agm.agl.repl.type_display import (
+            format_generic_type_def_for_repl,
+            format_type_for_repl,
+        )
+        from agm.agl.semantics.values import Cell
+
+        parts = tuple(name.split("::"))
+        if not name or any(not part for part in parts):
+            return None
+
+        scope_path, local_name = parts[:-1], parts[-1]
+        scope = self._session_scope_nodes.get(scope_path)
+        ref = (
+            None
+            if scope is None
+            else (scope.bindings.get(local_name) or scope.members.get(local_name))
+        )
+        if ref is not None and ref.kind.value != "constructor_binding":
+            location = _format_repl_location(ref.decl_span)
+            signature = self._type_env.get_function_signature_by_node_id(ref.decl_node_id)
+            if signature is not None:
+                return "\n".join(
+                    (
+                        f"{name}: {'method' if ref.is_method else 'function'}",
+                        f"Signature: {_format_repl_signature(signature)}",
+                        f"Declared: {location}",
+                    )
+                )
+            typ = self._type_env.get_binding_type(ref.decl_node_id)
+            assert typ is not None
+            symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
+            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
+            assert slot is not None
+            value = slot.value if isinstance(slot, Cell) else slot
+            rendered = _render_value_or_cyclic_message(
+                value, self.descriptors(), pretty=True, quote_strings=True
+            )
+            return "\n".join(
+                (
+                    f"{name}: binding",
+                    f"Type: {typ!r}",
+                    f"Value: {rendered}",
+                    f"Mutable: {'yes' if ref.mutable else 'no'}",
+                    f"Declared: {location}",
+                )
+            )
+
+        type_path = (*scope_path, local_name)
+        alias_target = self._session_type_paths.get(type_path)
+        if type_path in self._session_type_paths and alias_target is not None:
+            return f"{name}: type alias\nDefinition: type {name} = {alias_target}"
+        type_name = "::".join(type_path)
+        typ = self._type_env.get_type(type_name)
+        if typ is not None:
+            definition = format_type_for_repl(typ, self._type_env.type_table)
+            return f"{name}: {typ.kind} type\nDefinition:\n{definition}"
+        generic = self._type_env.get_generic_type(type_name)
+        if generic is not None:
+            return "\n".join(
+                (
+                    f"{name}: generic {generic.kind} type",
+                    "Definition:",
+                    format_generic_type_def_for_repl(name, generic, self._type_env.type_table),
+                )
+            )
+        try:
+            value_type = self.type_of(name)
+        except AglError:
+            return None
+        return f"{name}: value\nType: {value_type}"
 
     def type_names(self) -> frozenset[str]:
         """Return the names of types declared in prior promoted entries.

@@ -591,6 +591,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 | `:quit` / `:exit` (or Ctrl-D) | Exit the REPL |
 | `:reset` | Clear the whole session (bindings, types, declarations, imports, and uses) |
 | `:type EXPR` | Type-check `EXPR` against the session and print its type (no eval) |
+| `:info NAME` | Show the current binding, function, or type details for `NAME` |
 | `:bindings` / `:env` | List current bindings as `name : Type = value` |
 | `:set echo on\|off` | Toggle result echoing |
 | `:set echo-unit on\|off` | Toggle echoing `unit`-typed entries too (off by default) |

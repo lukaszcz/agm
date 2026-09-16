@@ -38,7 +38,7 @@ just install
 
 Install the Emacs mode on its own with `just setup-emacs`. It gives `.agl` files
 syntax highlighting, indentation, declaration navigation, on-save diagnostics
-through `agm check`, and an inferior `agm repl` — see
+through `agm check`, and an inferior `agm repl` with buffer reloads — see
 [config/emacs/README.md](config/emacs/README.md).
 
 Built wheels also contain a bundled standard-library fallback, so a direct wheel
@@ -286,7 +286,7 @@ Start an interactive read-eval-print loop for AgL. The REPL keeps a persistent s
 each entry is parsed, type-checked, and evaluated once against an environment that
 accumulates bindings, types, and declarations, so earlier results stay available and agent
 calls fire exactly once. Multiline editing, syntax highlighting, tab-completion, and history
-are built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
+are built in, and `:` meta-commands (`:help`, `:type`, `:info`, `:bindings`, …) inspect the session.
 Each loaded program receives the `std/prelude` standard-library prelude, as in
 `agm exec`, unless an explicit import includes `std/prelude`; plain `import std/prelude`
 therefore leaves its names qualified-only. Pass `--no-stdlib` to disable the

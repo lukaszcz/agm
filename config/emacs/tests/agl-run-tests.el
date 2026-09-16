@@ -66,6 +66,18 @@
       (agl-mode)
       (should-error (agl-run) :type 'user-error))))
 
+(ert-deftest agl-mode-provides-an-agl-menu ()
+  (let ((agl-flymake-enable nil))
+    (with-temp-buffer
+      (agl-mode)
+      (should (lookup-key agl-mode-map [menu-bar agl])))))
+
+(ert-deftest agl-mode-binds-reload-to-control-c-control-r ()
+  (should (eq (lookup-key agl-mode-map (kbd "C-c C-r"))
+              #'agl-repl-reload-buffer))
+  (should (eq (lookup-key agl-mode-map (kbd "C-c C-s"))
+              #'agl-send-region)))
+
 ;; --- AGM diagnostics are clickable in a compilation buffer ---
 
 (ert-deftest agl-run-compilation-recognizes-agm-diagnostics ()

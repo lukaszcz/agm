@@ -31,6 +31,15 @@ so the front end never depends on how the process was spawned."
   :type 'string
   :group 'agl)
 
+(defcustom agl-repl-reload-on-save nil
+  "Whether saving an AgL buffer resets and reloads the inferior REPL.
+
+Reloading starts from a clean session, so deleted declarations disappear as
+well as changed ones taking effect.  It deliberately remains opt-in because
+it also discards expressions entered manually at the REPL prompt."
+  :type 'boolean
+  :group 'agl)
+
 (defconst agl-repl-prompt-regexp "^\\(?:agl> \\|\\.\\.\\.> \\)"
   "Regexp matching the plain REPL's primary and continuation prompts.
 
@@ -100,6 +109,25 @@ a blank line instead, which is what closes that block."
   "Send the whole buffer to the inferior AgL REPL."
   (interactive)
   (agl-send-region (point-min) (point-max)))
+
+;;;###autoload
+(defun agl-repl-reload-buffer ()
+  "Reset the inferior REPL and load the current buffer into it.
+
+The reset makes reload faithful to the buffer: declarations removed from the
+source cannot survive as stale REPL state."
+  (interactive)
+  (agl-repl-send-string ":reset")
+  (agl-send-buffer))
+
+(defun agl-repl--reload-after-save ()
+  "Reload the current buffer when `agl-repl-reload-on-save' is enabled."
+  (when agl-repl-reload-on-save
+    (agl-repl-reload-buffer)))
+
+(defun agl-repl-setup-reload-on-save ()
+  "Install this buffer's optional REPL reload-on-save hook."
+  (add-hook 'after-save-hook #'agl-repl--reload-after-save nil t))
 
 (provide 'agl-repl)
 ;;; agl-repl.el ends here

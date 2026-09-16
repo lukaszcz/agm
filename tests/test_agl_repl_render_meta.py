@@ -601,6 +601,102 @@ class TestType:
         assert "expression" in outcome.text.lower()
 
 
+class TestInfo:
+    def test_info_reports_a_binding_type_value_and_location(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("var count = 3").ok
+
+        outcome = meta_mod.dispatch_meta(":info count", _session_ctx(session))
+
+        assert outcome.text is not None
+        assert "binding" in outcome.text.lower()
+        assert "int" in outcome.text
+        assert "3" in outcome.text
+        assert "mutable" in outcome.text.lower()
+        assert "<repl>:1:" in outcome.text
+
+    def test_info_reports_a_function_signature_and_location(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("def twice(value: int) -> int = value * 2").ok
+
+        outcome = meta_mod.dispatch_meta(":info twice", _session_ctx(session))
+
+        assert outcome.text is not None
+        assert "function" in outcome.text.lower()
+        assert "value: int" in outcome.text
+        assert "-> int" in outcome.text
+        assert "<repl>:1:" in outcome.text
+
+    def test_info_reports_a_type_definition(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("record Point\n  x: int\n  y: int").ok
+
+        outcome = meta_mod.dispatch_meta(":info Point", _session_ctx(session))
+
+        assert outcome.text is not None
+        assert "type" in outcome.text.lower()
+        assert "record Point" in outcome.text
+        assert "x: int" in outcome.text
+
+    def test_info_reports_alias_and_generic_type_definitions(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("type Count = int").ok
+        assert session.eval_entry("record Box[T]\n  value: T").ok
+
+        alias = meta_mod.dispatch_meta(":info Count", _session_ctx(session))
+        generic = meta_mod.dispatch_meta(":info Box", _session_ctx(session))
+
+        assert alias.text is not None
+        assert "alias" in alias.text.lower()
+        assert "Count = int" in alias.text
+        assert generic.text is not None
+        assert "generic" in generic.text.lower()
+        assert "record Box[T]" in generic.text
+
+    def test_info_rejects_an_invalid_qualified_name(self) -> None:
+        assert _open_session().info_of("Count::") is None
+
+    def test_info_reports_the_static_type_of_an_imported_value(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("import std/config").ok
+
+        outcome = meta_mod.dispatch_meta(":info std/config::strict-json", _session_ctx(session))
+
+        assert outcome.text is not None
+        assert "value" in outcome.text.lower()
+        assert "bool" in outcome.text
+
+    def test_info_requires_one_known_identifier(self) -> None:
+        assert "usage" in (meta_mod.dispatch_meta(":info", _session_ctx()).text or "").lower()
+        assert (
+            "unknown"
+            in (meta_mod.dispatch_meta(":info missing", _session_ctx()).text or "").lower()
+        )
+
+    def test_info_formats_full_function_parameter_metadata(self) -> None:
+        from agm.agl.repl.session import _format_repl_signature
+        from agm.agl.semantics.types import BoolType, IntType, TextType
+        from agm.agl.typecheck.env import FunctionSignature, ParamSpec
+        from agm.agl.zones import ParamZone
+
+        signature = FunctionSignature(
+            params=(
+                ParamSpec("first", IntType(), ParamZone.POSITIONAL_ONLY, False),
+                ParamSpec("second", TextType(), ParamZone.STANDARD, True),
+                ParamSpec("third", BoolType(), ParamZone.NAMED_ONLY, False),
+            ),
+            result=IntType(),
+            type_params=("T",),
+        )
+
+        rendered = _format_repl_signature(signature)
+
+        assert "[T]" in rendered
+        assert "positional-only" in rendered
+        assert "= …" in rendered
+        assert "named-only" in rendered
+
+
 class TestBindings:
     def test_bindings_empty(self) -> None:
         for name in (":bindings", ":env"):

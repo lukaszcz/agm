@@ -73,6 +73,22 @@
       (agl-send-buffer))
     (should (equal agl-repl-tests--sent '("let x = 1\nlet y = 2\n")))))
 
+(ert-deftest agl-repl-reload-buffer-resets-before-sending-source ()
+  (agl-repl--with-stubs
+    (with-temp-buffer
+      (insert "let x = 1")
+      (agl-repl-reload-buffer))
+    (should (equal agl-repl-tests--sent '(":reset\n" "let x = 1\n")))))
+
+(ert-deftest agl-repl-reload-on-save-is-opt-in ()
+  (let ((agl-repl-reload-on-save t))
+    (agl-repl--with-stubs
+      (with-temp-buffer
+        (insert "let x = 1")
+        (agl-mode)
+        (run-hooks 'after-save-hook))
+      (should (equal agl-repl-tests--sent '(":reset\n" "let x = 1\n"))))))
+
 (ert-deftest agl-repl-sends-a-multi-line-block-unsplit ()
   ;; Plain mode accumulates continuation lines until an entry is complete,
   ;; so a block is sent as one string rather than split here.

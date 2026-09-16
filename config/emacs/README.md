@@ -48,7 +48,8 @@ the directory directly:
 | `C-c C-c` | `agl-run` — run the file with `agm exec` |
 | `C-c C-k` | `agl-check` — statically check it with `agm check` |
 | `C-c C-z` | `agl-repl` — start or switch to the inferior REPL |
-| `C-c C-r` | `agl-send-region` |
+| `C-c C-r` | `agl-repl-reload-buffer` — reset and reload the buffer |
+| `C-c C-s` | `agl-send-region` |
 | `C-c C-b` | `agl-send-buffer` |
 | `C-c C-l` | `flymake-show-buffer-diagnostics` — list this file's diagnostics |
 
@@ -61,6 +62,9 @@ A sent region goes to the REPL unsplit. When its last line is indented the
 region leaves a block open — a layout block always accepts one more line — so
 the blank line that closes it is sent too.
 
+The **AgL** menu provides the same run, type-check, REPL, send, reload, and
+diagnostic actions.
+
 ## Customization
 
 - `agl-indent-offset` — block indentation, default 2.
@@ -68,6 +72,9 @@ the blank line that closes it is sent too.
   command vectors the integrations run; put any flags here.
 - `agl-flymake-enable` — whether entering the mode turns on
   `flymake-mode`.
+- `agl-repl-reload-on-save` — reset and reload the buffer after each save.
+  This is off by default because it clears values entered directly at the
+  REPL prompt.
 - `agl-repl-buffer-name` — the inferior REPL buffer's name.
 - `agl-interpolation-face` — the face for `%{`/`}` delimiters.
 

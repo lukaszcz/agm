@@ -72,11 +72,12 @@
       (agl-mode)
       (should (lookup-key agl-mode-map [menu-bar agl])))))
 
-(ert-deftest agl-mode-binds-reload-to-control-c-control-r ()
+(ert-deftest agl-mode-binds-repl-commands ()
   (should (eq (lookup-key agl-mode-map (kbd "C-c C-r"))
               #'agl-repl-reload-buffer))
-  (should (eq (lookup-key agl-mode-map (kbd "C-c C-s"))
-              #'agl-send-region)))
+  (should (eq (lookup-key agl-mode-map (kbd "C-<return>"))
+              #'agl-send-region))
+  (should-not (lookup-key agl-mode-map (kbd "C-c C-s"))))
 
 ;; --- AGM diagnostics are clickable in a compilation buffer ---
 

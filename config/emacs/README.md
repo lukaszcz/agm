@@ -49,7 +49,7 @@ the directory directly:
 | `C-c C-k` | `agl-check` — statically check it with `agm check` |
 | `C-c C-z` | `agl-repl` — start or switch to the inferior REPL |
 | `C-c C-r` | `agl-repl-reload-buffer` — reset and reload the buffer |
-| `C-c C-s` | `agl-send-region` |
+| `C-RET` | `agl-send-region` |
 | `C-c C-b` | `agl-send-buffer` |
 | `C-c C-l` | `flymake-show-buffer-diagnostics` — list this file's diagnostics |
 

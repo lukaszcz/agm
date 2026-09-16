@@ -28,7 +28,7 @@
 ;;
 ;; Key bindings: `C-c C-c' runs the file (`agm exec'), `C-c C-k' checks it
 ;; (`agm check'), `C-c C-z' opens the inferior REPL, `C-c C-r' reloads the
-;; buffer into it, and `C-c C-s' / `C-c C-b' send the region or buffer.
+;; buffer into it, and `C-<return>' / `C-c C-b' send the region or buffer.
 ;;
 ;; Font-lock is structural only : capitalization is semantically
 ;; meaningless in AgL, so faces derive from declaration and annotation
@@ -1529,7 +1529,7 @@ function."
 (define-key agl-mode-map (kbd "C-c C-k") #'agl-check)
 (define-key agl-mode-map (kbd "C-c C-z") #'agl-repl)
 (define-key agl-mode-map (kbd "C-c C-r") #'agl-repl-reload-buffer)
-(define-key agl-mode-map (kbd "C-c C-s") #'agl-send-region)
+(define-key agl-mode-map (kbd "C-<return>") #'agl-send-region)
 (define-key agl-mode-map (kbd "C-c C-b") #'agl-send-buffer)
 (define-key agl-mode-map (kbd "C-c C-l") #'flymake-show-buffer-diagnostics)
 

@@ -636,6 +636,31 @@ class TestInfo:
         assert outcome.text is not None
         assert outcome.text.startswith(f"{name} is a function.\nSignature:\n  def {name}")
 
+    def test_info_reports_a_qualified_standard_library_function(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("import std/fs").ok
+
+        outcome = meta_mod.dispatch_meta(":info fs::read", _session_ctx(session))
+
+        assert outcome.text is not None
+        assert outcome.text.startswith(
+            "fs::read is a function.\nSignature:\n  def fs::read(path: text) -> text"
+        )
+
+    def test_info_reports_an_imported_generic_type_and_constructor(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("import std/option").ok
+
+        option = meta_mod.dispatch_meta(":info Option", _session_ctx(session))
+        some = meta_mod.dispatch_meta(":info Some", _session_ctx(session))
+
+        assert option.text is not None
+        assert option.text.startswith("Option is a generic enum type.\nType:\n  enum Option[T]")
+        assert some.text is not None
+        assert some.text.startswith(
+            "Some is a constructor.\nSignature:\n  Some[T](value: T) -> std/option::Option::Some[T]"
+        )
+
     def test_info_reports_a_type_definition(self) -> None:
         session = _open_session()
         assert session.eval_entry("record Point\n  x: int\n  y: int").ok

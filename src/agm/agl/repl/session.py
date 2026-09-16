@@ -63,7 +63,13 @@ if TYPE_CHECKING:
     )
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
-    from agm.agl.typecheck.env import CheckedModule, FunctionSignature, TypeEnvironment
+    from agm.agl.typecheck.env import (
+        CheckedModule,
+        ConstructorSignature,
+        FunctionSignature,
+        GenericTypeDef,
+        TypeEnvironment,
+    )
     from agm.packages.model import PackageInfo
 
 
@@ -184,6 +190,15 @@ def _format_info_section(label: str, code: str, location: str | None = None) -> 
     indented_code = "\n".join(f"  {line}" for line in code.splitlines())
     location_line = "" if location is None else f"\nLocation: {location}"
     return f"{label}:\n{indented_code}{location_line}"
+
+
+def _format_constructor_signature(name: str, signature: "ConstructorSignature") -> str:
+    """Render one constructor's AgL call signature for ``:info``."""
+    generic = f"[{', '.join(signature.type_params)}]" if signature.type_params else ""
+    params = ", ".join(
+        f"{field}: {typ!r}" for field, typ in zip(signature.field_names, signature.field_templates)
+    )
+    return f"{name}{generic}({params}) -> {signature.result_template!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1854,6 +1869,17 @@ class ReplSession:
                 )
             )
 
+        library_signature = self._library_function_signature(scope_path, local_name)
+        if library_signature is not None:
+            return "\n".join(
+                (
+                    f"{name} is a function.",
+                    _format_info_section(
+                        "Signature", f"def {name}{_format_repl_signature(library_signature)}"
+                    ),
+                )
+            )
+
         type_path = (*scope_path, local_name)
         alias_target = self._session_type_paths.get(type_path)
         if type_path in self._session_type_paths and alias_target is not None:
@@ -1874,11 +1900,70 @@ class ReplSession:
                     _format_info_section("Type", definition, location),
                 )
             )
+        library_generic = self._library_generic_type(local_name)
+        if library_generic is not None:
+            definition = format_generic_type_def_for_repl(
+                name, library_generic, self._type_env.type_table
+            )
+            display = _format_info_section("Type", definition)
+            return f"{name} is a generic {library_generic.kind} type.\n{display}"
+        constructor_signature = self._library_constructor_signature(name)
+        if constructor_signature is not None:
+            return "\n".join(
+                (
+                    f"{name} is a constructor.",
+                    _format_info_section(
+                        "Signature", _format_constructor_signature(name, constructor_signature)
+                    ),
+                )
+            )
         try:
             value_type = self.type_of(name)
         except AglError:
             return None
         return f"{name} is a value.\n{_format_info_section('Type', value_type)}"
+
+    def _library_function_signature(
+        self, scope_path: tuple[str, ...], local_name: str
+    ) -> "FunctionSignature | None":
+        """Return a retained module function signature selected by a qualifier."""
+        if not scope_path:
+            return None
+        module_name = scope_path[-1]
+        for module_id, checked in self._retained_checked_modules.items():
+            if module_id.segments[-1] == module_name:
+                signature = checked.type_env.all_function_signatures().get(local_name)
+                if signature is not None:
+                    return signature
+        return None
+
+    def _library_generic_type(self, name: str) -> "GenericTypeDef | None":
+        """Return the sole retained generic type named *name*, if any."""
+        matches = [
+            generic
+            for checked in self._retained_checked_modules.values()
+            if (generic := checked.type_env.get_generic_type(name)) is not None
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _library_constructor_signature(self, name: str) -> "ConstructorSignature | None":
+        """Return the sole retained constructor signature named *name*, if any."""
+        from agm.agl.semantics.types import EnumType
+
+        matches: list[ConstructorSignature] = []
+        for checked in self._retained_checked_modules.values():
+            for generic in checked.type_env.all_generic_types().values():
+                if not isinstance(generic.template, EnumType):
+                    continue
+                member = checked.type_env.type_table.enum_member_names(generic.template).get(name)
+                if member is None:
+                    continue
+                signature = checked.type_env.get_ctor_sig_from_module(
+                    member.module_id, member.name, scope_path=member.scope_path
+                )
+                if signature is not None:
+                    matches.append(signature)
+        return matches[0] if len(matches) == 1 else None
 
     def type_names(self) -> frozenset[str]:
         """Return the names of types declared in prior promoted entries.

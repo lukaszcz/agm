@@ -1231,6 +1231,26 @@ success."
         (setq found t)))
     found))
 
+(defun agl--match-interpolation-body (limit)
+  "Match one contiguous interpolation body, up to LIMIT.
+
+The syntactic pass gives an enclosing template a string face.  This matcher
+clears that face before the ordinary code rules add their more specific faces."
+  (let (start end)
+    (while (and (not start) (< (point) limit))
+      (if (get-text-property (point) 'agl-interpolation-code)
+          (setq start (point)
+                end (min limit
+                         (next-single-property-change
+                          (point) 'agl-interpolation-code nil (point-max))))
+        (goto-char (min limit
+                         (next-single-property-change
+                          (point) 'agl-interpolation-code nil (point-max))))))
+    (when start
+      (set-match-data (list start end))
+      (goto-char end)
+      t)))
+
 (defun agl--font-lock-rule (rule &optional interpolation-only)
   "Build a font-lock rule from RULE, optionally restricted to interpolation code."
   (let* ((matcher (nth 0 rule))
@@ -1249,7 +1269,8 @@ success."
    (mapcar #'agl--font-lock-rule agl--code-font-lock-rules)
    (list (list #'agl--match-interpolation-delims
                '(1 'agl-interpolation-face t)
-               '(2 'agl-interpolation-face t)))
+               '(2 'agl-interpolation-face t))
+         (list #'agl--match-interpolation-body '(0 nil t)))
    (mapcar (lambda (rule) (agl--font-lock-rule rule t)) agl--code-font-lock-rules))
   "Font-lock keyword rules for `agl-mode'.
 

@@ -315,6 +315,7 @@
 
 (ert-deftest agl-flt-interpolation-hole-code-is-highlighted ()
   (agl-flt--with-buffer "let a = \"cost is %{render(price + 1 as json)}\"\n"
+    (should-not (agl-flt--face-of "price +"))
     (should (eq (agl-flt--face-of "render") 'font-lock-builtin-face))
     (should (eq (agl-flt--face-of "+") agl--operator-face))
     (should (eq (agl-flt--face-of "1 as") agl--number-face))
@@ -326,6 +327,7 @@
 
 (ert-deftest agl-flt-raw-tail-interpolation-code-is-highlighted ()
   (agl-flt--with-buffer "ask$ Summarize %{render(topic + 1)} please\n"
+    (should-not (agl-flt--face-of "topic +"))
     (should (eq (agl-flt--face-of "render") 'font-lock-builtin-face))
     (should (eq (agl-flt--face-of "+") agl--operator-face))
     (should (eq (agl-flt--face-of "1)}") agl--number-face))))

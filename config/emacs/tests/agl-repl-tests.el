@@ -9,8 +9,14 @@
 ;;; Code:
 
 (require 'ert)
+(require 'bytecomp)
 (require 'agl-mode)
 (require 'agl-repl)
+
+(defconst agl-repl-tests--source-file
+  (expand-file-name "../agl-repl.el"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "Path to the inferior REPL source file under test.")
 
 (defvar agl-repl-tests--spawn nil
   "The (PROGRAM . ARGS) the stubbed `make-comint-in-buffer' received.")
@@ -52,6 +58,19 @@
          (kill-buffer agl-repl-buffer-name)))))
 
 ;; --- Process construction ---
+
+(ert-deftest agl-repl-byte-compiles-with-known-dependencies ()
+  (let ((destination (make-temp-file "agl-repl-test-" nil ".elc"))
+        (byte-compile-error-on-warn t)
+        (font-lock-setup (symbol-function 'agl--setup-font-lock)))
+    (unwind-protect
+        (progn
+          (fmakunbound 'agl--setup-font-lock)
+          (let ((byte-compile-dest-file-function (lambda (_source) destination)))
+            (should (byte-compile-file agl-repl-tests--source-file))))
+      (fset 'agl--setup-font-lock font-lock-setup)
+      (when (file-exists-p destination)
+        (delete-file destination)))))
 
 (ert-deftest agl-repl-spawns-the-configured-command ()
   (agl-repl--with-stubs

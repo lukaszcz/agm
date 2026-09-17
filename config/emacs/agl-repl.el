@@ -13,6 +13,9 @@
 (require 'cl-lib)
 (require 'comint)
 
+(declare-function agl--setup-font-lock "agl-mode"
+                  (&optional fontify-region-function))
+
 (defcustom agl-repl-command '("agm" "repl" "--plain")
   "Command vector that starts the inferior AgL REPL.
 

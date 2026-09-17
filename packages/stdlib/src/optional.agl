@@ -82,3 +82,9 @@ def Optional::to-result[T, E](self, default: T, error: E) -> Result[T, E] =
     | None => Result::Err(error)
     | Some(value) => Result::Ok(value)
     | Default => Result::Ok(default)
+
+def Optional::to-option[T](self, default: T) -> Option[T] =
+  case self of
+    | None => None
+    | Some(value) => Some(value)
+    | Default => Some(default)

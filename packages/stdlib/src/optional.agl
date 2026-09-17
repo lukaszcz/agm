@@ -1,0 +1,84 @@
+import std/option::Option
+
+enum Optional[T]
+  | Option::Some[T]
+  | Option::None
+  | Default
+
+def Optional::map[T, U](self, f: (T) -> U) -> Optional[U] =
+  case self of
+    | None => None
+    | Some(value) => Some(value = f(value))
+    | Default => Default
+
+def Optional::and-then[T, U](self, f: (T) -> Optional[U]) -> Optional[U] =
+  case self of
+    | None => None
+    | Some(value) => f(value)
+    | Default => Default
+
+def Optional::select[T](self, p: (T) -> bool) -> Optional[T] =
+  case self of
+    | None => None
+    | Some(value) => (if p(value) => self else => None)
+    | Default => Default
+
+def Optional::or[T](self, other: Optional[T]) -> Optional[T] =
+  case self of
+    | None => other
+    | Some(_) => self
+    | Default => Default
+
+def Optional::or-else[T](self, f: () -> Optional[T]) -> Optional[T] =
+  case self of
+    | None => f()
+    | Some(_) => self
+    | Default => Default
+
+def Optional::unwrap-or[T](self, default: T, x: T) -> T =
+  case self of
+    | None => x
+    | Some(value) => value
+    | Default => default
+
+def Optional::unwrap-or-else[T](self, default: T, f: () -> T) -> T =
+  case self of
+    | None => f()
+    | Some(value) => value
+    | Default => default
+
+def Optional::unwrap[T](self, default: T) -> T =
+  case self of
+    | None => raise UnwrapError(message = "Optional has no value")
+    | Some(value) => value
+    | Default => default
+
+def Optional::is-some[T](self) -> bool =
+  case self of
+    | None => false
+    | Some(_) => true
+    | Default => false
+
+def Optional::is-none[T](self) -> bool =
+  case self of
+    | None => true
+    | Some(_) => false
+    | Default => false
+
+def Optional::is-default[T](self) -> bool =
+  case self of
+    | None => false
+    | Some(_) => false
+    | Default => true
+
+def Optional::each[T](self, f: (T) -> unit) -> unit =
+  case self of
+    | None => ()
+    | Some(value) => f(value)
+    | Default => ()
+
+def Optional::to-result[T, E](self, default: T, error: E) -> Result[T, E] =
+  case self of
+    | None => Result::Err(error)
+    | Some(value) => Result::Ok(value)
+    | Default => Result::Ok(default)

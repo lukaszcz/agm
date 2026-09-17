@@ -9,57 +9,57 @@ exception UnwrapError extends Exception()
 
 def Option::map[T, U](self, f: (T) -> U) -> Option[U] =
   case self of
-    | Option::None => Option::None
-    | Option::Some(value) => Option::Some(value = f(value))
+    | None => None
+    | Some(value) => Some(value = f(value))
 
 def Option::and-then[T, U](self, f: (T) -> Option[U]) -> Option[U] =
   case self of
-    | Option::None => Option::None
-    | Option::Some(value) => f(value)
+    | None => None
+    | Some(value) => f(value)
 
 def Option::select[T](self, p: (T) -> bool) -> Option[T] =
   case self of
-    | Option::None => Option::None
-    | Option::Some(value) => (if p(value) => self else => Option::None)
+    | None => None
+    | Some(value) => (if p(value) => self else => None)
 
 def Option::or[T](self, other: Option[T]) -> Option[T] =
   case self of
-    | Option::None => other
-    | Option::Some(_) => self
+    | None => other
+    | Some(_) => self
 
 def Option::or-else[T](self, f: () -> Option[T]) -> Option[T] =
   case self of
-    | Option::None => f()
-    | Option::Some(_) => self
+    | None => f()
+    | Some(_) => self
 
 def Option::unwrap-or[T](self, x: T) -> T =
   case self of
-    | Option::None => x
-    | Option::Some(value) => value
+    | None => x
+    | Some(value) => value
 
 def Option::unwrap-or-else[T](self, f: () -> T) -> T =
   case self of
-    | Option::None => f()
-    | Option::Some(value) => value
+    | None => f()
+    | Some(value) => value
 
 def Option::unwrap[T](self) -> T =
   case self of
-    | Option::None => raise UnwrapError(message = "Option has no value")
-    | Option::Some(value) => value
+    | None => raise UnwrapError(message = "Option has no value")
+    | Some(value) => value
 
 def Option::is-some[T](self) -> bool =
   case self of
-    | Option::None => false
-    | Option::Some(_) => true
+    | None => false
+    | Some(_) => true
 
 def Option::is-none[T](self) -> bool = not self.is-some()
 
 def Option::each[T](self, f: (T) -> unit) -> unit =
   case self of
-    | Option::None => ()
-    | Option::Some(value) => f(value)
+    | None => ()
+    | Some(value) => f(value)
 
 def Option::to-result[T, E](self, error: E) -> Result[T, E] =
   case self of
-    | Option::None => Result::Err(error = error)
-    | Option::Some(value) => Result::Ok(value = value)
+    | None => Result::Err(error)
+    | Some(value) => Result::Ok(value)

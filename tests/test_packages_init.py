@@ -77,7 +77,7 @@ class TestPackageInit:
         assert (package / MODULE_TREE_DIRNAME / "main.agl").read_text(encoding="utf-8")
         assert str(package / "package.toml") in created.output
 
-    def test_manifest_documents_how_to_declare_dependencies(
+    def test_manifest_contains_only_package_metadata(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         package = tmp_path / "demo"
@@ -87,7 +87,7 @@ class TestPackageInit:
         assert invoke(runner, ["pkg", "init"]).exit_code == 0
 
         manifest = (package / "package.toml").read_text(encoding="utf-8")
-        assert "# [dependencies]" in manifest
+        assert manifest == '[package]\nname = "demo"\nversion = "0.1.0"\n'
         assert invoke(runner, ["pkg", "check"]).exit_code == 0
 
     def test_creates_a_missing_target_directory(self, runner: CliRunner, tmp_path: Path) -> None:

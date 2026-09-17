@@ -214,7 +214,7 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
 ## Commands
 
 **`init`** creates `DIR` when missing and writes `package.toml` (name from the directory, version
-`0.1.0`, no dependencies, commented dependency guidance) plus a starter `src/main.agl` unless one
+`0.1.0`, and no dependencies) plus a starter `src/main.agl` unless one
 exists; refuses a directory that already holds a manifest.
 
 **`check`** scans the module tree for `@command`-registered programs, merges them with

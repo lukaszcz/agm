@@ -11,12 +11,8 @@ Rules implemented
     uninhabitable recursive records/enums, alias cycles, and built-in-name shadowing.
 2.  Function declarations: parameter/return types resolved; ordering enforced
     (required before defaulted); FunctionSignature registered.
-3.  Binding type inference:
-    - ``let pattern: T = e`` — check ``e`` once against the complete matched
-      type and type every selected binder in the supported nominal-pattern forms.
-      This records static classifications only; it makes no irrefutability or
-      execution-stage conclusion.
-    - ``var name: T = e`` — check ``e`` against ``T``.
+3.  Binding type inference: ``let name: T = e`` and ``var name: T = e`` check
+    ``e`` against ``T``; untyped initializers infer from the expression.
     - Other untyped initializers infer from the literal/expression.
 4.  ``name := e`` — expected type is the binding's declared type.
 5.  ``print(expr)`` — accepts any value and yields ``unit``.
@@ -184,8 +180,6 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
     declares_source_entry,
     declares_synthetic_entry,
-    pattern_binder_candidates,
-    simple_let_pattern_name,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -794,10 +788,9 @@ class _Checker:
         # Scope's candidate table remains immutable; lowering reads this map
         # through CheckedModule.constructor_ref_for.
         self._is_test_constructor_refs: dict[int, ConstructorRef] = {}
-        # Complete matched types and selected meanings for immutable let
-        # patterns. These are checked artifacts; inference-region rollback
-        # prevents candidate-session state from publishing through them.
-        self._let_matched_types: dict[int, Type] = {}
+        # Selected meanings for patterns are checked artifacts;
+        # inference-region rollback prevents candidate-session state from
+        # publishing through them.
         self._pattern_binding_refs: dict[int, BindingRef] = {}
         self._pattern_constructor_refs: dict[int, ConstructorRef] = {}
         # The concrete nominal selected by the checker for each applied
@@ -1486,17 +1479,14 @@ class _Checker:
         return BottomType() if isinstance(value_type, BottomType) else UnitType()
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> Type:
-        """Check a single-name mutable var or a complete immutable let pattern."""
-        if isinstance(stmt, VarDecl):
-            return self._check_var_binding(stmt)
-        return self._check_let_binding(stmt)
+        """Check one immutable or mutable name binding."""
+        return self._check_named_binding(stmt)
 
     def _validate_parameter_binding(self, stmt: LetDecl | VarDecl) -> None:
         """Require a static host parameter to have a closed, decodable type."""
-        binding_node_id = stmt.node_id if isinstance(stmt, VarDecl) else stmt.pattern.node_id
-        if binding_node_id not in self._resolved.attributes.params:
+        if stmt.node_id not in self._resolved.attributes.params:
             return
-        binding_type = self._env.get_binding_type(binding_node_id)
+        binding_type = self._env.get_binding_type(stmt.node_id)
         assert binding_type is not None, "checked parameter binding has no recorded type"
         variables = free_type_vars(binding_type)
         if variables:
@@ -1507,8 +1497,8 @@ class _Checker:
             )
         self._reject_undecodable_boundary_type(binding_type, stmt.span)
 
-    def _check_var_binding(self, stmt: VarDecl) -> Type:
-        """Check the intentionally single-name mutable binding form."""
+    def _check_named_binding(self, stmt: LetDecl | VarDecl) -> Type:
+        """Check an intentionally single-name binding form."""
         if stmt.name == "_":
             return self._binder_result(self._check_boundary_expr(stmt.value, expected=None))
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
@@ -1516,67 +1506,6 @@ class _Checker:
         declared_type = self._binding_declared_type(stmt, value_type, ann_type)
         self._install_binding_metadata(stmt.node_id, stmt.value, declared_type, ann_type)
         return self._binder_result(value_type)
-
-    def _check_let_binding(self, stmt: LetDecl) -> Type:
-        """Check a let RHS once, then type every selected pattern binder."""
-        if simple_let_pattern_name(stmt.pattern) == "_":
-            # Discard checks its initializer with no expected type and
-            # introduces no binder, so it records no matched type.
-            value_type = self._check_boundary_expr(stmt.value, expected=None)
-            return self._binder_result(value_type)
-
-        ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
-        value_type = self._check_boundary_expr(stmt.value, expected=ann_type)
-        matched_type = self._binding_declared_type(stmt, value_type, ann_type)
-        self._record_let_matched_type(stmt.node_id, matched_type)
-        provenance = (
-            set(self._inferred_return_expr_provenance.get(stmt.value.node_id, ()))
-            if ann_type is None
-            else set()
-        )
-        self._bind_pattern_types(
-            stmt.pattern,
-            matched_type,
-            stmt,
-            candidate_provenance=provenance,
-            root_bare_binds=True,
-        )
-        self._select_match_site_pattern_slots(stmt)
-        if isinstance(stmt.pattern, VarPattern):
-            # Simple lets have no resolver-created pattern slot. Publish the
-            # selected binding directly under its pattern identity; this is an
-            # identity entry, not a translation from the let match site.
-            self._record_pattern_binding_ref(
-                stmt.pattern.node_id,
-                BindingRef(
-                    name=stmt.pattern.name,
-                    mutable=False,
-                    decl_span=stmt.pattern.span,
-                    decl_node_id=stmt.pattern.node_id,
-                    kind=BinderKind.let_binding,
-                    module_id=self._module_id,
-                ),
-            )
-        self._propagate_pattern_callable_metadata(stmt.pattern, stmt.value)
-        return self._binder_result(value_type)
-
-    def _propagate_pattern_callable_metadata(self, pattern: Pattern, value: Expr) -> None:
-        """Copy callable provenance from a let initializer to selected pattern bindings."""
-        for candidate in pattern_binder_candidates(pattern):
-            binding = self._pattern_binding_refs.get(candidate.node_id)
-            if binding is None:
-                continue
-            binding_type = self._env.get_binding_type(binding.decl_node_id)
-            if not isinstance(binding_type, FunctionType):
-                continue
-            self._set_generic_function_binding_result_dependencies(
-                binding.decl_node_id,
-                self._generic_function_expr_result_dependencies.get(value.node_id, ()),
-            )
-            self._set_extern_binding_targets(
-                binding.decl_node_id,
-                self._extern_expr_targets.get(value.node_id, ()),
-            )
 
     def _binding_declared_type(
         self, stmt: LetDecl | VarDecl, value_type: Type, ann_type: Type | None
@@ -2627,7 +2556,6 @@ class _Checker:
             ("slot_resolution", self._slot_resolution),
             ("slot_constructor_refs", self._slot_constructor_refs),
             ("is_test_constructor_refs", self._is_test_constructor_refs),
-            ("let_matched_types", self._let_matched_types),
             ("pattern_binding_refs", self._pattern_binding_refs),
             ("pattern_constructor_refs", self._pattern_constructor_refs),
             ("pattern_constructor_owners", self._pattern_constructor_owners),
@@ -2698,11 +2626,6 @@ class _Checker:
             "is_test_constructor_refs", self._is_test_constructor_refs, node_id
         )
         self._is_test_constructor_refs[node_id] = constructor
-
-    def _record_let_matched_type(self, node_id: int, typ: Type) -> None:
-        """Publish one concrete complete-value type for an immutable let site."""
-        self._record_side_table_addition("let_matched_types", self._let_matched_types, node_id)
-        self._let_matched_types[node_id] = typ
 
     def _record_pattern_binding_ref(self, node_id: int, binding: BindingRef) -> None:
         """Publish the selected immutable binding for one pattern occurrence."""
@@ -5661,7 +5584,6 @@ class _Checker:
         field_name: str | None = None,
         field_names: frozenset[str] = frozenset(),
         candidate_provenance: set[int] | None = None,
-        root_bare_binds: bool = False,
     ) -> None:
         """Type and finally classify one pattern at its matched occurrence."""
         if isinstance(pattern, WildcardPattern):
@@ -5683,7 +5605,6 @@ class _Checker:
                 field_name=field_name,
                 field_names=field_names,
                 candidate_provenance=candidate_provenance,
-                root_bare_binds=root_bare_binds,
             )
             self._env.set_binding_type(pattern.node_id, subj_type)
             self._set_inferred_return_binding_provenance(
@@ -5692,13 +5613,7 @@ class _Checker:
             self._record_pattern_classification(pattern.node_id, None)
             return
         if isinstance(pattern, VarPattern):
-            if field_name is None and root_bare_binds:
-                self._env.set_binding_type(pattern.node_id, subj_type)
-                self._set_inferred_return_binding_provenance(
-                    pattern.node_id, candidate_provenance or set()
-                )
-                self._record_pattern_classification(pattern.node_id, None)
-            elif field_name is None:
+            if field_name is None:
                 self._check_top_level_bare_constructor(pattern, subj_type)
             else:
                 self._check_field_bare_pattern(
@@ -6090,8 +6005,8 @@ class _Checker:
                 span=pattern.span,
             )
 
-    def _select_match_site_pattern_slots(self, match_site: CaseBranch | LetDecl) -> None:
-        """Publish slots owned by a classified case branch or let pattern.
+    def _select_match_site_pattern_slots(self, match_site: CaseBranch) -> None:
+        """Publish slots owned by a classified case branch.
 
         Scope publishes slots outer-to-inner, which lets a nested slot use an
         enclosing slot's already-selected fallback.
@@ -6099,7 +6014,7 @@ class _Checker:
         for slot_id in self._resolved.match_site_pattern_slots.get(match_site.node_id, ()):
             self._select_pattern_slot(self._resolved.pattern_slots[slot_id], match_site)
 
-    def _select_pattern_slot(self, slot: PatternSlot, match_site: CaseBranch | LetDecl) -> None:
+    def _select_pattern_slot(self, slot: PatternSlot, match_site: CaseBranch) -> None:
         """Select and publish one slot's fully dereferenced final meaning."""
         binders = [
             candidate
@@ -6185,18 +6100,12 @@ class _Checker:
         """Whether a branch-body reference directly resolves to *slot*."""
         return slot.slot_id in self._referenced_slot_ids
 
-    def _slot_reference_span(
-        self, match_site: CaseBranch | LetDecl, slot: PatternSlot
-    ) -> SourceSpan:
+    def _slot_reference_span(self, match_site: CaseBranch, slot: PatternSlot) -> SourceSpan:
         """Span of the first branch-body reference that resolves to *slot*.
 
         The pattern occurrence is unambiguous where it stands, so an ambiguity
-        diagnostic belongs at the reference the user has to qualify. A let
-        slot scopes over its continuation, which the declaration does not own,
-        so its pattern occurrence is the available diagnostic location.
+        diagnostic belongs at the reference the user has to qualify.
         """
-        if isinstance(match_site, LetDecl):
-            return slot.candidates[0].span
         spans: list[SourceSpan] = []
 
         def collect(node: object) -> None:
@@ -6341,7 +6250,6 @@ class _Checker:
             slot_resolution=self._slot_resolution,
             slot_constructor_refs=self._slot_constructor_refs,
             is_test_constructor_refs=self._is_test_constructor_refs,
-            let_matched_types=self._let_matched_types,
             pattern_binding_refs=self._pattern_binding_refs,
             pattern_constructor_refs=self._pattern_constructor_refs,
             pattern_constructor_owners=self._pattern_constructor_owners,

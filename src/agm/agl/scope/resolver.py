@@ -183,12 +183,9 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VariantDef,
     VariantRef,
-    VarPattern,
     VarRef,
-    WildcardPattern,
     declares_source_entry,
     pattern_binder_candidates,
-    simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, AppliedT, NameT, render_type_expr
@@ -248,9 +245,6 @@ class _PatternResolutionPolicy:
 
 _CASE_PATTERN_POLICY = _PatternResolutionPolicy(
     root_bare_binds=False, binder_kind=BinderKind.pattern_binding
-)
-_LET_PATTERN_POLICY = _PatternResolutionPolicy(
-    root_bare_binds=True, binder_kind=BinderKind.let_binding
 )
 
 
@@ -549,9 +543,8 @@ class _Resolver:
         # Bare ``is`` spellings remain candidate sets until typecheck knows the
         # nominal type of the left operand.
         self._is_test_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
-        # Each pattern-owning case branch or let declaration creates one shared
-        # slot per binding name. The checker selects its final target after the
-        # match site has been classified.
+        # Each case branch creates one shared slot per pattern binding name.
+        # The checker selects its final target after the branch is classified.
         self._pattern_slots: dict[int, PatternSlot] = {}
         self._match_site_pattern_slots_by_node: dict[int, tuple[int, ...]] = {}
         self._active_match_site_pattern_slots: dict[str, int] | None = None
@@ -778,13 +771,8 @@ class _Resolver:
                 # member itself to be registered during the body walk, which is
                 # what makes textual precedence fall out of the mechanism.
                 self._ensure_scope_path(path, item.node_id, item.span)
-                name = (
-                    item.name
-                    if isinstance(item, VarDecl)
-                    else simple_let_pattern_name(item.pattern)
-                )
-                if name is not None and name != "_":
-                    self._ordered_binding_paths.add((*path, name))
+                if item.name != "_":
+                    self._ordered_binding_paths.add((*path, item.name))
 
     def _ensure_scope_path(self, path: ScopePath, node_id: int, span: SourceSpan) -> None:
         """Create every scope layer in *path*, rejecting ordinary-name clashes."""
@@ -2892,27 +2880,17 @@ class _Resolver:
 
     def _resolve_let(self, node: LetDecl) -> None:
         with self._binder_scope(node, "let"):
-            # A let initializer is non-recursive: no part of its pattern exists
-            # until its RHS has resolved. A simple name is still a pattern
-            # binder; only its slot handling differs from a broader pattern.
+            # A let initializer is non-recursive: its name does not exist until
+            # its RHS has resolved.
             self._resolve_expr(node.value)
-            if isinstance(node.pattern, VarPattern):
-                candidates = tuple(self._constructor_candidates.get(node.pattern.name, ()))
-                if candidates:
-                    self._pattern_constructor_candidates[node.pattern.node_id] = candidates
-                self._check_not_reserved(node.pattern.name, node.span)
-                self._define_binder(
-                    node,
-                    decl_node_id=node.pattern.node_id,
-                    name=node.pattern.name,
-                    mutable=False,
-                    kind=BinderKind.let_binding,
-                )
-                return
-            if isinstance(node.pattern, WildcardPattern):
-                return
-            with self._match_site_pattern_slots(node.node_id, _LET_PATTERN_POLICY):
-                self._bind_pattern_vars(node.pattern, self._current_scope(), _LET_PATTERN_POLICY)
+            self._check_not_reserved(node.name, node.span)
+            self._define_binder(
+                node,
+                decl_node_id=node.node_id,
+                name=node.name,
+                mutable=False,
+                kind=BinderKind.let_binding,
+            )
 
     def _resolve_var(self, node: VarDecl) -> None:
         with self._binder_scope(node, "var"):
@@ -2936,11 +2914,7 @@ class _Resolver:
         mutable: bool,
         kind: BinderKind,
     ) -> None:
-        """Define a resolved simple-name binder using its own identity node.
-
-        Let callers pass the pattern node; var callers pass the declaration node
-        because ``var`` has no pattern.
-        """
+        """Define a resolved simple-name binder using its declaration identity."""
         if name == "_":
             return
         self._define(

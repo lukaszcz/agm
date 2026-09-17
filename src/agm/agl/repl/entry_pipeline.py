@@ -478,7 +478,6 @@ class EntryPipeline:
             slot_resolution=entry.slot_resolution,
             slot_constructor_refs=entry.slot_constructor_refs,
             is_test_constructor_refs=entry.is_test_constructor_refs,
-            let_matched_types=entry.let_matched_types,
             pattern_binding_refs=entry.pattern_binding_refs,
             pattern_constructor_refs=entry.pattern_constructor_refs,
             pattern_constructor_owners=entry.pattern_constructor_owners,
@@ -1019,8 +1018,6 @@ class EntryPipeline:
             if marker is not None and initializer_values is not None
             else None
         )
-        if lowered.trailing_let_value_symbol is not None:
-            captured = self._ctx.frame_value(lowered.trailing_let_value_symbol)
         kind, name = self._ctx._classify(orig_program)
         value, value_type = self._ctx._echo_data_ir(orig_program, checked, captured)
         return EntryResult(

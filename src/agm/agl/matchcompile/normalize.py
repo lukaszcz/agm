@@ -35,7 +35,6 @@ from agm.agl.syntax.nodes import (
     ConstructorPattern,
     DecimalLit,
     IntLit,
-    LetDecl,
     LiteralPattern,
     NullLit,
     Pattern,
@@ -53,8 +52,6 @@ from .model import (
     Constructor,
     ConstructorCell,
     ConstructorField,
-    LetBindingAction,
-    LetSite,
     LiteralConstructor,
     LiteralKind,
     MatchCaseContext,
@@ -591,53 +588,6 @@ def normalize_case(
     )
 
 
-def normalize_let(
-    let: LetDecl,
-    checked: CheckedPatternOwner,
-    *,
-    case_context: MatchCaseContext | None = None,
-) -> NormalizedMatchSite:
-    """Normalize one checked ``let`` as its complete one-row match matrix.
-
-    A let's initializer remains source-owned: this artifact records its identity
-    but neither captures it nor represents its continuation.
-    """
-    try:
-        matched_type = checked.let_matched_types[let.node_id]
-    except KeyError as exc:
-        raise MatchCompileInvariantError(
-            f"missing checked matched type for let node {let.node_id}"
-        ) from exc
-    root = Occurrence(
-        id=OccurrenceId(0),
-        creation_order=0,
-        type=matched_type,
-        provenance=RootOccurrenceProvenance(
-            site_node_id=let.node_id,
-            span=let.value.span,
-        ),
-    )
-    cell = normalize_pattern(let.pattern, matched_type, checked)
-    action = LetBindingAction(action_id=let.node_id, source_index=0)
-    return NormalizedMatchSite(
-        site_node_id=let.node_id,
-        source=LetSite(action=action),
-        span=let.span,
-        root=root,
-        occurrences=(root,),
-        rows=(
-            MatrixRow(
-                cells=(cell,),
-                action_id=action.action_id,
-                source_index=action.source_index,
-                source_pattern_id=let.pattern.node_id,
-            ),
-        ),
-        type_table=checked.type_env.type_table,
-        case_context=case_context if case_context is not None else match_case_context(checked),
-    )
-
-
 __all__ = [
     "CheckedPatternOwner",
     "MatchCompileInvariantError",
@@ -645,7 +595,6 @@ __all__ = [
     "enum_constructor",
     "match_case_context",
     "normalize_case",
-    "normalize_let",
     "normalize_pattern",
     "pattern_cell_inhabits_type",
     "record_constructor",

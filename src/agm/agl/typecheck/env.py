@@ -454,10 +454,6 @@ class CheckedModule:
         Checker-selected constructors for bare ``is`` tests whose scope result
         retained multiple candidates. ``constructor_ref_for`` exposes the
         selection to lowering without rewriting scope's resolution table.
-    ``let_matched_types``
-        Complete concrete matched type for every immutable ``let`` site. This
-        is distinct from each binder's type, which is keyed by its pattern node
-        in ``type_env``.
     ``pattern_binding_refs`` / ``pattern_constructor_refs``
         Checker-selected meanings for individual pattern occurrences. They
         preserve scope's immutable candidates while making final selections
@@ -501,7 +497,6 @@ class CheckedModule:
     slot_resolution: dict[int, BindingRef] = field(default_factory=dict)
     slot_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
     is_test_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
-    let_matched_types: dict[int, Type] = field(default_factory=dict)
     pattern_binding_refs: dict[int, BindingRef] = field(default_factory=dict)
     pattern_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
     pattern_constructor_owners: dict[int, NominalId] = field(default_factory=dict)
@@ -575,7 +570,6 @@ class CheckedModule:
             slot_resolution=self.slot_resolution,
             slot_constructor_refs=self.slot_constructor_refs,
             is_test_constructor_refs=self.is_test_constructor_refs,
-            let_matched_types=self.let_matched_types,
             pattern_binding_refs=self.pattern_binding_refs,
             pattern_constructor_refs=self.pattern_constructor_refs,
             pattern_constructor_owners=self.pattern_constructor_owners,
@@ -598,7 +592,6 @@ def assert_checked_output_closed(
     function_signatures: Mapping[str, FunctionSignature],
     cast_specs: Mapping[int, CastSpec],
     argument_bindings: ArgumentBindings,
-    let_matched_types: Mapping[int, Type],
     explicit_builtin_targets: Mapping[int, Type],
     owner: str,
 ) -> None:
@@ -629,7 +622,6 @@ def assert_checked_output_closed(
                 for param_types in argument_bindings.function_param_types.values()
                 for param_type in param_types
             ),
-            *let_matched_types.values(),
             *explicit_builtin_targets.values(),
         ),
         owner=owner,
@@ -645,7 +637,6 @@ def assert_checked_module_closed(checked: CheckedModule) -> None:
         function_signatures=checked.function_signatures,
         cast_specs=checked.cast_specs,
         argument_bindings=checked.argument_bindings,
-        let_matched_types=checked.let_matched_types,
         explicit_builtin_targets=checked.explicit_builtin_targets,
         owner="checked program",
     )
@@ -871,7 +862,6 @@ class CheckedModuleImage:
     slot_resolution: dict[int, BindingRef]
     slot_constructor_refs: dict[int, ConstructorRef]
     is_test_constructor_refs: dict[int, ConstructorRef]
-    let_matched_types: dict[int, Type]
     pattern_binding_refs: dict[int, BindingRef]
     pattern_constructor_refs: dict[int, ConstructorRef]
     pattern_constructor_owners: dict[int, NominalId]
@@ -912,7 +902,6 @@ class CheckedModuleImage:
             slot_resolution=self.slot_resolution,
             slot_constructor_refs=self.slot_constructor_refs,
             is_test_constructor_refs=self.is_test_constructor_refs,
-            let_matched_types=self.let_matched_types,
             pattern_binding_refs=self.pattern_binding_refs,
             pattern_constructor_refs=self.pattern_constructor_refs,
             pattern_constructor_owners=self.pattern_constructor_owners,

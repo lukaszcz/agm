@@ -6,6 +6,7 @@ import decimal
 from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -17,14 +18,12 @@ from agm.agl.matchcompile import (
     CachedModuleSites,
     CaseSite,
     CompiledMatchSite,
-    LetSite,
     MatchCompilationResult,
     MatchCompiledModule,
     MatchCompiledProgram,
     MatchIssue,
     NonExhaustiveIssue,
     RedundantArmIssue,
-    RefutableLetIssue,
     compile_program_matches,
     diagnostic_from_match_issue,
     diagnostics_from_match_issues,
@@ -41,7 +40,6 @@ from agm.agl.matchcompile.model import (
     DecisionSwitch,
     LiteralConstructor,
     NormalizedMatchSite,
-    SourceAction,
 )
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError, normalize_case
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -80,8 +78,6 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "EnumWitness",
         "EnumWitnessQualification",
         "FieldOccurrenceProvenance",
-        "LetBindingAction",
-        "LetSite",
         "LiteralKind",
         "LiteralWitness",
         "MatchCompilationResult",
@@ -99,7 +95,6 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "NominalConstructor",
         "RecordWitness",
         "RedundantArmIssue",
-        "RefutableLetIssue",
         "WildcardWitness",
         "WitnessField",
         "cached_module_sites",
@@ -306,73 +301,46 @@ def test_empty_case_program_produces_valid_empty_artifact() -> None:
     assert case_sites(compiled.sites) == {}
 
 
-def test_compiles_nested_cases_and_lets_as_sealed_source_payloads() -> None:
+def test_compiles_nested_cases_as_sealed_source_payloads() -> None:
     checked = _checked(
-        "record Box\n"
-        "  value: bool\n"
-        "let Box(value = _ as outer) = Box(value = true)\n"
-        "case outer of\n"
+        "case true of\n"
         "  | true =>\n"
-        "      let Box(value = _ as inner) = Box(value = false)\n"
-        "      case inner of | false => 1 | true => 2\n"
+        "      case false of\n"
+        "        | false => 1\n"
+        "        | true => 2\n"
         "  | false => 3\n"
     )
     result = _compile_module_matches(checked)
     assert isinstance(result.compiled, MatchCompiledModule)
     compiled = result.compiled
 
-    assert len(compiled.sites) == 4
-    assert {type(site.source) for site in compiled.sites.values()} == {CaseSite, LetSite}
+    assert len(compiled.sites) == 2
+    assert {type(site.source) for site in compiled.sites.values()} == {CaseSite}
     assert len(case_sites(compiled.sites)) == 2
-    lets = tuple(site for site in compiled.sites.values() if isinstance(site.source, LetSite))
-    assert len(lets) == 2
-    assert all(isinstance(site, CompiledMatchSite) for site in lets)
-    for site in lets:
-        assert site.source.action == site.source.actions[0]
-        assert site.normalized.root.type == checked.let_matched_types[site.site_node_id]
 
     mutable_sites = cast(MutableMapping[int, CompiledMatchSite], compiled.sites)
     with pytest.raises(TypeError):
         mutable_sites[999] = next(iter(compiled.sites.values()))
 
 
-def test_artifact_validation_skips_simple_lets_but_requires_destructuring_lets() -> None:
+def test_artifact_validation_skips_lets_but_requires_cases() -> None:
     simple = _compiled("let value = true\nvalue")
     MatchCompiledModule(simple.checked, {})
 
-    destructuring = _compiled(
-        "record Box\n  value: bool\nlet Box(value) = Box(value = true)\nvalue"
-    )
+    case = _compiled("case true of | true => 1 | false => 0")
     with pytest.raises(MatchCompileInvariantError, match="missing"):
-        MatchCompiledModule(destructuring.checked, {})
-
-
-def test_refutable_let_is_rejected_with_a_structured_missing_pattern_witness() -> None:
-    checked = _checked("let true = false")
-    result = _compile_module_matches(checked)
-
-    assert result.compiled is None
-    assert len(result.issues) == 1
-    issue = result.issues[0]
-    assert isinstance(issue, RefutableLetIssue)
-    assert isinstance(issue.witness, matchcompile.BoolWitness)
-    assert issue.witness.value is False
-    assert "Refutable let" in diagnostic_from_match_issue(issue).message
+        MatchCompiledModule(case.checked, {})
 
 
 def test_artifact_rejects_a_match_site_with_the_wrong_source_payload() -> None:
-    compiled = _compiled("record Box\n  value: bool\nlet Box(value) = Box(value = true)")
+    compiled = _compiled("case true of | true => 1 | false => 0")
     site_id, site = next(iter(compiled.sites.items()))
-    assert isinstance(site.source, LetSite)
-    wrong_action = SourceAction(
-        action_id=site.source.action.action_id,
-        source_index=0,
-        body_node_id=site.source.action.action_id,
-        pattern_span=site.normalized.span,
-    )
     wrong_payload = replace(
         site,
-        normalized=replace(site.normalized, source=CaseSite((wrong_action,))),
+        normalized=replace(
+            site.normalized,
+            source=cast(CaseSite, SimpleNamespace(actions=site.source.actions)),
+        ),
     )
 
     with pytest.raises(MatchCompileInvariantError, match="source payload"):

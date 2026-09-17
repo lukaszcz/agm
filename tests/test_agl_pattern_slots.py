@@ -19,6 +19,7 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import ModuleResolution
 from agm.agl.scope.symbols import AglScopeError, BinderKind
 from agm.agl.syntax import (
+    Case,
     ConstructorPattern,
     pattern_binder_candidates,
     pattern_binding_node_ids,
@@ -60,18 +61,18 @@ def _slot_reference(resolved) -> int:
 
 
 def test_pattern_binder_helpers_preserve_preorder_and_pattern_depth() -> None:
-    program = parse_program("let Packet(value, _ as whole) = source")
-    declaration = program.body.items[0]
-    assert isinstance(declaration.pattern, ConstructorPattern)
+    program = parse_program("case source of | Packet(value, _ as whole) => value")
+    case = program.body.items[0]
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
 
-    candidates = pattern_binder_candidates(declaration.pattern)
+    candidates = pattern_binder_candidates(pattern)
     assert [(candidate.name, candidate.nested) for candidate in candidates] == [
         ("value", True),
         ("whole", True),
     ]
-    assert pattern_binding_node_ids(declaration.pattern) == tuple(
-        candidate.node_id for candidate in candidates
-    )
+    assert pattern_binding_node_ids(pattern) == tuple(candidate.node_id for candidate in candidates)
     assert tuple(candidate.name for candidate in candidates) == ("value", "whole")
 
 
@@ -194,42 +195,6 @@ def test_a_bare_nullary_variant_name_tests_the_variant() -> None:
 
     assert ok, diagnostics
     assert out == "2\n"
-
-
-def test_top_level_let_nested_nullary_constructor_selects_its_slot() -> None:
-    """A nested let pattern preserves its selected constructor in the continuation."""
-    checked = resolve_and_check_inline_entry(
-        "enum Flag\n"
-        "  | on\n"
-        "enum Packet\n"
-        "  | packet(flag: Flag)\n"
-        "let packet(on) = packet(on())\n"
-        "on\n",
-        HostCapabilities(),
-    )
-    reference = _slot_reference(checked.resolved)
-
-    binding = checked.binding_for(reference)
-    constructor = checked.constructor_ref_for(reference)
-    assert binding is not None
-    assert binding.kind is BinderKind.constructor_binding
-    assert constructor is not None
-    assert (constructor.owner_path, constructor.owner_name) == (("Flag",), "on")
-
-
-def test_top_level_let_rejects_an_ambiguous_constructor_slot_reference() -> None:
-    with pytest.raises(AglTypeError):
-        resolve_and_check_inline_entry(
-            "enum First\n"
-            "  | on\n"
-            "enum Second\n"
-            "  | on\n"
-            "enum Pair\n"
-            "  | pair(first: First, second: Second)\n"
-            "let pair(on, on) = pair(First::on, Second::on)\n"
-            "on\n",
-            HostCapabilities(),
-        )
 
 
 @pytest.mark.parametrize(

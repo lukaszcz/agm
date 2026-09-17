@@ -82,37 +82,15 @@ scope Config
 end Config
 ```
 
-A `let` pattern written as a plain qualifier chain — one or more `::`-separated
-name segments, not anchored at the module root — declares a scoped binding
-rather than matching a pattern: it is exactly the chain a declaration path
-could spell. Writing an argument list, even an empty one, an `as` binder, a
-module route, a type-argument-applied segment, or a `::` anchor keeps the
-pattern's ordinary match meaning:
+A `let` or `var` declaration head may be a plain qualifier chain: one or more
+`::`-separated name segments, not anchored at the module root. It declares a
+single scoped binding and cannot be a module route or contain type arguments:
 
 | Spelling | Meaning |
 |---|---|
 | `let A::x = e` | scoped binding `A::x` |
-| `let A::x() = e` | nullary constructor pattern, qualified |
-| `let A::x(a, b) = e` | constructor pattern with fields |
-| `let A::x as y = e` | constructor pattern bound to `y` |
 | `let x = e` | root binding |
-| `let ::x = e` | constructor pattern, anchored at the module root |
-
-The path prefix names a single binder, so it has no destructuring spelling.
-Written inside a region instead, a destructuring `let` binds every name its
-pattern selects as a member of that scope:
-
-```agl
-record Bounds(low: int, high: int)
-
-scope Config
-  let Bounds(low, high) = Bounds(low = 0, high = 10)
-end Config
-
-program def main() -> unit =
-  print(Config::low)
-  print(Config::high)
-```
+| `var A::x = e` | mutable scoped binding `A::x` |
 
 A binding's initializer runs at its region's position in the module body: in
 item order, together with the rest of the module's initializers, wherever the

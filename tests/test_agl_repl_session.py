@@ -50,7 +50,7 @@ from agm.agl.semantics.values import (
     UnitValue,
 )
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, strip_decl_ids
+from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value
 from tests._process_helpers import FakeShell
 
 # ---------------------------------------------------------------------------
@@ -3253,58 +3253,6 @@ class TestEchoData:
 
         assert not result.ok
 
-    def test_trailing_pattern_let_echoes_whole_value_and_promotes_every_binder(self) -> None:
-        from agm.agl.repl.render import render_entry_result
-
-        session = open_session()
-        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
-
-        live = session.eval_entry("let Pair(left, right) = Pair(left = 2, right = 3)")
-        checked = session.eval_entry(
-            "let Pair(left, right) = Pair(left = 2, right = 3)", check_only=True
-        )
-
-        assert live.ok, live.diagnostics
-        assert live.kind == "binding"
-        assert live.name is None
-        assert strip_decl_ids(live.value_type) == RecordType("Pair")
-        assert render_entry_result(live, echo=True) == ": Pair = Pair(\n  left = 2,\n  right = 3\n)"
-        assert checked.ok, checked.diagnostics
-        assert checked.kind == "binding"
-        assert checked.name is None
-        assert strip_decl_ids(checked.value_type) == RecordType("Pair")
-        assert (
-            render_entry_result(checked, echo=True, check_only=True)
-            == ": record Pair\n  left: int\n  right: int"
-        )
-        assert {name: value for name, _typ, value in session.bindings()} == {
-            "left": IntValue(2),
-            "right": IntValue(3),
-        }
-        assert session.eval_entry("left + right").value == IntValue(5)
-
-    def test_constructor_pattern_without_binders_echoes_but_discard_does_not(self) -> None:
-        from agm.agl.repl.render import render_entry_result
-
-        session = open_session()
-        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
-
-        constructor = session.eval_entry("let Pair() = Pair(left = 2, right = 3)")
-        discard = session.eval_entry("let _ = Pair(left = 4, right = 5)")
-
-        assert constructor.ok, constructor.diagnostics
-        assert constructor.kind == "binding"
-        assert constructor.name is None
-        assert strip_decl_ids(constructor.value_type) == RecordType("Pair")
-        assert (
-            render_entry_result(constructor, echo=True)
-            == ": Pair = Pair(\n  left = 2,\n  right = 3\n)"
-        )
-        assert discard.ok, discard.diagnostics
-        assert discard.kind == "statement"
-        assert render_entry_result(discard, echo=True) is None
-        assert session.bindings() == []
-
     def test_declaration_echo_kind(self) -> None:
         s = open_session()
         r = s.eval_entry("type Age = int")
@@ -3525,24 +3473,6 @@ class TestFailureEffects:
         assert use.ok
         assert use.value is not None and _int(use.value) == 30
 
-    def test_runtime_raise_promotes_complete_pattern_let_but_not_later_bindings(self) -> None:
-        session = open_session()
-        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
-
-        failed = session.eval_entry(
-            "let Pair(left, right) = Pair(left = 2, right = 3)\n"
-            'let later: int = raise Abort(message = "stop")'
-        )
-
-        assert not failed.ok
-        assert failed.installed == ("left", "right")
-        assert {name: value for name, _typ, value in session.bindings()} == {
-            "left": IntValue(2),
-            "right": IntValue(3),
-        }
-        assert session.eval_entry("left + right").value == IntValue(5)
-        assert not session.eval_entry("later").ok
-
     def test_installed_report_includes_promoted_type_declaration(self) -> None:
         # Regression: a promoted RECORD/ENUM/EXCEPTION/type-alias declaration is
         # tracked separately (``promoted_type_names``) from the value bindings
@@ -3556,24 +3486,6 @@ class TestFailureEffects:
         assert not failed.ok
         assert "Point" in failed.installed
         assert session.eval_entry("Point(x = 1)").ok
-
-    def test_completed_pattern_initializer_and_function_metadata_survive_called_failure(
-        self,
-    ) -> None:
-        session = open_session()
-        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
-
-        failed = session.eval_entry(
-            "let Pair(left, right) = Pair(left = 2, right = 3)\n"
-            'def fail() -> int = raise Abort(message = "stop")\n'
-            "fail()"
-        )
-
-        assert not failed.ok
-        assert {"left", "right", "fail"} <= set(failed.installed)
-        assert session.eval_entry("left + right").value == IntValue(5)
-        assert session.type_of("fail") == "() -> int"
-        assert session.eval_entry("fail()").error is not None
 
     def test_runtime_failure_excludes_function_with_uninitialized_value_dependency(self) -> None:
         session = open_session()
@@ -3735,24 +3647,6 @@ class TestFailureEffects:
         kept = session.eval_entry("keep(A::T(value = 1))")
         assert kept.ok, kept.diagnostics
         assert not session.eval_entry("B::T(value = 1)").ok
-
-    def test_runtime_failure_retains_independent_completed_function_and_pattern_binders(
-        self,
-    ) -> None:
-        session = open_session()
-        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
-
-        failed = session.eval_entry(
-            "let Pair(left, right) = Pair(left = 2, right = 3)\n"
-            "def sum() -> int = left + right\n"
-            'def fail() -> int = raise Abort(message = "stop")\n'
-            'let stop: int = raise Abort(message = "stop")'
-        )
-
-        assert not failed.ok
-        assert {"left", "right", "sum", "fail"} <= set(failed.installed)
-        assert session.eval_entry("sum()").value == IntValue(5)
-        assert session.eval_entry("fail()").error is not None
 
     def test_runtime_raise_in_else_branch_returns_entry_error(self) -> None:
         s = open_session()

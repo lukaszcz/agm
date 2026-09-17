@@ -1071,7 +1071,6 @@ class ReplSession:
             TypeAlias,
             VarDecl,
             VariantDef,
-            pattern_binder_candidates,
             static_items,
         )
         from agm.agl.syntax.types import render_type_expr
@@ -1090,7 +1089,7 @@ class ReplSession:
             TypeAlias,
             VarDecl,
         )
-        binding_items = (FuncDef, VarDecl)
+        binding_items = (FuncDef, LetDecl, VarDecl)
         promotion_bindings = {
             item.name: entry_root.bindings[item.name]
             for item in program.body.items
@@ -1098,38 +1097,15 @@ class ReplSession:
             and not item.scope_path
             and item.name in entry_root.bindings
         }
-        promotion_bindings.update(
-            (binding.name, binding)
-            for item in program.body.items
-            if isinstance(item, LetDecl) and not item.scope_path
-            for candidate in pattern_binder_candidates(item.pattern)
-            if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
-        )
         entry_binding_node_ids = {ref.decl_node_id for ref in promotion_bindings.values()}
         promoted_binding_node_ids = entry_binding_node_ids & promoted_declaration_ids
-
-        # A region-form ``let``'s scope-member ref keys on its binder
-        # candidate node id (not the ``LetDecl`` node's own id), same as at
-        # the root. Only root binders feed ``promotion_bindings`` — a scoped
-        # one must not, since that also drives the root-only
-        # ``self._session_scope.bindings`` update below — so its candidate
-        # ids are collected separately and only fed into
-        # ``entry_declaration_node_ids``.
-        scoped_binder_node_ids = {
-            candidate.node_id
-            for item in static_items(program.body.items)
-            if isinstance(item, LetDecl)
-            for candidate in pattern_binder_candidates(item.pattern)
-        }
 
         # Declarations this entry introduces, at the root and in its scope
         # regions. Anything outside this set is retained session state, which a
         # partial entry never demotes.
-        entry_declaration_node_ids = (
-            {item.node_id for item in entry_declarations if isinstance(item, named_declarations)}
-            | entry_binding_node_ids
-            | scoped_binder_node_ids
-        )
+        entry_declaration_node_ids = {
+            item.node_id for item in entry_declarations if isinstance(item, named_declarations)
+        } | entry_binding_node_ids
 
         def _is_promoted(node_id: int) -> bool:
             return node_id not in entry_declaration_node_ids or node_id in promoted_declaration_ids
@@ -1527,9 +1503,8 @@ class ReplSession:
 
         Ordered by the entry's source items: a promoted value binding (function /
         var) or a promoted type declaration (record / enum /
-        exception / type alias) contributes its declared name; a promoted ``let``
-        contributes each selected binder in pattern order. An enum's variant
-        names are never listed separately, only the enum's own declared name.
+        exception / type alias) contributes its declared name. An enum's
+        variant names are never listed separately, only the enum's own declared name.
         """
         from agm.agl.syntax.nodes import (
             EnumDef,
@@ -1539,21 +1514,15 @@ class ReplSession:
             RecordDef,
             TypeAlias,
             VarDecl,
-            pattern_binder_candidates,
         )
 
-        binding_items = (FuncDef, VarDecl)
+        binding_items = (FuncDef, LetDecl, VarDecl)
         type_items = (RecordDef, EnumDef, ExceptionDef, TypeAlias)
         installed: list[str] = []
         for item in program.body.items:
             if isinstance(item, binding_items):
                 if item.node_id in promoted_binding_node_ids:
                     installed.append(item.name)
-            elif isinstance(item, LetDecl):
-                for candidate in pattern_binder_candidates(item.pattern):
-                    binding = checked.pattern_binding_for(candidate.node_id)
-                    if binding is not None and binding.decl_node_id in promoted_binding_node_ids:
-                        installed.append(binding.name)
             elif isinstance(item, type_items) and item.name in promoted_type_names:
                 installed.append(item.name)
         return installed
@@ -1577,7 +1546,6 @@ class ReplSession:
             Declaration,
             LetDecl,
             VarDecl,
-            simple_let_pattern_name,
         )
 
         last = program.body.items[-1]
@@ -1585,12 +1553,9 @@ class ReplSession:
         if not isinstance(last, (Binder, Declaration)):
             return captured, value_type
         if isinstance(last, LetDecl):
-            simple_name = simple_let_pattern_name(last.pattern)
-            if simple_name is None or simple_name == "_":
+            if last.name == "_":
                 return captured, value_type
-            binding = checked.pattern_binding_for(last.pattern.node_id)
-            assert binding is not None, "compiler bug: no selected simple-let binding"
-            return self._declaration_value(binding.decl_node_id), value_type
+            return self._declaration_value(last.node_id), value_type
         if isinstance(last, VarDecl):
             return self._declaration_value(last.node_id), value_type
         return None, None
@@ -1612,7 +1577,6 @@ class ReplSession:
             VarDecl,
             is_scoped_declaration,
             scoped_public_name,
-            simple_let_pattern_name,
         )
 
         # An entry echoed here always has at least one item: blank and
@@ -1622,14 +1586,11 @@ class ReplSession:
         if not isinstance(last, (Binder, Declaration, ScopeRegion)):
             return "expression", None
         if isinstance(last, LetDecl):
-            name = simple_let_pattern_name(last.pattern)
-            if name is None:
-                return "binding", None
-            if name == "_":
+            if last.name == "_":
                 return "statement", None
             # A shorthand binder path names the member it declares, so the
             # echo shows the member the way its scope makes it reachable.
-            return "binding", scoped_public_name(last.scope_path, name)
+            return "binding", scoped_public_name(last.scope_path, last.name)
         if isinstance(last, VarDecl):
             if last.name == "_":
                 return "statement", None
@@ -1685,7 +1646,6 @@ class ReplSession:
             Declaration,
             LetDecl,
             VarDecl,
-            simple_let_pattern_name,
         )
 
         # An entry echoed here always has at least one item: blank and
@@ -1705,10 +1665,6 @@ class ReplSession:
             initializer_type = checked.node_types.get(last.value.node_id)
             if isinstance(initializer_type, BottomType):
                 return initializer_type
-            if isinstance(last, LetDecl):
-                if simple_let_pattern_name(last.pattern) == "_":
-                    return None
-                return checked.let_matched_types.get(last.node_id)
             if last.name == "_":
                 return None
             return checked.type_env.get_binding_type(last.node_id)

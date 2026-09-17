@@ -7,12 +7,9 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import BinderKind
-from agm.agl.semantics.types import EnumType, IntType, RecordType
-from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, FuncDef, LetDecl, VarPattern
+from agm.agl.semantics.types import EnumType
+from agm.agl.syntax.nodes import Case, ConstructorPattern, FuncDef, LetDecl
 from agm.agl.typecheck import AglTypeError, CheckedProgram, check_program
 from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files
@@ -44,124 +41,6 @@ def accept_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
 def reject_graph(tmp_path: Path, modules: dict[str, str]) -> None:
     with pytest.raises(AglTypeError):
         accept_graph(tmp_path, modules)
-
-
-def test_additive_import_rename_preserves_both_constructor_pattern_spellings(
-    tmp_path: Path,
-) -> None:
-    accept_graph(
-        tmp_path,
-        {
-            "entry": (
-                "import library::{Token as T}\n"
-                "let item = T(value = 1)\n"
-                "let Token(value = _ as original) = item\n"
-                "let T(value = _ as renamed) = item\n"
-                "original + renamed"
-            ),
-            "library": "record Token\n  value: int",
-        },
-    )
-
-
-def test_record_patterns_bind_positional_named_named_only_nested_and_as_in_case_and_let() -> None:
-    checked = accept(
-        "record Inner\n"
-        "  value: int\n"
-        "record Outer(@arg-pos a: int, inner: Inner, @arg-named label: text)\n"
-        'let outer: Outer = Outer(1, Inner(value = 2), label = "ok")\n'
-        "let Outer(a, inner = Inner(value = _ as value) as whole, label = label) = outer\n"
-        "case outer of\n"
-        "  | Outer(a, Inner(value), label) as subject => a + value\n"
-        "  | _ => 0\n"
-    )
-
-    let = checked.resolved.program.body.items[3]
-    assert isinstance(let, LetDecl)
-    assert isinstance(let.pattern, ConstructorPattern)
-    (first,) = let.pattern.positional
-    fields = {field.name: field.pattern for field in let.pattern.named}
-    nested = fields["inner"]
-    label = fields["label"]
-    assert isinstance(first, VarPattern)
-    assert isinstance(nested, AsPattern)
-    assert isinstance(label, VarPattern)
-    assert checked.type_env.get_binding_type(first.node_id) == IntType()
-    assert checked.type_env.get_binding_type(label.node_id).kind == "text"
-    assert strip_decl_ids(checked.type_env.get_binding_type(nested.node_id)) == RecordType("Inner")
-    assert checked.pattern_binding_for(first.node_id).kind is BinderKind.let_binding
-    assert checked.pattern_constructor_ref_for(let.pattern.node_id) is not None
-
-    case = checked.resolved.program.body.items[4]
-    branch = case.branches[0]
-    assert isinstance(branch.pattern, AsPattern)
-    assert isinstance(branch.pattern.pattern, ConstructorPattern)
-    assert checked.pattern_constructor_ref_for(branch.pattern.pattern.node_id) is not None
-
-
-def test_generic_record_alias_pattern_uses_concrete_field_type_and_selected_constructor() -> None:
-    checked = accept(
-        "record Box[T]\n"
-        "  value: T\n"
-        "type Alias[T] = Box[T]\n"
-        "type Phantom[T] = Box[int]\n"
-        "let box: Alias[int] = Box(value = 1)\n"
-        "let Alias(value = _ as value) = box\n"
-        "let ::Alias(value = _ as self-value) = box\n"
-        "let Phantom(value = _ as phantom-value) = box\n"
-        "value + self-value + phantom-value\n"
-    )
-
-    let = checked.resolved.program.body.items[4]
-    assert isinstance(let, LetDecl)
-    assert isinstance(let.pattern, ConstructorPattern)
-    (field,) = let.pattern.named
-    assert isinstance(field.pattern, AsPattern)
-    value = field.pattern
-    assert checked.type_env.get_binding_type(value.node_id) == IntType()
-    constructor = checked.pattern_constructor_ref_for(let.pattern.node_id)
-    assert constructor is not None
-    assert constructor.owner_name == "Alias"
-    box_typedef = checked.type_env.type_table.get(ENTRY_ID, "Box")
-    assert box_typedef is not None
-    assert checked.pattern_constructor_owner_for(let.pattern.node_id) == NominalId(
-        box_typedef.decl_node_id
-    )
-
-
-def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
-    checked = accept(
-        "record Box[T]\n"
-        "  value: T\n"
-        "let int-box: Box[int] = Box(value = 1)\n"
-        "let Box(value = _) = int-box\n"
-        'let text-box: Box[text] = Box(value = "x")\n'
-        "let Box(value = _) = text-box\n"
-        "int-box\n"
-    )
-    pattern_lets = [
-        item
-        for item in checked.resolved.program.body.items
-        if isinstance(item, LetDecl) and isinstance(item.pattern, ConstructorPattern)
-    ]
-    assert len(pattern_lets) == 2
-    box_typedef = checked.type_env.type_table.get(ENTRY_ID, "Box")
-    assert box_typedef is not None
-    expected = NominalId(box_typedef.decl_node_id)
-    assert [checked.pattern_constructor_owner_for(let.pattern.node_id) for let in pattern_lets] == [
-        expected,
-        expected,
-    ]
-
-
-def test_referenced_member_pattern_rejects_a_different_record_instantiation() -> None:
-    reject(
-        "record Box[T](value: T)\n"
-        "enum E = ::Box[int]\n"
-        'let subject: Box[text] = Box(value = "text")\n'
-        "let E::Box(value) = subject\n"
-        "()"
-    )
 
 
 @pytest.mark.parametrize(
@@ -213,72 +92,8 @@ def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> N
     checked = accept("enum Opt\n  | none\nlet value: Opt = none\nlet none = value\nnone\n")
     let = checked.resolved.program.body.items[2]
     assert isinstance(let, LetDecl)
-    assert isinstance(let.pattern, VarPattern)
-    assert checked.pattern_classifications[let.pattern.node_id] is None
-    assert strip_decl_ids(checked.type_env.get_binding_type(let.pattern.node_id)) == EnumType("Opt")
-
-
-@pytest.mark.parametrize(
-    "entry",
-    [
-        ("import lib\nuse lib::*\nlet instance = R(value = 1)\nlet R(value) = instance\n"),
-        (
-            "scope Region\n"
-            "  import lib::*\n"
-            "  let instance = R(value = 1)\n"
-            "  let R(value) = instance\n"
-            "end Region\n"
-        ),
-    ],
-)
-def test_root_record_patterns_work_through_use_and_regional_import_tails(
-    tmp_path: Path, entry: str
-) -> None:
-    accept_graph(
-        tmp_path,
-        {
-            "lib": "record R\n  value: int\n",
-            "entry": entry,
-        },
-    )
-
-
-def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path: Path) -> None:
-    checked = accept_graph(
-        tmp_path,
-        {
-            "lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[T]\n",
-            "entry": (
-                "import lib\n"
-                "import lib as L\n"
-                "import lib::*\n"
-                "record Local\n  value: int\n"
-                "let local = Local(value = 1)\n"
-                "let ::Local(value) = local\n"
-                "let direct: lib::Alias[int] = lib::Box(value = 2)\n"
-                "let lib::Alias(value = _ as direct-value) = direct\n"
-                "let renamed: L::Alias[int] = L::Box(value = 3)\n"
-                "let L::Alias(value = _ as renamed-value) = renamed\n"
-                "let opened: Alias[int] = Box(value = 4)\n"
-                "let Alias(value = _ as opened-value) = opened\n"
-                "let generic: lib::Box[int] = lib::Box(value = 5)\n"
-                "let lib::Box(value = _ as generic-value) = generic\n"
-                "direct-value + renamed-value + opened-value + generic-value\n"
-            ),
-        },
-    )
-
-    entry = checked.modules[ENTRY_ID]
-    main = entry.resolved.program.body.items[-1]
-    assert isinstance(main, FuncDef)
-    pattern_lets = [
-        item
-        for item in main.body.items
-        if isinstance(item, LetDecl) and isinstance(item.pattern, ConstructorPattern)
-    ]
-    assert len(pattern_lets) == 5
-    for let in pattern_lets:
-        assert entry.pattern_constructor_ref_for(let.pattern.node_id) is not None
+    assert let.name == "none"
+    assert strip_decl_ids(checked.type_env.get_binding_type(let.node_id)) == EnumType("Opt")
 
 
 def test_local_record_owner_qualifier_selects_only_the_local_same_named_record(
@@ -313,18 +128,20 @@ def test_local_record_owner_qualifier_selects_only_the_local_same_named_record(
     )
 
 
-def test_module_qualified_record_pattern_rejects_an_absent_named_owner(tmp_path: Path) -> None:
+def test_module_qualified_pattern_rejects_wrong_phantom_generic_enum_owner(
+    tmp_path: Path,
+) -> None:
     reject_graph(
         tmp_path,
         {
-            "lib": "record Other\n  x: int\n",
+            "lib": "enum Other[T]\n  | none\n",
             "entry": (
                 "import lib\n"
-                "record Point\n"
-                "  x: int\n"
-                "let point = Point(x = 1)\n"
-                "let lib::Point(x) = point\n"
-                "x\n"
+                "enum Maybe[T]\n"
+                "  | none\n"
+                "case Maybe::none of\n"
+                "  | lib::Other::none => ()\n"
+                "  | _ => ()\n"
             ),
         },
     )
@@ -336,12 +153,11 @@ def test_module_qualified_record_pattern_accepts_each_referencing_enum_owner(
     accept_graph(
         tmp_path,
         {
-            "lib": ("record Shared(value: int)\nenum First = ::Shared\nenum Second = ::Shared\n"),
+            "lib": "record Shared(value: int)\nenum First = ::Shared\nenum Second = ::Shared\n",
             "entry": (
                 "import lib\n"
                 "let shared: lib::Shared = lib::Shared(value = 1)\n"
-                "let lib::Second::Shared(value) = shared\n"
-                "value\n"
+                "case shared of | lib::Second::Shared(value) => value\n"
             ),
         },
     )
@@ -362,38 +178,8 @@ def test_module_qualified_record_pattern_rejects_an_unrelated_enum_owner(
             "entry": (
                 "import lib\n"
                 "let shared: lib::Shared = lib::Shared(value = 1)\n"
-                "let lib::Unrelated::Shared(value) = shared\n"
-                "value\n"
+                "case shared of | lib::Unrelated::Shared(value) => value\n"
             ),
-        },
-    )
-
-
-def test_module_qualified_pattern_rejects_wrong_phantom_generic_enum_owner(
-    tmp_path: Path,
-) -> None:
-    reject_graph(
-        tmp_path,
-        {
-            "lib": "enum Other[T]\n  | none\n",
-            "entry": (
-                "import lib\n"
-                "enum Maybe[T]\n"
-                "  | none\n"
-                "case Maybe::none of\n"
-                "  | lib::Other::none => ()\n"
-                "  | _ => ()\n"
-            ),
-        },
-    )
-
-
-def test_self_qualified_record_pattern_rejects_an_absent_current_owner(tmp_path: Path) -> None:
-    reject_graph(
-        tmp_path,
-        {
-            "lib": "record Point\n  x: int\n",
-            "entry": ("import lib::*\nlet point = Point(x = 1)\nlet ::Point(x) = point\nx\n"),
         },
     )
 
@@ -443,34 +229,12 @@ def test_invalid_record_constructor_patterns_are_rejected(source: str) -> None:
     reject(source)
 
 
-def test_scoped_record_pattern_selects_its_scope_member() -> None:
-    """``A::Point(x)`` destructures the record declared in named scope ``A``."""
-    checked = accept(
-        "scope A\n"
-        "  record Point\n"
-        "    x: int\n"
-        "end A\n"
-        "\n"
-        "let p: A::Point = A::Point(x = 4)\n"
-        "let A::Point(x) = p\n"
-        "x\n"
-    )
-
-    let_decl = checked.resolved.program.body.items[-2]
-    assert isinstance(let_decl, LetDecl)
-    assert isinstance(let_decl.pattern, ConstructorPattern)
-    selected = checked.pattern_constructor_ref_for(let_decl.pattern.node_id)
-    assert selected is not None
-    assert (selected.owner_path, selected.owner_name) == (("A",), "Point")
-
-
 def test_unqualified_pattern_selects_a_nominal_declared_in_the_same_scope() -> None:
     """An unqualified pattern still selects its own scope's record.
 
     The pattern-to-nominal ownership check must key on the structured scope
     path, not just the bare spelling: ``Bounds(low, high)`` inside
-    ``scope Config`` selects ``Config::Bounds``, in both a ``case`` arm and a
-    destructuring ``let``, exactly as the qualified spelling would.
+    ``scope Config`` selects ``Config::Bounds``.
     """
     checked = accept(
         "scope Config\n"
@@ -478,26 +242,19 @@ def test_unqualified_pattern_selects_a_nominal_declared_in_the_same_scope() -> N
         "  def pick(b: Bounds) -> int =\n"
         "    case b of\n"
         "    | Bounds(low, high) => low\n"
-        "  def unpick(b: Bounds) -> int =\n"
-        "    let Bounds(low, high) = b\n"
-        "    high\n"
         "end Config\n"
         "\n"
         "()\n"
     )
     region = checked.resolved.program.body.items[0]
-    pick, unpick = (item for item in region.items if isinstance(item, FuncDef))
+    pick = next(item for item in region.items if isinstance(item, FuncDef))
     case = pick.body.items[0]
     assert isinstance(case, Case)
     case_pattern = case.branches[0].pattern
     assert isinstance(case_pattern, ConstructorPattern)
-    let_decl = unpick.body.items[0]
-    assert isinstance(let_decl, LetDecl)
-    assert isinstance(let_decl.pattern, ConstructorPattern)
-    for pattern in (case_pattern, let_decl.pattern):
-        selected = checked.pattern_constructor_ref_for(pattern.node_id)
-        assert selected is not None
-        assert (selected.owner_path, selected.owner_name) == (("Config",), "Bounds")
+    selected = checked.pattern_constructor_ref_for(case_pattern.node_id)
+    assert selected is not None
+    assert (selected.owner_path, selected.owner_name) == (("Config",), "Bounds")
 
 
 def test_scoped_record_pattern_rejects_a_same_named_root_record() -> None:

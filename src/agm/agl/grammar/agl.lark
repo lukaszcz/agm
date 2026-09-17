@@ -325,7 +325,7 @@ func_body: suite_expr | raw_return_expr | line_final_expr
 // with _INDENT and no expression form can, so the choice is unambiguous.
 _init_value: suite_expr | line_final_expr
 
-let_decl: attributes? "let" pattern type_ann? EQ _init_value
+let_decl: attributes? "let" decl_head type_ann? EQ _init_value
 var_decl: attributes? VAR decl_head type_ann? EQ _init_value
 assign_stmt: postfix ASSIGN _init_value
 
@@ -507,7 +507,7 @@ try_body: suite_expr | (marked_item SEMICOLON)* try_tail
 ?try_tail: or_expr | inline_assign | try_letvar_decl | raise_expr | return_expr
          | if_expr | case_expr | loop_expr
 
-?try_letvar_decl: attributes? "let" pattern type_ann? EQ try_value -> let_decl
+?try_letvar_decl: attributes? "let" decl_head type_ann? EQ try_value -> let_decl
                  | attributes? VAR decl_head type_ann? EQ try_value -> var_decl
 
 ?try_value: or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
@@ -847,7 +847,7 @@ dict_entry: template COLON arg_expr     -> dict_entry_str
 // Pattern `as` binders wrap the complete preceding pattern and associate left.
 // Disambiguation of pattern_atom:
 //   name with value "_" → wildcard (handled in AstBuilder.pat_var_or_wild)
-//   qualifier chain, no parens → bare qualified pattern (or a scoped `let` binder path)
+//   qualifier chain, no parens → bare qualified pattern
 //   qualifier chain + parens → qualified constructor pattern
 //   name LPAR ... RPAR → unqualified constructor pattern with payload
 //   name (other) → a bare top-level constructor or field-directed nested pattern

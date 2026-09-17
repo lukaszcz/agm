@@ -12,7 +12,6 @@ from agm.agl.ir import (
     ExecutableProgram,
     IrBind,
     IrCase,
-    IrConstUnit,
     IrField,
     IrLiteralCaseKey,
     IrLiteralKind,
@@ -243,42 +242,6 @@ def test_shared_decision_node_remains_shared_ir_object() -> None:
     right_switch = left_switch.arms[0].body
     assert isinstance(right_switch, IrCase)
     assert right_switch.default is left_switch.default
-
-
-def test_pattern_let_uses_the_shared_decision_dag_for_nested_demanded_fields() -> None:
-    program = _lower(
-        "record Leaf\n"
-        "  value: int\n"
-        "record Box\n"
-        "  selected: Leaf\n"
-        "  skipped: int\n"
-        "let Box(selected = Leaf(value = value)) = Box(selected = Leaf(value = 7), skipped = 9)\n"
-        "()\n"
-    )
-    (lowered, _) = program.modules[program.entry_module].initializers
-    assert isinstance(lowered, IrSequence)
-    root_capture, outer_decomposition = lowered.items
-    assert isinstance(root_capture, IrBind)
-    assert program.symbols[root_capture.symbol].public_name is None
-    assert isinstance(outer_decomposition, IrSequence)
-    outer_projection = outer_decomposition.items[0]
-    assert isinstance(outer_projection, IrBind)
-    assert isinstance(outer_projection.value, IrField)
-    assert outer_projection.value.field == "selected"
-    nested_decomposition = outer_decomposition.items[1]
-    assert isinstance(nested_decomposition, IrSequence)
-    nested_projection = nested_decomposition.items[0]
-    assert isinstance(nested_projection, IrBind)
-    assert isinstance(nested_projection.value, IrField)
-    assert nested_projection.value.field == "value"
-    leaf = nested_decomposition.items[1]
-    assert isinstance(leaf, IrSequence)
-    assert isinstance(leaf.items[-1], IrConstUnit)
-    assert "skipped" not in [
-        item.value.field
-        for item in (*outer_decomposition.items, *nested_decomposition.items)
-        if isinstance(item, IrBind) and isinstance(item.value, IrField)
-    ]
 
 
 def test_executable_ir_contains_no_source_pattern_or_occurrence_objects() -> None:

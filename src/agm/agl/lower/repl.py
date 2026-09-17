@@ -29,8 +29,6 @@ from agm.agl.syntax.nodes import (
     UseDecl,
     VarDecl,
     VariantDef,
-    pattern_binder_candidates,
-    simple_let_pattern_name,
     static_items,
 )
 
@@ -95,7 +93,6 @@ class LinkImage:
             builtin_nominals=state.builtin_nominals,
             sources=dict(state.sources),
             contracts=dict(state.contracts),
-            let_value_symbols=dict(state.let_value_symbols),
             initializer_origins=dict(state.initializer_origins),
         )
 
@@ -196,15 +193,12 @@ class LoweredReplEntry:
     """One entry linked into a persistent image.
 
     ``trailing_expression`` is the initializer index whose value the REPL echoes
-    for a bare expression. ``trailing_let_value_symbol`` retains a trailing
-    destructuring let's complete initializer value without changing the let
-    item's language-level unit result. ``promotion_plan`` maps completed entry
-    initializers to declarations that may persist after a runtime failure.
+    for a bare expression. ``promotion_plan`` maps completed entry initializers
+    to declarations that may persist after a runtime failure.
     """
 
     program: ExecutableProgram
     trailing_expression: int | None
-    trailing_let_value_symbol: SymbolId | None
     promotion_plan: ReplPromotionPlan
 
 
@@ -217,11 +211,7 @@ def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int
     from the region node itself.
     """
     if isinstance(item, LetDecl):
-        return frozenset(
-            candidate.node_id
-            for candidate in pattern_binder_candidates(item.pattern)
-            if checked.pattern_binding_for(candidate.node_id) is not None
-        )
+        return frozenset() if item.name == "_" else frozenset({item.node_id})
     if isinstance(
         item,
         (
@@ -453,17 +443,6 @@ def _promotion_plan(
     )
 
 
-def _trailing_let_value_symbol(last: Item, link: _LinkState) -> SymbolId | None:
-    """Return the root value symbol of a trailing destructuring let, if any.
-
-    A simple-name let echoes through its own binding symbol, so only a
-    destructuring pattern needs the site's retained root value.
-    """
-    if not isinstance(last, LetDecl) or simple_let_pattern_name(last.pattern) is not None:
-        return None
-    return link.let_value_symbols.get(last.node_id)
-
-
 def lower_repl_program(
     compiled: MatchCompiledProgram,
     *,
@@ -493,11 +472,9 @@ def lower_repl_program(
         if not isinstance(last, (Binder, Declaration, ScopeRegion))
         else None
     )
-    trailing_let_value_symbol = _trailing_let_value_symbol(last, image._state)
     return LoweredReplEntry(
         program=program,
         trailing_expression=marker,
-        trailing_let_value_symbol=trailing_let_value_symbol,
         promotion_plan=_promotion_plan(
             checked.modules[checked.entry_id],
             image._state.initializer_origins[program.entry_module],

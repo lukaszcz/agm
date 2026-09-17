@@ -357,7 +357,7 @@ def _run_with_json_codec(
 
 def _let(name: str, value: ast.Expr, *, type_ann: tast.TypeExpr | None = None) -> ast.LetDecl:
     return ast.LetDecl(
-        pattern=ast.VarPattern(name=name, span=_sp(), node_id=_nid()),
+        name=name,
         type_ann=type_ann,
         value=value,
         span=_sp(),

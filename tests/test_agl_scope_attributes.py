@@ -33,7 +33,6 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
     VarDecl,
     VariantDef,
-    VarPattern,
     static_function_items,
 )
 from agm.agl.syntax.visitor import walk
@@ -111,8 +110,8 @@ def _static_binding(resolution: ModuleResolution, name: str) -> LetDecl | VarDec
                 visit_items(item.items)
             elif isinstance(item, VarDecl) and item.name == name:
                 found.append(item)
-            elif isinstance(item, LetDecl) and isinstance(item.pattern, VarPattern):
-                if item.pattern.name == name:
+            elif isinstance(item, LetDecl):
+                if item.name == name:
                     found.append(item)
 
     visit_items(resolution.program.body.items)
@@ -122,7 +121,7 @@ def _static_binding(resolution: ModuleResolution, name: str) -> LetDecl | VarDec
 
 def _binding_node_id(binding: LetDecl | VarDecl) -> int:
     """Return the static binding identity used by scope and typecheck."""
-    return binding.pattern.node_id if isinstance(binding, LetDecl) else binding.node_id
+    return binding.node_id
 
 
 class TestParameterZones:
@@ -274,7 +273,6 @@ class TestAttributeDiagnostics:
         ("fixture", "attribute_name", "occurrence"),
         [
             ("rejections/scope/param_nested_binder.agl", "param", 0),
-            ("rejections/scope/param_destructuring.agl", "param", 0),
             ("rejections/scope/param_wildcard.agl", "param", 0),
             (
                 "program_modules/param_on_builtin_var_stdlib/src/prelude.agl",
@@ -286,7 +284,6 @@ class TestAttributeDiagnostics:
         ],
         ids=(
             "nested-binder",
-            "destructuring",
             "wildcard",
             "builtin-var",
             "option-without-param",

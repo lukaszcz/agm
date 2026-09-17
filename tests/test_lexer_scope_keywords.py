@@ -20,10 +20,7 @@ def _non_layout_tokens(source: str) -> list[tuple[str, str]]:
 
 @pytest.mark.parametrize(
     "fixture",
-    (
-        "programs/scope/scoped_destructuring.agl",
-        "rejections/scope/used_scope_members_do_not_escape.agl",
-    ),
+    ("rejections/scope/used_scope_members_do_not_escape.agl",),
 )
 def test_use_in_scope_fixtures_remains_an_identifier(fixture: str) -> None:
     source = (Path(__file__).parent / "agl" / fixture).read_text()

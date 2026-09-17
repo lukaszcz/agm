@@ -1078,35 +1078,15 @@ def pattern_binding_node_ids(pattern: Pattern) -> tuple[int, ...]:
 
 @dataclass(frozen=True, slots=True)
 class LetDecl:
-    """``let pattern [: type] = expr`` — immutable binding (scopes over continuation).
+    """``let [scope_path::]name [: type] = expr`` — immutable binding."""
 
-    Pattern-bearing lets are represented uniformly in the AST. Scope and
-    typechecking resolve supported patterns and record their selected bindings;
-    the AST itself makes no claim about later-stage execution support. ``node_id``
-    identifies the let match site, not any individual binder; binder identities
-    come from the pattern nodes.
-
-    ``scope_path`` is non-empty only for the ``let A::x = expr`` shorthand, which
-    the parser reinterprets from a root-position bare qualifier chain pattern;
-    ``pattern`` is then a plain ``VarPattern`` for the chain's member name.
-    """
-
-    pattern: Pattern
+    name: str
     type_ann: TypeExpr | None
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     scope_path: tuple[ScopeSegment, ...] = ()
     attributes: tuple[Attribute, ...] = ()
-
-
-def simple_let_pattern_name(pattern: Pattern) -> str | None:
-    """Return a simple let root's name, with ``_`` for a wildcard root."""
-    if isinstance(pattern, VarPattern):
-        return pattern.name
-    if isinstance(pattern, WildcardPattern):
-        return "_"
-    return None
 
 
 @dataclass(frozen=True, slots=True)

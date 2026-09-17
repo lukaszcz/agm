@@ -521,9 +521,7 @@ class TestRenderHelpers:
         assert line == ": int = 5"
 
     def test_unnamed_binding_echo_matches_format_helper(self) -> None:
-        # A destructuring let has no single public name (``result.name is
-        # None``); its echo must go through the SAME shared formatter as a
-        # named binding, just with no name, so the two never drift.
+        # The generic unnamed-value display uses the shared formatter too.
         value = TextValue("hi")
         result = _result(kind="binding", name=None, value=value, value_type=TextType())
         echoed = render_mod.render_entry_result(result, echo=True)

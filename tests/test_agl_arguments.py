@@ -168,7 +168,7 @@ def test_named_only_shorthand_bare_positional() -> None:
 
 
 def test_pattern_binding_keeps_each_nested_pattern_in_its_selected_field() -> None:
-    """Pattern argument binding preserves distinct nested let binders."""
+    """Pattern argument binding preserves distinct nested binders."""
     left = VarPattern("left", _SPAN, 1)
     right = WildcardPattern(_SPAN, 2)
 

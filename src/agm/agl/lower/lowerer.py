@@ -157,7 +157,6 @@ from agm.agl.matchcompile import (
     DecisionLeaf,
     DecisionSwitch,
     FieldOccurrenceProvenance,
-    LetSite,
     LiteralKind,
     NominalConstructor,
     Occurrence,
@@ -264,7 +263,6 @@ from agm.agl.syntax.nodes import (
     VarRef,
     pattern_binder_candidates,
     scoped_public_name,
-    simple_let_pattern_name,
     static_items,
 )
 from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
@@ -454,7 +452,6 @@ class _LinkState:
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
-    let_value_symbols: dict[int, SymbolId] = field(default_factory=dict)
     # Lowering's published initializer-to-source-item mapping is the sole
     # source of that correspondence. REPL promotion reads it rather than
     # re-classifying source items; the entry mapping is overwritten before
@@ -776,7 +773,6 @@ class _Lowerer:
                 return
             case LetDecl():
                 local_ids.add(node.node_id)
-                self._pattern_binding_ids(node.pattern, local_ids)
                 self._scan_captures(node.value, local_ids, captured)
             case VarDecl():
                 local_ids.add(node.node_id)
@@ -3360,47 +3356,6 @@ class _Lowerer:
         )
         return sequence
 
-    def _lower_pattern_let(self, let: LetDecl, *, top_level: bool) -> IrSequence:
-        """Lower one destructuring irrefutable immutable pattern through its DAG."""
-        compiled = self._compiled_sites.get(let.node_id)
-        assert compiled is not None, (
-            f"compiler bug: no compiled decision for let node {let.node_id}"
-        )
-        matched_type = self._checked.let_matched_types.get(let.node_id)
-        assert matched_type is not None, f"compiler bug: no matched type for let node {let.node_id}"
-        binder_symbols: dict[int, SymbolId] = {}
-        for node_id, name in self._decision_binder_names(compiled).items():
-            binding = self._checked.pattern_binding_for(node_id)
-            assert binding is not None and binding.kind is BinderKind.let_binding, (
-                f"compiler bug: no selected immutable binding for let pattern node {node_id}"
-            )
-            binder_symbols[node_id] = self._symbol_for_or_alloc_decl(
-                binding.decl_node_id,
-                name=scoped_public_name(let.scope_path, name),
-                mutable=False,
-                public=top_level,
-            )
-        location = self._loc(let.span)
-        source = compiled.source
-        assert isinstance(source, LetSite), "compiler bug: let site carries a non-let payload"
-        action = source.action
-
-        def leaf_tail(decision: DecisionLeaf) -> IrExpr:
-            assert decision.action_id == action.action_id, (
-                "compiler bug: let decision selected an unknown binding action"
-            )
-            return IrConstUnit(location)
-
-        sequence, root_symbol = self._lower_compiled_decision(
-            compiled,
-            self.lower_coerced(let.value, matched_type),
-            location,
-            binder_symbols,
-            leaf_tail,
-        )
-        self._link.let_value_symbols[let.node_id] = root_symbol
-        return sequence
-
     def _lower_compiled_decision(
         self,
         compiled: CompiledMatchSite,
@@ -3409,7 +3364,7 @@ class _Lowerer:
         binder_symbols: "Mapping[int, SymbolId]",
         leaf_tail: "Callable[[DecisionLeaf], IrExpr]",
     ) -> tuple[IrSequence, SymbolId]:
-        """Lower a case or let decision through one shared occurrence DAG.
+        """Lower a case decision through its occurrence DAG.
 
         Returns the lowered sequence together with the synthetic symbol holding
         the site's root value.
@@ -3841,39 +3796,33 @@ class _Lowerer:
             case VarDecl(name="_", value=rhs):
                 return self.lower_expr(rhs)
 
-            case LetDecl() as let:
-                simple_name = simple_let_pattern_name(let.pattern)
-                if simple_name == "_":
-                    # Nothing is bound, so avoid allocating a symbol while still
-                    # evaluating the initializer for its effects.
-                    location = self._loc(let.span)
-                    return IrSequence(
-                        location=location,
-                        items=(self.lower_expr(let.value), IrConstUnit(location)),
-                    )
-                if simple_name is not None:
-                    binding = self._checked.pattern_binding_for(let.pattern.node_id)
-                    assert binding is not None and binding.kind is BinderKind.let_binding, (
-                        f"compiler bug: no selected immutable binding for let node {let.node_id}"
-                    )
-                    matched_type = self._checked.let_matched_types.get(let.node_id)
-                    assert matched_type is not None, (
-                        f"compiler bug: no matched type for let node {let.node_id}"
-                    )
-                    # Simple lets share the direct bind path with var. Only a
-                    # destructuring let needs the decision traversal, so this
-                    # avoids the synthetic root symbol, occurrence ledger, and
-                    # surrounding sequence nodes on the evaluator's hot path.
-                    return self._lower_named_binding(
-                        decl_node_id=binding.decl_node_id,
-                        name=scoped_public_name(let.scope_path, simple_name),
-                        rhs=let.value,
-                        span=let.span,
-                        binding_type=matched_type,
-                        mutable=False,
-                        public=top_level,
-                    )
-                return self._lower_pattern_let(let, top_level=top_level)
+            case LetDecl(name="_", value=rhs, span=span):
+                # Nothing is bound, so avoid allocating a symbol while still
+                # evaluating the initializer for its effects.
+                location = self._loc(span)
+                return IrSequence(
+                    location=location,
+                    items=(self.lower_expr(rhs), IrConstUnit(location)),
+                )
+
+            case LetDecl(
+                name=name,
+                value=rhs,
+                span=span,
+                node_id=nid,
+                scope_path=scope_path,
+            ):
+                binding_type = self._checked.type_env.get_binding_type(nid)
+                assert binding_type is not None, f"compiler bug: no checked type for let node {nid}"
+                return self._lower_named_binding(
+                    decl_node_id=nid,
+                    name=scoped_public_name(scope_path, name),
+                    rhs=rhs,
+                    span=span,
+                    binding_type=binding_type,
+                    mutable=False,
+                    public=top_level,
+                )
 
             case VarDecl(name=name, value=rhs, span=span, node_id=nid, scope_path=scope_path):
                 return self._lower_named_binding(
@@ -4019,15 +3968,12 @@ class _Lowerer:
                     name=scoped_public_name(item.scope_path, item.name),
                     mutable=True,
                 )
-            elif isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) != "_":
-                for candidate in pattern_binder_candidates(item.pattern):
-                    binding = self._checked.pattern_binding_for(candidate.node_id)
-                    if binding is not None:
-                        self._alloc_sym(
-                            binding.decl_node_id,
-                            name=scoped_public_name(item.scope_path, binding.name),
-                            mutable=False,
-                        )
+            elif isinstance(item, LetDecl) and item.name != "_":
+                self._alloc_sym(
+                    item.node_id,
+                    name=scoped_public_name(item.scope_path, item.name),
+                    mutable=False,
+                )
 
     def lower_initializers(
         self,

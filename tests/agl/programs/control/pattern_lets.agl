@@ -1,9 +1,0 @@
-# Immutable let patterns capture one record value and publish each binder.
-
-record Pair
-  left: int
-  right: int
-
-program def main(choose-right: bool) -> unit =
-  let Pair(left = left, right = right) = if choose-right => Pair(left = 2, right = 3) | else => Pair(left = 5, right = 7)
-  print(if choose-right => right | else => left)

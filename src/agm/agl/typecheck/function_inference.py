@@ -44,7 +44,6 @@ from agm.agl.syntax.nodes import (
     Program,
     VarDecl,
     VarRef,
-    pattern_binding_node_ids,
     static_items,
 )
 from agm.agl.syntax.visitor import walk
@@ -302,8 +301,7 @@ def _function_dependencies(
         assert isinstance(program, Program)
         for item in static_items(program.body.items):
             if isinstance(item, LetDecl):
-                for binding_id in pattern_binding_node_ids(item.pattern):
-                    binding_values[binding_id] = (module, item.value)
+                binding_values[item.node_id] = (module, item.value)
             elif isinstance(item, VarDecl):
                 binding_values[item.node_id] = (module, item.value)
 
@@ -500,12 +498,7 @@ def _seed_candidate_visible_bindings(
                 )
             elif isinstance(item, (LetDecl, VarDecl)):
                 if _references_tainted_binding(module, item, tainted, candidate_methods, checker):
-                    if isinstance(item, LetDecl):
-                        # A let site's selected binders are the declaration ids
-                        # referenced by later code, not the match-site id.
-                        tainted.update(pattern_binding_node_ids(item.pattern))
-                    else:
-                        tainted.add(item.node_id)
+                    tainted.add(item.node_id)
                     continue
                 checker._check_item(item, expected=None)
         session.slot_resolution_snapshots[module.module_id] = dict(checker._slot_resolution)

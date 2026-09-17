@@ -162,7 +162,7 @@ A program outside a package registers nothing: nothing reads its `@command`.
 
 `@param` exposes an ordinary static `let` or `var` binding as a module
 parameter. The binding must be at module root or directly in a scope region,
-must bind exactly one name rather than `_` or a destructuring pattern, and must
+must bind a readable name rather than `_`, and must
 have an initializer. Its type annotation is optional. It is not a `builtin var`
 and cannot appear in a function, block, lambda, or other nested binding.
 Its inferred or annotated type must be closed and decodable at the host

@@ -1,6 +1,6 @@
 # AgL Match Compilation
 
-The match compiler turns every checked match site — a `case` or a destructuring immutable `let` — into an immutable decision DAG that lowering executes. It is the last static pass: it consumes checked pattern metadata only and depends on nothing downstream.
+The match compiler turns every checked `case` into an immutable decision DAG that lowering executes. It is the last static pass: it consumes checked pattern metadata only and depends on nothing downstream.
 
 ## Compilation Model
 
@@ -12,7 +12,7 @@ Reachable-arm information and missing-pattern witnesses are derived from the sam
 
 ## Whole-Program Artifacts
 
-The stage visits every site in every reachable module. A `let` with a bare-name or `_` pattern is irrefutable and is skipped; lowering emits it as one bind. The result wraps the checked artifact plus a total site-to-DAG mapping whose per-kind payloads (case arms, let binding) are sealed, so a new site kind cannot be added without visiting every consumer. Artifact validation is a self-check under the self-validation toggle ([testing.md](../../testing.md)).
+The stage visits every case in every reachable module. The result wraps the checked artifact plus a total site-to-DAG mapping whose case-arm payloads are sealed. Artifact validation is a self-check under the self-validation toggle ([testing.md](../../testing.md)).
 
 ## References
 

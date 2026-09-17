@@ -724,7 +724,7 @@ class TestBlockNode:
     def test_block_with_binder_and_expr(self) -> None:
         val = IntLit(value=1, span=self._s(), node_id=3)
         let = LetDecl(
-            pattern=VarPattern(name="x", span=self._s(), node_id=5),
+            name="x",
             type_ann=None,
             value=val,
             span=self._s(),
@@ -1023,14 +1023,13 @@ class TestBinders:
     def _s(self) -> SourceSpan:
         return span()
 
-    def test_let_decl_has_one_pattern_field(self) -> None:
+    def test_let_decl_has_one_name_field(self) -> None:
         val = IntLit(value=1, span=self._s(), node_id=3)
-        pattern = VarPattern(name="x", span=self._s(), node_id=2)
-        node = LetDecl(pattern=pattern, type_ann=None, value=val, span=self._s(), node_id=1)
-        assert node.pattern is pattern
+        node = LetDecl(name="x", type_ann=None, value=val, span=self._s(), node_id=1)
+        assert node.name == "x"
         assert node.type_ann is None
         assert tuple(field.name for field in fields(LetDecl)) == (
-            "pattern",
+            "name",
             "type_ann",
             "value",
             "span",
@@ -1039,20 +1038,12 @@ class TestBinders:
             "attributes",
         )
 
-    def test_let_decl_with_pattern_and_type_is_frozen_and_structurally_equal(self) -> None:
+    def test_let_decl_with_type_is_frozen_and_structurally_equal(self) -> None:
         val = IntLit(value=1, span=self._s(), node_id=3)
-        pattern = ConstructorPattern(
-            qualifier=None,
-            name="Point",
-            positional=(VarPattern(name="x", span=self._s(), node_id=4),),
-            named=(),
-            span=self._s(),
-            node_id=2,
-        )
         t = IntT(span=self._s(), node_id=5)
-        node = LetDecl(pattern=pattern, type_ann=t, value=val, span=self._s(), node_id=1)
+        node = LetDecl(name="x", type_ann=t, value=val, span=self._s(), node_id=1)
         equal = LetDecl(
-            pattern=pattern,
+            name="x",
             type_ann=t,
             value=val,
             span=span(2, 0, 2, 20),
@@ -1060,7 +1051,7 @@ class TestBinders:
         )
         assert node == equal
         with pytest.raises((FrozenInstanceError, AttributeError)):
-            setattr(node, "pattern", pattern)
+            setattr(node, "name", "y")
 
     def test_var_decl(self) -> None:
         val = IntLit(value=0, span=self._s(), node_id=2)
@@ -1069,19 +1060,17 @@ class TestBinders:
 
     def test_let_and_var_decl_scope_path_defaults_to_empty(self) -> None:
         val = IntLit(value=0, span=self._s(), node_id=2)
-        pattern = VarPattern(name="x", span=self._s(), node_id=3)
-        let_node = LetDecl(pattern=pattern, type_ann=None, value=val, span=self._s(), node_id=1)
+        let_node = LetDecl(name="x", type_ann=None, value=val, span=self._s(), node_id=1)
         var_node = VarDecl(name="x", type_ann=None, value=val, span=self._s(), node_id=1)
         assert let_node.scope_path == ()
         assert var_node.scope_path == ()
 
     def test_let_and_var_decl_scope_path_participates_in_equality(self) -> None:
         val = IntLit(value=0, span=self._s(), node_id=2)
-        pattern = VarPattern(name="x", span=self._s(), node_id=3)
         segment = ScopeSegment(name="A", span=self._s(), node_id=4)
-        plain_let = LetDecl(pattern=pattern, type_ann=None, value=val, span=self._s(), node_id=1)
+        plain_let = LetDecl(name="x", type_ann=None, value=val, span=self._s(), node_id=1)
         scoped_let = LetDecl(
-            pattern=pattern,
+            name="x",
             type_ann=None,
             value=val,
             span=self._s(),
@@ -1126,17 +1115,15 @@ class TestBinders:
 
     def test_binder_equality_ignores_span_node_id(self) -> None:
         val = IntLit(value=1, span=span(1, 0, 1, 1), node_id=5)
-        pattern = VarPattern(name="x", span=span(), node_id=6)
-        a = LetDecl(pattern=pattern, type_ann=None, value=val, span=span(1, 0, 1, 10), node_id=1)
-        b = LetDecl(pattern=pattern, type_ann=None, value=val, span=span(9, 0, 9, 10), node_id=99)
+        a = LetDecl(name="x", type_ann=None, value=val, span=span(1, 0, 1, 10), node_id=1)
+        b = LetDecl(name="x", type_ann=None, value=val, span=span(9, 0, 9, 10), node_id=99)
         assert a == b
 
     def test_binder_frozen(self) -> None:
         val = IntLit(value=1, span=span(), node_id=2)
-        pattern = VarPattern(name="x", span=span(), node_id=3)
-        node = LetDecl(pattern=pattern, type_ann=None, value=val, span=span(), node_id=1)
+        node = LetDecl(name="x", type_ann=None, value=val, span=span(), node_id=1)
         with pytest.raises((FrozenInstanceError, AttributeError)):
-            setattr(node, "pattern", pattern)
+            setattr(node, "name", "y")
 
 
 # ---------------------------------------------------------------------------
@@ -1600,21 +1587,21 @@ class TestWalk:
 
         # --- Binders ---
         let_decl = LetDecl(
-            pattern=VarPattern(name="a", span=s, node_id=6000),
+            name="a",
             type_ann=None,
             value=int_lit,
             span=s,
             node_id=600,
         )
         let_with_type = LetDecl(
-            pattern=VarPattern(name="c", span=s, node_id=6010),
+            name="c",
             type_ann=bool_t,
             value=bool_lit,
             span=s,
             node_id=601,
         )
         let_applied = LetDecl(
-            pattern=VarPattern(name="p", span=s, node_id=6080),
+            name="p",
             type_ann=applied_t,
             value=null_lit,
             span=s,
@@ -1770,27 +1757,12 @@ class TestWalk:
         walk(node, visited.append)
         assert visited == [node, callee, type_arg]
 
-    def test_walk_visits_let_pattern_and_every_child(self) -> None:
+    def test_walk_visits_let_type_and_value(self) -> None:
         from agm.agl.syntax.visitor import walk
 
         s = self._s()
-        x = VarPattern(name="x", span=s, node_id=4)
-        field = PatternField(name="left", pattern=x, span=s, node_id=3)
-        pattern = AsPattern(
-            pattern=ConstructorPattern(
-                qualifier=None,
-                name="Pair",
-                positional=(),
-                named=(field,),
-                span=s,
-                node_id=2,
-            ),
-            name="pair",
-            span=s,
-            node_id=5,
-        )
         let = LetDecl(
-            pattern=pattern,
+            name="pair",
             type_ann=IntT(span=s, node_id=6),
             value=IntLit(value=1, span=s, node_id=7),
             span=s,
@@ -1798,7 +1770,7 @@ class TestWalk:
         )
         visited: list[object] = []
         walk(let, visited.append)
-        assert visited == [let, pattern, pattern.pattern, field, x, let.type_ann, let.value]
+        assert visited == [let, let.type_ann, let.value]
 
     def test_walk_visits_all_pattern_kinds(self) -> None:
         from agm.agl.syntax.visitor import walk
@@ -2792,7 +2764,7 @@ class TestDeclarationAttributes:
             ),
             "TypeAlias": TypeAlias(name="T", type_expr=type_expr, span=sp, node_id=nid(), **prefix),
             "LetDecl": LetDecl(
-                pattern=VarPattern(name="x", span=sp, node_id=nid()),
+                name="x",
                 type_ann=None,
                 value=body,
                 span=sp,

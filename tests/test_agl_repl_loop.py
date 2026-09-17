@@ -99,7 +99,7 @@ def test_info_uses_the_rich_front_end_highlighter_when_available() -> None:
 
     assert highlighted == [
         "count is a binding.\nBinding:\n  let count\nType:\n  int\nValue:\n  1\n"
-        "Location: <repl>:1:5"
+        "Location: <repl>:1:1"
     ]
     assert all("count is a binding" not in text for text in written)
 

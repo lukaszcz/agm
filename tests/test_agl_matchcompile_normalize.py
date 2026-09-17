@@ -25,7 +25,6 @@ from agm.agl.matchcompile.model import (
     DecisionLeaf,
     DecisionSwitch,
     FieldOccurrenceProvenance,
-    LetSite,
     LiteralConstructor,
     LiteralKind,
     NominalConstructor,
@@ -40,7 +39,6 @@ from agm.agl.matchcompile.normalize import (
     constructor_inhabits_type,
     enum_constructor,
     normalize_case,
-    normalize_let,
     normalize_pattern,
     pattern_cell_inhabits_type,
     signature_for_type,
@@ -61,7 +59,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
 )
 from agm.agl.semantics.values import DecimalValue, RecordValue, TextValue
-from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, LetDecl, Pattern
+from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, Pattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule, check_program
@@ -117,31 +115,6 @@ def _stripped_signature(signature: ClosedSignature) -> ClosedSignature:
         return constructor
 
     return replace(signature, constructors=tuple(strip(c) for c in signature.constructors))
-
-
-def test_let_normalization_retains_its_initializer_pattern_and_matched_type() -> None:
-    checked = _check("let value: bool = true")
-    lets: list[LetDecl] = []
-
-    def collect(node: object) -> None:
-        if isinstance(node, LetDecl):
-            lets.append(node)
-
-    walk(checked.resolved.program, collect)
-    (let,) = lets
-
-    normalized = normalize_let(let, checked)
-
-    assert normalized.site_node_id == let.node_id
-    assert isinstance(normalized.source, LetSite)
-    assert normalized.root.type == checked.let_matched_types[let.node_id]
-    assert normalized.source.action.action_id == normalized.rows[0].action_id
-    assert normalized.source.actions == (normalized.source.action,)
-    assert len(normalized.rows) == len(normalized.source.actions) == 1
-    assert normalized.rows[0].source_pattern_id == let.pattern.node_id
-    assert normalized.root.provenance.site_node_id == let.node_id
-    with pytest.raises(MatchCompileInvariantError, match="matched type"):
-        normalize_let(let, replace(checked, let_matched_types={}))
 
 
 def test_signatures_are_closed_for_boolean_and_enum_in_declaration_order() -> None:

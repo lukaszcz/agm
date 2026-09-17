@@ -277,43 +277,13 @@ class SourceAction:
 
 
 @dataclass(frozen=True, slots=True)
-class LetBindingAction:
-    """The sole binding leaf of a source ``let`` match site."""
-
-    action_id: int
-    source_index: int
-
-
-@dataclass(frozen=True, slots=True)
 class CaseSite:
     """Ordered arm actions of a source ``case`` expression."""
 
     actions: tuple[SourceAction, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class LetSite:
-    """The sole binding action of a source ``let``.
-
-    The action is a field rather than a tuple because a let has exactly one
-    binding leaf; the type states the structural fact directly.
-    """
-
-    action: LetBindingAction
-
-    @property
-    def actions(self) -> tuple[SourceAction | LetBindingAction, ...]:
-        """Widen actions for kind-independent validation only.
-
-        Narrowing consumers match on the payload; a narrowing accessor would
-        have to be able to fail.
-        """
-        return (self.action,)
-
-
-# The payload's concrete type is the match site's discriminant; no separate
-# kind tag exists by design.
-MatchSiteSource: TypeAlias = CaseSite | LetSite
+MatchSiteSource: TypeAlias = CaseSite
 
 
 EnumConstructorSpelling: TypeAlias = EnumOwnerForm
@@ -494,8 +464,6 @@ __all__ = [
     "LiteralConstructor",
     "LiteralKind",
     "LiteralValue",
-    "LetBindingAction",
-    "LetSite",
     "MatchCaseContext",
     "MatchSiteSource",
     "MatrixRow",

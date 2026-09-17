@@ -2,7 +2,7 @@
 
 Provides a recursive ``node_id`` collector (``all_node_ids``) used by the
 seeded parsing and seeded type-checking tests, and ``let_root_capture`` for
-extracting the binding IR from a simple or destructuring immutable ``let``.
+extracting the binding IR from an immutable ``let``.
 
 ``type_table_for`` is the shared helper for tests that build ad-hoc
 ``RecordType``/``EnumType`` handles directly (rather than through the real
@@ -295,7 +295,7 @@ def next_decl_id() -> int:
 
 
 def let_root_capture(initializer: IrExpr) -> IrBind:
-    """Return the binding IR for a simple or destructuring immutable let."""
+    """Return the binding IR for an immutable let."""
     if isinstance(initializer, IrBind):
         return initializer
     assert isinstance(initializer, IrSequence)

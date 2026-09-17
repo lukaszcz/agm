@@ -432,27 +432,6 @@ def test_mixed_provisional_literal_elements_report_a_type_error() -> None:
         )
 
 
-def test_destructuring_let_binder_preserves_candidate_validation_provenance() -> None:
-    """A generic pattern field retains its initializer's candidate-return evidence."""
-    # Named "Holder", not "Option": the standard library's own Option[T] is in
-    # scope, and a same-named top-level enum would make Option:: ambiguous
-    # instead of exercising the candidate-return-type provenance under test.
-    source = (
-        "enum Holder[T]\n"
-        "  | some(value: T)\n"
-        "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
-        "let some(value = value) = Holder::some(value = recurse(0))\n"
-        'value + "x"'
-    )
-
-    with pytest.raises(AglTypeError) as raised:
-        resolve_and_check_inline_entry(source, HostCapabilities())
-
-    error = raised.value
-    assert "inferred return type" in str(error).lower()
-    assert any("candidate return type" in message.lower() for message, _ in error.related)
-
-
 def test_method_with_inferred_return_uses_receiver_header_type() -> None:
     """Candidate inference retains the receiver's rigid generic slot in its body."""
     checked = resolve_and_check_inline_entry(

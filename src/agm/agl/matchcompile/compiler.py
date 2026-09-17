@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypeAlias, assert_never, cast
+from typing import TypeAlias, cast
 
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind, EnumType
@@ -19,7 +19,6 @@ from .diagnostics import (
     OpenComplementWitness,
     RecordWitness,
     RedundantArmIssue,
-    RefutableLetIssue,
     WildcardWitness,
     WitnessField,
     issue_sort_key,
@@ -41,7 +40,6 @@ from .model import (
     BinderAssignment,
     BinderProvenance,
     BoolConstructor,
-    CaseSite,
     ClosedSignature,
     Constructor,
     ConstructorCell,
@@ -53,7 +51,6 @@ from .model import (
     DecisionSwitch,
     EnumConstructorSpelling,
     FieldOccurrenceProvenance,
-    LetSite,
     LiteralConstructor,
     MatchCaseContext,
     MatchSiteSource,
@@ -601,17 +598,7 @@ def _issues(
     occurrences: tuple[Occurrence, ...],
 ) -> tuple[tuple[int, ...], tuple[MatchIssue, ...]]:
     reachable = _reachable_actions(root)
-    issue_cls: type[NonExhaustiveIssue] | type[RefutableLetIssue]
-    redundant_actions: tuple[SourceAction, ...]
-    match normalized.source:
-        case CaseSite(actions=actions):
-            redundant_actions = actions
-            issue_cls = NonExhaustiveIssue
-        case LetSite():
-            redundant_actions = ()
-            issue_cls = RefutableLetIssue
-        case _ as unreachable_source:
-            assert_never(unreachable_source)
+    redundant_actions: tuple[SourceAction, ...] = normalized.source.actions
     reachable_in_source_order = tuple(
         action.action_id for action in normalized.source.actions if action.action_id in reachable
     )
@@ -632,7 +619,7 @@ def _issues(
             normalized.type_table,
             normalized.case_context,
         )
-        issues.append(issue_cls(normalized.site_node_id, normalized.span, witness))
+        issues.append(NonExhaustiveIssue(normalized.site_node_id, normalized.span, witness))
     return reachable_in_source_order, tuple(sorted(issues, key=issue_sort_key))
 
 

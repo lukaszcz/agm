@@ -287,7 +287,7 @@ def _make_varref(name: str, line: int = 1) -> VarRef:
 
 def _make_let(name: str, value: Expr, line: int = 1) -> LetDecl:
     return LetDecl(
-        pattern=VarPattern(name=name, span=_sp(line), node_id=_nid()),
+        name=name,
         type_ann=None,
         value=value,
         span=_sp(line),
@@ -594,22 +594,6 @@ class TestScopedBindings:
     def test_reference_textually_before_a_shorthand_binding_is_rejected(self) -> None:
         with pytest.raises(AglScopeError):
             parse_and_resolve("def f() -> int = A::x\nlet A::x = 1\nf()")
-
-    def test_destructuring_let_in_a_region_contributes_every_selected_binder(self) -> None:
-        resolved = parse_and_resolve(
-            "scope A\n"
-            "  record Point\n"
-            "    x: int\n"
-            "    y: int\n"
-            "  let Point(x, y) = Point(x = 1, y = 2)\n"
-            "end A\n"
-            "\n"
-            "A::x\n"
-            "A::y\n"
-        )
-        members = resolved.scope_nodes[("A",)].members
-        assert members["x"].kind is BinderKind.pattern_slot
-        assert members["y"].kind is BinderKind.pattern_slot
 
     @pytest.mark.parametrize("keyword", ("let", "var"))
     def test_binder_path_in_a_nested_block_is_rejected(self, keyword: str) -> None:
@@ -1082,18 +1066,6 @@ class TestAcceptance:
         captured = _find_varref(resolved.program, "value")
         assert resolved.resolution[captured.node_id].kind is BinderKind.let_binding
 
-    def test_destructuring_let_captured_by_function_still_resolves(self) -> None:
-        resolved = parse_and_resolve_repl(
-            "record Pair\n"
-            "  value: int\n"
-            "let Pair(value) = Pair(value = 1)\n"
-            "def capture() = value\n"
-            "capture()"
-        )
-
-        captured = _find_varref(resolved.program, "value")
-        assert resolved.resolution[captured.node_id].kind is BinderKind.pattern_slot
-
     def test_unit_lit(self) -> None:
         r = parse_and_resolve("()")
         assert r.resolution == {}
@@ -1169,77 +1141,41 @@ class TestBlockScoping:
         assert "a" in msg
 
 
-class TestLetPatternCompatibility:
-    def test_destructuring_let_creates_continuation_slots_before_later_rejection(self) -> None:
-        resolved = parse_and_resolve("let value = 0\nlet Pair(left, right) = value\nleft")
-        assert _ref(resolved, "left").kind is BinderKind.pattern_slot
-
+class TestLetBindings:
     def test_wildcard_let_resolves_its_rhs_without_creating_a_binding(self) -> None:
         resolved = parse_and_resolve("let value = 1\nlet _ = value\n()")
         assert _ref(resolved, "value").kind is BinderKind.let_binding
         assert "_" not in resolved.root_scope.bindings
 
 
-class TestLetPatternScope:
-    def test_simple_let_binding_identity_is_its_pattern_node(self) -> None:
+class TestLetBindingScope:
+    def test_simple_let_binding_identity_is_its_declaration_node(self) -> None:
         resolved = parse_and_resolve_file("let value = 1")
         declaration = resolved.program.body.items[0]
         assert isinstance(declaration, LetDecl)
         binding = resolved.root_scope.lookup("value")
         assert binding is not None
 
-        assert binding.decl_node_id == declaration.pattern.node_id
-
-    def test_destructuring_let_binding_identity_is_each_binder_pattern_node(self) -> None:
-        resolved = parse_and_resolve(
-            "record Pair\n"
-            "  left: int\n"
-            "  right: int\n"
-            "let Pair(left, right) = Pair(left = 1, right = 2)\n"
-            "left\n"
-            "right"
-        )
-        declaration = resolved.program.body.items[1]
-        assert isinstance(declaration, LetDecl)
-        assert isinstance(declaration.pattern, ConstructorPattern)
-        left_pattern, right_pattern = declaration.pattern.positional
-        assert isinstance(left_pattern, VarPattern)
-        assert isinstance(right_pattern, VarPattern)
-
-        left_ref = _find_varref(resolved.program, "left")
-        right_ref = _find_varref(resolved.program, "right")
-        assert resolved.resolution[left_ref.node_id].decl_node_id == left_pattern.node_id
-        assert resolved.resolution[right_ref.node_id].decl_node_id == right_pattern.node_id
+        assert binding.decl_node_id == declaration.node_id
 
     def test_root_let_name_binds_despite_a_visible_constructor(self) -> None:
         resolved = parse_and_resolve("enum Flag\n  | on\nlet on = 1\nlet copied = on\ncopied")
         assert _ref(resolved, "on").kind is BinderKind.let_binding
-        declaration = resolved.program.body.items[1]
-        assert isinstance(declaration, LetDecl)
-        assert resolved.pattern_constructor_candidates[declaration.pattern.node_id]
 
-    def test_let_initializer_cannot_see_its_own_pattern(self) -> None:
+    def test_let_initializer_cannot_see_its_own_name(self) -> None:
         reject_scope("let value = value\nvalue")
 
     def test_ast_wildcard_name_does_not_create_a_binding(self) -> None:
         resolved = resolve_program(_make_let("_", _make_intlit()))
         assert "_" not in resolved.root_scope.bindings
 
+    def test_scoped_wildcard_name_creates_only_its_scope(self) -> None:
+        resolved = parse_and_resolve("let A::_ = 1")
+        scope = resolved.scope_nodes[("A",)]
+        assert "_" not in scope.bindings
+
     def test_unimported_qualified_constructor_pattern_stays_a_checker_concern(self) -> None:
         parse_and_resolve("let value = 1\ncase value of | missing::packet(_) => 1")
-
-    def test_destructuring_let_resolves_nested_binders_for_its_continuation(self) -> None:
-        resolved = parse_and_resolve(
-            "let value = 0\nlet Pair(left, _ as right) = value\nleft\nright"
-        )
-        assert _ref(resolved, "left").kind is BinderKind.pattern_slot
-        assert _ref(resolved, "right").kind is BinderKind.pattern_slot
-        assert {slot.binder_kind for slot in resolved.pattern_slots.values()} == {
-            BinderKind.let_binding
-        }
-        declaration = resolved.program.body.items[1]
-        assert isinstance(declaration, LetDecl)
-        assert resolved.match_site_pattern_slots[declaration.node_id]
 
 
 class TestWildcardBinders:
@@ -2397,7 +2333,7 @@ class TestParentScopeSeam:
         let_stmt = entry.program.body.items[0]
         assert isinstance(let_stmt, LetDecl)
         assert "x" in entry.root_scope.bindings
-        assert entry.root_scope.bindings["x"].decl_node_id == let_stmt.pattern.node_id
+        assert entry.root_scope.bindings["x"].decl_node_id == let_stmt.node_id
 
     def test_assign_to_parent_mutable_resolves(self) -> None:
         """``:=`` of a parent var binding resolves through the parent."""

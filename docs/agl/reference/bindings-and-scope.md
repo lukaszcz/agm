@@ -11,28 +11,15 @@ assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
 ## `let` — immutable binding
 
 ```ebnf
-let_decl ::= "let" pattern (":" type_expr)? "=" init_value
+let_decl ::= "let" decl_head (":" type_expr)? "=" init_value
 init_value ::= expr | suite
 ```
 
-The annotation applies to the complete pattern. The initializer is evaluated
-before any name introduced by the pattern becomes visible in the continuation.
-
-A bare name at a `let` root always introduces a binding, even when a visible
-constructor has the same spelling. Write `Only()` or a qualified constructor
-pattern when the pattern must test a constructor instead. Within a constructor
-pattern, bare names follow the same field-directed rules as nested `case`
-patterns; an `as` name always binds and `_` never binds.
-
-A `let` pattern may use record or enum constructors, literals, wildcards, and
-`as` binders. The annotation describes the complete value being matched, not any
-individual binder: the initializer is checked once against it, then each
-selected binder receives its field or whole-value type. Without an annotation,
-the complete matched type is inferred from the initializer. A bottom initializer
-needs that annotation to type binders. `let _` is a discard: its annotation does
-not constrain the initializer. Every `let` pattern must be irrefutable; a
-refutable pattern is a static error. A destructuring `let` evaluates its
-initializer once and installs every selected binder from that value.
+The initializer is evaluated before the bound name becomes visible in the
+continuation. The annotation constrains the initializer and declares the
+binding's type. Without an annotation, the type is inferred from the
+initializer; a bottom initializer therefore needs an annotation. `let` binds
+one name only. Use `case` to match or destructure a value.
 
 `let` evaluates the initializer, checks it against the complete annotation (if
 any), and creates **immutable** bindings in the current scope. It scopes over the
@@ -65,24 +52,18 @@ non-`unit` value is intentionally discarded.
 
 ### REPL persistence and echo
 
-At the REPL top level, a completed destructuring `let` persists every selected
-binder across later entries. Its echo shows the complete matched value and type,
-not a synthetic binder name. If a later initializer fails, completed
-pattern initializers (and completed function closures) remain available; the
-failing initializer contributes no binders.
+At the REPL top level, a completed `let` persists its binding across later
+entries and echoes the bound name, value, and type. If a later initializer
+fails, previously completed bindings and function closures remain available.
 
 ### Binder scope paths
 
 `let` and `var` also accept an optional scope-path prefix on a single-name
 binder at the module root (`let A::x = 1`, `var A::count = 0`), declaring a
-binding at that path rather than in the module root namespace. For `let`,
-the prefix is written as an ordinary qualifier chain at the pattern root: a
-plain chain spellable as a declaration path (no argument list, no `as`
-binder, no module route or type-argument-applied segment, not anchored at
-the module root) is read as a scoped binding path, while any other pattern
-shape keeps its constructor-pattern meaning. See
-[Named scopes](scopes.md#binder-paths) for the complete disambiguation and
-for declaring a binder inside a `scope` region.
+binding at that path rather than in the module root namespace. The prefix is
+an ordinary declaration path, not a module route or a type-argument-applied
+segment. See [Named scopes](scopes.md#binder-paths) for declaring a binder
+inside a `scope` region.
 
 A module-root or scope-region single-name binding may be marked `@param` to
 admit a host-supplied initial value. It remains an ordinary `let` or `var` in
@@ -258,11 +239,9 @@ A `def` inside a nested block is a static error. See
 
 ## Typing of bindings
 
-- With an annotation, the initializer is checked against the annotated complete
-  type (`int → decimal` widening applies; see [Types](types.md)); every pattern
-  binder receives its selected concrete type.
-- Without an annotation, the complete matched type and each binder type are
-  inferred from the initializer.
+- With an annotation, the initializer is checked against the annotated binding
+  type (`int → decimal` widening applies; see [Types](types.md)).
+- Without an annotation, the binding type is inferred from the initializer.
   **An untyped `ask` defaults to `text`; an untyped `exec` defaults to the
   structured `ExecResult`**:
 

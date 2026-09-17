@@ -27,7 +27,6 @@ class LoweredModule:
     declarations: dict[int, SymbolId]
     function_symbols: dict[int, SymbolId]
     function_ids: dict[int, FunctionId]
-    let_values: dict[int, SymbolId]
     defaults: dict[BuiltinVarKey | str, IrExpr]
     resources: tuple[tuple[Path | None, str | None, Path], ...]
 
@@ -39,7 +38,6 @@ class LoweredModule:
         link.decl_to_sym.update(self.declarations)
         link.fn_node_to_sym.update(self.function_symbols)
         link.fn_node_to_id.update(self.function_ids)
-        link.let_value_symbols.update(self.let_values)
 
 
 def capture(
@@ -69,7 +67,6 @@ def capture(
         {nid: sid for nid, sid in link.decl_to_sym.items() if sid in symbols},
         {nid: sid for nid, sid in link.fn_node_to_sym.items() if sid in symbols},
         {nid: fid for nid, fid in link.fn_node_to_id.items() if fid in functions},
-        {nid: sid for nid, sid in link.let_value_symbols.items() if sid in symbols},
         defaults,
         resources,
     )

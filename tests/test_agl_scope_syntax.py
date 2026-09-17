@@ -14,9 +14,7 @@ from agm.agl.scope import AglScopeError
 from agm.agl.scope.imports import SingleTarget, build_import_env
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.syntax import (
-    AsPattern,
     BuiltinVarDecl,
-    ConstructorPattern,
     EnumDef,
     ExceptionDef,
     ExportDecl,
@@ -29,7 +27,6 @@ from agm.agl.syntax import (
     ScopeSegment,
     UseDecl,
     VarDecl,
-    VarPattern,
 )
 from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import write_module_file
@@ -161,11 +158,7 @@ def test_let_and_var_accept_root_scope_path_shorthand(
     assert isinstance(declaration, kind)
     assert isinstance(declaration, (LetDecl, VarDecl))
     assert [segment.name for segment in declaration.scope_path] == path
-    if isinstance(declaration, LetDecl):
-        assert isinstance(declaration.pattern, VarPattern)
-        assert declaration.pattern.name == name
-    else:
-        assert declaration.name == name
+    assert declaration.name == name
 
 
 @pytest.mark.parametrize(
@@ -209,55 +202,8 @@ def test_let_binder_path_shorthand_combines_with_enclosing_region_path() -> None
     assert isinstance(region, ScopeRegion)
     (member,) = region.items
     assert isinstance(member, LetDecl)
-    assert isinstance(member.pattern, VarPattern)
-    assert member.pattern.name == "x"
+    assert member.name == "x"
     assert [segment.name for segment in member.scope_path] == ["Outer", "Inner"]
-
-
-@pytest.mark.parametrize(
-    ("source", "pattern_kind", "scope_path"),
-    (
-        # `let A::x = e` — a chain spellable as a declaration head reinterprets
-        # as a scoped binding.
-        ("let A::x = e", VarPattern, ("A",)),
-        # `let A::x() = e` — an explicit (empty) argument list forces a
-        # nullary qualified constructor pattern.
-        ("let A::x() = e", ConstructorPattern, ()),
-        # `let A::x(a, b) = e` — a constructor pattern with fields.
-        ("let A::x(a, b) = e", ConstructorPattern, ()),
-        # `let A::x as y = e` — an `as` binder always wraps a match pattern.
-        ("let A::x as y = e", AsPattern, ()),
-        # `let x = e` — an unqualified name is an ordinary root binding.
-        ("let x = e", VarPattern, ()),
-        # A `::`-anchored chain is not spellable as a declaration head, so it
-        # keeps its constructor-pattern meaning.
-        ("let ::x = e", ConstructorPattern, ()),
-        ("let ::A::x = e", ConstructorPattern, ()),
-        # A module-routed segment is not spellable as a declaration head
-        # either, so it too keeps its constructor-pattern meaning.
-        ("let std/config::retries = e", ConstructorPattern, ()),
-        ("let config::A/B::retries = e", ConstructorPattern, ()),
-        # A type-argument-applied segment likewise keeps its pattern meaning.
-        ("let Box[int]::v = e", ConstructorPattern, ()),
-    ),
-)
-def test_let_disambiguation_table(
-    source: str, pattern_kind: type[object], scope_path: tuple[str, ...]
-) -> None:
-    declaration = _declaration(source)
-
-    assert isinstance(declaration, LetDecl)
-    assert isinstance(declaration.pattern, pattern_kind)
-    assert [segment.name for segment in declaration.scope_path] == list(scope_path)
-
-
-def test_let_as_binder_is_never_reinterpreted_as_a_scoped_binding() -> None:
-    declaration = _declaration("let A::x as y = e")
-
-    assert isinstance(declaration, LetDecl)
-    assert isinstance(declaration.pattern, AsPattern)
-    assert declaration.pattern.name == "y"
-    assert declaration.scope_path == ()
 
 
 def test_var_binder_path_rejects_a_module_route_segment() -> None:

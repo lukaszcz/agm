@@ -274,11 +274,8 @@ record Box[T]
 type IntBox = Box[int]
 
 let box: IntBox = Box(value = 1)
-let IntBox(value) = box       # value: int
-
 case box of
-  | Box(value) => value
-  | _ => 0
+  | IntBox(value) => value    # value: int
 ```
 
 ## Matching semantics

@@ -106,7 +106,6 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
     pattern_binder_candidates,
     pattern_binding_node_ids,
-    simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
@@ -178,7 +177,6 @@ __all__ = [
     "IndexTarget",
     "FieldTarget",
     "AssignTarget",
-    "simple_let_pattern_name",
     "PatternBinderCandidate",
     "pattern_binder_candidates",
     "pattern_binding_node_ids",

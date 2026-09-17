@@ -268,8 +268,8 @@ class TestRehydrationParity:
                 if not isinstance(item, LetDecl):
                     continue
                 assert rehydrated_module.type_env.get_binding_type(
-                    item.pattern.node_id
-                ) == cm.type_env.get_binding_type(item.pattern.node_id)
+                    item.node_id
+                ) == cm.type_env.get_binding_type(item.node_id)
 
     def test_enum_and_generic_whole_environment_queries_match(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]

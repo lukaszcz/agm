@@ -433,12 +433,6 @@ class AstBuilder(Transformer):
         # Transcript parsing discovers entry boundaries only; each entry is
         # parsed normally before evaluation and owns its own header ordering.
         self._allow_late_uses = allow_late_uses
-        # Node ids of qualified patterns built by ``pat_qual_bare`` (no argument
-        # list in the source). Provenance for ``let_decl``'s scoped-binding
-        # reinterpretation only -- ``A::x`` and ``A::x()`` build structurally
-        # identical ConstructorPattern nodes, so this distinction never leaks
-        # into the AST itself.
-        self._bare_qualified_pattern_ids: set[int] = set()
 
     def _source_start_span(self) -> SourceSpan:
         """Build the empty span at the start of the source being built.
@@ -644,28 +638,6 @@ class AstBuilder(Transformer):
             ),
             receiver.receiver_type,
         )
-
-    def _binder_scope_path(
-        self, qualifier: syntax.QualifierChain
-    ) -> tuple[syntax.ScopeSegment, ...] | None:
-        """Build a binder scope path from a bare qualifier chain, or decline.
-
-        A binder path is exactly what `decl_head` can spell: one or more
-        plain name segments, with the chain not anchored at the module root.
-        Returns ``None`` — rather than raising — for a chain that is
-        `::`-anchored, carries a module route, or applies type arguments to a
-        segment; the caller then keeps the pattern's constructor meaning.
-        """
-        if qualifier.anchor is syntax.QualifierAnchor.CURRENT_MODULE:
-            return None
-        segments: list[syntax.ScopeSegment] = []
-        for segment in qualifier.segments:
-            if segment.type_args is not None or segment.anchored or "/" in segment.name:
-                return None
-            segments.append(
-                syntax.ScopeSegment(name=segment.name, span=segment.span, node_id=self._next_id())
-            )
-        return tuple(segments)
 
     def scope_region(self, meta: Meta, args: _Args) -> syntax.ScopeRegion:
         """Build and normalize a scope region with a matching closer."""
@@ -1137,35 +1109,13 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def let_decl(self, meta: Meta, args: _Args) -> syntax.LetDecl:
-        """let_decl: "let" pattern type_ann? EQ expr
-
-        A pattern that is exactly a bare qualifier chain (``A::x``, built by
-        ``pat_qual_bare``: no argument list, no enclosing ``as`` binder) and
-        spellable as a declaration head reinterprets as a scoped binding: the
-        chain's qualifier segments become the scope path and its member name
-        becomes a plain ``VarPattern``. Every other pattern shape — including
-        a bare chain that is `::`-anchored, module-routed, or carries a
-        type-argument-applied segment, or a chain written with an argument
-        list (``A::x()``) — keeps its match meaning.
-        """
+        """let_decl: attributes? "let" decl_head type_ann? EQ expr"""
         rest = _without_attributes(args)
-        pattern = next(a for a in rest if isinstance(a, _PATTERN_NODE_TYPES))
-        ann, value = _extract_ann_and_value(rest)
+        name, scope_path = self._declaration_head(rest)
+        ann, value = _extract_ann_and_value(rest[1:])
         span = self._span_from_meta(meta)
-        scope_path: tuple[syntax.ScopeSegment, ...] = ()
-        if (
-            isinstance(pattern, syntax.ConstructorPattern)
-            and pattern.qualifier is not None
-            and pattern.node_id in self._bare_qualified_pattern_ids
-        ):
-            binder_path = self._binder_scope_path(pattern.qualifier)
-            if binder_path is not None:
-                scope_path = binder_path
-                pattern = syntax.VarPattern(
-                    name=pattern.qualifier.member, span=pattern.span, node_id=self._next_id()
-                )
         return syntax.LetDecl(
-            pattern=pattern,
+            name=name,
             type_ann=ann,
             value=value,
             span=span,
@@ -3094,14 +3044,9 @@ class AstBuilder(Transformer):
         )
 
     def pat_qual_bare(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
-        """pat_qual_bare: qual_ref_chain — a qualified pattern written without parens.
-
-        Also the shape a root-position ``let`` pattern must have to be
-        reinterpreted as a scoped binding; see ``let_decl``.
-        """
+        """pat_qual_bare: qual_ref_chain — a qualified pattern written without parens."""
         qualifier = next(a for a in args if isinstance(a, syntax.QualifierChain))
         node_id = self._next_id()
-        self._bare_qualified_pattern_ids.add(node_id)
         return syntax.ConstructorPattern(
             name=qualifier.member,
             positional=(),

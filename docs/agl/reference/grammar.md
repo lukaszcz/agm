@@ -389,7 +389,7 @@ priorities.
 ## Bindings and mutation
 
 ```ebnf
-let_decl       ::= attributes? "let" pattern type_ann? "=" init_value
+let_decl       ::= attributes? "let" decl_head type_ann? "=" init_value
 var_decl       ::= attributes? "var" decl_head type_ann? "=" init_value
 builtin_var_def ::= attributes? "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* standard library only *)
 assign_stmt ::= assign_target ":=" init_value
@@ -522,7 +522,7 @@ try_expr          ::= "try" try_body catch_clause+
 try_body          ::= suite | (marked_item ";")* try_tail
 try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
                     | return_expr | if_expr | case_expr | loop
-try_letvar_decl   ::= attributes? "let" pattern type_ann? "=" try_value
+try_letvar_decl   ::= attributes? "let" decl_head type_ann? "=" try_value
                     | attributes? "var" decl_head type_ann? "=" try_value
 try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop
 catch_clause      ::= "catch" catch_pattern "=>" branch_body
@@ -563,8 +563,7 @@ member record with `::`. A leading `/` is an anchored qualifier; without it,
 the qualifier is resolved as a suffix. The complete qualifier through `::` is
 byte-adjacent. A qualified pattern's argument list is optional
 (`Option::None` and `Option::None()` are both nullary matches) except at the
-root of a `let` pattern, where writing it or not distinguishes a match from a
-scoped binding — see [Bindings and scope](bindings-and-scope.md). Unqualified
+root of a `let` declaration, which accepts only a binding name. Unqualified
 constructor ownership is selected by the scrutinee's static nominal type, even
 when multiple enums contribute the same member name or a record constructor
 spelling collides with an injected member name; a qualifier is optional and

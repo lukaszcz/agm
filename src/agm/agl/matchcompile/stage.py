@@ -10,7 +10,7 @@ from typing import TypeAlias
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.syntax.nodes import Case, LetDecl, Program, simple_let_pattern_name
+from agm.agl.syntax.nodes import Case, Program
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram
@@ -20,19 +20,17 @@ from .diagnostics import (
     MatchIssue,
     NonExhaustiveIssue,
     RedundantArmIssue,
-    RefutableLetIssue,
     issue_sort_key,
     render_witness,
 )
-from .model import CaseSite, LetSite, MatchCaseContext, NormalizedMatchSite
+from .model import CaseSite, MatchCaseContext, NormalizedMatchSite
 from .normalize import (
     MatchCompileInvariantError,
     match_case_context,
     normalize_case,
-    normalize_let,
 )
 
-SourceMatchSite: TypeAlias = Case | LetDecl
+SourceMatchSite: TypeAlias = Case
 
 
 def _immutable_sites(sites: Mapping[int, CompiledMatchSite]) -> Mapping[int, CompiledMatchSite]:
@@ -109,19 +107,11 @@ class MatchCompilationResult:
 
 
 def _source_sites(program: Program) -> dict[int, SourceMatchSite]:
-    """Collect match sites, excluding irrefutable simple-name and discard lets.
-
-    A bare-name or ``_`` let is an irrefutable single-binder site by
-    construction. Compiling it would spend normalization, matrix construction,
-    occurrence allocation, and DAG derivation to describe one lowering
-    instruction, so only cases and destructuring lets enter this artifact.
-    """
+    """Collect case-expression match sites."""
     sites: dict[int, SourceMatchSite] = {}
 
     def collect(node: object) -> None:
-        if isinstance(node, LetDecl) and simple_let_pattern_name(node.pattern) is not None:
-            return
-        if not isinstance(node, (Case, LetDecl)):
+        if not isinstance(node, Case):
             return
         if node.node_id in sites:
             raise MatchCompileInvariantError(
@@ -136,9 +126,7 @@ def _source_sites(program: Program) -> dict[int, SourceMatchSite]:
 def _normalize_source_site(
     source: SourceMatchSite, owner: CheckedModule, case_context: MatchCaseContext
 ) -> NormalizedMatchSite:
-    if isinstance(source, Case):
-        return normalize_case(source, owner, case_context=case_context)
-    return normalize_let(source, owner, case_context=case_context)
+    return normalize_case(source, owner, case_context=case_context)
 
 
 def _compile_owner_sites(
@@ -223,8 +211,6 @@ def diagnostic_from_match_issue(issue: MatchIssue) -> Diagnostic:
     """Adapt one structured compiler issue to the ordinary static diagnostic channel."""
     if isinstance(issue, NonExhaustiveIssue):
         message = f"Non-exhaustive case; missing pattern: {render_witness(issue.witness)}."
-    elif isinstance(issue, RefutableLetIssue):
-        message = f"Refutable let pattern; missing pattern: {render_witness(issue.witness)}."
     elif isinstance(issue, RedundantArmIssue):
         message = "Redundant case arm; this pattern can never be selected."
     else:
@@ -265,8 +251,7 @@ def _validate_sites(
             raise MatchCompileInvariantError(
                 f"compiled match-site mapping key {site_id} does not match its source"
             )
-        expected_payload = CaseSite if isinstance(source, Case) else LetSite
-        if not isinstance(normalized.source, expected_payload):
+        if not isinstance(normalized.source, CaseSite):
             raise MatchCompileInvariantError(
                 f"compiled match site {site_id} carries the wrong source payload"
             )

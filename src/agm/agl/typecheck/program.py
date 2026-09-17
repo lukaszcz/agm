@@ -101,7 +101,6 @@ from agm.agl.syntax.nodes import (
     Program,
     RecordDef,
     TypeAlias,
-    simple_let_pattern_name,
     static_function_items,
     static_items,
     static_type_items,
@@ -233,7 +232,6 @@ def _assert_checked_module_closed(module: CheckedModule) -> None:
         function_signatures=module.function_signatures,
         cast_specs=module.cast_specs,
         argument_bindings=module.argument_bindings,
-        let_matched_types=module.let_matched_types,
         explicit_builtin_targets=module.explicit_builtin_targets,
         owner=f"checked module {module.module_id.path_str()}",
     )
@@ -859,12 +857,11 @@ def _build_program_static_let_table(
         for item in static_items(loaded.resolved.program.body.items):
             if not isinstance(item, LetDecl) or item.type_ann is None:
                 continue
-            name = simple_let_pattern_name(item.pattern)
-            if name is None or name == "_":
+            if item.name == "_":
                 continue
             scope_path = tuple(segment.name for segment in item.scope_path)
             with env.type_scope(scope_path):
-                result[item.pattern.node_id] = env.resolve_type_expr(
+                result[item.node_id] = env.resolve_type_expr(
                     item.type_ann, span=item.span, type_vars=frozenset()
                 )
     return result

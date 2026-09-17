@@ -3719,21 +3719,3 @@ end A
         assert region_result.ok and shorthand_result.ok
         assert region_result.bindings["A::x"] == IntValue(1)
         assert shorthand_result.bindings["A::x"] == IntValue(1)
-
-    def test_destructured_binder_in_a_region_publishes_its_full_path_name(self) -> None:
-        from agm.agl.semantics.values import IntValue
-
-        source = """\
-record Point
-  x: int
-  y: int
-
-scope A
-  let Point(x, y) = Point(x = 1, y = 2)
-end A
-"""
-        result = run_inline_command(PipelineDriver(), source)
-
-        assert result.ok, result.diagnostics
-        assert result.bindings["A::x"] == IntValue(1)
-        assert result.bindings["A::y"] == IntValue(2)

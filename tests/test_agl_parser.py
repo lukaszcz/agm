@@ -369,59 +369,38 @@ class TestBinders:
     def test_let_decl_simple(self) -> None:
         let = first(parse("let x = 5"))
         assert isinstance(let, LetDecl)
-        assert isinstance(let.pattern, VarPattern)
-        assert let.pattern.name == "x"
+        assert let.name == "x"
         assert let.type_ann is None
         assert isinstance(let.value, IntLit)
 
     def test_let_decl_wildcard(self) -> None:
         let = first(parse("let _ = 5"))
         assert isinstance(let, LetDecl)
-        assert isinstance(let.pattern, WildcardPattern)
+        assert let.name == "_"
 
     def test_let_decl_annotated(self) -> None:
         let = first(parse("let x: int = 5"))
         assert isinstance(let, LetDecl)
-        assert isinstance(let.pattern, VarPattern)
+        assert let.name == "x"
         assert isinstance(let.type_ann, IntT)
 
-    def test_let_decl_constructor_pattern_annotation_follows_complete_pattern(self) -> None:
-        let = first(parse("let Point(x, y): Point = value"))
-        assert isinstance(let, LetDecl)
-        assert isinstance(let.pattern, ConstructorPattern)
-        assert let.pattern.name == "Point"
-        names = [
-            pattern.name for pattern in let.pattern.positional if isinstance(pattern, VarPattern)
-        ]
-        assert names == ["x", "y"]
-        assert isinstance(let.type_ann, NameT)
-        assert let.type_ann.name == "Point"
-
-    def test_let_decl_qualified_constructor_pattern(self) -> None:
-        let = first(parse("let geometry::Point(x = x) = value"))
-        assert isinstance(let, LetDecl)
-        assert isinstance(let.pattern, ConstructorPattern)
-        assert let.pattern.qualifier is not None
-        assert let.pattern.qualifier.route_segments == ("geometry",)
-        assert let.pattern.name == "Point"
-
-    def test_let_decl_alias_and_nested_patterns(self) -> None:
-        let = first(parse("let Pair(Point(x, _), right = Some(value)) as pair = value"))
-        assert isinstance(let, LetDecl)
-        assert isinstance(let.pattern, AsPattern)
-        assert let.pattern.name == "pair"
-        assert isinstance(let.pattern.pattern, ConstructorPattern)
-        (left,) = let.pattern.pattern.positional
-        assert isinstance(left, ConstructorPattern)
-        assert isinstance(left.positional[1], WildcardPattern)
-        (right,) = let.pattern.pattern.named
-        assert isinstance(right.pattern, ConstructorPattern)
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let Point(x, y): Point = value",
+            "let geometry::Point(x = x) = value",
+            "let Pair(Point(x, _), right = Some(value)) as pair = value",
+            "try let Pair(left, right): Pair = value catch _ => ()",
+        ),
+    )
+    def test_let_decl_rejects_patterns(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
 
     def test_operator_name_let_binding(self) -> None:
         let = first(parse("let %? = 0"))
         assert isinstance(let, LetDecl)
-        assert isinstance(let.pattern, VarPattern)
-        assert let.pattern.name == "%?"
+        assert let.name == "%?"
         assert isinstance(let.value, IntLit)
 
     @pytest.mark.parametrize("source", ("var Point(x) = value", "var _ as ignored = value"))
@@ -2839,16 +2818,6 @@ class TestTryExpr:
         assert isinstance(e.body, Block)
         assert isinstance(e.body.items[-1], binder_type)
 
-    def test_inline_try_body_let_accepts_a_pattern(self) -> None:
-        e = first(parse("try let Pair(left, right) as pair: Pair = value catch _ => ()"))
-        assert isinstance(e, Try)
-        assert isinstance(e.body, Block)
-        (let,) = e.body.items
-        assert isinstance(let, LetDecl)
-        assert isinstance(let.pattern, AsPattern)
-        assert isinstance(let.pattern.pattern, ConstructorPattern)
-        assert isinstance(let.type_ann, NameT)
-
     @pytest.mark.parametrize(
         "source",
         (
@@ -3047,46 +3016,15 @@ class TestPatterns:
         assert isinstance(pat.pattern, ConstructorPattern)
         assert pat.pattern.qualifier is not None
 
-    def test_bare_qualified_let_pattern_is_a_scoped_binding(self) -> None:
+    def test_qualified_let_name_is_a_scoped_binding(self) -> None:
         let = self._let_decl("let A::x = 1")
         assert [segment.name for segment in let.scope_path] == ["A"]
-        assert isinstance(let.pattern, VarPattern)
-        assert let.pattern.name == "x"
+        assert let.name == "x"
 
-    def test_qualified_let_pattern_with_parens_keeps_constructor_match_meaning(self) -> None:
-        let = self._let_decl("let A::x() = 1")
-        assert let.scope_path == ()
-        assert isinstance(let.pattern, ConstructorPattern)
-        assert let.pattern.qualifier is not None
-        assert let.pattern.qualifier.member == "x"
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "let ::x = 1",
-            "let std/config::x = 1",
-            "let Box[int]::x = 1",
-        ),
-        ids=("root-anchored", "module-routed", "type-argument-applied"),
-    )
-    def test_let_pattern_not_spellable_as_a_declaration_head_keeps_constructor_match_meaning(
-        self, source: str
-    ) -> None:
-        let = self._let_decl(source)
-        assert let.scope_path == ()
-        assert isinstance(let.pattern, ConstructorPattern)
-
-    def test_deeper_qualified_let_pattern_is_a_scoped_binding_with_every_segment(self) -> None:
+    def test_deeper_qualified_let_name_keeps_every_segment(self) -> None:
         let = self._let_decl("let A::B::x = 1")
         assert [segment.name for segment in let.scope_path] == ["A", "B"]
-        assert isinstance(let.pattern, VarPattern)
-        assert let.pattern.name == "x"
-
-    def test_let_bare_and_parenthesized_qualified_forms_differ_in_meaning(self) -> None:
-        bare = self._let_decl("let A::x = 1")
-        parenthesized = self._let_decl("let A::x() = 1")
-        assert bare.scope_path != parenthesized.scope_path
-        assert type(bare.pattern) is not type(parenthesized.pattern)
+        assert let.name == "x"
 
 
 # ---------------------------------------------------------------------------
@@ -3777,8 +3715,7 @@ class TestCaseNeutralNamesParser:
         prog = parse("let X = 1")
         d = first(prog)
         assert isinstance(d, LetDecl)
-        assert isinstance(d.pattern, VarPattern)
-        assert d.pattern.name == "X"
+        assert d.name == "X"
 
     def test_lowercase_type_in_type_ann(self) -> None:
         prog = parse("let x: mytype = 1")

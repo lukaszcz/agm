@@ -24,7 +24,6 @@ from agm.agl.matchcompile import (
     OpenComplementWitness,
     RecordWitness,
     RedundantArmIssue,
-    RefutableLetIssue,
     WildcardWitness,
     WitnessField,
     render_witness,
@@ -54,10 +53,8 @@ from agm.agl.matchcompile.model import (
     DecisionSwitch,
     EnumConstructorSpelling,
     FieldOccurrenceProvenance,
-    LetSite,
     LiteralKind,
     MatchCaseContext,
-    MatchSiteSource,
     NominalConstructor,
     Occurrence,
     OccurrenceId,
@@ -67,7 +64,6 @@ from agm.agl.matchcompile.model import (
 from agm.agl.matchcompile.normalize import (
     MatchCompileInvariantError,
     normalize_case,
-    normalize_let,
     signature_for_type,
 )
 from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID
@@ -75,7 +71,7 @@ from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, IntType, RecordType, Type, TypeTemplate
 from agm.agl.semantics.values import BoolValue, RecordValue, Value
-from agm.agl.syntax.nodes import Case, LetDecl
+from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import (
     CheckedModule,
@@ -136,21 +132,7 @@ def _matrix_batch_source(declarations: str, matrices: Sequence[Sequence[str]]) -
     return declarations + "\n".join(blocks) + "\n"
 
 
-def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
-    checked = resolve_and_check_inline_entry("let true = false", _CAPS)
-    lets: list[LetDecl] = []
-
-    def collect(node: object) -> None:
-        if isinstance(node, LetDecl):
-            lets.append(node)
-
-    walk(checked.resolved.program, collect)
-    (let,) = lets
-    compiled = compile_match_site(normalize_let(let, checked))
-
-    assert isinstance(compiled.issues[0], RefutableLetIssue)
-    assert isinstance(compiled.issues[0].witness, BoolWitness)
-    assert compiled.issues[0].witness.value is False
+def test_compiler_validation_rejects_malformed_decisions() -> None:
     _checked, ((_, irrefutable), (_, decomposed)) = _compiled_cases(
         "record Pair\n  left: int\n  right: int\nlet value = Pair(left = 1, right = 2)\n"
         "let _ = case true of | _ => 1\n"
@@ -172,38 +154,10 @@ def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
     assert isinstance(root.child, DecisionLeaf)
 
 
-def test_issue_kind_is_selected_by_the_sealed_source_payload() -> None:
+def test_case_source_payload_selects_non_exhaustive_issue() -> None:
     _, _, case_compiled = _compile("case true of | false => 0")
     assert isinstance(case_compiled.normalized.source, CaseSite)
     assert isinstance(case_compiled.issues[0], NonExhaustiveIssue)
-
-    checked = resolve_and_check_inline_entry("let true = false", _CAPS)
-    lets: list[LetDecl] = []
-
-    def collect(node: object) -> None:
-        if isinstance(node, LetDecl):
-            lets.append(node)
-
-    walk(checked.resolved.program, collect)
-    (let,) = lets
-    let_compiled = compile_match_site(normalize_let(let, checked))
-    assert isinstance(let_compiled.normalized.source, LetSite)
-    assert isinstance(let_compiled.issues[0], RefutableLetIssue)
-
-
-def test_issue_selection_rejects_an_unknown_source_payload() -> None:
-    _, _, compiled = _compile("case true of | _ => 1")
-
-    class UnknownPayload:
-        actions: tuple[object, ...] = ()
-
-    malformed = replace(
-        compiled.normalized,
-        source=cast(MatchSiteSource, UnknownPayload()),
-        rows=(),
-    )
-    with pytest.raises(AssertionError):
-        compiler_module._issues(malformed, compiled.root, compiled.occurrences)
 
 
 def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledMatchSite:

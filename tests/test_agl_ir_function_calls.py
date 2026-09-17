@@ -489,27 +489,6 @@ def test_static_let_calls_function_assigning_prior_static_var() -> None:
     assert ir["result"] == IntValue(1)
 
 
-def test_static_let_reads_prior_destructured_static_let() -> None:
-    """A static let's initializer may read binders from a preceding destructuring let."""
-    source = (
-        "record Pair(left: int, right: int)\n"
-        "let Pair(left, right) = Pair(left = 20, right = 22)\n"
-        "let result = left + right\n"
-        "()"
-    )
-
-    ir = evaluate_ir(source)
-
-    assert ir["left"] == IntValue(20)
-    assert ir["right"] == IntValue(22)
-    assert ir["result"] == IntValue(42)
-
-
-# ---------------------------------------------------------------------------
-# B1/capture fix tests (review-fixes task)
-# ---------------------------------------------------------------------------
-
-
 def test_index_target_static_root_access() -> None:
     """A root function can mutate a static root array through an index target."""
     from agm.agl.semantics.values import ArrayValue

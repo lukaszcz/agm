@@ -244,20 +244,15 @@ config-file layers.
 
 ## Binders: `let` and `var`
 
-`let` carries an immutable pattern; `var` binds a single mutable name. Both
+`let` binds a single immutable name; `var` binds a single mutable name. Both
 scope their binding over the **continuation** — the rest of the block and any
-enclosing continuation that consumes the block. A `let` pattern must be
-irrefutable for its complete initializer type, so destructuring has no runtime
-match failure. A final binder makes its block `unit`-valued unless its
+enclosing continuation that consumes the block. A final binder makes its block `unit`-valued unless its
 initializer exits, in which case the block is bottom-valued.
 
 ```agl
-record Pair
-  left: int
-  right: int
-
 program def main() -> unit =
-  let Pair(left, right) = Pair(left = 3, right = 4)
+  let left = 3
+  let right = 4
   let _ = left + right
 ```
 

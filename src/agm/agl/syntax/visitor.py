@@ -11,7 +11,7 @@ Usage::
 
     def show(node: object) -> None:
         if isinstance(node, LetDecl):
-            print(f"let {node.pattern}")
+            print(f"let {node.name}")
 
     walk(program, show)
 """
@@ -394,7 +394,6 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     # --- Binder nodes ---
     elif isinstance(node, LetDecl):
         _walk_attributes(node.attributes, callback)
-        walk(node.pattern, callback)
         if node.type_ann is not None:
             walk(node.type_ann, callback)
         walk(node.value, callback)

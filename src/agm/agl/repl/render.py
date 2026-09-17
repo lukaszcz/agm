@@ -66,10 +66,8 @@ def format_typed_value(
 
     This is the single source of truth for the binding/value display shared by
     the entry-echo path (:func:`_render_echo`) and the ``:bindings``
-    meta-command, so the two never drift in how a value is rendered. *name* is
-    ``None`` for a destructuring ``let`` binding echo, which has no single
-    public name to show.  A value that turned cyclic since its entry ran
-    reports as a runtime-error line instead (see
+    meta-command, so the two never drift in how a value is rendered. A value
+    that turned cyclic since its entry ran reports as a runtime-error line instead (see
     :func:`_render_value_or_cyclic_message`).
     """
     prefix = f"{name} :" if name is not None else ":"
@@ -205,8 +203,7 @@ def _render_echo(result: "EntryResult") -> str | None:
             quote_strings=result.quote_strings,
         )
     if result.kind == "binding":
-        # Named bindings share their display with ``:bindings``. A destructuring
-        # let has no single public name, so it echoes its complete matched value.
+        # Bindings share their display with ``:bindings``.
         assert (
             result.value is not None
             and result.value_type is not None

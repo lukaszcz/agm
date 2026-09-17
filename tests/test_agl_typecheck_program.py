@@ -104,13 +104,13 @@ def _module_items(module: CheckedModule) -> tuple[Item, ...]:
 
 def _binding_value_type(cg: CheckedProgram, module_id: ModuleId, name: str) -> Type:
     """Inferred type of a source ``let``/``var <name> = ...`` in *module_id*."""
-    from agm.agl.syntax.nodes import LetDecl, VarDecl, simple_let_pattern_name
+    from agm.agl.syntax.nodes import LetDecl, VarDecl
 
     module = cg.modules[module_id]
     for item in _module_items(module):
         if isinstance(item, VarDecl) and item.name == name:
             return module.node_types[item.value.node_id]
-        if isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) == name:
+        if isinstance(item, LetDecl) and item.name == name:
             return module.node_types[item.value.node_id]
     raise AssertionError(f"no top-level binding named {name!r} in {module_id}")
 
@@ -274,23 +274,6 @@ def test_single_module_program_infers_forward_and_mutual_returns(tmp_path: Path)
     assert signatures["later"].result == IntType()
     assert signatures["is-even"].result == BoolType()
     assert signatures["is-odd"].result == BoolType()
-
-
-def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> None:
-    """Candidate seeding tracks every selected binder node, not just the let site."""
-    # Named "Holder", not "Option": the standard library's own Option[T] is in
-    # scope, and a same-named top-level enum would make Option:: ambiguous
-    # instead of exercising the candidate-seeding path under test.
-    checked = resolve_and_check_repl_entry(
-        "enum Holder[T]\n"
-        "  | some(value: T)\n"
-        "let some(value = value): Holder[int] = some(value = 1)\n"
-        "def capture() = value\n"
-        "capture()",
-        _CAPS,
-    )
-
-    assert checked.function_signatures["capture"].result == IntType()
 
 
 def test_candidate_seeding_defers_binding_that_calls_unannotated_orphan_method() -> None:
@@ -665,40 +648,6 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
     # Pin c's concrete member identity to mylib.
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
         "Red", scope_path=("Color",), module_id=mylib_id
-    )
-
-
-@pytest.mark.parametrize(
-    ("import_decl", "route"),
-    (
-        ("import mylib", "mylib"),
-        ("import mylib as colors", "colors"),
-        ("import mylib::*", "mylib"),
-    ),
-    ids=("plain", "alias", "glob_tail"),
-)
-def test_module_qualified_imported_enum_pattern_publishes_constructor_ref(
-    tmp_path: Path, import_decl: str, route: str
-) -> None:
-    """A qualified imported enum pattern publishes its selected variant reference."""
-    checked = _check_program(
-        tmp_path,
-        {
-            "entry": f"{import_decl}\nlet {route}::Flag::on() = {route}::Flag::on\n()",
-            "mylib": "enum Flag\n  | on\n  | off",
-        },
-    )
-    from agm.agl.syntax.nodes import ConstructorPattern, LetDecl
-
-    entry = checked.modules[ENTRY_ID]
-    let_decl = next(item for item in _module_items(entry) if isinstance(item, LetDecl))
-    assert isinstance(let_decl.pattern, ConstructorPattern)
-    constructor = entry.pattern_constructor_ref_for(let_decl.pattern.node_id)
-    assert constructor is not None
-    assert (constructor.owner_module_id, constructor.owner_path, constructor.owner_name) == (
-        ModuleId.from_path("mylib"),
-        ("Flag",),
-        "on",
     )
 
 

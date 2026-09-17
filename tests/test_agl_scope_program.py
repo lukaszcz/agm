@@ -3700,7 +3700,9 @@ def test_plain_import_retains_qualified_constructor_pattern_candidates(
         {
             "library": "record Token\n  value: int\ntype Alias = Token",
             "entry": (
-                f"import library\nlet value = 0\nlet library::{owner}({owner}) = value\n{owner}"
+                f"import library\n"
+                f"let subject: library::{owner} = library::{owner}(value = 1)\n"
+                f"case subject of | library::{owner}(value) => value"
             ),
         },
     )
@@ -3708,9 +3710,11 @@ def test_plain_import_retains_qualified_constructor_pattern_candidates(
     entry = resolve_program(graph).modules[ENTRY_ID].resolved
     main = entry.program.body.items[-1]
     assert isinstance(main, FuncDef)
-    let_decl = main.body.items[-2]
-    assert isinstance(let_decl.pattern, ConstructorPattern)
-    candidates = entry.pattern_constructor_candidates[let_decl.pattern.node_id]
+    case = main.body.items[-1]
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    candidates = entry.pattern_constructor_candidates[pattern.node_id]
     assert candidates[0].owner_module_id == ModuleId.from_path("library")
     assert candidates[0].owner_name == owner
 

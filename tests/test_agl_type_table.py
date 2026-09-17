@@ -69,7 +69,6 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     VarDecl,
     VariantDef,
-    simple_let_pattern_name,
 )
 from agm.agl.typecheck import AglTypeError, CheckedModule
 from agm.agl.typecheck.program import check_program
@@ -359,7 +358,7 @@ def _binding_value_type(checked: CheckedModule, name: str):
     for item in checked.resolved.program.body.items:
         if isinstance(item, VarDecl) and item.name == name:
             return checked.node_types[item.value.node_id]
-        if isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) == name:
+        if isinstance(item, LetDecl) and item.name == name:
             return checked.node_types[item.value.node_id]
     raise AssertionError(f"no top-level binding named {name!r}")
 

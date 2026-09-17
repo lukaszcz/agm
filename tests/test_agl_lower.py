@@ -121,7 +121,6 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     Placeholder,
     VarRef,
-    pattern_binder_candidates,
 )
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import check_program
@@ -329,7 +328,7 @@ def test_lowering_registers_a_generic_enum_nominal_with_enum_kind() -> None:
 
 
 def _let_root_capture(initializer: object) -> IrBind:
-    """Return the initializer bind from a simple or destructuring let."""
+    """Return the initializer bind from a lowered let."""
     if isinstance(initializer, IrBind):
         return initializer
     assert isinstance(initializer, IrSequence)
@@ -339,7 +338,7 @@ def _let_root_capture(initializer: object) -> IrBind:
 
 
 def _simple_let_binder(initializer: object) -> IrBind:
-    """Return the public binding from a simple or destructuring let."""
+    """Return the public binding from a lowered let."""
     if isinstance(initializer, IrBind):
         return initializer
     assert isinstance(initializer, IrSequence)
@@ -477,67 +476,6 @@ def test_constructor_result_nominal_rejects_non_nominal_type() -> None:
 
     with pytest.raises(AssertionError, match="non-nominal result"):
         lowerer._nominal_for_constructor_result(IntType())
-
-
-def test_preallocation_ignores_constructor_pattern_candidates() -> None:
-    """Only binders, not nested constructor tests, receive runtime symbols."""
-    source = (
-        "enum Flag\n"
-        "  | On\n"
-        "  | Off\n"
-        "record Pair\n"
-        "  flag: Flag\n"
-        "  value: int\n"
-        "let Pair(On, _ as root) = Pair(flag = On, value = 1)\n"
-        "def extract(pair: Pair) -> int =\n"
-        "  let Pair(On, _ as inner) = pair\n"
-        "  inner\n"
-        "program def main() -> unit = ()\n"
-    )
-    checked = _check(source)
-
-    from agm.agl.ir.ids import SourceId
-    from agm.agl.ir.program import SourceFile
-    from agm.agl.lower.lowerer import _LinkState
-
-    link = _LinkState()
-    source_id = SourceId(link.next_source)
-    link.next_source += 1
-    link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=source)
-    lowerer = _Lowerer(checked, link, ENTRY_ID, source_id, source, {})
-    lowerer.prealloc_static_symbols(checked.resolved.program.body)
-
-    root_let = next(
-        item for item in checked.resolved.program.body.items if isinstance(item, LetDecl)
-    )
-    extract = next(
-        item
-        for item in checked.resolved.program.body.items
-        if isinstance(item, FuncDef) and item.name == "extract"
-    )
-    assert isinstance(extract.body, Block)
-    function_let = next(item for item in extract.body.items if isinstance(item, LetDecl))
-    root_candidates = pattern_binder_candidates(root_let.pattern)
-    function_candidates = pattern_binder_candidates(function_let.pattern)
-    root_bound_ids = {
-        binding.decl_node_id
-        for candidate in root_candidates
-        if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
-    }
-    function_bound_ids = {
-        binding.decl_node_id
-        for candidate in function_candidates
-        if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
-    }
-    constructor_ids = {
-        candidate.node_id
-        for candidate in (*root_candidates, *function_candidates)
-        if checked.pattern_binding_for(candidate.node_id) is None
-    }
-
-    assert root_bound_ids <= link.decl_to_sym.keys()
-    assert function_bound_ids.isdisjoint(link.decl_to_sym)
-    assert constructor_ids.isdisjoint(link.decl_to_sym)
 
 
 def test_lowering_erases_flexible_state_from_generic_direct_nested_and_partial_calls() -> None:
@@ -1051,41 +989,6 @@ class TestBindingLowering:
         output = evaluate_ir_output('let _ = print "first"\nvar _ = print "second"\n()')
 
         assert output == "first\nsecond\n"
-
-    def test_pattern_let_captures_once_and_binds_each_top_level_name_publicly(self) -> None:
-        source = (
-            "record Pair\n"
-            "  left: int\n"
-            "  right: int\n"
-            "let Pair(left, right) = Pair(left = 1, right = 2)\n"
-            "()\n"
-        )
-        prog = _lower(source)
-        (lowered, _) = prog.modules[prog.entry_module].initializers
-        assert isinstance(lowered, IrSequence)
-        root_capture, decomposition = lowered.items
-        assert isinstance(root_capture, IrBind)
-        assert prog.symbols[root_capture.symbol].public_name is None
-        assert isinstance(decomposition, IrSequence)
-        projections_and_leaf = decomposition.items
-        projected_fields = [
-            item.value
-            for item in projections_and_leaf[:-1]
-            if isinstance(item, IrBind) and isinstance(item.value, IrField)
-        ]
-        assert projected_fields
-        assert all(field.mode is IrFieldMode.EXACT for field in projected_fields)
-        assert all(
-            not isinstance(item, IrBind) or prog.symbols[item.symbol].public_name is None
-            for item in projections_and_leaf[:-1]
-        )
-        leaf = projections_and_leaf[-1]
-        assert isinstance(leaf, IrSequence)
-        binders = [item for item in leaf.items if isinstance(item, IrBind)]
-        assert [prog.symbols[binder.symbol].public_name for binder in binders] == ["left", "right"]
-        assert all(not prog.symbols[binder.symbol].mutable for binder in binders)
-        assert all(isinstance(binder.value, IrLoad) for binder in binders)
-        assert isinstance(leaf.items[-1], IrConstUnit)
 
     def test_symbol_public_name(self) -> None:
         prog = _lower("let myvar: int = 1\n()")

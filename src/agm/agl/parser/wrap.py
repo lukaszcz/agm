@@ -25,17 +25,16 @@ _ROOT_DECLARATIONS = (
 
 
 def _binding_names(binding: syntax.LetDecl | syntax.VarDecl) -> frozenset[str]:
-    """The names *binding* introduces, over-approximated for pattern binders."""
-    if isinstance(binding, syntax.VarDecl):
-        return frozenset({binding.name})
-    names: set[str] = set()
-    walk(binding.pattern, lambda node: _collect_binder(node, names))
-    return frozenset(names)
+    """The name *binding* introduces."""
+    return frozenset({binding.name})
 
 
 def _collect_binder(node: object, names: set[str]) -> None:
     """Record every name *node* can introduce as a binder."""
-    if isinstance(node, (syntax.Param, syntax.VarDecl, syntax.VarPattern, syntax.AsPattern)):
+    if isinstance(
+        node,
+        (syntax.Param, syntax.LetDecl, syntax.VarDecl, syntax.VarPattern, syntax.AsPattern),
+    ):
         names.add(node.name)
     elif isinstance(node, syntax.Loop) and node.for_var is not None:
         names.add(node.for_var)

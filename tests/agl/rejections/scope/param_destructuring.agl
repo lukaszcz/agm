@@ -1,5 +1,0 @@
-record Pair
-  left: int
-  right: int
-
-@param let Pair(left, right) = Pair(1, 2)

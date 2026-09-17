@@ -90,7 +90,6 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VariantDef,
     VariantRef,
-    simple_let_pattern_name,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -410,12 +409,9 @@ def _item_atom(
 
 
 def _let_atom(item: LetDecl) -> NameAtom | None:
-    if item.type_ann is None:
+    if item.type_ann is None or item.name == "_":
         return None
-    name = simple_let_pattern_name(item.pattern)
-    if name is None or name == "_":
-        return None
-    return _atom((*tuple(segment.name for segment in item.scope_path), name))
+    return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
 
 
 def _compute_local_scope_exports(
@@ -982,7 +978,7 @@ def resolve_program(
                 if let_atom is not None:
                     key = (mid, let_atom)
                     decl_info[key] = (
-                        item.pattern.node_id,
+                        item.node_id,
                         item.span,
                         BinderKind.let_binding,
                         False,

@@ -400,10 +400,11 @@ let upcast = Circle(radius = 3) as? Shape
     assert isinstance(upcast, IrConvert)
     validate_ir(program, deep=True)
     values = evaluate_ir(source, default_stdlib=False)
-    assert values["circle"] == RecordValue(circle.nominal, {"radius": IntValue(2)})
-    assert values["is-circle"] == _some(RecordValue(circle.nominal, {"radius": IntValue(2)}))
+    circle_nominal = circle.nominals[0]
+    assert values["circle"] == RecordValue(circle_nominal, {"radius": IntValue(2)})
+    assert values["is-circle"] == _some(RecordValue(circle_nominal, {"radius": IntValue(2)}))
     assert values["is-square"] == _none()
-    assert values["upcast"] == _some(RecordValue(circle.nominal, {"radius": IntValue(3)}))
+    assert values["upcast"] == _some(RecordValue(circle_nominal, {"radius": IntValue(3)}))
 
 
 def test_golden_total_as_question_lowers_to_ir_convert() -> None:

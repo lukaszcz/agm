@@ -615,7 +615,7 @@ class IrConvert:
 
 @dataclass(frozen=True, slots=True)
 class IrNominalCast:
-    """Identity cast from an enum value to one of its member records.
+    """Identity cast accepting one or more enum member records.
 
     ``test_only`` (the ``as?`` operator) evaluates to ``Option::Some`` carrying
     the member value, and to ``Option::None`` on a nominal mismatch instead of
@@ -624,7 +624,7 @@ class IrNominalCast:
     """
 
     location: Location
-    nominal: NominalId
+    nominals: tuple[NominalId, ...]
     value: "IrExpr"
     test_only: bool
     source_label: str

@@ -1,0 +1,37 @@
+# Enum widening is static and preserves the constructor record. A narrowing
+# cast accepts only constructors shared by the source and target enums.
+enum Narrow[T]
+  | Some(value: T)
+  | None
+
+enum Wide[T] = Narrow::Some[T] | Narrow::None | Default
+
+program def main() -> unit =
+  let narrow: Narrow[int] = Some(7)
+  let wide: Wide[int] = narrow
+  let narrowed = wide as Narrow[int]
+  case narrowed of
+    | Some(value) => print value
+    | None => print "none"
+
+  let default: Wide[int] = Default
+  case default as? Narrow[int] of
+    | Some(_) => print "unexpected cast"
+    | None => print "no narrow value"
+
+  let text-wide: Wide[text] = Narrow[text]::Some("text")
+  case text-wide as? Narrow[int] of
+    | Some(_) => print "unexpected generic cast"
+    | None => print "constructor instantiation differs"
+
+  let text-none: Wide[text] = Narrow::None
+  let int-none = text-none as Narrow[int]
+  case int-none of
+    | Some(_) => print "unexpected some"
+    | None => print "shared none"
+
+  try
+    let _ = default as Narrow[int]
+    print "unexpected cast"
+  catch CastError as error =>
+    print "%{error.source-type} -> %{error.target-type}"

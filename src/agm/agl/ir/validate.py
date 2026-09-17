@@ -1037,10 +1037,13 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             if ctx.deep:
                 _check_record_nominal(nominal, ctx, "IrMakeConstructor")
 
-        case IrNominalCast(nominal=nominal, value=val):
+        case IrNominalCast(nominals=nominals, value=val):
             _validate_location(node.location, ctx)
             if ctx.deep:
-                _check_record_nominal(nominal, ctx, "IrNominalCast")
+                if not nominals:
+                    raise InvalidIrError("IrNominalCast requires at least one nominal")
+                for nominal in nominals:
+                    _check_record_nominal(nominal, ctx, "IrNominalCast")
             _validate_expr(val, ctx)
 
         case IrNominalIs(nominal=nominal, value=val):

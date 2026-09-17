@@ -846,6 +846,22 @@ class TypeTable:
         self._enum_member_by_decl_cache.setdefault(enum_decl_id, {})[handle] = result
         return result
 
+    def shared_enum_members(self, source: EnumType, target: EnumType) -> tuple[RecordType, ...]:
+        """Return *source* members that are also exact members of *target*.
+
+        Constructor identity alone is insufficient for generic members: two
+        instantiations of the same constructor are shared only when their
+        captured type arguments also match. Source declaration order is
+        preserved for deterministic lowering.
+        """
+        target_members = frozenset(self.enum_members(target))
+        return tuple(member for member in self.enum_members(source) if member in target_members)
+
+    def enum_is_subset(self, source: EnumType, target: EnumType) -> bool:
+        """Return whether every constructor of *source* is a constructor of *target*."""
+        source_members = self.enum_members(source)
+        return len(self.shared_enum_members(source, target)) == len(source_members)
+
     def exception_fields(self, handle: ExceptionType) -> Mapping[str, Type]:
         """Return *handle*'s fully flattened field types (base chain applied).
 
@@ -1677,8 +1693,8 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
     addition, a member record is assignable to an enum when it occurs in that
     enum instantiation's declared member set, and an exception is assignable
     to any exception in its base chain. This is deliberately a top-level,
-    directed relation: containers remain invariant and enums do not gain
-    membership-based conversions.
+    directed relation: containers remain invariant. An enum is assignable to
+    another enum exactly when its constructor set is a subset of the target's.
     """
     if is_assignable(value_type, target_type):
         return True
@@ -1688,6 +1704,13 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
         and value_type in table.enum_members(target_type)
     ):
         return True
+    if isinstance(value_type, EnumType) and isinstance(target_type, EnumType):
+        if (
+            table.get_by_id(value_type.decl_id) is None
+            or table.get_by_id(target_type.decl_id) is None
+        ):
+            return False
+        return table.enum_is_subset(value_type, target_type)
     if isinstance(value_type, ExceptionType) and isinstance(target_type, ExceptionType):
         return any(
             ancestor.decl_node_id == target_type.decl_id
@@ -1734,10 +1757,9 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
     if isinstance(target, ExceptionType):
         return CastKind.STATIC_ERROR
 
-    # Nominal membership casts are identity operations. A member-to-enum cast
-    # is a statically established widening; enum-to-member needs one runtime
-    # nominal check. They must precede ordinary assignability, which deliberately
-    # knows nothing about declaration-table membership.
+    # Nominal membership casts preserve the constructor record. Enum widening
+    # is statically established; narrowing to a member or an overlapping enum
+    # needs a runtime constructor-identity check.
     if isinstance(source, RecordType) and isinstance(target, EnumType):
         if source in table.enum_members(target):
             return CastKind.IDENTITY_UPCAST
@@ -1746,6 +1768,13 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
         if target in table.enum_members(source):
             return CastKind.NOMINAL_DOWNCAST
         return CastKind.STATIC_ERROR
+    if isinstance(source, EnumType) and isinstance(target, EnumType):
+        shared = table.shared_enum_members(source, target)
+        if not shared:
+            return CastKind.STATIC_ERROR
+        if len(shared) == len(table.enum_members(source)):
+            return CastKind.TOTAL_NOOP
+        return CastKind.NOMINAL_DOWNCAST
 
     # Handle is_assignable cases first (no-op / widen / json-absorb).
     # Note: is_assignable(X, TextType) is true only when X is TextType itself

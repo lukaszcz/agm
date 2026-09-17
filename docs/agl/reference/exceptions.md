@@ -421,8 +421,8 @@ value the host rejects.
 ### `CastError`
 
 A fallible `as` cast failed at runtime: the source value did not conform to
-the target type. This includes an enum-to-member identity downcast when the
-value has a different member identity.
+the target type. This includes an enum-to-member identity downcast or an
+overlapping-enum cast when the value's constructor is absent from the target.
 
 ```text
 source-type: text   # name of the source type, e.g. "json"

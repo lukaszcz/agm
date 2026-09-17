@@ -1627,7 +1627,7 @@ class IrInterpreter:
                 return ConstructorValue(nominal=nominal)
 
             case IrNominalCast(
-                nominal=nominal,
+                nominals=nominals,
                 value=val_expr,
                 test_only=test_only,
                 source_label=source_label,
@@ -1638,7 +1638,7 @@ class IrInterpreter:
                     raise InvalidIrError(
                         f"IrNominalCast: value is not a record, got {type(value).__name__}"
                     )
-                if value.nominal == nominal:
+                if value.nominal in nominals:
                     return self._option_some(value) if test_only else value
                 if test_only:
                     return self._option_none()

@@ -134,7 +134,28 @@ class TestMembershipAssignable:
 
         assert not is_assignable_in(table, ArrayType(leaf), ArrayType(target))
         assert not is_assignable_in(table, target, EnumType("Other", decl_id=5))
+        assert not is_assignable_in(table, EnumType("Other", decl_id=5), target)
         assert not is_assignable_in(table, ExceptionType("Oops", decl_id=6), target)
+
+    def test_enum_constructor_subset_is_assignable(self) -> None:
+        table, node, leaf, other, _tree = _member_assignability_table()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Wide",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                members=(node, leaf, other),
+                decl_node_id=5,
+            )
+        )
+        tree_int = EnumType("Tree", (IntType(),), decl_id=4)
+        tree_text = EnumType("Tree", (TextType(),), decl_id=4)
+        wide_int = EnumType("Wide", (IntType(),), decl_id=5)
+
+        assert is_assignable_in(table, tree_int, wide_int)
+        assert not is_assignable_in(table, wide_int, tree_int)
+        assert not is_assignable_in(table, tree_text, wide_int)
 
     def test_accepts_an_exception_subtype_as_its_base(self) -> None:
         table = TypeTable()

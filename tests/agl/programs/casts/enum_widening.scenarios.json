@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "enum_widening_and_checked_narrowing",
+      "expect": {
+        "stdout": "7\nno narrow value\nconstructor instantiation differs\nshared none\nWide[int] -> Narrow[int]\n"
+      }
+    }
+  ]
+}

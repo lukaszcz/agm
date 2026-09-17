@@ -13452,6 +13452,111 @@ class TestCast:
         assert isinstance(cast, Cast)
         assert r.node_types[cast.node_id] == TextType()
 
+    def test_enum_with_subset_of_constructors_is_assignable_to_wider_enum(self) -> None:
+        checked = accept_type(
+            "enum Narrow[T]\n"
+            "  | Some(value: T)\n"
+            "  | None\n"
+            "enum Wide[T] = Narrow::Some[T] | Narrow::None | Default\n"
+            "let narrow: Narrow[int] = Some(1)\n"
+            "let wide: Wide[int] = narrow\n"
+            "wide"
+        )
+        assert (
+            repr(checked.node_types[checked.resolved.program.body.items[-1].node_id]) == "Wide[int]"
+        )
+
+    def test_explicit_enum_widening_is_a_total_noop(self) -> None:
+        from agm.agl.semantics.types import CastKind
+
+        checked = accept_type(
+            "enum Narrow | Shared\n"
+            "enum Wide = Narrow::Shared | Extra\n"
+            "let narrow: Narrow = Shared\n"
+            "narrow as Wide"
+        )
+        spec = next(iter(checked.cast_specs.values()))
+        assert spec.kind is CastKind.TOTAL_NOOP
+
+    def test_enum_widening_infers_target_type_arguments(self) -> None:
+        checked = accept_type(
+            "enum Narrow[T]\n"
+            "  | Some(value: T)\n"
+            "  | None\n"
+            "enum Wide[T] = Narrow::Some[T] | Narrow::None | Default\n"
+            "def widen[T](value: Wide[T]) -> Wide[T] = value\n"
+            "let narrow: Narrow[int] = Some(1)\n"
+            "let wide: Wide[int] = widen(narrow)\n"
+            "wide"
+        )
+        assert (
+            repr(checked.node_types[checked.resolved.program.body.items[-1].node_id]) == "Wide[int]"
+        )
+
+    def test_generic_call_rejects_enum_narrowing(self) -> None:
+        err = reject_type(
+            "enum Narrow[T]\n"
+            "  | Some(value: T)\n"
+            "  | None\n"
+            "enum Wide[T] = Narrow::Some[T] | Narrow::None | Default\n"
+            "def narrow[T](value: Narrow[T]) -> Narrow[T] = value\n"
+            "let wide: Wide[int] = Default\n"
+            "narrow(wide)"
+        )
+        assert "inconsistent type argument" in str(err).lower()
+
+    def test_enum_with_extra_constructor_is_not_assignable_to_narrower_enum(self) -> None:
+        err = reject_type(
+            "enum Narrow | Shared\n"
+            "enum Wide = Narrow::Shared | Extra\n"
+            "let wide: Wide = Extra\n"
+            "let narrow: Narrow = wide\n"
+            "narrow"
+        )
+        assert "type mismatch" in str(err).lower()
+
+    def test_enum_widening_requires_matching_constructor_instantiations(self) -> None:
+        err = reject_type(
+            "enum Narrow[T]\n"
+            "  | Some(value: T)\n"
+            "  | None\n"
+            "enum Wide[T] = Narrow::Some[T] | Narrow::None | Default\n"
+            "let narrow: Narrow[int] = Some(1)\n"
+            "let wide: Wide[text] = narrow\n"
+            "wide"
+        )
+        assert "type mismatch" in str(err).lower()
+
+    def test_enums_with_common_constructor_can_be_cast(self) -> None:
+        checked = accept_type(
+            "enum Left | Shared | LeftOnly\n"
+            "enum Right = Left::Shared | RightOnly\n"
+            "let left: Left = Shared\n"
+            "left as Right"
+        )
+        cast = checked.resolved.program.body.items[-1]
+        assert isinstance(cast, Cast)
+        assert repr(checked.node_types[cast.node_id]) == "Right"
+
+    def test_generic_enums_can_be_cast_through_an_exact_shared_constructor(self) -> None:
+        checked = accept_type(
+            "enum Narrow[T]\n"
+            "  | Some(value: T)\n"
+            "  | None\n"
+            "enum Wide[T] = Narrow::Some[T] | Narrow::None | Default\n"
+            "let wide: Wide[text] = Narrow::None\n"
+            "wide as Narrow[int]"
+        )
+        cast = checked.resolved.program.body.items[-1]
+        assert isinstance(cast, Cast)
+        assert repr(checked.node_types[cast.node_id]) == "Narrow[int]"
+
+    def test_disjoint_enums_cannot_be_cast(self) -> None:
+        err = reject_type(
+            "enum Left | LeftOnly\nenum Right | RightOnly\nlet left: Left = LeftOnly\nleft as Right"
+        )
+        assert "cannot cast" in str(err).lower()
+
 
 # ---------------------------------------------------------------------------
 # No-finite-schema use-site enforcement (agent output target, cast target,

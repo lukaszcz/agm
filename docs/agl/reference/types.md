@@ -966,20 +966,25 @@ Typing is exact nominal matching with these implicit coercions:
 3. **An enum member record widens to an enum that declares it.** This applies only
    when checking against a known enum slot; it never finds a common enum while
    inferring a mixed expression.
-4. **A derived exception widens to any ancestor in its `extends` chain.** This
+4. **An enum widens to another enum that contains all of its constructors.**
+   Generic constructor instantiations must match; the value remains the same
+   constructor record and no runtime check is needed. Like member widening,
+   this applies against a known target slot and does not propagate through
+   containers.
+5. **A derived exception widens to any ancestor in its `extends` chain.** This
    applies only against a known base-exception slot and preserves the value's
    concrete identity. It does not propagate through containers, and `catch`
    matching remains exact.
-5. There are no other implicit conversions. In particular, an `array` or
+6. There are no other implicit conversions. In particular, an `array` or
    `dict` value — even one that is JSON-shaped — is never implicitly absorbed
    into `json`: an implicit conversion never copies a data structure, and
    converting a container to `json` builds one. Use an explicit `as json`
    cast (see [Casts and convertibility](#casts-and-convertibility) below).
-6. Equality (`==`, `!=`) and ordering comparisons require both operands to
+7. Equality (`==`, `!=`) and ordering comparisons require both operands to
    have the *same* type after rule 1. Operands whose type is, or transitively
    contains, a function, `unit`, or opaque `Session` value are a static error — see
    [Values and equality](#values-and-equality) below.
-7. All branches of a `case` expression must have the same type after rule 1.
+8. All branches of a `case` expression must have the same type after rule 1.
 
 For explicit, user-requested conversions between types, see
 [Casts and convertibility](#casts-and-convertibility) below.
@@ -1000,7 +1005,10 @@ parsing conversions. A member value may be cast up to an enum that declares
 it only when that enum declares the member record; this upcast is a
 compile-time-checked no-op. An enum value may be cast down only to one of that
 enum's declared member records; this downcast checks the runtime nominal
-identity and returns the same record value on success.
+identity and returns the same record value on success. Two enums may be cast
+when their instantiated constructor sets overlap. The cast checks whether the
+runtime constructor belongs to that overlap; a subset-to-superset cast is
+total and needs no runtime check.
 
 The target type `T` is a type expression written the same way as any other
 type annotation (`int`, `array[text]`, `MyRecord`, etc.).
@@ -1042,6 +1050,8 @@ may raise `CastError`.
 | enum `E` | same enum `E` | total (no-op) |
 | member record `R` of enum `E` | `E` | total compile-time-checked identity upcast (no-op) |
 | enum `E` | declared member record `R` | fallible identity downcast — checks that the runtime member is `R` |
+| enum `A` | enum `B` containing every constructor of `A` | total identity widening (no-op) |
+| enum `A` | enum `B` sharing some but not all constructors of `A` | fallible identity cast — checks that the runtime constructor belongs to both enums |
 | enum `E` | `text` | fallible — strict JSON or AgL value syntax parse, then member validation |
 | enum `E` | `json` | fallible — member validation |
 | `Agent` | `text` | fallible — shorthand, a JSON object, or an `Agent` member constructor call; no verbatim command fallback |

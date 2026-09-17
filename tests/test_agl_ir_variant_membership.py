@@ -170,13 +170,27 @@ def test_validate_cheap_tier_skips_nominal_checks_for_ir_nominal_cast() -> None:
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrNominalCast(
         location=loc,
-        nominal=NominalId(1),
+        nominals=(NominalId(1),),
         value=IrConstInt(loc, 1),
         test_only=False,
         source_label="int",
         target_label="Record",
     )
     validate_ir(_variant_is_program(node, {}), deep=False)
+
+
+def test_validate_rejects_ir_nominal_cast_without_accepted_members() -> None:
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    node = IrNominalCast(
+        location=loc,
+        nominals=(),
+        value=IrConstInt(loc, 1),
+        test_only=False,
+        source_label="Source",
+        target_label="Target",
+    )
+    with pytest.raises(InvalidIrError, match="at least one nominal"):
+        validate_ir(_variant_is_program(node, {}), deep=True)
 
 
 def test_validate_rejects_ir_variant_is_with_unknown_nominal() -> None:

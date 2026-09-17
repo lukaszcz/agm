@@ -696,7 +696,9 @@ success and `None` on failure — so a successful test also supplies the value.
 `as text` and `as json` raise `CyclicValueError` when conversion walks a
 reference cycle; their `as?` forms yield `None` instead. Casting from an enum
 to one of its member records is an identity downcast;
-casting a member record to a containing enum is an identity upcast.
+casting a member record to a containing enum is an identity upcast. Enums can
+be cast when they share constructors; the runtime constructor must belong to
+the target enum.
 The full conversion matrix and semantics are in
 [Types](types.md#casts-and-convertibility).
 

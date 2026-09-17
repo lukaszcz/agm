@@ -1161,7 +1161,7 @@ class CastKind(_enum.Enum):
     TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text; a cyclic walk can fail
     TOTAL_JSON = "TOTAL_JSON"  # convert to json; a cyclic walk can fail
     IDENTITY_UPCAST = "IDENTITY_UPCAST"  # member record → containing enum
-    NOMINAL_DOWNCAST = "NOMINAL_DOWNCAST"  # enum → one of its member records
+    NOMINAL_DOWNCAST = "NOMINAL_DOWNCAST"  # enum → member record or overlapping enum
     FALLIBLE = "FALLIBLE"  # runtime-fallible conversion
     STATIC_ERROR = "STATIC_ERROR"  # statically impossible — raise AglTypeError
 

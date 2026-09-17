@@ -108,8 +108,8 @@ class InferenceEngine:
     additionally have one structural solution. Rigid source variables are
     ordinary leaves: they can only equal themselves, while a flexible variable
     may solve to one. When given a type table, the engine additionally permits
-    the limited table-aware record-member-to-rigid-enum conversion only for the
-    outer equality constraint; callers apply all other assignability rules after
+    table-aware member-to-enum and enum-widening conversions at the outer
+    equality constraint; callers apply all other assignability rules after
     :meth:`zonk`.
     """
 
@@ -157,7 +157,7 @@ class InferenceEngine:
         )
 
     def unify(self, left: Type, right: Type, origin: ConstraintOrigin) -> None:
-        """Unify exactly, except for a direct member-record-to-enum constraint."""
+        """Unify exactly, except for a direct nominal-widening constraint."""
         self._unify(left, right, origin, (), allow_member_to_enum=True)
 
     def complete_from_context(
@@ -259,6 +259,27 @@ class InferenceEngine:
                 for value_arg, member_arg in zip(left.type_args, member.type_args, strict=True):
                     self._unify(value_arg, member_arg, origin, evidence)
                 return
+        if (
+            allow_member_to_enum
+            and self._type_table is not None
+            and isinstance(left, EnumType)
+            and isinstance(right, EnumType)
+            and not _same_nominal_declaration(left, right)
+        ):
+            left_members = self._type_table.enum_member_ids(left)
+            right_members = self._type_table.enum_member_ids(right)
+            if left_members.keys() <= right_members.keys():
+                for decl_id, left_member in left_members.items():
+                    right_member = right_members[decl_id]
+                    self._unify_nominal_args(
+                        left_member.type_args,
+                        right_member.type_args,
+                        left_member,
+                        right_member,
+                        origin,
+                        evidence,
+                    )
+                return
         if isinstance(left, ArrayType) and isinstance(right, ArrayType):
             self._unify(left.elem, right.elem, origin, evidence)
             return
@@ -355,6 +376,16 @@ class InferenceEngine:
         if isinstance(inferred, EnumType) and isinstance(context, EnumType):
             if _same_nominal_declaration(inferred, context):
                 self._complete_nominal_args(inferred.type_args, context.type_args, origin)
+            elif self._type_table is not None:
+                inferred_members = self._type_table.enum_member_ids(inferred)
+                context_members = self._type_table.enum_member_ids(context)
+                if inferred_members.keys() <= context_members.keys():
+                    for decl_id, inferred_member in inferred_members.items():
+                        self._complete_nominal_args(
+                            inferred_member.type_args,
+                            context_members[decl_id].type_args,
+                            origin,
+                        )
             return
         if self._type_table is not None:
             for value, target in ((inferred, context), (context, inferred)):

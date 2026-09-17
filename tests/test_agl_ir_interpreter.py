@@ -935,7 +935,7 @@ class TestDefensiveErrors:
             (
                 IrNominalCast(
                     _LOC,
-                    nominal=NominalId(1),
+                    nominals=(NominalId(1),),
                     value=IrConstInt(_LOC, 1),
                     test_only=False,
                     source_label="int",

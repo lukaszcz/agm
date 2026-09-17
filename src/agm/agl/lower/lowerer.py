@@ -1430,10 +1430,18 @@ class _Lowerer:
                 if spec.kind is CastKind.IDENTITY_UPCAST and not test_only:
                     return inner
                 if spec.kind is CastKind.NOMINAL_DOWNCAST:
-                    assert isinstance(spec.target_type, RecordType)
+                    assert isinstance(source_type, EnumType)
+                    accepted_members: tuple[RecordType, ...]
+                    if isinstance(spec.target_type, RecordType):
+                        accepted_members = (spec.target_type,)
+                    else:
+                        assert isinstance(spec.target_type, EnumType)
+                        accepted_members = self._type_table.shared_enum_members(
+                            source_type, spec.target_type
+                        )
                     return IrNominalCast(
                         location=self._loc(span),
-                        nominal=NominalId(spec.target_type.decl_id),
+                        nominals=tuple(NominalId(member.decl_id) for member in accepted_members),
                         value=inner,
                         test_only=test_only,
                         source_label=repr(source_type),

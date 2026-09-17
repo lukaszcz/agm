@@ -322,6 +322,20 @@ class TestLexer:
         assert ("class:agl.type", "int") in fragments
         assert ("class:agl.keyword", "is") not in fragments
 
+    def test_highlighted_fragment_preserves_newlines_and_trailing_prose(self) -> None:
+        source = "let x = 1\nx"
+        trailing = "\nLocation: <repl>:1:5"
+        fragments = _highlighted_agl_fragments(source + trailing, agl_ranges=((0, len(source)),))
+
+        assert ("", "\n") in fragments
+        assert fragments[-1] == ("", trailing)
+
+    def test_info_command_uses_the_highlighted_writer(self) -> None:
+        output = drive("let count = 1\r:info count\r\x04")
+
+        assert "count is a binding" in output
+        assert "let count" in output
+
     def test_styles_a_sample_line(self) -> None:
         lexer = AglPromptLexer()
         fragments = lexer.lex_document(Document("let x = 1 + foo"))(0)

@@ -647,6 +647,14 @@ class TestInfo:
             "fs::read is a function.\nSignature:\n  def fs::read(path: text) -> text"
         )
 
+    def test_info_rejects_an_unknown_qualified_library_function(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("import std/fs").ok
+
+        outcome = meta_mod.dispatch_meta(":info fs::missing", _session_ctx(session))
+
+        assert outcome.text == "Unknown identifier 'fs::missing'."
+
     def test_info_reports_an_imported_generic_type_and_constructor(self) -> None:
         session = _open_session()
         assert session.eval_entry("import std/option").ok

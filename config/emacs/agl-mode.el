@@ -1486,6 +1486,16 @@ function."
 ;; Major mode definition.
 ;; ---------------------------------------------------------------------------
 
+(defun agl--setup-font-lock (&optional fontify-region-function)
+  "Install AgL syntax and font-lock, optionally using FONTIFY-REGION-FUNCTION."
+  (set-syntax-table agl-mode-syntax-table)
+  (setq-local syntax-propertize-function #'agl-syntax-propertize-function)
+  (add-hook 'syntax-propertize-extend-region-functions
+            #'agl--propertize-extend-region nil t)
+  (setq-local font-lock-defaults '(agl-font-lock-keywords nil nil))
+  (when fontify-region-function
+    (setq-local font-lock-fontify-region-function fontify-region-function)))
+
 ;;;###autoload (add-to-list 'auto-mode-alist '("\\.agl\\'" . agl-mode))
 
 ;;;###autoload
@@ -1498,10 +1508,7 @@ function."
   (setq-local indent-tabs-mode nil)
   ;; AgL layout counts a tab as advancing to the next multiple of 4 columns.
   (setq-local tab-width 4)
-  (setq-local syntax-propertize-function #'agl-syntax-propertize-function)
-  (add-hook 'syntax-propertize-extend-region-functions
-            #'agl--propertize-extend-region nil t)
-  (setq-local font-lock-defaults '(agl-font-lock-keywords nil nil))
+  (agl--setup-font-lock)
   (setq-local imenu-create-index-function #'agl-imenu-create-index)
   (setq-local beginning-of-defun-function #'agl-beginning-of-defun)
   (setq-local end-of-defun-function #'agl-end-of-defun)

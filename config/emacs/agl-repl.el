@@ -4,8 +4,8 @@
 
 ;;; Commentary:
 
-;; An inferior AgL REPL over comint.  Its pty preserves the REPL's own
-;; prompt_toolkit ANSI styling, which comint renders in the buffer.
+;; An inferior AgL REPL over comint.  Comint advertises a dumb terminal, so the
+;; integration runs the plain REPL and applies AgL font-lock to prompt input.
 
 ;;; Code:
 
@@ -13,11 +13,11 @@
 (require 'cl-lib)
 (require 'comint)
 
-(defcustom agl-repl-command '("agm" "repl")
+(defcustom agl-repl-command '("agm" "repl" "--plain")
   "Command vector that starts the inferior AgL REPL.
 
-The default runs the REPL's rich terminal front end so its ANSI syntax
-highlighting reaches comint."
+The default uses the line-oriented frontend; `agl-repl-mode' provides native
+syntax highlighting without requiring terminal emulation."
   :type '(repeat string)
   :group 'agl)
 
@@ -98,8 +98,37 @@ describes both.")
       (setq agl-repl--sent-input-echo ""))
     visible))
 
+(defun agl-repl--fontify-region (start end loudly)
+  "Fontify AgL input after REPL prompts between START and END.
+
+LOUDLY is forwarded to `font-lock-default-fontify-region'.  Output remains
+unstyled unless it carries styling of its own."
+  (save-excursion
+    (goto-char start)
+    (beginning-of-line)
+    (while (re-search-forward agl-repl-prompt-regexp end t)
+      (let ((code-start (point))
+            (code-end (line-end-position)))
+        (when (< code-start code-end)
+          (font-lock-default-unfontify-region code-start code-end)
+          (save-restriction
+            (narrow-to-region code-start code-end)
+            (syntax-propertize (point-max))
+            (font-lock-default-fontify-region code-start code-end loudly)))))))
+
+(defun agl-repl--setup-input-buffer ()
+  "Set up the indirect buffer used to fontify REPL input."
+  (prog-mode)
+  (agl--setup-font-lock))
+
 (define-derived-mode agl-repl-mode comint-mode "AgL-REPL"
   "Major mode for an inferior AgL REPL."
+  (setq-local comint-highlight-input nil)
+  (if (fboundp 'comint-fontify-input-mode)
+      (progn
+        (setq-local comint-indirect-setup-function #'agl-repl--setup-input-buffer)
+        (comint-fontify-input-mode 1))
+    (agl--setup-font-lock #'agl-repl--fontify-region))
   (ansi-color-for-comint-mode-on)
   (setq-local comint-prompt-regexp agl-repl-prompt-regexp)
   (setq-local comint-prompt-read-only t)

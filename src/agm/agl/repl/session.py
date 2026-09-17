@@ -1961,8 +1961,8 @@ class ReplSession:
                 signature = checked.type_env.get_ctor_sig_from_module(
                     member.module_id, member.name, scope_path=member.scope_path
                 )
-                if signature is not None:
-                    matches.append(signature)
+                assert signature is not None
+                matches.append(signature)
         return matches[0] if len(matches) == 1 else None
 
     def type_names(self) -> frozenset[str]:

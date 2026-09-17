@@ -56,7 +56,7 @@
 (ert-deftest agl-repl-spawns-the-configured-command ()
   (agl-repl--with-stubs
     (agl-repl-buffer)
-    (should (equal agl-repl-tests--spawn '("agm" "repl")))
+    (should (equal agl-repl-tests--spawn '("agm" "repl" "--plain")))
     (should agl-repl-tests--connection-type)))
 
 (ert-deftest agl-repl-honours-a-customized-command ()
@@ -74,6 +74,38 @@
     (agl-repl-mode)
     (should (memq #'ansi-color-process-output comint-output-filter-functions))
     (should (memq #'agl-repl--filter-sent-input comint-preoutput-filter-functions))))
+
+(ert-deftest agl-repl-highlights-agl-input-natively ()
+  (with-temp-buffer
+    (agl-repl-mode)
+    (should-not comint-highlight-input)
+    (let ((output-start (point)))
+      (insert "AgL REPL is ready 'for' input.\nagl> ")
+      (put-text-property output-start (point) 'field 'output))
+    (insert "let answer = 42\n")
+    (let ((output-start (point)))
+      (insert "agl> ")
+      (put-text-property output-start (point) 'field 'output))
+    (insert "let message = \"hi\" # note\n")
+    (font-lock-ensure)
+    (goto-char (point-min))
+    (search-forward "for")
+    (should-not (get-text-property (1- (point)) 'face))
+    (search-forward "let")
+    (should (eq (get-text-property (1- (point)) 'face)
+                'font-lock-keyword-face))
+    (search-forward "answer")
+    (should (eq (get-text-property (1- (point)) 'face)
+                'font-lock-variable-name-face))
+    (search-forward "42")
+    (should (eq (get-text-property (1- (point)) 'face)
+                agl--number-face))
+    (search-forward "hi")
+    (should (eq (get-text-property (1- (point)) 'face)
+                'font-lock-string-face))
+    (search-forward "note")
+    (should (eq (get-text-property (1- (point)) 'face)
+                'font-lock-comment-face))))
 
 ;; --- Sending source ---
 

@@ -64,7 +64,8 @@ the blank line that closes it is sent too.
 
 Sent source and its intermediate prompts are not echoed back into the REPL
 buffer; AGM's concise result or definition summary and its final prompt remain
-visible. Input typed at the REPL prompt is unchanged.
+visible. Input typed at the REPL prompt uses the same native AgL syntax
+highlighting as source buffers.
 
 The **AgL** menu provides the same run, type-check, REPL, send, reload, and
 diagnostic actions.

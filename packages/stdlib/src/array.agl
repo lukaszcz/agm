@@ -56,11 +56,6 @@ extern def array[E]::zip[F](self, other: array[F]) -> array[Pair[E, F]]
 extern def array[E]::zip-with[F, A](self, other: array[F], function: (E, F) -> A) -> array[A]
 extern def array[E]::enumerate(self) -> array[Pair[int, E]]
 
-# Raises exception on empty array
-def join[T](values: array[T], f: (T, T) -> T) -> T =
-  values.drop(1).fold(values.first(), f)
-@extern-name("join_text")
-extern def join-text(values: array[text], separator: text) -> text
 extern def flatten[T](values: array[array[T]]) -> array[T]
 extern def unzip[A, B](values: array[Pair[A, B]]) -> Pair[array[A], array[B]]
 extern def repeat[T](value: T, count: int) -> array[T]

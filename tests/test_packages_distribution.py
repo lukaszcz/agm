@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agm.packages.distribution import distribution_files
+import semver
+
+from agm.packages.distribution import distribution_files, materialize_distribution
+from agm.packages.manifest import PackageManifest
 
 
 def _write_tree(root: Path, files: dict[str, str]) -> None:
@@ -16,6 +19,22 @@ def _write_tree(root: Path, files: dict[str, str]) -> None:
 
 def _selected(root: Path) -> set[str]:
     return {relative for relative, _ in distribution_files(root)}
+
+
+def test_materialize_distribution_dereferences_a_symlinked_file(tmp_path: Path) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "target.txt").write_text("source", encoding="utf-8")
+    (root / "alias.txt").symlink_to(root / "target.txt")
+    destination = tmp_path / "distribution"
+    destination.mkdir()
+
+    materialize_distribution(
+        root, PackageManifest(name="alpha", version=semver.Version.parse("1.0.0")), destination
+    )
+
+    assert (destination / "alias.txt").read_text(encoding="utf-8") == "source"
+    assert not (destination / "alias.txt").is_symlink()
 
 
 def test_nested_directory_rule_excludes_matching_descendants(tmp_path: Path) -> None:

@@ -19,7 +19,6 @@ from agm.packages.distribution import (
     DistributionError,
     distribution_files,
     normalized_manifest,
-    reject_source_links,
     source_paths,
 )
 from agm.packages.manifest import (
@@ -102,12 +101,12 @@ def write_archive(package_root: Path, destination: Path) -> ArchiveMetadata:
     """Write a deterministic ``.agmpkg`` archive from a quiescent *package_root*.
 
     The writer never intentionally modifies a source tree that remains unchanged.
-    It rejects ordinary source links and destination aliases, and rolls back a
-    publication when it can verify that its opened output parent entered the
-    source tree. Concurrent source or namespace mutation is unsupported: POSIX
-    has no atomic operation to prove that an already-open output parent remains
-    outside a concurrently renameable source tree. Detected races raise
-    :class:`ArchiveError`.
+    Source links to regular files are copied as regular archive entries. It
+    rejects destination aliases and rolls back a publication when it can verify
+    that its opened output parent entered the source tree. Concurrent source or
+    namespace mutation is unsupported: POSIX has no atomic operation to prove
+    that an already-open output parent remains outside a concurrently renameable
+    source tree. Detected races raise :class:`ArchiveError`.
     """
 
     root = _package_root(package_root)
@@ -117,7 +116,6 @@ def write_archive(package_root: Path, destination: Path) -> ArchiveMetadata:
         )
     source_root = _capture_source_root(root)
     try:
-        _reject_source_links(root)
         _validate_destination(root, destination)
         manifest, prefix, contents = _archive_distribution(root)
         metadata = _metadata(manifest, contents)
@@ -154,7 +152,6 @@ def validate_archive_source(
     """
 
     root = _package_root(package_root)
-    _reject_source_links(root)
     source_manifest, manifest, prefix = _source_distribution_manifest(root)
     _archive_path(prefix + MANIFEST_NAME)
     contents = _archive_contents(root, manifest)
@@ -556,10 +553,6 @@ def _source_paths(root: Path) -> tuple[Path, ...]:
     """Return every source descendant, refusing directories that cannot be read."""
 
     return _as_archive_error(lambda: source_paths(root))
-
-
-def _reject_source_links(root: Path) -> None:
-    _as_archive_error(lambda: reject_source_links(root))
 
 
 def _validate_destination(root: Path, destination: Path) -> None:

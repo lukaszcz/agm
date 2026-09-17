@@ -74,6 +74,12 @@ def test_array_methods_are_ambient_but_free_functions_require_an_import() -> Non
 
     resolve_and_check_inline_entry("import std/array\narray::range(1, 2)\n", HostCapabilities())
 
+    with pytest.raises(AglScopeError):
+        resolve_and_check_inline_entry(
+            "import std/array\narray::join([1, 2], fn(left: int, right: int) => left + right)\n",
+            HostCapabilities(),
+        )
+
 
 def test_map_in_place_preserves_the_receiver_element_type() -> None:
     resolve_and_check_inline_entry(

@@ -56,8 +56,7 @@ def is_cache_or_vcs_path(path: str) -> bool:
 def source_paths(root: Path) -> tuple[Path, ...]:
     """Return every source descendant, refusing directories that cannot be read.
 
-    Symlinks are accepted by this walk and rejected separately, once collected,
-    by :func:`reject_source_links`.
+    Symlinks are collected as files but are never traversed as directories.
     """
 
     def accept(child: Path, mode: int) -> None:
@@ -75,23 +74,16 @@ def source_paths(root: Path) -> tuple[Path, ...]:
     )
 
 
-def reject_source_links(root: Path) -> None:
-    """Reject a source tree containing a symlink, which no distribution carries."""
-
-    _reject_links(source_paths(root))
-
-
 def distribution_files(root: Path) -> tuple[tuple[str, Path], ...]:
     """Return the distributed source files as sorted ``(relative path, path)`` pairs.
 
     The manifest and ``RECORD`` are excluded: both are rendered rather than
     copied, so a distribution carries a normalized manifest and a record of the
-    selection made here. A symlink anywhere below *root* is rejected, whether or
-    not the selection would carry it.
+    selection made here. Symlinked regular files are included and dereferenced
+    by distribution writers, so stored trees and archives remain link-free.
     """
 
     paths = source_paths(root)
-    _reject_links(paths)
     ignored = _gitignore_spec(root, paths)
     return tuple(
         (relative, path)
@@ -203,12 +195,6 @@ def _toml_key(value: str) -> str:
 
 def _toml_array(values: tuple[str, ...]) -> str:
     return "[" + ", ".join(_toml_string(value) for value in values) + "]"
-
-
-def _reject_links(paths: tuple[Path, ...]) -> None:
-    for path in paths:
-        if path.is_symlink():
-            raise DistributionError(f"package contains symlink {path}")
 
 
 def _gitignore_spec(root: Path, paths: tuple[Path, ...]) -> PathSpec:

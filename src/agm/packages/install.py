@@ -40,6 +40,7 @@ from agm.packages.distribution import (
     MANIFEST_NAME,
     DistributionError,
     distribution_entries,
+    distribution_files,
     is_cache_or_vcs_path,
     materialize_distribution,
 )
@@ -66,7 +67,6 @@ from agm.packages.record import (
     RecordError,
     content_hash,
     read_record,
-    validate_package_tree,
     verify_record,
     write_record,
 )
@@ -550,7 +550,7 @@ def _install_directory(
                     fs.rmtree(staging)
         else:
             try:
-                validate_package_tree(root)
+                distribution_files(root)
                 validate_package_distribution(resolution)
             except (DisciplineError, DistributionError, OSError, RecordError) as exc:
                 raise PackageInstallError(

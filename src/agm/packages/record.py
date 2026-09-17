@@ -53,18 +53,6 @@ def record_entries(root: Path) -> tuple[RecordEntry, ...]:
     )
 
 
-def validate_package_tree(root: Path) -> None:
-    """Check that *root* is a package tree AGM can record, without hashing it.
-
-    Callers that only need to know a directory is eligible (regular files and
-    directories, no symlinks or special nodes, portable relative paths) use
-    this instead of building record entries, which would read and hash every
-    file only to discard the digests.
-    """
-
-    _package_tree(root)
-
-
 def read_record(root: Path) -> tuple[RecordEntry, ...]:
     """Read and validate the package ``RECORD`` below *root*."""
 

@@ -250,12 +250,22 @@ def test_archive_discipline_accepts_a_nonempty_directory_resource(tmp_path: Path
     assert verify_archive_discipline(archive_path) == metadata
 
 
-def test_write_archive_refuses_symlinks_and_casefolding_collisions(tmp_path: Path) -> None:
+def test_write_archive_materializes_source_symlinks_and_rejects_casefolding_collisions(
+    tmp_path: Path,
+) -> None:
     root = _package_tree(tmp_path)
     (root / "linked.agl").symlink_to(root / MODULE_TREE_DIRNAME / "main.agl")
+    archive_path = tmp_path / "linked.agmpkg"
 
-    with pytest.raises(ArchiveError, match="symlink"):
-        write_archive(root, tmp_path / "linked.agmpkg")
+    write_archive(root, archive_path)
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    extract_archive(archive_path, extracted)
+
+    assert (extracted / "linked.agl").read_text(encoding="utf-8") == (
+        "program def main() -> unit = ()\n"
+    )
+    assert not (extracted / "linked.agl").is_symlink()
 
     (root / "linked.agl").unlink()
     (root / "README").write_text("one", encoding="utf-8")

@@ -38,6 +38,10 @@ def lines(value: str) -> object:
     return array(value.splitlines())
 
 
+def join(values: object, separator: str) -> str:
+    return separator.join(values)
+
+
 def split(value: str, separator: str) -> object:
     return array(value.split(separator))
 
@@ -113,6 +117,7 @@ __all__ = [
     "index_of",
     "index_of_option",
     "interp",
+    "join",
     "lines",
     "lower",
     "pad_end",

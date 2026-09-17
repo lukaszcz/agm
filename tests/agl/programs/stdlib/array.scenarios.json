@@ -20,7 +20,7 @@
       "name": "singleton_large_and_free_function_workflows",
       "params": {"mode": 3},
       "expect": {
-        "stdout": "one\none\ntrue\nOption::Some(value = \"one\")\n[]\n[Pair(first = 1, second = \"a\"), Pair(first = 2, second = \"b\"), Pair(first = 3, second = \"c\")]\n[Pair(first = \"a\", second = 1), Pair(first = \"b\", second = 2), Pair(first = \"c\", second = 3)]\n[Pair(first = 0, second = 1), Pair(first = 1, second = 2), Pair(first = 2, second = 3), Pair(first = 3, second = 4), Pair(first = 4, second = 5)]\n123\na,b,c\n[1, 2, 3, 4]\nPair(first = [1, 2], second = [\"a\", \"b\"])\n[\"x\", \"x\", \"x\"]\n[2, 4, 6]\n",
+        "stdout": "one\none\ntrue\nOption::Some(value = \"one\")\n[]\n[Pair(first = 1, second = \"a\"), Pair(first = 2, second = \"b\"), Pair(first = 3, second = \"c\")]\n[Pair(first = \"a\", second = 1), Pair(first = \"b\", second = 2), Pair(first = \"c\", second = 3)]\n[Pair(first = 0, second = 1), Pair(first = 1, second = 2), Pair(first = 2, second = 3), Pair(first = 3, second = 4), Pair(first = 4, second = 5)]\n[1, 2, 3, 4]\nPair(first = [1, 2], second = [\"a\", \"b\"])\n[\"x\", \"x\", \"x\"]\n[2, 4, 6]\n",
         "calls": {}
       }
     },
@@ -86,10 +86,10 @@
       }
     },
     {
-      "name": "take_drop_slice_repeat_join_and_range_cover_their_boundary_arguments",
+      "name": "take_drop_slice_repeat_and_range_cover_their_boundary_arguments",
       "params": {"mode": 11},
       "expect": {
-        "stdout": "[]\n[]\n[1, 2, 3, 4]\n[3, 4]\n[]\n[1, 2, 3, 4]\n[]\n[]\n\n[5, 4, 3, 2, 1]\n[3]\n",
+        "stdout": "[]\n[]\n[1, 2, 3, 4]\n[3, 4]\n[]\n[1, 2, 3, 4]\n[]\n[]\n[5, 4, 3, 2, 1]\n[3]\n",
         "calls": {}
       }
     },

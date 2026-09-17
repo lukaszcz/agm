@@ -1994,15 +1994,36 @@ def test_install_refuses_tampered_existing_tree_and_cleans_failed_copy(
         install_directory(another, home=home, env={})
 
 
-def test_reinstall_reports_an_invalid_source_tree_as_a_package_install_error(
+def test_reinstall_materializes_a_source_symlink_as_a_regular_file(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
     source = _package(tmp_path / "source", "alpha", "1.0.0")
-    install_directory(source, home=home, env={})
     (source / "linked-manifest").symlink_to(source / "package.toml")
+    installed = install_directory(source, home=home, env={})
 
-    with pytest.raises(PackageInstallError, match="symlink"):
+    reinstalled = install_directory(source, home=home, env={})
+
+    assert reinstalled.root == installed.root
+    assert (reinstalled.root / "linked-manifest").read_text(encoding="utf-8") == (
+        source.joinpath("package.toml").read_text(encoding="utf-8")
+    )
+    assert not (reinstalled.root / "linked-manifest").is_symlink()
+
+
+def test_reinstall_wraps_a_distribution_hash_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    install_directory(source, home=home, env={})
+
+    def fail_distribution_entries(*_args: object, **_kwargs: object) -> tuple[RecordEntry, ...]:
+        raise OSError("read failed")
+
+    monkeypatch.setattr(package_install, "distribution_entries", fail_distribution_entries)
+
+    with pytest.raises(PackageInstallError, match="read failed"):
         install_directory(source, home=home, env={})
 
 
@@ -2896,7 +2917,7 @@ def test_install_refuses_unsatisfied_and_different_existing_manifest(tmp_path: P
         install_directory(source, home=home, env={})
 
 
-def test_dry_run_directory_install_rejects_a_descendant_symlink_without_writing(
+def test_dry_run_directory_install_accepts_a_descendant_symlink_without_writing(
     tmp_path: Path,
 ) -> None:
     source = _package(tmp_path / "source", "alpha", "1.0.0")
@@ -2904,10 +2925,10 @@ def test_dry_run_directory_install_rejects_a_descendant_symlink_without_writing(
     home = tmp_path / "home"
     dry_run.set_enabled(True)
 
-    with pytest.raises(PackageInstallError, match="symlink"):
-        install_directory(source, home=home, env={})
+    installed = install_directory(source, home=home, env={})
 
-    assert not home.exists()
+    assert installed.root == home / ".agm" / "packages" / "alpha" / "1.0.0"
+    assert not installed.root.exists()
     assert not (source / "RECORD").exists()
 
 

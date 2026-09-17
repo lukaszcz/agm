@@ -35,6 +35,8 @@ class _TextCompanion(Protocol):
 
     def index_of_option(self, value: str, substring: str) -> object: ...
 
+    def join(self, values: object, separator: str) -> str: ...
+
     def pad_start(self, value: str, length: int, fill: str) -> str: ...
 
     def pad_end(self, value: str, length: int, fill: str) -> str: ...
@@ -86,6 +88,10 @@ def test_text_companion_padding_counts_unicode_code_points() -> None:
     assert companion.pad_end("text", 8, "") == "text"
 
 
+def test_text_companion_joins_text_values() -> None:
+    assert _text_companion().join(["a", "b", "c"], ",") == "a,b,c"
+
+
 def test_text_methods_are_ambient_but_interp_requires_an_import() -> None:
     resolve_and_check_inline_entry('"value".trim()\n', HostCapabilities())
 
@@ -94,6 +100,9 @@ def test_text_methods_are_ambient_but_interp_requires_an_import() -> None:
 
     resolve_and_check_inline_entry(
         'import std/text\ntext::interp("value", {})\n', HostCapabilities()
+    )
+    resolve_and_check_inline_entry(
+        'import std/text\ntext::join(["a", "b"], ",")\n', HostCapabilities()
     )
 
     with pytest.raises(AglTypeError, match="text is immutable"):

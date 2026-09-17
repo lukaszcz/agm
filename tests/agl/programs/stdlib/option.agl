@@ -11,10 +11,10 @@ def report(value: int) -> unit = print("each %{value}")
 program def main(input: int) -> unit =
   let option: Option[int] = (if input > 0 => Option::Some(value = input) else => Option::None)
   let chained = option.map(fn(value: int) => value + 1).and-then(keep-large)
-  let filtered = option.filter(fn(value: int) => value > 1)
+  let selected = option.select(fn(value: int) => value > 1)
 
   print(chained.unwrap-or(-1))
-  print(filtered.is-some())
+  print(selected.is-some())
   print(option.or(Option::Some(value = 99)).unwrap-or(0))
   print(option.or-else(fn() => Option::Some(value = 98)).unwrap-or(0))
   print(option.unwrap-or-else(fn() => 97))

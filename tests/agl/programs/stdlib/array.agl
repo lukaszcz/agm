@@ -26,10 +26,10 @@ program def main(mode: int) -> unit =
         let offset = 10
         var values = [3, 1, 2]
         let mapped = values.map(fn(value: int) => value + offset)
-        let filtered = values.filter(fn(value: int) => value > 1)
+        let selected = values.select(fn(value: int) => value > 1)
         print(values)
         print(mapped)
-        print(filtered)
+        print(selected)
         print(values.count(fn(value: int) => value > 1))
         print(values.index-of(2))
         values.each(fn(value: int) => print(value))
@@ -47,7 +47,7 @@ program def main(mode: int) -> unit =
         print(values.drop(1))
         print(values.concat([4, 5]))
         values.map!(fn(value: int) => value + offset)
-        values.filter!(fn(value: int) => value > 11)
+        values.select!(fn(value: int) => value > 11)
         values.reverse!()
         values.sort!(by-order)
         values.push(14)

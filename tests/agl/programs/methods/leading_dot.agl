@@ -10,7 +10,7 @@ def Box::describe[T](self, prefix: text = "value") -> text =
 program def main(mode: text) -> unit =
   if mode == "array" =>
     let values = [1, 2, 3, 4]
-    let mapped = values |> .map(fn(value: int) => value * 2) |> .filter(fn(value: int) => value > 3)
+    let mapped = values |> .map(fn(value: int) => value * 2) |> .select(fn(value: int) => value > 3)
     let nested = [[1, 2], [3]].map(.map(fn(value: int) => value + 1))
     print(mapped)
     print(nested)

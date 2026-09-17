@@ -15,7 +15,7 @@ def compose(outer: (int) -> int, inner: (int) -> int) -> (int) -> int =
 
 @arg-named
 def summarize(values: array[int], keep: (int) -> bool) -> int =
-  values.filter(keep).fold(0, fn(@arg-pos total: int, @arg-pos value: int) -> int => total + value)
+  values.select(keep).fold(0, fn(@arg-pos total: int, @arg-pos value: int) -> int => total + value)
 
 program def main(seed: int, step: int) -> unit =
   let bump = fn(@arg-pos value: int) -> int => value + step

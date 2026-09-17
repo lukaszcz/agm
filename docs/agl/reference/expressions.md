@@ -784,7 +784,7 @@ program def main() -> unit =
   print([1, 2, 3].fold(0, (+)))         # 6
   print(["a", "b"].map((==)(?, "a")))   # [true, false]
   print([3, 1, 2].sort((-)))            # [1, 2, 3]
-  print([1, 5, 9].filter((<)(?, 4)))    # [1]
+  print([1, 5, 9].select((<)(?, 4)))    # [1]
   let ratio: (int, int) -> decimal = (/)
   print(ratio(1, 4))                    # 0.25
 ```

@@ -98,7 +98,7 @@ The layout rules:
    ```agl
    program def main() -> unit =
      let report = [1, 2, 3]
-       .filter(fn v => v > 1)
+       .select(fn v => v > 1)
        .map(fn v => v * 2)
        |> .fold(0, fn (total, v) => total + v)
      print report

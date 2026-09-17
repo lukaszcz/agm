@@ -129,11 +129,11 @@ def map_in_place(values: object, function: object) -> None:
     values[:] = [function(value) for value in values]
 
 
-def filter(values: object, predicate: object) -> object:
+def select(values: object, predicate: object) -> object:
     return array([value for value in values if predicate(value)])
 
 
-def filter_in_place(values: object, predicate: object) -> None:
+def select_in_place(values: object, predicate: object) -> None:
     values[:] = [value for value in values if predicate(value)]
 
 
@@ -267,8 +267,8 @@ __all__ = [
     "drop",
     "each",
     "enumerate",
-    "filter",
-    "filter_in_place",
+    "select",
+    "select_in_place",
     "find",
     "find_index",
     "first",

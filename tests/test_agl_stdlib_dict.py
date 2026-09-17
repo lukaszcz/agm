@@ -40,7 +40,7 @@ class _DictCompanion(Protocol):
 
     def merge_in_place(self, values: object, other: object) -> None: ...
 
-    def filter_in_place(self, values: object, predicate: object) -> None: ...
+    def select_in_place(self, values: object, predicate: object) -> None: ...
 
     def clear(self, values: object) -> None: ...
 
@@ -123,7 +123,7 @@ def test_dict_companion_mutating_operations_update_boundary_views() -> None:
     companion.merge_in_place(
         values, AglDictView(DictValue({"three": IntValue(3)}), _NO_DESCRIPTORS)
     )
-    companion.filter_in_place(values, _exclude_two)
+    companion.select_in_place(values, _exclude_two)
     companion.clear(values)
 
     assert _entries(alias) == {}

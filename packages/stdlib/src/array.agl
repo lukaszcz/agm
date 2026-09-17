@@ -27,9 +27,9 @@ extern def array[E]::count(self, predicate: (E) -> bool) -> int
 extern def array[E]::map[U](self, function: (E) -> U) -> array[U]
 @extern-name("map_in_place")
 extern def array[E]::map!(self, function: (E) -> E) -> unit
-extern def array[E]::filter(self, predicate: (E) -> bool) -> array[E]
-@extern-name("filter_in_place")
-extern def array[E]::filter!(self, predicate: (E) -> bool) -> unit
+extern def array[E]::select(self, predicate: (E) -> bool) -> array[E]
+@extern-name("select_in_place")
+extern def array[E]::select!(self, predicate: (E) -> bool) -> unit
 extern def array[E]::each(self, function: (E) -> unit) -> unit
 extern def array[E]::fold[B](self, initial: B, function: (B, E) -> B) -> B
 @extern-name("fold_right")

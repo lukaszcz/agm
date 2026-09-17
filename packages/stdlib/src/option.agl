@@ -17,7 +17,7 @@ def Option::and-then[T, U](self, f: (T) -> Option[U]) -> Option[U] =
     | Option::None => Option::None
     | Option::Some(value) => f(value)
 
-def Option::filter[T](self, p: (T) -> bool) -> Option[T] =
+def Option::select[T](self, p: (T) -> bool) -> Option[T] =
   case self of
     | Option::None => Option::None
     | Option::Some(value) => (if p(value) => self else => Option::None)

@@ -80,11 +80,11 @@ def map_values(values: object, function: object) -> object:
     return agl_dict({key: function(value) for key, value in values.items()})
 
 
-def filter(values: object, predicate: object) -> object:
+def select(values: object, predicate: object) -> object:
     return agl_dict({key: value for key, value in values.items() if predicate(key, value)})
 
 
-def filter_in_place(values: object, predicate: object) -> None:
+def select_in_place(values: object, predicate: object) -> None:
     for key in list(values):
         if not predicate(key, values[key]):
             del values[key]
@@ -104,8 +104,8 @@ __all__ = [
     "contains",
     "each",
     "entries",
-    "filter",
-    "filter_in_place",
+    "select",
+    "select_in_place",
     "from_entries",
     "get",
     "get_option",

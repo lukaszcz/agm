@@ -16,7 +16,7 @@ program def main(a: int, b: int, tag: text) -> unit =
 
   # The operator opens a more indented line.
   let chained = values
-    .filter(fn v => v > 0)
+    .select(fn v => v > 0)
     .map(fn v => v * 2)
     |> .fold(0, fn (total, v) => total + v)
   let label = tag

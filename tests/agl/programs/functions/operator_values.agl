@@ -8,7 +8,7 @@ program def main(values: array[int], words: array[text], limit: int) -> unit =
   print(values.fold(1, (*)))
   print(words.fold("", (++)))
   print(values.sort((-)))
-  print(values.filter((<)(?, limit)))
+  print(values.select((<)(?, limit)))
   print(words.map((==)(?, "b")))
   let scaled: (int, decimal) -> decimal = (*)
   print(scaled(limit, 0.5))

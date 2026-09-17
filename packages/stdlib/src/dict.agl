@@ -21,9 +21,9 @@ extern def dict[text, V]::merge(self, other: dict[text, V]) -> dict[text, V]
 extern def dict[text, V]::merge!(self, other: dict[text, V]) -> unit
 @extern-name("map_values")
 extern def dict[text, V]::map-values[U](self, function: (V) -> U) -> dict[text, U]
-extern def dict[text, V]::filter(self, predicate: (text, V) -> bool) -> dict[text, V]
-@extern-name("filter_in_place")
-extern def dict[text, V]::filter!(self, predicate: (text, V) -> bool) -> unit
+extern def dict[text, V]::select(self, predicate: (text, V) -> bool) -> dict[text, V]
+@extern-name("select_in_place")
+extern def dict[text, V]::select!(self, predicate: (text, V) -> bool) -> unit
 extern def dict[text, V]::each(self, function: (text, V) -> unit) -> unit
 
 @extern-name("from_entries")

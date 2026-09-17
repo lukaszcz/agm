@@ -69,7 +69,7 @@ RESOURCE_PROGRAMS_DIR = PROGRAMS_DIR / "resources"
 _SESSION_STATIC_DECLARATIONS = """\
 builtin def Session::open(
   agent: Agent,
-  transport: Option[SessionTransport] = Option[SessionTransport]::None,
+  transport: Option[SessionTransport] = None,
   name: text = "",
 ) -> Session
 builtin def Session::default() -> Session
@@ -1743,7 +1743,7 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
                 "builtin def exec(\n"
                 "  command: text,\n"
                 "  env: Environ = std/env::environ,\n"
-                "  cwd: Option[path] = Option[path]::None,\n"
+                "  cwd: Option[path] = None,\n"
                 "  timeout: Option[text] = std/config::timeout,\n"
                 ") -> ExecResult\n",
                 "builtin def exec(command: text) -> ExecResult\n",

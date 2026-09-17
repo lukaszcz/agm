@@ -9,7 +9,7 @@ infixr ++ at prio + + 0
 record TextBuilder(chunks: array[text])
 
 # Each call creates an independent empty builder.
-def builder() -> TextBuilder = TextBuilder(chunks = [])
+def builder() -> TextBuilder = TextBuilder([])
 
 # Amortized constant time: stores the chunk without copying accumulated text.
 def TextBuilder::append(self, chunk: text) -> unit = self.chunks.push(chunk)

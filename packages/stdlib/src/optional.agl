@@ -8,7 +8,7 @@ enum Optional[T]
 def Optional::map[T, U](self, f: (T) -> U) -> Optional[U] =
   case self of
     | None => None
-    | Some(value) => Some(value = f(value))
+    | Some(value) => Some(f(value))
     | Default => Default
 
 def Optional::and-then[T, U](self, f: (T) -> Optional[U]) -> Optional[U] =
@@ -79,9 +79,9 @@ def Optional::each[T](self, f: (T) -> unit) -> unit =
 
 def Optional::to-result[T, E](self, default: T, error: E) -> Result[T, E] =
   case self of
-    | None => Result::Err(error)
-    | Some(value) => Result::Ok(value)
-    | Default => Result::Ok(default)
+    | None => Err(error)
+    | Some(value) => Ok(value)
+    | Default => Ok(default)
 
 def Optional::to-option[T](self, default: T) -> Option[T] =
   case self of

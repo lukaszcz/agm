@@ -7,7 +7,7 @@ extern def between(lower: int, upper: int) -> int
 extern def uniform() -> decimal
 extern def choice[T](values: array[T]) -> T
 def choice?[T](values: array[T]) -> Option[T] =
-  try Option::Some(value = choice(values)) catch IndexError as _ => Option::None
+  try Some(choice(values)) catch IndexError as _ => None
 
 @extern-name("shuffle_in_place")
 extern def shuffle![T](values: array[T]) -> unit

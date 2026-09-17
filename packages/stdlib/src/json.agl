@@ -4,12 +4,12 @@ import std/errors::{JsonParseError, KeyError}
 
 extern def parse(value: text) -> json
 def try-parse(value: text) -> Result[json, JsonParseError] =
-  try Result::Ok(value = parse(value)) catch JsonParseError as e => Result::Err(error = e)
+  try Ok(parse(value)) catch JsonParseError as e => Err(e)
 
 @extern-name("parse_lenient")
 extern def parse-lenient(value: text) -> json
 def try-parse-lenient(value: text) -> Result[json, JsonParseError] =
-  try Result::Ok(value = parse-lenient(value)) catch JsonParseError as e => Result::Err(error = e)
+  try Ok(parse-lenient(value)) catch JsonParseError as e => Err(e)
 
 extern def json::kind(self) -> text
 extern def json::size(self) -> int

@@ -22,6 +22,6 @@ exception ExecError extends Exception
 builtin def exec(
   command: text,
   env: Environ = std/env::environ,
-  cwd: Option[path] = Option[path]::None,
+  cwd: Option[path] = None,
   timeout: Option[text] = std/config::timeout,
 ) -> ExecResult

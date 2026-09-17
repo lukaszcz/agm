@@ -6,32 +6,32 @@ enum Either[A, B] =
 
 def Either::map-left[A, B, C](self, f: (A) -> C) -> Either[C, B] =
   case self of
-    | Either::Left(value) => Either::Left(value = f(value))
-    | Either::Right(value) => Either::Right(value = value)
+    | Left(value) => Left(f(value))
+    | Right(value) => Right(value)
 
 def Either::map-right[A, B, C](self, f: (B) -> C) -> Either[A, C] =
   case self of
-    | Either::Left(value) => Either::Left(value = value)
-    | Either::Right(value) => Either::Right(value = f(value))
+    | Left(value) => Left(value)
+    | Right(value) => Right(f(value))
 
 def Either::is-left[A, B](self) -> bool =
   case self of
-    | Either::Left(_) => true
-    | Either::Right(_) => false
+    | Left(_) => true
+    | Right(_) => false
 
 def Either::is-right[A, B](self) -> bool = not self.is-left()
 
 def Either::left[A, B](self) -> Option[A] =
   case self of
-    | Either::Left(value) => Option::Some(value = value)
-    | Either::Right(_) => Option::None
+    | Left(value) => Some(value)
+    | Right(_) => None
 
 def Either::right[A, B](self) -> Option[B] =
   case self of
-    | Either::Left(_) => Option::None
-    | Either::Right(value) => Option::Some(value = value)
+    | Left(_) => None
+    | Right(value) => Some(value)
 
 def Either::swap[A, B](self) -> Either[B, A] =
   case self of
-    | Either::Left(value) => Either::Right(value = value)
-    | Either::Right(value) => Either::Left(value = value)
+    | Left(value) => Right(value)
+    | Right(value) => Left(value)

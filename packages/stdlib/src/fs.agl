@@ -19,7 +19,7 @@ extern def glob(pattern: text) -> array[path]
 extern def temp-dir() -> path
 
 def try-read(path: path) -> Result[text, FsError] =
-  try Result::Ok(value = read(path)) catch FsError as e => Result::Err(error = e)
+  try Ok(read(path)) catch FsError as e => Err(e)
 
 @extern-name("is_file")
 extern def is-file(path: path) -> bool

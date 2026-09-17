@@ -7,5 +7,5 @@ exception TomlRenderError extends Exception()
 
 extern def parse(value: text) -> json
 def try-parse(value: text) -> Result[json, TomlParseError] =
-  try Result::Ok(value = parse(value)) catch TomlParseError as e => Result::Err(error = e)
+  try Ok(parse(value)) catch TomlParseError as e => Err(e)
 extern def render(value: json) -> text

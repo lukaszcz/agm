@@ -12,7 +12,7 @@ extern def sleep(seconds: decimal) -> unit
 @extern-name("parse_iso")
 extern def parse-iso(value: text) -> decimal
 def try-parse-iso(value: text) -> Result[decimal, TimeParseError] =
-  try Result::Ok(value = parse-iso(value)) catch TimeParseError as e => Result::Err(error = e)
+  try Ok(parse-iso(value)) catch TimeParseError as e => Err(e)
 def parse-iso?(value: text) -> Option[decimal] =
   try-parse-iso(value).ok()
 
@@ -21,6 +21,6 @@ extern def format-iso(epoch: decimal) -> text
 extern def format(epoch: decimal, fmt: text) -> text
 extern def parse(value: text, fmt: text) -> decimal
 def try-parse(value: text, fmt: text) -> Result[decimal, TimeParseError] =
-  try Result::Ok(value = parse(value, fmt)) catch TimeParseError as e => Result::Err(error = e)
+  try Ok(parse(value, fmt)) catch TimeParseError as e => Err(e)
 def parse?(value: text, fmt: text) -> Option[decimal] =
   try-parse(value, fmt).ok()

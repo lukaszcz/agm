@@ -1,9 +1,9 @@
 record Pair[A, B](first: A, second: B)
 
 def Pair::map-first[A, B, C](self, f: (A) -> C) -> Pair[C, B] =
-  Pair(first = f(self.first), second = self.second)
+  Pair(f(self.first), self.second)
 
 def Pair::map-second[A, B, C](self, f: (B) -> C) -> Pair[A, C] =
-  Pair(first = self.first, second = f(self.second))
+  Pair(self.first, f(self.second))
 
-def Pair::swap[A, B](self) -> Pair[B, A] = Pair(first = self.second, second = self.first)
+def Pair::swap[A, B](self) -> Pair[B, A] = Pair(self.second, self.first)

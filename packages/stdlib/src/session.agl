@@ -20,7 +20,7 @@ builtin exception SessionError extends Exception(operation: text)
 
 builtin def Session::open(
   agent: Agent,
-  transport: Option[SessionTransport] = Option[SessionTransport]::None,
+  transport: Option[SessionTransport] = None,
   name: text = "",
 ) -> Session
 builtin def Session::default() -> Session

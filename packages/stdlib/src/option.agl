@@ -10,7 +10,7 @@ exception UnwrapError extends Exception()
 def Option::map[T, U](self, f: (T) -> U) -> Option[U] =
   case self of
     | None => None
-    | Some(value) => Some(value = f(value))
+    | Some(value) => Some(f(value))
 
 def Option::and-then[T, U](self, f: (T) -> Option[U]) -> Option[U] =
   case self of
@@ -61,5 +61,5 @@ def Option::each[T](self, f: (T) -> unit) -> unit =
 
 def Option::to-result[T, E](self, error: E) -> Result[T, E] =
   case self of
-    | None => Result::Err(error)
-    | Some(value) => Result::Ok(value)
+    | None => Err(error)
+    | Some(value) => Ok(value)

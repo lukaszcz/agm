@@ -17,7 +17,7 @@ def TextBuilder::clear(self) -> unit = self.chunks.clear()
 
 # Return an immutable snapshot, retaining chunks for further appends or reuse.
 # Linear in chunk count plus output length; build once after appending in a loop.
-def TextBuilder::build(self) -> text = array::join(self.chunks, "")
+def TextBuilder::build(self) -> text = array::join-text(self.chunks, "")
 
 extern def interp(template: text, vars: dict[text, text]) -> text
 

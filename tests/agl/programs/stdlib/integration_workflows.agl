@@ -25,11 +25,11 @@ program def main(workflow: int, root: path) -> unit =
     | 1 =>
         let names = (exec "inventory").stdout |> json::parse |> (fn(value: json) => value.get("items") as array[json]) |> (fn(items: array[json]) => items.map(fn(item: json) => item.get("name") as text))
         let metadata = json::parse('{"source": "mock"}') as dict[text, json]
-        print(array::join(names, ","))
+        print(array::join-text(names, ","))
         print(metadata.get("source"))
     | 2 =>
         let labels = fs::read(path::join([root, "report.txt"])) |> (fn(content: text) => regex::find-all("ticket-[0-9]+", content)) |> (fn(matches: array[Match]) => matches.map(fn(found: Match) => found.matched.upper()))
-        print(array::join(labels, " | "))
+        print(array::join-text(labels, " | "))
     | 3 =>
         let parsed = attempt(fn() => parse-schedule(path::join([root, "schedule.toml"])))
         print(parsed.is-ok())

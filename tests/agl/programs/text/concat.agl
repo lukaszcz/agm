@@ -11,7 +11,7 @@ program def main(mode: text, words: array[text], sep: text) -> unit =
     print("" ++ sep == sep)
     print("ab" in "x" ++ "abc")
     print("hi" ++ sep |> shout)
-    print("%{words.size()} words: " ++ array::join(words, sep))
+    print("%{words.size()} words: " ++ array::join-text(words, sep))
 
   if mode == "values" =>
     print(words.fold("", (++)))

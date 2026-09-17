@@ -230,7 +230,7 @@ def enumerate(values: object) -> object:
     return array([Pair(first=index, second=value) for index, value in builtins.enumerate(values)])
 
 
-def join(values: object, separator: str) -> str:
+def join_text(values: object, separator: str) -> str:
     return separator.join(values)
 
 
@@ -279,7 +279,7 @@ __all__ = [
     "index_of",
     "index_of_option",
     "insert",
-    "join",
+    "join_text",
     "last",
     "last_option",
     "map",

@@ -1,4 +1,4 @@
-# Text methods are ambient; array::join remains an explicit free function.
+# Text methods are ambient; array::join-text remains an explicit free function.
 import std/array
 
 program def main(mode: int) -> unit =
@@ -58,7 +58,7 @@ program def main(mode: int) -> unit =
         catch IndexError => "out of range caught"
         print(result)
     | 6 =>
-        let result = " alpha \n beta \n".lines() |> (fn(lines: array[text]) => lines.map(fn(line: text) => line.trim())) |> (fn(lines: array[text]) => array::join(lines, "|"))
+        let result = " alpha \n beta \n".lines() |> (fn(lines: array[text]) => lines.map(fn(line: text) => line.trim())) |> (fn(lines: array[text]) => array::join-text(lines, "|"))
         print(result)
     | _ =>
         let _ = "a,b".split("")

@@ -69,7 +69,8 @@ program def main(mode: int) -> unit =
         print(many.zip(["a", "b", "c"]))
         print(many.zip-with(["a", "b", "c"], fn(number: int, label: text) => Pair(first = label, second = number)))
         print(many.enumerate())
-        print(array::join(["a", "b", "c"], ","))
+        print(array::join([1, 2, 3], fn(left: int, right: int) => left * 10 + right))
+        print(array::join-text(["a", "b", "c"], ","))
         print(array::flatten([[1, 2], [], [3, 4]]))
         print(array::unzip([Pair(first = 1, second = "a"), Pair(first = 2, second = "b")]))
         print(array::repeat("x", 3))
@@ -117,7 +118,7 @@ program def main(mode: int) -> unit =
         print(values.slice(-10, 10))
         print(array::repeat("x", 0))
         print(array::repeat("x", -3))
-        print(array::join([], ","))
+        print(array::join-text([], ","))
         print(array::range(5, 1))
         print(array::range(3, 3))
     | 12 =>

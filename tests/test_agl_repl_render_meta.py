@@ -647,6 +647,35 @@ class TestInfo:
             "fs::read is a function.\nSignature:\n  def fs::read(path: text) -> text"
         )
 
+    def test_info_resolves_an_unqualified_function_like_a_repl_expression(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("import std/log").ok
+
+        outcome = meta_mod.dispatch_meta(":info print", _session_ctx(session))
+
+        assert outcome.text is not None
+        assert outcome.text.startswith("print is a function.\nSignature:\n  def print[T](value: T)")
+        assert "std/log::Level" not in outcome.text
+
+        log = meta_mod.dispatch_meta(":info log::print", _session_ctx(session))
+
+        assert log.text is not None
+        assert log.text.startswith(
+            "log::print is a function.\nSignature:\n  def log::print[T]"
+            "(lvl: std/log::Level, val: T)"
+        )
+
+    def test_info_resolves_a_canonical_module_function(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("import std/log").ok
+
+        outcome = meta_mod.dispatch_meta(":info std/io::print", _session_ctx(session))
+
+        assert outcome.text is not None
+        assert outcome.text.startswith(
+            "std/io::print is a function.\nSignature:\n  def std/io::print[T](value: T)"
+        )
+
     def test_info_rejects_an_unknown_qualified_library_function(self) -> None:
         session = _open_session()
         assert session.eval_entry("import std/fs").ok
@@ -694,6 +723,12 @@ class TestInfo:
 
     def test_info_rejects_an_invalid_qualified_name(self) -> None:
         assert _open_session().info_of("Count::") is None
+
+    def test_info_rejects_a_non_identifier_and_an_unknown_module_path(self) -> None:
+        session = _open_session()
+
+        assert session.info_of("()") is None
+        assert session.info_of("std/not-loaded::missing") is None
 
     def test_info_reports_the_static_type_of_an_imported_value(self) -> None:
         session = _open_session()

@@ -29,7 +29,7 @@ by a prompt for manually typed input.
 
 `EntryResult` carries the `ValueDescriptors` view of the entry's own compiled program alongside its value, so `repl/render.py` renders a live value without any global registry; `ReplSession.descriptors()` builds the analogous cumulative view over every retained declaration for `:bindings`. `render_entry_result` decides whether an entry echoes at all from its checked static type, once: a `unit`-typed expression or binding echoes nothing, for both the live value echo and the `--dry-run` type echo, unless the `echo-unit` setting is on.
 
-`:info NAME` reads retained session and loaded-library metadata without evaluating source. It reports live bindings, functions (including qualified library functions and operators), constructors, and retained nominal, generic, or alias types as concise AgL fragments; the rich console styles only those fragments through its live lexer and theme, while plain output remains text.
+`:info NAME` resolves bare and imported-qualified targets through the same entry resolver as the REPL, and canonical library paths through retained module identities, without evaluating source. It therefore respects current visibility while reporting live bindings, functions (including qualified library functions and operators), constructors, and retained nominal, generic, or alias types as concise AgL fragments; the rich console styles only those fragments through its live lexer and theme, while plain output remains text.
 
 ## Setting Persistence
 

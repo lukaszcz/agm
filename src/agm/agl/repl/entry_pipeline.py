@@ -375,8 +375,32 @@ class EntryPipeline:
         on failure; callers that need diagnostics instead of a raised exception
         must catch these themselves.
         """
-        from agm.agl.modules.loader import build_repl_graph
         from agm.agl.typecheck.program import check_program
+
+        resolved_program = self.resolve_program(
+            program, next_start_id, spaced_qualifiers=spaced_qualifiers
+        )
+        return check_program(
+            resolved_program,
+            host_env.capabilities,
+            entry_seed_env=self._ctx._type_env,
+            cached_checked_modules=self._ctx._retained_checked_modules,
+        )
+
+    def resolve_program(
+        self,
+        program: Program,
+        next_start_id: int,
+        *,
+        spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
+    ) -> ResolvedProgram:
+        """Resolve *program* against the retained REPL session without checking it.
+
+        The REPL's introspection commands use this phase to identify one name
+        exactly as a subsequent entry would, without evaluating source or
+        requiring a generic function value to infer its type arguments.
+        """
+        from agm.agl.modules.loader import build_repl_graph
 
         roots = self._ctx._ensure_roots()
         entry_program, next_start_id, _entry_imports, _entry_uses = self._prepare_entry_program(
@@ -392,13 +416,7 @@ class EntryPipeline:
             spaced_qualifiers=spaced_qualifiers,
             session_infix=self._ctx._accumulated_infix,
         )
-        resolved_program = self._resolve_program(graph)
-        return check_program(
-            resolved_program,
-            host_env.capabilities,
-            entry_seed_env=self._ctx._type_env,
-            cached_checked_modules=self._ctx._retained_checked_modules,
-        )
+        return self._resolve_program(graph)
 
     def _retain_module_artifacts(
         self, resolved_program: "ResolvedProgram", checked_program: "CheckedProgram"

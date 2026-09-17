@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.sessions import SessionHost
     from agm.agl.runtime.types import ParamBindingInfo
     from agm.agl.scope.program import ResolvedModule
-    from agm.agl.scope.symbols import ConstructorRef, ScopeNode
+    from agm.agl.scope.symbols import BindingRef, ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import Frame, RecordValue, Value
     from agm.agl.syntax.nodes import (
@@ -60,6 +60,7 @@ if TYPE_CHECKING:
         Program,
         ScopeRegion,
         TypeAlias,
+        VarRef,
     )
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
@@ -1805,9 +1806,10 @@ class ReplSession:
     def info_of(self, name: str) -> str | None:
         """Return a compact AgL-shaped description of one known identifier.
 
-        This is introspection over promoted state only: it never parses,
-        evaluates, or changes the session.  Names may address root or named
-        scope bindings and types (``Deploy::worker`` and ``Deploy::Config``).
+        This is introspection over promoted state only: it never evaluates or
+        changes the session.  It resolves names through the same entry pipeline
+        as the REPL, so bare and imported qualified names select their actual
+        visible declaration.
         """
         from agm.agl.repl.render import _render_value_or_cyclic_message
         from agm.agl.repl.type_display import (
@@ -1821,15 +1823,15 @@ class ReplSession:
             return None
 
         scope_path, local_name = parts[:-1], parts[-1]
-        scope = self._session_scope_nodes.get(scope_path)
-        ref = (
-            None
-            if scope is None
-            else (scope.bindings.get(local_name) or scope.members.get(local_name))
+        ref = self._resolve_info_reference(name)
+        location = (
+            _format_repl_location(ref.decl_span)
+            if ref is not None and ref.module_id.is_entry
+            else None
         )
-        location = None if ref is None else _format_repl_location(ref.decl_span)
         if ref is not None and ref.kind.value != "constructor_binding":
-            signature = self._type_env.get_function_signature_by_node_id(ref.decl_node_id)
+            type_env = self._info_type_env(ref)
+            signature = type_env.get_function_signature_by_node_id(ref.decl_node_id)
             if signature is not None:
                 return "\n".join(
                     (
@@ -1839,11 +1841,12 @@ class ReplSession:
                         ),
                     )
                 )
-            typ = self._type_env.get_binding_type(ref.decl_node_id)
+            typ = type_env.get_binding_type(ref.decl_node_id)
             assert typ is not None
             symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
             slot = self._ir_base_frame.get(symbol) if symbol is not None else None
-            assert slot is not None
+            if slot is None:
+                return f"{name} is a value.\n{_format_info_section('Type', repr(typ))}"
             value = slot.value if isinstance(slot, Cell) else slot
             rendered = _render_value_or_cyclic_message(
                 value, self.descriptors(), pretty=True, quote_strings=True
@@ -1855,28 +1858,6 @@ class ReplSession:
                     _format_info_section("Binding", f"{keyword} {name}"),
                     _format_info_section("Type", repr(typ)),
                     _format_info_section("Value", rendered, location),
-                )
-            )
-
-        signature = self._type_env.all_function_signatures().get(name)
-        if signature is not None:
-            return "\n".join(
-                (
-                    f"{name} is a function.",
-                    _format_info_section(
-                        "Signature", f"def {name}{_format_repl_signature(signature)}"
-                    ),
-                )
-            )
-
-        library_signature = self._library_function_signature(scope_path, local_name)
-        if library_signature is not None:
-            return "\n".join(
-                (
-                    f"{name} is a function.",
-                    _format_info_section(
-                        "Signature", f"def {name}{_format_repl_signature(library_signature)}"
-                    ),
                 )
             )
 
@@ -1917,25 +1898,51 @@ class ReplSession:
                     ),
                 )
             )
-        try:
-            value_type = self.type_of(name)
-        except AglError:
-            return None
-        return f"{name} is a value.\n{_format_info_section('Type', value_type)}"
-
-    def _library_function_signature(
-        self, scope_path: tuple[str, ...], local_name: str
-    ) -> "FunctionSignature | None":
-        """Return a retained module function signature selected by a qualifier."""
-        if not scope_path:
-            return None
-        module_name = scope_path[-1]
-        for module_id, checked in self._retained_checked_modules.items():
-            if module_id.segments[-1] == module_name:
-                signature = checked.type_env.all_function_signatures().get(local_name)
-                if signature is not None:
-                    return signature
         return None
+
+    def _resolve_info_reference(self, name: str) -> "BindingRef | None":
+        """Resolve NAME with the REPL entry resolver, without type-checking it."""
+        from agm.agl.lexer import spaced_qualifier_collector
+        from agm.agl.parser import parse_program_seeded
+        from agm.agl.syntax.nodes import VarRef
+
+        reference: VarRef | None = None
+        try:
+            with spaced_qualifier_collector() as spaced_sink:
+                program, next_node_id = parse_program_seeded(
+                    name, start_id=self._next_node_id, resolve_infix=False
+                )
+            if len(program.body.items) != 1 or not isinstance(program.body.items[0], VarRef):
+                return None
+            reference = program.body.items[0]
+            resolved = self._entry_pipeline.resolve_program(
+                program, next_node_id, spaced_qualifiers=tuple(spaced_sink)
+            )
+        except AglError:
+            return None if reference is None else self._canonical_library_reference(reference)
+        entry = resolved.modules[resolved.entry_id].resolved
+        return entry.resolution.get(reference.node_id) or self._canonical_library_reference(
+            reference
+        )
+
+    def _canonical_library_reference(self, reference: "VarRef") -> "BindingRef | None":
+        """Return the retained declaration named by REFERENCE's module path."""
+        from agm.agl.modules.ids import ModuleId
+
+        qualifier = reference.qualifier
+        if qualifier is None or not qualifier.segments or "/" not in qualifier.segments[0].name:
+            return None
+        module_id = ModuleId.from_path(qualifier.segments[0].name)
+        module = self._retained_resolved_modules.get(module_id)
+        if module is None:
+            return None
+        scope_path = tuple(segment.name for segment in qualifier.segments[1:])
+        return module.resolved.declarations.get((module_id, scope_path, reference.name))
+
+    def _info_type_env(self, ref: "BindingRef") -> "TypeEnvironment":
+        """Return the retained type environment that owns REF."""
+        checked = self._retained_checked_modules.get(ref.module_id)
+        return self._type_env if checked is None else checked.type_env
 
     def _library_generic_type(self, name: str) -> "GenericTypeDef | None":
         """Return the sole retained generic type named *name*, if any."""

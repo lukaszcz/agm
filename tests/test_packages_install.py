@@ -2954,6 +2954,19 @@ def test_dry_run_directory_install_validates_the_filtered_distribution(
     assert not (source / "RECORD").exists()
 
 
+def test_dry_run_directory_install_rejects_a_newline_distribution_path(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    (source / "bad\nname").write_text("invalid record path", encoding="utf-8")
+    home = tmp_path / "home"
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError):
+        install_directory(source, home=home, env={})
+
+    assert not home.exists()
+    assert not (source / "RECORD").exists()
+
+
 def test_dry_run_install_validates_the_resulting_activation_without_writing(tmp_path: Path) -> None:
     home = tmp_path / "home"
     install_directory(_package(tmp_path / "bravo-two", "bravo", "2.0.0"), home=home, env={})

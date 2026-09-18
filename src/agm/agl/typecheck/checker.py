@@ -4019,16 +4019,29 @@ class _Checker:
                 result_type = concrete_contextual_result
             elif (
                 contextual_result is not None
-                and isinstance(body_type, RecordType)
                 and isinstance(contextual_result, EnumType)
-                and self._env.type_table.enum_member_by_decl(contextual_result, body_type.decl_id)
-                is not None
+                and (
+                    (
+                        isinstance(body_type, RecordType)
+                        and self._env.type_table.enum_member_by_decl(
+                            contextual_result, body_type.decl_id
+                        )
+                        is not None
+                    )
+                    or (
+                        isinstance(body_type, EnumType)
+                        and body_type.decl_id != contextual_result.decl_id
+                        and self._env.type_table.enum_member_ids(body_type).keys()
+                        <= self._env.type_table.enum_member_ids(contextual_result).keys()
+                    )
+                )
             ):
                 # A lambda body is a direct value boundary even when the lambda
-                # itself occupies a nested generic function slot. Widen the
-                # member here, before exact function-type unification, so its
-                # enum arguments contribute to this instantiation without
-                # making containers or arbitrary nested types covariant.
+                # itself occupies a nested generic function slot. Widen enum
+                # members and subsets here, before exact function-type
+                # unification, so their arguments contribute to this
+                # instantiation without making containers or arbitrary nested
+                # types covariant.
                 engine = self._active_inference_engine()
                 try:
                     engine.unify(

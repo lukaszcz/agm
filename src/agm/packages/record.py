@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import io
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -138,6 +138,13 @@ def record_path_key(entry: RecordEntry) -> str:
     """Return the canonical ordering key for one record entry."""
 
     return entry.path
+
+
+def validate_record_paths(paths: Iterable[str]) -> None:
+    """Reject paths that cannot appear in a package ``RECORD``."""
+
+    for path in paths:
+        _record_path(path)
 
 
 def posix_relative_path(root: Path) -> Callable[[Path], str]:

@@ -469,6 +469,26 @@ def test_generic_lambda_widens_a_member_result_before_function_constraint() -> N
     assert result_type.type_args == (IntType(), TextType())
 
 
+def test_generic_lambda_widens_an_enum_result_before_function_constraint() -> None:
+    """A lambda result widens before a generic nested function slot is unified."""
+    checked = resolve_and_check_inline_entry(
+        "enum Narrow[T]\n"
+        "  | Some(value: T)\n"
+        "  | None\n"
+        "enum Wide[T] = Narrow::Some[T] | Narrow::None | Default\n"
+        "def use[T](f: () -> Wide[T]) -> Wide[T] = f()\n"
+        "let narrow: Narrow[int] = Narrow::Some(value = 1)\n"
+        "use(fn() => narrow)",
+        HostCapabilities(),
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    result_type = checked.node_types[result.node_id]
+    assert isinstance(result_type, EnumType)
+    assert result_type.name == "Wide"
+    assert result_type.type_args == (IntType(),)
+
+
 def test_generic_lambda_rejects_a_member_result_that_conflicts_with_prior_evidence() -> None:
     """Direct member widening still reports conflicts from an earlier generic argument."""
     with pytest.raises(AglTypeError):

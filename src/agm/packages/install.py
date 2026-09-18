@@ -67,6 +67,7 @@ from agm.packages.record import (
     RecordError,
     content_hash,
     read_record,
+    validate_record_paths,
     verify_record,
     write_record,
 )
@@ -550,7 +551,7 @@ def _install_directory(
                     fs.rmtree(staging)
         else:
             try:
-                distribution_files(root)
+                validate_record_paths(relative for relative, _ in distribution_files(root))
                 validate_package_distribution(resolution)
             except (DisciplineError, DistributionError, OSError, RecordError) as exc:
                 raise PackageInstallError(

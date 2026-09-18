@@ -64,6 +64,51 @@ def test_write_text_atomic_logs_and_does_not_write_when_dry_run_is_enabled(
     assert capsys.readouterr().out == f"dry-run: agm write-file {path}\n"
 
 
+def test_write_bytes_atomic_writes_every_chunk(tmp_path: Path) -> None:
+    path = tmp_path / "out.bin"
+    path.write_bytes(b"stale")
+
+    fs.write_bytes_atomic(path, [b"hel", b"lo"])
+
+    assert path.read_bytes() == b"hello"
+    assert [child.name for child in tmp_path.iterdir()] == ["out.bin"]
+
+
+def test_write_bytes_atomic_leaves_the_previous_file_on_a_mid_stream_failure(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "out.bin"
+    path.write_bytes(b"previous")
+
+    def chunks() -> Generator[bytes, None, None]:
+        yield b"partial"
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        fs.write_bytes_atomic(path, chunks())
+
+    assert path.read_bytes() == b"previous"
+    assert [child.name for child in tmp_path.iterdir()] == ["out.bin"]
+
+
+def test_write_bytes_atomic_drains_chunks_without_writing_under_dry_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "out.bin"
+    dry_run.set_enabled(True)
+    drained = []
+
+    def chunks() -> Generator[bytes, None, None]:
+        drained.append(True)
+        yield b"data"
+
+    fs.write_bytes_atomic(path, chunks())
+
+    assert drained == [True]
+    assert not path.exists()
+    assert capsys.readouterr().out == f"dry-run: agm write-file {path}\n"
+
+
 def test_copy_tree_copies_a_complete_tree(tmp_path: Path) -> None:
     source = tmp_path / "source"
     (source / "modules").mkdir(parents=True)

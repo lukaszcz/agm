@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from stat import S_IMODE
 from uuid import uuid4
@@ -153,21 +154,39 @@ def write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
 def write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Write text through a temporary sibling that replaces *path* in one step.
 
+    See :func:`write_bytes_atomic` for the atomicity and dry-run contract.
+    """
+
+    write_bytes_atomic(path, (content.encode(encoding),))
+
+
+def write_bytes_atomic(path: Path, chunks: Iterable[bytes]) -> None:
+    """Write *chunks* through a temporary sibling that replaces *path* in one step.
+
     Concurrent readers therefore observe either the previous file or the
     complete new content, never a partially written file. Existing permissions
     are retained, and the temporary file remains private while it is populated.
+    A failure while consuming *chunks* leaves *path* untouched and removes the
+    temporary file; ``OSError`` propagates unchanged.
+
+    Under dry-run, *chunks* are still drained -- a caller may rely on the
+    iteration itself for a side effect such as counting bytes -- but nothing
+    is written to disk.
     """
 
     if dry_run.enabled():
-        write_text(path, content)
+        dry_run.print_operation("write-file", display_path(path))
+        for _ in chunks:
+            pass
         return
     destination_mode = S_IMODE(path.stat().st_mode) if path.exists() else None
     temporary_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
     try:
-        with temporary_path.open("x", encoding=encoding) as temporary:
+        with temporary_path.open("xb") as temporary:
             default_mode = S_IMODE(os.fstat(temporary.fileno()).st_mode)
             os.fchmod(temporary.fileno(), 0o600)
-            temporary.write(content)
+            for chunk in chunks:
+                temporary.write(chunk)
         temporary_path.chmod(default_mode if destination_mode is None else destination_mode)
         temporary_path.replace(path)
     finally:

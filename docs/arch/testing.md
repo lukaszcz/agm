@@ -8,7 +8,7 @@ The suite mirrors the architecture: AgL is tested pass by pass plus whole-progra
 - **Commands** are tested at the CLI boundary. Most tests invoke `agm` once against a fixture; the multi-command arcs a real user follows live in `tests/test_e2e.py`, where state written by one command is proven to be the state the next one reads.
 - **Domain and primitives** have unit tests for behavior and edge cases. Package command tests use real archives, manifests, and activation state; failure fixtures corrupt inputs or fail external I/O instead of replacing domain handlers.
 
-Tests assert observable behavior, never exact help, warning, or error text. Import reuse and REPL state are checked through program output, edited modules, recovery, and redeclarations. Real agents are never invoked; agent transports and unavailable tools are faked at their external boundaries, while filesystem, git, shell, and loopback HTTP workflows execute real operations. The e2e harness stages a temporary CLI entry point using the test interpreter and checkout source, with ambient Python imports disabled. It installs nothing and needs no package cache or second interpreter. Tests survive concurrent and cross-worktree runs.
+Tests assert observable behavior, never exact help, warning, or error text. Import reuse and REPL state are checked through program output, edited modules, recovery, and redeclarations. Real agents are never invoked; agent transports, unavailable tools, and outbound HTTP requests are faked at their external boundaries, while filesystem, git, shell, and loopback HTTP workflows (the package fetcher's own tests) execute real operations. The e2e harness stages a temporary CLI entry point using the test interpreter and checkout source, with ambient Python imports disabled. It installs nothing and needs no package cache or second interpreter. Tests survive concurrent and cross-worktree runs.
 
 ## Gates and Invariants
 
@@ -36,6 +36,6 @@ The Emacs mode (`config/emacs/`) and micro rules (`config/micro/`) carry their o
 
 - `tests/test_agl_*.py` — AgL pass suites; `tests/test_agl_e2e.py`, `test_agl_multifile.py` — acceptance suites over `tests/agl/`.
 - `tests/test_e2e.py` — the command e2e suite; its `run_agm` helper invokes the staged checkout CLI, also placed on PATH for nested AGM calls.
-- `tests/conftest.py`, `_agl_helpers.py`, `_process_helpers.py`, `_package_helpers.py`, `_git_helpers.py` — shared fixtures and fakes.
+- `tests/conftest.py`, `_agl_helpers.py`, `_process_helpers.py`, `_package_helpers.py`, `_git_helpers.py`, `_http_helpers.py` — shared fixtures and fakes.
 - `tests/_command_coverage.py`, `tests/_durations.py` — the command-coverage and CPU-cost plugins.
 - `justfile` — the `test`, `test-budget`, `test-neutral-tmp`, `lint`, `typecheck`, `vulture`, `test-emacs`, `test-micro`, and `check` recipes; `tools/vulture_check.py` — the dead-code gate.

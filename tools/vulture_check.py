@@ -46,6 +46,11 @@ EXTERNALLY_USED = (
     "clear_parsed_module_cache",
     "set_self_validation_enabled",
     "close_detached_state",
+    # HTTP transport seam's public API; used only by tests today
+    "open_session",
+    "perform",
+    # requests.Session hook, called by its own redirect handling
+    "rebuild_auth",
 )
 
 

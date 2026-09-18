@@ -8,7 +8,7 @@ A project has a fixed set of roles — repository, branch worktrees, config dire
 
 ## Workspaces and Worktrees
 
-A *workspace* is the main repository or a linked git worktree for a branch, interpreted with AGM's project config, dependency environment, setup scripts, and tmux lifecycle. Opening a branch without a worktree checks it out into one at a path derived from the branch name; opening a missing branch creates it first. Both paths share the preparation flow in `commands/workspace/open.py`, which assembles config and environment, creates the worktree, commits generated config, and starts the session. Worktree orchestration coordinates git with dependency setup: creating the worktree, ensuring tracking branches, resolving a branch across remotes the way git does (exactly one remote may carry it). Only branch workspaces can be closed; closing can retain the branch or the worktree while still ending the session.
+A *workspace* is the main repository or a linked git worktree in the project's worktrees directory, named by its path there; other git worktrees are not workspaces, and `project_workspaces` in the layout module is the single source of this set. Workspaces are interpreted with AGM's project config, dependency environment, setup scripts, and tmux lifecycle. Opening a branch without a worktree checks it out into one at a path derived from the branch name; opening a missing branch creates it first. Both paths share the preparation flow in `commands/workspace/open.py`, which assembles config and environment, creates the worktree, commits generated config, and starts the session. Worktree orchestration coordinates git with dependency setup: creating the worktree, ensuring tracking branches, resolving a branch across remotes the way git does (exactly one remote may carry it). Only branch workspaces can be closed; closing can retain the branch or the worktree while still ending the session.
 
 ## Dependencies
 
@@ -28,7 +28,7 @@ All git work goes through one VCS module wrapping git as subprocess calls; every
 
 ## Code Entry Points
 
-- `src/agm/project/layout.py` — layout detection, role-path resolution, current-workspace detection.
+- `src/agm/project/layout.py` — layout detection, role-path resolution, workspace enumeration, current-workspace detection.
 - `src/agm/project/worktree.py` — worktree creation and branch/remote synchronization.
 - `src/agm/project/workspace_env.py`, `workspace_shell.py`, `workspace_setup.py` — environment assembly, shell wrapper, setup scripts.
 - `src/agm/project/dependency_env.py`, `dependency_checkout.py`, `config_git.py` — dependency env vars, checkout discovery, config-directory git operations.

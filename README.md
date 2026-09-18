@@ -189,9 +189,9 @@ When only `REPO_URL` is provided, AGM derives the project name from the reposito
 
 ### `agm workspace`
 
-Manage AGM workspaces. A workspace may be the main repo or a linked Git worktree, interpreted
-with AGM project config, workspace config, dependency environment, setup scripts, and tmux session
-lifecycle.
+Manage AGM workspaces. A workspace may be the main repo or a linked Git worktree in the project's
+worktrees directory, interpreted with AGM project config, workspace config, dependency environment,
+setup scripts, and tmux session lifecycle.
 
 ```bash
 agm workspace open repo
@@ -220,8 +220,8 @@ agm sync fetch
 
 ### `agm sync pull`
 
-Run `agm sync fetch`, then run `git merge` in every Git worktree: dependency worktrees, the main
-workspace, and branch workspaces.
+Run `agm sync fetch`, then run `git merge` in the main workspace, branch workspaces, and dependency
+worktrees.
 
 ```bash
 agm sync pull

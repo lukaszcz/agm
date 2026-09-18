@@ -19,10 +19,12 @@
 | `agm init [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] [PROJECT_NAME] REPO_URL` | Initialize the current directory or named child directory and clone a repo |
 | `agm init --clone [--embedded \| --split] [-b\|--branch BRANCH] [--no-git-init \| --no-repo-git \| --no-config-git \| --no-notes-git] REPO_URL` | Initialize a URL-derived child project directory and clone a repo |
 | `agm sync fetch` | Prune stale worktrees, fetch the main repo and checked-out dependencies, then create missing tracking branches |
-| `agm sync pull` | Run `agm sync fetch`, then run `git merge` in every dependency, main workspace, and branch workspace |
+| `agm sync pull` | Run `agm sync fetch`, then run `git merge` in the main workspace, every branch workspace, and every dependency |
 
-An AGM workspace is the main repo or a linked Git worktree, combined with AGM project config,
-workspace config, dependency environment, setup scripts, and tmux session lifecycle.
+An AGM workspace is the main repo or a linked Git worktree in the project's worktrees directory,
+combined with AGM project config, workspace config, dependency environment, setup scripts, and tmux
+session lifecycle. A branch workspace is named by its path under the worktrees directory (the
+branch it was opened for); other Git worktrees of the repo are not workspaces.
 
 `agm workspace open` behavior:
 
@@ -51,6 +53,7 @@ workspace config, dependency environment, setup scripts, and tmux session lifecy
 `agm workspace close` notes:
 
 - closes only branch workspaces: `repo` and the main workspace branch cannot be removed
+- `BRANCH` names the workspace, so it is closed even when its checkout has switched branches or detached HEAD
 
 `agm sync fetch` notes:
 
@@ -58,16 +61,17 @@ workspace config, dependency environment, setup scripts, and tmux session lifecy
 
 `agm sync pull` notes:
 
-- runs `agm sync fetch`'s prune, fetch, and tracking-branch sync first, then `git merge` in each dependency checkout/worktree, the main workspace, and each branch workspace
+- runs `agm sync fetch`'s prune, fetch, and tracking-branch sync first, then `git merge` in the main workspace, each branch workspace, and each dependency checkout/worktree
 - relies on each Git worktree's current branch upstream, matching plain `git merge`
 
 `agm workspace list` options:
 
-- `-v`, `--verbose`: show the workspace directory path after each branch name
+- `-v`, `--verbose`: show the workspace directory path after each workspace
 
 `agm workspace list` notes:
 
-- the main workspace is listed first
+- the main workspace is listed first, by its checked-out branch
+- branch workspaces follow, sorted by name; `(detached)` or `(on OTHER)` marks a checkout whose HEAD is detached or on another branch
 - the current workspace is indicated with a leading `*`
 
 `agm workspace setup` runs executable setup scripts for the current workspace, in this order:

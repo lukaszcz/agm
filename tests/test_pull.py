@@ -25,11 +25,12 @@ class TestMergeWorktree:
 class TestPullRun:
     """Tests for the pull run() entrypoint."""
 
-    def test_fetches_before_merging_all_repo_and_dependency_worktrees(
+    def test_fetches_before_merging_workspaces_and_dependency_worktrees(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
+        repo_dir.mkdir(parents=True)
         worktree_dir = project_dir / "worktrees" / "feat"
         dep_repo = project_dir / "deps" / "mylib" / "main"
         dep_worktree = project_dir / "deps" / "mylib" / "feat"
@@ -46,10 +47,13 @@ class TestPullRun:
         def fake_fetch(project: Path, repos: list[Path]) -> None:
             events.append(("fetch", tuple(repos)))
 
-        def fake_worktree_list(repo_path: Path) -> list[WorktreeInfo]:
+        def fake_worktree_list(
+            repo_path: Path, env: dict[str, str] | None = None
+        ) -> list[WorktreeInfo]:
             if repo_path == repo_dir:
                 return [
                     WorktreeInfo(path=repo_dir, branch="main"),
+                    WorktreeInfo(path=tmp_path / "elsewhere", branch="outside"),
                     WorktreeInfo(path=worktree_dir, branch="feat"),
                 ]
             if repo_path == dep_repo:
@@ -82,6 +86,7 @@ class TestPullRun:
     ) -> None:
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
+        repo_dir.mkdir(parents=True)
         worktree_dir = project_dir / "worktrees" / "feat"
 
         monkeypatch.setattr(pull_cmd, "require_current_project_dir", lambda: project_dir)
@@ -90,7 +95,7 @@ class TestPullRun:
         monkeypatch.setattr(
             pull_cmd.git_helpers,
             "worktree_list",
-            lambda p: [
+            lambda p, env=None: [
                 WorktreeInfo(path=repo_dir, branch="main"),
                 WorktreeInfo(path=worktree_dir, branch="feat"),
             ],
@@ -119,6 +124,7 @@ class TestPullRunEdgeCases:
         """
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
+        repo_dir.mkdir(parents=True)
         worktree_dir = project_dir / "worktrees" / "feat"
 
         monkeypatch.setattr(pull_cmd, "require_current_project_dir", lambda: project_dir)
@@ -127,7 +133,7 @@ class TestPullRunEdgeCases:
         monkeypatch.setattr(
             pull_cmd.git_helpers,
             "worktree_list",
-            lambda p: [
+            lambda p, env=None: [
                 WorktreeInfo(path=repo_dir, branch="main"),
                 WorktreeInfo(path=worktree_dir, branch="feat"),
             ],
@@ -153,6 +159,7 @@ class TestPullRunEdgeCases:
         """A repo with only the main worktree (no linked extras) pulls without error."""
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
+        repo_dir.mkdir(parents=True)
 
         monkeypatch.setattr(pull_cmd, "require_current_project_dir", lambda: project_dir)
         monkeypatch.setattr(pull_cmd.fetch_command, "project_git_repos", lambda p: [repo_dir])
@@ -160,7 +167,7 @@ class TestPullRunEdgeCases:
         monkeypatch.setattr(
             pull_cmd.git_helpers,
             "worktree_list",
-            lambda p: [WorktreeInfo(path=repo_dir, branch="main")],
+            lambda p, env=None: [WorktreeInfo(path=repo_dir, branch="main")],
         )
 
         merged: list[Path] = []

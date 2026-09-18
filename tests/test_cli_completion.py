@@ -570,48 +570,26 @@ def test_complete_open_target_swallows_helper_errors(
     assert completion.complete_open_target("f") == []
 
 
-def test_complete_close_branch_only_returns_worktree_branches(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir()
-    monkeypatch.setattr(completion, "_resolve_project_repo_dir", lambda: repo_dir)
-    monkeypatch.setattr(git_helpers, "current_branch", lambda repo_dir: "main")
-    monkeypatch.setattr(
-        git_helpers,
-        "worktree_list",
-        lambda repo_dir: [
-            git_helpers.WorktreeInfo(path=tmp_path / "repo", branch="main"),
-            git_helpers.WorktreeInfo(path=tmp_path / "worktrees" / "feat/a", branch="feat/a"),
-            git_helpers.WorktreeInfo(path=tmp_path / "worktrees" / "feat/b", branch="feat/b"),
-        ],
-    )
-
-    suggestions = completion.complete_close_branch("feat/")
-
-    assert suggestions == ["feat/a", "feat/b"]
-
-
-def test_complete_close_branch_infers_branch_name_from_checkout_worktree_path(
+def test_complete_close_branch_suggests_branch_workspace_names(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     project_dir = tmp_path / "project"
     repo_dir = project_dir / "repo"
     worktrees_dir = project_dir / "worktrees"
     repo_dir.mkdir(parents=True)
-    worktrees_dir.mkdir()
-    monkeypatch.setattr(completion, "_resolve_project_repo_dir", lambda: repo_dir)
-    monkeypatch.setattr(git_helpers, "current_branch", lambda repo_dir: "main")
+    monkeypatch.setattr(completion, "discover_current_project_dir", lambda: project_dir)
     monkeypatch.setattr(
         git_helpers,
         "worktree_list",
-        lambda repo_dir: [
+        lambda repo_dir, env=None: [
             git_helpers.WorktreeInfo(path=repo_dir, branch="main"),
-            git_helpers.WorktreeInfo(path=worktrees_dir / "feat" / "detached", branch=None),
+            git_helpers.WorktreeInfo(path=worktrees_dir / "feat" / "a", branch="feat/a"),
+            git_helpers.WorktreeInfo(path=worktrees_dir / "feat" / "b", branch=None),
+            git_helpers.WorktreeInfo(path=tmp_path / "elsewhere", branch="feat/outside"),
         ],
     )
 
-    assert completion.complete_close_branch("feat/") == ["feat/detached"]
+    assert completion.complete_close_branch("feat/") == ["feat/a", "feat/b"]
 
 
 def test_complete_help_path_suggests_subcommands() -> None:
@@ -1194,13 +1172,13 @@ class TestCompleteOpenTarget:
 
 class TestCompleteCloseBranch:
     def test_returns_empty_when_resolve_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(completion, "_resolve_project_repo_dir", lambda: None)
+        monkeypatch.setattr(completion, "discover_current_project_dir", lambda: None)
         assert completion.complete_close_branch("") == []
 
     def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             completion,
-            "_resolve_project_repo_dir",
+            "discover_current_project_dir",
             lambda: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         assert completion.complete_close_branch("") == []

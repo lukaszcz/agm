@@ -11,457 +11,125 @@ from typer.main import get_command
 
 import agm.cli as cli
 import agm.commands.workspace.list as list_cmd
-import agm.commands.workspace.list as workspace_list_command
-from agm.vcs.git import WorktreeInfo
+from tests._git_helpers import add_linked_worktree, git_run, init_repo
 
 
 def _invoke(runner: CliRunner, argv: list[str]) -> Any:
     return runner.invoke(get_command(cli.app), argv, prog_name="agm")
 
 
-class TestListWorkspaces:
-    """Tests for list_workspaces."""
+@pytest.fixture
+def project(tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Split project with `fix` and `feat` workspaces and git's environment applied."""
 
-    def test_lists_main_repo_at_top(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        repo_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(list_cmd.git_helpers, "worktree_list", lambda p, env=None: [])
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: None,
-        )
-
-        list_cmd.list_workspaces()
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 1
-        assert "main" in lines[0]
-        assert str(repo_dir) not in lines[0]
-
-    def test_verbose_shows_directory(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        repo_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(list_cmd.git_helpers, "worktree_list", lambda p, env=None: [])
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: None,
-        )
-
-        list_cmd.list_workspaces(verbose=True)
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 1
-        assert "main" in lines[0]
-        assert str(repo_dir) in lines[0]
-
-    def test_lists_main_repo_and_branch_worktrees(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        worktrees_dir = project_dir / ".agm" / "worktrees"
-        feat_path = worktrees_dir / "feat"
-        fix_path = worktrees_dir / "fix"
-        repo_dir.mkdir(parents=True)
-        feat_path.mkdir(parents=True)
-        fix_path.mkdir(parents=True)
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            list_cmd.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [
-                WorktreeInfo(path=repo_dir, branch="main"),
-                WorktreeInfo(path=fix_path, branch="fix"),
-                WorktreeInfo(path=feat_path, branch="feat"),
-            ],
-        )
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: None,
-        )
-
-        list_cmd.list_workspaces()
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 3
-        assert "main" in lines[0]
-        assert "feat" in lines[1]
-        assert "fix" in lines[2]
-        # Default (non-verbose) output should NOT contain directory paths
-        assert str(repo_dir) not in lines[0]
-        assert str(feat_path) not in lines[1]
-        assert str(fix_path) not in lines[2]
-
-    def test_verbose_lists_main_repo_and_branch_worktrees_with_dirs(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        worktrees_dir = project_dir / ".agm" / "worktrees"
-        feat_path = worktrees_dir / "feat"
-        fix_path = worktrees_dir / "fix"
-        repo_dir.mkdir(parents=True)
-        feat_path.mkdir(parents=True)
-        fix_path.mkdir(parents=True)
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            list_cmd.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [
-                WorktreeInfo(path=repo_dir, branch="main"),
-                WorktreeInfo(path=feat_path, branch="feat"),
-                WorktreeInfo(path=fix_path, branch="fix"),
-            ],
-        )
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: None,
-        )
-
-        list_cmd.list_workspaces(verbose=True)
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 3
-        assert "main" in lines[0]
-        assert "feat" in lines[1]
-        assert "fix" in lines[2]
-        assert str(repo_dir) in lines[0]
-        assert str(feat_path) in lines[1]
-        assert str(fix_path) in lines[2]
-
-    def test_marks_current_worktree_with_star(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        worktrees_dir = project_dir / ".agm" / "worktrees"
-        feat_path = worktrees_dir / "feat"
-        repo_dir.mkdir(parents=True)
-        feat_path.mkdir(parents=True)
-
-        from agm.project.layout import CurrentWorkspace
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            list_cmd.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [
-                WorktreeInfo(path=repo_dir, branch="main"),
-                WorktreeInfo(path=feat_path, branch="feat"),
-            ],
-        )
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: CurrentWorkspace(
-                workspace_dir=feat_path,
-                branch="feat",
-            ),
-        )
-
-        list_cmd.list_workspaces()
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 2
-        # First line (main) should NOT have a star
-        assert lines[0].startswith(" ")
-        assert "main" in lines[0]
-        # Second line (feat) SHOULD have a star
-        assert lines[1].startswith("*")
-        assert "feat" in lines[1]
-
-    def test_marks_main_repo_as_current_when_on_main(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        repo_dir.mkdir(parents=True)
-
-        from agm.project.layout import CurrentWorkspace
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            list_cmd.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [
-                WorktreeInfo(path=repo_dir, branch="main"),
-            ],
-        )
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: CurrentWorkspace(
-                workspace_dir=repo_dir,
-                branch=None,
-            ),
-        )
-
-        list_cmd.list_workspaces()
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 1
-        assert lines[0].startswith("*")
-        assert "main" in lines[0]
-
-    def test_no_star_when_no_current_workspace(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        repo_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(
-            list_cmd.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [
-                WorktreeInfo(path=repo_dir, branch="main"),
-            ],
-        )
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: None,
-        )
-
-        list_cmd.list_workspaces()
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 1
-        assert lines[0].startswith(" ")
-        assert "main" in lines[0]
-
-    def test_main_repo_always_shown_even_without_worktrees(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        repo_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "develop")
-        # No worktrees from git (including main repo not in the list)
-        monkeypatch.setattr(
-            list_cmd.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [],
-        )
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: None,
-        )
-
-        list_cmd.list_workspaces()
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 1
-        assert "develop" in lines[0]
-        assert str(repo_dir) not in lines[0]
-
-    def test_verbose_main_repo_always_shown_even_without_worktrees(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        repo_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "develop")
-        # No worktrees from git (including main repo not in the list)
-        monkeypatch.setattr(
-            list_cmd.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [],
-        )
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: None,
-        )
-
-        list_cmd.list_workspaces(verbose=True)
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 1
-        assert "develop" in lines[0]
-        assert str(repo_dir) in lines[0]
-
-    def test_embedded_layout_uses_project_dir_as_repo(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """Embedded layout: project_dir itself is the repo."""
-        project_dir = tmp_path / "proj"
-        project_dir.mkdir()
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: pd)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(list_cmd.git_helpers, "worktree_list", lambda p, env=None: [])
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: None,
-        )
-
-        list_cmd.list_workspaces(verbose=True)
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 1
-        assert "main" in lines[0]
-        assert str(project_dir) in lines[0]
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    project_dir = tmp_path / "proj"
+    repo_dir = init_repo(project_dir / "repo", env)
+    add_linked_worktree(repo_dir, project_dir / "worktrees" / "fix", env, branch="fix")
+    add_linked_worktree(repo_dir, project_dir / "worktrees" / "feat", env, branch="feat")
+    return project_dir
 
 
-class TestRun:
-    """Tests for the run() entrypoint."""
-
-    def test_delegates_to_list_workspaces(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        repo_dir.mkdir(parents=True)
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        monkeypatch.setattr(list_cmd.git_helpers, "worktree_list", lambda p, env=None: [])
-        monkeypatch.setattr(
-            list_cmd,
-            "current_workspace",
-            lambda pd, cwd=None, env=None: None,
-        )
-
-        list_cmd.run()
-
-        captured = capsys.readouterr()
-        assert captured.out  # produces output
+def _lines(capsys: pytest.CaptureFixture[str]) -> list[str]:
+    return [line for line in capsys.readouterr().out.splitlines() if line]
 
 
-class TestDetachedWorktree:
-    """Branch worktree with branch=None is displayed as (detached)."""
+def test_lists_main_workspace_first_then_branch_workspaces(
+    project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    list_cmd.list_workspaces(cwd=project)
 
-    def test_detached_worktree_shows_detached_label(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        project_dir = tmp_path / "proj"
-        repo_dir = project_dir / "repo"
-        detached_path = project_dir / ".agm" / "worktrees" / "detached"
-        repo_dir.mkdir(parents=True)
-        detached_path.mkdir(parents=True)
-
-        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
-        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
-        # Branch worktree listed before main repo to exercise the
-        # line-44 False branch (wt.path != repo_dir).
-        monkeypatch.setattr(
-            list_cmd.git_helpers,
-            "worktree_list",
-            lambda p, env=None: [
-                WorktreeInfo(path=detached_path, branch=None),
-                WorktreeInfo(path=repo_dir, branch="main"),
-            ],
-        )
-        monkeypatch.setattr(list_cmd, "current_workspace", lambda pd, cwd=None, env=None: None)
-
-        list_cmd.list_workspaces()
-
-        captured = capsys.readouterr()
-        lines = [line for line in captured.out.splitlines() if line]
-        assert len(lines) == 2
-        assert "(detached)" in lines[1]
+    assert _lines(capsys) == ["* main", "  feat", "  fix"]
 
 
-class TestListCommandViaCli:
-    """workspace list CLI entry point dispatches correctly."""
+def test_verbose_shows_workspace_directories(
+    project: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    list_cmd.list_workspaces(cwd=project, verbose=True)
 
-    def test_list_cmd_via_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        runner = CliRunner()
-        calls: list[object] = []
+    lines = _lines(capsys)
+    assert [line[2:].split()[0] for line in lines] == ["main", "feat", "fix"]
+    assert lines[0].endswith("repo")
+    assert lines[1].endswith(str(Path("worktrees") / "feat"))
 
-        def record(*, verbose: bool = False) -> None:
-            calls.append(True)
 
-        monkeypatch.setattr(workspace_list_command, "run", record)
-        result = _invoke(runner, ["workspace", "list"])
-        assert result.exit_code == 0
-        assert len(calls) == 1
+@pytest.mark.parametrize(
+    ("cwd_parts", "expected"),
+    [
+        (("worktrees",), ["  main", "  feat", "  fix"]),
+        (("worktrees", "feat"), ["  main", "* feat", "  fix"]),
+    ],
+)
+def test_marks_current_workspace(
+    project: Path,
+    capsys: pytest.CaptureFixture[str],
+    cwd_parts: tuple[str, ...],
+    expected: list[str],
+) -> None:
+    list_cmd.list_workspaces(cwd=project.joinpath(*cwd_parts))
+
+    assert _lines(capsys) == expected
+
+
+def test_ignores_git_worktrees_that_are_not_workspaces(
+    project: Path, tmp_path: Path, env: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo_dir = project / "repo"
+    add_linked_worktree(repo_dir, tmp_path / "elsewhere", env, branch="outside")
+    git_run(repo_dir, ["worktree", "add", "-q", "--detach", str(tmp_path / "detached")], env)
+
+    list_cmd.list_workspaces(cwd=project)
+
+    assert _lines(capsys) == ["* main", "  feat", "  fix"]
+
+
+def test_shows_detached_and_switched_workspace_state(
+    project: Path, env: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    git_run(project / "repo", ["checkout", "-q", "--detach"], env)
+    git_run(project / "worktrees" / "feat", ["checkout", "-q", "--detach"], env)
+    git_run(project / "worktrees" / "fix", ["checkout", "-q", "-b", "other"], env)
+
+    list_cmd.list_workspaces(cwd=project)
+
+    assert _lines(capsys) == ["* (detached)", "  feat (detached)", "  fix (on other)"]
+
+
+def test_embedded_layout_lists_agm_worktrees(
+    tmp_path: Path,
+    env: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    repo_dir = init_repo(tmp_path / "proj", env)
+    (repo_dir / ".agm" / "worktrees").mkdir(parents=True)
+    add_linked_worktree(repo_dir, repo_dir / ".agm" / "worktrees" / "feat", env, branch="feat")
+
+    list_cmd.list_workspaces(cwd=repo_dir)
+
+    assert _lines(capsys) == ["* main", "  feat"]
+
+
+def test_run_lists_workspaces_of_the_current_project(
+    project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(project / "worktrees" / "fix")
+
+    list_cmd.run()
+
+    assert _lines(capsys) == ["  main", "  feat", "* fix"]
+
+
+def test_list_cmd_via_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[bool] = []
+
+    def record(*, verbose: bool = False) -> None:
+        calls.append(verbose)
+
+    monkeypatch.setattr(list_cmd, "run", record)
+    result = _invoke(CliRunner(), ["workspace", "list", "-v"])
+    assert result.exit_code == 0
+    assert calls == [True]

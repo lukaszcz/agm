@@ -15,11 +15,12 @@ from agm.project.layout import (
     is_main_workspace_branch,
     project_config_dir,
     project_repo_dir,
+    project_workspaces,
     require_current_project_dir,
 )
 from agm.project.workspace_env import load_workspace_env
 from agm.project.workspace_shell import remove_workspace_shell
-from agm.project.worktree import remove_worktree
+from agm.project.worktree import remove_worktree_at
 from agm.tmux.session import close_tmux_session
 
 
@@ -69,6 +70,10 @@ def close_workspace(
     effective_force_delete = force or force_delete
 
     if not keep_workspace:
+        workspace = next((ws for ws in project_workspaces(proj_dir) if ws.name == branch), None)
+        if workspace is None:
+            print(f"error: no workspace for branch '{branch}'", file=sys.stderr)
+            raise SystemExit(1)
         # Pre-check: verify the branch can be deleted before removing the Git worktree.
         # Uses default environment; project-specific env is not needed for git checks.
         if not keep_branch and not git_helpers.branch_can_delete(
@@ -83,8 +88,9 @@ def close_workspace(
                 )
             raise SystemExit(1)
 
-        remove_worktree(
+        remove_worktree_at(
             repo_dir=repo_dir,
+            worktree_path=workspace.path,
             force=force,
             branch=branch,
             force_delete=effective_force_delete,

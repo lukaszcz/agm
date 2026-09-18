@@ -173,6 +173,29 @@ def remove_worktree(
         require_success(["git", "-C", str(repo_dir), "worktree", "list"], env=env)
         raise SystemExit(1)
 
+    remove_worktree_at(
+        repo_dir=repo_dir,
+        worktree_path=worktree_path,
+        branch=branch,
+        force=force,
+        force_delete=force_delete,
+        delete_branch=delete_branch,
+        env=env,
+    )
+
+
+def remove_worktree_at(
+    *,
+    repo_dir: Path,
+    worktree_path: Path,
+    branch: str,
+    force: bool,
+    force_delete: bool = False,
+    delete_branch: bool = True,
+    env: dict[str, str] | None = None,
+) -> None:
+    """Remove the worktree at *worktree_path* and optionally delete *branch*."""
+
     git_helpers.worktree_remove(repo_dir, worktree_path, force=force, env=env)
     print(f"Removed worktree for branch '{branch}': {display_path(worktree_path)}")
     if delete_branch:

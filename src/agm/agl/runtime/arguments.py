@@ -153,10 +153,11 @@ class ProgramSignature:
 
 @dataclass(frozen=True, slots=True)
 class OptionSome:
-    """A host-supplied ``Option[T]`` "Some" raw payload, awaiting decode.
+    """A host-supplied optional enum's ``Some`` raw payload, awaiting decode.
 
     Boxes the raw ``VALUE`` a CLI flag or config table supplied for an
-    ``Option[T]`` parameter (:func:`~agm.cli_support.program_options.option_some_raw`
+    ``Option[T]`` or ``Optional[T]`` parameter
+    (:func:`~agm.cli_support.program_options.option_some_raw`
     builds it) so :func:`decode_param_value` can decode ``value`` against the
     ``Some`` variant's own field type before wrapping it back into the enum's
     JSON shape — a string is read through the same host-text dispatch as any
@@ -176,7 +177,7 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     ``text`` params verbatim, the standard ``Agent`` enum through its own text
     conventions, everything else as strict JSON falling back to AgL value
     syntax. An :class:`OptionSome` payload decodes its own ``value`` the same
-    way (when textual) before being wrapped back into the ``Option`` enum's
+    way (when textual) before being wrapped back into the optional enum's
     JSON shape. Every other value crosses the canonical JSON boundary (strict
     parse, JSON-Schema validation, then the typeless ``decode_value`` walk).
 

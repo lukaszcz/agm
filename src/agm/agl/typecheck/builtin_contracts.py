@@ -2,9 +2,9 @@
 
 The seeded reserved ``TypeDef`` objects are real nominal declarations used by
 type resolution and runtime values.  They are not validation schemas: a source
-``builtin`` declaration may live in any module or scope, and an enum is
-validated only after the builder has required its members to be inline, so
-source constructors can share the identities expected by host-minted values.
+``builtin`` declaration may live in any module or scope. Enum members are
+normally inline so source constructors share host identities; ``Optional``
+instead reuses its selected builtin ``Option``'s ``Some``/``None`` members.
 
 This module projects nominal declarations into explicit contracts.  A contract
 keeps declaration kind, parameters, fields, member names, captured member type
@@ -26,6 +26,7 @@ from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
     OPTION_TYPE_DEF,
+    OPTIONAL_TYPE_DEF,
     TypeDef,
     TypeDefKind,
     TypeTable,
@@ -155,7 +156,12 @@ def _canonical_contracts(
 
 _CANONICAL_TABLE = create_seeded_type_table()
 _PRELUDE_CONTRACTS = _canonical_contracts(
-    {**BUILTIN_PRELUDE_TYPE_DEFS, "Option": OPTION_TYPE_DEF}, _CANONICAL_TABLE
+    {
+        **BUILTIN_PRELUDE_TYPE_DEFS,
+        "Option": OPTION_TYPE_DEF,
+        "Optional": OPTIONAL_TYPE_DEF,
+    },
+    _CANONICAL_TABLE,
 )
 
 BUILTIN_RECORD_CONTRACTS: Mapping[str, BuiltinTypeContract] = {

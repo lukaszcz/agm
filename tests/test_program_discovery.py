@@ -43,6 +43,7 @@ class TestProgramDeclarationDiscovery:
             "  qualified: path::path,\n"
             "  scoped: files::spot,\n"
             "  optional: Option[path],\n"
+            "  defaultable: Optional[path],\n"
             "  aliased: location,\n"
             "  optional-alias: maybe-location,\n"
             "  words: text,\n"
@@ -57,6 +58,7 @@ class TestProgramDeclarationDiscovery:
             "qualified": True,
             "scoped": True,
             "optional": True,
+            "defaultable": True,
             "aliased": True,
             "optional-alias": True,
             "words": False,

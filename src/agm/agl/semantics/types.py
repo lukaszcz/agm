@@ -1040,6 +1040,15 @@ def is_standard_option_enum(type_: Type) -> TypeGuard[EnumType]:
     )
 
 
+def is_standard_optional_enum(type_: Type) -> TypeGuard[EnumType]:
+    """Return whether *type_* is the standard library's ``Optional`` enum."""
+    return (
+        isinstance(type_, EnumType)
+        and type_.name == "Optional"
+        and (type_.module_id.is_reserved or type_.module_id.is_standard_library)
+    )
+
+
 _OUTPUT_CONTRACT_TYPE = RecordType(
     name="OutputContract", module_id=RESERVED_ID, decl_id=_reserved_id("OutputContract")
 )

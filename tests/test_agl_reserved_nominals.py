@@ -18,6 +18,7 @@ from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
     OPTION_TYPE_DEF,
+    OPTIONAL_TYPE_DEF,
     create_seeded_type_table,
 )
 from agm.agl.semantics.types import (
@@ -39,8 +40,8 @@ def _decl_id(t: Type) -> int:
 
 
 class TestReservedNominalCatalog:
-    def test_covers_exactly_builtin_exceptions_and_prelude_types_plus_option(self) -> None:
-        expected = BUILTIN_EXCEPTION_NAMES | BUILTIN_PRELUDE_TYPE_NAMES | {"Option"}
+    def test_covers_exactly_builtin_exceptions_and_prelude_types_plus_host_enums(self) -> None:
+        expected = BUILTIN_EXCEPTION_NAMES | BUILTIN_PRELUDE_TYPE_NAMES | {"Option", "Optional"}
         assert set(RESERVED_NOMINAL_NAMES) == expected
 
     def test_names_have_no_duplicates(self) -> None:
@@ -95,6 +96,9 @@ class TestSeededTypeDefsCarryReservedIds:
 
     def test_option_typedef_carries_its_reserved_decl_node_id(self) -> None:
         assert OPTION_TYPE_DEF.decl_node_id == reserved_nominal_id("Option")
+
+    def test_optional_typedef_carries_its_reserved_decl_node_id(self) -> None:
+        assert OPTIONAL_TYPE_DEF.decl_node_id == reserved_nominal_id("Optional")
 
     def test_agent_request_carries_the_selected_agent(self) -> None:
         agent_request = BUILTIN_PRELUDE_TYPE_DEFS["AgentRequest"]

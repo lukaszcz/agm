@@ -65,6 +65,15 @@ def _option_type(inner: Type) -> EnumType:
     )
 
 
+def _optional_type(inner: Type) -> EnumType:
+    return EnumType(
+        name="Optional",
+        type_args=(inner,),
+        module_id=ModuleId.from_path("std/optional"),
+        decl_id=next_decl_id(),
+    )
+
+
 def _param(
     name: str,
     typ: Type,
@@ -216,6 +225,14 @@ class TestProjectOption:
         assert projected.value_form is ValueForm.OPTION
         assert projected.negative_flags == ("--no-flag",)
 
+    def test_optional_projects_a_default_aware_flag_pair(self) -> None:
+        projected = project_option("file", _optional_type(TextType()))
+
+        assert projected.flags == ("--file",)
+        assert projected.negative_flags == ("--no-file",)
+        assert projected.takes_value is True
+        assert projected.value_form is ValueForm.OPTIONAL
+
     def test_agent_projects_a_host_agent_value(self) -> None:
         projected = project_option("worker", BUILTIN_PRELUDE_TYPES["Agent"])
 
@@ -258,6 +275,16 @@ class TestProjectOption:
         assert projected.value_form is ValueForm.VALUE
         assert projected.negative_flags == ()
         assert projected.takes_value is True
+
+    def test_entry_module_enum_named_optional_projects_as_an_ordinary_value(self) -> None:
+        user_optional = EnumType(
+            name="Optional", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=next_decl_id()
+        )
+
+        projected = project_option("thing", user_optional)
+
+        assert projected.value_form is ValueForm.VALUE
+        assert projected.negative_flags == ()
 
 
 # ---------------------------------------------------------------------------
@@ -725,6 +752,28 @@ class TestParseOption:
     def test_omitted_option_supplies_nothing(self) -> None:
         args = _command(_param("region", _option_type(TextType()))).parse([])
         assert args.named == {}
+
+
+class TestParseOptional:
+    def test_positive_value_boxes_some(self) -> None:
+        args = _command(_param("file", _optional_type(TextType()))).parse(["--file", "result.txt"])
+
+        assert args.named == {"file": OptionSome("result.txt")}
+
+    def test_negative_flag_supplies_none(self) -> None:
+        args = _command(_param("file", _optional_type(TextType()))).parse(["--no-file"])
+
+        assert args.named == {"file": {"$case": "None"}}
+
+    def test_default_token_supplies_default(self) -> None:
+        args = _command(_param("file", _optional_type(TextType()))).parse(["--file", "default"])
+
+        assert args.named == {"file": {"$case": "Default"}}
+
+    def test_config_default_string_supplies_default(self) -> None:
+        projected = project_option("file", _optional_type(TextType()))
+
+        assert native_raw_value(projected, "default") == {"$case": "Default"}
 
 
 class TestParsePositional:
@@ -1211,11 +1260,13 @@ class TestDefaultMetavar:
         help_text = _command(
             _param("out", TextType(), is_path=True),
             _param("journal", _option_type(TextType()), is_path=True),
+            _param("file", _optional_type(TextType()), is_path=True),
             _param("dest", TextType(), is_path=True, metavar="DIR"),
         ).render_help("prog")
 
         assert "--out PATH" in help_text
         assert "--journal PATH" in help_text
+        assert "--file PATH" in help_text
         assert "--dest DIR" in help_text
 
 

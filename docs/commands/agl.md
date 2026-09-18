@@ -136,26 +136,28 @@ A name-addressable parameter's type selects its flag form; every value-taking fl
 |---|---|
 | `bool` | `--x` / `--no-x`, no value |
 | `Option[T]` | `--x VALUE` (`Some`) / `--no-x` (`None`); `VALUE` verbatim for `text`, [host Agent syntax](#host-agent-syntax) for `Agent`, else strict JSON or [value syntax](../agl/reference/host-environment.md#value-syntax) for `T` |
+| `Optional[T]` | Like `Option[T]`, plus the exact `--x default` spelling for `Default` |
 | `text` | `--x VALUE`, verbatim |
 | `Agent` | `--x VALUE`, in [host Agent syntax](#host-agent-syntax) |
 | `json` | `--x VALUE`, strict JSON or a value-syntax literal restricted to JSON-shaped data (no constructor calls) |
 | other | `--x VALUE`, strict JSON or [value syntax](../agl/reference/host-environment.md#value-syntax) validated against the type |
 
-A `path` parameter — `path`, `Option[path]`, or an alias of either — takes its value as the
+A `path` parameter — `path`, `Option[path]`, `Optional[path]`, or an alias of one — takes its value as the
 matching `text` form does, with `PATH` as its default value placeholder. Shell completion offers
 filesystem paths for its value (`--x <TAB>`, `-x <TAB>`, `--x=<TAB>`) and for its positional slot,
 under `agm exec FILE` and a registered package command alike.
 
-A positional slot has no `--no-x`, so `Option[T]` gets no special treatment there: `text` is
-verbatim, `Agent` uses host syntax, and every other type, `Option[T]` included, is strict JSON or
+A positional slot has no `--no-x`, so `Option[T]` and `Optional[T]` get no special treatment
+there: `text` is verbatim, `Agent` uses host syntax, and every other type is strict JSON or
 value syntax of the declared type (`'{"$case": "Some", "value": "hi"}'` or `'Some("hi")'` for
 `Option[text]`).
 
 An omitted argument resolves as `CLI > @opt-env variable > qualified program table (see
 [Configuration](#configuration)) > signature default > required error`; errors are reported
 before any agent runs. A positional-only parameter has no name to key a config table by, so it
-skips that step. A config key cannot spell `None` for `Option[T]`: a present key supplies
-`Some`, an absent one falls through to the default; pass `--no-x` for `None`.
+skips that step. A config key cannot spell `None` for `Option[T]` or `Optional[T]`: a present
+key normally supplies `Some`, and an absent one falls through to the declared default. For
+`Optional[T]`, the exact string `"default"` supplies `Default`; pass `--no-x` for `None`.
 
 Also reported before any agent runs: a parameter supplied twice (two flags, or positional plus
 `--x`), an unrecognized `--flag`, or more positionals than positional-capable parameters.
@@ -230,7 +232,7 @@ An `@param let` or `@param var` in the selected program's transitive import clos
 host option. The declaring module's external parameter name is used for a bare flag when it
 resolves, and for dotted qualified flags in all cases: an `A/logging` parameter `verbose` can
 be `--verbose`, `--logging.verbose`, or `--A.logging.verbose`; a `scope debug` parameter is
-`--logging.debug.trace` or `--A.logging.debug.trace`. `bool` and `Option[T]` also have the
+`--logging.debug.trace` or `--A.logging.debug.trace`. `bool`, `Option[T]`, and `Optional[T]` also have the
 corresponding `--no-...` form, and `@opt-short("v")` adds `-v`. Module and scope paths are dotted
 in flags; `::` is only for declaration paths in AgL source.
 

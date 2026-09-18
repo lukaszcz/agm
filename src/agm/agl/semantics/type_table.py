@@ -1942,6 +1942,40 @@ _OPTION_DEF, _OPTION_MEMBER_DEFS = _builtin_enum_defs(
     (("None", ()), ("Some", (("value", TypeVarType("T")),))),
     type_params=("T",),
 )
+_OPTIONAL_DEFAULT_DEF = TypeDef(
+    kind="record",
+    name="Default",
+    module_id=RESERVED_ID,
+    scope_path=("Optional",),
+    decl_node_id=require_reserved_enum_member_id("Optional", "Default"),
+)
+_OPTIONAL_DEF = TypeDef(
+    kind="enum",
+    name="Optional",
+    module_id=RESERVED_ID,
+    type_params=("T",),
+    members=(
+        RecordType(
+            name="Some",
+            type_args=(TypeVarType("T"),),
+            module_id=RESERVED_ID,
+            scope_path=("Option",),
+            decl_id=require_reserved_enum_member_id("Option", "Some"),
+        ),
+        RecordType(
+            name="None",
+            module_id=RESERVED_ID,
+            scope_path=("Option",),
+            decl_id=require_reserved_enum_member_id("Option", "None"),
+        ),
+        RecordType(
+            name="Default",
+            module_id=RESERVED_ID,
+            scope_path=("Optional",),
+            decl_id=require_reserved_enum_member_id("Optional", "Default"),
+        ),
+    ),
+)
 
 
 def _with_reserved_ids(defs: Mapping[str, TypeDef]) -> Mapping[str, TypeDef]:
@@ -2086,6 +2120,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_S
 # without the standard library can still resolve its member set on
 # ``Option`` handles.
 OPTION_TYPE_DEF = replace(_OPTION_DEF, decl_node_id=_reserved_id("Option"))
+OPTIONAL_TYPE_DEF = replace(_OPTIONAL_DEF, decl_node_id=_reserved_id("Optional"))
 BUILTIN_PRELUDE_MEMBER_TYPE_DEFS: Mapping[DeclId, TypeDef] = {
     member.decl_node_id: member
     for member in (
@@ -2094,6 +2129,7 @@ BUILTIN_PRELUDE_MEMBER_TYPE_DEFS: Mapping[DeclId, TypeDef] = {
         *_OUTPUT_CONTRACT_OPTION_MEMBER_DEFS,
         *_SESSION_TRANSPORT_MEMBER_DEFS,
         *_OPTION_MEMBER_DEFS,
+        _OPTIONAL_DEFAULT_DEF,
     )
 }
 
@@ -2351,7 +2387,8 @@ def create_seeded_type_table() -> TypeTable:
 
     Registers ``BUILTIN_PRELUDE_TYPE_DEFS`` (``ExecResult``, ``ParsePolicy``,
     ``Agent``, ``OutputContract``, ``OutputContractOption``, ``AgentRequest``), the
-    generic ``OPTION_TYPE_DEF``, and ``BUILTIN_EXCEPTION_TYPE_DEFS`` (every
+    generic ``OPTION_TYPE_DEF`` and ``OPTIONAL_TYPE_DEF``, and
+    ``BUILTIN_EXCEPTION_TYPE_DEFS`` (every
     entry of ``semantics.types.BUILTIN_EXCEPTIONS``).
     """
     table = TypeTable()
@@ -2360,6 +2397,7 @@ def create_seeded_type_table() -> TypeTable:
     for typedef in BUILTIN_PRELUDE_TYPE_DEFS.values():
         table.register(typedef)
     table.register(OPTION_TYPE_DEF)
+    table.register(OPTIONAL_TYPE_DEF)
     for typedef in BUILTIN_EXCEPTION_TYPE_DEFS.values():
         table.register(typedef)
     return table

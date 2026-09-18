@@ -71,6 +71,54 @@ def _superseded_reserved(typedef: TypeDef, type_table: TypeTable) -> bool:
     return reserved_fallback_superseded(owner_name, type_table)
 
 
+def _record_descriptor(
+    typedef: TypeDef,
+    handle: RecordType,
+    type_table: TypeTable,
+    *,
+    bears_name_path: bool,
+) -> NominalDescriptor:
+    """Build one record descriptor from its authoritative declaration."""
+    nominal = NominalId(typedef.decl_node_id)
+    return NominalDescriptor(
+        nominal=nominal,
+        module_id=typedef.module_id,
+        scope_path=typedef.scope_path,
+        declared_name=typedef.name,
+        kind=NominalKind.RECORD,
+        fields=tuple(name for name, _ in typedef.fields),
+        mutable_fields=typedef.mutable_fields,
+        variants=(),
+        positional_fields=positional_field_names(type_table.field_kinds(handle)),
+        bears_name_path=bears_name_path,
+    )
+
+
+def _add_missing_enum_member_descriptors(
+    nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
+) -> None:
+    """Close the nominal table over records referenced by retained enums.
+
+    Usually an enum and all its members are emitted by the same declaration
+    pass. A retained enum may instead reference a reserved member whose owning
+    fallback enum was superseded, so that record still needs a non-name-bearing
+    descriptor for IR identity and validation.
+    """
+    missing = {
+        variant.member
+        for descriptor in nominals.values()
+        if descriptor.kind is NominalKind.ENUM
+        for variant in descriptor.variants
+        if variant.member not in nominals
+    }
+    for nominal in missing:
+        typedef = type_table.get_by_id(nominal.value)
+        assert typedef is not None and typedef.kind == "record"
+        handle = typedef.handle()
+        assert isinstance(handle, RecordType)
+        nominals[nominal] = _record_descriptor(typedef, handle, type_table, bears_name_path=False)
+
+
 def _exception_field_encodes(
     type_table: TypeTable,
 ) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
@@ -291,17 +339,8 @@ def lower_program(
         handle = typedef.handle()
         match handle:
             case RecordType():
-                link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typedef.module_id,
-                    scope_path=typedef.scope_path,
-                    declared_name=typedef.name,
-                    kind=NominalKind.RECORD,
-                    fields=tuple(name for name, _ in typedef.fields),
-                    mutable_fields=typedef.mutable_fields,
-                    variants=(),
-                    positional_fields=positional_field_names(type_table.field_kinds(handle)),
-                    bears_name_path=bears_name_path,
+                link.nominals[nominal] = _record_descriptor(
+                    typedef, handle, type_table, bears_name_path=bears_name_path
                 )
             case EnumType():
                 link.nominals[nominal] = NominalDescriptor(
@@ -355,16 +394,8 @@ def lower_program(
                 generic_typedef.decl_node_id == typ.decl_id and typ.decl_id not in inline_member_ids
             )
             if isinstance(typ, RecordType):
-                link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typ.module_id,
-                    scope_path=typ.scope_path,
-                    declared_name=typ.name,
-                    kind=NominalKind.RECORD,
-                    fields=tuple(fname for fname, _ in generic_typedef.fields),
-                    mutable_fields=generic_typedef.mutable_fields,
-                    positional_fields=positional_field_names(type_table.field_kinds(typ)),
-                    bears_name_path=bears_name_path,
+                link.nominals[nominal] = _record_descriptor(
+                    generic_typedef, typ, type_table, bears_name_path=bears_name_path
                 )
             else:
                 link.nominals[nominal] = NominalDescriptor(
@@ -383,6 +414,8 @@ def lower_program(
                     ),
                     bears_name_path=bears_name_path,
                 )
+
+    _add_missing_enum_member_descriptors(link.nominals, type_table)
 
     # Step 3: Phase 1 — pre-allocate every static runtime symbol before any
     # body is lowered. Function ids enable calls across root and named-scope

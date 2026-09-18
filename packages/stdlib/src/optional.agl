@@ -1,5 +1,7 @@
-import std/option::Option
+import std/option::{Option, UnwrapError}
+import std/result::Result
 
+builtin
 enum Optional[T]
   | Option::Some[T]
   | Option::None

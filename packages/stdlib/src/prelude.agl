@@ -6,6 +6,7 @@ export std/math::{int, decimal, bool}
 export std/fun
 export std/errors
 export std/option
+export std/optional
 export std/pair
 export std/either
 export std/result

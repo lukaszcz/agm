@@ -5140,8 +5140,9 @@ class _Checker:
         if any(self._visible_method_levels(direct)):
             return obj_type
         enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
-        if len(enum_owners) == 1 and is_standard_option_enum(enum_owners[0]):
-            return enum_owners[0]
+        option_owners = tuple(owner for owner in enum_owners if is_standard_option_enum(owner))
+        if len(option_owners) == 1:
+            return option_owners[0]
         return obj_type
 
     def _check_field_access(

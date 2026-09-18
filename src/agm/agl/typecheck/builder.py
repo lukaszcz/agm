@@ -936,20 +936,40 @@ class _TypeBuilder:
         """Check a ``builtin`` declaration against its structural host contract.
 
         A builtin may live at any source path, but its enum members must be
-        inline so host-minted values and source constructors share the member
-        identities assigned by the builtin declaration. Nominal types inside
-        fields and an exception's base remain contract-bearing and are
+        inline so host-minted values and source constructors share identities.
+        ``Optional`` instead reuses its selected builtin ``Option``'s
+        ``Some``/``None`` members and declares ``Default`` inline. Nominal types
+        inside fields and an exception's base remain contract-bearing and are
         normalized by :func:`contract_for_typedef` relative to the declaration's
         own frame.
         """
-        if isinstance(stmt, EnumDef) and any(
-            isinstance(member, VariantRef) for member in stmt.members
-        ):
-            raise AglTypeError(
-                f"Builtin type '{stmt.name}' has an invalid definition.",
-                span=stmt.span,
-            )
         bare_name = _bare_name(stmt.name)
+        if isinstance(stmt, EnumDef):
+            referenced = any(isinstance(member, VariantRef) for member in stmt.members)
+            if bare_name == "Optional":
+                option = self._env.type_table.builtin_declaration("Option")
+                option_members = {} if option is None else {m.name: m for m in option.members}
+                actual_members = {member.name: member for member in typedef.members}
+                shares_option = all(
+                    name in option_members
+                    and name in actual_members
+                    and actual_members[name].decl_id == option_members[name].decl_id
+                    for name in ("Some", "None")
+                )
+                default_is_inline = any(
+                    isinstance(member, VariantDef) and member.name == "Default"
+                    for member in stmt.members
+                )
+                if not shares_option or not default_is_inline:
+                    raise AglTypeError(
+                        f"Builtin type '{stmt.name}' has an invalid definition.",
+                        span=stmt.span,
+                    )
+            elif referenced:
+                raise AglTypeError(
+                    f"Builtin type '{stmt.name}' has an invalid definition.",
+                    span=stmt.span,
+                )
         expected = expected_contracts[bare_name]
         actual = contract_for_typedef(typedef, self._env.type_table, base_type=base_type)
         if actual != expected:

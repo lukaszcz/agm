@@ -45,6 +45,7 @@ _ROOTS = agl_roots()
 _CAPS = HostCapabilities()
 _STD_DIR = Path(__file__).resolve().parents[1] / "packages" / "stdlib" / "src"
 _STD_OPTION = Path(__file__).resolve().parents[1] / "packages" / "stdlib" / "src" / "option.agl"
+_STD_OPTIONAL = Path(__file__).resolve().parents[1] / "packages" / "stdlib" / "src" / "optional.agl"
 
 
 def _check(source: str, *, default_stdlib: bool = True) -> None:
@@ -231,7 +232,7 @@ def test_standard_library_declares_every_public_builtin() -> None:
     assert records | enums | exceptions == (
         set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES)
         | set(BUILTIN_EXCEPTIONS)
-        | {OPTION_TEXT_TYPE.name}
+        | {OPTION_TEXT_TYPE.name, "Optional"}
     )
     assert exceptions == set(BUILTIN_EXCEPTIONS) | {"SessionError"}
     assert functions == set(BUILTIN_CALL_NAMES) | set(NON_RESERVED_BUILTIN_CALL_NAMES)
@@ -260,6 +261,19 @@ def test_std_option_declares_the_builtin_option_and_keeps_its_host_identity() ->
     assert option_descriptor.module_id == ModuleId.from_path("std/option")
     assert {variant.name for variant in option_descriptor.variants} == {"None", "Some"}
     assert all(variant.member in executable.nominals for variant in option_descriptor.variants)
+
+
+def test_std_optional_declares_the_builtin_optional_and_is_in_the_prelude() -> None:
+    from agm.agl.parser import parse_program
+    from agm.agl.syntax.nodes import EnumDef
+
+    program = parse_program(_STD_OPTIONAL.read_text())
+    enums = {
+        item.name for item in program.body.items if isinstance(item, EnumDef) and item.is_builtin
+    }
+
+    assert enums == {"Optional"}
+    _check("let value: Optional[path] = Default\n()\n")
 
 
 def test_unknown_builtin_type_is_rejected() -> None:
@@ -312,6 +326,27 @@ def test_std_core_source_builtin_shape_is_not_masked_by_seed(
 def test_builtin_option_shape_must_match() -> None:
     with pytest.raises(AglTypeError, match="Builtin type 'Option' has an invalid definition"):
         _check("builtin\nenum Option[T] =\n  | None\n  | Some(value: T, extra: int)\n()\n")
+
+
+def test_builtin_optional_must_reference_option_members() -> None:
+    with pytest.raises(AglTypeError, match="Builtin type 'Optional' has an invalid definition"):
+        _check(
+            "builtin enum Option[T]\n"
+            "  | None\n"
+            "  | Some(value: T)\n"
+            "\n"
+            "scope Fake\n"
+            "  record None()\n"
+            "  record Some[T](value: T)\n"
+            "end Fake\n"
+            "\n"
+            "builtin enum Optional[T]\n"
+            "  | Fake::Some[T]\n"
+            "  | Fake::None\n"
+            "  | Default\n"
+            "()\n",
+            default_stdlib=False,
+        )
 
 
 def test_builtin_exception_shape_must_match() -> None:

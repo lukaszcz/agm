@@ -72,7 +72,9 @@ host invocation error.
 
 A positional-only or standard parameter accepts a positional CLI token; a
 standard or named-only parameter accepts `--name value`, `--name=value`, or,
-for `bool` and `Option[T]`, the negated form `--no-name`. A parameter given a
+for `bool`, `Option[T]`, and `Optional[T]`, the negated form `--no-name`. An
+`Optional[T]` parameter additionally reads the exact value `default` as `Default`;
+other positive values become `Some`. A parameter given a
 one-letter spelling by `@opt-short` also accepts `-n value` and `-nvalue`, and
 groups with other one-letter flags — `-abc` — where only the last letter of a
 group may take a value. A `program def`'s
@@ -141,7 +143,7 @@ slot, read as plain data with no constructor calls, since a `json` value has
 no declared type to resolve one against.
 
 A parameter annotated [`path`](types.md#type-aliases) — directly, as
-`Option[path]`, or through an alias of either — takes its value exactly as the
+`Option[path]` or `Optional[path]`, or through an alias — takes its value exactly as the
 corresponding `text` parameter does. A host presents that value as a
 filesystem location: its value placeholder defaults to `PATH`, and a host
 offering completion completes it from the filesystem.
@@ -197,7 +199,7 @@ adds the scope path: `--logging.debug.trace` and
 `--A.logging.debug.trace`. Qualified spellings are dotted; source declaration
 paths use `::` instead. `@opt-short("v")` adds `-v` on the command line.
 
-`bool` and `Option[T]` parameters also accept their normal `--no-...` form;
+`bool`, `Option[T]`, and `Optional[T]` parameters also accept their normal `--no-...` form;
 other parameter types take a value under the same type-directed rules as
 [program arguments](#program-arguments). A bare name is resolved in this
 order: host flags and engine-setting leaves, the selected program's own value

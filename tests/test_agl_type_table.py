@@ -69,6 +69,7 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     VarDecl,
     VariantDef,
+    VariantRef,
 )
 from agm.agl.typecheck import AglTypeError, CheckedModule
 from agm.agl.typecheck.program import check_program
@@ -4634,6 +4635,12 @@ class TestDeclarationIdentity:
                     if isinstance(member, VariantDef)
                 }
                 resolved_members = module.type_env.type_table.enum_member_names(handle)
+                assert set(resolved_members) == {
+                    member.name if isinstance(member, VariantDef) else member.chain.member
+                    for member in declaration.members
+                    if isinstance(member, VariantDef | VariantRef)
+                }
                 assert {
-                    member_name: member.decl_id for member_name, member in resolved_members.items()
+                    member_name: resolved_members[member_name].decl_id
+                    for member_name in source_members
                 } == source_members

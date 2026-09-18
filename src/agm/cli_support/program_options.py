@@ -3,13 +3,13 @@
 :func:`project_option` maps one name and AgL type onto its CLI surface:
 ``bool`` becomes a bare ``--x``/``--no-x`` flag pair (no value); ``Option[T]``
 becomes a value-taking ``--x VALUE``/``--no-x`` pair, where ``VALUE`` decodes
-as ``T`` and is wrapped ``Some``, and ``--no-x`` supplies ``None``; ``text``
-takes ``VALUE`` verbatim; standard ``Agent`` uses host Agent syntax; every
-other type takes one strict-JSON ``VALUE``.
-Whether a type is the standard ``Option`` is decided by nominal provenance
-(``agm.agl.semantics.types.is_standard_option_enum``), not by name, so a
-user-declared ``enum Option[T]`` of its own projects as an ordinary JSON-form
-value, never as the ``Option`` shape. This is the single derivation shared by
+as ``T`` and is wrapped ``Some``, and ``--no-x`` supplies ``None``;
+``Optional[T]`` has the same pair plus the exact ``--x default`` spelling for
+``Default``; ``text`` takes ``VALUE`` verbatim; standard ``Agent`` uses host
+Agent syntax; every other type takes one strict-JSON ``VALUE``.
+Whether a type is the standard ``Option`` or ``Optional`` is decided by nominal
+provenance, not by name, so a user-declared enum sharing either name projects as
+an ordinary JSON-form value. This is the single derivation shared by
 an engine key's CLI flags (:func:`engine_key_flags`, folded into
 :data:`EXEC_RESERVED_FLAGS`) and a program parameter's own flags
 (:class:`ProgramCommand`), so the reserved set and the parameter flags can
@@ -58,17 +58,17 @@ and which belong to the program: :func:`split_exec_tail` is the one place
 that split is derived, and :func:`retain_end_of_options` is what keeps the
 end-of-options marker visible to it across Click's own parse.
 
-Nested ``Option`` handling
----------------------------
+Nested optional handling
+------------------------
 
-Only the outermost type gets special CLI treatment. A non-``Option`` flag's
+Only the outermost type gets special CLI treatment. A non-optional flag's
 ``VALUE`` token passes through verbatim, exactly like a positional token:
 ``decode_param_value`` already reads a raw string against the parameter's
 own decoder (host Agent syntax, strict JSON, or AgL value syntax alike), so
 reading it again here would duplicate that step and lose its diagnostic,
 anchored at the parameter's declaration, on a malformed value.
 
-An ``Option[T]`` flag is the one boxing exception. Its raw value is an
+An ``Option[T]`` or ``Optional[T]`` flag is the one boxing exception. Its raw value is an
 :class:`~agm.agl.runtime.arguments.OptionSome` box around the token, built by
 :func:`option_some_raw` — ``decode_param_value``'s deferred-decode path reads
 a boxed ``Some`` payload against ``T``'s own field schema (host-text dispatch
@@ -79,7 +79,8 @@ no further special case, so it also defines nested behavior:
 ``Option[bool]``'s ``VALUE`` is a JSON boolean literal (``--x true`` /
 ``--x false``; ``--no-x`` for ``None``), and ``Option[Option[T]]``'s
 ``VALUE`` is a JSON or value-syntax literal of the *whole* inner ``Option``
-shape (``--no-x`` for the outer ``None``). A malformed ``Option`` payload —
+shape (``--no-x`` for the outer ``None``). ``Optional[T]`` applies its
+``default`` shortcut before this boxing step. A malformed optional payload —
 like any other malformed value — surfaces as a decode diagnostic anchored at
 the parameter's declaration, not as a Click usage error.
 """
@@ -104,6 +105,7 @@ from agm.agl.semantics.types import (
     TextType,
     is_standard_agent_enum,
     is_standard_option_enum,
+    is_standard_optional_enum,
 )
 from agm.agl.zones import ParamZone
 
@@ -244,6 +246,8 @@ class ValueForm(enum.Enum):
     TEXT = "text"
     #: ``Option[T]``: a ``{"$case": ...}`` envelope wrapping ``T``'s own value.
     OPTION = "option"
+    #: ``Optional[T]``: ``Option[T]`` plus the reserved ``default`` value.
+    OPTIONAL = "optional"
     #: ``bool``: a native Python bool, no ``VALUE`` token.
     BOOL = "bool"
     #: Standard ``Agent``: compact syntax, command text, a constructor call, or
@@ -263,8 +267,8 @@ class ProjectedOption:
     ``takes_value`` both follow from it, so :attr:`takes_value` is derived
     rather than stored and cannot disagree with the form.
 
-    ``option_inner``/``option_inner_form`` are ``Option[T]``'s own ``T`` and
-    ``T``'s bare value form when ``value_form`` is :attr:`ValueForm.OPTION`,
+    ``option_inner``/``option_inner_form`` are ``Option[T]`` or ``Optional[T]``'s
+    own ``T`` and ``T``'s bare value form for either optional value form,
     and ``None`` for every other form — computed once here rather than
     re-derived from the parameter's type on every token, so the raw-value
     builder and the metavar never have to re-classify ``T`` themselves.
@@ -282,18 +286,27 @@ class ProjectedOption:
         return self.value_form is not ValueForm.BOOL
 
 
-def _option_inner(type_: "AglType") -> "AglType | None":
-    """Return ``T`` when *type_* is the standard ``Option[T]``, else ``None``."""
-    if is_standard_option_enum(type_) and type_.type_args:
-        return type_.type_args[0]
-    return None
+def _optional_projection(type_: "AglType") -> "tuple[ValueForm, AglType] | None":
+    """Return the CLI form and inner type for a standard optional enum."""
+    if is_standard_option_enum(type_):
+        form = ValueForm.OPTION
+    elif is_standard_optional_enum(type_):
+        form = ValueForm.OPTIONAL
+    else:
+        return None
+    return (form, type_.type_args[0]) if type_.type_args else None
+
+
+def _is_nullable_value_form(form: ValueForm) -> bool:
+    """Return whether *form* has value and negative CLI polarities."""
+    return form in (ValueForm.OPTION, ValueForm.OPTIONAL)
 
 
 def _bare_value_form(type_: "AglType") -> ValueForm:
-    """Return the CLI value form for a bare type: never ``bool`` or ``Option``.
+    """Return the CLI value form for a bare type: never ``bool`` or an optional enum.
 
     Shared by a parameter's own type, when it is neither, and by
-    ``Option[T]``'s inner ``T``, so the type-to-form mapping is written once.
+    An optional enum's inner ``T`` shares this mapping with a bare parameter.
     """
     if isinstance(type_, TextType):
         return ValueForm.TEXT
@@ -310,21 +323,22 @@ def project_option(name: str, type_: "AglType") -> ProjectedOption:
     *name* is the option's external spelling: an engine key's own name, or a
     program parameter's ``@opt-name`` (defaulting to its declared name).
     """
-    inner = _option_inner(type_)
+    optional = _optional_projection(type_)
+    inner: AglType | None = None
     inner_form: ValueForm | None = None
     if isinstance(type_, BoolType):
         form = ValueForm.BOOL
-    elif inner is not None:
-        form = ValueForm.OPTION
+    elif optional is not None:
+        form, inner = optional
         inner_form = _bare_value_form(inner)
     else:
         form = _bare_value_form(type_)
-    negated = form in (ValueForm.BOOL, ValueForm.OPTION)
+    negated = form is ValueForm.BOOL or _is_nullable_value_form(form)
     return ProjectedOption(
         flags=(f"--{name}",),
         negative_flags=(f"--no-{name}",) if negated else (),
         value_form=form,
-        option_inner=inner if form is ValueForm.OPTION else None,
+        option_inner=inner if _is_nullable_value_form(form) else None,
         option_inner_form=inner_form,
     )
 
@@ -749,10 +763,11 @@ def native_raw_value(projected: ProjectedOption, raw: object) -> object:
     """Project one already-native host value onto *projected*'s raw argument shape.
 
     The config-table counterpart of :func:`_positive_raw`, which applies the
-    same ``Option`` rule to a CLI ``VALUE`` token. A present value for an
-    ``Option[T]`` parameter is wrapped ``Some``: a config table has no
+    same optional-enum rule to a CLI ``VALUE`` token. A present value is
+    normally wrapped ``Some``: a config table has no
     ``--no-x`` equivalent, so an absent key supplies nothing at all and the
-    parameter falls back to its own default. A native string for a slot whose
+    parameter falls back to its own default. The exact ``"default"`` string
+    supplies ``Optional::Default``. A native string for a slot whose
     type is ``json`` (the parameter's own type, or ``Option[T]``'s inner
     ``T``) is encoded into JSON text, preserving its distinction from AgL
     value syntax; every other native string is host text, decoded the same
@@ -760,7 +775,9 @@ def native_raw_value(projected: ProjectedOption, raw: object) -> object:
     decoded data. Keeping this beside :func:`_positive_raw` is what stops the
     envelope rule from being spelled once per host surface.
     """
-    if projected.value_form is ValueForm.OPTION:
+    if projected.value_form is ValueForm.OPTIONAL and raw == "default":
+        return {"$case": "Default"}
+    if _is_nullable_value_form(projected.value_form):
         value = raw
         if isinstance(raw, str) and projected.option_inner_form is ValueForm.JSON:
             value = dumps_exact(raw, indent=None)
@@ -773,14 +790,17 @@ def native_raw_value(projected: ProjectedOption, raw: object) -> object:
 def _positive_raw(projected: ProjectedOption, token: str) -> object:
     """Build the raw value for one value-taking flag's ``VALUE`` token.
 
-    Only ``TEXT``/``JSON``/``VALUE``/``AGENT``/``OPTION`` forms reach here —
+    Only value-taking forms reach here —
     the caller (:meth:`ProgramCommand.parse`) never calls this for a ``BOOL``
-    form, whose ``takes_value`` is ``False``. Every form but ``OPTION`` takes
+    form, whose ``takes_value`` is ``False``. Every non-optional form takes
     its token verbatim: ``decode_param_value`` reads a string raw value
     through the shared host-text dispatch, so parsing it here would duplicate
-    that step and lose its diagnostic. An ``Option[T]`` token is boxed for the
-    same deferred decode, against ``T``'s own field type.
+    that step and lose its diagnostic. An optional token is boxed for the same
+    deferred decode against ``T``'s own field type, except for ``Optional``'s
+    exact ``default`` shortcut.
     """
+    if projected.value_form is ValueForm.OPTIONAL and token == "default":
+        return {"$case": "Default"}
     if projected.option_inner is not None:
         return option_some_raw(token)
     return token
@@ -877,15 +897,15 @@ def _default_metavar(
 ) -> str:
     """Return the placeholder standing for a value-taking option's own VALUE.
 
-    A ``path`` parameter (directly or as ``Option[path]``) announces a path.
+    A ``path`` parameter, directly or inside either optional enum, announces a path.
     Otherwise it names how the token is read rather than the declared type: a
     ``text`` parameter takes its token verbatim, standard ``Agent`` uses host
     syntax, ``json`` parses one JSON value, and every other type reads strict
-    JSON or AgL value syntax. An ``Option[T]`` follows ``T``.
+    JSON or AgL value syntax. Both optional enums follow ``T``.
     """
     if param.is_path:
         return "PATH"
-    if projected.value_form is ValueForm.OPTION:
+    if _is_nullable_value_form(projected.value_form):
         return _value_form_metavar(cast(ValueForm, projected.option_inner_form))
     return _value_form_metavar(projected.value_form)
 
@@ -900,7 +920,7 @@ def _click_params(
     """Build the Click parameter(s) carrying one program parameter's CLI surface.
 
     A ``bool`` parameter is a single ``--x/--no-x`` flag, whose recorded
-    occurrences carry their own polarity; an ``Option[T]`` parameter is a
+    occurrences carry their own polarity; an optional-enum parameter is a
     value-taking ``--x`` plus an independent ``--no-x`` flag, whose
     exclusivity :meth:`ProgramCommand.parse` checks once both are parsed;
     every other form is one value-taking option. Only the positive option
@@ -942,7 +962,7 @@ def _click_params(
         help=spec.doc,
         hidden=spec.hidden,
     )
-    if projected.value_form is not ValueForm.OPTION:
+    if not _is_nullable_value_form(projected.value_form):
         return [positive]
     negative = _ProgramOption(
         [_negative_dest(index), *negative_flags],
@@ -1314,9 +1334,9 @@ class ProgramCommand:
             running the program.
         :raises ValueError: for any Click usage error (unknown option,
             missing value, a value given to a flag), for a parameter supplied
-            more than once, or for an ``Option[T]`` parameter given both
+            more than once, or for an optional-enum parameter given both
             polarities on the command line. A malformed ``VALUE`` — including
-            a malformed ``Option`` payload (see the module docstring) — is
+            a malformed optional payload (see the module docstring) — is
             not raised here: it reaches this method's caller as a deferred
             decode diagnostic from ``decode_param_value``, anchored at the
             parameter's declaration.
@@ -1351,14 +1371,14 @@ class ProgramCommand:
                     named[param.name] = cast(bool, positive[0])
                 continue
             _reject_repetition(positive, flag)
-            if projected.value_form is not ValueForm.OPTION:
+            if not _is_nullable_value_form(projected.value_form):
                 if positive and not positional_overrides_environment:
                     named[param.name] = _positive_raw(projected, cast(str, positive[0]))
                 continue
             negative_flag = projected.negative_flags[0]
             negative = cast(tuple[object, ...], values[_negative_dest(index)])
             _reject_repetition(negative, negative_flag)
-            # An ``Option[T]``'s two polarities are two Click parameters, so
+            # An optional enum's two polarities are two Click parameters, so
             # only their sources tell a supplied token from an ``@opt-env``
             # value. Both polarities typed together is the contradiction; a
             # ``--no-x`` token against an environment-supplied positive is
@@ -1396,7 +1416,7 @@ class ProgramCommand:
                     module_params[module_param.key] = cast(bool, positive[0])
                 continue
             _reject_repetition(positive, positive_flag)
-            if projected.value_form is not ValueForm.OPTION:
+            if not _is_nullable_value_form(projected.value_form):
                 if positive:
                     module_params[module_param.key] = _positive_raw(
                         projected, cast(str, positive[0])

@@ -1657,9 +1657,13 @@ def _annotates_path(
     Resolution erases transparent aliases, so the annotation's own
     declarations are followed instead: non-generic aliases down to the builtin
     alias, or to the reserved ``path`` no declaration reaches, optionally
-    wrapped in the standard ``Option``.
+    wrapped in the standard ``Option`` or ``Optional``.
     """
-    from agm.agl.semantics.types import PATH_TYPE_NAME, is_standard_option_enum
+    from agm.agl.semantics.types import (
+        PATH_TYPE_NAME,
+        is_standard_option_enum,
+        is_standard_optional_enum,
+    )
     from agm.agl.syntax.nodes import TypeAlias, static_type_items
     from agm.agl.syntax.types import AppliedT, NameT
 
@@ -1689,7 +1693,7 @@ def _annotates_path(
         )
     return (
         isinstance(type_expr, AppliedT)
-        and is_standard_option_enum(resolved)
+        and (is_standard_option_enum(resolved) or is_standard_optional_enum(resolved))
         and len(type_expr.args) == len(resolved.type_args) == 1
         and _annotates_path(
             checked, module_id, scope_path, type_expr.args[0], resolved.type_args[0]

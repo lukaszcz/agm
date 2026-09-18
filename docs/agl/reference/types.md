@@ -369,13 +369,18 @@ automatic `import std/prelude::*`, unless `--no-stdlib` disables it or an
 explicit import whose expansion includes `std/prelude` supplies the prelude
 contribution instead.
 
-The prelude also re-exports `std/option`, `std/pair`, `std/either`, and
-`std/result`, which supply the generic optional `Option[T]`, product
+The prelude also re-exports `std/option`, `std/optional`, `std/pair`, `std/either`, and
+`std/result`, which supply the generic optional `Option[T]`, host-default-aware
+`Optional[T]`, product
 `Pair[A, B]`, neutral sum `Either[A, B]`, and outcome `Result[T, E]`. Of those,
 `Option[T]` reaches the language surface: `null` is a value of type `json` only
 and ordinary AgL types are not nullable, so a value that may be absent has type
 `Option[T]`, and the `?` twins of raising operations throughout the standard
 library return one.
+
+`Optional[T]` is the built-in three-way enum formed from `Option[T]`'s shared
+`Some(value)` and `None` members plus `Default`. It is intended for host parameters
+that distinguish an explicit value, explicit absence, and a request to use the host's default.
 See [Modules](modules.md#standard-library-modules) for the rest of the library.
 
 ### `ExecResult`
@@ -893,8 +898,8 @@ library declares it in `std/path`, and the prelude forwards it
 ([Modules](modules.md)). Where no declaration of `path` is visible — as in a
 program started with `--no-stdlib` — the name `path` still denotes `text`; a
 visible declaration of that name, builtin or not, takes precedence as usual.
-A host presents a program parameter annotated `path`, `Option[path]`, or an
-alias of either as a filesystem location
+A host presents a program parameter annotated `path`, `Option[path]`, `Optional[path]`, or an
+alias of one as a filesystem location
 ([Host environment](host-environment.md#program-arguments)); any other
 annotation, including a non-builtin alias named `path`, is ordinary `text`.
 

@@ -312,6 +312,47 @@ class TestModuleParameterHostInputs:
 
         assert capsys.readouterr().out == "false\ntrue\n"
 
+    @pytest.mark.parametrize(
+        ("tokens", "expected"),
+        [
+            (["--file", "result.txt"], 'Option::Some(value = "result.txt")\n'),
+            (["--no-file"], "Option::None\n"),
+            (["--file", "default"], "Optional::Default\n"),
+        ],
+    )
+    def test_optional_module_parameter_cli_forms(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        tokens: list[str],
+        expected: str,
+    ) -> None:
+        self._context(tmp_path, monkeypatch)
+        source = "@param let file: Optional[path] = Default\nprint file\n"
+
+        exec_engine.run(inline_args(source, argument_tokens=tokens))
+
+        assert capsys.readouterr().out == expected
+
+    def test_optional_module_parameter_config_default(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        home = self._context(tmp_path, monkeypatch)
+        (home / ".agm" / "config.toml").write_text('[prog.main]\nfile = "default"\n')
+        source = tmp_path / "prog.agl"
+        source.write_text(
+            "@param let file: Optional[path] = None\nprogram def main() -> unit = print file\n",
+            encoding="utf-8",
+        )
+
+        exec_engine.run(_exec_args_no_log(source))
+
+        assert capsys.readouterr().out == "Optional::Default\n"
+
 
 @pytest.fixture()
 def recorded_runs(monkeypatch: pytest.MonkeyPatch) -> list[object]:

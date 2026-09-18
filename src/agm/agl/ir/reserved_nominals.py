@@ -24,10 +24,11 @@ nothing from ``agm`` (see ``tests/test_agl_dependencies.py``), matching
 
 The reserved names are exactly: every built-in exception name
 (``semantics.types.BUILTIN_EXCEPTION_NAMES``), every built-in prelude type
-name (``semantics.types.BUILTIN_PRELUDE_TYPE_NAMES``), plus ``"Option"`` —
-``std/option::Option`` is an ordinary enum declaration, but the host mints
-``Option`` values directly (``runtime/option.py``), so it needs a fixed
-identity the same way a built-in does. This module cannot import
+name (``semantics.types.BUILTIN_PRELUDE_TYPE_NAMES``), plus ``"Option"`` and
+``"Optional"`` —
+``std/option::Option`` and ``std/optional::Optional`` are generic standard-library
+declarations whose values the host can decode directly, so both need fixed
+fallback identities. This module cannot import
 ``semantics`` (see above), so the list is spelled out literally here; a
 dependency test asserts the two catalogs never drift apart.
 """
@@ -54,7 +55,7 @@ __all__ = [
 NO_DECL_ID: int = -1
 
 #: Every bare name the host recognizes without needing a source declaration:
-#: built-in exceptions, built-in prelude types, and ``Option``. Order fixes
+#: built-in exceptions, built-in prelude types, and host-known generic enums. Order fixes
 #: each name's negative id (see ``RESERVED_NOMINAL_IDS``) and is otherwise
 #: insignificant.
 RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
@@ -94,6 +95,8 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "SessionError",
     # Appended: built-in exception raised by std/value::parse / try-parse.
     "ValueParseError",
+    # Appended host-decoded std/optional::Optional.
+    "Optional",
 )
 
 #: Bare reserved name -> its stable, distinct identity. Derived from
@@ -121,6 +124,7 @@ RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType
         ("Option", "Some"): -1031,
         ("SessionTransport", "Cli"): -1040,
         ("SessionTransport", "Rpc"): -1041,
+        ("Optional", "Default"): -1050,
     }
 )
 

@@ -863,8 +863,7 @@ class TypeTable:
 
     def enum_is_subset(self, source: EnumType, target: EnumType) -> bool:
         """Return whether every constructor of *source* is a constructor of *target*."""
-        source_members = self.enum_members(source)
-        return len(self.shared_enum_members(source, target)) == len(source_members)
+        return frozenset(self.enum_members(source)) <= frozenset(self.enum_members(target))
 
     def exception_fields(self, handle: ExceptionType) -> Mapping[str, Type]:
         """Return *handle*'s fully flattened field types (base chain applied).

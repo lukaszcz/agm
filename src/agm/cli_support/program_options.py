@@ -305,7 +305,6 @@ def _is_nullable_value_form(form: ValueForm) -> bool:
 def _bare_value_form(type_: "AglType") -> ValueForm:
     """Return the CLI value form for a bare type: never ``bool`` or an optional enum.
 
-    Shared by a parameter's own type, when it is neither, and by
     An optional enum's inner ``T`` shares this mapping with a bare parameter.
     """
     if isinstance(type_, TextType):
@@ -759,6 +758,11 @@ def option_none_raw() -> object:
     return {"$case": "None"}
 
 
+def optional_default_raw() -> object:
+    """Return the ``Default`` envelope ``decode_param_value`` expects for ``Optional[T]``."""
+    return {"$case": "Default"}
+
+
 def native_raw_value(projected: ProjectedOption, raw: object) -> object:
     """Project one already-native host value onto *projected*'s raw argument shape.
 
@@ -776,7 +780,7 @@ def native_raw_value(projected: ProjectedOption, raw: object) -> object:
     envelope rule from being spelled once per host surface.
     """
     if projected.value_form is ValueForm.OPTIONAL and raw == "default":
-        return {"$case": "Default"}
+        return optional_default_raw()
     if _is_nullable_value_form(projected.value_form):
         value = raw
         if isinstance(raw, str) and projected.option_inner_form is ValueForm.JSON:
@@ -800,7 +804,7 @@ def _positive_raw(projected: ProjectedOption, token: str) -> object:
     exact ``default`` shortcut.
     """
     if projected.value_form is ValueForm.OPTIONAL and token == "default":
-        return {"$case": "Default"}
+        return optional_default_raw()
     if projected.option_inner is not None:
         return option_some_raw(token)
     return token

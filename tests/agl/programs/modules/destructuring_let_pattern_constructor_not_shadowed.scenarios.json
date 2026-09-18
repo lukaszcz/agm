@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "default",
+      "expect": {
+        "stdout": "1\n",
+        "calls": {}
+      }
+    }
+  ]
+}

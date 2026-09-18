@@ -68,6 +68,12 @@ class TestAcceptedConfigTargets:
             "program def main() -> unit = ()\n"
         )
 
+    def test_own_module_param_declared_later_in_the_module(self) -> None:
+        """A ``@param let`` is a static-root module-level binding, visible
+        regardless of textual order like any other, so a ``@config`` entry
+        may reference one declared after the ``program def``."""
+        _check("@config(count = 1)\nprogram def main() -> unit = ()\n\n@param let count: int = 0\n")
+
     def test_scoped_param(self) -> None:
         _check(
             "scope Logging\n"
@@ -291,10 +297,4 @@ class TestRejectedConfigTargets:
                 "  | Green\n\n"
                 "@config(Color = 2)\n"
                 "program def main() -> unit = ()\n"
-            )
-
-    def test_a_forward_reference_to_a_later_param_is_a_scope_error(self) -> None:
-        with pytest.raises(AglScopeError):
-            _check(
-                "@config(count = 1)\nprogram def main() -> unit = ()\n\n@param let count: int = 0\n"
             )

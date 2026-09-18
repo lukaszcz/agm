@@ -806,9 +806,14 @@ class ModuleResolution:
     ``root_scope``
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.
-    ``allows_root_statements``
-        Whether this entry is an incremental REPL entry, whose root retains
-        executable items instead of enforcing a static module root.
+    ``static_root``
+        Whether this module enforces the static-root binding rule: false for
+        a REPL entry (whose root retains executable items instead of
+        enforcing a static module root) or one carrying a host-synthesized
+        entry (an inline command); true for every other module, including a
+        file with its own ``program def``. Governs relaxed forward-reference
+        order for module-level bindings and the narrow-var/constant-initializer
+        rules.
     ``origin_path``
         This module's canonical source file, or ``None`` for a module with no
         backing file (inline sources, REPL entries). Later passes consult it to
@@ -871,7 +876,7 @@ class ModuleResolution:
     builtin_static_calls: dict[int, BuiltinStaticKind] = field(default_factory=dict)
     declarations: dict[DeclarationKey, BindingRef] = field(default_factory=dict)
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
-    allows_root_statements: bool = False
+    static_root: bool = False
     origin_path: Path | None = None
     declared_type_paths: frozenset[ScopePath] = frozenset()
     constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)

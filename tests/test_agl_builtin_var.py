@@ -96,6 +96,17 @@ class TestBuiltinVarRegisters:
         assert result.ok
         assert result.bindings["l"] == BoolValue(False)
 
+    def test_a_def_declared_above_a_builtin_var_still_reads_it(self, tmp_path: Path) -> None:
+        """A ``builtin var`` follows the same relaxed order a root let/var
+        already does: a def declared above it may still read it."""
+        result = _run_with_std_config(
+            "import std/config::*\nlet b = read-strict-json()\nb",
+            "def read-strict-json() -> bool = strict-json\n\nbuiltin var strict-json: bool = true",
+            tmp_path,
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["b"] == BoolValue(True)
+
 
 # ---------------------------------------------------------------------------
 # Placement + name-whitelist gate (mirrors the builtin-def gate)
@@ -306,6 +317,20 @@ class TestScopedBuiltinVar:
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["value"] == TextValue("not-a-timeout")
 
+    def test_a_def_declared_above_a_scoped_builtin_var_still_reads_it(self, tmp_path: Path) -> None:
+        """The relaxed order also reaches a scoped ``builtin var``."""
+        result = _run_with_std_config(
+            "import std/config::*\nlet n = Region::read-retries()\nn",
+            "scope Region\n"
+            "  def read-retries() -> int = retries\n"
+            "\n"
+            "  builtin var retries: int = 3\n"
+            "end Region",
+            tmp_path,
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["n"] == IntValue(3)
+
     def test_scoped_declaration_still_confined_to_std_config(self, tmp_path: Path) -> None:
         """A scoped ``builtin var`` outside ``std/config`` is rejected, same as a root one."""
         (tmp_path / "mylib.agl").write_text(
@@ -314,6 +339,24 @@ class TestScopedBuiltinVar:
         result = _run_program(
             "import mylib\nprint 1",
             extra_roots=frozenset({tmp_path}),
+        )
+        assert not result.ok
+        assert result.diagnostics
+
+    def test_scoped_builtin_var_named_like_a_nested_scope_is_an_error(self, tmp_path: Path) -> None:
+        """A scoped ``builtin var`` shares the same-path collision rule as a
+        ``let``/``var``/``def``/type: it may not repeat a nested scope's name."""
+        result = _run_with_std_config(
+            "import std/config\n1",
+            "scope Region\n"
+            "\n"
+            "  scope Sub\n"
+            "    builtin var y: int\n"
+            "  end Sub\n"
+            "\n"
+            "  builtin var Sub: int\n"
+            "end Region\n",
+            tmp_path,
         )
         assert not result.ok
         assert result.diagnostics

@@ -1,0 +1,6 @@
+{
+  "diagnostic": {
+    "line": 1,
+    "message_contains": ["annotation"]
+  }
+}

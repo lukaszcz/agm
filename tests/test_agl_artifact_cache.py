@@ -109,6 +109,26 @@ def test_a_warm_checked_module_cache_still_resolves_an_unannotated_imported_var_
         assert capsys.readouterr().out == "5\n"
 
 
+def test_a_warm_checked_module_cache_still_resolves_a_destructuring_let_forward_reference(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A def reading a destructuring let's binder ahead of it keeps working once
+    the module is served from the warm cache instead of rechecked."""
+    path = tmp_path / "point.agl"
+    path.write_text(
+        "record Point(x: int, y: int)\n"
+        "def sum-point() -> int = x + y\n"
+        "let Point(x, y) = Point(x = 1, y = 2)\n"
+    )
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import point::*\nprint(sum-point())\n"
+    for _ in range(2):
+        result = run_inline_command(runtime, source, roots=roots)
+        assert result.ok, result.diagnostics
+        assert capsys.readouterr().out == "3\n"
+
+
 def test_editing_an_unannotated_exported_binding_type_invalidates_the_warm_cache(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

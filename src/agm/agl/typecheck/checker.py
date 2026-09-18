@@ -112,6 +112,7 @@ from agm.agl.semantics.types import (
     contains_inference_var,
     free_type_vars,
     is_standard_option_enum,
+    iter_type,
     reroot_type,
     substitute,
 )
@@ -183,7 +184,6 @@ from agm.agl.syntax.nodes import (
     VarRef,
     WildcardPattern,
     declares_source_entry,
-    declares_synthetic_entry,
     pattern_binder_candidates,
     simple_let_pattern_name,
     static_items,
@@ -729,19 +729,6 @@ def _is_constant_builtin_call(resolved: ModuleResolution, node_id: int) -> bool:
     return resolved.builtin_calls.get(node_id) in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}
 
 
-def is_static_root_module(resolved: ModuleResolution) -> bool:
-    """Whether *resolved*'s module enforces the static-root binding rule.
-
-    False for a module whose root allows bare statements/assignments (an
-    incremental REPL entry) or that carries a host-synthesized entry (an
-    inline command): such a module is never imported, and its root bindings
-    are there only because the entry transform put them there.
-    """
-    return not resolved.allows_root_statements and not declares_synthetic_entry(
-        resolved.program.body.items
-    )
-
-
 def require_static_root_constant(
     expr: Expr, resolved: ModuleResolution, *, is_constructor: Callable[[int], bool]
 ) -> None:
@@ -770,6 +757,19 @@ def require_static_root_constant(
     )
 
 
+def _mentions_narrow_enum_member_type(t: Type, type_table: TypeTable) -> bool:
+    """Whether *t* mentions a single enum-member type.
+
+    Used by ``_binding_declared_type`` (through ``infer_static_initializer_type``)
+    to reject a static-root module-level ``var`` inferring such a type: e.g.
+    ``None`` infers the ``Option::None`` member record, not the ``Option``
+    enum, too narrow to later assign a different case to.
+    """
+    return any(
+        isinstance(node, RecordType) and type_table.is_enum_member(node) for node in iter_type(t)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main checker
 # ---------------------------------------------------------------------------
@@ -795,6 +795,7 @@ class _Checker:
         candidate_session: CandidateSession | None = None,
         candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
         declaration_spans: Mapping[DeclarationKey, SourceSpan] | None = None,
+        prebound_slot_resolution: Mapping[int, BindingRef] | None = None,
     ) -> None:
         self._env = env
         self._resolved = resolved
@@ -844,7 +845,11 @@ class _Checker:
         self._pattern_classifications: dict[int, ConstructorRef | None] = {}
         # Pattern-slot selections are the checked artifact's authority. Their
         # values are fully dereferenced ordinary binders or constructors.
-        self._slot_resolution: dict[int, BindingRef] = {}
+        # *prebound_slot_resolution* seeds slots a static-root destructuring
+        # let's own pre-pass already selected (typecheck/program.py), so an
+        # earlier def's ordinary body check can dereference them; the ordered
+        # walk reselecting the same let later is an idempotent overwrite.
+        self._slot_resolution: dict[int, BindingRef] = dict(prebound_slot_resolution or {})
         self._slot_constructor_refs: dict[int, ConstructorRef] = {}
         # Scrutinee-directed selections for ambiguous bare ``is`` spellings.
         # Scope's candidate table remains immutable; lowering reads this map
@@ -1183,7 +1188,7 @@ class _Checker:
         self._check_block(
             program.body,
             expected=None,
-            static_root=is_static_root_module(self._resolved),
+            static_root=self._resolved.static_root,
         )
 
     # ------------------------------------------------------------------
@@ -1590,10 +1595,47 @@ class _Checker:
         the authoritative check later installs -- but it installs no
         binding, runs no parameter validation, and writes nothing into the
         env beyond the initializer expression's own ordinary node types.
+
+        This is the only site that runs the narrow-var check: a static-root
+        ``var``'s type is always established here, before the authoritative
+        per-module walk, so a re-check there could never observe a different
+        (narrow) type.
         """
         with self._own_type_scope(item):
             value_type = self._check_boundary_expr(item.value, expected=None)
-        return self._binding_declared_type(item, value_type, ann_type=None)
+        declared_type = self._binding_declared_type(item, value_type, ann_type=None)
+        if isinstance(item, VarDecl):
+            self._reject_narrow_static_var(item, value_type)
+        return declared_type
+
+    def infer_static_destructuring_let_types(self, item: LetDecl) -> Mapping[int, BindingRef]:
+        """Seed a static-root destructuring let's own binder types and slots.
+
+        Used by the program-level pre-pass (``typecheck/program.py``) so an
+        earlier def may read a binder this let introduces. A destructuring
+        let is never exported, so unlike :meth:`infer_static_initializer_type`
+        this seeds every bound pattern name straight into the env via
+        :meth:`_bind_pattern_types` (also the owning module's own env)
+        instead of returning one type -- and installs no binding.
+
+        Every bare pattern name resolves through a scope-created slot (shared
+        machinery with ``case``), so a reference needs that slot selected
+        too, not just its type: this also runs
+        :meth:`_select_match_site_pattern_slots` and returns the slots this
+        let owns, for the caller to seed into the checker that later
+        authoritatively checks this module (an earlier def's ordinary body
+        check cannot otherwise dereference a slot this pre-pass created).
+        """
+        with self._own_type_scope(item):
+            ann_type = self._resolve_annotation(item.type_ann, item.span)
+            value_type = self._check_boundary_expr(item.value, expected=ann_type)
+        matched_type = self._binding_declared_type(item, value_type, ann_type)
+        self._bind_pattern_types(item.pattern, matched_type, item, root_bare_binds=True)
+        self._select_match_site_pattern_slots(item)
+        return {
+            slot_id: self._slot_resolution[slot_id]
+            for slot_id in self._resolved.match_site_pattern_slots.get(item.node_id, ())
+        }
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> Type:
         """Check a single-name mutable var or a complete immutable let pattern."""
@@ -1692,7 +1734,13 @@ class _Checker:
     def _binding_declared_type(
         self, stmt: LetDecl | VarDecl, value_type: Type, ann_type: Type | None
     ) -> Type:
-        """Return the concrete declaration/matched type, rejecting untyped bottom."""
+        """Return the concrete declaration/matched type, rejecting untyped bottom.
+
+        Shared by the authoritative check (``_check_var_binding``/
+        ``_check_let_binding``) and the program-level pre-pass
+        (``infer_static_initializer_type``/``infer_static_destructuring_let_types``),
+        so both raise the identical diagnostic for the identical initializer.
+        """
         if ann_type is not None:
             self._assert_assignable_from(value_type, ann_type, stmt.span, stmt.value)
             return ann_type
@@ -1702,6 +1750,20 @@ class _Checker:
                 span=stmt.span,
             )
         return value_type
+
+    def _reject_narrow_static_var(self, stmt: VarDecl, value_type: Type) -> None:
+        """Reject a static-root module-level ``var`` inferring a single enum case.
+
+        Called only from :meth:`infer_static_initializer_type`, the sole
+        place an unannotated static-root ``var``'s type is established: a
+        later assignment could then never hold any other case.
+        """
+        if _mentions_narrow_enum_member_type(value_type, self._env.type_table):
+            raise AglTypeError(
+                "Cannot infer a usable type for this 'var': its initializer names a single "
+                "enum case. Add a type annotation.",
+                span=stmt.span,
+            )
 
     def _install_binding_metadata(
         self, node_id: int, value: Expr, typ: Type, ann_type: Type | None
@@ -6499,6 +6561,7 @@ def _check_prepared_module(
     infer_candidates: bool = True,
     candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
     declaration_spans: Mapping[DeclarationKey, SourceSpan] | None = None,
+    prebound_slot_resolution: Mapping[int, BindingRef] | None = None,
 ) -> CheckedModule:
     """Check using a prepared environment and return only finalized annotations.
 
@@ -6511,7 +6574,9 @@ def _check_prepared_module(
 
     ``prepare_headers`` runs the type-table build and function-header
     pre-registration; the program driver disables it because Phase 3 already
-    seeded this environment before candidate inference.
+    seeded this environment before candidate inference. ``prebound_slot_resolution``
+    likewise carries forward the slots Phase 3 already selected for a
+    static-root destructuring let, ahead of this module's own ordered walk.
     """
     if prepare_headers:
         prepare_module_headers(
@@ -6533,6 +6598,7 @@ def _check_prepared_module(
         module_id=module_id,
         candidate_records=candidate_records,
         declaration_spans=declaration_spans,
+        prebound_slot_resolution=prebound_slot_resolution,
     )
     checker.check_body(resolved.program)
     checked = checker.result()

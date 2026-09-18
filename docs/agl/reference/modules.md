@@ -214,10 +214,13 @@ module-and-scope nominal identity.
 `def`, `record`, `enum`, `exception`, and `type` declarations, plus simple
 `let`/`var` bindings, are exported under their full declaration paths. An
 unannotated binding's exported type is the one inferred from its initializer,
-exactly as an importer would see for an annotated binding's declared type.
-Grouping helpers in a [named scope](scopes.md) keeps them off a module's bare
-surface: an importer reaches such a member through its scope path or makes it
-bare with an import tail or `use` declaration.
+exactly as an importer would see for an annotated binding's declared type —
+except an unannotated `var` whose inferred type is too narrow to reassign, which
+is rejected instead (see [Typing of
+bindings](bindings-and-scope.md#typing-of-bindings)). Grouping helpers in a
+[named scope](scopes.md) keeps them off a module's bare surface: an importer
+reaches such a member through its scope path or makes it bare with an import
+tail or `use` declaration.
 
 An exported `var` is writable across a module boundary the same way it is
 read: a qualified target, or a bare target reached through an import tail or
@@ -339,7 +342,10 @@ assignments are not. Root binding initializers must be constant expressions:
 literals, literal containers, constructor applications, unary operators over
 those, and `resource`/`resource-dir` calls
 ([Expressions](expressions.md#resource-and-resource-dir)). Put executable
-workflow code in a `program def` body.
+workflow code in a `program def` body. Because every initializer is a
+constant, declaration order does not matter for a static root's own `let`/`var`
+bindings, root or scoped — see [Names and
+visibility](scopes.md#names-and-visibility).
 
 Imports, uses, and exports appear before other declarations at a module root and in
 every named scope region. A region is one declaration for its enclosing root's

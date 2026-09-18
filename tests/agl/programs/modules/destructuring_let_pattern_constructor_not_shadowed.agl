@@ -1,0 +1,15 @@
+# A destructuring let's pattern may nest a bare name that also spells a
+# visible constructor (a field-directed constructor test, not a binder): in
+# a static-root module, where the relaxed-order pre-pass selects the
+# pattern's binders ahead of the ordered walk, that name must still resolve
+# to the true constructor everywhere else -- including the same let's own
+# initializer -- rather than to the pattern's own slot.
+enum Flag
+  | On
+
+record Pair(flag: Flag, value: int)
+
+let Pair(On, value) = Pair(flag = On, value = 1)
+
+program def main() -> unit =
+  print value

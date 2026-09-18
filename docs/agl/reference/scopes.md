@@ -186,17 +186,32 @@ module root, so it bypasses a nearer scoped member.
 
 A static declaration (`def` or a type) is visible throughout its
 scope regardless of textual order, matching the module root, where a `def` may
-call another declared later in the same file. A `let` or `var`
-binding is different: it is visible only to references that follow it
-textually, in its own region or elsewhere in the module — exactly like a
-root-level `let` or `var`. This holds across separate blocks of the same
-scope: a member declared in an earlier `scope A` block cannot see a binding a
-later `scope A` block introduces, while the reverse order works. The same
-textual rule governs a binding reached through `use`: a reference sees the
-binding once the reference itself follows the binding's own declaration,
-regardless of where the `use` appears — a `use` written before the scope that
-declares the binding still
-exposes it to a later reference, just not to an earlier one.
+call another declared later in the same file. A `let` or `var` binding of a
+module with a static root ([Library modules and
+cycles](modules.md#library-modules-and-cycles)) — every file-backed module,
+entry or library — is visible the same way: a `def` may read a binding
+declared later in the same region or at the module root, and a `var` binding
+may be written there too, since its initializer is already required to be a
+constant.
+This holds across separate blocks of the same scope too: a member declared in
+an earlier `scope A` block is visible to a later `scope A` block and vice
+versa.
+
+Without a static root — the REPL, and an inline `-c` program with no
+`program def` — a `let` or `var` binding keeps the textual rule instead: it
+is visible only to references that follow it, in its own region or elsewhere
+in the module, exactly as its root statements execute. A member declared in
+an earlier `scope A` block there cannot see a binding a later `scope A` block
+introduces, while the reverse order works. The same textual rule governs a
+binding reached through `use`: a reference sees the binding once the
+reference itself follows the binding's own declaration, regardless of where
+the `use` appears — a `use` written before the scope that declares the
+binding still exposes it to a later reference, just not to an earlier one.
+
+A `let` or `var` name may not repeat a named scope's own name at the same
+scope path, in either declaration order, at the module root or nested inside
+another scope region — the same rule a `def` or type name follows against a
+same-path scope.
 
 A scoped `var` is assigned through its path (`A::count := 1`) or, inside its
 region or after a `use`, through its bare name — the same forms that read it,
@@ -321,3 +336,10 @@ scope with a new member, and a same-path binding declared later replaces the
 earlier one rather than colliding with it. A duplicate at the same path
 within one entry is still an error. `:reset` clears every scoped binding
 along with the rest of the session.
+
+A named scope region itself is retained state, not a replaceable member: once
+an entry declares `scope A`, a later entry's plain `let A = …`/`var A = …`
+cannot reuse the name `A`, and once an entry declares a root `let A`/`var A`,
+a later entry cannot reopen it as `scope A` — the same restriction governs a
+retained `def` or type name against a later `scope` declaration, and vice
+versa.

@@ -1,0 +1,10 @@
+scope A
+
+  scope T
+    let cap = 10
+  end T
+
+  let T = 1
+end A
+
+program def main() -> unit = print A::T

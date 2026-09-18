@@ -1,0 +1,21 @@
+# A destructuring let's own binder names follow the same relaxed order as
+# a simple root binding in a static-root module: a def declared above it
+# may read a name it introduces, both at the root and inside a named scope
+# region.
+record Point(x: int, y: int)
+
+def read-x() -> int = x
+
+let Point(x, y) = Point(x = 1, y = 2)
+
+scope Region
+  def read-x() -> int = x
+
+  let Point(x, y) = Point(x = 3, y = 4)
+end Region
+
+program def main() -> unit =
+  print read-x()
+  print y
+  print Region::read-x()
+  print Region::x

@@ -93,10 +93,10 @@ from agm.agl.artifact_cache import (
 )
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
-from agm.agl.scope.symbols import DeclarationKey, ModuleResolution
+from agm.agl.scope.symbols import BindingRef, DeclarationKey, ModuleResolution
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
@@ -119,6 +119,7 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
     VarDecl,
     exported_binding_name,
+    static_binding_name,
     static_binding_node_id,
     static_function_items,
     static_items,
@@ -913,23 +914,25 @@ def _build_program_static_binding_table(
     installs no binding and writes nothing beyond the initializer's own
     ordinary node types.
 
-    The anonymous entry (``ENTRY_ID``: a REPL/``-c`` source or a loose file
-    with no package identity) is skipped entirely -- it is never imported, so
-    nothing can read its published types, and its root may use non-constant
-    initializers.
+    A non-static-root module (the REPL, or a ``-c`` entry with no ``program
+    def`` of its own) is skipped: it is never imported, so nothing reads its
+    published types. A loose file with its own ``program def`` is still
+    static-root despite carrying ``ENTRY_ID`` (no package identity), since
+    its own defs need root bindings' types seeded just like an importable
+    module's -- hence the ``static_root`` test here, not an ``ENTRY_ID`` one.
 
     A module served from the artifact cache is never re-checked here: its
     published binding types are read directly off its ``published_binding_types``.
     """
     result: dict[int, Type] = {}
     for mid, loaded in resolved.modules.items():
-        if mid == ENTRY_ID:
+        module_resolved = loaded.resolved
+        if not module_resolved.static_root:
             continue
         cached = cached_modules.get(mid) if cached_modules is not None else None
         if cached is not None and cached.published_binding_types is not None:
             result.update(cached.published_binding_types)
             continue
-        module_resolved = loaded.resolved
         env = module_envs[mid]
         checker: _Checker | None = None
         for item in static_items(module_resolved.program.body.items):
@@ -954,6 +957,56 @@ def _build_program_static_binding_table(
                     module_id=mid,
                 )
             result[decl_node_id] = checker.infer_static_initializer_type(item)
+    return result
+
+
+def _seed_static_destructuring_let_types(
+    resolved: ResolvedProgram,
+    module_envs: Mapping[ModuleId, TypeEnvironment],
+    capabilities: HostCapabilities,
+    cached_modules: Mapping[ModuleId, CheckedModule | CheckedModuleImage] | None = None,
+) -> dict[ModuleId, dict[int, BindingRef]]:
+    """Seed each static-root destructuring let's own binder types and slots.
+
+    Unlike a simple binding's cross-module-readable type (see
+    ``_build_program_static_binding_table``), a destructuring let is never
+    exported (``exported_binding_name`` is ``None`` for it): its binder types
+    matter only to its own declaring module, so a throwaway ``_Checker``
+    seeds them straight into that module's own environment via
+    ``_bind_pattern_types`` instead of returning a table to spread across
+    every environment. Its selected pattern-slot bindings, by contrast, live
+    on the checker instance, not the shared env; the returned per-module
+    table seeds the checker that later authoritatively checks that module
+    (see ``check_program``), so an earlier def can dereference them too.
+
+    A module served from the artifact cache is skipped entirely: its body is
+    never rechecked, and no other module can read its private binder types.
+    """
+    result: dict[ModuleId, dict[int, BindingRef]] = {}
+    for mid, loaded in resolved.modules.items():
+        if cached_modules is not None and mid in cached_modules:
+            continue
+        module_resolved = loaded.resolved
+        if not module_resolved.static_root:
+            continue
+        env = module_envs[mid]
+        checker: _Checker | None = None
+        module_result: dict[int, BindingRef] = {}
+        for item in static_items(module_resolved.program.body.items):
+            if not isinstance(item, LetDecl) or static_binding_name(item) is not None:
+                continue
+            if item.type_ann is None:
+                _screen_unannotated_binding_is_constant(item, module_resolved)
+            if checker is None:
+                checker = _Checker(
+                    env=env,
+                    resolved=module_resolved,
+                    capabilities=capabilities,
+                    module_id=mid,
+                )
+            module_result.update(checker.infer_static_destructuring_let_types(item))
+        if module_result:
+            result[mid] = module_result
     return result
 
 
@@ -1157,6 +1210,7 @@ class _PreparedProgram:
     program_type_table: dict[DeclKey, Type]
     program_func_sig_table: dict[int, FunctionSignatureRecord]
     program_static_binding_table: dict[int, Type]
+    program_slot_resolution_table: dict[ModuleId, dict[int, BindingRef]]
     candidate_records: dict[int, FunctionSignatureRecord]
     ordered_mids: tuple[ModuleId, ...]
     declaration_spans: dict[DeclarationKey, SourceSpan]
@@ -1272,6 +1326,9 @@ def _prepare_program(
     program_builtin_var_table = _build_program_builtin_var_table(
         resolved, module_envs, shared_type_table
     )
+    program_slot_resolution_table = _seed_static_destructuring_let_types(
+        resolved, module_envs, capabilities, cached_checked_modules
+    )
     for env in module_envs.values():
         for binding_node_id, binding_type in program_static_binding_table.items():
             env.set_binding_type(binding_node_id, binding_type)
@@ -1364,6 +1421,7 @@ def _prepare_program(
         program_type_table=program_type_table,
         program_func_sig_table=program_func_sig_table,
         program_static_binding_table=program_static_binding_table,
+        program_slot_resolution_table=program_slot_resolution_table,
         candidate_records=candidate_records,
         ordered_mids=ordered_mids,
         declaration_spans=declaration_spans,
@@ -1451,6 +1509,7 @@ def check_program(
     module_envs = prepared.module_envs
     program_type_table = prepared.program_type_table
     program_func_sig_table = prepared.program_func_sig_table
+    program_slot_resolution_table = prepared.program_slot_resolution_table
     candidate_records = prepared.candidate_records
     ordered_mids = prepared.ordered_mids
     declaration_spans = prepared.declaration_spans
@@ -1489,6 +1548,7 @@ def check_program(
             infer_candidates=False,
             candidate_records=candidate_records,
             declaration_spans=declaration_spans,
+            prebound_slot_resolution=program_slot_resolution_table.get(mid),
         )
         cm = replace(
             cp,

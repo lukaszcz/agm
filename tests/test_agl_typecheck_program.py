@@ -276,6 +276,40 @@ def test_single_module_program_infers_forward_and_mutual_returns(tmp_path: Path)
     assert signatures["is-odd"].result == BoolType()
 
 
+def test_inline_entry_forward_var_read_stays_a_scope_error() -> None:
+    """Unlike a static-root module, ``-c`` inline source keeps textual order."""
+    with pytest.raises(AglScopeError):
+        _check("def read() = later\nvar later = 1\nread()")
+
+
+def test_inline_entry_accepts_an_unannotated_narrow_var() -> None:
+    """The narrow-var annotation requirement is static-root-only, not inline."""
+    checked = _check("var v = None\nv")
+
+    assert isinstance(checked, CheckedModule)
+
+
+@pytest.mark.parametrize(
+    ("decls", "initializer"),
+    [
+        ("", "Some(1)"),
+        ("", "Ok(1)"),
+        ("enum Color\n  | Red\n  | Blue\n", "Color::Red"),
+        ("enum Box\n  | Box(a: Option[int])\n", "Box(a = None)"),
+    ],
+)
+def test_static_root_var_naming_a_single_enum_case_is_rejected(
+    tmp_path: Path, decls: str, initializer: str
+) -> None:
+    """An unannotated static-root ``var`` may not infer a single enum-member
+    type, whichever enum -- prelude or user-declared -- names it."""
+    with pytest.raises(AglTypeError):
+        _check_program(
+            tmp_path,
+            {"entry": f"{decls}var v = {initializer}\nprogram def main() -> unit = ()\n"},
+        )
+
+
 def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> None:
     """Candidate seeding tracks every selected binder node, not just the let site."""
     # Named "Holder", not "Option": the standard library's own Option[T] is in

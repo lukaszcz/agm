@@ -1,0 +1,11 @@
+# An unannotated def's return type is inferred from its body: forward
+# reference to a root binding declared below it still works, the same as
+# for an annotated def, since a static-root module's pre-pass establishes
+# every root binding's type before the walk that infers unannotated
+# return types reaches this def.
+def read-counter() = counter + 1
+
+let counter = 41
+
+program def main() -> unit =
+  print read-counter()

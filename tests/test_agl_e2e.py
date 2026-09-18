@@ -857,6 +857,23 @@ def test_inline_entry_module_params_seed_root_binding(capsys: pytest.CaptureFixt
     assert capsys.readouterr().out == "5\n"
 
 
+def test_inline_entry_with_its_own_program_def_follows_relaxed_binding_order(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An inline (``-c``) source declaring its own ``program def`` is static-root,
+    like a file program: a def declared above a root var it reads still works."""
+    from agm.agl import PipelineDriver
+
+    result = run_inline_command(
+        PipelineDriver(),
+        "def read-counter() -> int = counter\n\nvar counter = 41\n\n"
+        "program def main() -> unit =\n  counter := counter + 1\n  print read-counter()\n",
+    )
+
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "42\n"
+
+
 def _run_program(
     source: str, scenario: dict[str, Any], program: Path
 ) -> tuple[Any, dict[str, ScriptedAgent], FakeShell]:

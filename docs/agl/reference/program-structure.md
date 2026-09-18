@@ -177,9 +177,12 @@ below, along with their parameters and fields — may carry an
   binder is. The scope-path-prefixed spelling (`let A::x = …`,
   `var A::count = …`) declares a member of that scope instead, and the prefix
   is legal only at the module root or inside a named scope region — the same
-  placement `def` and the type forms use. See
-  [Named scopes](scopes.md#binder-paths) for the complete spelling and
-  visibility rules.
+  placement `def` and the type forms use. A module-level binding's own name
+  may not repeat a named scope's name at the same scope path. In a module with
+  a static root, a module-level binding is visible regardless of textual
+  order, exactly like a `def`; elsewhere it keeps the textual order its root
+  statements execute in. See [Named scopes](scopes.md#names-and-visibility)
+  for the complete spelling and visibility rules.
 
 ### The block's value
 

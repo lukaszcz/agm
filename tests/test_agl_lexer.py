@@ -1149,6 +1149,272 @@ class TestRawTailForms:
 
 
 # ---------------------------------------------------------------------------
+# `$` verbatim text literal
+# ---------------------------------------------------------------------------
+
+
+class TestVerbatimLiteral:
+    def test_spaced_payload(self) -> None:
+        assert tok("ask $ x") == [
+            ("NAME", "ask"),
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "x"),
+            ("VERBATIM_END", ""),
+        ]
+
+    def test_unspaced_payload(self) -> None:
+        assert tok("ask $x") == [
+            ("NAME", "ask"),
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "x"),
+            ("VERBATIM_END", ""),
+        ]
+
+    def test_payload_starting_with_operator_characters(self) -> None:
+        assert tok("$-rf x") == [
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "-rf x"),
+            ("VERBATIM_END", ""),
+        ]
+
+    @pytest.mark.parametrize("name", ("a$b", "foo$bar"))
+    def test_dollar_inside_identifier_is_unaffected(self, name: str) -> None:
+        assert tok(name) == [("NAME", name)]
+
+    @pytest.mark.parametrize("name", ("ask$", "exec$"))
+    def test_reserved_raw_tail_names_still_start_raw_tail_scanning(self, name: str) -> None:
+        # The token-start `$` path only fires when `$` itself opens a token;
+        # `ask$`/`exec$` are consumed whole by identifier scanning first, so
+        # they keep triggering the (still-supported) raw-tail path unchanged.
+        assert ("RAW_TAIL_NAME", name) in tok(name)
+
+    @pytest.mark.parametrize("op", ("<$>", "%$"))
+    def test_dollar_inside_operator_run_is_unaffected(self, op: str) -> None:
+        assert tok(op) == [("OP_NAME", op)]
+
+    def test_dollar_inside_a_plus_prefixed_identifier_does_not_open_a_literal(self) -> None:
+        assert tok("x+$ y") == [("NAME", "x+$"), ("NAME", "y")]
+
+    def test_leading_and_trailing_horizontal_whitespace_trimmed(self) -> None:
+        assert tok("$  \t hello \t  ") == [
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "hello"),
+            ("VERBATIM_END", ""),
+        ]
+
+    def test_payload_is_verbatim_except_interpolation_escape(self) -> None:
+        source = r"""$ echo '#; "quoted"' ; (x) \\ \%{ $HOME ${shell} $(date) $1"""
+        assert tok(source) == [
+            ("VERBATIM_START", "$"),
+            (
+                "STRING_FRAGMENT",
+                "echo '#; \"quoted\"' ; (x) \\\\ %{ $HOME ${shell} $(date) $1",
+            ),
+            ("VERBATIM_END", ""),
+        ]
+
+    def test_double_backslash_before_hole_opener_is_literal_backslash_then_escape(self) -> None:
+        assert tok(r"$ \\%{x}") == [
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", r"\%{x}"),
+            ("VERBATIM_END", ""),
+        ]
+
+    def test_expression_hole_interpolates(self) -> None:
+        assert tok("$ echo %{value}") == [
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "echo "),
+            ("INTERP_START", "%{"),
+            ("NAME", "value"),
+            ("INTERP_END", "}"),
+            ("VERBATIM_END", ""),
+        ]
+
+    def test_newline_in_verbatim_hole_is_rejected(self) -> None:
+        with pytest.raises(LexError):
+            tok("$ a %{x\n} b")
+
+    def test_inline_payload_span_ends_at_the_payload(self) -> None:
+        tokens = list(tokenize("x = $ a %{b}  \n"))
+        start = next(t for t in tokens if t.type == "VERBATIM_START")
+        frag = next(t for t in tokens if t.type == "STRING_FRAGMENT")
+        end = next(t for t in tokens if t.type == "VERBATIM_END")
+        assert (start.line, start.column, start.end_line, start.end_column) == (1, 5, 1, 6)
+        assert (frag.line, frag.column, frag.start_pos) == (1, 7, 6)
+        assert (end.line, end.column, end.end_line, end.end_column, end.start_pos) == (
+            1,
+            13,
+            1,
+            13,
+            12,
+        )
+
+    def test_block_payload_span_ends_at_the_last_payload_line(self) -> None:
+        tokens = list(tokenize("$\n  a\n  b\n\nc"))
+        start = next(t for t in tokens if t.type == "VERBATIM_START")
+        frag = next(t for t in tokens if t.type == "STRING_FRAGMENT")
+        end = next(t for t in tokens if t.type == "VERBATIM_END")
+        assert (start.line, start.column, start.end_line, start.end_column) == (1, 1, 1, 2)
+        assert (frag.line, frag.column, frag.start_pos) == (2, 3, 4)
+        assert (end.line, end.column, end.end_line, end.end_column, end.start_pos) == (
+            3,
+            4,
+            3,
+            4,
+            9,
+        )
+
+    @pytest.mark.parametrize(
+        "source, payload",
+        (
+            (r"$ ${NAME}", "${NAME}"),
+            (r"$ $VAR", "$VAR"),
+            (r"$ $(cmd)", "$(cmd)"),
+            (r"$ \${x}", r"\${x}"),
+        ),
+    )
+    def test_environment_style_holes_stay_verbatim(self, source: str, payload: str) -> None:
+        assert tok(source) == [
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", payload),
+            ("VERBATIM_END", ""),
+        ]
+
+    def test_block_payload_is_dedented_and_inert_to_layout(self) -> None:
+        source = "$\n  first %{value}\n    done\n\n  else\nafter"
+        assert tok(source) == [
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "first "),
+            ("INTERP_START", "%{"),
+            ("NAME", "value"),
+            ("INTERP_END", "}"),
+            ("STRING_FRAGMENT", "\n  done\n\nelse"),
+            ("VERBATIM_END", ""),
+            ("_NEWLINE", "0"),
+            ("NAME", "after"),
+        ]
+
+    def test_block_preserves_leading_and_interior_blank_lines(self) -> None:
+        assert tok("$\n\n  first\n\n  last") == [
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "\nfirst\n\nlast"),
+            ("VERBATIM_END", ""),
+        ]
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "$\n  echo hi\n\nlet y = 1",
+            "$\n  echo hi\n\n\nlet y = 1",
+            "$\n  echo hi\n\n",
+            "$\n  echo hi\n  \n",
+        ),
+    )
+    def test_block_drops_trailing_blank_lines(self, source: str) -> None:
+        fragments = [value for typ, value in tok(source) if typ == "STRING_FRAGMENT"]
+        assert fragments == ["echo hi"]
+
+    def test_block_tab_straddling_the_margin_keeps_relative_indentation(self) -> None:
+        fragments = [
+            value for typ, value in tok("$\n echo start\n\tnested") if typ == "STRING_FRAGMENT"
+        ]
+        assert fragments == ["echo start\n   nested"]
+
+    def test_under_indented_block_line_is_rejected_at_its_location(self) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok("$\n  first\n next")
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (3, 2, 3, 2)
+
+    def test_block_followed_by_dedented_statement(self) -> None:
+        assert tok("$\n  echo hi\nafter") == [
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "echo hi"),
+            ("VERBATIM_END", ""),
+            ("_NEWLINE", "0"),
+            ("NAME", "after"),
+        ]
+
+    @pytest.mark.parametrize("source", ("$", "$   ", "$\n", "$\n\n", "$\n  \n", "$\nx"))
+    def test_empty_literal_is_a_lex_error(self, source: str) -> None:
+        with pytest.raises(LexError):
+            tok(source)
+
+    def test_block_followed_by_a_true_dedent_closes_the_enclosing_indent(self) -> None:
+        assert tok("def f() =\n  $\n    a\nz") == [
+            ("def", "def"),
+            ("NAME", "f"),
+            ("LPAR", "("),
+            ("RPAR", ")"),
+            ("EQ", "="),
+            ("_INDENT", ""),
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "a"),
+            ("VERBATIM_END", ""),
+            ("_DEDENT", ""),
+            ("_NEWLINE", "0"),
+            ("NAME", "z"),
+        ]
+
+    def test_block_followed_by_a_same_indent_continuation_in_a_nested_body(self) -> None:
+        assert tok("if c\n  $\n    a\n  y\nz") == [
+            ("if", "if"),
+            ("NAME", "c"),
+            ("_INDENT", ""),
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "a"),
+            ("VERBATIM_END", ""),
+            ("_NEWLINE", "2"),
+            ("NAME", "y"),
+            ("_DEDENT", ""),
+            ("_NEWLINE", "0"),
+            ("NAME", "z"),
+        ]
+
+    @pytest.mark.parametrize("opener, closer", (("(", ")"), ("[", "]"), ("{", "}")))
+    def test_dollar_inside_a_closed_bracket_is_rejected_at_its_location(
+        self, opener: str, closer: str
+    ) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok(f"{opener}$ x{closer}")
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, 2)
+
+    def test_second_dollar_in_the_same_bracket_does_not_overwrite_the_first_error(self) -> None:
+        # Two verbatim literals inside one bracket: the closed bracket really
+        # does enclose both, so the error is reported — anchored at the first.
+        with pytest.raises(LexError) as exc_info:
+            tok("($ a $ b)")
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, 2)
+
+    def test_dollar_inside_a_string_hole_is_rejected(self) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok('"%{ $ x }"')
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, 5)
+
+    def test_dollar_inside_a_verbatim_payload_hole_is_rejected(self) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok("$ echo %{ $ x }")
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, 11)
+
+    def test_dollar_under_an_unclosed_bracket_is_left_to_the_parser(self) -> None:
+        tokens = tok("let a = (1 + $ echo hi\nprint(b)\n")
+        assert ("VERBATIM_START", "$") in tokens
+
+
+# ---------------------------------------------------------------------------
 # Comments
 # ---------------------------------------------------------------------------
 

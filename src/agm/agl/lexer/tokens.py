@@ -86,6 +86,8 @@ RAW_TAIL_NAME = "RAW_TAIL_NAME"
 RAW_TAIL_START = "RAW_TAIL_START"
 RAW_FRAGMENT = "RAW_FRAGMENT"
 RAW_TAIL_END = "RAW_TAIL_END"
+VERBATIM_START = "VERBATIM_START"  # "$" opening a verbatim text literal
+VERBATIM_END = "VERBATIM_END"  # closes a verbatim text literal (empty value)
 
 # ---------------------------------------------------------------------------
 # Identifiers

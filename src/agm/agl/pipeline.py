@@ -146,13 +146,18 @@ class ArgumentPreflight:
         order — or ``()`` when the static pipeline or binding failed.
     ``param_seeds``
         The decoded module-parameter values, ready for ``run_prepared``.
+        Already folds in any ``@config`` entry targeting a ``@param``
+        binding, at its rank between the module-route and program-route/CLI
+        tiers (:meth:`PipelineDriver.preflight_arguments`).
     ``program_config``
         *program*'s own ``@config`` entries, evaluated to values: a target
         ``StaticBindingKey`` (an engine setting or a ``@param`` binding) ->
         its checked, constant value. Empty when *program* carries no
-        ``@config``. A host merges this mapping into its own precedence
-        rules alongside its other seed sources (CLI flags, config files, and
-        the like).
+        ``@config``. A ``@param`` target here is also already folded into
+        ``param_seeds``; a host reads the engine-setting subset (see
+        ``agm.agl.ir.builtin_vars.is_engine_builtin_var_key``) to merge
+        alongside its other engine-setting seed sources (CLI flags, config
+        files, and the like).
     """
 
     result: "RunResult"
@@ -391,6 +396,34 @@ class PipelineDriver:
                 "Duplicate codec registrations are not allowed."
             )
         self._extra_codecs[name] = codec
+        self._host_env_cache = None
+
+    def configure_execution_services(
+        self,
+        *,
+        default_strict_json: bool,
+        agent_dispatcher: AgentFn | None,
+        session_host: "SessionHost | None",
+        shell_exec_timeout: float | None,
+    ) -> None:
+        """Replace this driver's execution-time services before ``run_prepared``.
+
+        A host that derives strict-json/timeout/session settings from a
+        value only known after :meth:`preflight_arguments` (a ``@config``
+        engine value merged with its other tiers) constructs the real
+        services once that value is known and calls this to wire them into
+        the same driver instance :meth:`preflight_arguments` already ran
+        on — the instance :meth:`run_prepared` must reuse to resume a
+        preflighted executable (see :class:`ArgumentPreflight`). Safe any
+        time before execution: :meth:`discover_programs` and
+        :meth:`preflight_arguments` never read these fields, only the
+        eventual :meth:`run_prepared` call does. Invalidates the cached host
+        environment so the new dispatcher/session host take effect.
+        """
+        self._default_strict_json = default_strict_json
+        self._agent_dispatcher = agent_dispatcher
+        self._session_host = session_host
+        self._shell_exec_timeout = shell_exec_timeout
         self._host_env_cache = None
 
     def host_environment(self) -> HostEnvironment:
@@ -1224,6 +1257,7 @@ class PipelineDriver:
         *,
         compiled: "MatchCompiledProgram | None" = None,
         param_values: "Mapping[StaticBindingKey, object] | None" = None,
+        param_values_lower: "Mapping[StaticBindingKey, object] | None" = None,
     ) -> ArgumentPreflight:
         """Validate program arguments and module parameter values before execution.
 
@@ -1234,6 +1268,15 @@ class PipelineDriver:
         the lowered executable and the bound arguments back to
         :meth:`run_prepared` (``executable=``, ``arguments=``) to execute it
         without lowering it a second time.
+
+        *param_values* (the supplied/program-route tier) always wins.
+        *param_values_lower* (the module-route tier) is decoded only for keys
+        neither *param_values* nor the selected program's own ``@config``
+        cover — a module-route value either of those overrides is never
+        decoded, exactly as a program-route override is today. The
+        ``@config`` values targeting a ``@param`` binding are already typed
+        ``Value``s (evaluated by :meth:`_evaluate_program_config`) and need
+        no decoding; they rank between the two raw tiers.
         """
         from agm.agl.runtime.arguments import bind_param_values, bind_program_arguments_for
 
@@ -1242,8 +1285,20 @@ class PipelineDriver:
             return ArgumentPreflight(result=result, executable=executable)
 
         bound, argument_diagnostics = bind_program_arguments_for(executable, program, arguments)
-        param_seeds, param_diagnostics = bind_param_values(executable, param_values or {})
-        diagnostics = (*argument_diagnostics, *param_diagnostics)
+        program_config = self._evaluate_program_config(executable, program)
+        config_param_values = {
+            key: value for key, value in program_config.items() if key in executable.param_bindings
+        }
+        upper = param_values or {}
+        lower = {
+            key: value
+            for key, value in (param_values_lower or {}).items()
+            if key not in upper and key not in config_param_values
+        }
+        decoded_lower, lower_diagnostics = bind_param_values(executable, lower)
+        decoded_upper, upper_diagnostics = bind_param_values(executable, upper)
+        param_seeds = {**decoded_lower, **config_param_values, **decoded_upper}
+        diagnostics = (*argument_diagnostics, *lower_diagnostics, *upper_diagnostics)
         if diagnostics:
             return ArgumentPreflight(
                 result=RunResult(
@@ -1259,7 +1314,7 @@ class PipelineDriver:
             executable=executable,
             arguments=bound,
             param_seeds=param_seeds,
-            program_config=self._evaluate_program_config(executable, program),
+            program_config=program_config,
         )
 
     @staticmethod

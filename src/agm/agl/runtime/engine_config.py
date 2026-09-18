@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from agm.config.engine_keys import ENGINE_KEYS
+from agm.agent.spec import AGENT_SPECS
+from agm.agl.semantics.values import RecordValue
+from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from agm.agl.ir.builtin_nominals import BuiltinNominals
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
@@ -19,7 +22,73 @@ __all__ = [
     "convert_host_value",
     "engine_default_settings",
     "raw_option_str",
+    "restamp_engine_setting",
 ]
+
+
+def _engine_key_shape(kind: EngineKeyKind) -> tuple[str, tuple[str, ...]] | None:
+    """Return the ``(enum name, member names)`` an engine key *kind* restamps, if any."""
+    if kind is EngineKeyKind.AGENT:
+        return ("Agent", tuple(AGENT_SPECS))
+    if kind is EngineKeyKind.OPTION_TEXT:
+        return ("Option", ("None", "Some"))
+    return None
+
+
+#: Engine key name -> ``(enum name, member names)``, built once from ``ENGINE_KEYS``.
+_ENGINE_KEY_ENUM_SHAPES: dict[str, tuple[str, tuple[str, ...]]] = {
+    spec.name: shape for spec in ENGINE_KEYS if (shape := _engine_key_shape(spec.kind)) is not None
+}
+
+
+def _restamp_host_enum_member(
+    value: RecordValue,
+    *,
+    enum_name: str,
+    member_names: tuple[str, ...],
+    from_table: "BuiltinNominals",
+    to_table: "BuiltinNominals",
+) -> RecordValue:
+    """Restamp *value*'s identity from *from_table* to *to_table*, if it is an *enum_name* member.
+
+    Used both to bind a persisted engine-setting seed (reserved fallback
+    identity) onto a program's own nominal table, and to persist a
+    post-run engine-setting value (a program's own identity) back onto the
+    reserved fallback table so it survives past that program's own lifetime.
+    """
+    for member_name in member_names:
+        source = from_table.resolve_standard_member(enum_name, member_name)
+        if value.nominal == source.nominal:
+            target = to_table.resolve_standard_member(enum_name, member_name)
+            return RecordValue(nominal=target.nominal, fields=value.fields)
+    return value
+
+
+def restamp_engine_setting(
+    key: str, value: "Value", *, from_table: "BuiltinNominals", to_table: "BuiltinNominals"
+) -> "Value":
+    """Restamp *value* onto *to_table*'s identity when *key* is enum-backed.
+
+    An enum-backed engine key (``AGENT``/``OPTION_TEXT`` kind) carries the
+    identity of whichever nominal table stamped it; every reader of such a
+    value needs it in its own table's identity to recognize the value's
+    members with :func:`~agm.agl.ir.builtin_nominals.resolve_standard_member_name`
+    (or, as here, directly). A non-enum-backed key, or a value that is not a
+    ``RecordValue``, crosses through unchanged.
+    """
+    if not isinstance(value, RecordValue):
+        return value
+    shape = _ENGINE_KEY_ENUM_SHAPES.get(key)
+    if shape is None:
+        return value
+    enum_name, member_names = shape
+    return _restamp_host_enum_member(
+        value,
+        enum_name=enum_name,
+        member_names=member_names,
+        from_table=from_table,
+        to_table=to_table,
+    )
 
 
 def raw_option_str(

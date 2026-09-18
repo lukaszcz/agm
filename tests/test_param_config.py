@@ -94,7 +94,7 @@ def _resolve(
         command_paths=(),
         surface=_surface(program, bindings),
     )
-    return tiers.merged(), reports
+    return {**tiers.lower, **tiers.upper}, reports
 
 
 def test_resolves_a_module_route() -> None:
@@ -412,7 +412,7 @@ def test_anonymous_entry_params_do_not_read_a_module_route() -> None:
         surface=_surface(program, (binding,)),
     )
 
-    assert tiers.merged() == {}
+    assert {**tiers.lower, **tiers.upper} == {}
 
 
 def test_cli_or_environment_values_are_not_overwritten() -> None:
@@ -663,7 +663,10 @@ def test_a_cli_supplied_value_is_in_the_upper_tier_and_shadows_a_module_route_in
     assert tiers.lower == {}
 
 
-def test_merged_applies_supplied_and_program_route_over_module_route() -> None:
+def test_supplied_and_program_route_tiers_combine_over_module_route() -> None:
+    """``upper`` (program route) and ``lower`` (module route) partition disjoint
+    keys here; the full precedence chain, including where ``@config`` ranks
+    between them, is ``PipelineDriver.preflight_arguments``'s own merge."""
     module_only = _binding("A/logging", "verbose")
     program_routed = _binding("B/logging", "trace")
     program = _program(
@@ -679,4 +682,5 @@ def test_merged_applies_supplied_and_program_route_over_module_route() -> None:
         (module_only, program_routed),
     )
 
-    assert tiers.merged() == {module_only.key: True, program_routed.key: True}
+    assert tiers.upper == {program_routed.key: True}
+    assert tiers.lower == {module_only.key: True}

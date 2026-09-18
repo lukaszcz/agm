@@ -46,6 +46,25 @@ def _configured_value(
     return configured_value
 
 
+def _validate_cli_timeout(raw: str) -> None:
+    """Reject an unparsable ``--timeout`` value eagerly, before anything runs.
+
+    ``convert_config_value`` only checks ``--timeout``'s value decodes as
+    ``Option[text]``, never that it is a valid duration — that conversion
+    happens once at its use site (:func:`~agm.core.parse.parse_timeout`).
+    Validating it here, alongside every other CLI decode failure, keeps a
+    malformed flag from surfacing only after the static pipeline has already
+    run.
+    """
+    from agm.core.parse import parse_timeout
+
+    try:
+        parse_timeout(raw)
+    except ValueError as exc:
+        print(f"Error: invalid --timeout value: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 def _decode_engine_value(
     key_name: str, raw: object, origin: str, type_table: "TypeTable"
 ) -> "Value":
@@ -81,6 +100,18 @@ class EngineSeedTiers:
     cli_log: "tuple[object, str] | None"
     _type_table: "TypeTable" = field(repr=False)
 
+    def config_merged(self, middle: "Mapping[str, Value] | None" = None) -> "dict[str, Value]":
+        """Flatten the config-only tiers: ``lower`` < *middle* < ``upper``, ``cli`` excluded.
+
+        *middle*: already-decoded engine settings ranked between ``lower``
+        and ``upper`` (a selected program's own ``@config`` entries, restamped
+        onto the standard identity by the caller). Exposed so a host reads
+        the same config-only view :meth:`merged` derives ``log`` from — e.g.
+        to resolve its own trace-file decision — without recomputing it.
+        """
+        mid: "Mapping[str, Value]" = middle if middle is not None else {}
+        return {**self.lower, **mid, **self.upper}
+
     def merged(self, middle: "Mapping[str, Value] | None" = None) -> "dict[str, Value]":
         """Flatten to one mapping: ``lower`` < *middle* < ``upper`` < ``cli``, plus derived ``log``.
 
@@ -89,8 +120,7 @@ class EngineSeedTiers:
         config-only merge (``cli`` excluded, except for its own fast path) —
         see :meth:`_resolve_log`.
         """
-        mid: "Mapping[str, Value]" = middle if middle is not None else {}
-        config_result = {**self.lower, **mid, **self.upper}
+        config_result = self.config_merged(middle)
         result = {**config_result, **self.cli}
         log = self._resolve_log(config_result)
         if log is not None:
@@ -174,6 +204,8 @@ def build_host_engine_seeds(
     lower: dict[str, Value] = {}
     for spec in ENGINE_KEYS:
         if spec.name in cli_values:
+            if spec.name == "timeout" and cli_values["timeout"] is not None:
+                _validate_cli_timeout(cast(str, cli_values["timeout"]))
             cli[spec.name] = _decode_engine_value(
                 spec.name, cli_values[spec.name], f"--{spec.name}", type_table
             )

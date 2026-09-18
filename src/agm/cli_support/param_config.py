@@ -35,16 +35,14 @@ __all__ = [
 class ParamValueTiers:
     """Supplied/program-route values (``upper``) above module-route values (``lower``).
 
-    ``lower`` holds only keys absent from ``upper``; :meth:`merged` applies
-    the full precedence.
+    ``lower`` holds only keys absent from ``upper``. The full chain also
+    ranks a selected program's own ``@config`` entries between the two —
+    ``PipelineDriver.preflight_arguments`` merges all three; there is no
+    flattened two-tier view here.
     """
 
     upper: Mapping[StaticBindingKey, object]
     lower: Mapping[StaticBindingKey, object]
-
-    def merged(self) -> dict[StaticBindingKey, object]:
-        """Return the flattened precedence: ``upper`` over ``lower``."""
-        return {**self.lower, **self.upper}
 
 
 class RouteReport(NamedTuple):

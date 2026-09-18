@@ -64,12 +64,17 @@ from typing import TYPE_CHECKING, NoReturn, TypedDict, TypeVar, assert_never
 from agm.agent.session import create_agl_session_host
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.arguments import ProgramArguments
+from agm.agl.runtime.engine_config import restamp_engine_setting
 from agm.agl.runtime.host_settings import HostSettingsPolicy
+from agm.agl.runtime.option import option_text
 from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
+from agm.agl.semantics.values import BoolValue, RecordValue
 from agm.agl.syntax.nodes import FuncDef, static_items
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.engine_seeds import build_host_engine_seeds
@@ -80,6 +85,7 @@ from agm.cli_support.exec_target import (
     resolve_installed_reference,
 )
 from agm.cli_support.param_config import (
+    ParamValueTiers,
     _report_undeclared_config_keys,
     resolve_param_values,
 )
@@ -129,6 +135,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.nodes import UseDefault
     from agm.agl.ir.program import ExecutableProgram
     from agm.agl.ir.static_keys import StaticBindingKey
+    from agm.agl.pipeline import ArgumentPreflight
     from agm.agl.runtime.types import ParamBindingInfo
     from agm.agl.semantics.values import Value
     from agm.config.general import GeneralConfig
@@ -173,18 +180,23 @@ def _bind_host_inputs(
     config: "GeneralConfig",
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
-) -> tuple[ProgramArguments, dict["StaticBindingKey", object]]:
+) -> tuple[ProgramArguments, ParamValueTiers]:
     """Bind one selected program's CLI, environment, and config host inputs.
 
     This is the only execution-host path that combines the signature and
     module-parameter surfaces.  Registered commands reach it through
     :func:`run`, retaining their smaller reserved-flag inventory while sharing
     parsing, config precedence, warning reports, and preflight input shape.
+
+    The returned :class:`ParamValueTiers` is handed to
+    ``PipelineDriver.preflight_arguments`` unmerged: it, not this function,
+    ranks the module-route (``lower``) tier beneath the selected program's own
+    ``@config`` values, which are only known once the program is lowered.
     """
     if program is None:
         if tokens:
             raise RegisteredProgramUsageError(f"unexpected argument: {tokens[0]!r}")
-        return ProgramArguments(positional=(), named={}), {}
+        return ProgramArguments(positional=(), named={}), ParamValueTiers(upper={}, lower={})
 
     command_result = build_program_command(program, reserved_flags, params)
     if not isinstance(command_result, ProgramCommand):
@@ -221,8 +233,6 @@ def _bind_host_inputs(
     except QualifiedConfigLookupError as exc:
         print(f"Error: invalid qualified configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-    param_values = param_tiers.merged()
-
     if entry_segments:
         try:
             configured_arguments = resolve_qualified_values(config, argument_keys)
@@ -240,7 +250,7 @@ def _bind_host_inputs(
     _report_undeclared_config_keys(config, route_reports)
     return ProgramArguments(
         positional=parsed_tail.arguments.positional, named=program_named
-    ), param_values
+    ), param_tiers
 
 
 def _package_entry_segments(entry_path: Path | None, roots: RootSet) -> tuple[str, ...] | None:
@@ -287,6 +297,13 @@ _T = TypeVar("_T")
 def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
+
+
+def _option_text(value: "Value | None") -> str | None:
+    """Read a standard-identity ``Option[text]`` engine value's payload, if present."""
+    if not isinstance(value, RecordValue):
+        return None
+    return option_text(value, nominals=NO_BUILTIN_DECLARATIONS)
 
 
 def _registered_command_mismatch(command_path: str) -> NoReturn:
@@ -487,45 +504,11 @@ def run(
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    # Resolve strict_json: CLI > config. A source ``std/config::strict-json :=
-    # VALUE`` write is applied at runtime when it updates the live setting.
-    strict_json = _first(args.strict_json, config.strict_json)
-    # config.strict_json is always a bool, so _first always returns a bool here.
-    assert strict_json is not None
-    resolved_strict_json: bool = strict_json
-
     # Resolve max call depth: CLI > config.  ``None`` (nothing set at
     # any layer) lets the driver apply its canonical default.
     resolved_call_depth_limit = _first(
         args.max_call_depth,
         config.max_call_depth,
-    )
-
-    # Resolve timeout: CLI > [exec] config. A source ``std/config::timeout :=
-    # VALUE`` write is applied at runtime from its program point.
-    # ``--timeout VALUE`` overrides the config; ``--no-timeout`` clears it (None).
-    if args.timeout is not None:
-        try:
-            resolved_timeout: float | None = parse_timeout(args.timeout)
-        except ValueError as exc:
-            print(f"Error: invalid --timeout value: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
-    elif args.no_timeout:
-        resolved_timeout = None
-    else:
-        resolved_timeout = config.timeout
-
-    factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
-    session_host = create_agl_session_host(idle_timeout=resolved_timeout)
-
-    # Resolve the CLI > config logging decision ONCE: it both drives the trace
-    # file prepared below and seeds the readable ``log`` register.
-    log_decision = resolve_log_decision(
-        cli_no_log=args.no_log,
-        cli_log=args.log,
-        cli_log_file=args.log_file,
-        config_log=config.log,
-        config_log_file=config.log_file,
     )
 
     # Seed only settings explicitly controlled by CLI/config. Runtime fallbacks
@@ -553,13 +536,19 @@ def run(
     if args.default_agent is not None:
         cli_values["default-agent"] = args.default_agent
 
+    # strict-json/timeout/log are resolved only after preflight, below, once a
+    # selected program's own ``@config`` entries (ranked between the config
+    # tables and the CLI, see ``EngineSeedTiers.merged``) are known. Building
+    # these three tiers (never merging them) is possible now: neither
+    # ``build_host_engine_seeds`` nor discovery/preflight reads
+    # strict-json/timeout/log's resolved host values.
     process_environment = dict(os.environ)
-    engine_seeds = build_host_engine_seeds(
+    engine_tiers = build_host_engine_seeds(
         config=config,
         primary_table=engine_program_table,
         fallback_table=toml_dict(merged_config.get("exec")),
         cli_values=cli_values,
-    ).merged()
+    )
 
     # Load + scope the graph ONCE, against the module roots assembled above. A
     # source ``std/config::KEY := VALUE`` write takes effect at its program
@@ -576,13 +565,10 @@ def run(
 
     # ``prepare_parsed_entry`` was already called above; the same ``PreparedProgram``
     # is reused for discovery and the run, so the source is loaded and scoped only once.
-    runtime = PipelineDriver(
-        default_strict_json=resolved_strict_json,
-        agent_dispatcher=factory,
-        session_host=session_host,
-        shell_exec_timeout=resolved_timeout,
-        default_call_depth_limit=resolved_call_depth_limit,
-    )
+    # strict-json/agent-dispatch/session/timeout are wired in below, once the
+    # selected program's own ``@config`` entries are known (see
+    # ``configure_execution_services``); discovery and preflight never read them.
+    runtime = PipelineDriver(default_call_depth_limit=resolved_call_depth_limit)
     discovery = (
         cached_pipeline.discovery
         if cached_pipeline is not None
@@ -623,7 +609,7 @@ def run(
             )
             raise SystemExit(1)
 
-    arguments, param_values = _bind_host_inputs(
+    arguments, param_tiers = _bind_host_inputs(
         tokens=args.argument_tokens,
         program=selected_program,
         params=() if selected_program is None else discovery.params_for(selected_program),
@@ -642,13 +628,15 @@ def run(
     executable: "ExecutableProgram | None" = None
     program_symbol = None
     arguments_bound: "tuple[Value | UseDefault, ...] | None" = None
+    argument_preflight: "ArgumentPreflight | None" = None
     if selected_program is not None:
         argument_preflight = runtime.preflight_arguments(
             prepared,
             selected_program,
             arguments,
             compiled=discovery.compiled,
-            param_values=param_values,
+            param_values=param_tiers.upper,
+            param_values_lower=param_tiers.lower,
         )
         if not argument_preflight.result.ok:
             for diag in argument_preflight.result.diagnostics:
@@ -658,6 +646,72 @@ def run(
         assert executable is not None
         program_symbol = executable.program_symbols[selected_program.node_id]
         arguments_bound = argument_preflight.arguments
+
+    # The selected program's own ``@config`` entries (evaluated by preflight
+    # above) rank between the config tables and the CLI for both a module
+    # parameter (folded into ``param_seeds`` by preflight already, filtered by
+    # ``key in executable.param_bindings``) and an engine setting (folded in
+    # here, filtered by ``is_engine_builtin_var_key`` — the checker admits only
+    # these two target kinds, so every entry lands in exactly one filter).
+    # Resolving these only now — after a preflight failure has already exited
+    # 1 — is what lets ``@config`` reach them without a second lowering pass
+    # or a duplicated precedence rule. A ``@config`` value is decoded against
+    # *executable*'s own nominal identity (see ``preflight_arguments``); an
+    # enum-backed value (``timeout``, ``log-file``, ``default-agent``) is
+    # restamped onto the standard identity every other engine tier already
+    # uses, so it reads back through the same plain accessors.
+    config_engine_values: dict[str, Value] = {}
+    if executable is not None:
+        assert argument_preflight is not None
+        config_engine_values = {
+            key[2]: restamp_engine_setting(
+                key[2],
+                value,
+                from_table=executable.builtin_nominals,
+                to_table=NO_BUILTIN_DECLARATIONS,
+            )
+            for key, value in argument_preflight.program_config.items()
+            if is_engine_builtin_var_key(key)
+        }
+    engine_seeds = engine_tiers.merged(middle=config_engine_values)
+
+    strict_seed = engine_seeds.get("strict-json")
+    resolved_strict_json = isinstance(strict_seed, BoolValue) and strict_seed.value
+
+    timeout_text = _option_text(engine_seeds.get("timeout"))
+    if timeout_text is not None:
+        try:
+            resolved_timeout: float | None = parse_timeout(timeout_text)
+        except ValueError as exc:
+            origin = "--timeout" if cli_values.get("timeout") is not None else "@config timeout"
+            print(f"Error: invalid {origin} value: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+    else:
+        resolved_timeout = None
+
+    # Config tables and ``@config`` (never the CLI — see
+    # ``EngineSeedTiers.config_merged``) feed the derived ``log`` rule the
+    # same way ``EngineSeedTiers._resolve_log`` does.
+    config_result = engine_tiers.config_merged(config_engine_values)
+    config_log_value = config_result.get("log")
+    config_log = isinstance(config_log_value, BoolValue) and config_log_value.value
+    config_log_file = _option_text(config_result.get("log-file"))
+    log_decision = resolve_log_decision(
+        cli_no_log=args.no_log,
+        cli_log=args.log,
+        cli_log_file=args.log_file,
+        config_log=config_log,
+        config_log_file=config_log_file,
+    )
+
+    factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
+    session_host = create_agl_session_host(idle_timeout=resolved_timeout)
+    runtime.configure_execution_services(
+        default_strict_json=resolved_strict_json,
+        agent_dispatcher=factory,
+        session_host=session_host,
+        shell_exec_timeout=resolved_timeout,
+    )
 
     # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.  A source
@@ -696,7 +750,7 @@ def run(
     # exception, and must not be replaced by a secondary close failure.
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
         run_kwargs: _PreparedRunOverrides = {}
-        if selected_program is not None and argument_preflight.param_seeds:
+        if argument_preflight is not None and argument_preflight.param_seeds:
             run_kwargs["param_seeds"] = argument_preflight.param_seeds
         result = runtime.run_prepared(
             prepared,

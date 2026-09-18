@@ -45,9 +45,6 @@ EXTERNALLY_USED = (
     "clear_retained_artifacts",
     "clear_parsed_module_cache",
     "set_self_validation_enabled",
-    # ArgumentPreflight field read by tests only; remove this entry once a host
-    # reads it to merge it into its own precedence rules
-    "program_config",
 )
 
 

@@ -609,23 +609,20 @@ class TestMalformedAgentCommandAtConstruction:
         assert result.error is None
 
 
-def test_engine_key_enum_shape_and_restamp_ignore_non_enum_backed_keys() -> None:
+def test_restamp_engine_setting_ignores_non_enum_backed_keys() -> None:
     """A boolean-kind or unrecognized key carries no host-enum identity to restamp.
 
-    ``_engine_key_enum_shape`` is the one place that maps an engine key to the
-    enum it restamps; ``log``/``strict-json`` are boolean-kind and an
-    unrecognized name is not a key at all, so both return ``None`` and
-    ``_restamp_engine_setting`` leaves such a value untouched.
+    ``log``/``strict-json`` are boolean-kind and an unrecognized name is not a
+    key at all, so :func:`restamp_engine_setting` leaves such a value untouched
+    regardless of the ``from``/``to`` tables given.
     """
-    from agm.agl.eval.ir_interpreter import _engine_key_enum_shape, _restamp_engine_setting
-
-    for key in ("log", "strict-json", "not-an-engine-key"):
-        assert _engine_key_enum_shape(key) is None
+    from agm.agl.runtime.engine_config import restamp_engine_setting
 
     stray = agent_value("AgentCommand", command="unused")
-    assert (
-        _restamp_engine_setting(
-            "log", stray, from_table=NO_BUILTIN_DECLARATIONS, to_table=NO_BUILTIN_DECLARATIONS
+    for key in ("log", "strict-json", "not-an-engine-key"):
+        assert (
+            restamp_engine_setting(
+                key, stray, from_table=NO_BUILTIN_DECLARATIONS, to_table=NO_BUILTIN_DECLARATIONS
+            )
+            is stray
         )
-        is stray
-    )

@@ -1,0 +1,5 @@
+# A `hiding` re-export makes an exported var unreachable to its importer.
+import facade_hidden::*
+
+program def main() -> unit =
+  total := 1

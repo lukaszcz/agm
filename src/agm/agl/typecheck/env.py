@@ -481,6 +481,17 @@ class CheckedModule:
         (``unit``/``text``); ``copy``/``shallow_copy`` publish the same type
         here as their checked result in ``node_types``, so either source works
         for them.
+    ``published_binding_types``
+        This module's exported static ``let``/``var`` binding types, keyed by
+        declaration node id (see ``syntax.nodes.static_binding_node_id``). Lets
+        a cache hit answer the program-level static-binding pre-pass
+        (``typecheck/program.py``) without re-checking the module.
+    ``program_config_targets``
+        Resolved ``@config`` targets, keyed by each entry's key expression node
+        id: ``(module id, scope path, name)``, the same shape as
+        ``ir.static_keys.StaticBindingKey`` (this module may not import
+        ``ir``). Lowering reads this instead of re-resolving
+        ``resolved.attributes.program_configs``' raw keys.
     """
 
     resolved: ModuleResolution
@@ -495,6 +506,7 @@ class CheckedModule:
     pattern_classifications: dict[int, ConstructorRef | None]
     partial_calls: dict[int, PartialCallSpec]
     published_signatures: dict[int, FunctionSignatureRecord] | None = None
+    published_binding_types: dict[int, Type] | None = None
     module_id: ModuleId = ENTRY_ID
     import_env: ImportEnv = field(default_factory=lambda: ImportEnv({}, {}))
     source_text: str = ""
@@ -507,6 +519,9 @@ class CheckedModule:
     pattern_constructor_owners: dict[int, NominalId] = field(default_factory=dict)
     method_selections: dict[int, MethodDef] = field(default_factory=dict)
     explicit_builtin_targets: dict[int, Type] = field(default_factory=dict)
+    program_config_targets: dict[int, tuple[ModuleId, tuple[str, ...], str]] = field(
+        default_factory=dict
+    )
 
     def binding_for(self, node_id: int) -> BindingRef | None:
         """Return *node_id*'s checked binding, dereferencing a pattern slot."""
@@ -571,6 +586,7 @@ class CheckedModule:
             interface=self.interface,
             environment_facts=self.type_env.own_facts(),
             published_signatures=self.published_signatures,
+            published_binding_types=self.published_binding_types,
             module_id=self.module_id,
             slot_resolution=self.slot_resolution,
             slot_constructor_refs=self.slot_constructor_refs,
@@ -581,6 +597,7 @@ class CheckedModule:
             pattern_constructor_owners=self.pattern_constructor_owners,
             method_selections=self.method_selections,
             explicit_builtin_targets=self.explicit_builtin_targets,
+            program_config_targets=self.program_config_targets,
         )
 
 
@@ -676,10 +693,11 @@ class ModuleTypeInterface:
 class PublishedModuleSurface(Protocol):
     """Shared surface of ``CheckedModule`` and ``CheckedModuleImage``.
 
-    Exposes a module's published interface and signatures so the
-    whole-program pre-passes (:mod:`agm.agl.typecheck.program`) —
-    ``_build_program_type_table`` and ``_build_program_func_sig_table`` — can
-    read a reused module's closed type interface and published signatures
+    Exposes a module's published interface, signatures, and static-binding
+    types so the whole-program pre-passes (:mod:`agm.agl.typecheck.program`) —
+    ``_build_program_type_table``, ``_build_program_func_sig_table``, and
+    ``_build_program_static_binding_table`` — can read a reused module's
+    closed type interface, published signatures, and published binding types
     whether it is a live ``CheckedModule`` or a rehydration-ready
     ``CheckedModuleImage``.
     """
@@ -689,6 +707,9 @@ class PublishedModuleSurface(Protocol):
 
     @property
     def published_signatures(self) -> dict[int, FunctionSignatureRecord] | None: ...
+
+    @property
+    def published_binding_types(self) -> dict[int, Type] | None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +888,7 @@ class CheckedModuleImage:
     interface: ModuleTypeInterface
     environment_facts: EnvironmentFacts
     published_signatures: dict[int, FunctionSignatureRecord] | None
+    published_binding_types: dict[int, Type] | None
     module_id: ModuleId
     slot_resolution: dict[int, BindingRef]
     slot_constructor_refs: dict[int, ConstructorRef]
@@ -877,6 +899,7 @@ class CheckedModuleImage:
     pattern_constructor_owners: dict[int, NominalId]
     method_selections: dict[int, MethodDef]
     explicit_builtin_targets: dict[int, Type]
+    program_config_targets: dict[int, tuple[ModuleId, tuple[str, ...], str]]
 
     def rehydrate(self, resolved_module: ResolvedModule, env: TypeEnvironment) -> CheckedModule:
         """Reconstruct an equivalent ``CheckedModule`` over a freshly prepared *env*.
@@ -906,6 +929,7 @@ class CheckedModuleImage:
             pattern_classifications=self.pattern_classifications,
             partial_calls=self.partial_calls,
             published_signatures=self.published_signatures,
+            published_binding_types=self.published_binding_types,
             module_id=self.module_id,
             import_env=resolved_module.import_env,
             source_text=resolved_module.source_text,
@@ -918,6 +942,7 @@ class CheckedModuleImage:
             pattern_constructor_owners=self.pattern_constructor_owners,
             method_selections=self.method_selections,
             explicit_builtin_targets=self.explicit_builtin_targets,
+            program_config_targets=self.program_config_targets,
         )
 
 

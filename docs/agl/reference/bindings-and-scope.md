@@ -37,7 +37,10 @@ initializer once and installs every selected binder from that value.
 `let` evaluates the initializer, checks it against the complete annotation (if
 any), and creates **immutable** bindings in the current scope. It scopes over the
 **continuation** — the remaining items in the block and any enclosing
-continuation that consumes the block. A block ending in a bare `let` has type
+continuation that consumes the block — except at the root of a module with a
+static root, where every binding is visible throughout the module regardless
+of declaration order ([Names and visibility](scopes.md#names-and-visibility)).
+A block ending in a bare `let` has type
 `unit` unless its initializer exits, in which case it has bottom type:
 
 <!-- agl-check: fragment -->
@@ -274,6 +277,12 @@ program def main() -> unit =
 
 - Empty array/dictionary literals cannot be inferred and require an
   annotation: `let items: array[Issue] = []`.
+- A module-level `var` of a module with a static root ([Library modules and
+  cycles](modules.md#library-modules-and-cycles)) needs an annotation whenever
+  its initializer would otherwise infer a single enum case (`var v = Some(1)`
+  infers `Option::Some`, not `Option[int]`, so it is rejected; `var v: Option[int]
+  = Some(1)` is fine): a later write could then never hold any other case. A
+  module-level `let` has no such restriction, since it is never reassigned.
 - A `let` or `var` bound to a function value has a function type:
 
   <!-- agl-check: fragment -->
@@ -290,9 +299,10 @@ builtin_var_def ::= "builtin" NEWLINE? "var" name ":" type_expr ["=" expr]
 
 A `builtin var` declares a body-less, host-backed, **mutable** binding with a
 mandatory type and an optional declared default. Its initializer must be a
-constant expression of the declared type: literals, literal containers,
-constructor applications, and a unary operator over any of those (`-1`,
-`not true`) are allowed; reads, calls other than constructors, and binary
+**constant expression** of the declared type: literals, literal containers,
+constructor applications, a [`resource`/`resource-dir`](expressions.md#resource-and-resource-dir)
+call, and a unary operator over any of those (`-1`, `not true`) are allowed;
+other reads, calls other than constructors and resource lookups, and binary
 operators are not. The `builtin` marker may be on the same line as `var` or on
 the line directly above it. A declaration may appear only at the root, or in a
 named scope region, of a module whose path identity lies under `std`, which it
@@ -312,15 +322,16 @@ program def main() -> unit =
   let strict = std/config::strict-json  # read a setting
 ```
 
-An engine setting is an ordinary mutable binding in another module, so an
+An engine setting is a host-backed mutable binding in another module, so an
 assignment target names it exactly as a read does: a qualifier always works,
-and an import tail or `use` declaration can contribute a bare name. See
-[Modules](modules.md) for import and `use` contributions. When the host
-supplies no initial value, the declared default is used; a host seed wins over
-it. Reading another standard-library binding with neither a host seed nor a
-declared default instead reports an error. A write takes effect from its
-program point onward, exactly like any `var` mutation. The optional settings
-are set with `Some("…")` or `None`.
+and an import tail or `use` declaration can contribute a bare name. An exported
+ordinary `var` (see [Modules](modules.md#re-exports-and-visibility)) is
+writable across a module boundary the same way; an exported `let` is not.
+When the host supplies no initial value, the declared default is used; a host
+seed wins over it. Reading another standard-library binding with neither a
+host seed nor a declared default instead reports an error. A write takes
+effect from its program point onward, exactly like any `var` mutation. The
+optional settings are set with `Some("…")` or `None`.
 
 Other standard-library modules may use `builtin var` for their own ambient
 host values. For example, `std/env` exposes an in-memory

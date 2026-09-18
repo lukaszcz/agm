@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "default",
+      "expect": {
+        "stdout": "Option::None\nOption::Some(value = 5)\nOption::None\n",
+        "calls": {}
+      }
+    }
+  ]
+}

@@ -38,6 +38,7 @@ from agm.agl.syntax import (
     AssignStmt,
     AssignTarget,
     Attribute,
+    AttributeKeyedArg,
     BinaryOp,
     Binder,
     BinOp,
@@ -2739,7 +2740,7 @@ class TestDeclarationAttributes:
         return Attribute(
             name=name,
             args=(StringLit(value="why", span=self._sp(), node_id=nid()),),
-            named_args=(),
+            keyed_args=(),
             span=self._sp(),
             node_id=nid(),
         )
@@ -2823,22 +2824,23 @@ class TestDeclarationAttributes:
 
     def test_attribute_holds_its_name_and_raw_arguments(self) -> None:
         value = StringLit(value="python-name", span=self._sp(), node_id=nid())
-        named = NamedArg(name="short", value=value, span=self._sp(), node_id=nid())
+        key = VarRef(name="short", span=self._sp(), node_id=nid())
+        keyed = AttributeKeyedArg(key=key, value=value, span=self._sp(), node_id=nid())
         attribute = Attribute(
             name="extern-name",
             args=(value,),
-            named_args=(named,),
+            keyed_args=(keyed,),
             span=self._sp(),
             node_id=nid(),
         )
         assert attribute.name == "extern-name"
         assert attribute.args == (value,)
-        assert attribute.named_args == (named,)
+        assert attribute.keyed_args == (keyed,)
 
     def test_attribute_equality_ignores_span_and_node_id(self) -> None:
-        first = Attribute(name="arg-pos", args=(), named_args=(), span=span(1, 0, 1, 8), node_id=1)
+        first = Attribute(name="arg-pos", args=(), keyed_args=(), span=span(1, 0, 1, 8), node_id=1)
         second = Attribute(
-            name="arg-pos", args=(), named_args=(), span=span(9, 0, 9, 8), node_id=99
+            name="arg-pos", args=(), keyed_args=(), span=span(9, 0, 9, 8), node_id=99
         )
         assert first == second
 
@@ -2858,21 +2860,39 @@ class TestDeclarationAttributes:
                 name
             )
 
-    def test_walk_visits_attribute_named_arguments(self) -> None:
+    def test_walk_visits_attribute_keyed_arguments(self) -> None:
         from agm.agl.syntax.visitor import walk
 
         value = StringLit(value="named", span=self._sp(), node_id=nid())
+        key = VarRef(name="text", span=self._sp(), node_id=nid())
+        keyed = AttributeKeyedArg(key=key, value=value, span=self._sp(), node_id=nid())
         attribute = Attribute(
             name="doc",
             args=(),
-            named_args=(NamedArg(name="text", value=value, span=self._sp(), node_id=nid()),),
+            keyed_args=(keyed,),
             span=self._sp(),
             node_id=nid(),
         )
         visited: list[object] = []
         walk(attribute, visited.append)
         assert visited[0] is attribute
+        assert keyed in visited
+        assert key in visited
         assert value in visited
+
+    def test_walk_visits_attribute_keyed_argument_qualified_key(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        chain = QualifierChain(
+            anchor=None, segments=(), member="log", span=self._sp(), node_id=nid()
+        )
+        key = VarRef(name="log", span=self._sp(), node_id=nid(), qualifier=chain)
+        value = BoolLit(value=True, span=self._sp(), node_id=nid())
+        keyed = AttributeKeyedArg(key=key, value=value, span=self._sp(), node_id=nid())
+
+        visited: list[object] = []
+        walk(keyed, visited.append)
+        assert chain in visited
 
     def test_walk_reaches_declaration_attributes(self) -> None:
         from agm.agl.syntax.visitor import walk

@@ -1,0 +1,5 @@
+# An unannotated root binding built from another module's constructor: its
+# published type is the imported record type, inferred without an annotation.
+import shapes
+
+let origin = shapes::Point(x = 1, y = 2)

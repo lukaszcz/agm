@@ -1851,31 +1851,35 @@ class TestExecCommandExitCodes:
 def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     """Patch ``exec.PipelineDriver`` with a recording subclass.
 
-    Returns a dict that captures the constructor kwargs the command passed.
+    Returns a dict that captures the runtime's effective strict-json/timeout.
+    These are wired in through ``configure_execution_services`` (after
+    preflight resolves any ``@config`` engine values), not the constructor,
+    so that call is what this records.
     """
     from agm.agl.pipeline import PipelineDriver as RealRuntime
 
     captured: dict[str, object] = {}
 
     class RecordingRuntime(RealRuntime):
-        def __init__(
+        def __init__(self, *, default_call_depth_limit: int | None = None) -> None:
+            captured["default_call_depth_limit"] = default_call_depth_limit
+            super().__init__(default_call_depth_limit=default_call_depth_limit)
+
+        def configure_execution_services(
             self,
             *,
-            default_strict_json: bool = False,
-            agent_dispatcher: Any | None = None,
-            session_host: Any | None = None,
-            shell_exec_timeout: float | None = None,
-            default_call_depth_limit: int | None = None,
+            default_strict_json: bool,
+            agent_dispatcher: Any | None,
+            session_host: Any | None,
+            shell_exec_timeout: float | None,
         ) -> None:
             captured["default_strict_json"] = default_strict_json
             captured["shell_exec_timeout"] = shell_exec_timeout
-            captured["default_call_depth_limit"] = default_call_depth_limit
-            super().__init__(
+            super().configure_execution_services(
                 default_strict_json=default_strict_json,
                 agent_dispatcher=agent_dispatcher,
                 session_host=session_host,
                 shell_exec_timeout=shell_exec_timeout,
-                default_call_depth_limit=default_call_depth_limit,
             )
 
     monkeypatch.setattr(exec_engine, "PipelineDriver", RecordingRuntime)
@@ -2837,17 +2841,9 @@ class TestExecSourceConfigPrecedence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Source ``std/config::strict-json := false`` overrides ``[exec] strict-json = true``
-        when the assignment executes. The PipelineDriver constructor still receives
-        the config-file value (True)."""
-        from agm.config.general import ExecConfig
-
-        strict_config = ExecConfig(
-            strict_json=True,
-            timeout=None,
-            log=False,
-            log_file=None,
-        )
-        monkeypatch.setattr(exec_engine, "exec_config_from_merged", lambda *_, **__: strict_config)
+        when the assignment executes. The runtime is still wired with the
+        config-file value (True)."""
+        _config_home(tmp_path, monkeypatch, "[exec]\nstrict-json = true\n")
 
         agl_file = tmp_path / "prog.agl"
         write_file_program(
@@ -2858,8 +2854,8 @@ class TestExecSourceConfigPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        # constructor gets config-file value (True); the source assignment (False)
-        # overrides it at runtime when it executes.
+        # runtime is wired with the config-file value (True); the source
+        # assignment (False) overrides it at runtime when it executes.
         assert captured["default_strict_json"] is True
 
     # ------------------------------------------------------------------
@@ -2900,19 +2896,9 @@ class TestExecSourceConfigPrecedence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Source ``std/config::timeout := Some("30s")`` overrides ``[exec] timeout = 999``
-        when the assignment executes. The PipelineDriver constructor still receives
-        the config-file value (999.0)."""
-        from agm.config.general import ExecConfig
-
-        config_with_timeout = ExecConfig(
-            strict_json=False,
-            timeout=999.0,
-            log=False,
-            log_file=None,
-        )
-        monkeypatch.setattr(
-            exec_engine, "exec_config_from_merged", lambda *_, **__: config_with_timeout
-        )
+        when the assignment executes. The runtime is still wired with the
+        config-file value (999.0)."""
+        _config_home(tmp_path, monkeypatch, "[exec]\ntimeout = 999\n")
 
         agl_file = tmp_path / "prog.agl"
         write_file_program(
@@ -2923,8 +2909,8 @@ class TestExecSourceConfigPrecedence:
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
         assert result is None
-        # constructor gets config-file value (999.0); the source assignment (30s)
-        # overrides it at runtime when it executes.
+        # runtime is wired with the config-file value (999.0); the source
+        # assignment (30s) overrides it at runtime when it executes.
         assert captured["shell_exec_timeout"] == pytest.approx(999.0)
 
     def test_source_timeout_invalid_string_raises_runtime_error(self, tmp_path: Path) -> None:

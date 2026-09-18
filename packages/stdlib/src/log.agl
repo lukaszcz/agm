@@ -1,6 +1,7 @@
 
 enum Level = Error | Warn | Info | Debug
 
+@param @opt-name("log-level") @doc("Least severe level printed by log:: calls.")
 var level: Level = Info
 
 def Level::to-int(self) -> int =

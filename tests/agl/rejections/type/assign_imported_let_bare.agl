@@ -1,0 +1,6 @@
+# Writing a bare imported `let` is a type error via the cross-module
+# immutable path (mutability of an unqualified target is decided by checking).
+import store::{fixed}
+
+program def main() -> unit =
+  fixed := 1

@@ -1,0 +1,4 @@
+{
+  "module_roots": ["program_modules/type/unannotated_library_binding_not_constant"],
+  "diagnostic": {"line": 5, "message_contains": ["constant"]}
+}

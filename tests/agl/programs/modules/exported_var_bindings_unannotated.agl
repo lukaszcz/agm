@@ -1,0 +1,40 @@
+# Modules: unannotated root and scoped let/var bindings infer their types and
+# export exactly like annotated ones -- readable and (for var) writable
+# through a qualified name, a bare import tail, and `use`, across diverse
+# initializer shapes (int, negated int, text, record constructor, array,
+# dict). Writes are observed by another module, by a closure obtained before
+# the write, and by the entry.
+import store
+import store::{total as t}
+import viewer
+use store::Region::*
+
+program def main(delta: int) -> unit =
+  let read-total = viewer::total-reader()
+
+  store::total := delta
+  print store::total
+  print read-total()
+  print viewer::observed-total()
+  print store::total-doubled()
+
+  t := delta * 2
+  print t
+  print read-total()
+  print viewer::observed-total()
+
+  viewer::bump-total(delta)
+  print store::total
+
+  print store::fixed
+  print store::negative
+  print store::label-default
+  print store::origin.x
+  print store::origin.y
+  print store::tags[0]
+  print store::tags[2]
+  print store::scores["two"]
+
+  hits := 7
+  print store::Region::hits
+  print store::Region::cap

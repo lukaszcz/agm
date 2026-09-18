@@ -1,0 +1,4 @@
+# An unannotated exported var whose initializer's type is a single enum
+# member is rejected the same way whether or not it is imported: the type
+# is too narrow to admit any other case on a later write.
+var v = None

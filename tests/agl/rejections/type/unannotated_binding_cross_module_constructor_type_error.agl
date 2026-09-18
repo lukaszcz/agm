@@ -1,0 +1,6 @@
+# Importing a library whose unannotated exported binding's constructor call
+# has a wrong-typed argument is rejected in the library itself.
+import store
+
+program def main() -> unit =
+  print store::origin.x

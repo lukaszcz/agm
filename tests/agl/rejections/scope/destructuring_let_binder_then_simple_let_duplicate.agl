@@ -1,0 +1,5 @@
+record P(x: int, y: int)
+let P(x, y) = P(x = 1, y = 2)
+let x = 3
+
+program def main() -> unit = print x

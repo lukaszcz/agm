@@ -19,6 +19,7 @@ from agm.agl.runtime.codec import TextCodec
 from agm.agl.scope.program import ResolvedProgram, resolve_program
 from agm.agl.syntax.nodes import static_function_items, static_type_items
 from agm.agl.typecheck.env import (
+    AglTypeError,
     CheckedModule,
     CheckedModuleImage,
     EnvironmentFacts,
@@ -74,6 +75,102 @@ def test_edited_imports_change_the_next_execution(
 
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == expected
+
+
+def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unchanged library module served from the warm cache still exports its var."""
+    path = tmp_path / "store.agl"
+    path.write_text("var total: int = 0\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import store::*\ntotal := total + 5\nprint(total)\n"
+    for _ in range(2):
+        result = run_inline_command(runtime, source, roots=roots)
+        assert result.ok, result.diagnostics
+        assert capsys.readouterr().out == "5\n"
+
+
+def test_a_warm_checked_module_cache_still_resolves_an_unannotated_imported_var_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unchanged library module served from the warm cache still exports its
+    unannotated var, with its published binding type read straight off the
+    cached module instead of being re-inferred."""
+    path = tmp_path / "store.agl"
+    path.write_text("var total = 0\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import store::*\ntotal := total + 5\nprint(total)\n"
+    for _ in range(2):
+        result = run_inline_command(runtime, source, roots=roots)
+        assert result.ok, result.diagnostics
+        assert capsys.readouterr().out == "5\n"
+
+
+def test_a_warm_checked_module_cache_still_resolves_a_destructuring_let_forward_reference(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A def reading a destructuring let's binder ahead of it keeps working once
+    the module is served from the warm cache instead of rechecked."""
+    path = tmp_path / "point.agl"
+    path.write_text(
+        "record Point(x: int, y: int)\n"
+        "def sum-point() -> int = x + y\n"
+        "let Point(x, y) = Point(x = 1, y = 2)\n"
+    )
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import point::*\nprint(sum-point())\n"
+    for _ in range(2):
+        result = run_inline_command(runtime, source, roots=roots)
+        assert result.ok, result.diagnostics
+        assert capsys.readouterr().out == "3\n"
+
+
+def test_editing_an_unannotated_exported_binding_type_invalidates_the_warm_cache(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A source edit that changes an unannotated exported binding's inferred
+    type invalidates the warm cache: the importer never sees a stale type."""
+    path = tmp_path / "store.agl"
+    path.write_text("let value = 1\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import store::*\nprint(value)\n"
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "1\n"
+
+    path.write_text('let value = "changed"\n')
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "changed\n"
+
+
+def test_warm_cached_importer_reflects_a_changed_unannotated_transitive_binding(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A cached library importer's own source never changes, but its
+    transitive dependency's unannotated binding does: the importer is
+    rechecked (not served stale from cache) and observes the new type/value."""
+    store_path = tmp_path / "store.agl"
+    mid_path = tmp_path / "mid.agl"
+    mid_path.write_text("import store\ndef get() = store::value\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import mid::*\nprint(get())\n"
+
+    store_path.write_text("let value = 1\n")
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "1\n"
+
+    store_path.write_text('let value = "changed"\n')
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "changed\n"
 
 
 def test_invalid_import_edit_is_rejected_and_can_be_repaired(
@@ -145,6 +242,89 @@ def test_non_entry_cycle_member_is_retained_against_the_entry_source(tmp_path: P
         helper_id,
     )
     assert graph.entry_id not in retained
+
+
+def test_config_attribute_program_configs_round_trip_through_the_resolved_cache(
+    tmp_path: Path,
+) -> None:
+    """A program def's @config entries survive the disk-backed resolved-module cache."""
+    graph = make_file_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import helper\n\nprogram def main() -> unit = ()\n",
+            "helper": (
+                "import std/config\n\n"
+                "@config(config::log = true)\n"
+                "program def build() -> unit = ()\n"
+            ),
+        },
+    )
+    resolved_program = resolve_program(graph)
+    retainable = artifact_cache.retained_module_sources(graph)
+    artifact_cache.retain_resolved_modules(retainable, resolved_program.modules)
+    artifact_cache.clear_retained_artifacts()
+
+    restored = artifact_cache.retained_resolved_modules(retainable)
+
+    helper_id = next(mid for mid in graph.modules if mid != graph.entry_id)
+    original = resolved_program.modules[helper_id].resolved.attributes.program_configs
+    round_tripped = restored[helper_id].resolved.attributes.program_configs
+    assert original
+    assert round_tripped == original
+
+
+def test_config_attribute_program_config_targets_round_trip_through_the_checked_cache(
+    tmp_path: Path,
+) -> None:
+    """A program def's resolved '@config' targets survive the disk-backed checked-module cache."""
+    graph = make_file_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import helper\n\nprogram def main() -> unit = ()\n",
+            "helper": (
+                "import std/config\n\n"
+                "@config(config::log = true)\n"
+                "program def build() -> unit = ()\n"
+            ),
+        },
+    )
+    resolved_program = resolve_program(graph)
+    caps = base_caps()
+    retainable = artifact_cache.retained_module_sources(graph)
+    checked = check_program(resolved_program, caps)
+    artifact_cache.retain_checked_modules(retainable, caps, checked.modules)
+    artifact_cache.clear_retained_artifacts()
+
+    restored = artifact_cache.retained_checked_modules(retainable, caps)
+
+    helper_id = next(mid for mid in graph.modules if mid != graph.entry_id)
+    original = checked.modules[helper_id].program_config_targets
+    round_tripped = restored[helper_id]
+    assert original
+    assert isinstance(round_tripped, CheckedModuleImage)
+    assert round_tripped.program_config_targets == original
+
+
+def test_a_params_flip_invalidates_a_warm_checked_module_cache(tmp_path: Path) -> None:
+    """A cross-module ``@config`` target's ``@param``-ness is rechecked, not cached stale."""
+    entry_source = "import helper\n\n@config(helper::value = 2)\nprogram def main() -> unit = ()\n"
+
+    def _round_trip(helper_source: str) -> None:
+        graph = make_file_graph_from_files(
+            tmp_path, {"entry": entry_source, "helper": helper_source}
+        )
+        resolved_program = resolve_program(graph)
+        retainable = artifact_cache.retained_module_sources(graph)
+        cached = artifact_cache.retained_checked_modules(retainable, base_caps())
+        checked = check_program(resolved_program, base_caps(), cached_checked_modules=cached)
+        artifact_cache.retain_checked_modules(retainable, base_caps(), checked.modules)
+
+    _round_trip("@param let value: int = 1\n")
+
+    with pytest.raises(AglTypeError):
+        _round_trip("let value: int = 1\n")
+
+    _round_trip("@param let value: int = 1\n")
 
 
 def _persisted_checked_entry_size(

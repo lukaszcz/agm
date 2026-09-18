@@ -1,0 +1,6 @@
+# A def declared above a root let it reads, exercising cross-module
+# forward reference: the importer sees store's exported binding types
+# regardless of store's own internal declaration order.
+def total-plus-one() -> int = total + 1
+
+let total = 5

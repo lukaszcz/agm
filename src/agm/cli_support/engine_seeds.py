@@ -3,24 +3,31 @@
 ``agm exec`` and ``agm repl`` both hand the AgL engine a seed mapping for the
 settings the host explicitly controls.  The layering rule is the same for both —
 CLI flag, then the command's configuration tables — so it lives here rather than
-in either command.
+in either command.  :func:`build_host_engine_seeds` returns the three tiers as
+an :class:`EngineSeedTiers`; :meth:`EngineSeedTiers.merged` flattens them, with
+room for a caller-supplied middle tier, into the one mapping the engine seeds
+from.
 """
 
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING, cast
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.runtime.engine_config import convert_config_value, raw_option_str
-from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, EngineKeyKind, EngineKeySpec
+from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind, EngineKeySpec
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.values import Value
     from agm.config.general import ExecConfig
 
-__all__ = ["build_host_engine_seeds"]
+__all__ = ["EngineSeedTiers", "build_host_engine_seeds"]
+
+_T = TypeVar("_T")
 
 
 def _configured_value(
@@ -39,21 +46,146 @@ def _configured_value(
     return configured_value
 
 
+def _validate_cli_timeout(raw: str) -> None:
+    """Reject an unparsable ``--timeout`` value eagerly, before anything runs.
+
+    ``convert_config_value`` only checks ``--timeout``'s value decodes as
+    ``Option[text]``, never that it is a valid duration — that conversion
+    happens once at its use site (:func:`~agm.core.parse.parse_timeout`).
+    Validating it here, alongside every other CLI decode failure, keeps a
+    malformed flag from surfacing only after the static pipeline has already
+    run.
+    """
+    from agm.core.parse import parse_timeout
+
+    try:
+        parse_timeout(raw)
+    except ValueError as exc:
+        print(f"Error: invalid --timeout value: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def _decode_engine_value(
+    key_name: str, raw: object, origin: str, type_table: "TypeTable"
+) -> "Value":
+    """Decode one engine value, printing an origin-tagged error and exiting 1 on failure.
+
+    Shared by the ordinary per-key seeding loop and the derived ``log`` rule,
+    so both go through one decode-failure contract (message and exit code).
+    """
+    from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
+
+    try:
+        return convert_config_value(key_name, raw, ENGINE_KEY_TYPES[key_name], type_table)
+    except ValueError as exc:
+        print(f"Error: invalid {key_name} value from {origin}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+@dataclass(frozen=True)
+class EngineSeedTiers:
+    """``cli`` (explicit CLI flags) above ``upper`` (primary table) above ``lower`` (fallback).
+
+    The three tiers are independent: ``upper``/``lower`` always reflect the
+    config tables, whether or not ``cli`` also names the same key — this
+    matters for ``log-file``, where ``--no-log-file`` clears only the CLI
+    seed and must not hide a config-table path from the derived ``log`` rule
+    (see :meth:`merged`). ``cli`` still wins the actual seeded value for a
+    key it names.
+    """
+
+    cli: "Mapping[str, Value]"
+    upper: "Mapping[str, Value]"
+    lower: "Mapping[str, Value]"
+    cli_log: "tuple[object, str] | None"
+    _type_table: "TypeTable" = field(repr=False)
+
+    def config_merged(self, middle: "Mapping[str, Value] | None" = None) -> "dict[str, Value]":
+        """Flatten the config-only tiers: ``lower`` < *middle* < ``upper``, ``cli`` excluded.
+
+        *middle*: already-decoded engine settings ranked between ``lower``
+        and ``upper`` (a selected program's own ``@config`` entries, restamped
+        onto the standard identity by the caller). Exposed so a host reads
+        the same config-only view :meth:`merged` derives ``log`` from — e.g.
+        to resolve its own trace-file decision — without recomputing it.
+        """
+        mid: "Mapping[str, Value]" = middle if middle is not None else {}
+        return {**self.lower, **mid, **self.upper}
+
+    def merged(self, middle: "Mapping[str, Value] | None" = None) -> "dict[str, Value]":
+        """Flatten to one mapping: ``lower`` < *middle* < ``upper`` < ``cli``, plus derived ``log``.
+
+        *middle*: already-decoded engine settings ranked between ``lower``
+        and ``upper``. The derived ``log`` setting is resolved from the
+        config-only merge (``cli`` excluded, except for its own fast path) —
+        see :meth:`_resolve_log`.
+        """
+        config_result = self.config_merged(middle)
+        result = {**config_result, **self.cli}
+        log = self._resolve_log(config_result)
+        if log is not None:
+            result["log"] = log
+        return result
+
+    def _resolve_log(self, config_result: "Mapping[str, Value]") -> "Value | None":
+        """Recompute the derived ``log`` setting.
+
+        An explicit CLI ``log``, or a non-``None`` CLI ``log-file``, wins
+        outright. Otherwise ``log`` is derived from *config_result* alone
+        (``lower``/*middle*/``upper``, ``cli`` excluded): when it names
+        ``log`` or ``log-file`` at all, ``log`` is true iff its ``log`` is
+        true or its ``log-file`` resolves to a real path (``Some``) — each
+        key independently carrying whichever tier won that merge. Left
+        unconfigured everywhere, ``log`` stays absent (``None``).
+
+        Excluding ``cli`` here (beyond its own fast path) is deliberate:
+        ``--no-log-file`` clears only the CLI seed, not a trace a config
+        table independently establishes.
+        """
+        if self.cli_log is not None:
+            raw, origin = self.cli_log
+        elif "log" in config_result or "log-file" in config_result:
+            from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+            from agm.agl.runtime.option import option_text
+            from agm.agl.semantics.values import BoolValue, RecordValue
+
+            log_value = config_result.get("log")
+            is_log_true = isinstance(log_value, BoolValue) and log_value.value
+            log_file_value = config_result.get("log-file")
+            log_file_path = (
+                option_text(log_file_value, nominals=NO_BUILTIN_DECLARATIONS)
+                if isinstance(log_file_value, RecordValue)
+                else None
+            )
+            raw = is_log_true or log_file_path is not None
+            origin = "log/log-file configuration"
+        else:
+            return None
+
+        return _decode_engine_value("log", raw, origin, self._type_table)
+
+
 def build_host_engine_seeds(
     *,
     config: "ExecConfig",
     primary_table: "Mapping[str, object]",
     fallback_table: "Mapping[str, object] | None" = None,
     cli_values: "Mapping[str, object | None]",
-) -> "dict[str, Value]":
-    """Decode the engine settings the host explicitly controls into seed values.
+) -> "EngineSeedTiers":
+    """Decode the engine settings the host explicitly controls into a three-tier seed set.
 
-    Only explicit controls are seeded: a setting left to its default stays
-    absent from the result, so a ``builtin var`` initializer supplies it instead
-    of being suppressed by a host-side floor. ``cli_values`` contains only
-    explicitly supplied CLI values; its present ``None`` values represent an
-    explicit empty ``Option``. CLI values win over configuration tables, which
-    are consulted in *primary_table* then *fallback_table* order.
+    ``cli`` holds every explicitly supplied CLI value; ``upper`` holds every
+    *primary_table* value; ``lower`` holds every *fallback_table* value not
+    already covered by *primary_table*. A table value the CLI overrides is
+    not decoded, except ``log-file``, which the derived ``log`` rule still
+    reads from the config tiers. A setting
+    left to its default in every source stays absent from every tier, so a
+    ``builtin var`` initializer supplies it instead of being suppressed by a
+    host-side floor. ``cli_values`` contains only explicitly supplied CLI
+    values; its present ``None`` values represent an explicit empty
+    ``Option``. ``log`` is seeded like any other key here;
+    :meth:`EngineSeedTiers.merged` recomputes it once the ``log-file``
+    implication and any caller-supplied middle tier are folded in.
 
     Every key, ``default-agent`` included, decodes through
     :func:`~agm.agl.runtime.engine_config.convert_config_value` against one
@@ -62,56 +194,46 @@ def build_host_engine_seeds(
     ``configuration key <name>``) to stderr and exits 1 here, before anything
     runs.
     """
-    from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
     from agm.agl.semantics.type_table import create_seeded_type_table
 
     fallback: "Mapping[str, object]" = fallback_table if fallback_table is not None else {}
-    configured = {key for key in ENGINE_KEY_NAMES if key in primary_table or key in fallback}
-
-    seed_raw: dict[str, object] = {}
-    origins: dict[str, str] = {}
-    for spec in ENGINE_KEYS:
-        # ``log`` is implied by log-file, so it follows its own rule below
-        # instead of this per-key resolution.
-        if spec.name == "log":
-            continue
-        if spec.name in cli_values:
-            seed_raw[spec.name] = cli_values[spec.name]
-            origins[spec.name] = f"--{spec.name}"
-        elif spec.name in configured:
-            value = _configured_value(spec, config, primary_table, fallback)
-            # A ``None`` config result is absent, not an explicit control. In
-            # particular this lets a builtin initializer supply invalid/empty
-            # Option values.
-            if value is not None:
-                seed_raw[spec.name] = value
-                origins[spec.name] = f"configuration key {spec.name}"
-
-    # ``log`` is not an ordinary setting: a supplied log-file implies it. Keep
-    # that relationship explicit instead of encoding it in the catalog loop.
-    if "log" in cli_values:
-        seed_raw["log"] = cli_values["log"]
-        origins["log"] = "--log"
-    elif cli_values.get("log-file") is not None:
-        seed_raw["log"] = True
-        origins["log"] = "--log-file"
-    elif configured & {"log", "log-file"}:
-        seed_raw["log"] = config.log or config.log_file is not None
-        origins["log"] = "configuration key log"
-
     type_table = create_seeded_type_table()
-    seeds: dict[str, Value] = {}
-    for key_name, raw in seed_raw.items():
-        # ``seed_raw``'s keys are always drawn from ``ENGINE_KEYS`` above, so
-        # this lookup is total: never a missing key to guard against.
-        key_type = ENGINE_KEY_TYPES[key_name]
-        try:
-            seeds[key_name] = convert_config_value(key_name, raw, key_type, type_table)
-        except ValueError as exc:
-            print(
-                f"Error: invalid {key_name} value from {origins[key_name]}: {exc}",
-                file=sys.stderr,
-            )
-            raise SystemExit(1) from exc
 
-    return seeds
+    cli: dict[str, Value] = {}
+    upper: dict[str, Value] = {}
+    lower: dict[str, Value] = {}
+    for spec in ENGINE_KEYS:
+        if spec.name in cli_values:
+            if spec.name == "timeout" and cli_values["timeout"] is not None:
+                _validate_cli_timeout(cast(str, cli_values["timeout"]))
+            cli[spec.name] = _decode_engine_value(
+                spec.name, cli_values[spec.name], f"--{spec.name}", type_table
+            )
+            # An overridden table value is never decoded, except ``log-file``:
+            # ``--no-log-file`` leaves a configured trace path enabling ``log``.
+            if spec.name != "log-file":
+                continue
+        if spec.name in primary_table:
+            tier = upper
+        elif spec.name in fallback:
+            tier = lower
+        else:
+            continue
+        value = _configured_value(spec, config, primary_table, fallback)
+        # A ``None`` config result is absent, not an explicit control; this
+        # lets a builtin initializer supply invalid/empty Option values.
+        if value is not None:
+            tier[spec.name] = _decode_engine_value(
+                spec.name, value, f"configuration key {spec.name}", type_table
+            )
+
+    if "log" in cli_values:
+        cli_log: tuple[object, str] | None = (cli_values["log"], "--log")
+    elif cli_values.get("log-file") is not None:
+        cli_log = (True, "--log-file")
+    else:
+        cli_log = None
+
+    return EngineSeedTiers(
+        cli=cli, upper=upper, lower=lower, cli_log=cli_log, _type_table=type_table
+    )

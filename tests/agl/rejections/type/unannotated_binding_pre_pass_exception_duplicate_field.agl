@@ -1,0 +1,8 @@
+# Regression: the static-binding pre-pass runs after module headers are
+# finalized, so a duplicate-field exception diagnostic in an imported library
+# is reported instead of a confusing error from scratch-typing its
+# unannotated binding against a not-yet-finalized exception shape.
+import store
+
+program def main() -> unit =
+  print store::e

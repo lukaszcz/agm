@@ -1,0 +1,9 @@
+# The same imported module parameter `config_attribute.agl` addresses with a
+# bare module suffix (`settings::factor`) resolves identically through its
+# full slash-qualified path.
+
+import libs/settings
+
+@config(libs/settings::factor = 50)
+program def main() -> unit =
+  print settings::factor

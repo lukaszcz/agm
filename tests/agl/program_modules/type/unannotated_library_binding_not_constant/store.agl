@@ -1,0 +1,5 @@
+# A library module whose unannotated root binding is not a constant
+# expression, which the static-root rule rejects before export.
+def seed() = 7
+
+let computed = seed()

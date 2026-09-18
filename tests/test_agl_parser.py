@@ -49,6 +49,7 @@ from agm.agl.syntax import (
     AsPattern,
     AssignStmt,
     Attribute,
+    AttributeKeyedArg,
     BinaryOp,
     BinOp,
     Block,
@@ -90,6 +91,7 @@ from agm.agl.syntax import (
     PatternField,
     Placeholder,
     Program,
+    QualifierAnchor,
     Raise,
     RawInfixChain,
     RecordDef,
@@ -1375,7 +1377,7 @@ class TestAttributes:
         fd = first(parse("@doc\ndef f(x: int) -> int = x"))
         assert isinstance(fd, FuncDef)
         (attribute,) = fd.attributes
-        assert (attribute.name, attribute.args, attribute.named_args) == ("doc", (), ())
+        assert (attribute.name, attribute.args, attribute.keyed_args) == ("doc", (), ())
 
     def test_attribute_positional_argument(self) -> None:
         fd = first(parse('@doc("hi")\ndef f(x: int) -> int = x'))
@@ -1389,9 +1391,119 @@ class TestAttributes:
         fd = first(parse('@opt-name(name = "verbose")\ndef f(x: int) -> int = x'))
         assert isinstance(fd, FuncDef)
         (attribute,) = fd.attributes
-        (named,) = attribute.named_args
-        assert isinstance(named.value, StringLit)
-        assert (attribute.name, named.name, named.value.value) == ("opt-name", "name", "verbose")
+        (keyed,) = attribute.keyed_args
+        assert isinstance(keyed.value, StringLit)
+        assert keyed.key.qualifier is None
+        assert (attribute.name, keyed.key.name, keyed.value.value) == (
+            "opt-name",
+            "name",
+            "verbose",
+        )
+
+    def test_attribute_keyed_argument_suffix_qualified(self) -> None:
+        fd = first(parse("@config(log::level = 1)\ndef f() -> int = 1"))
+        assert isinstance(fd, FuncDef)
+        (attribute,) = fd.attributes
+        (keyed,) = attribute.keyed_args
+        assert isinstance(keyed, AttributeKeyedArg)
+        assert keyed.key.name == "level"
+        assert keyed.key.qualifier is not None
+        assert keyed.key.qualifier.anchor is None
+        assert [s.name for s in keyed.key.qualifier.segments] == ["log"]
+        assert isinstance(keyed.value, IntLit)
+        assert keyed.value.value == 1
+
+    def test_attribute_keyed_argument_slash_qualified(self) -> None:
+        fd = first(parse("@config(std/log::level = 1)\ndef f() -> int = 1"))
+        (attribute,) = fd.attributes
+        (keyed,) = attribute.keyed_args
+        assert keyed.key.name == "level"
+        assert keyed.key.qualifier is not None
+        assert [s.name for s in keyed.key.qualifier.segments] == ["std/log"]
+
+    def test_attribute_keyed_argument_module_anchored(self) -> None:
+        fd = first(parse("@config(/std/log::level = 1)\ndef f() -> int = 1"))
+        (attribute,) = fd.attributes
+        (keyed,) = attribute.keyed_args
+        assert keyed.key.name == "level"
+        assert keyed.key.qualifier is not None
+        assert keyed.key.qualifier.anchor is QualifierAnchor.MODULE
+        assert [s.name for s in keyed.key.qualifier.segments] == ["std/log"]
+
+    def test_attribute_keyed_argument_current_module_anchored(self) -> None:
+        fd = first(parse("@config(::verbose = 3)\ndef f() -> int = 1"))
+        (attribute,) = fd.attributes
+        (keyed,) = attribute.keyed_args
+        assert keyed.key.name == "verbose"
+        assert keyed.key.qualifier is not None
+        assert keyed.key.qualifier.anchor is QualifierAnchor.CURRENT_MODULE
+        assert keyed.key.qualifier.segments == ()
+
+    def test_attribute_keyed_argument_multi_segment_chain(self) -> None:
+        fd = first(parse("@config(logging::debug::trace = false)\ndef f() -> int = 1"))
+        (attribute,) = fd.attributes
+        (keyed,) = attribute.keyed_args
+        assert keyed.key.name == "trace"
+        assert keyed.key.qualifier is not None
+        assert [s.name for s in keyed.key.qualifier.segments] == ["logging", "debug"]
+
+    def test_attribute_bare_keyed_argument_has_no_qualifier(self) -> None:
+        fd = first(parse("@config(flag = false)\ndef f() -> int = 1"))
+        (attribute,) = fd.attributes
+        (keyed,) = attribute.keyed_args
+        assert keyed.key.name == "flag"
+        assert keyed.key.qualifier is None
+
+    def test_attribute_multi_line_keyed_arguments_with_trailing_comma(self) -> None:
+        fd = first(
+            parse(
+                "@config(\n"
+                "  config::log = true,\n"
+                "  std/log::level = 1,\n"
+                "  ::verbose = 3,\n"
+                "  logging::debug::trace = false,\n"
+                "  flag = false,\n"
+                ")\n"
+                "def f() -> int = 1"
+            )
+        )
+        (attribute,) = fd.attributes
+        assert [k.key.name for k in attribute.keyed_args] == [
+            "log",
+            "level",
+            "verbose",
+            "trace",
+            "flag",
+        ]
+
+    def test_attribute_mixed_positional_and_keyed_arguments(self) -> None:
+        fd = first(parse('@config("why", config::log = true)\ndef f() -> int = 1'))
+        (attribute,) = fd.attributes
+        (positional,) = attribute.args
+        assert isinstance(positional, StringLit)
+        (keyed,) = attribute.keyed_args
+        assert keyed.key.name == "log"
+
+    def test_attribute_duplicate_keyed_argument_is_not_a_parse_error(self) -> None:
+        fd = first(parse("@config(x = 1, x = 2)\ndef f() -> int = 1"))
+        (attribute,) = fd.attributes
+        assert [k.key.name for k in attribute.keyed_args] == ["x", "x"]
+
+    def test_qualified_keyed_argument_at_an_ordinary_call_site_is_a_parse_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("f(a::b = 1)")
+
+    def test_attribute_keyed_argument_placeholder_value_is_a_parse_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("@doc(x = ?)\ndef f() -> int = 1")
+
+    def test_attribute_bare_positional_placeholder_is_a_parse_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("@doc(?)\ndef f() -> int = 1")
+
+    def test_attribute_keyed_argument_type_applied_segment_is_a_parse_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("@config(Foo[int]::x = 1)\ndef f() -> int = 1")
 
     def test_several_attributes_on_their_own_lines(self) -> None:
         fd = first(parse('@doc("d")\n@extern-name("g")\ndef f(x: int) -> int = x'))
@@ -1556,6 +1668,19 @@ class TestAttributes:
             "infixl <+> at 6\n"
             "def <+>(a: int, b: int) -> int = a + b\n"
             "def f(@doc(1 <+> 2) x: int) -> int = x"
+        )
+
+        chains: list[object] = []
+        walk(program, lambda node: chains.append(node) if isinstance(node, RawInfixChain) else None)
+        assert chains == []
+
+    def test_declared_operator_inside_a_keyed_attribute_argument_is_resolved(self) -> None:
+        """A keyed attribute argument's value is grouped the same as a positional one."""
+        program = parse(
+            "infixl <+> at 6\n"
+            "def <+>(a: int, b: int) -> int = a + b\n"
+            "@doc(k = 1 <+> 2)\n"
+            "def f(x: int) -> int = x"
         )
 
         chains: list[object] = []

@@ -1087,6 +1087,66 @@ class TestBuiltinVarPlacement:
         assert assignment_ref.module_id == STD_CONFIG_ID
 
 
+class TestExportedVarBindings:
+    """An annotated simple ``var`` is exported like an annotated ``let`` and is writable."""
+
+    def test_annotated_root_var_is_exported(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import mylib\n()",
+                "mylib": "var total: int = 0",
+            },
+        )
+        result = resolve_program(graph)
+        mylib_id = ModuleId.from_path("mylib")
+        assert "total" in result.modules[mylib_id].exports
+
+    def test_annotated_scoped_var_is_exported(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import mylib\n()",
+                "mylib": "scope Review\n  var attempts: int = 0\nend Review",
+            },
+        )
+        result = resolve_program(graph)
+        mylib_id = ModuleId.from_path("mylib")
+        assert ("Review", "attempts") in result.modules[mylib_id].exports
+
+    def test_unannotated_var_is_exported(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import mylib\n()",
+                "mylib": "var total = 0",
+            },
+        )
+        result = resolve_program(graph)
+        mylib_id = ModuleId.from_path("mylib")
+        assert "total" in result.modules[mylib_id].exports
+
+    def test_cross_module_var_write_is_mutable_with_source_module_id(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import mylib::*\ntotal := 1",
+                "mylib": "var total: int = 0",
+            },
+        )
+        result = resolve_program(graph)
+        mylib_id = ModuleId.from_path("mylib")
+        entry_resolved = result.modules[ENTRY_ID].resolved
+        main = entry_resolved.program.body.items[-1]
+        assert isinstance(main, FuncDef)
+        assignment = main.body.items[-1]
+        assert isinstance(assignment, AssignStmt)
+        ref = entry_resolved.resolution[assignment.node_id]
+        assert ref.mutable is True
+        assert ref.kind is BinderKind.var_binding
+        assert ref.module_id == mylib_id
+
+
 class TestStaticModuleRoots:
     def test_let_and_var_are_allowed_at_library_root_and_in_scope_regions(
         self, tmp_path: Path

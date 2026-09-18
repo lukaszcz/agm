@@ -1,0 +1,3 @@
+var xs = [None]
+
+program def main() -> unit = print xs

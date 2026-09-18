@@ -1,0 +1,9 @@
+# Modules: an unannotated exported binding is readable from the other side of
+# a cyclic import by an unannotated function, since its constant-expression
+# initializer never depends on cross-module function inference.
+import alpha::*
+import beta::*
+
+program def main(n: int) -> unit =
+  print(total(n))
+  print(double-base())

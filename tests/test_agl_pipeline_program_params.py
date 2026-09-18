@@ -41,6 +41,7 @@ def _preflight(
     discovery: ProgramDiscovery,
     *,
     param_values: dict[StaticBindingKey, object] | None = None,
+    param_values_lower: dict[StaticBindingKey, object] | None = None,
 ) -> ArgumentPreflight:
     """Preflight the first discovered program with no value arguments."""
     return runtime.preflight_arguments(
@@ -49,6 +50,7 @@ def _preflight(
         ProgramArguments(positional=(), named={}),
         compiled=discovery.compiled,
         param_values=param_values,
+        param_values_lower=param_values_lower,
     )
 
 
@@ -340,3 +342,118 @@ program def main() -> unit = print value
         assert check_result.ok
         assert check_result.bindings == {}
         assert capsys.readouterr().out == ""
+
+
+class TestParamValueTierMerge:
+    """``preflight_arguments`` merges two raw tiers (``param_values`` = supplied/
+    program-route, ``param_values_lower`` = module-route) beneath the selected
+    program's own ``@config`` param values: upper > @config > lower."""
+
+    def test_lower_is_used_when_upper_and_config_are_silent(self, tmp_path: Path) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        runtime = PipelineDriver()
+        prepared = _prepared(
+            "@param let count: int = 1\nprogram def main() -> unit = ()\n", tmp_path
+        )
+        discovery = runtime.discover_programs(prepared)
+        (count,) = discovery.params_for(discovery.programs[0])
+
+        preflight = _preflight(runtime, prepared, discovery, param_values_lower={count.key: 5})
+
+        assert preflight.result.ok
+        assert preflight.param_seeds == {count.key: IntValue(5)}
+
+    def test_upper_overrides_lower(self, tmp_path: Path) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        runtime = PipelineDriver()
+        prepared = _prepared(
+            "@param let count: int = 1\nprogram def main() -> unit = ()\n", tmp_path
+        )
+        discovery = runtime.discover_programs(prepared)
+        (count,) = discovery.params_for(discovery.programs[0])
+
+        preflight = _preflight(
+            runtime,
+            prepared,
+            discovery,
+            param_values={count.key: 7},
+            param_values_lower={count.key: 5},
+        )
+
+        assert preflight.result.ok
+        assert preflight.param_seeds == {count.key: IntValue(7)}
+
+    def test_config_overrides_lower(self, tmp_path: Path) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        runtime = PipelineDriver()
+        prepared = _prepared(
+            "@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n",
+            tmp_path,
+        )
+        discovery = runtime.discover_programs(prepared)
+        (count,) = discovery.params_for(discovery.programs[0])
+
+        preflight = _preflight(runtime, prepared, discovery, param_values_lower={count.key: 5})
+
+        assert preflight.result.ok
+        assert preflight.param_seeds == {count.key: IntValue(2)}
+
+    def test_upper_overrides_config(self, tmp_path: Path) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        runtime = PipelineDriver()
+        prepared = _prepared(
+            "@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n",
+            tmp_path,
+        )
+        discovery = runtime.discover_programs(prepared)
+        (count,) = discovery.params_for(discovery.programs[0])
+
+        preflight = _preflight(runtime, prepared, discovery, param_values={count.key: 7})
+
+        assert preflight.result.ok
+        assert preflight.param_seeds == {count.key: IntValue(7)}
+
+    def test_a_lower_value_overridden_by_config_is_never_decoded(self, tmp_path: Path) -> None:
+        """An invalid module-route raw value that ``@config`` overrides must not
+        surface a decode diagnostic — exactly as a program-route override today."""
+        from agm.agl.semantics.values import IntValue
+
+        runtime = PipelineDriver()
+        prepared = _prepared(
+            "@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n",
+            tmp_path,
+        )
+        discovery = runtime.discover_programs(prepared)
+        (count,) = discovery.params_for(discovery.programs[0])
+
+        preflight = _preflight(
+            runtime, prepared, discovery, param_values_lower={count.key: "not-an-int"}
+        )
+
+        assert preflight.result.ok
+        assert preflight.param_seeds == {count.key: IntValue(2)}
+
+    def test_a_lower_value_overridden_by_upper_is_never_decoded(self, tmp_path: Path) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        runtime = PipelineDriver()
+        prepared = _prepared(
+            "@param let count: int = 1\nprogram def main() -> unit = ()\n", tmp_path
+        )
+        discovery = runtime.discover_programs(prepared)
+        (count,) = discovery.params_for(discovery.programs[0])
+
+        preflight = _preflight(
+            runtime,
+            prepared,
+            discovery,
+            param_values={count.key: 7},
+            param_values_lower={count.key: "not-an-int"},
+        )
+
+        assert preflight.result.ok
+        assert preflight.param_seeds == {count.key: IntValue(7)}

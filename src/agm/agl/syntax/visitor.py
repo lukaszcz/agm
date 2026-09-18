@@ -25,6 +25,7 @@ from agm.agl.syntax.nodes import (
     AsPattern,
     AssignStmt,
     Attribute,
+    AttributeKeyedArg,
     BinaryOp,
     Block,
     BoolLit,
@@ -125,6 +126,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         Program,
         # declaration attributes
         Attribute,
+        AttributeKeyedArg,
         # type nodes
         TextT,
         JsonT,
@@ -259,8 +261,12 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, Attribute):
         for attribute_arg in node.args:
             walk(attribute_arg, callback)
-        for attribute_named in node.named_args:
-            walk(attribute_named, callback)
+        for attribute_keyed in node.keyed_args:
+            walk(attribute_keyed, callback)
+
+    elif isinstance(node, AttributeKeyedArg):
+        walk(node.key, callback)
+        walk(node.value, callback)
 
     # --- Type nodes ---
     elif isinstance(node, (TextT, JsonT, BoolT, IntT, DecimalT)):

@@ -1,0 +1,11 @@
+# Reads and writes store's unannotated exported var to prove cross-module
+# writes are observed, including by a closure obtained before the write.
+import store
+
+def observed-total() -> int = store::total
+
+def bump-total(delta: int) -> unit =
+  store::total := store::total + delta
+
+def total-reader() -> () -> int =
+  fn() => store::total

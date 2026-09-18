@@ -1,0 +1,30 @@
+{
+  "scenarios": [
+    {
+      "name": "small_delta",
+      "module_roots": [
+        "program_modules/modules/exported_vars"
+      ],
+      "params": {
+        "delta": 3
+      },
+      "expect": {
+        "stdout": "3\n3\n3\n6\n6\n6\n6\n9\n9\nbusy\nqualified\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "large_delta",
+      "module_roots": [
+        "program_modules/modules/exported_vars"
+      ],
+      "params": {
+        "delta": 10
+      },
+      "expect": {
+        "stdout": "10\n10\n10\n20\n20\n20\n20\n30\n30\nbusy\nqualified\n",
+        "calls": {}
+      }
+    }
+  ]
+}

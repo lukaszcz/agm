@@ -1,0 +1,8 @@
+# A host-seeded `@param var` with no type annotation infers its type from its
+# default and is writable by its importer exactly like an annotated one.
+import budget
+
+program def main(boost: int) -> unit =
+  print budget::limit
+  budget::limit := budget::limit + boost
+  print budget::limit

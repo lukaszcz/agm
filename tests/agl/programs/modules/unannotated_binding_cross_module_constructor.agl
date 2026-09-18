@@ -1,0 +1,8 @@
+# Modules: an unannotated exported binding built from another module's
+# constructor publishes its inferred type -- an importer reads the fields
+# straight off the qualified reference.
+import store
+
+program def main() -> unit =
+  print store::origin.x
+  print store::origin.y

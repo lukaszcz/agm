@@ -1,0 +1,4 @@
+{
+  "module_roots": ["program_modules/type/unannotated_binding_cross_module_constructor_type_error"],
+  "diagnostic": {"line": 6}
+}

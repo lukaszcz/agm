@@ -32,6 +32,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.external_names import ExternalName
 from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
+    AttributeKeyedArg,
     EnumDef,
     ExceptionDef,
     ExportItem,
@@ -317,19 +318,18 @@ def immutable_binder_phrase(kind: BinderKind) -> str:
     return _IMMUTABLE_BINDER_PHRASES[kind]
 
 
-def immutable_assignment_message(name: str, kind: BinderKind) -> str:
+def immutable_assignment_message(name: str, kind: BinderKind, *, cross_module: bool = False) -> str:
     """Return the canonical ``:=``-on-immutable rejection message for *name*.
 
     Type checking is the only caller: a field-directed pattern slot's final
     binding is selected there, so only it can judge an unqualified target.
     The wording lives here beside :func:`immutable_binder_phrase`, which the
     resolver also uses for the cross-module qualified-assignment rejection.
+    *cross_module* drops the "declare with 'var'" hint: an importer cannot
+    change how another module declared its own binding.
     """
-    return (
-        f"Cannot assign to '{name}': "
-        f"{immutable_binder_phrase(kind)} (immutable). "
-        f"Declare with 'var' to make the variable mutable."
-    )
+    hint = "" if cross_module else " Declare with 'var' to make the variable mutable."
+    return f"Cannot assign to '{name}': {immutable_binder_phrase(kind)} (immutable).{hint}"
 
 
 def duplicate_binder_message(name: str) -> str:
@@ -529,6 +529,10 @@ class BindingRef:
         This provenance survives imports, re-exports, and REPL retention.
     ``is_method``
         Whether the function declaration has a ``self`` receiver.
+    ``is_param``
+        Whether a ``let``/``var`` binding carries the ``@param`` attribute.
+        This provenance survives imports, re-exports, and REPL retention, so
+        a ``@config`` target check never needs a whole-program node-id set.
     """
 
     name: str
@@ -541,6 +545,30 @@ class BindingRef:
     slot_id: int | None = None
     is_builtin: bool = False
     is_method: bool = False
+    is_param: bool = False
+
+
+# ---------------------------------------------------------------------------
+# DeclInfo — pre-pass declaration metadata for cross-module BindingRefs
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DeclInfo:
+    """One declaration's metadata, keyed by ``(module_id, name)`` in a whole-program pre-pass.
+
+    Built before any module's body resolves (see
+    :func:`~agm.agl.scope.program.resolve_program`), so a cross-module
+    :class:`BindingRef` can be built without waiting on the owning module's
+    own resolution to finish.
+    """
+
+    decl_node_id: int
+    decl_span: SourceSpan
+    kind: BinderKind
+    is_builtin: bool = False
+    is_method: bool = False
+    is_param: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -743,6 +771,11 @@ class AttributeFacts:
         The ``@name``/``@json-name`` spellings of every field, enum member,
         and record declaration carrying one, keyed by that declaration's node
         id. Typecheck stores them on the type table.
+    ``program_configs``
+        The raw ``key = value`` entries of every ``program def``'s ``@config``
+        attribute, keyed by ``FuncDef.node_id``. Keys resolve through the
+        ordinary resolution tables, like any other reference. A program
+        without ``@config`` has no entry.
     """
 
     param_zones: dict[int, ParamZone] = field(default_factory=dict)
@@ -752,6 +785,7 @@ class AttributeFacts:
     command_registrations: dict[int, ProgramCommandSpec] = field(default_factory=dict)
     docs: dict[int, str] = field(default_factory=dict)
     external_names: dict[int, ExternalName] = field(default_factory=dict)
+    program_configs: dict[int, tuple[AttributeKeyedArg, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -772,9 +806,14 @@ class ModuleResolution:
     ``root_scope``
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.
-    ``allows_root_statements``
-        Whether this entry is an incremental REPL entry, whose root retains
-        executable items instead of enforcing a static module root.
+    ``static_root``
+        Whether this module enforces the static-root binding rule: false for
+        a REPL entry (whose root retains executable items instead of
+        enforcing a static module root) or one carrying a host-synthesized
+        entry (an inline command); true for every other module, including a
+        file with its own ``program def``. Governs relaxed forward-reference
+        order for module-level bindings and the narrow-var/constant-initializer
+        rules.
     ``origin_path``
         This module's canonical source file, or ``None`` for a module with no
         backing file (inline sources, REPL entries). Later passes consult it to
@@ -837,7 +876,7 @@ class ModuleResolution:
     builtin_static_calls: dict[int, BuiltinStaticKind] = field(default_factory=dict)
     declarations: dict[DeclarationKey, BindingRef] = field(default_factory=dict)
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
-    allows_root_statements: bool = False
+    static_root: bool = False
     origin_path: Path | None = None
     declared_type_paths: frozenset[ScopePath] = frozenset()
     constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)

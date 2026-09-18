@@ -1,0 +1,3 @@
+# A plain binding for the importer to shadow with its own same-named root
+# declaration.
+let total = 5

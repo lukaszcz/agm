@@ -1125,6 +1125,35 @@ class VarDecl:
     attributes: tuple[Attribute, ...] = ()
 
 
+def static_binding_name(item: LetDecl | VarDecl) -> str | None:
+    """Return a static ``let``/``var``'s simple name, or ``None`` for a destructuring let.
+
+    ``var`` always names a simple binding; ``let`` names one only through a
+    simple root pattern (see ``simple_let_pattern_name``), which may itself be
+    ``"_"`` for a wildcard root.
+    """
+    return item.name if isinstance(item, VarDecl) else simple_let_pattern_name(item.pattern)
+
+
+def static_binding_node_id(item: LetDecl | VarDecl) -> int:
+    """Return a static ``let``/``var``'s own identity node id.
+
+    For ``var`` this is the declaration node; for ``let`` it is the pattern
+    node, since binder identity lives on the pattern (see ``LetDecl``).
+    """
+    return item.node_id if isinstance(item, VarDecl) else item.pattern.node_id
+
+
+def exported_binding_name(item: LetDecl | VarDecl) -> str | None:
+    """Return a static ``let``/``var``'s exported name, or ``None`` if not exported.
+
+    Exported bindings are every simple ``let``/``var`` root, annotated or not;
+    a wildcard root and a destructuring ``let`` pattern are never exported.
+    """
+    name = static_binding_name(item)
+    return None if name is None or name == "_" else name
+
+
 @dataclass(frozen=True, slots=True)
 class NameTarget:
     """Assignment target for ``name := expr``.
@@ -1182,17 +1211,36 @@ Binder = LetDecl | VarDecl | AssignStmt
 
 
 @dataclass(frozen=True, slots=True)
+class AttributeKeyedArg:
+    """A keyed argument in an attribute's argument list: ``key = value``.
+
+    Unlike :class:`NamedArg`, an attribute's key is a reference — see
+    :class:`VarRef` — that may carry a qualifier: bare, suffix-qualified
+    (``mod::x``), slash-qualified (``a/b::x``), module-anchored
+    (``/a/b::x``), current-module anchored (``::x``), or a chain of several
+    scope segments (``a::b::x``). A type-applied segment (``Foo[int]::x``)
+    is rejected when the argument is built.
+    """
+
+    key: VarRef
+    value: Expr
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class Attribute:
     """``@name`` or ``@name(args)`` in front of a defining declaration.
 
-    The AST keeps an attribute exactly as written: its name and the ordinary
-    call arguments it was given. Which attributes exist, where they may sit,
-    and what they mean are decided later, against the attribute catalog.
+    The AST keeps an attribute exactly as written: its name, positional
+    arguments, and reference-keyed arguments. Which attributes exist, where
+    they may sit, and what they mean are decided later, against the
+    attribute catalog.
     """
 
     name: str
     args: tuple[Expr, ...]
-    named_args: tuple[NamedArg, ...]
+    keyed_args: tuple[AttributeKeyedArg, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 

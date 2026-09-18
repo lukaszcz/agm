@@ -1,0 +1,31 @@
+# Module-level let/var bindings of a static-root module are visible
+# throughout, like defs: a function may read and write a root var
+# declared below it, a scoped def may read a scoped let declared below
+# it, and an importer's own def may call into an imported module whose
+# own def reads a binding declared below it.
+import store
+
+def bump-counter(delta: int) -> unit =
+  counter := counter + delta
+
+def read-counter() -> int = counter
+
+def counter-reader() -> () -> int =
+  fn() => counter
+
+scope Region
+  def area() -> int = width * height
+  let width = 3
+  let height = 4
+end Region
+
+var counter = 0
+
+program def main(delta: int) -> unit =
+  let reader = counter-reader()
+  print read-counter()
+  bump-counter(delta)
+  print counter
+  print reader()
+  print Region::area()
+  print store::total-plus-one()

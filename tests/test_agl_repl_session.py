@@ -854,6 +854,55 @@ class TestScopedBindingRetention:
         assert a.value == IntValue(1)
         assert b.value == IntValue(2)
 
+    def test_same_entry_let_named_like_a_scope_is_an_error(self) -> None:
+        s = open_session()
+
+        result = s.eval_entry("let Region = 1\n\nscope Region\n  let cap = 10\nend Region")
+
+        assert not result.ok
+
+    def test_same_entry_scope_named_like_a_let_is_an_error(self) -> None:
+        s = open_session()
+
+        result = s.eval_entry("scope Region\n  let cap = 10\nend Region\n\nlet Region = 1")
+
+        assert not result.ok
+
+    def test_cross_entry_let_cannot_reopen_a_retained_scope_name(self) -> None:
+        """A named scope region is retained state, like a def/scope clash: a
+        later entry's plain ``let`` cannot reuse its name, matching how a
+        later entry's ``def`` already cannot (see
+        test_retained_member_cannot_be_reopened_as_a_nested_scope)."""
+        s = open_session()
+        assert s.eval_entry("scope Region\n  let cap = 10\nend Region").ok
+
+        result = s.eval_entry("let Region = 1")
+
+        assert not result.ok
+
+    def test_cross_entry_scope_cannot_reuse_a_retained_root_let_name(self) -> None:
+        s = open_session()
+        assert s.eval_entry("let Region = 1").ok
+
+        result = s.eval_entry("scope Region\n  let cap = 10\nend Region")
+
+        assert not result.ok
+
+    def test_forward_var_read_within_one_entry_is_not_defined(self) -> None:
+        """Unlike a static-root module, one REPL entry's own root statements
+        run in textual order: a def may not read a var declared below it."""
+        s = open_session()
+
+        result = s.eval_entry("def read() = later\nvar later = 1\nread()")
+
+        assert not result.ok
+
+    def test_unannotated_narrow_var_is_accepted_outside_a_static_root_module(self) -> None:
+        """The narrow-var annotation requirement is static-root-only."""
+        result = open_session().eval_entry("var v = None\nv")
+
+        assert result.ok, result.diagnostics
+
     def test_redeclaring_one_path_does_not_disturb_a_same_named_sibling_path(self) -> None:
         s = open_session()
         assert s.eval_entry("let A::x = 1").ok
@@ -1370,6 +1419,35 @@ def _session_with_import_root(
     s = ReplSession(param_seed_resolver=param_seed_resolver)
     s._roots = roots
     return s
+
+
+# ---------------------------------------------------------------------------
+# @config targets across entries
+# ---------------------------------------------------------------------------
+
+
+class TestProgramConfigAcrossEntries:
+    """A ``@config`` target's ``@param``-ness is a binding fact, not a whole-program set."""
+
+    def test_an_earlier_entrys_param_binding_is_a_legal_config_target(self) -> None:
+        session = open_session()
+        assert session.eval_entry("@param let v: int = 1").ok
+
+        accepted = session.eval_entry(
+            "import std/config\n\n@config(v = 2)\nprogram def p() -> unit = ()\n"
+        )
+
+        assert accepted.ok, accepted.diagnostics
+
+    def test_an_earlier_entrys_plain_let_is_not_a_legal_config_target(self) -> None:
+        session = open_session()
+        assert session.eval_entry("let v: int = 1").ok
+
+        rejected = session.eval_entry(
+            "import std/config\n\n@config(v = 2)\nprogram def p() -> unit = ()\n"
+        )
+
+        assert not rejected.ok
 
 
 # ---------------------------------------------------------------------------

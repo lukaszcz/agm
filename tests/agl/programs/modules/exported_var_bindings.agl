@@ -1,0 +1,32 @@
+# Modules: annotated root and scoped vars are exported like lets and
+# writable by importers -- through a qualified write, a bare import tail,
+# and `use` -- with writes observed by another module, by a closure obtained
+# before the write, by a function in a third module, and by the entry.
+import store
+import store::{total as t}
+import viewer
+use store::Region::*
+
+program def main(delta: int) -> unit =
+  let read-total = viewer::total-reader()
+
+  store::total := delta
+  print store::total
+  print read-total()
+  print viewer::observed-total()
+  print store::total-doubled()
+
+  t := delta * 2
+  print t
+  print read-total()
+  print viewer::observed-total()
+
+  viewer::bump-total(delta)
+  print store::total
+  print read-total()
+
+  label := "busy"
+  print store::Region::label
+
+  store::Region::label := "qualified"
+  print label

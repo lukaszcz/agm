@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "default",
+      "module_roots": [
+        "program_modules/modules/import_tail_shadowed_by_root_binding"
+      ],
+      "expect": {
+        "stdout": "99\n99\n",
+        "calls": {}
+      }
+    }
+  ]
+}

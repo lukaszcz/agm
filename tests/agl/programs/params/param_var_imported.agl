@@ -1,0 +1,7 @@
+# A host-seeded `@param var` in a library module is writable by its importer.
+import budget
+
+program def main(boost: int) -> unit =
+  print budget::limit
+  budget::limit := budget::limit + boost
+  print budget::limit

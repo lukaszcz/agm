@@ -466,6 +466,10 @@ def is-odd(n: int) -> bool =
 a block (`do` body, `if` branch, etc.). A static error is raised if a `def` is
 nested in a block.
 
+A root or same-scope `def` may likewise read or write a `let`/`var` binding
+declared later, in a module with a static root ([Names and
+visibility](scopes.md#names-and-visibility)).
+
 ## `fn` — anonymous functions (lambdas)
 
 ```ebnf

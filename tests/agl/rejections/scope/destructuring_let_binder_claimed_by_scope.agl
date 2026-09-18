@@ -1,0 +1,11 @@
+record P(x: int, y: int)
+
+let P(x, y) = P(x = 1, y = 2)
+
+scope x
+  let c = 3
+end x
+
+program def main() -> unit =
+  print x
+  print x::c

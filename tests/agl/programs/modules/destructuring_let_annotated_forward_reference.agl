@@ -1,0 +1,13 @@
+# An annotated destructuring let follows the same relaxed order as an
+# unannotated one at a static-root module's root: its annotation, not a
+# constant-expression screen, establishes its type, and its binders stay
+# visible to a def declared above it either way.
+record Pair(x: int, y: int)
+
+def read-x() -> int = x
+
+let Pair(x, y): Pair = Pair(x = 1, y = 2)
+
+program def main() -> unit =
+  print read-x()
+  print y

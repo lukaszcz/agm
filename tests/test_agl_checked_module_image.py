@@ -140,6 +140,11 @@ def bump-attempts() -> int =
   default-attempts
 
 def shout-default-label() -> text = default-label
+
+@param let default-threshold: int = 5
+
+@config(default-threshold = 9)
+program def bump-threshold() -> unit = ()
 """
 
 _ENTRY_SRC = """\

@@ -42,6 +42,9 @@ Two tiers (validate_ir runs ONLY when explicitly called):
     11. ``program_signatures`` is keyed by exactly the ``program_functions``
         symbols, and each entry's parameter count and required-ness agree
         with its function descriptor's own declared parameters.
+    12. ``program_configs`` is sparse over ``program_functions`` symbols, with
+        no duplicate target per entry, each ``std/config``-rooted target names
+        a known engine setting, and each value expression validates.
 
 The expression dispatcher uses a closed structural ``match`` with a final
 ``assert_never(node)`` arm so that adding an ``IrExpr`` variant in a
@@ -167,6 +170,7 @@ from agm.agl.ir.program import (
     NominalKind,
     SourceFile,
 )
+from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import STD_CONFIG_ID, ModuleId
 from agm.config.engine_keys import ENGINE_KEY_NAMES
 
@@ -1513,6 +1517,42 @@ def _validate_program_tables(ctx: _Context) -> None:
                     " descriptor's default"
                 )
             _validate_program_param(program_param, ctx)
+
+    # 12. program_configs — sparse: only a program def carrying '@config' has
+    # an entry, with no target repeated within one program's entries, and
+    # each value expression itself validates. A '@param' target's binding
+    # is not cross-checked against param_bindings here: a REPL's growing
+    # entry module may declare that '@param' in an earlier entry, so
+    # param_bindings -- built from only the modules and item lists the
+    # current lowering call actually walks -- can lack it even though the
+    # checker legitimately resolved it against the session's persistent
+    # scope. A std/config-rooted target has no such cross-entry escape
+    # (engine settings are declared once, in the standard library), so it
+    # is cheaply checked against the closed engine-key catalog instead.
+    for symbol, entries in program.program_configs.items():
+        if symbol not in program.program_functions:
+            raise InvalidIrError(
+                f"program_configs entry for symbol_id={symbol!r} is not"
+                " a linked program_functions entry"
+            )
+        seen_targets: set[StaticBindingKey] = set()
+        for target, value in entries:
+            if target in seen_targets:
+                raise InvalidIrError(
+                    f"program_configs entry for symbol_id={symbol!r} has duplicate target"
+                    f" {target!r}"
+                )
+            seen_targets.add(target)
+            if (
+                target[0] == STD_CONFIG_ID
+                and not target[1]
+                and not is_engine_builtin_var_key(target)
+            ):
+                raise InvalidIrError(
+                    f"program_configs entry for symbol_id={symbol!r} target {target!r} names"
+                    " no known engine setting"
+                )
+            _validate_expr(value, ctx)
 
     # 6. contracts table — each ContractRequest must be consistent.
     for cid, contract_req in program.contracts.items():

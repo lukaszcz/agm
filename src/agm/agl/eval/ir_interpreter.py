@@ -585,7 +585,7 @@ class IrInterpreter:
         }
         defaults.update(
             {
-                self._builtin_var_key(key): self._eval(value)
+                self._builtin_var_key(key): self.evaluate_constant(value)
                 for key, value in self._program.builtin_setting_defaults.items()
             }
         )
@@ -1219,6 +1219,14 @@ class IrInterpreter:
             if exc.span is None:
                 exc.span = location
             raise
+
+    def evaluate_constant(self, expr: IrExpr) -> Value:
+        """Evaluate a checked constant expression: no binding, setting, or host effect.
+
+        Shared by ``builtin var`` default bootstrap and ``@config`` preflight
+        evaluation, both of which consume only checker-proven-constant IR.
+        """
+        return self._eval(expr)
 
     def run(
         self,

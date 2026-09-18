@@ -146,12 +146,20 @@ class ArgumentPreflight:
         order — or ``()`` when the static pipeline or binding failed.
     ``param_seeds``
         The decoded module-parameter values, ready for ``run_prepared``.
+    ``program_config``
+        *program*'s own ``@config`` entries, evaluated to values: a target
+        ``StaticBindingKey`` (an engine setting or a ``@param`` binding) ->
+        its checked, constant value. Empty when *program* carries no
+        ``@config``. A host merges this mapping into its own precedence
+        rules alongside its other seed sources (CLI flags, config files, and
+        the like).
     """
 
     result: "RunResult"
     executable: "ExecutableProgram | None"
     arguments: "tuple[Value | UseDefault, ...]" = ()
     param_seeds: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
+    program_config: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1251,7 +1259,26 @@ class PipelineDriver:
             executable=executable,
             arguments=bound,
             param_seeds=param_seeds,
+            program_config=self._evaluate_program_config(executable, program),
         )
+
+    @staticmethod
+    def _evaluate_program_config(
+        executable: "ExecutableProgram", program: ProgramDeclInfo
+    ) -> "Mapping[StaticBindingKey, Value]":
+        """Evaluate *program*'s own ``@config`` entries, if it carries any.
+
+        A throwaway interpreter evaluates each checked constant value
+        expression; nothing is executed and no module initializer runs. Empty
+        when *program* declares no ``@config``, so an unconfigured program
+        never pays this construction cost.
+        """
+        program_symbol = executable.program_symbols[program.node_id]
+        entries = executable.program_configs.get(program_symbol, ())
+        if not entries:
+            return {}
+        interp = IrInterpreter(executable)
+        return {key: interp.evaluate_constant(value) for key, value in entries}
 
     def _run_program(
         self,
@@ -1494,9 +1521,19 @@ def _reachable_modules(
 
 
 def _select_program_inventory(
-    executable: "ExecutableProgram", graph: "ModuleGraph", module_id: "ModuleId"
+    executable: "ExecutableProgram",
+    graph: "ModuleGraph",
+    module_id: "ModuleId",
 ) -> "ExecutableProgram":
-    """Restrict a selected program to its graph-reachable runtime modules and source inventory."""
+    """Restrict a selected program to its graph-reachable runtime modules and source inventory.
+
+    ``program_configs`` is left whole: it is already keyed by each program
+    def's own linked symbol, so ``_evaluate_program_config`` selects the
+    right entry (or none) by symbol without narrowing the table, and a
+    forced re-lower of an already-selected executable would otherwise make
+    a sibling program def's entry look newly narrowed away rather than
+    simply absent.
+    """
     source_reachable = frozenset(graph.source_reachable_modules(module_id))
     runtime_reachable = frozenset(_reachable_modules(module_id, graph.adjacency))
     return replace(

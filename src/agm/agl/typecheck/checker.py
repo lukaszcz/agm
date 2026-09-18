@@ -834,6 +834,9 @@ class _Checker:
         # Absent when the call has none. Populated by BuiltinCallChecker via
         # ``_record_explicit_builtin_target``.
         self._explicit_builtin_targets: dict[int, Type] = {}
+        # Resolved '@config' targets, keyed by each entry's key expression
+        # node id. Populated by ``_check_program_config``.
+        self._program_config_targets: dict[int, tuple[ModuleId, tuple[str, ...], str]] = {}
         # Argument bindings computed during the check, reused by the lowerer so it
         # never re-binds.  Keyed by Call/Pattern node_id (see ``ArgumentBindings``).
         self._function_call_bindings: dict[int, tuple[Expr | None, ...]] = {}
@@ -1387,6 +1390,7 @@ class _Checker:
                     span=entry.key.span,
                 )
             seen_targets.add(target_key)
+            self._program_config_targets[entry.key.node_id] = target_key
             key_type = self._check_boundary_expr(entry.key, expected=None)
             value_type = self._check_boundary_expr(entry.value, expected=key_type)
             self._assert_assignable_from(value_type, key_type, entry.value.span, entry.value)
@@ -6522,6 +6526,7 @@ class _Checker:
             pattern_constructor_owners=self._pattern_constructor_owners,
             method_selections=self._method_selections,
             explicit_builtin_targets=self._explicit_builtin_targets,
+            program_config_targets=self._program_config_targets,
         )
 
 

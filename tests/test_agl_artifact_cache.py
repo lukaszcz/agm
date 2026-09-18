@@ -273,6 +273,38 @@ def test_config_attribute_program_configs_round_trip_through_the_resolved_cache(
     assert round_tripped == original
 
 
+def test_config_attribute_program_config_targets_round_trip_through_the_checked_cache(
+    tmp_path: Path,
+) -> None:
+    """A program def's resolved '@config' targets survive the disk-backed checked-module cache."""
+    graph = make_file_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import helper\n\nprogram def main() -> unit = ()\n",
+            "helper": (
+                "import std/config\n\n"
+                "@config(config::log = true)\n"
+                "program def build() -> unit = ()\n"
+            ),
+        },
+    )
+    resolved_program = resolve_program(graph)
+    caps = base_caps()
+    retainable = artifact_cache.retained_module_sources(graph)
+    checked = check_program(resolved_program, caps)
+    artifact_cache.retain_checked_modules(retainable, caps, checked.modules)
+    artifact_cache.clear_retained_artifacts()
+
+    restored = artifact_cache.retained_checked_modules(retainable, caps)
+
+    helper_id = next(mid for mid in graph.modules if mid != graph.entry_id)
+    original = checked.modules[helper_id].program_config_targets
+    round_tripped = restored[helper_id]
+    assert original
+    assert isinstance(round_tripped, CheckedModuleImage)
+    assert round_tripped.program_config_targets == original
+
+
 def test_a_params_flip_invalidates_a_warm_checked_module_cache(tmp_path: Path) -> None:
     """A cross-module ``@config`` target's ``@param``-ness is rechecked, not cached stale."""
     entry_source = "import helper\n\n@config(helper::value = 2)\nprogram def main() -> unit = ()\n"

@@ -486,6 +486,12 @@ class CheckedModule:
         declaration node id (see ``syntax.nodes.static_binding_node_id``). Lets
         a cache hit answer the program-level static-binding pre-pass
         (``typecheck/program.py``) without re-checking the module.
+    ``program_config_targets``
+        Resolved ``@config`` targets, keyed by each entry's key expression node
+        id: ``(module id, scope path, name)``, the same shape as
+        ``ir.static_keys.StaticBindingKey`` (this module may not import
+        ``ir``). Lowering reads this instead of re-resolving
+        ``resolved.attributes.program_configs``' raw keys.
     """
 
     resolved: ModuleResolution
@@ -513,6 +519,9 @@ class CheckedModule:
     pattern_constructor_owners: dict[int, NominalId] = field(default_factory=dict)
     method_selections: dict[int, MethodDef] = field(default_factory=dict)
     explicit_builtin_targets: dict[int, Type] = field(default_factory=dict)
+    program_config_targets: dict[int, tuple[ModuleId, tuple[str, ...], str]] = field(
+        default_factory=dict
+    )
 
     def binding_for(self, node_id: int) -> BindingRef | None:
         """Return *node_id*'s checked binding, dereferencing a pattern slot."""
@@ -588,6 +597,7 @@ class CheckedModule:
             pattern_constructor_owners=self.pattern_constructor_owners,
             method_selections=self.method_selections,
             explicit_builtin_targets=self.explicit_builtin_targets,
+            program_config_targets=self.program_config_targets,
         )
 
 
@@ -889,6 +899,7 @@ class CheckedModuleImage:
     pattern_constructor_owners: dict[int, NominalId]
     method_selections: dict[int, MethodDef]
     explicit_builtin_targets: dict[int, Type]
+    program_config_targets: dict[int, tuple[ModuleId, tuple[str, ...], str]]
 
     def rehydrate(self, resolved_module: ResolvedModule, env: TypeEnvironment) -> CheckedModule:
         """Reconstruct an equivalent ``CheckedModule`` over a freshly prepared *env*.
@@ -931,6 +942,7 @@ class CheckedModuleImage:
             pattern_constructor_owners=self.pattern_constructor_owners,
             method_selections=self.method_selections,
             explicit_builtin_targets=self.explicit_builtin_targets,
+            program_config_targets=self.program_config_targets,
         )
 
 

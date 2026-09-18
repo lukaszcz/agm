@@ -429,6 +429,7 @@ def lower_program(
         mid: ExecutableModule(module_id=mid, initializers=()) for mid in _already_linked
     }
     builtin_setting_defaults: dict[BuiltinVarKey | str, IrExpr] = {}
+    program_configs: dict[SymbolId, tuple[tuple[StaticBindingKey, IrExpr], ...]] = {}
     for mid in ordered_mids:
         cm = checked.modules[mid]
         lowerer = module_lowerers[mid]
@@ -449,6 +450,7 @@ def lower_program(
             cached.link_into(link)
             executable_modules[mid] = cached.module
             builtin_setting_defaults.update(cached.defaults)
+            program_configs.update(cached.program_configs)
             continue
         body = cm.resolved.program.body
         initializers = lowerer.lower_initializers(body, top_level=True)
@@ -462,6 +464,18 @@ def lower_program(
             if isinstance(item, BuiltinVarDecl) and item.default is not None
         }
         builtin_setting_defaults.update(defaults)
+        module_program_configs: dict[SymbolId, tuple[tuple[StaticBindingKey, IrExpr], ...]] = {
+            link.fn_node_to_sym[item.node_id]: tuple(
+                (
+                    cm.program_config_targets[entry.key.node_id],
+                    lowerer.lower_coerced(entry.value, cm.node_types[entry.key.node_id]),
+                )
+                for entry in raw_entries
+            )
+            for _mid, _cm, item in program_funcdefs({mid: cm})
+            if (raw_entries := cm.resolved.attributes.program_configs.get(item.node_id, ()))
+        }
+        program_configs.update(module_program_configs)
         if key is not None:
             seed = cm.resolved.program.node_id << 32
             module_cache.save(
@@ -470,6 +484,7 @@ def lower_program(
                     executable_module,
                     link,
                     defaults,
+                    module_program_configs,
                     tuple(lowerer.resources),
                     seed,
                     seed + (1 << 32),
@@ -549,6 +564,7 @@ def lower_program(
         builtin_var_declarations=builtin_var_declarations,
         exception_field_encodes=exception_field_encodes,
         builtin_setting_defaults=builtin_setting_defaults,
+        program_configs=program_configs,
     )
     if self_validation_enabled():
         validate_ir(program, deep=True)

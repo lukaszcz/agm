@@ -404,7 +404,8 @@ Tracing records only observable boundaries:
   response records its full content or transport/cancellation outcome;
 - every `exec` invocation (command, exit code, duration, stdout, stderr, and
   timeout flag);
-- an exception only when it escapes the program uncaught.
+- an exception only when it escapes the program uncaught;
+- a companion's own trace records, when its extern declares them ([FFI](ffi.md)).
 
 Ordinary expression evaluation is not traced. Trace records and exception
 values have no host-generated `trace-id`; a user-declared exception may still

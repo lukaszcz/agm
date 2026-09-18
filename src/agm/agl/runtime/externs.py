@@ -10,6 +10,7 @@ their underlying AgL containers.
 from __future__ import annotations
 
 import contextvars
+import dataclasses
 import decimal
 import functools
 import importlib.machinery
@@ -23,7 +24,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from types import CodeType, ModuleType
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.artifact_storage import artifact_entry, read_payload, write_payload
 from agm.agl.diagnostics import AglError
@@ -52,6 +53,10 @@ from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, Text
 from agm.core import fs
 from agm.core.cleanup import run_cleanup_steps
 from agm.util.scoping import ScopedVar
+
+if TYPE_CHECKING:
+    from agm.agl.ir.ids import Location
+    from agm.agl.runtime.trace import TraceStore
 
 # These companion module attributes are APIs, never synthesized nominal aliases.
 _COMPANION_API_NAMES = frozenset({"AglException", "array", "dict", "json", "nominals", "runtime"})
@@ -94,25 +99,40 @@ class ExternRuntimeState:
         run_cleanup_steps(steps)
 
 
-class _CompanionRuntime:
-    """Route companion state to the interpreter active in this call context."""
+@dataclasses.dataclass(frozen=True, slots=True)
+class ActiveCall:
+    """One extern call's active companion state, trace destination, module, and span.
 
-    __slots__ = ("_active_state", "_detached_state")
+    Bundled into a single context variable so :meth:`ExternRegistry.invoke`
+    activates one object for the call rather than two, and ``runtime.state``
+    and ``runtime.trace`` both read it.
+    """
+
+    state: ExternRuntimeState
+    trace_store: "TraceStore"
+    module_id: ModuleId
+    span: "Location | None" = None
+
+
+class _CompanionRuntime:
+    """Route companion state and tracing to the interpreter active in this call context."""
+
+    __slots__ = ("_active_call", "_detached_state")
 
     def __init__(self) -> None:
-        self._active_state: contextvars.ContextVar[ExternRuntimeState | None] = (
-            contextvars.ContextVar("agl_extern_runtime_state", default=None)
+        self._active_call: contextvars.ContextVar[ActiveCall | None] = contextvars.ContextVar(
+            "agl_extern_active_call", default=None
         )
         # Direct companion use outside evaluation remains useful to host tests
         # and tools, but evaluation always supplies its interpreter-owned state.
         self._detached_state = ExternRuntimeState()
 
-    def activate(self, state: ExternRuntimeState | None) -> AbstractContextManager[None]:
-        """Make *state* visible to a companion for the dynamic call extent."""
-        if state is None:
+    def activate(self, call: ActiveCall | None) -> AbstractContextManager[None]:
+        """Make *call* visible to a companion for the dynamic call extent."""
+        if call is None:
             # Absent evaluator state must not shadow an enclosing activation.
             return nullcontext()
-        return ScopedVar(self._active_state, state)
+        return ScopedVar(self._active_call, call)
 
     def state[T](
         self, key: str, factory: Callable[[], T], close: Callable[[T], None] | None = None
@@ -123,13 +143,40 @@ class _CompanionRuntime:
         owning interpreter's run ends (or, for a detached call, when
         :func:`close_detached_state` is called).
         """
-        state = self._active_state.get()
-        return (state if state is not None else self._detached_state).get_or_create(
-            key, factory, close
-        )
+        active = self._active_call.get()
+        state = active.state if active is not None else self._detached_state
+        return state.get_or_create(key, factory, close)
+
+    def trace(self, kind: str, payload: dict[str, object]) -> None:
+        """Emit a companion trace record tagged with the active call's origin and span.
+
+        A silent no-op outside an active extern call (detached companion use),
+        and when tracing is off. The origin (the calling module's display
+        path) is computed only once the store is confirmed to be writing.
+        """
+        active = self._active_call.get()
+        if active is not None and active.trace_store.path is not None:
+            active.trace_store.companion_record(
+                active.module_id.display(), kind, payload, active.span
+            )
+
+    def active_span(self) -> "Location | None":
+        """The span of the extern call active in this context, if any.
+
+        Read by ``IrInterpreter._invoke_crossed_closure`` for a companion
+        callback that is itself an extern: it has no AgL call site of its
+        own, so it inherits the outer call's span instead.
+        """
+        active = self._active_call.get()
+        return active.span if active is not None else None
 
 
 _COMPANION_RUNTIME = _CompanionRuntime()
+
+
+def active_call_span() -> "Location | None":
+    """The span of the extern call active in this context, or ``None``."""
+    return _COMPANION_RUNTIME.active_span()
 
 
 def close_detached_state() -> None:
@@ -594,7 +641,7 @@ class ExternRegistry:
         nominals: BuiltinNominals,
         descriptors: ValueDescriptors,
         function_encoder: Callable[[IrClosureValue], object] | None = None,
-        runtime_state: ExternRuntimeState | None = None,
+        active_call: ActiveCall | None = None,
     ) -> Value:
         """Cross the boundary for one extern call: encode, call, and decode.
 
@@ -621,15 +668,17 @@ class ExternRegistry:
         unit test) passes the shipped standard library's own identities and
         an empty descriptor view explicitly, rather than a default silently
         standing in for the wrong program.
-        *runtime_state* is the evaluator-owned companion state activated for
-        this call; absent direct callers use detached host state instead.
+        *active_call* bundles the evaluator-owned companion state, trace
+        store, module id, and call-site span, activated together for this
+        call so ``runtime.state``/``runtime.trace`` inside *fn* reach them;
+        absent direct callers use detached host state and a no-op trace
+        instead.
         *function_encoder* turns an AgL closure into a callable proxy and is
         published for the call's extent, so every closure a companion reaches
         -- through an argument, a retained view, or a nested container --
-        encodes through the interpreter it is running under. Like the
-        companion runtime state activated here, it is scoped to this call's
-        context: a thread the companion spawns sees it only if it runs in a
-        copy of that context.
+        encodes through the interpreter it is running under. Like
+        *active_call*, it is scoped to this call's context: a thread the
+        companion spawns sees it only if it runs in a copy of that context.
         """
         with active_function_encoder(function_encoder), active_descriptors(descriptors):
             try:
@@ -643,7 +692,10 @@ class ExternRegistry:
                 ) from exc
 
             try:
-                with _COMPANION_RUNTIME.activate(runtime_state), decimal.localcontext():
+                with (
+                    _COMPANION_RUNTIME.activate(active_call),
+                    decimal.localcontext(),
+                ):
                     result = fn(*encoded_args)
             except AglException as exc:
                 raise AglRaise(exc.value) from exc

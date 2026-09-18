@@ -40,7 +40,12 @@ from agm.agl.ir.contracts import (
     forwarded_encode_key,
     resolve_schema_ref,
 )
-from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue, enter_value
+from agm.agl.semantics.cycles import (
+    CYCLIC_VALUE_MARKER,
+    AglCyclicValue,
+    enter_value,
+    non_data_marker,
+)
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -90,7 +95,7 @@ def degraded_marker(exc: "AglCyclicValue | AglNonDataValue") -> str:
     sentinel and does not use this.
     """
     if isinstance(exc, AglNonDataValue):
-        return f"<{exc.kind} has no JSON representation>"
+        return non_data_marker(exc.kind)
     return CYCLIC_VALUE_MARKER
 
 

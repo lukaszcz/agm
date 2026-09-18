@@ -30,6 +30,7 @@ __all__ = [
     "AglCyclicValue",
     "cyclic_value_raise",
     "enter_value",
+    "non_data_marker",
 ]
 
 #: The single ``CyclicValueError`` message text, shared by every construction
@@ -41,6 +42,16 @@ CYCLE_MESSAGE = "value contains a reference cycle"
 #: sites that must degrade instead of raising (trace logging, in-flight error
 #: reporting) — see ``runtime/trace.py`` and ``pipeline.py``.
 CYCLIC_VALUE_MARKER = "<cyclic value>"
+
+
+def non_data_marker(kind: str) -> str:
+    """Return the placeholder text for a value with no JSON representation.
+
+    Shared marker format for every walk that degrades such a value instead of
+    raising — see ``runtime/serialize.py``'s ``degraded_marker`` and
+    ``runtime/trace.py``'s companion payload sanitizer.
+    """
+    return f"<{kind} has no JSON representation>"
 
 
 class AglCyclicValue(Exception):

@@ -113,6 +113,32 @@ def session() -> requests.Session:
     return runtime.state("mylib/session", requests.Session, close=requests.Session.close)
 ```
 
+### Trace hook
+
+A companion may emit its own structured trace records with
+`runtime.trace(kind, payload)`, tagged with the calling module and the call
+site's source location:
+
+```python
+from agl import runtime
+
+
+def fetch(url: str) -> str:
+    runtime.trace("http_request", {"url": url})
+    ...
+```
+
+Like `runtime.state`, this must be called during an extern invocation; a
+direct host call outside evaluation is a silent no-op. Nothing is written when
+tracing is off. A payload value with no JSON representation, including a
+reference cycle, is replaced by a marker rather than failing the call.
+
+The record is `{kind, origin, line, col, ...payload}`: `kind` is the hook's
+first argument, `origin` is the calling module's path, `line`/`col` locate the
+call site, and every payload field sits at the top level beside them. A
+payload key of `ts`, `run_id`, `kind`, `origin`, `line`, or `col` collides with
+this envelope and raises `ValueError`.
+
 ## Value mapping
 
 The mapping is injective, so conversion is directed by the actual value rather

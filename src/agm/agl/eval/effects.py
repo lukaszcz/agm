@@ -37,7 +37,7 @@ from agm.agl.runtime.agents import (
 from agm.agl.runtime.agents import agent_value as encode_agent_value
 from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
-from agm.agl.runtime.externs import ExternRegistry, ExternRuntimeState
+from agm.agl.runtime.externs import ActiveCall, ExternRegistry, ExternRuntimeState
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import (
@@ -149,7 +149,12 @@ class EffectHandlers:
     # ------------------------------------------------------------------
 
     def eval_extern_call(
-        self, module_id: ModuleId, extern: ExternFunctionBody, args: Sequence[Value]
+        self,
+        module_id: ModuleId,
+        extern: ExternFunctionBody,
+        args: Sequence[Value],
+        *,
+        location: Location | None,
     ) -> Value:
         """Handle a call to an ``extern def``: resolve and invoke.
 
@@ -160,6 +165,13 @@ class EffectHandlers:
         callable, an argument-conversion failure, or a return-contract
         violation — into ``AglRaise(ExternError)``, mirroring the ``exec``
         model; that failure names the extern as AgL declares it.
+
+        *location* is the call site's source location, when the call has one
+        of its own -- ``None`` for a companion callback that is itself an
+        extern, re-entered from :meth:`IrInterpreter._invoke_crossed_closure`
+        with the enclosing active call's own span instead. It becomes the
+        span for any ``runtime.trace`` record the companion emits; *origin*
+        is *module_id*'s own display path (e.g. ``std/http``).
         """
         fn = self._ctx._extern_registry.resolve(module_id, extern.companion_name)
         with self._ctx._extern_call_window():
@@ -170,7 +182,12 @@ class EffectHandlers:
                 nominals=self._ctx._program.builtin_nominals,
                 descriptors=self._descriptors(),
                 function_encoder=self._ctx._make_extern_callable_proxy,
-                runtime_state=self._ctx._extern_runtime_state,
+                active_call=ActiveCall(
+                    state=self._ctx._extern_runtime_state,
+                    trace_store=self._ctx._trace,
+                    module_id=module_id,
+                    span=location,
+                ),
             )
 
     # ------------------------------------------------------------------

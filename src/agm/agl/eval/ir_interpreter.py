@@ -147,6 +147,7 @@ from agm.agl.runtime.externs import (
     ExternCallWindow,
     ExternRegistry,
     ExternRuntimeState,
+    active_call_span,
 )
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.render import render_value
@@ -954,11 +955,20 @@ class IrInterpreter:
         )
 
     def _invoke_crossed_closure(self, closure: IrClosureValue, args: tuple[Value, ...]) -> Value:
-        """Re-enter this interpreter to execute an AgL callback from an extern."""
+        """Re-enter this interpreter to execute an AgL callback from an extern.
+
+        A callback that is itself an ``extern def`` has no AgL call site of
+        its own -- it is invoked directly by the companion holding it, not
+        through an ``IrCall`` node -- so its trace span is the enclosing
+        active call's span (the outer call that handed the companion this
+        closure in the first place), or ``None`` outside any active call.
+        """
         desc = self._program.functions[closure.function_id]
         match desc.impl:
             case ExternFunctionBody() as extern:
-                return self._effects.eval_extern_call(desc.module_id, extern, args)
+                return self._effects.eval_extern_call(
+                    desc.module_id, extern, args, location=active_call_span()
+                )
             case IrFunctionBody(body=body):
                 self._check_call_depth()
                 return self._bind_and_invoke(desc, body, closure, list(args))
@@ -1031,7 +1041,9 @@ class IrInterpreter:
                         else self._eval(arg)
                     )
                     extern_bound_values.append(val)
-                return self._effects.eval_extern_call(desc.module_id, extern, extern_bound_values)
+                return self._effects.eval_extern_call(
+                    desc.module_id, extern, extern_bound_values, location=location
+                )
             case IrFunctionBody(body=body):
                 self._check_call_depth()
                 closure_val = self._get_closure_for(fn_id)
@@ -1086,7 +1098,9 @@ class IrInterpreter:
                             " and no default available (lowerer bug)"
                         )
                     extern_bound_values.append(val)
-                return self._effects.eval_extern_call(desc.module_id, extern, extern_bound_values)
+                return self._effects.eval_extern_call(
+                    desc.module_id, extern, extern_bound_values, location=location
+                )
             case IrFunctionBody(body=body):
                 self._check_call_depth()
 

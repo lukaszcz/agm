@@ -10,16 +10,20 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
 import agm.commands.exec as exec_command
 from agm.agl import PipelineDriver
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest, AgentResponse
 from agm.agl.runtime.agents import AgentFn
+from agm.agl.runtime.externs import ExternRegistry
 from agm.cli_support.args import ExecArgs
-from tests._agl_helpers import run_inline_command, write_file_program
+from tests._agl_helpers import agl_roots, run_inline_command, write_file_program
+from tests.agl.ir_harness import write_companion_file, write_module_file
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1149,3 +1153,274 @@ class TestPrepareTraceLogTruncates:
         assert len(lines) == 1, f"Only the new record must be present; got {len(lines)} lines"
         rec = _json.loads(lines[0])
         assert rec.get("run_id") == "new"
+
+
+# ---------------------------------------------------------------------------
+# 13. Companion trace hook (``runtime.trace(kind, payload)``)
+# ---------------------------------------------------------------------------
+
+
+def _write_extern_entry(tmp_path: Path, source: str, companion_source: str) -> Path:
+    """Write an inline extern-declaring entry and its Python companion as real sibling files."""
+    entry_path = tmp_path / "entry.agl"
+    entry_path.write_text(source)
+    (tmp_path / "entry.py").write_text(companion_source)
+    return entry_path
+
+
+class _EmitCompanion(Protocol):
+    """A loaded companion's typed surface for the detached-call test below."""
+
+    def emit(self) -> None: ...
+
+
+class TestCompanionTraceHook:
+    """``runtime.trace(kind, payload)`` lets a companion emit its own trace records."""
+
+    def test_companion_trace_produces_a_record_with_origin_and_span(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'value': 42})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        rec = probe_recs[0]
+        assert rec.get("origin") == "<entry>"
+        assert rec.get("value") == 42
+        # `emit()` is the call on line 2 of `source`.
+        assert rec.get("line") == 2
+        assert rec.get("col") == 1
+
+    def test_companion_trace_origin_is_the_calling_module_path(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        root = tmp_path / "root"
+        write_module_file(root, "lib/tracer", "extern def emit() -> unit")
+        write_companion_file(
+            root,
+            "lib/tracer",
+            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'value': 1})\n",
+        )
+        result = run_inline_command(
+            PipelineDriver(),
+            "import lib/tracer\nlib/tracer::emit()",
+            roots=agl_roots(root),
+            default_stdlib=False,
+            log_file=log_path,
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["origin"] == "lib/tracer"
+
+    def test_companion_trace_writes_nothing_when_logging_is_off(self, tmp_path: Path) -> None:
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'value': 1})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(PipelineDriver(), source, entry_path=entry_path, log_file=None)
+        assert result.ok
+        assert not list(tmp_path.rglob("*.jsonl"))
+
+    def test_companion_trace_cyclic_payload_degrades_instead_of_raising(
+        self, tmp_path: Path
+    ) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\n"
+            "def emit():\n"
+            "    payload = {'a': 1}\n"
+            "    payload['self'] = payload\n"
+            "    runtime.trace('probe', payload)\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["self"] == "<cyclic value>"
+
+    def test_companion_trace_cyclic_list_payload_degrades_instead_of_raising(
+        self, tmp_path: Path
+    ) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\n"
+            "def emit():\n"
+            "    items = [1, 2]\n"
+            "    items.append(items)\n"
+            "    runtime.trace('probe', {'items': items})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["items"] == [1, 2, "<cyclic value>"]
+
+    def test_companion_trace_non_json_value_degrades_instead_of_raising(
+        self, tmp_path: Path
+    ) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\n"
+            "def emit():\n"
+            "    runtime.trace('probe', {'bad': object()})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["bad"] == "<object has no JSON representation>"
+
+    def test_companion_trace_direct_call_outside_evaluation_is_a_silent_noop(
+        self, tmp_path: Path
+    ) -> None:
+        """A companion calling ``runtime.trace`` with no active interpreter is a no-op."""
+        companion_path = write_companion_file(
+            tmp_path,
+            "entry",
+            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'value': 1})\n",
+        )
+        companion = cast(_EmitCompanion, ExternRegistry().load_companion(ENTRY_ID, companion_path))
+        companion.emit()  # must not raise
+
+    def test_companion_trace_reserved_key_raises_a_value_error(self, tmp_path: Path) -> None:
+        """A payload key colliding with the envelope is a companion programmer error."""
+        log_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'kind': 'x'})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "ExternError"
+
+    def test_companion_trace_decimal_value_renders_as_exact_text(self, tmp_path: Path) -> None:
+        """A ``Decimal`` payload value uses the DSL's own exact-number convention."""
+        log_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from decimal import Decimal\n"
+            "from agl import runtime\n\n"
+            "def emit():\n"
+            "    runtime.trace('probe', {'amount': Decimal('1.50')})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["amount"] == "1.50"
+
+    def test_companion_trace_agl_json_value_unwraps_to_its_raw_json(self, tmp_path: Path) -> None:
+        """An ``AglJson`` payload value (JSON already crossed the boundary) unwraps."""
+        log_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import json, runtime\n\n"
+            "def emit():\n"
+            "    runtime.trace('probe', {'payload': json({'nested': [1, 2]})})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["payload"] == {"nested": [1, 2]}
+
+    def test_companion_trace_span_through_a_function_value_call(self, tmp_path: Path) -> None:
+        """The span is the first-class function value's call site, not its declaration."""
+        log_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nlet f = emit\nf()\n()\n"
+        companion = "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n"
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        # `f()` is the call on line 3 of `source`; `emit`'s own declaration
+        # (line 1) must not be reported.
+        assert probe_recs[0]["line"] == 3
+        assert probe_recs[0]["col"] == 1
+
+    def test_companion_trace_span_is_restored_after_a_crossed_extern_callback(
+        self, tmp_path: Path
+    ) -> None:
+        """A crossed callback with no AgL call site of its own inherits the outer span,
+        and the outer call's own span is restored once the callback returns."""
+        log_path = tmp_path / "trace.jsonl"
+        source = (
+            "extern def relay(f: () -> unit) -> unit\n"
+            "extern def probe() -> unit\n"
+            "relay(probe)\n"
+            "()\n"
+        )
+        companion = (
+            "from agl import runtime\n\n"
+            "def relay(f):\n"
+            "    runtime.trace('a_before', {})\n"
+            "    f()\n"
+            "    runtime.trace('a_after', {})\n\n"
+            "def probe():\n"
+            "    runtime.trace('b_probe', {})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        kinds = {"a_before", "b_probe", "a_after"}
+        by_kind = {r["kind"]: r for r in records if r["kind"] in kinds}
+        assert set(by_kind) == kinds
+        # `relay(probe)` (line 3) is the only real AgL call site here: the
+        # crossed callback (`probe`, invoked directly by `relay`'s own Python
+        # body) has none of its own, so it inherits that outer span, and the
+        # outer call's span is restored once the crossed callback returns.
+        for kind in kinds:
+            assert by_kind[kind]["line"] == 3
+            assert by_kind[kind]["col"] == 1

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ModuleId
 from agm.agl.repl.entry import EntryKind, EntryResult
+from agm.core.cleanup import notes_of
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -770,6 +771,7 @@ class EntryPipeline:
                 nominals=lowered.program.nominals,
                 span=exc.span,
                 exception_field_encodes=lowered.program.exception_field_encodes,
+                notes=notes_of(exc),
             )
             trace.exception(
                 type_name=error.type_name,
@@ -962,6 +964,7 @@ class EntryPipeline:
                 nominals=lowered.program.nominals,
                 span=exc.span,
                 exception_field_encodes=lowered.program.exception_field_encodes,
+                notes=notes_of(exc),
             )
             trace.exception(
                 type_name=error.type_name,

@@ -1181,25 +1181,32 @@ class IrInterpreter:
         ``max_call_depth`` guard is reached before Python's own limit; a Python
         ``RecursionError`` that still escapes (its limit is capped) is converted
         to a catchable AgL ``RecursionError`` rather than crashing the host.
+
+        Companion state is closed on every exit; session cleanup stays gated by
+        ``close_sessions``.
         """
         needed = _BASE_RECURSION_HEADROOM + self._max_call_depth * _PYTHON_FRAMES_PER_AGL_CALL
         target = min(needed, _MAX_PYTHON_RECURSION_LIMIT)
-        cleanup = self._session_host.close_all if self._close_sessions else _noop
+        session_cleanup = self._session_host.close_all if self._close_sessions else _noop
+
         with raised_recursion_limit(target):
             try:
-                with preserve_primary_error(cleanup, label="agent session cleanup"):
-                    with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-                        self._install_function_closures()
-                        for mod in self._program.modules.values():
-                            for node in mod.initializers:
-                                self._eval_and_record_initializer(mod.module_id, node)
-                        if program_symbol is not None:
-                            try:
-                                self._invoke_program(program_symbol, arguments)
-                            except RecursionError:
-                                error = self._recursion_error()
-                                error.span = self._program_entry_location(program_symbol)
-                                raise error from None
+                with preserve_primary_error(
+                    self._extern_runtime_state.close_all, label="companion state cleanup"
+                ):
+                    with preserve_primary_error(session_cleanup, label="agent session cleanup"):
+                        with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+                            self._install_function_closures()
+                            for mod in self._program.modules.values():
+                                for node in mod.initializers:
+                                    self._eval_and_record_initializer(mod.module_id, node)
+                            if program_symbol is not None:
+                                try:
+                                    self._invoke_program(program_symbol, arguments)
+                                except RecursionError:
+                                    error = self._recursion_error()
+                                    error.span = self._program_entry_location(program_symbol)
+                                    raise error from None
                 return self._collect_results()
             except RecursionError:
                 raise self._recursion_error() from None

@@ -45,6 +45,7 @@ EXTERNALLY_USED = (
     "clear_retained_artifacts",
     "clear_parsed_module_cache",
     "set_self_validation_enabled",
+    "close_detached_state",
 )
 
 

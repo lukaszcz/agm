@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextvars
 import decimal
+import functools
 import importlib.machinery
 import importlib.util
 import marshal
@@ -49,6 +50,7 @@ from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, TextValue, Value
 from agm.core import fs
+from agm.core.cleanup import run_cleanup_steps
 from agm.util.scoping import ScopedVar
 
 # These companion module attributes are APIs, never synthesized nominal aliases.
@@ -58,16 +60,38 @@ _COMPANION_API_NAMES = frozenset({"AglException", "array", "dict", "json", "nomi
 class ExternRuntimeState:
     """Mutable companion state belonging to one interpreter instance."""
 
-    __slots__ = ("_values",)
+    __slots__ = ("_entries",)
 
     def __init__(self) -> None:
-        self._values: dict[str, object] = {}
+        self._entries: dict[str, tuple[object, Callable[[object], None] | None]] = {}
 
-    def get_or_create(self, key: str, factory: Callable[[], object]) -> object:
-        """Return this state's value for *key*, creating it once when absent."""
-        if key not in self._values:
-            self._values[key] = factory()
-        return self._values[key]
+    def get_or_create[T](
+        self, key: str, factory: Callable[[], T], close: Callable[[T], None] | None = None
+    ) -> T:
+        """Return this state's value for *key*, creating it (with its closer) once when absent.
+
+        *close*, when given, is recorded beside the value on this creating
+        call and later invoked with that same value by :meth:`close_all`.
+        """
+        if key not in self._entries:
+            value = factory()
+            self._entries[key] = (value, cast("Callable[[object], None] | None", close))
+        return cast("T", self._entries[key][0])
+
+    def close_all(self) -> None:
+        """Close every registered value once, in reverse creation order, then clear the bag.
+
+        Each closer receives the value it was registered for. A second call
+        is a no-op. A value registered with no closer is simply dropped.
+        """
+        entries = list(self._entries.values())
+        self._entries.clear()
+        steps: list[Callable[[], None]] = [
+            functools.partial(close, value)
+            for value, close in reversed(entries)
+            if close is not None
+        ]
+        run_cleanup_steps(steps)
 
 
 class _CompanionRuntime:
@@ -90,13 +114,31 @@ class _CompanionRuntime:
             return nullcontext()
         return ScopedVar(self._active_state, state)
 
-    def state(self, key: str, factory: Callable[[], object]) -> object:
-        """Get companion-local state scoped to the active interpreter call."""
+    def state[T](
+        self, key: str, factory: Callable[[], T], close: Callable[[T], None] | None = None
+    ) -> T:
+        """Get companion-local state scoped to the active interpreter call.
+
+        *close*, given on the call that creates the value, runs once when the
+        owning interpreter's run ends (or, for a detached call, when
+        :func:`close_detached_state` is called).
+        """
         state = self._active_state.get()
-        return (state if state is not None else self._detached_state).get_or_create(key, factory)
+        return (state if state is not None else self._detached_state).get_or_create(
+            key, factory, close
+        )
 
 
 _COMPANION_RUNTIME = _CompanionRuntime()
+
+
+def close_detached_state() -> None:
+    """Close the fallback state bag used by a companion called outside evaluation.
+
+    For tests and tools only: evaluation always closes its own
+    interpreter-owned state at the run boundary instead.
+    """
+    _COMPANION_RUNTIME._detached_state.close_all()
 
 
 class ExternImportError(AglError):

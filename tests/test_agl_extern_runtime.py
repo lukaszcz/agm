@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
+from agm.agl.eval.ir_interpreter import IrInterpreter
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
+from agm.agl.runtime.externs import ExternRegistry, ExternRuntimeState, close_detached_state
+from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     UNIT_VALUE,
     BoolValue,
@@ -17,10 +22,12 @@ from agm.agl.semantics.values import (
     IntValue,
     TextValue,
 )
-from tests._agl_helpers import prepare_inline_command
+from tests._agl_helpers import agl_roots, file_program, prepare_inline_command
 from tests.agl.ir_harness import (
     evaluate_ir_raises_with_externs,
     evaluate_ir_with_externs,
+    lower_extern_program,
+    run_inline_ir,
     write_companion_file,
     write_module_file,
 )
@@ -200,7 +207,6 @@ def test_extern_defaults_work_for_direct_calls(tmp_path: Path) -> None:
 
 
 def test_indirect_extern_default_and_missing_argument_guards(tmp_path: Path) -> None:
-    from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir import (
         ExecutableModule,
         ExecutableProgram,
@@ -220,8 +226,6 @@ def test_indirect_extern_default_and_missing_argument_guards(tmp_path: Path) -> 
         SymbolId,
     )
     from agm.agl.ir.validate import InvalidIrError
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.externs import ExternRegistry
 
     companion = tmp_path / "companion.py"
     companion.write_text("def increment(value, step): return value + step\n")
@@ -353,3 +357,252 @@ def test_an_attributed_extern_calls_the_companion_it_names(tmp_path: Path) -> No
     assert result["b"] == IntValue(0)
     assert result["c"] == TextValue("HI")
     assert result["d"] == IntValue(3)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic companion state release (``runtime.state(..., close=...)``)
+# ---------------------------------------------------------------------------
+
+
+class _DetachedCompanion(Protocol):
+    """A loaded companion's typed surface for the detached-state test below."""
+
+    closed: list[object]
+
+    def register(self) -> None: ...
+
+
+def _counting_state_companion(created_log: Path, closed_log: Path) -> str:
+    """A companion registering one ``runtime.state`` key, logging create/close."""
+    return (
+        "from agl import runtime\n"
+        "\n"
+        f"_CREATED_LOG = {str(created_log)!r}\n"
+        f"_CLOSED_LOG = {str(closed_log)!r}\n"
+        "\n"
+        "def _make():\n"
+        "    value = id(object())\n"
+        "    with open(_CREATED_LOG, 'a') as f:\n"
+        "        f.write(f'{value}\\n')\n"
+        "    return value\n"
+        "\n"
+        "def _close(value):\n"
+        "    with open(_CLOSED_LOG, 'a') as f:\n"
+        "        f.write(f'{value}\\n')\n"
+        "\n"
+        "def get():\n"
+        "    return runtime.state('k', _make, close=_close)\n"
+    )
+
+
+def test_runtime_state_value_is_reused_within_a_run_and_closed_once_per_run(
+    tmp_path: Path,
+) -> None:
+    created_log = tmp_path / "created.log"
+    closed_log = tmp_path / "closed.log"
+    companion = _counting_state_companion(created_log, closed_log)
+    source = "extern def get() -> int\nlet a = get()\nlet b = get()\n()\n"
+
+    bindings, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+
+    assert bindings["a"] == bindings["b"]
+    assert created_log.read_text().count("\n") == 1
+    # The closer received exactly the value the factory created.
+    assert closed_log.read_text() == created_log.read_text()
+
+    # A separate run gets its own fresh state bag: the factory and the closer
+    # each run again rather than reusing the previous run's registration.
+    evaluate_ir_with_externs(source, companion, tmp_path)
+
+    assert created_log.read_text().count("\n") == 2
+    assert closed_log.read_text() == created_log.read_text()
+
+
+def test_runtime_state_without_close_behaves_exactly_as_before(tmp_path: Path) -> None:
+    source = "extern def get() -> int\nlet a = get()\nlet b = get()\n()\n"
+    companion = (
+        "from agl import runtime\n"
+        "\n"
+        "def _make():\n"
+        "    return id(object())\n"
+        "\n"
+        "def get():\n"
+        "    return runtime.state('k', _make)\n"
+    )
+
+    bindings, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+
+    assert bindings["a"] == bindings["b"]
+
+
+def test_runtime_state_closer_runs_once_when_an_uncaught_exception_escapes(
+    tmp_path: Path,
+) -> None:
+    created_log = tmp_path / "created.log"
+    closed_log = tmp_path / "closed.log"
+    companion = _counting_state_companion(created_log, closed_log)
+    source = 'extern def get() -> int\nlet _ = get()\nraise Abort(message = "boom")\n'
+
+    evaluate_ir_raises_with_externs(source, companion, tmp_path)
+
+    assert closed_log.read_text().count("\n") == 1
+
+
+def test_runtime_state_closer_runs_once_when_process_exit_raises_system_exit(
+    tmp_path: Path,
+) -> None:
+    created_log = tmp_path / "created.log"
+    closed_log = tmp_path / "closed.log"
+    companion = _counting_state_companion(created_log, closed_log)
+    entry_path = tmp_path / "entry.agl"
+    source = file_program(
+        "import std/process\nextern def get() -> int\nlet _ = get()\nprocess::exit(0)\n"
+    )
+    entry_path.write_text(source)
+    (tmp_path / "entry.py").write_text(companion)
+
+    with pytest.raises(SystemExit):
+        PipelineDriver().run(source, entry_path=entry_path, roots=agl_roots())
+
+    assert closed_log.read_text().count("\n") == 1
+
+
+def test_runtime_state_failing_closer_becomes_a_note_naming_companion_state_not_sessions(
+    tmp_path: Path,
+) -> None:
+    """The interpreter's two cleanup managers keep their own labels.
+
+    Only the companion-state closer fails here, so its note must name
+    "companion state cleanup" and never the unrelated session label.
+    """
+    source = 'extern def register() -> unit\nlet _ = register()\nraise Abort(message = "primary")\n'
+    companion = (
+        "from agl import runtime\n"
+        "\n"
+        "def _close(_value):\n"
+        "    raise RuntimeError('cleanup failed')\n"
+        "\n"
+        "def register():\n"
+        "    runtime.state('k', object, close=_close)\n"
+    )
+    program = lower_extern_program(source, companion, tmp_path)
+    registry = ExternRegistry()
+    registry.load_companion(ENTRY_ID, tmp_path / "entry.py")
+
+    with pytest.raises(AglRaise) as excinfo:
+        IrInterpreter(program, extern_registry=registry).run(
+            program_symbol=program.synthetic_main_symbol
+        )
+
+    notes = getattr(excinfo.value, "__notes__", [])
+    assert any("companion state cleanup" in note and "cleanup failed" in note for note in notes)
+    assert not any("agent session cleanup" in note for note in notes)
+
+
+def test_pipeline_run_surfaces_a_failing_companion_closer_as_a_run_error_note(
+    tmp_path: Path,
+) -> None:
+    """The same failure, driven through the public pipeline, lands in ``RunError.notes``."""
+    entry_path = tmp_path / "entry.agl"
+    source = file_program(
+        'extern def register() -> unit\nlet _ = register()\nraise Abort(message = "primary")\n'
+    )
+    companion = (
+        "from agl import runtime\n"
+        "\n"
+        "def _close(_value):\n"
+        "    raise RuntimeError('cleanup failed')\n"
+        "\n"
+        "def register():\n"
+        "    runtime.state('k', object, close=_close)\n"
+    )
+    entry_path.write_text(source)
+    (tmp_path / "entry.py").write_text(companion)
+
+    result = PipelineDriver().run(source, entry_path=entry_path, roots=agl_roots())
+
+    assert result.ok is False
+    assert result.error is not None
+    assert any("companion state cleanup" in note for note in result.error.notes)
+
+
+def test_runtime_state_failing_closer_is_raised_on_a_clean_exit(tmp_path: Path) -> None:
+    entry_path = tmp_path / "entry.agl"
+    source = "extern def register() -> unit\nregister()\n"
+    companion = (
+        "from agl import runtime\n"
+        "\n"
+        "def _close(_value):\n"
+        "    raise RuntimeError('cleanup failed')\n"
+        "\n"
+        "def register():\n"
+        "    runtime.state('k', object, close=_close)\n"
+    )
+    entry_path.write_text(source)
+    (tmp_path / "entry.py").write_text(companion)
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        run_inline_ir(source, entry_path=entry_path)
+
+
+def test_extern_runtime_state_close_all_runs_closers_once_in_reverse_creation_order() -> None:
+    state = ExternRuntimeState()
+    order: list[str] = []
+    state.get_or_create("first", lambda: "a", close=lambda value: order.append(f"first:{value}"))
+    state.get_or_create("second", lambda: "b", close=lambda value: order.append(f"second:{value}"))
+
+    state.close_all()
+    assert order == ["second:b", "first:a"]
+
+    state.close_all()  # a second call is a no-op
+    assert order == ["second:b", "first:a"]
+
+
+def test_extern_runtime_state_close_all_attaches_a_note_for_each_further_failing_closer() -> None:
+    def _fail(message: str) -> None:
+        raise RuntimeError(message)
+
+    state = ExternRuntimeState()
+    state.get_or_create("first", lambda: "a", close=lambda _value: _fail("first failed"))
+    state.get_or_create("second", lambda: "b", close=lambda _value: _fail("second failed"))
+
+    with pytest.raises(RuntimeError, match="second failed") as excinfo:
+        state.close_all()
+
+    assert any("first failed" in note for note in excinfo.value.__notes__)
+
+
+def test_extern_runtime_state_get_or_create_without_a_closer_drops_the_value_silently() -> None:
+    state = ExternRuntimeState()
+    state.get_or_create("k", lambda: object())
+
+    state.close_all()  # nothing registered to close; must not raise
+
+
+def test_close_detached_state_closes_state_created_by_a_direct_companion_call(
+    tmp_path: Path,
+) -> None:
+    """A companion called with no active interpreter falls back to detached state.
+
+    Loads a real companion module and calls its function directly (no
+    interpreter, no ``ExternCallWindow``), then closes the detached bag
+    explicitly, as tests and tools do.
+    """
+    companion_path = write_companion_file(
+        tmp_path,
+        "entry",
+        "from agl import runtime\n"
+        "\n"
+        "closed = []\n"
+        "\n"
+        "def register():\n"
+        "    runtime.state(\n"
+        "        'test-direct-companion-call', object, close=lambda value: closed.append(value)\n"
+        "    )\n",
+    )
+    companion = cast(_DetachedCompanion, ExternRegistry().load_companion(ENTRY_ID, companion_path))
+
+    companion.register()
+    close_detached_state()
+
+    assert len(companion.closed) == 1

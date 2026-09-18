@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
+from typing import cast
 
 
 @contextmanager
@@ -23,3 +24,28 @@ def preserve_primary_error(cleanup: Callable[[], None], *, label: str) -> Genera
         raise
     else:
         cleanup()
+
+
+def run_cleanup_steps(steps: Sequence[Callable[[], None]]) -> None:
+    """Run every *step*, even after an earlier one raises.
+
+    Catches ``BaseException`` so one step's ``KeyboardInterrupt`` never skips
+    the rest. The first failure propagates once every step has run, with each
+    later failure attached to it as a note.
+    """
+    primary: BaseException | None = None
+    for step in steps:
+        try:
+            step()
+        except BaseException as exc:
+            if primary is None:
+                primary = exc
+            else:
+                primary.add_note(f"cleanup step also failed: {exc}")
+    if primary is not None:
+        raise primary
+
+
+def notes_of(exc: BaseException) -> tuple[str, ...]:
+    """Return every note attached to *exc* (e.g. by :func:`preserve_primary_error`)."""
+    return tuple(cast(list[str], getattr(exc, "__notes__", ())))

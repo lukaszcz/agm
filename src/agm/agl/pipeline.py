@@ -42,6 +42,7 @@ from agm.agl.runtime.types import (
     ProgramParamInfo,
 )
 from agm.agl.self_validation import self_validation_enabled
+from agm.core.cleanup import notes_of
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -241,15 +242,18 @@ class RunError:
     ``line`` is the 1-based source line of the raise site when known; ``None`` when
     the span was not threaded through (e.g. arithmetic errors inside expressions).
     ``col`` is the 1-based source column of the raise site; ``None`` when unknown.
+    ``notes`` are cleanup-failure notes attached to the raise (e.g. a companion
+    state closer failing while this exception was already propagating).
     """
 
     type_name: str
     fields: dict[str, object]
     line: int | None = None
     col: int | None = None
+    notes: tuple[str, ...] = ()
 
     def to_message(self) -> str:
-        """Render the single-line ``AgL exception: ...`` report for this error."""
+        """Render the ``AgL exception: ...`` report, then each note on its own line."""
         parts: list[str] = [f"AgL exception: {self.type_name}"]
         message = self.fields.get("message")
         if isinstance(message, str) and message:
@@ -259,7 +263,7 @@ class RunError:
                 parts.append(f"at line {self.line}, col {self.col}")
             else:
                 parts.append(f"at line {self.line}")
-        return ": ".join(parts)
+        return "\n".join([": ".join(parts), *self.notes])
 
 
 @dataclass(slots=True)
@@ -636,6 +640,7 @@ class PipelineDriver:
                 nominals=executable.nominals,
                 span=exc.span,
                 exception_field_encodes=executable.exception_field_encodes,
+                notes=notes_of(exc),
             )
             # Record the uncaught exception in the trace.
             trace.exception(
@@ -2105,6 +2110,7 @@ def exception_value_to_run_error(
     nominals: "Mapping[NominalId, NominalDescriptor]",
     span: "object" = None,  # SourceSpan | None — avoids import cycle
     exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] | None" = None,
+    notes: tuple[str, ...] = (),
 ) -> RunError:
     """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``.
 
@@ -2131,6 +2137,10 @@ def exception_value_to_run_error(
     *span* is the optional raise-site source span threaded from ``AglRaise``;
     when present, ``RunError.line`` and ``RunError.col`` are populated from it
     so the CLI can include the source location in its exit-2 error output.
+
+    *notes* carries the caught ``AglRaise``'s ``__notes__`` (e.g. a companion
+    state closer that failed while this exception was already propagating)
+    straight onto ``RunError.notes``.
     """
     from agm.agl.ir.ids import Location
     from agm.agl.runtime.serialize import (
@@ -2168,7 +2178,9 @@ def exception_value_to_run_error(
     if isinstance(span, (SourceSpan, Location)):
         line = span.start_line
         col = span.start_col
-    return RunError(type_name=nominals[exc.nominal].display_name, fields=fields, line=line, col=col)
+    return RunError(
+        type_name=nominals[exc.nominal].display_name, fields=fields, line=line, col=col, notes=notes
+    )
 
 
 def _build_call_inventory_from_ir(entries: "tuple[object, ...]") -> list[CallSiteInfo]:

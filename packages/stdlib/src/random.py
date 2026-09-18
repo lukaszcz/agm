@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 import uuid as uuid_module
 from decimal import Decimal
-from typing import Protocol, cast
+from typing import Protocol
 
 from agl import AglException, nominals, runtime
 
@@ -14,7 +14,7 @@ IndexError = nominals.std.errors.IndexError
 
 def _random() -> random.Random:
     """Return the pseudo-random source for the active AgL interpreter."""
-    return cast(random.Random, runtime.state("std/random", random.Random))
+    return runtime.state("std/random", random.Random)
 
 
 class _MutableSequence(Protocol):

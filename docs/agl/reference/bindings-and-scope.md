@@ -299,9 +299,10 @@ builtin_var_def ::= "builtin" NEWLINE? "var" name ":" type_expr ["=" expr]
 
 A `builtin var` declares a body-less, host-backed, **mutable** binding with a
 mandatory type and an optional declared default. Its initializer must be a
-constant expression of the declared type: literals, literal containers,
-constructor applications, and a unary operator over any of those (`-1`,
-`not true`) are allowed; reads, calls other than constructors, and binary
+**constant expression** of the declared type: literals, literal containers,
+constructor applications, a [`resource`/`resource-dir`](expressions.md#resource-and-resource-dir)
+call, and a unary operator over any of those (`-1`, `not true`) are allowed;
+other reads, calls other than constructors and resource lookups, and binary
 operators are not. The `builtin` marker may be on the same line as `var` or on
 the line directly above it. A declaration may appear only at the root, or in a
 named scope region, of a module whose path identity lies under `std`, which it

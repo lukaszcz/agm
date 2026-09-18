@@ -1,0 +1,5 @@
+@param let factor: int = 2
+
+scope Extra
+  @param let bonus: bool = false
+end Extra

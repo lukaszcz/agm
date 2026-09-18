@@ -210,7 +210,7 @@ short spelling.
 For an unset module parameter, the value is chosen in this order:
 
 ```
-CLI flag  >  @opt-env variable  >  program route  >  module route  >  initializer
+CLI flag  >  @opt-env variable  >  program route  >  @config  >  module route  >  initializer
 ```
 
 The **program route** is the selected program's table. It addresses a parameter
@@ -220,9 +220,11 @@ name a nearer declaration claims — an engine setting, the signature, a nearer
 module — is therefore still configurable for one program through a qualified
 leaf. Setting two spellings of one parameter in a single layer is an error, and
 a spelling several parameters claim is rejected naming them, exactly as the
-matching flag would be. The program route wins over the **module route**, even
-when the latter appears in a more-specific TOML layer. A module route addresses
-the binding's declaring module and scope, so it remains available too.
+matching flag would be. The program route wins over the selected program's own
+[`@config`](attributes.md#config) entries, which in turn win over the
+**module route**, even when the latter appears in a more-specific TOML layer.
+A module route addresses the binding's declaring module and scope, so it
+remains available too.
 
 For example, this program imports the `A/logging` module:
 
@@ -293,14 +295,15 @@ Import `std/config` and read or write a setting through a qualified target
 `agm exec` resolves initial values as:
 
 ```
-setting X:    source (std/config::X := e)  >  CLI --X  >  qualified program table  >  [exec].X  >  declared default
+setting X:    source (std/config::X := e)  >  CLI --X  >  qualified program table  >  @config  >  [exec].X  >  declared default
 argument Y:   CLI token (--Y / positional) >  qualified program table             >  declared default > required error
 ```
 
-The CLI flag and config-file layers supply a setting's **initial** value; a
-source write to `std/config::X` overrides them from its program point onward.
-A program that never writes a setting keeps the value chosen by the CLI/config
-layers.
+The CLI flag and config-file layers, and the selected program's own
+[`@config`](attributes.md#config) entries, supply a setting's **initial**
+value; a source write to `std/config::X` overrides them from its program
+point onward. A program that never writes a setting keeps the value chosen by
+those layers.
 
 `agm repl` resolves engine settings as source writes > CLI > `[exec]` > declared
 default. It has no entry program: a `program def` declared at the prompt is an
@@ -318,7 +321,11 @@ declaration name — `[prog.main]` for a program named `main` in a file whose
 stem or route is `prog`. The same table supplies both that program's engine-key
 overrides and its own value parameters. A longer suffix, including an exact
 quoted module route, disambiguates same-leaf modules. Inline `-c` value
-parameters are CLI-only.
+parameters are CLI-only. The selected program's own
+[`@config`](attributes.md#config) entries rank between this qualified table
+and `[exec]` for an engine setting, and between this table and a module route
+for a module parameter; `@config` is a source declaration, so it never
+appears in a config file.
 
 A program a package registers as a CLI command is addressed by that command
 path too: `agm dev review`, registered for `review-tools/review::main`, reads

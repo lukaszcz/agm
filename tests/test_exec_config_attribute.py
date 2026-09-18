@@ -407,6 +407,27 @@ class TestConfigStrictJson:
         assert exc_info.value.code == 2  # strict JSON rejects the fenced payload
 
 
+class TestConfigCombinesParamAndEngineTargets:
+    """A single ``@config`` may target a ``@param`` binding and an engine
+    setting together; both partitions merge independently in the same run."""
+
+    def test_module_param_and_engine_setting_both_apply(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "import std/config\n\n"
+            "@param let count: int = 1\n\n"
+            '@config(count = 7, config::timeout = Some("4s"))\n'
+            "program def main() -> unit =\n"
+            "  print count\n"
+            "  print(config::timeout)\n",
+        )
+        exec_command.run(_exec_args_no_log(agl_file))
+        assert capsys.readouterr().out == '7\nOption::Some(value = "4s")\n'
+
+
 class TestProgramDefCalledAsAnOrdinaryFunctionIgnoresConfig:
     def test_config_is_ignored_when_called_as_a_function(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -423,6 +444,24 @@ class TestProgramDefCalledAsAnOrdinaryFunctionIgnoresConfig:
         exec_command.run(_exec_args_no_log(agl_file, program="main"))
         # build's own @config entry never applies: it is not the selected program.
         assert capsys.readouterr().out == "1\n"
+
+    def test_selecting_the_sibling_program_applies_its_own_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The flip side: selecting ``build`` directly applies its own
+        ``@config`` (distinct from ``main``'s), proving the two declarations'
+        entries stay independent rather than one leaking into the other."""
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "@param let count: int = 1\n\n"
+            "@config(count = 99)\n"
+            "program def build() -> unit = print(count)\n\n"
+            "@config(count = 2)\n"
+            "program def main() -> unit = print(count)\n",
+        )
+        exec_command.run(_exec_args_no_log(agl_file, program="build"))
+        assert capsys.readouterr().out == "99\n"
 
 
 class TestRegisteredCommandHonoursConfig:

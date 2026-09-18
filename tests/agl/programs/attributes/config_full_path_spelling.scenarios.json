@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "full_path_key_resolves_the_same_declaration",
+      "module_roots": [
+        "program_modules/attributes/config_attribute"
+      ],
+      "expect": {
+        "stdout": "50\n"
+      }
+    },
+    {
+      "name": "directly_supplied_seed_still_outranks_the_full_path_config_entry",
+      "module_roots": [
+        "program_modules/attributes/config_attribute"
+      ],
+      "module_params": {
+        "libs/settings::factor": 100
+      },
+      "expect": {
+        "stdout": "100\n"
+      }
+    }
+  ]
+}

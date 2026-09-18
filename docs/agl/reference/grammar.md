@@ -214,8 +214,12 @@ parenthesized block passed as an argument carries its own parentheses:
 ## Attributes
 
 ```ebnf
-attributes ::= attribute+
-attribute  ::= "@" NAME ["(" arg_list? ")"] NEWLINE?
+attributes    ::= attribute+
+attribute     ::= "@" NAME ["(" attr_arg_list? ")"] NEWLINE?
+attr_arg_list ::= attr_arg ("," attr_arg)* ","?
+attr_arg      ::= element_expr                    (* positional: every attribute but @config *)
+                | attr_key "=" element_expr       (* keyed: @config only *)
+attr_key      ::= name | qualifier_chain name
 ```
 
 An attribute prefixes a **defining declaration**: a record, an enum, an enum
@@ -227,8 +231,10 @@ own and take no attribute.
 [Lexical structure](lexical-structure.md#attributes) gives the placements an
 attribute may take.
 
-An attribute's arguments are an ordinary `arg_list`; every built-in attribute
-takes literal constants only, positionally. The catalog, per-attribute
+Every built-in attribute but `@config` takes literal constants only,
+positionally. `@config` instead takes one or more keyed entries, each an
+`attr_key` — a bare or `::`-qualified reference, resolved like any other
+reference — paired with a constant value. The catalog, per-attribute
 semantics, and the errors an unknown, misplaced, repeated, or contradicted
 attribute raises: [Attributes](attributes.md).
 

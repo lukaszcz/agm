@@ -56,6 +56,7 @@ from tests._agl_helpers import (
     agl_roots,
     module_param_values,
     prepare_inline_command,
+    program_config_engine_seeds,
     run_inline_command,
 )
 from tests._process_helpers import FakeShell
@@ -766,10 +767,11 @@ def _run_prepared_entry(
 ) -> Any:
     """Run the sole selected file-style entry through the public pipeline seams.
 
-    Routes through :meth:`PipelineDriver.preflight_arguments` (binding
-    *positional*/*param_values* as the entry program's own value arguments)
-    when the selected entry ``program def`` declares parameters or a scenario
-    supplies module parameters. A program with neither just runs.
+    Always routes through :meth:`PipelineDriver.preflight_arguments` (binding
+    *positional*/*param_values* as the entry program's own value arguments),
+    so a parameterless entry's own ``@config`` — module parameter or engine
+    setting — is evaluated and seeded exactly like one that declares
+    parameters or receives module parameters.
     """
     discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:
@@ -778,41 +780,36 @@ def _run_prepared_entry(
     assert len(entry_programs) == 1
     entry_program = entry_programs[0]
 
-    if entry_program.parameters or module_params is not None:
-        from agm.agl.runtime.arguments import ProgramArguments
-
-        argument_preflight = runtime.preflight_arguments(
-            prepared,
-            entry_program,
-            ProgramArguments(
-                positional=tuple(positional) if positional else (),
-                named=dict(param_values) if param_values else {},
-            ),
-            compiled=discovery.compiled,
-            param_values=module_param_values(discovery, entry_program, module_params),
-        )
-        if not argument_preflight.result.ok:
-            return argument_preflight.result
-        assert argument_preflight.executable is not None
-        return runtime.run_prepared(
-            prepared,
-            compiled=discovery.compiled,
-            executable=argument_preflight.executable,
-            program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
-            arguments=argument_preflight.arguments,
-            param_seeds=argument_preflight.param_seeds,
-            process_environment=process_environment,
+    if not entry_program.parameters and module_params is None:
+        assert not positional and not param_values, (
+            "scenario supplied 'positional'/'params' but the entry program declares "
+            "no value parameters to receive them - check the fixture's program "
+            "signature"
         )
 
-    assert not positional and not param_values, (
-        "scenario supplied 'positional'/'params' but the entry program declares "
-        "no value parameters to receive them - check the fixture's program "
-        "signature"
+    from agm.agl.runtime.arguments import ProgramArguments
+
+    argument_preflight = runtime.preflight_arguments(
+        prepared,
+        entry_program,
+        ProgramArguments(
+            positional=tuple(positional) if positional else (),
+            named=dict(param_values) if param_values else {},
+        ),
+        compiled=discovery.compiled,
+        param_values=module_param_values(discovery, entry_program, module_params),
     )
+    if not argument_preflight.result.ok:
+        return argument_preflight.result
+    assert argument_preflight.executable is not None
     return runtime.run_prepared(
         prepared,
         compiled=discovery.compiled,
-        select_default_program=True,
+        executable=argument_preflight.executable,
+        program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
+        arguments=argument_preflight.arguments,
+        param_seeds=argument_preflight.param_seeds,
+        builtin_var_seeds=program_config_engine_seeds(argument_preflight) or None,
         process_environment=process_environment,
     )
 

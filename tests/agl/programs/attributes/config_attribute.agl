@@ -1,0 +1,23 @@
+# `@config` seeds a module parameter in the program's own module (a plain
+# `int` and a record), one in an imported module (suffix-qualified key), and
+# one in that module's own `scope` region. A directly supplied module seed
+# still outranks every `@config` entry, key by key.
+
+import libs/settings
+
+record Budget(cap: int, label: text)
+
+@param let retries: int = 1
+@param let plan: Budget = Budget(cap = 1, label = "base")
+
+@config(
+  retries = 5,
+  plan = Budget(cap = 9, label = "config"),
+  settings::factor = 20,
+  settings::Extra::bonus = true,
+)
+program def main() -> unit =
+  print retries
+  print(plan.cap + settings::factor)
+  print plan.label
+  print settings::Extra::bonus

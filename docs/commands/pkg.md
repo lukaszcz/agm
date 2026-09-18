@@ -193,10 +193,14 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
   the program's qualified table (e.g. `[review-tools.main.review]` for
   `review-tools/main::review`) or a registered command path (`[pr-review]`, or `[dev.review]`
   for command `dev review`). Both name the same program regardless of how it runs, so setting
-  one key through both in one config layer is an error. A module parameter also uses the module
-  route of its declaring module; a resolving program-route leaf — its bare external name, or a
-  dotted qualified spelling as a quoted key — overrides that module-route leaf.
-  CLI and `@opt-env` values win over both. See [Configuration](agl.md#configuration).
+  one key through both in one config layer is an error. The program's own
+  [`@config`](../agl/reference/attributes.md#config) entries rank below the program route: an
+  engine setting falls through to `@config` before `[exec]`, and a module parameter falls
+  through to `@config` before its declaring module's module route. A resolving program-route
+  leaf — its bare external name, or a dotted qualified spelling as a quoted key — still overrides
+  both. CLI values win over all of them; `@opt-env` reaches a module parameter the same way, but
+  not an engine setting, which only a source `std/config` write outranks. See
+  [Configuration](agl.md#configuration).
 - **`--dry-run`**, before or after the command path, runs the static pipeline and host-input
   validation without executing.
 - **Conflicts.** Two active packages cannot own the same command path; install the later one with

@@ -101,6 +101,14 @@ module, not a value parameter of a `program def`. A selected program exposes
 the marked bindings from its transitive import closure alongside its own
 parameters; see [Module parameters](host-environment.md#module-parameters).
 
+### Program-selected configuration
+
+A `program def` may carry [`@config`](attributes.md#config), stating the
+values its own selection gives to module parameters and engine settings, in
+source. It has no effect unless that `program def` is the one a host selects
+to run; see [Host-configurable settings](host-environment.md#host-configurable-settings)
+for where it ranks.
+
 ## Module items
 
 ### Import declarations

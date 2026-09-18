@@ -656,6 +656,38 @@ req
     assert metadata.raw["strict_json"] is True
 
 
+def test_ask_request_schema_describes_enum_members_from_doc_attributes() -> None:
+    source = """\
+@doc("The review was deferred.")
+record Deferred(date: text)
+
+enum Review
+  | @doc("The change is ready to merge.") Pass
+  | @doc("The change needs revisions.") Fail(reason: text)
+  | ::Deferred
+
+let worker = AgentCommand("worker")
+let req = ask-request::[Review]("Review this.", agent = worker)
+req
+"""
+    ir = evaluate_ir_with_agents(source, scripts={"worker": []})
+
+    req = ir["req"]
+    assert isinstance(req, RecordValue)
+    schema = req.fields["json-schema"]
+    assert isinstance(schema, RecordValue)
+    schema_value = schema.fields["value"]
+    assert isinstance(schema_value, JsonValue)
+    assert isinstance(schema_value.raw, dict)
+    one_of = schema_value.raw["oneOf"]
+    assert isinstance(one_of, list)
+    assert [variant["description"] for variant in one_of] == [
+        "The change is ready to merge.",
+        "The change needs revisions.",
+        "The review was deferred.",
+    ]
+
+
 def test_ask_request_records_its_retry_policy() -> None:
     """``on-parse-error`` shapes the attempt budget recorded on the request."""
     source = """\

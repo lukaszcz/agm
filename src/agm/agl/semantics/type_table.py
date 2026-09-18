@@ -201,6 +201,9 @@ class TypeDef:
     ``field_external_names`` — ``(field_name, ExternalName)`` pairs for the
                    OWN fields carrying ``@name``/``@json-name``, in
                    declaration order; unrenamed fields are absent.
+    ``doc``        — the declaration's recognized ``@doc`` prose, when present.
+                   It is presentation metadata rather than part of the type's
+                   semantic shape, so it is excluded from equality/hashing.
     """
 
     kind: TypeDefKind
@@ -219,6 +222,7 @@ class TypeDef:
     is_inline_enum_member: bool = field(default=False, compare=False)
     external_name: ExternalName = NO_EXTERNAL_NAME
     field_external_names: tuple[tuple[str, ExternalName], ...] = ()
+    doc: str | None = field(default=None, compare=False)
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
         """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
@@ -955,6 +959,10 @@ class TypeTable:
     def external_name(self, handle: RecordType) -> ExternalName:
         """Return the ``@name``/``@json-name`` spellings of record *handle*'s declaration."""
         return self._require_record_def(handle, caller="external_name").external_name
+
+    def record_doc(self, handle: RecordType) -> str | None:
+        """Return a record/member declaration's recognized ``@doc`` prose."""
+        return self._require_record_def(handle, caller="record_doc").doc
 
     def json_fields(self, handle: RecordType | ExceptionType) -> tuple[tuple[str, str, Type], ...]:
         """Return every field of *handle* as ``(declared_name, json_name, field_type)``.

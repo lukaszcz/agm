@@ -630,6 +630,7 @@ class _TypeBuilder:
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
             external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
             field_external_names=self._field_external_names(stmt.fields),
+            doc=self._attributes.docs.get(stmt.node_id),
         )
         self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
@@ -727,6 +728,7 @@ class _TypeBuilder:
                 is_inline_enum_member=True,
                 external_name=self._attributes.external_names.get(vd.node_id, NO_EXTERNAL_NAME),
                 field_external_names=self._field_external_names(vd.fields),
+                doc=self._attributes.docs.get(vd.node_id),
             )
             member_defs.append(member_def)
             self._env.register_constructor_field_kinds(
@@ -772,6 +774,7 @@ class _TypeBuilder:
                 members=tuple(members),
                 is_builtin=stmt.is_builtin,
                 decl_node_id=enum_decl_id,
+                doc=self._attributes.docs.get(stmt.node_id),
             ),
             tuple(member_defs),
         )
@@ -828,6 +831,7 @@ class _TypeBuilder:
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
             field_external_names=self._field_external_names(stmt.fields),
+            doc=self._attributes.docs.get(stmt.node_id),
         )
         self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
@@ -1033,6 +1037,7 @@ class _TypeBuilder:
             decl_node_id=template.decl_id,
             external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
             field_external_names=self._field_external_names(stmt.fields),
+            doc=self._attributes.docs.get(stmt.node_id),
         )
         self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)

@@ -31,9 +31,9 @@ Derivation rules:
                 and per-field ``properties``, keyed by each field's effective
                 JSON name (``@json-name`` ?? ``@name`` ?? declared).
 - ``enum``    → ``{"oneOf": [...]}`` — one variant schema per variant, each an
-                object with a ``"$case"`` const property (the member's
-                effective JSON tag) and any payload fields, JSON-keyed the
-                same way.
+                object with the member's ``@doc`` as ``description`` when
+                present, a ``"$case"`` const property (the member's effective
+                JSON tag), and any payload fields, JSON-keyed the same way.
 
 Recursive types: both derivations expand the
 concrete *instantiation graph* reachable from *typ* (nodes are concrete
@@ -291,7 +291,8 @@ def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dic
     Each variant becomes a ``oneOf`` alternative.  The ``"$case"`` property is
     a ``const`` string that identifies the selected variant — the member's
     effective JSON tag; payload fields follow, keyed by their effective JSON
-    names.
+    names. A documented member carries its ``@doc`` prose as the alternative's
+    ``description`` annotation.
     """
     variant_schemas: list[object] = []
     for variant_name, member in type_table.enum_member_names(typ).items():
@@ -302,14 +303,16 @@ def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dic
         for _field_name, json_name, field_type in type_table.json_fields(member):
             properties[json_name] = _emit(field_type, type_table, plan)
             required.append(json_name)
-        variant_schemas.append(
-            {
-                "type": "object",
-                "additionalProperties": False,
-                "required": required,
-                "properties": properties,
-            }
-        )
+        variant_schema: dict[str, object] = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": required,
+            "properties": properties,
+        }
+        doc = type_table.record_doc(member)
+        if doc is not None:
+            variant_schema["description"] = doc
+        variant_schemas.append(variant_schema)
     return {"oneOf": variant_schemas}
 
 

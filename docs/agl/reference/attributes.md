@@ -45,7 +45,7 @@ static errors.
 
 | Attribute | Argument | Allowed on | Effect |
 | --------- | -------- | ---------- | ------ |
-| `@doc("…")` | prose | every defining declaration | Describes the declaration; hosts show it in help. |
+| `@doc("…")` | prose | every defining declaration | Describes the declaration; hosts show it in help, and enum-member prose annotates derived JSON Schema. |
 | `@arg-pos` | none | parameter, field, or their declaring `def`, `record`, `exception`, or enum member | Positional-only zone. |
 | `@arg-std` | none | same | Standard zone (positional or named). |
 | `@arg-named` | none | same | Named-only zone. |
@@ -80,6 +80,9 @@ standard. Zone semantics: [Functions](functions.md#parameters),
 One text literal of prose. It never changes a declaration's meaning. A host
 shows a `program def`'s `@doc` as the program's description and each host-facing
 parameter's `@doc` as that parameter's help ([Host environment](host-environment.md#help)).
+An inline enum member's `@doc`, or a referenced member record's own `@doc`, is
+the `description` of that member's `oneOf` alternative in a
+[derived JSON Schema](agent-calls.md#derived-json-schema).
 
 ## `@extern-name`
 

@@ -681,6 +681,7 @@ class TestInfo:
         outcome = meta_mod.dispatch_meta(":info fs::missing", _session_ctx(session))
 
         assert outcome.text == "Unknown identifier 'fs::missing'."
+        assert session.info_of("std/fs::missing") is None
 
     def test_info_reports_an_imported_generic_type_and_constructor(self) -> None:
         session = _open_session()

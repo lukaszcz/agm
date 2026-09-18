@@ -483,7 +483,7 @@ mechanically from the target type:
 | `array[T]` | `{"type": "array", "items": <T>}` |
 | `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
 | record | object schema: `additionalProperties: false`, all fields `required`, per-field `properties` keyed by effective JSON name |
-| enum | `oneOf` of per-member-record schemas, each with a `"$case"` `const` holding the member's effective JSON tag plus record fields keyed by effective JSON name, `additionalProperties: false` |
+| enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name, and `additionalProperties: false` |
 
 A target type's schema uses standard JSON Schema `$defs`/`$ref` for any
 record/enum it would otherwise repeat. A reachable type gets one entry under a

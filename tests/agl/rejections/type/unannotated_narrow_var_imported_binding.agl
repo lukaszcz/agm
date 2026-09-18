@@ -1,0 +1,6 @@
+# An unannotated exported var whose inferred type names a single enum case
+# is rejected in the module that declares it, whether or not it is imported.
+import store
+
+program def main() -> unit =
+  print store::v

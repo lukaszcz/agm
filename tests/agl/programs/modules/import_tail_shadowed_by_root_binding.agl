@@ -1,0 +1,13 @@
+# A root let/var shadows a same-named import-tail binding for the whole
+# module, including a def declared above the shadowing declaration: local
+# declarations win regardless of textual order, the same as two same-module
+# defs already do.
+import store::*
+
+def read-total() -> int = total
+
+let total = 99
+
+program def main() -> unit =
+  print read-total()
+  print total

@@ -1,0 +1,9 @@
+# Library module forming a cyclic import with `beta`. Its unannotated
+# exported binding is constant, so beta can read it even though beta's own
+# unannotated function calls back into this module's unannotated function,
+# closing the cycle.
+import beta::*
+
+let base = 10
+
+def total(n: int) -> int = if n == 0 => base + extra else => total(n - 1)

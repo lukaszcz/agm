@@ -197,6 +197,8 @@ _RawNamed: TypeAlias = syntax.NamedArg | _RawNamedArg
 _RawArgLists: TypeAlias = tuple[list[_RawPosArg], list[_RawNamed]]
 _ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
 _JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
+_RawAttrPosArg: TypeAlias = syntax.Expr | _RawInfixChain
+_RawAttrArgLists: TypeAlias = tuple[list[_RawAttrPosArg], list[syntax.AttributeKeyedArg]]
 _RawItem: TypeAlias = syntax.Item | _RawInfixChain
 _InfixOperatorSpec: TypeAlias = tuple[int, syntax.InfixAssoc, syntax.BinOp | None]
 #: One ``use`` target before its spelling is resolved: the merged qualifier
@@ -779,19 +781,18 @@ class AstBuilder(Transformer):
         return tuple(a for a in args if isinstance(a, syntax.Attribute))
 
     def attribute(self, meta: Meta, args: _Args) -> syntax.Attribute:
-        """attribute: AT NAME (LPAR arg_list? RPAR)? — kept exactly as written."""
+        """attribute: AT NAME (LPAR attr_arg_list? RPAR)? — kept exactly as written."""
         name_tok = next(a for a in args if _is_name_token(a))
         span = self._span_from_meta(meta)
-        raw_pos: list[_RawPosArg] = []
-        raw_named: list[_RawNamed] = []
+        raw_pos: list[_RawAttrPosArg] = []
+        keyed_args: list[syntax.AttributeKeyedArg] = []
         for a in args:
             if isinstance(a, tuple) and len(a) == 2 and isinstance(a[0], list):
-                raw_pos, raw_named = cast(_RawArgLists, a)
-        pos_args, named_args = self._finalize_call_args(raw_pos, raw_named, call_span=span)
+                raw_pos, keyed_args = cast(_RawAttrArgLists, a)
         return syntax.Attribute(
             name=str(name_tok),
-            args=pos_args,
-            named_args=named_args,
+            args=tuple(cast(syntax.Expr, a) for a in raw_pos),
+            keyed_args=tuple(keyed_args),
             span=span,
             node_id=self._next_id(),
         )
@@ -1834,11 +1835,7 @@ class AstBuilder(Transformer):
                 seen_named = True
             elif isinstance(a, _RawPlaceholder) or _is_expr_node(a):
                 pos_arg = cast(_RawPosArg, a)
-                if seen_named:
-                    raise AglSyntaxError(
-                        "positional argument after named argument is not allowed.",
-                        span=pos_arg.span,
-                    )
+                _reject_positional_after_keyed(pos_arg.span, seen_keyed=seen_named)
                 pos_args.append(pos_arg)
         return (pos_args, named_args)
 
@@ -1867,6 +1864,56 @@ class AstBuilder(Transformer):
             name=str(name_tok),
             value=cast(syntax.Expr, value),
             span=span,
+            node_id=self._next_id(),
+        )
+
+    def attr_arg_list(self, meta: Meta, args: _Args) -> _RawAttrArgLists:
+        """attr_arg_list: attr_arg (COMMA attr_arg)* COMMA?
+
+        Returns (pos_args, keyed_args) for the attribute builder. Keys are
+        not checked for duplicates here; each attribute's own semantics
+        decide. Positional arguments after a keyed one are still rejected
+        here, as for an ordinary call.
+        """
+        pos_args: list[_RawAttrPosArg] = []
+        keyed_args: list[syntax.AttributeKeyedArg] = []
+        seen_keyed = False
+        for a in args:
+            if isinstance(a, syntax.AttributeKeyedArg):
+                keyed_args.append(a)
+                seen_keyed = True
+            elif _is_expr_node(a):
+                pos_arg = cast(_RawAttrPosArg, a)
+                _reject_positional_after_keyed(pos_arg.span, seen_keyed=seen_keyed)
+                pos_args.append(pos_arg)
+        return (pos_args, keyed_args)
+
+    def attr_keyed_arg(self, meta: Meta, args: _Args) -> syntax.AttributeKeyedArg:
+        """attr_keyed_arg: attr_key EQ arg_expr — a bare or qualified attribute key.
+
+        ``attr_key`` reuses ``qual_var_ref``/``var_ref``, so the key already
+        arrives as a finished ``VarRef`` — the same construction an ordinary
+        reference expression gets, just picked out of the child list here.
+        The value is ``arg_expr`` only: an attribute keyed argument never
+        admits a placeholder. A type-applied qualifier segment
+        (``Foo[int]::x``) is rejected: an attribute key names a binding, not
+        a generic instantiation. See ``AttributeKeyedArg`` for the key's
+        legal qualifier spellings.
+        """
+        key = next(a for a in args if isinstance(a, syntax.VarRef))
+        if key.qualifier is not None and any(
+            segment.type_args is not None for segment in key.qualifier.segments
+        ):
+            raise AglSyntaxError(
+                "an attribute key names a binding; type arguments have no meaning here.",
+                span=key.span,
+            )
+        # A raw infix chain is grouped later by ``_rewrite_attributes``.
+        value = cast(syntax.Expr, next(a for a in args if _is_expr_node(a) and a is not key))
+        return syntax.AttributeKeyedArg(
+            key=key,
+            value=value,
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
@@ -3502,6 +3549,18 @@ def _is_expr_node(a: object) -> bool:
     return isinstance(a, syntax.Expr) or isinstance(a, _RawInfixChain)
 
 
+def _reject_positional_after_keyed(pos_arg_span: SourceSpan, *, seen_keyed: bool) -> None:
+    """Raise if a positional argument follows a named/keyed one.
+
+    Shared by arg_list and attr_arg_list.
+    """
+    if seen_keyed:
+        raise AglSyntaxError(
+            "positional argument after named argument is not allowed.",
+            span=pos_arg_span,
+        )
+
+
 def _find_non_token(args: _Args) -> object:
     """Return the first non-None, non-Token element in args."""
     result = next(
@@ -3769,15 +3828,20 @@ def _rewrite_arguments(
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
     builder: AstBuilder,
 ) -> tuple[tuple[syntax.Expr, ...], tuple[syntax.NamedArg, ...]]:
-    """Group the raw infix chains inside one argument list.
-
-    Calls and attributes take the same argument syntax, so they group it the
-    same way.
-    """
+    """Group the raw infix chains inside a call's argument list."""
     return (
         tuple(_rewrite_expr(arg, table, builder) for arg in args),
         tuple(_rewrite_named_arg(arg, table, builder) for arg in named_args),
     )
+
+
+def _rewrite_attribute_keyed_arg(
+    arg: syntax.AttributeKeyedArg,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.AttributeKeyedArg:
+    """Group the raw infix chain inside one keyed argument's value."""
+    return replace(arg, value=_rewrite_expr(arg.value, table, builder))
 
 
 def _rewrite_attributes(
@@ -3792,8 +3856,16 @@ def _rewrite_attributes(
     """
     rewritten: list[syntax.Attribute] = []
     for attribute in attributes:
-        args, named_args = _rewrite_arguments(attribute.args, attribute.named_args, table, builder)
-        rewritten.append(replace(attribute, args=args, named_args=named_args))
+        rewritten.append(
+            replace(
+                attribute,
+                args=tuple(_rewrite_expr(arg, table, builder) for arg in attribute.args),
+                keyed_args=tuple(
+                    _rewrite_attribute_keyed_arg(arg, table, builder)
+                    for arg in attribute.keyed_args
+                ),
+            )
+        )
     return tuple(rewritten)
 
 

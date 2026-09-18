@@ -36,10 +36,11 @@ enum Shape
   | Empty
 ```
 
-Every built-in attribute takes literal constants only, positionally: either
-nothing or one text literal. An unknown name, a misplaced, repeated, or
-conflicting attribute, and an argument list the attribute does not admit are
-static errors.
+Every built-in attribute but `@config` takes literal constants only,
+positionally: either nothing or one text literal. `@config` instead takes one
+or more `key = value` entries; see [`@config`](#config) below. An unknown
+name, a misplaced, repeated, or conflicting attribute, and an argument list
+the attribute does not admit are static errors.
 
 ## Catalog
 
@@ -61,6 +62,7 @@ static errors.
 | `@command("…")` | command path | `program def` | Registers the program as that package command. |
 | `@description("…")` | prose | `program def` | The registered command's one-line description. |
 | `@help("…")` | prose | `program def` | Further prose the registered command's help shows. |
+| `@config(key = value, ...)` | one or more keyed entries | `program def` | States the values module parameters and engine settings take when this program is selected. |
 
 ## Zone attributes
 
@@ -174,7 +176,8 @@ parameter boundary.
 Its initializer supplies the value when the host leaves the parameter unset;
 when the host supplies a value, that value is bound instead and the initializer
 is not evaluated. A `var` remains mutable after that initial host value is
-bound.
+bound. When exported (see [Modules](modules.md#re-exports-and-visibility)), an
+importer may also write it.
 
 The presentation attributes `@opt-name`, `@opt-short`, `@opt-env`,
 `@opt-metavar`, `@opt-hidden`, and `@doc` apply to the binding. Without
@@ -194,6 +197,63 @@ scope debug
   @param @opt-name("trace") let tracing = false
 end debug
 ```
+
+## `@config`
+
+`@config` states, in source, the values a `program def` selects for module
+parameters and engine settings when it is the program a host runs — the
+source-level counterpart of that program's own configuration table. It takes
+one or more `key = value` entries, comma-separated and optionally spanning
+several lines with a trailing comma, and is legal only on a `program def`, at
+most once.
+
+Each `key` is an ordinary AgL reference — bare, suffix-qualified, fully
+qualified, anchored with a leading `::`, or a scope path — resolved by
+ordinary scope lookup in the scope that declares the `program def` (not its
+own parameter scope). The same visibility and import rules apply as for any
+reference: a target reached only through another module still needs that
+module imported to be named.
+
+Each key must resolve to a [module parameter](#module-parameters) — a
+`@param` binding anywhere in the program's transitive import closure,
+including its own module — or one of the root `std/config` [engine
+settings](host-environment.md#engine-settings). Any other target (a plain
+`let`/`var`, a non-engine `builtin var`, a function, a type) is a static
+error, as is a key that resolves to no declaration — which includes a name
+that only a signature parameter binds, since a `program def`'s own parameter
+scope is not where a `@config` key resolves. Two entries addressing the same
+target, by any two spellings, are a static error.
+
+Each `value` is a [constant expression](bindings-and-scope.md#builtin-var--host-backed-bindings),
+checked against the target's declared type — the module parameter's own
+type, or the engine setting's type.
+
+```agl
+import std/config
+import std/log
+
+@param let retries: int = 1
+
+scope Debug
+  @param let verbose: bool = false
+end Debug
+
+@config(
+  retries = 5,
+  Debug::verbose = true,
+  config::timeout = Some("30m"),
+  log::level = log::Level::Debug,
+)
+program def main() -> unit = print retries
+```
+
+`@config` applies only when its `program def` is the **selected** program: a
+program reached through an ordinary call, or a sibling `program def` in the
+same module that is not selected, keeps its own parameters and settings
+unaffected by it. `agm check` and the REPL validate a `@config` attribute
+statically and apply nothing. Where `@config` ranks in the full resolution
+order for a module parameter and an engine setting, and how it interacts with
+a program's own configuration table: [Host environment](host-environment.md#host-configurable-settings).
 
 ## Host parameter attributes
 

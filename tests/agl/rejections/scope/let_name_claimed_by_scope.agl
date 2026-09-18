@@ -1,0 +1,7 @@
+scope Region
+  let cap = 10
+end Region
+
+let Region = 1
+
+program def main() -> unit = print Region

@@ -1,0 +1,17 @@
+# Binding rules around a single enum case: a module-level `let` inferring
+# `None` needs no annotation, since it is never reassigned; an annotated
+# `var` may freely narrow to `None` and widen back to `Some`; an unannotated
+# `var` of a record type is fine even when a field is itself an `Option`.
+record Holder(value: Option[int])
+
+let v = None
+
+var counter: Option[int] = None
+
+var h = Holder(value = None)
+
+program def main() -> unit =
+  print v
+  counter := Some(5)
+  print counter
+  print h.value

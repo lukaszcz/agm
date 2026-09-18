@@ -1,0 +1,5 @@
+# Writing a wrongly typed value to an imported `var` is a type error.
+import store
+
+program def main() -> unit =
+  store::total := "oops"

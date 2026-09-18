@@ -1,0 +1,6 @@
+# An unannotated root binding whose constructor call has a wrong-typed
+# argument: the static-binding pre-pass's own type error, not a constancy
+# rejection, since a constructor call is otherwise a constant expression.
+import shapes
+
+let origin = shapes::Point(x = "bad", y = 2)

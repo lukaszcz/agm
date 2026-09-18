@@ -212,3 +212,8 @@ STD_CONFIG_ID: ModuleId = ModuleId(segments=("std", "config"))
 
 #: Logical module id for the ambient process-environment standard library.
 STD_ENV_ID: ModuleId = ModuleId(segments=("std", "env"))
+
+
+def is_std_config_root(module_id: ModuleId, scope_path: Sequence[str]) -> bool:
+    """Whether *module_id*/*scope_path* names a root ``std/config`` binding."""
+    return module_id == STD_CONFIG_ID and not scope_path

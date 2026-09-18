@@ -1,0 +1,8 @@
+# Library module completing the cycle with `alpha`. Reads alpha's
+# unannotated exported binding directly from an unannotated function, mirroring
+# alpha's own cross-cycle read of this module's unannotated binding.
+import alpha::*
+
+let extra = 5
+
+def double-base() -> int = base * 2

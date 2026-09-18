@@ -1,0 +1,6 @@
+# A plain `import ... hiding` on an exported var makes it unreachable, so a
+# bare write to it fails exactly like a re-export's `hiding` does.
+import store::* hiding total
+
+program def main() -> unit =
+  total := 1

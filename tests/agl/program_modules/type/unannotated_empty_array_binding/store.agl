@@ -1,0 +1,4 @@
+# An unannotated root var whose initializer is an empty array literal still
+# needs a type annotation, exactly as it would for a non-exported binding:
+# becoming exportable does not relax this pre-existing literal-inference rule.
+var xs = []

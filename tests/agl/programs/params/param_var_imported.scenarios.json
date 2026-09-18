@@ -1,0 +1,33 @@
+{
+  "scenarios": [
+    {
+      "name": "no_module_seeds",
+      "module_roots": [
+        "program_modules/params/param_var_imported"
+      ],
+      "params": {
+        "boost": 2
+      },
+      "expect": {
+        "stdout": "3\n5\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "seed_module_then_write",
+      "module_roots": [
+        "program_modules/params/param_var_imported"
+      ],
+      "params": {
+        "boost": 1
+      },
+      "module_params": {
+        "budget::limit": 10
+      },
+      "expect": {
+        "stdout": "10\n11\n",
+        "calls": {}
+      }
+    }
+  ]
+}

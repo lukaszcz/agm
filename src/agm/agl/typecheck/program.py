@@ -41,25 +41,41 @@ Algorithm
    annotations for top-level ``FuncDef`` declarations in every module,
    producing a declaration-node-id-keyed signature table.
 
-3. **Import-SCC candidate inference** — consume the loader's graph SCCs in
+3. **Module headers and static bindings** — finalize every module's record,
+   enum, and exception bodies and pre-register function headers
+   (:func:`~agm.agl.typecheck.checker.prepare_module_headers`), then resolve
+   every module's exported static ``let``/``var`` binding type: an annotated
+   binding resolves its annotation, an unannotated one is typed from its
+   constant initializer (a static-root binding in an importable module already
+   requires one). Running this after headers, not before, keeps a binding's
+   own diagnostic from preempting a type declaration's; running it before
+   candidate inference means a published binding type never depends on an
+   inferred function signature. A module served from the artifact cache
+   supplies its published binding types directly, skipping the recheck.
+   Every resulting binding and builtin-var type is seeded into every module's
+   environment for cross-module references.
+
+4. **Import-SCC candidate inference** — consume the loader's graph SCCs in
    reverse topological order. Ordinary dependency SCCs publish their closed
    signatures before their importers are considered. Each candidate function
    dependency SCC publishes only closed unannotated signatures; one resulting
    cycle builds a single cross-module function graph.
 
-4. **Authoritative per-module type-check** — after every signature is concrete,
+5. **Authoritative per-module type-check** — after every signature is concrete,
    recheck each module body with its module-aware
    :class:`~agm.agl.typecheck.env.TypeEnvironment`. This pass alone publishes
    checked node types, calls, contracts, bindings, and warnings. Each module's
    environment starts its own-facts journal
    (:meth:`~agm.agl.typecheck.env.TypeEnvironment.begin_own_facts`)
-   immediately before this recheck, once phases 1-3 are done mutating it, so
+   immediately before this recheck, once phases 1-4 are done mutating it, so
    the journal records exactly this recheck's mutations
-   (:class:`~agm.agl.typecheck.env.CheckedModuleImage`).
+   (:class:`~agm.agl.typecheck.env.CheckedModuleImage`). Consequently, an
+   unannotated static binding's own type error surfaces before its module's
+   ordinary body-check diagnostics.
 
-Phases 1-3 live in :func:`_prepare_program`, returning the prepared
+Phases 1-4 live in :func:`_prepare_program`, returning the prepared
 per-module environments and tables in :class:`_PreparedProgram`;
-:func:`check_program` runs phase 4 over that result.
+:func:`check_program` runs phase 5 over that result.
 """
 
 from __future__ import annotations
@@ -101,13 +117,21 @@ from agm.agl.syntax.nodes import (
     Program,
     RecordDef,
     TypeAlias,
+    VarDecl,
+    exported_binding_name,
+    static_binding_node_id,
     static_function_items,
     static_items,
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
+from agm.agl.typecheck.checker import (
+    _check_prepared_module,
+    _Checker,
+    prepare_module_headers,
+    require_static_root_constant,
+)
 from agm.agl.typecheck.declaration_validation import (
     validate_builtin_declaration_uniqueness,
     validate_method_declaration_collisions,
@@ -124,6 +148,7 @@ from agm.agl.typecheck.env import (
     TypeEnvironment,
     _assert_checked_types_closed,
     assert_checked_output_closed,
+    dereference_slot_constructor_ref,
 )
 from agm.agl.typecheck.function_inference import (
     CandidateModule,
@@ -842,28 +867,94 @@ def _build_program_func_sig_table(
     return result
 
 
-def _build_program_static_let_table(
-    resolved: ResolvedProgram, module_envs: Mapping[ModuleId, TypeEnvironment]
-) -> dict[int, Type]:
-    """Resolve annotated static ``let`` bindings for cross-module access.
+def _screen_unannotated_binding_is_constant(
+    item: LetDecl | VarDecl, module_resolved: ModuleResolution
+) -> None:
+    """Reject a non-constant unannotated static-root binding before scratch-typing it.
 
-    Module-root lets initialize before importers execute. An annotation makes
-    their type available in the whole-program header phase, while the ordinary
-    body check remains responsible for validating the initializer.
+    Uses only scope-resolved data (no checker-time slot resolution exists yet),
+    so a non-constant initializer never reaches expression checking before
+    candidate function signatures are published.
+    """
+    require_static_root_constant(
+        item.value,
+        module_resolved,
+        is_constructor=lambda node_id: (
+            dereference_slot_constructor_ref(
+                node_id,
+                resolution=module_resolved.resolution,
+                constructor_refs=module_resolved.constructor_refs,
+                slot_constructor_refs={},
+            )
+            is not None
+        ),
+    )
+
+
+def _build_program_static_binding_table(
+    resolved: ResolvedProgram,
+    module_envs: Mapping[ModuleId, TypeEnvironment],
+    capabilities: HostCapabilities,
+    cached_modules: Mapping[ModuleId, PublishedModuleSurface] | None = None,
+) -> dict[int, Type]:
+    """Resolve every exported static ``let``/``var`` binding for cross-module access.
+
+    Module-root and scoped bindings initialize before importers execute.
+    Annotated: resolve the annotation directly. Unannotated: the static-root
+    constant-expression rule already required of every module-level initializer
+    in an importable module (``checker.require_static_root_constant``) means an
+    unannotated binding's type depends only on its own initializer -- never on
+    another binding or on candidate function inference, which has not run yet
+    -- so it is screened for constancy and then typed with a throwaway
+    ``_Checker``'s ``infer_static_initializer_type`` over this module's own
+    prepared environment (the same pattern
+    ``function_inference._seed_candidate_visible_bindings`` uses), which
+    installs no binding and writes nothing beyond the initializer's own
+    ordinary node types.
+
+    A non-static-root module (the REPL, or a ``-c`` entry with no ``program
+    def`` of its own) is skipped: it is never imported, so nothing reads its
+    published types. A loose file with its own ``program def`` is still
+    static-root despite carrying ``ENTRY_ID`` (no package identity), since
+    its own defs need root bindings' types seeded just like an importable
+    module's -- hence the ``static_root`` test here, not an ``ENTRY_ID`` one.
+
+    A module served from the artifact cache is never re-checked here: its
+    published binding types are read directly off its ``published_binding_types``.
     """
     result: dict[int, Type] = {}
     for mid, loaded in resolved.modules.items():
+        module_resolved = loaded.resolved
+        if not module_resolved.static_root:
+            continue
+        cached = cached_modules.get(mid) if cached_modules is not None else None
+        if cached is not None and cached.published_binding_types is not None:
+            result.update(cached.published_binding_types)
+            continue
         env = module_envs[mid]
-        for item in static_items(loaded.resolved.program.body.items):
-            if not isinstance(item, LetDecl) or item.type_ann is None:
+        checker: _Checker | None = None
+        for item in static_items(module_resolved.program.body.items):
+            if not isinstance(item, (LetDecl, VarDecl)):
                 continue
-            if item.name == "_":
+            if exported_binding_name(item) is None:
                 continue
+            decl_node_id = static_binding_node_id(item)
             scope_path = tuple(segment.name for segment in item.scope_path)
-            with env.type_scope(scope_path):
-                result[item.node_id] = env.resolve_type_expr(
-                    item.type_ann, span=item.span, type_vars=frozenset()
+            if item.type_ann is not None:
+                with env.type_scope(scope_path):
+                    result[decl_node_id] = env.resolve_type_expr(
+                        item.type_ann, span=item.span, type_vars=frozenset()
+                    )
+                continue
+            _screen_unannotated_binding_is_constant(item, module_resolved)
+            if checker is None:
+                checker = _Checker(
+                    env=env,
+                    resolved=module_resolved,
+                    capabilities=capabilities,
+                    module_id=mid,
                 )
+            result[decl_node_id] = checker.infer_static_initializer_type(item)
     return result
 
 
@@ -931,6 +1022,25 @@ def _module_function_signatures(
         assert signature is not None, f"No checked signature for '{item.name}'"
         signatures[item.name] = signature
     return signatures
+
+
+def _module_static_binding_types(program: Program, env: TypeEnvironment) -> dict[int, Type]:
+    """Return this module's own published static-binding types, keyed by node id.
+
+    Read straight off the authoritative post-check environment -- the same
+    source ``_module_function_signatures`` reads signatures from -- not off the
+    static-binding pre-pass table, so a published type always matches what the
+    ordinary body check installed.
+    """
+    result: dict[int, Type] = {}
+    for item in static_items(program.body.items):
+        if not isinstance(item, (LetDecl, VarDecl)) or exported_binding_name(item) is None:
+            continue
+        node_id = static_binding_node_id(item)
+        binding_type = env.get_binding_type(node_id)
+        assert binding_type is not None, f"No checked type for binding node {node_id}"
+        result[node_id] = binding_type
+    return result
 
 
 def _prepare_module_environment(
@@ -1047,6 +1157,7 @@ class _PreparedProgram:
     module_envs: dict[ModuleId, TypeEnvironment]
     program_type_table: dict[DeclKey, Type]
     program_func_sig_table: dict[int, FunctionSignatureRecord]
+    program_static_binding_table: dict[int, Type]
     candidate_records: dict[int, FunctionSignatureRecord]
     ordered_mids: tuple[ModuleId, ...]
     declaration_spans: dict[DeclarationKey, SourceSpan]
@@ -1138,20 +1249,6 @@ def _prepare_program(
             entry_seed_env=entry_seed_env if mid == resolved.entry_id else None,
         )
 
-    # Annotated static lets and builtin vars need each module's complete type
-    # environment, while the environments themselves need those types only for
-    # later body checks. Build the environments first, then seed their completed
-    # binding tables into every module for cross-module references.
-    program_static_let_table = _build_program_static_let_table(resolved, module_envs)
-    program_builtin_var_table = _build_program_builtin_var_table(
-        resolved, module_envs, shared_type_table
-    )
-    for env in module_envs.values():
-        for binding_node_id, binding_type in program_static_let_table.items():
-            env.set_binding_type(binding_node_id, binding_type)
-        for var_node_id, var_type in program_builtin_var_table.items():
-            env.set_binding_type(var_node_id, var_type)
-
     program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
     declaration_spans = _declaration_spans(resolved)
 
@@ -1162,6 +1259,25 @@ def _prepare_program(
             env=module_envs[mid],
             module_id=mid,
         )
+
+    # Static let/var bindings and builtin vars need each module's headers
+    # finalized (record/enum/exception bodies, constructor arities) so that a
+    # binding's own initializer diagnostic never preempts a type-declaration
+    # diagnostic from the same module. They need each module's complete type
+    # environment, while the environments themselves need those types only for
+    # later body checks, so seed the completed binding tables into every
+    # module for cross-module references only after computing them here.
+    program_static_binding_table = _build_program_static_binding_table(
+        resolved, module_envs, capabilities, cached_modules=cached_checked_modules
+    )
+    program_builtin_var_table = _build_program_builtin_var_table(
+        resolved, module_envs, shared_type_table
+    )
+    for env in module_envs.values():
+        for binding_node_id, binding_type in program_static_binding_table.items():
+            env.set_binding_type(binding_node_id, binding_type)
+        for var_node_id, var_type in program_builtin_var_table.items():
+            env.set_binding_type(var_node_id, var_type)
 
     for mid, retained in cached_checked_modules.items():
         env = module_envs[mid]
@@ -1248,6 +1364,7 @@ def _prepare_program(
         module_envs=module_envs,
         program_type_table=program_type_table,
         program_func_sig_table=program_func_sig_table,
+        program_static_binding_table=program_static_binding_table,
         candidate_records=candidate_records,
         ordered_mids=ordered_mids,
         declaration_spans=declaration_spans,
@@ -1385,6 +1502,9 @@ def check_program(
                 for item in static_function_items(rmod.resolved.program.body.items)
                 if item.node_id in program_func_sig_table
             },
+            published_binding_types=_module_static_binding_types(
+                rmod.resolved.program, cp.type_env
+            ),
         )
         checked_modules[mid] = cm
 

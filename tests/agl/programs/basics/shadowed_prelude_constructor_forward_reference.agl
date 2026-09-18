@@ -1,0 +1,10 @@
+# A root let/var shadows a prelude constructor's bare name for the whole
+# module, including a def declared above the shadowing declaration -- the
+# same relaxed order any other root binding follows.
+def read-none() -> int = None
+
+let None = 1
+
+program def main() -> unit =
+  print read-none()
+  print None

@@ -1,0 +1,5 @@
+# Writing an imported `let` is an error, exactly like writing a local one.
+import store
+
+program def main() -> unit =
+  store::fixed := 1

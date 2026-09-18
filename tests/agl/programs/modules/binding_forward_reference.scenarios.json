@@ -1,0 +1,30 @@
+{
+  "scenarios": [
+    {
+      "name": "small_delta",
+      "module_roots": [
+        "program_modules/modules/binding_forward_reference"
+      ],
+      "params": {
+        "delta": 3
+      },
+      "expect": {
+        "stdout": "0\n3\n3\n12\n6\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "large_delta",
+      "module_roots": [
+        "program_modules/modules/binding_forward_reference"
+      ],
+      "params": {
+        "delta": 10
+      },
+      "expect": {
+        "stdout": "0\n10\n10\n12\n6\n",
+        "calls": {}
+      }
+    }
+  ]
+}

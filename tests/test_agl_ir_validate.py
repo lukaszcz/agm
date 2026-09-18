@@ -82,6 +82,7 @@ from agm.agl.ir import (
 from agm.agl.ir.contracts import ContractRequest
 from agm.agl.ir.ids import ContractId
 from agm.agl.ir.nodes import IrExpr
+from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import STD_CONFIG_ID, ModuleId
 
@@ -163,6 +164,7 @@ def _make_program(
     program_symbols: dict[int, SymbolId] | None = None,
     program_functions: dict[SymbolId, FunctionId] | None = None,
     program_signatures: "dict[SymbolId, tuple[IrProgramParam, ...]] | None" = None,
+    program_configs: "dict[SymbolId, tuple[tuple[StaticBindingKey, IrExpr], ...]] | None" = None,
     synthetic_main_symbol: SymbolId | None = None,
     builtin_var_declarations: frozenset[tuple[ModuleId, tuple[str, ...], str]] = frozenset(),
 ) -> ExecutableProgram:
@@ -197,6 +199,7 @@ def _make_program(
             if program_signatures is None
             else program_signatures
         ),
+        program_configs={} if program_configs is None else program_configs,
         synthetic_main_symbol=synthetic_main_symbol,
         builtin_var_declarations=builtin_var_declarations,
     )
@@ -1933,6 +1936,88 @@ class TestProgramSignatureValidation:
 
         with pytest.raises(InvalidIrError, match="disagrees"):
             validate_ir(prog)
+
+
+class TestProgramConfigsValidation:
+    """``program_configs`` entries must index a linked program, with no
+    target repeated within one entry, and a std/config-rooted target must
+    name a known engine setting."""
+
+    def test_entry_for_a_non_program_symbol_raises(self) -> None:
+        """A program_configs entry not indexed by a linked program is rejected."""
+        target: StaticBindingKey = (STD_CONFIG_ID, (), "log")
+        prog = _make_program(
+            program_configs={SYM1: ((target, IrConstBool(location=LOC, value=True)),)}
+        )
+
+        with pytest.raises(InvalidIrError, match="program_configs"):
+            validate_ir(prog)
+
+    def test_duplicate_target_within_one_entry_raises(self) -> None:
+        """The same target repeated within one program's entries is rejected."""
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        target: StaticBindingKey = (STD_CONFIG_ID, (), "log")
+        prog = _make_program(
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+            program_configs={
+                SYM0: (
+                    (target, IrConstBool(location=LOC, value=True)),
+                    (target, IrConstBool(location=LOC, value=False)),
+                )
+            },
+        )
+
+        with pytest.raises(InvalidIrError, match="duplicate target"):
+            validate_ir(prog)
+
+    def test_a_single_entry_validates(self) -> None:
+        """A program_configs entry on a linked program with one target validates."""
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        target: StaticBindingKey = (STD_CONFIG_ID, (), "log")
+        prog = _make_program(
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+            program_configs={SYM0: ((target, IrConstBool(location=LOC, value=True)),)},
+        )
+
+        validate_ir(prog)  # no exception
+
+    def test_an_unknown_std_config_target_raises(self) -> None:
+        """A std/config-rooted target naming no known engine setting is rejected."""
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        target: StaticBindingKey = (STD_CONFIG_ID, (), "not-a-real-setting")
+        prog = _make_program(
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+            program_configs={SYM0: ((target, IrConstBool(location=LOC, value=True)),)},
+        )
+
+        with pytest.raises(InvalidIrError, match="program_configs"):
+            validate_ir(prog)
+
+    def test_a_param_target_absent_from_param_bindings_still_validates(self) -> None:
+        """A non-std/config target is not cross-checked against param_bindings.
+
+        A REPL's growing entry module may declare a ``@config`` target's
+        ``@param`` binding in an earlier entry, so this table -- built only
+        from the modules and items the current lowering call walks -- can
+        lack it even though the checker legitimately resolved it.
+        """
+        fn_desc = _make_fn_desc(fn_sym=SYM0)
+        target: StaticBindingKey = (MOD_A, (), "count")
+        prog = _make_program(
+            functions={FN0: fn_desc},
+            program_symbols={10: SYM0},
+            program_functions={SYM0: FN0},
+            program_configs={SYM0: ((target, IrConstInt(location=LOC, value=2)),)},
+        )
+        assert target not in prog.param_bindings
+
+        validate_ir(prog)  # no exception
 
 
 class TestIrMakeClosure:

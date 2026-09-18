@@ -12,7 +12,6 @@ Allowed imports:
 - ``agm.agl.runtime.serialize`` (untyped coercion and static direct JSON
   construction)
 - ``agm.config.engine_keys`` (the canonical engine-key catalog data leaf)
-- ``agm.agent.spec`` (AGENT_SPECS, for the Agent enum's member names)
 
 NOT allowed: ``agm.agl.syntax``, ``agm.agl.scope``, ``agm.agl.typecheck``.
 """
@@ -21,11 +20,9 @@ from __future__ import annotations
 
 import decimal
 import inspect
-import sys
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, ContextManager, Protocol, TypeVar, assert_never, cast
 
-from agm.agent.spec import AGENT_SPECS
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.eval.arith import (
     AglDivisionByZero,
@@ -42,7 +39,7 @@ from agm.agl.eval.arith import (
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
-from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key, is_engine_builtin_var_key
 from agm.agl.ir.contracts import (
     ContractRequest,
@@ -144,7 +141,7 @@ from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
-from agm.agl.runtime.engine_config import engine_default_settings
+from agm.agl.runtime.engine_config import engine_default_settings, restamp_engine_setting
 from agm.agl.runtime.externs import (
     AglCallableProxy,
     ExternCallWindow,
@@ -179,16 +176,15 @@ from agm.agl.semantics.values import (
     Value,
 )
 from agm.config.engine_keys import (
-    ENGINE_KEYS,
     HOST_CONSUMED_ENGINE_KEYS,
     RUNTIME_LIVE_ENGINE_KEYS,
     TRACE_ENGINE_KEYS,
-    EngineKeyKind,
     trace_write_implies_enabled,
 )
 from agm.core.cleanup import preserve_primary_error
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
+from agm.util.recursion import raised_recursion_limit
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
@@ -207,71 +203,6 @@ __all__ = [
 _SCALAR_ENCODE_PLAN = EncodePlan(ScalarEncode())
 
 _ArgT = TypeVar("_ArgT")
-
-
-def _engine_key_shape(kind: EngineKeyKind) -> tuple[str, tuple[str, ...]] | None:
-    """Return the ``(enum name, member names)`` an engine key *kind* restamps, if any."""
-    if kind is EngineKeyKind.AGENT:
-        return ("Agent", tuple(AGENT_SPECS))
-    if kind is EngineKeyKind.OPTION_TEXT:
-        return ("Option", ("None", "Some"))
-    return None
-
-
-#: Engine key name -> ``(enum name, member names)``, built once from ``ENGINE_KEYS``.
-_ENGINE_KEY_ENUM_SHAPES: dict[str, tuple[str, tuple[str, ...]]] = {
-    spec.name: shape for spec in ENGINE_KEYS if (shape := _engine_key_shape(spec.kind)) is not None
-}
-
-
-def _engine_key_enum_shape(key: str) -> tuple[str, tuple[str, ...]] | None:
-    """Return the ``(enum name, member names)`` an enum-backed engine key restamps.
-
-    ``None`` for a key whose kind carries no host-enum identity.
-    """
-    return _ENGINE_KEY_ENUM_SHAPES.get(key)
-
-
-def _restamp_host_enum_member(
-    value: RecordValue,
-    *,
-    enum_name: str,
-    member_names: tuple[str, ...],
-    from_table: BuiltinNominals,
-    to_table: BuiltinNominals,
-) -> RecordValue:
-    """Restamp *value*'s identity from *from_table* to *to_table*, if it is an *enum_name* member.
-
-    Used both to bind a persisted engine-setting seed (reserved fallback
-    identity) onto this program's own nominal table, and to persist a
-    post-run engine-setting value (this program's identity) back onto the
-    reserved fallback table so it survives past this program's own lifetime.
-    """
-    for member_name in member_names:
-        source = from_table.resolve_standard_member(enum_name, member_name)
-        if value.nominal == source.nominal:
-            target = to_table.resolve_standard_member(enum_name, member_name)
-            return RecordValue(nominal=target.nominal, fields=value.fields)
-    return value
-
-
-def _restamp_engine_setting(
-    key: str, value: Value, *, from_table: BuiltinNominals, to_table: BuiltinNominals
-) -> Value:
-    """Restamp *value* onto *to_table*'s identity when *key* is enum-backed."""
-    if not isinstance(value, RecordValue):
-        return value
-    shape = _engine_key_enum_shape(key)
-    if shape is None:
-        return value
-    enum_name, member_names = shape
-    return _restamp_host_enum_member(
-        value,
-        enum_name=enum_name,
-        member_names=member_names,
-        from_table=from_table,
-        to_table=to_table,
-    )
 
 
 class HostConfigurationError(Exception):
@@ -585,7 +516,7 @@ class IrInterpreter:
         }
         defaults.update(
             {
-                self._builtin_var_key(key): self._eval(value)
+                self._builtin_var_key(key): self.evaluate_constant(value)
                 for key, value in self._program.builtin_setting_defaults.items()
             }
         )
@@ -626,7 +557,7 @@ class IrInterpreter:
         assert isinstance(timeout_setting, RecordValue)
         timeout_setting = cast(
             RecordValue,
-            _restamp_engine_setting(
+            restamp_engine_setting(
                 "timeout",
                 timeout_setting,
                 from_table=NO_BUILTIN_DECLARATIONS,
@@ -653,7 +584,7 @@ class IrInterpreter:
         if isinstance(default_agent, RecordValue):
             default_agent = cast(
                 RecordValue,
-                _restamp_engine_setting(
+                restamp_engine_setting(
                     "default-agent",
                     default_agent,
                     from_table=NO_BUILTIN_DECLARATIONS,
@@ -666,7 +597,7 @@ class IrInterpreter:
         # ``log-file`` always has a declared default (unlike ``default-agent``),
         # so it is always present here.
         assert isinstance(log_file, RecordValue)
-        self._builtin_host_settings["log-file"] = _restamp_engine_setting(
+        self._builtin_host_settings["log-file"] = restamp_engine_setting(
             "log-file",
             log_file,
             from_table=NO_BUILTIN_DECLARATIONS,
@@ -720,9 +651,9 @@ class IrInterpreter:
 
         A host that persists this past the run that produced it (the REPL)
         needs it recognizable once this run's own compiled program is gone --
-        see :func:`_restamp_host_enum_member`.
+        see :func:`~agm.agl.runtime.engine_config.restamp_engine_setting`.
         """
-        value = _restamp_engine_setting(
+        value = restamp_engine_setting(
             "timeout",
             self._timeout_setting,
             from_table=self._program.builtin_nominals,
@@ -752,10 +683,10 @@ class IrInterpreter:
         seed the next one; an enum-backed value (``Option``/``Agent``) is
         already restamped onto the reserved fallback identity, so such a host
         needs no program-specific nominal table of its own -- see
-        :func:`_restamp_host_enum_member`.
+        :func:`~agm.agl.runtime.engine_config.restamp_engine_setting`.
         """
         return {
-            key: _restamp_engine_setting(
+            key: restamp_engine_setting(
                 key,
                 value,
                 from_table=self._program.builtin_nominals,
@@ -1220,6 +1151,14 @@ class IrInterpreter:
                 exc.span = location
             raise
 
+    def evaluate_constant(self, expr: IrExpr) -> Value:
+        """Evaluate a checked constant expression: no binding, setting, or host effect.
+
+        Shared by ``builtin var`` default bootstrap and ``@config`` preflight
+        evaluation, both of which consume only checker-proven-constant IR.
+        """
+        return self._eval(expr)
+
     def run(
         self,
         *,
@@ -1245,29 +1184,25 @@ class IrInterpreter:
         """
         needed = _BASE_RECURSION_HEADROOM + self._max_call_depth * _PYTHON_FRAMES_PER_AGL_CALL
         target = min(needed, _MAX_PYTHON_RECURSION_LIMIT)
-        previous_limit = sys.getrecursionlimit()
-        # Never lower an already-higher limit (e.g. a nested run); only raise it.
-        sys.setrecursionlimit(max(previous_limit, target))
         cleanup = self._session_host.close_all if self._close_sessions else _noop
-        try:
-            with preserve_primary_error(cleanup, label="agent session cleanup"):
-                with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-                    self._install_function_closures()
-                    for mod in self._program.modules.values():
-                        for node in mod.initializers:
-                            self._eval_and_record_initializer(mod.module_id, node)
-                    if program_symbol is not None:
-                        try:
-                            self._invoke_program(program_symbol, arguments)
-                        except RecursionError:
-                            error = self._recursion_error()
-                            error.span = self._program_entry_location(program_symbol)
-                            raise error from None
-            return self._collect_results()
-        except RecursionError:
-            raise self._recursion_error() from None
-        finally:
-            sys.setrecursionlimit(previous_limit)
+        with raised_recursion_limit(target):
+            try:
+                with preserve_primary_error(cleanup, label="agent session cleanup"):
+                    with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+                        self._install_function_closures()
+                        for mod in self._program.modules.values():
+                            for node in mod.initializers:
+                                self._eval_and_record_initializer(mod.module_id, node)
+                        if program_symbol is not None:
+                            try:
+                                self._invoke_program(program_symbol, arguments)
+                            except RecursionError:
+                                error = self._recursion_error()
+                                error.span = self._program_entry_location(program_symbol)
+                                raise error from None
+                return self._collect_results()
+            except RecursionError:
+                raise self._recursion_error() from None
 
     def _eval_and_record_initializer(self, module_id: ModuleId, node: IrExpr) -> None:
         """Evaluate one initializer, retaining its result for result collection."""

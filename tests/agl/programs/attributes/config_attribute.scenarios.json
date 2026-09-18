@@ -1,0 +1,26 @@
+{
+  "scenarios": [
+    {
+      "name": "config_values_apply_with_no_other_seed",
+      "module_roots": [
+        "program_modules/attributes/config_attribute"
+      ],
+      "expect": {
+        "stdout": "5\n29\nconfig\ntrue\n"
+      }
+    },
+    {
+      "name": "directly_supplied_seed_still_outranks_config",
+      "module_roots": [
+        "program_modules/attributes/config_attribute"
+      ],
+      "module_params": {
+        "<entry>::retries": 42,
+        "libs/settings::factor": 100
+      },
+      "expect": {
+        "stdout": "42\n109\nconfig\ntrue\n"
+      }
+    }
+  ]
+}

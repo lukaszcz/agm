@@ -394,6 +394,12 @@ class ExecutableProgram:
         IR expression declared by ``builtin var``. The evaluator uses it only
         when the host did not seed that binding. Legacy string keys remain
         supported as root ``std/config`` engine-setting keys.
+      ``program_configs`` — a linked ``program def`` symbol -> its ``@config``
+        entries, each a target ``StaticBindingKey`` (a ``@param`` binding or a
+        root ``std/config`` engine setting) paired with its checked, constant
+        value expression. A program without ``@config`` has no entry.
+        Preflight evaluates the selected program's own entry; calling a
+        ``program def`` as an ordinary function never reads this table.
 
     """
 
@@ -418,3 +424,6 @@ class ExecutableProgram:
         default_factory=dict
     )
     builtin_setting_defaults: dict[BuiltinVarKey | str, IrExpr] = field(default_factory=dict)
+    program_configs: Mapping[SymbolId, tuple[tuple[StaticBindingKey, IrExpr], ...]] = field(
+        default_factory=dict
+    )

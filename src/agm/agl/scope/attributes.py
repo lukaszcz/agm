@@ -7,17 +7,19 @@ admitted target, the arguments match the declared schema, the attribute is not
 repeated or contradicted — and turns the surviving attributes into typed
 side-table entries.
 
-Seven facts are built: a parameter's zone, from the ``@arg-*`` attribute an
+Eight facts are built: a parameter's zone, from the ``@arg-*`` attribute an
 entry or its owning declaration carries; an ``extern def``'s Python companion
 name, from ``@extern-name`` — the walk sees every extern of a module, so it is
 also where their companion names are held apart; host-facing parameters'
 presentation, from ``@param`` and the ``@opt-*`` attributes; the package command
 a ``program def`` registers itself as, from ``@command`` and its prose; a
-declaration's documentation text, from ``@doc``; and a field, inline enum
+declaration's documentation text, from ``@doc``; a field, inline enum
 member, or record declaration's external spellings, from ``@name``/
-``@json-name``. The walk is the seam a further attribute meaning joins
-through — a new fact reads the attributes the walk already hands it and fills
-a table of its own, so it costs one more builder, never one more traversal.
+``@json-name``; and a ``program def``'s ``@config`` entries, filed raw for
+resolution and type checking to give meaning to. The walk is the seam a
+further attribute meaning joins through — a new fact reads the attributes the
+walk already hands it and fills a table of its own, so it costs one more
+builder, never one more traversal.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from agm.agl.attributes import (
     BUILTIN_ATTRIBUTES,
     COMMAND_ATTRIBUTE,
     COMMAND_PROSE_ATTRIBUTES,
+    CONFIG_ATTRIBUTE,
     DESCRIPTION_ATTRIBUTE,
     DOC_ATTRIBUTE,
     EXTERN_NAME_ATTRIBUTE,
@@ -57,6 +60,7 @@ from agm.agl.scope.symbols import AglScopeError, AttributeFacts
 from agm.agl.semantics.external_names import ExternalName
 from agm.agl.syntax.nodes import (
     Attribute,
+    AttributeKeyedArg,
     BuiltinVarDecl,
     EnumDef,
     ExceptionDef,
@@ -70,6 +74,8 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
     VarDecl,
     VariantDef,
+    static_binding_name,
+    static_binding_node_id,
     static_items,
 )
 from agm.agl.syntax.visitor import walk
@@ -190,6 +196,7 @@ def recognize_attributes(
         command_registrations=recognizer.command_registrations,
         docs=recognizer.docs,
         external_names=recognizer.external_names,
+        program_configs=recognizer.program_configs,
     )
 
 
@@ -210,6 +217,7 @@ class _Recognizer:
         self.command_registrations: dict[int, ProgramCommandSpec] = {}
         self.docs: dict[int, str] = {}
         self.external_names: dict[int, ExternalName] = {}
+        self.program_configs: dict[int, tuple[AttributeKeyedArg, ...]] = {}
         self._companion_owners: dict[str, str] = {}
 
     def visit(self, node: object) -> None:
@@ -220,6 +228,7 @@ class _Recognizer:
                 self._extern_name(node, recognized)
             if node.is_program:
                 self._command_registration(node, recognized)
+                self._program_config(node, recognized)
             self._entries(
                 node.params,
                 _zone_attribute(recognized),
@@ -294,13 +303,13 @@ class _Recognizer:
         marker = recognized.nodes.get(PARAM_ATTRIBUTE)
         if marker is None:
             return
-        name = node.name
+        name = static_binding_name(node)
         if name == "_":
             raise AglScopeError(
                 "Attribute '@param' requires a binding with a single name.",
                 span=marker.span,
             )
-        binding_node_id = node.node_id
+        binding_node_id = static_binding_node_id(node)
         self.params[binding_node_id] = _option_spec(name, recognized)
 
     # ------------------------------------------------------------------
@@ -389,6 +398,16 @@ class _Recognizer:
         spec = _program_command_spec(node, recognized)
         if spec is not None:
             self.command_registrations[node.node_id] = spec
+
+    # ------------------------------------------------------------------
+    # Fact builder: program config entries
+    # ------------------------------------------------------------------
+
+    def _program_config(self, node: FuncDef, recognized: _Recognized) -> None:
+        """Record one ``program def``'s ``@config`` entries, if it carries one."""
+        attribute = recognized.nodes.get(CONFIG_ATTRIBUTE)
+        if attribute is not None:
+            self.program_configs[node.node_id] = attribute.keyed_args
 
     # ------------------------------------------------------------------
     # Fact builder: parameter zones
@@ -567,12 +586,23 @@ def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:
     """Reject arguments a built-in attribute's literal schema does not admit.
 
     Returns the text an attribute taking one argument carries, and ``None``
-    for an attribute whose schema takes none. A schema narrowing that text to
-    a spelling a host has to form (``AttributeSpec.pattern``) is enforced
-    here too, so a fact builder downstream reads an argument already known to
-    be well shaped.
+    for an attribute whose schema takes none or keyed entries. A schema
+    narrowing that text to a spelling a host has to form
+    (``AttributeSpec.pattern``) is enforced here too, so a fact builder
+    downstream reads an argument already known to be well shaped.
     """
-    if attribute.named_args:
+    if spec.arguments is AttributeArguments.KEYED_ENTRIES:
+        if attribute.args:
+            raise AglScopeError(
+                f"Attribute '@{attribute.name}' takes only keyed arguments.", span=attribute.span
+            )
+        if not attribute.keyed_args:
+            raise AglScopeError(
+                f"Attribute '@{attribute.name}' requires at least one keyed argument.",
+                span=attribute.span,
+            )
+        return None
+    if attribute.keyed_args:
         raise AglScopeError(
             f"Attribute '@{attribute.name}' takes no named argument.", span=attribute.span
         )

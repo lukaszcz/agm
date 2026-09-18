@@ -15,6 +15,7 @@ import pytest
 
 from agm.agl.attributes import (
     BUILTIN_ATTRIBUTES,
+    CONFIG_ATTRIBUTE,
     PARAM_ATTRIBUTE,
     AttributeArguments,
     AttributeSpec,
@@ -34,6 +35,7 @@ class TestCatalogContents:
             *COMMAND_ATTRIBUTES,
             "extern-name",
             PARAM_ATTRIBUTE,
+            CONFIG_ATTRIBUTE,
             "doc",
             "name",
             "json-name",
@@ -123,6 +125,15 @@ class TestParamAttribute:
 
         assert spec.targets == frozenset({AttributeTarget.BINDING})
         assert spec.arguments is AttributeArguments.NONE
+
+
+class TestConfigAttribute:
+    def test_config_takes_keyed_entries_on_programs_only(self) -> None:
+        spec = BUILTIN_ATTRIBUTES[CONFIG_ATTRIBUTE]
+
+        assert spec.targets == frozenset({AttributeTarget.PROGRAM})
+        assert spec.arguments is AttributeArguments.KEYED_ENTRIES
+        assert spec.conflicts == ()
 
 
 class TestCommandAttributes:

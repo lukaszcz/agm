@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "cross_module_constructor",
+      "module_roots": [
+        "program_modules/modules/unannotated_binding_cross_module_constructor"
+      ],
+      "expect": {
+        "stdout": "1\n2\n",
+        "calls": {}
+      }
+    }
+  ]
+}

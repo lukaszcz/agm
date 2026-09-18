@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import enum
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import Protocol
 
 from agm.agl.keywords import is_plain_name
 from agm.agl.zones import ParamZone
@@ -35,6 +36,7 @@ __all__ = [
     "BUILTIN_ATTRIBUTES",
     "COMMAND_ATTRIBUTE",
     "COMMAND_PROSE_ATTRIBUTES",
+    "CONFIG_ATTRIBUTE",
     "DESCRIPTION_ATTRIBUTE",
     "DOC_ATTRIBUTE",
     "EXTERN_NAME_ATTRIBUTE",
@@ -59,6 +61,7 @@ __all__ = [
     "invalid_external_name",
     "invalid_json_name",
     "invalid_program_command_path",
+    "is_param_declaration",
 ]
 
 
@@ -89,12 +92,15 @@ class AttributeTarget(enum.Enum):
 class AttributeArguments(enum.Enum):
     """The argument shape a built-in attribute accepts.
 
-    Every built-in attribute takes literal constants only, in one of two
-    shapes: nothing at all, or a single text literal.
+    Most built-in attributes take literal constants only, in one of two
+    shapes: nothing at all, or a single text literal. ``@config`` instead
+    takes one or more ``key = value`` entries, resolved and type-checked
+    downstream rather than validated as a literal here.
     """
 
     NONE = "none"
     ONE_TEXT = "one_text"
+    KEYED_ENTRIES = "keyed_entries"
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +177,10 @@ HELP_ATTRIBUTE = "help"
 #: The command attributes carrying prose: legal only beside ``@command``.
 COMMAND_PROSE_ATTRIBUTES: tuple[str, ...] = (DESCRIPTION_ATTRIBUTE, HELP_ATTRIBUTE)
 
+#: The attribute stating the module-parameter and engine-setting values a
+#: ``program def`` selects in source.
+CONFIG_ATTRIBUTE = "config"
+
 #: The attributes shaping how a host-facing parameter is presented.
 OPTION_NAME_ATTRIBUTE = "opt-name"
 OPTION_SHORT_ATTRIBUTE = "opt-short"
@@ -180,6 +190,19 @@ OPTION_HIDDEN_ATTRIBUTE = "opt-hidden"
 
 #: The marker that exposes a static binding as a host-facing parameter.
 PARAM_ATTRIBUTE = "param"
+
+
+class _NamedAttribute(Protocol):
+    """Structural shape shared by every parsed attribute occurrence."""
+
+    @property
+    def name(self) -> str: ...
+
+
+def is_param_declaration(attributes: Iterable[_NamedAttribute]) -> bool:
+    """Whether an attribute prefix carries ``@param``."""
+    return any(attribute.name == PARAM_ATTRIBUTE for attribute in attributes)
+
 
 #: The option attributes that address a parameter by name: they rename its
 #: flag, give it a short spelling, name an environment fallback, or keep that
@@ -365,6 +388,11 @@ _SPECS: tuple[AttributeSpec, ...] = (
     _option_spec(OPTION_HIDDEN_ATTRIBUTE, AttributeArguments.NONE),
     _program_spec(COMMAND_ATTRIBUTE),
     *(_program_spec(name) for name in COMMAND_PROSE_ATTRIBUTES),
+    AttributeSpec(
+        name=CONFIG_ATTRIBUTE,
+        targets=frozenset({AttributeTarget.PROGRAM}),
+        arguments=AttributeArguments.KEYED_ENTRIES,
+    ),
     AttributeSpec(
         name=DOC_ATTRIBUTE,
         targets=_EVERY_TARGET,

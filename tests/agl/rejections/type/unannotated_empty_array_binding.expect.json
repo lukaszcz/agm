@@ -1,0 +1,4 @@
+{
+  "module_roots": ["program_modules/type/unannotated_empty_array_binding"],
+  "diagnostic": {"line": 4, "message_contains": ["annotation"]}
+}

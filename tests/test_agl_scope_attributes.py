@@ -33,6 +33,7 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
     VarDecl,
     VariantDef,
+    VarRef,
     static_function_items,
 )
 from agm.agl.syntax.visitor import walk
@@ -237,6 +238,10 @@ class TestAttributeDiagnostics:
     def test_an_attribute_on_a_disallowed_target_is_rejected(self) -> None:
         with pytest.raises(AglScopeError, match="opt-name"):
             resolve_entry('@opt-name("x")\nrecord R\n  x: int\n')
+
+    def test_a_qualified_keyed_argument_on_a_built_in_attribute_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError):
+            resolve_entry('@doc(a::b = "x")\ndef f() -> int = 1\n')
 
     def test_an_enum_declaration_admits_a_doc_attribute(self) -> None:
         resolution = resolve_entry('@doc("shapes")\nenum Shape =\n  | Dot\n  | Dash\n')
@@ -639,3 +644,70 @@ class TestParseOnlyCommandRecognition:
 
         with pytest.raises(AglScopeError, match="command"):
             recognize_program_command(function)
+
+    def test_a_program_carrying_config_is_still_recognized(self) -> None:
+        function = self._program(
+            'import std/config\n\n@command("audit")\n@config(config::log = true)\n'
+            "program def main() -> unit = ()\n"
+        )
+
+        assert recognize_program_command(function) == ProgramCommandSpec(path="audit")
+
+
+class TestProgramConfigRecognition:
+    """``@config``, filed raw into ``program_configs`` keyed by the program."""
+
+    def test_every_entry_reaches_the_fact_table(self) -> None:
+        resolution = resolve_entry(
+            "import std/config\n\n"
+            "@config(config::log = true, config::timeout = None)\n"
+            "program def main() -> unit = ()\n"
+        )
+
+        program = _program(resolution, "main")
+        entries = resolution.attributes.program_configs[program.node_id]
+        assert len(entries) == 2
+        assert all(isinstance(entry.key, VarRef) for entry in entries)
+        assert [entry.key.name for entry in entries] == ["log", "timeout"]
+
+    def test_a_program_without_config_has_no_entry(self) -> None:
+        resolution = resolve_entry("program def main() -> unit = ()\n")
+
+        assert resolution.attributes.program_configs == {}
+
+    def test_a_program_in_a_scope_region_is_recorded(self) -> None:
+        resolution = resolve_entry(
+            "import std/config\n\n"
+            "scope Tools\n"
+            "\n"
+            "  @config(config::log = true)\n"
+            "  program def run() -> unit = ()\n"
+            "end Tools\n"
+            "\n"
+            "program def main() -> unit = ()\n"
+        )
+
+        program = _program(resolution, "run")
+        assert program.node_id in resolution.attributes.program_configs
+
+    def test_config_with_no_entries_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError):
+            resolve_entry("import std/config\n\n@config()\nprogram def main() -> unit = ()\n")
+
+    def test_a_positional_argument_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError):
+            resolve_entry("import std/config\n\n@config(true)\nprogram def main() -> unit = ()\n")
+
+    def test_repeated_config_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError):
+            resolve_entry(
+                "import std/config\n\n"
+                "@config(config::log = true)\n@config(config::log = false)\n"
+                "program def main() -> unit = ()\n"
+            )
+
+    def test_config_on_a_plain_function_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError):
+            resolve_entry(
+                "import std/config\n\n@config(config::log = true)\ndef helper() -> unit = ()\n"
+            )

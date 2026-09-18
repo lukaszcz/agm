@@ -8,9 +8,9 @@ results plus whole-program pre-pass tables.
 Design
 ------
 - **Public surfaces**: declaration export maps covering top-level declarations
-  and named immutable bindings, plus separate named-scope identity maps per
-  module, including explicit ``export`` declarations, all computed before any
-  body is resolved.
+  and simple ``let``/``var`` bindings, plus separate named-scope identity maps
+  per module, including explicit ``export`` declarations, all computed before
+  any body is resolved.
 - **Contribution import environment per module**: built from each module's
   import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
@@ -35,6 +35,7 @@ from agm.agl.artifact_cache import (
     retained_module_sources,
     retained_resolved_modules,
 )
+from agm.agl.attributes import is_param_declaration
 from agm.agl.modules.ids import ModuleId, expand_module_wildcard
 
 if TYPE_CHECKING:
@@ -60,6 +61,7 @@ from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
     ConstructorRef,
+    DeclInfo,
     ModuleResolution,
     ReceiverOwner,
     ScopeNode,
@@ -90,9 +92,10 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VariantDef,
     VariantRef,
+    exported_binding_name,
+    static_binding_node_id,
     static_items,
 )
-from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, member_type_params
 
 
@@ -408,10 +411,15 @@ def _item_atom(
     return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
 
 
-def _let_atom(item: LetDecl) -> NameAtom | None:
-    if item.type_ann is None or item.name == "_":
+def _static_binding_atom(item: LetDecl | VarDecl) -> NameAtom | None:
+    """Return the exported name atom for a ``let``/``var``, or ``None``.
+
+    The ``_`` wildcard is never exported.
+    """
+    name = exported_binding_name(item)
+    if name is None:
         return None
-    return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
+    return _atom((*tuple(segment.name for segment in item.scope_path), name))
 
 
 def _compute_local_scope_exports(
@@ -470,10 +478,10 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
         elif isinstance(item, BuiltinVarDecl):
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
-        elif isinstance(item, LetDecl):
-            let_atom = _let_atom(item)
-            if let_atom is not None:
-                result[let_atom] = (self_id, let_atom)
+        elif isinstance(item, (LetDecl, VarDecl)):
+            binding_atom = _static_binding_atom(item)
+            if binding_atom is not None:
+                result[binding_atom] = (self_id, binding_atom)
     return result
 
 
@@ -786,9 +794,9 @@ def _decl_to_import_target(decl: ImportDecl | ExportDecl, graph: ModuleGraph) ->
 # Cross-module decl info type aliases
 # ---------------------------------------------------------------------------
 
-# Maps (module_id, name) → (decl_node_id, decl_span, binder_kind, is_builtin)
-# for building BindingRef values for cross-module references.
-_DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind, bool, bool]]
+# Maps (module_id, name) → DeclInfo, for building BindingRef values for
+# cross-module references.
+_DeclInfo = dict[QName, DeclInfo]
 
 
 # ---------------------------------------------------------------------------
@@ -947,12 +955,12 @@ def resolve_program(
                     continue
                 key = (mid, _item_atom(item))
                 all_public_funcs[key] = item
-                decl_info[key] = (
-                    item.node_id,
-                    item.span,
-                    BinderKind.function_binding,
-                    item.is_builtin,
-                    bool(item.params) and item.params[0].name == "self",
+                decl_info[key] = DeclInfo(
+                    decl_node_id=item.node_id,
+                    decl_span=item.span,
+                    kind=BinderKind.function_binding,
+                    is_builtin=item.is_builtin,
+                    is_method=bool(item.params) and item.params[0].name == "self",
                 )
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 key = (mid, _item_atom(item))
@@ -963,26 +971,27 @@ def resolve_program(
                     or isinstance(item.type_expr, (NameT, AppliedT))
                     else BinderKind.let_binding
                 )
-                decl_info[key] = (item.node_id, item.span, kind, False, False)
+                decl_info[key] = DeclInfo(decl_node_id=item.node_id, decl_span=item.span, kind=kind)
             elif isinstance(item, BuiltinVarDecl):
                 key = (mid, _item_atom(item))
-                decl_info[key] = (
-                    item.node_id,
-                    item.span,
-                    BinderKind.builtin_var_binding,
-                    False,
-                    False,
+                decl_info[key] = DeclInfo(
+                    decl_node_id=item.node_id,
+                    decl_span=item.span,
+                    kind=BinderKind.builtin_var_binding,
                 )
-            elif isinstance(item, LetDecl):
-                let_atom = _let_atom(item)
-                if let_atom is not None:
-                    key = (mid, let_atom)
-                    decl_info[key] = (
-                        item.node_id,
-                        item.span,
-                        BinderKind.let_binding,
-                        False,
-                        False,
+            elif isinstance(item, (LetDecl, VarDecl)):
+                binding_atom = _static_binding_atom(item)
+                if binding_atom is not None:
+                    key = (mid, binding_atom)
+                    decl_info[key] = DeclInfo(
+                        decl_node_id=static_binding_node_id(item),
+                        decl_span=item.span,
+                        kind=(
+                            BinderKind.let_binding
+                            if isinstance(item, LetDecl)
+                            else BinderKind.var_binding
+                        ),
+                        is_param=is_param_declaration(item.attributes),
                     )
 
     prelude_static_decl_node_ids = _builtin_static_decl_node_ids(all_public_funcs, all_public_types)

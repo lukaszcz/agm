@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "config_seeds_the_engine_setting",
+      "params": {
+        "override": false
+      },
+      "expect": {
+        "stdout": "true\n"
+      }
+    },
+    {
+      "name": "a_source_write_outranks_config",
+      "params": {
+        "override": true
+      },
+      "expect": {
+        "stdout": "false\n"
+      }
+    }
+  ]
+}

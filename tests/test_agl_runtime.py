@@ -2953,6 +2953,58 @@ class TestHostEnvironmentCache:
         assert env1 is env2
 
 
+class TestConfigureExecutionServices:
+    """A host can wire the real agent dispatcher/session host into a driver
+    instance after ``preflight_arguments`` already lowered the program on it —
+    e.g. once a ``@config`` timeout value is known only after preflight."""
+
+    def test_run_prepared_uses_services_configured_after_preflight(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from agm.agl.runtime.arguments import ProgramArguments
+
+        prompts: list[str] = []
+
+        def dispatcher(request: AgentRequest) -> str:
+            prompts.append(request.prompt)
+            return "response"
+
+        runtime = PipelineDriver()
+        prepared = prepare_inline_command(
+            'let my-agent = AgentCommand("my_agent")\n'
+            'let answer = my-agent.ask("meaningful prompt")\nprint answer'
+        )
+        discovery = runtime.discover_programs(prepared)
+        program = discovery.programs[0]
+        preflight = runtime.preflight_arguments(
+            prepared,
+            program,
+            ProgramArguments(positional=(), named={}),
+            compiled=discovery.compiled,
+        )
+        assert preflight.result.ok
+        assert preflight.executable is not None
+
+        runtime.configure_execution_services(
+            default_strict_json=False,
+            agent_dispatcher=dispatcher,
+            session_host=None,
+            shell_exec_timeout=None,
+        )
+
+        result = runtime.run_prepared(
+            prepared,
+            compiled=discovery.compiled,
+            executable=preflight.executable,
+            program_symbol=preflight.executable.program_symbols[program.node_id],
+            arguments=preflight.arguments,
+        )
+
+        assert result.ok, result.diagnostics
+        assert prompts == ["meaningful prompt"]
+        assert capsys.readouterr().out == "response\n"
+
+
 class TestRegisterCodecErrors:
     """register_codec raises for reserved names and duplicates."""
 

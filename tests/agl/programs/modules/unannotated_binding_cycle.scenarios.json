@@ -1,0 +1,30 @@
+{
+  "scenarios": [
+    {
+      "name": "base_case",
+      "module_roots": [
+        "program_modules/modules/unannotated_binding_cycle"
+      ],
+      "params": {
+        "n": 0
+      },
+      "expect": {
+        "stdout": "15\n20\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "recursed",
+      "module_roots": [
+        "program_modules/modules/unannotated_binding_cycle"
+      ],
+      "params": {
+        "n": 3
+      },
+      "expect": {
+        "stdout": "15\n20\n",
+        "calls": {}
+      }
+    }
+  ]
+}

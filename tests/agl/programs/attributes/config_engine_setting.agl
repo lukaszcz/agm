@@ -1,0 +1,8 @@
+# `@config` seeds a root `std/config` engine setting's initial value, just
+# as it does a module parameter; a source write still outranks it.
+import std/config
+
+@config(config::strict-json = true)
+program def main(override: bool = false) -> unit =
+  if override => std/config::strict-json := false
+  print std/config::strict-json

@@ -142,6 +142,10 @@ Field notes:
   `directory_symlinks`; a `"$TEMP_ROOT"` parameter value is replaced with that root.
 - `module_roots` — optional paths relative to `tests/agl/`. When present, the
   program runs through the multi-file module graph with these library roots.
+- `module_params` — directly supplied seed values for `@param` bindings, keyed
+  by declaration path (`<entry>::name` for the entry program's own module,
+  `module/path::name` for an import). Outranks every other tier, `@config`
+  included.
 - `inline_entry` — the program declares no `program def`: it runs through the
   same synthetic-entry transform as `agm exec -c`, which keeps root
   declarations and the bindings they read at the root.

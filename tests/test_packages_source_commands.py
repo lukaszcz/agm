@@ -138,6 +138,21 @@ class TestPackageWithSourceCommands:
         with pytest.raises(DisciplineError, match="cannot parse"):
             package_with_source_commands(package)
 
+    def test_a_program_carrying_config_still_registers_its_command(self, tmp_path: Path) -> None:
+        package = _package(tmp_path)
+        _write(
+            package,
+            "review.agl",
+            'import std/config\n\n@command("tools review")\n'
+            "@config(config::log = true)\nprogram def main() -> unit = ()\n",
+        )
+
+        merged = package_with_source_commands(package)
+
+        assert merged.manifest.commands == {
+            "tools review": CommandSpec(program="tools/review::main")
+        }
+
     def test_discovered_commands_extend_the_manifest(self, tmp_path: Path) -> None:
         package = _package(tmp_path, commands={"launch": CommandSpec(program="tools/other::main")})
         _write(package, "other.agl", "program def main() -> unit = ()\n")

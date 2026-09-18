@@ -40,6 +40,12 @@ payload without going through source parsing.
 
 ``dummy_span`` returns a fixed placeholder ``SourceSpan`` for tests that must
 supply one but don't assert on its content.
+
+``program_config_engine_seeds`` partitions a preflighted entry's evaluated
+``@config`` into its engine-setting seeds, mirroring the production split
+``agm.commands.exec_program`` makes; ``run_inline_command`` uses it so an
+inline scenario's ``@config`` engine settings reach the interpreter the same
+way the real host applies them.
 """
 
 from __future__ import annotations
@@ -50,6 +56,8 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from agm.agl import PipelineDriver
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
 from agm.agl.ir.contracts import DecodePlan
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
@@ -58,8 +66,9 @@ from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
-from agm.agl.pipeline import PreparedProgram, ProgramDiscovery, RunResult
+from agm.agl.pipeline import ArgumentPreflight, PreparedProgram, ProgramDiscovery, RunResult
 from agm.agl.runtime.arguments import ProgramArguments
+from agm.agl.runtime.engine_config import restamp_engine_setting
 from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
@@ -76,7 +85,7 @@ from agm.agl.semantics.types import (
     free_type_vars,
     transform_type,
 )
-from agm.agl.semantics.values import RecordValue, TextValue
+from agm.agl.semantics.values import RecordValue, TextValue, Value
 from agm.agl.syntax import (
     AssignStmt,
     BuiltinVarDecl,
@@ -192,6 +201,33 @@ def prepare_inline_command(
     )
 
 
+def program_config_engine_seeds(
+    argument_preflight: ArgumentPreflight,
+) -> dict[StaticBindingKey, Value]:
+    """Partition a preflighted entry's ``@config`` into its engine-setting seeds.
+
+    Mirrors ``agm.commands.exec_program``'s own split of
+    ``ArgumentPreflight.program_config`` by ``is_engine_builtin_var_key``,
+    restamped onto the executable's own nominal identity, so a scenario
+    harness feeds an engine setting from ``@config`` (``std/config::log``,
+    ``timeout``, ...) the same way the real ``agm exec`` host does. A module
+    parameter's own ``@config`` entries need no such seam: preflight already
+    folds them into ``param_seeds``.
+    """
+    executable = argument_preflight.executable
+    assert executable is not None
+    return {
+        key: restamp_engine_setting(
+            key[2],
+            value,
+            from_table=executable.builtin_nominals,
+            to_table=NO_BUILTIN_DECLARATIONS,
+        )
+        for key, value in argument_preflight.program_config.items()
+        if is_engine_builtin_var_key(key)
+    }
+
+
 def run_inline_command(
     runtime: PipelineDriver,
     source: str,
@@ -257,6 +293,11 @@ def run_inline_command(
     if not argument_preflight.result.ok:
         return argument_preflight.result
     assert argument_preflight.executable is not None
+    engine_seeds = program_config_engine_seeds(argument_preflight)
+    supplied_seeds = run_kwargs.pop("builtin_var_seeds", None)
+    if supplied_seeds is not None:
+        assert isinstance(supplied_seeds, Mapping)
+        engine_seeds.update(supplied_seeds)
     return runtime.run_prepared(
         prepared,
         compiled=discovery.compiled,
@@ -264,6 +305,7 @@ def run_inline_command(
         program_symbol=argument_preflight.executable.program_symbols[entry_program.node_id],
         arguments=argument_preflight.arguments,
         param_seeds=argument_preflight.param_seeds,
+        builtin_var_seeds=engine_seeds or None,
         **run_kwargs,
     )
 

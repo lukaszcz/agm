@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "default_level_suppresses_debug",
+      "params": {
+        "raise-level": false
+      },
+      "expect": {
+        "stdout": "done\n"
+      }
+    },
+    {
+      "name": "raised_level_shows_debug",
+      "params": {
+        "raise-level": true
+      },
+      "expect": {
+        "stdout": "shown-when-raised\ndone\n"
+      }
+    }
+  ]
+}

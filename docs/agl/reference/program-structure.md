@@ -101,6 +101,14 @@ module, not a value parameter of a `program def`. A selected program exposes
 the marked bindings from its transitive import closure alongside its own
 parameters; see [Module parameters](host-environment.md#module-parameters).
 
+### Program-selected configuration
+
+A `program def` may carry [`@config`](attributes.md#config), stating the
+values its own selection gives to module parameters and engine settings, in
+source. It has no effect unless that `program def` is the one a host selects
+to run; see [Host-configurable settings](host-environment.md#host-configurable-settings)
+for where it ranks.
+
 ## Module items
 
 ### Import declarations
@@ -177,9 +185,12 @@ below, along with their parameters and fields — may carry an
   binder is. The scope-path-prefixed spelling (`let A::x = …`,
   `var A::count = …`) declares a member of that scope instead, and the prefix
   is legal only at the module root or inside a named scope region — the same
-  placement `def` and the type forms use. See
-  [Named scopes](scopes.md#binder-paths) for the complete spelling and
-  visibility rules.
+  placement `def` and the type forms use. A module-level binding's own name
+  may not repeat a named scope's name at the same scope path. In a module with
+  a static root, a module-level binding is visible regardless of textual
+  order, exactly like a `def`; elsewhere it keeps the textual order its root
+  statements execute in. See [Named scopes](scopes.md#names-and-visibility)
+  for the complete spelling and visibility rules.
 
 ### The block's value
 

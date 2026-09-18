@@ -1,0 +1,30 @@
+{
+  "scenarios": [
+    {
+      "name": "small_delta",
+      "module_roots": [
+        "program_modules/modules/exported_vars_unannotated"
+      ],
+      "params": {
+        "delta": 3
+      },
+      "expect": {
+        "stdout": "3\n6\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "large_delta",
+      "module_roots": [
+        "program_modules/modules/exported_vars_unannotated"
+      ],
+      "params": {
+        "delta": 7
+      },
+      "expect": {
+        "stdout": "7\n14\n",
+        "calls": {}
+      }
+    }
+  ]
+}

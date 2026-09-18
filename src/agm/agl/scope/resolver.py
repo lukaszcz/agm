@@ -16,8 +16,9 @@ Scope rules
 2. A bare-name ``:=`` resolves to the nearest visible binding; ``:=`` on an
    undeclared name → error.  Whether that binding is assignable is decided by
    type checking, which alone knows a pattern slot's selected meaning.  A
-   *qualified* target is settled here: only ``builtin var`` is assignable
-   across a module boundary, and no qualified name is ever a pattern slot.
+   *qualified* target is settled here: only an exported ``var`` or a
+   ``builtin var`` is assignable across a module boundary, and no qualified
+   name is ever a pattern slot.
    Indexed and field targets (``target[index] := value`` and
    ``target.field := value``) create no assignment binding: their receivers
    (and an index target's index) are resolved as ordinary expressions, and no
@@ -48,6 +49,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, TypeVar, cast
 
+from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
 from agm.agl.diagnostics import static_root_message
 from agm.agl.modules.ids import RESERVED_ID, ModuleId, spell_declaration
 from agm.agl.scope.attributes import recognize_attributes
@@ -83,6 +85,7 @@ from agm.agl.scope.symbols import (
     BuiltinStaticKind,
     ConstructorRef,
     DeclarationKey,
+    DeclInfo,
     ImportedUseContribution,
     LocalUseContribution,
     ModuleResolution,
@@ -185,13 +188,27 @@ from agm.agl.syntax.nodes import (
     VariantRef,
     VarRef,
     declares_source_entry,
+    declares_synthetic_entry,
     pattern_binder_candidates,
+    static_binding_name,
+    static_binding_node_id,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, AppliedT, NameT, render_type_expr
 from agm.agl.syntax.visitor import walk
 
 _T = TypeVar("_T")
+_RootDeclItem = TypeVar(
+    "_RootDeclItem",
+    FuncDef,
+    RecordDef,
+    EnumDef,
+    ExceptionDef,
+    TypeAlias,
+    LetDecl,
+    VarDecl,
+    BuiltinVarDecl,
+)
 
 
 def _relative_under(atom: NameAtom, target: ScopePath) -> ScopePath | None:
@@ -338,8 +355,7 @@ class _Resolver:
         all_public_types: dict[
             tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
         ],
-        decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind, bool, bool]]
-        | None = None,
+        decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo] | None = None,
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
         builtin_static_decl_node_ids: frozenset[int] = frozenset(),
@@ -369,9 +385,9 @@ class _Resolver:
             {module_id: import_env} if program_import_envs is None else program_import_envs
         )
         # Declaration metadata used to build cross-module references.
-        self._decl_info: dict[
-            tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind, bool, bool]
-        ] = decl_info if decl_info is not None else {}
+        self._decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo] = (
+            decl_info if decl_info is not None else {}
+        )
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
             cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
         )
@@ -487,7 +503,15 @@ class _Resolver:
         # root-only tables can be derived from the same collection without
         # admitting scoped members.
         self._declaration_items: dict[
-            DeclarationKey, FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
+            DeclarationKey,
+            FuncDef
+            | RecordDef
+            | EnumDef
+            | ExceptionDef
+            | TypeAlias
+            | LetDecl
+            | VarDecl
+            | BuiltinVarDecl,
         ] = {}
         # Seeded with every retained scope path so a fresh entry's collision
         # check (``_ensure_scope_path``, ``_register_declaration``, ``_define``)
@@ -640,6 +664,13 @@ class _Resolver:
             self._type_paths.update((name,) for name in ambient_type_names)
 
         self._declares_program_entry = declares_source_entry(program.body.items)
+        # Published on the returned ModuleResolution as ``static_root``: true
+        # for every importable module and for a loose file with its own
+        # program def, false for the REPL and for a synthetic
+        # (``-c``/entry-less) root, whose statements execute in textual order.
+        self._is_static_root_module = (
+            not self._allow_root_statements and not declares_synthetic_entry(program.body.items)
+        )
 
         # Pre-pass 1: collect every named declaration and scope mention. This
         # establishes path-keyed membership before qualifier validation and the
@@ -662,9 +693,15 @@ class _Resolver:
         # Define root functions as value bindings; scoped members are already
         # present in their named-scope layers.
         self._define_function_bindings()
+        # A static-root module's root let/var bindings are visible the same
+        # way; scoped ones are already present in their named-scope layers
+        # (``_build_scope_nodes``, seeded from ``_declarations`` above).
+        self._define_static_binding_bindings()
+        # A standard-library module's root ``builtin var`` follows the same
+        # relaxed order (always static-root, since it is always file-backed).
+        self._define_static_builtin_var_bindings()
         # Define constructor bindings in root scope.
         self._define_constructor_bindings()
-
         self._resolve_block_items(program.body.items)
         self._validate_function_names()
         self._validate_non_method_type_params()
@@ -686,7 +723,7 @@ class _Resolver:
             root_scope=root,
             declarations=dict(self._declarations),
             scope_nodes=dict(self._scope_nodes),
-            allows_root_statements=self._allow_root_statements,
+            static_root=self._is_static_root_module,
             origin_path=self._origin_path,
             declared_type_paths=frozenset(self._type_paths),
             constructor_candidates={
@@ -762,17 +799,25 @@ class _Resolver:
             self._ensure_scope_path(path, item.node_id, item.span)
             self._register_declaration(item, path)
             return
+        if isinstance(item, BuiltinVarDecl):
+            path = tuple(segment.name for segment in item.scope_path) or enclosing_path
+            if path:
+                self._ensure_scope_path(path, item.node_id, item.span)
+            self._register_builtin_var_declaration(item, path)
+            return
         if isinstance(item, (LetDecl, VarDecl)):
             path = tuple(segment.name for segment in item.scope_path) or enclosing_path
             if path:
                 # A binder's scope layer is order-independent even though its
                 # membership is not: create the path here so a binder with no
-                # sibling declaration still gets a scope node, but leave the
-                # member itself to be registered during the body walk, which is
-                # what makes textual precedence fall out of the mechanism.
+                # sibling declaration still gets a scope node.
                 self._ensure_scope_path(path, item.node_id, item.span)
-                if item.name != "_":
-                    self._ordered_binding_paths.add((*path, item.name))
+            name = static_binding_name(item)
+            if name == "_":
+                return
+            if path:
+                self._ordered_binding_paths.add((*path, name))
+            self._register_static_binding_declaration(item, path, name)
 
     def _ensure_scope_path(self, path: ScopePath, node_id: int, span: SourceSpan) -> None:
         """Create every scope layer in *path*, rejecting ordinary-name clashes."""
@@ -860,6 +905,68 @@ class _Resolver:
                 self._scope_paths.add(member_scope)
                 self._scope_node_ids.setdefault(member_scope, member.node_id)
                 self._type_paths.add(member_scope)
+
+    def _register_static_binding_declaration(
+        self, item: LetDecl | VarDecl, path: ScopePath, name: str
+    ) -> None:
+        """Register one module-level simple let/var like a def or a type.
+
+        Claims *name* at *path* in ``_scope_entity_kinds``, the registry
+        ``_ensure_scope_path``/``_register_declaration`` also consult, so a
+        let/var collides with a same-path scope, def, or type regardless of
+        textual order, in every module.
+
+        A static-root module additionally installs the binding itself, like
+        ``_declared_functions`` does for a def: ``_declarations``/
+        ``_declaration_items`` make it a scope member before the ordered walk
+        reaches it (root through ``_define_static_binding_bindings``, a scope
+        region through ``_build_scope_nodes``), so a def declared above it may
+        read it. A non-static module's scoped bindings install only when the
+        walk reaches them, keeping a script's line-by-line visibility.
+
+        A root-position binding is always recorded in ``_declarations`` even
+        so, since ``ScopeNode.lookup`` never consults the true root's
+        ``.members`` (only a named scope region's) and so grants no early
+        visibility there -- it only carries the binding into ``root.members``
+        via ``_build_scope_nodes``, as a def's always does, for a later REPL
+        entry to detect a same-path scope-region clash against it.
+        """
+        key = (self._module_id, path, name)
+        existing_entity = self._scope_entity_kinds.get(key)
+        if existing_entity is not None:
+            raise AglScopeError(f"Name '{name}' is already declared in this scope.", span=item.span)
+        self._scope_entity_kinds[key] = "ordinary"
+        decl_node_id = static_binding_node_id(item)
+        if path and not self._is_static_root_module:
+            return
+        self._declarations[key] = self._binder_ref(
+            item, decl_node_id=decl_node_id, name=name, scope_path=path
+        )
+        self._declaration_items[key] = item
+
+    def _register_builtin_var_declaration(self, item: BuiltinVarDecl, path: ScopePath) -> None:
+        """Claim a ``builtin var``'s name early, like a static let/var.
+
+        A ``builtin var`` is declared only by a standard-library module, which
+        is always file-backed and so always static-root: unlike a scoped
+        simple let/var, there is no non-static-root case, so this always
+        installs the binding alongside claiming the name (mirrors
+        :meth:`_register_static_binding_declaration`). The module-kind and
+        root-only checks stay in :meth:`_resolve_builtin_var`, at the walk's
+        ordered position, since a misplaced declaration must still fail
+        regardless of pre-pass timing.
+        """
+        key = (self._module_id, path, item.name)
+        existing_entity = self._scope_entity_kinds.get(key)
+        if existing_entity is not None:
+            raise AglScopeError(
+                f"Name '{item.name}' is already declared in this scope.", span=item.span
+            )
+        self._scope_entity_kinds[key] = "ordinary"
+        self._declarations[key] = self._binder_ref(
+            item, decl_node_id=item.node_id, name=item.name, scope_path=path
+        )
+        self._declaration_items[key] = item
 
     def _classify_method_declaration(self, declaration: FuncDef) -> None:
         """Classify one receiver after preceding lexical contributions are visible."""
@@ -1130,13 +1237,8 @@ class _Resolver:
         return nodes
 
     def _root_declaration_items(
-        self,
-        declaration_type: type[FuncDef]
-        | type[RecordDef]
-        | type[EnumDef]
-        | type[ExceptionDef]
-        | type[TypeAlias],
-    ) -> Iterator[FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias]:
+        self, declaration_type: type[_RootDeclItem]
+    ) -> Iterator[_RootDeclItem]:
         """Yield collected declarations of *declaration_type* at the root path."""
         for (module_id, path, _name), item in self._declaration_items.items():
             if module_id == self._module_id and not path and isinstance(item, declaration_type):
@@ -1145,7 +1247,6 @@ class _Resolver:
     def _collect_func_decls(self, program: Program) -> None:
         """Populate the legacy function table from root-path declarations only."""
         for item in self._root_declaration_items(FuncDef):
-            assert isinstance(item, FuncDef)
             self._declared_functions[item.name] = item
 
     def _non_method_functions(self) -> Iterator[FuncDef]:
@@ -1681,6 +1782,36 @@ class _Resolver:
             )
             self._current_scope().define(name, ref)
 
+    def _define_static_binding_bindings(self) -> None:
+        """Define each collected root static let/var as a value binding.
+
+        Mirrors :meth:`_collect_func_decls`/``_define_function_bindings``: a
+        no-op except in a static-root module, whose root simple let/var
+        declarations (:meth:`_register_static_binding_declaration`) each
+        already own a ref in ``_declarations``, reused here instead of rebuilt.
+        """
+        if not self._is_static_root_module:
+            return
+        for let_item in self._root_declaration_items(LetDecl):
+            name = static_binding_name(let_item)
+            self._current_scope().define(name, self._declarations[(self._module_id, (), name)])
+        for var_item in self._root_declaration_items(VarDecl):
+            self._current_scope().define(
+                var_item.name, self._declarations[(self._module_id, (), var_item.name)]
+            )
+
+    def _define_static_builtin_var_bindings(self) -> None:
+        """Define each collected root ``builtin var`` as a value binding.
+
+        Mirrors :meth:`_define_static_binding_bindings`: reuses the ref
+        :meth:`_register_builtin_var_declaration` already built into
+        ``_declarations`` instead of rebuilding it.
+        """
+        for item in self._root_declaration_items(BuiltinVarDecl):
+            self._current_scope().define(
+                item.name, self._declarations[(self._module_id, (), item.name)]
+            )
+
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
         """Resolve a standard-library host-backed mutable binding.
 
@@ -1783,26 +1914,16 @@ class _Resolver:
         A named scope's own body — reached while resolving a scope region or
         the pushed layer of a root-position binder-path shorthand — is a
         members layer, not a lexical bindings layer: a binder resolved there
-        is registered into ``members`` instead, so it becomes a member
-        reachable both bare (inside, via the outward walk) and by path
-        (outside). It is checked and recorded against the same
-        ``_scope_entity_kinds`` registry every other member at that path
-        uses (declarations in the pre-pass, nested scope layers via
-        ``_ensure_scope_path``), so one check governs collisions between a
-        binding and a ``def``, a type, or a nested scope at the same path,
-        regardless of textual order. ``_scope_entity_kinds`` is a fresh dict
-        per entry, so the check only ever sees THIS entry's own members: a
-        member the REPL session retained from a prior entry pre-populates
-        ``scope.members`` (for lookup) but leaves no ``_scope_entity_kinds``
-        trace, so redeclaring it is a replacement, matching how a redeclared
-        scoped ``def`` or type behaves across entries. A retained *scope's
-        own path*, unlike a retained member, is pre-seeded into the fresh
-        dict at construction, so a member or declaration this entry tries to
-        register there still collides — the cross-entry counterpart of
-        ``_ensure_scope_path``'s same-entry seeding. This is the only
-        reachable site: parameters, pattern/catch binders, and loop
-        variables always resolve inside a fresh child scope with an empty
-        path.
+        is registered into ``members`` instead. Only a let, var, builtin
+        var, or builtin var ever reaches this branch (a
+        parameter, catch binder, or loop variable always resolves inside a
+        fresh child scope with an empty path instead), and each one's own
+        pre-pass (``_register_static_binding_declaration``/
+        ``_register_builtin_var_declaration``) already claimed *name*
+        in ``_scope_entity_kinds`` and raised there on a same-path collision
+        with a ``def``, a type, or a nested scope, regardless of textual
+        order -- so this call always installs its own pre-claimed member,
+        never a fresh or colliding one.
 
         At the true root, a declaration may claim the bare spelling of a
         constructor declared in another module (e.g. the prelude
@@ -1813,16 +1934,17 @@ class _Resolver:
         """
         scope = self._current_scope()
         if scope.scope_path:
-            key = (self._module_id, scope.scope_path, name)
-            if self._scope_entity_kinds.get(key) is not None:
-                raise AglScopeError(
-                    f"Name '{name}' is already declared in this scope.",
-                    span=ref.decl_span,
-                )
-            self._scope_entity_kinds[key] = "ordinary"
+            # The pre-pass already claimed this key for this exact binder
+            # (see the docstring); install the member it pre-claimed.
             scope.register_member(name, replace(ref, scope_path=scope.scope_path))
             return
         existing = scope.bindings.get(name)
+        if existing is not None and existing.decl_node_id == ref.decl_node_id:
+            # Same self-registration case as above, for a root-position binder
+            # a static-root module already defined via
+            # ``_define_static_binding_bindings``.
+            scope.define(name, ref)
+            return
         if existing is not None and (
             existing.kind is not BinderKind.constructor_binding
             or self._root_declaring_candidates(name)
@@ -2802,6 +2924,7 @@ class _Resolver:
             with self._named_scope(tuple(segment.name for segment in node.scope_path)):
                 self._classify_method_declaration(node)
                 self._validate_qualifier_chains(node)
+                self._resolve_program_config(node)
                 self._resolve_params_and_body(node)
             return
         if not self._at_root:
@@ -2814,6 +2937,7 @@ class _Resolver:
         # evaluated in the function's definition scope.
         self._classify_method_declaration(node)
         self._validate_qualifier_chains(node)
+        self._resolve_program_config(node)
         previous_synthetic_entry = self._in_synthetic_entry
         previous_entry_items = self._synthetic_entry_items
         self._in_synthetic_entry = node.is_synthetic
@@ -2824,6 +2948,21 @@ class _Resolver:
         finally:
             self._in_synthetic_entry = previous_synthetic_entry
             self._synthetic_entry_items = previous_entry_items
+
+    def _resolve_program_config(self, node: FuncDef) -> None:
+        """Resolve a ``program def``'s ``@config`` keys and values, if it carries one.
+
+        Both resolve in the scope that declares the program, before its
+        parameter scope opens.
+        """
+        if not node.is_program:
+            return
+        for attribute in node.attributes:
+            if attribute.name != CONFIG_ATTRIBUTE:
+                continue
+            for entry in attribute.keyed_args:
+                self._resolve_varref(entry.key)
+                self._resolve_expr(entry.value)
 
     def _resolve_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
         """Reject type declarations outside the program root."""
@@ -2880,16 +3019,14 @@ class _Resolver:
 
     def _resolve_let(self, node: LetDecl) -> None:
         with self._binder_scope(node, "let"):
-            # A let initializer is non-recursive: its name does not exist until
-            # its RHS has resolved.
+            # Resolve the initializer before the ordered definition. Static-root
+            # bindings may already expose this identity through the pre-pass.
             self._resolve_expr(node.value)
             self._check_not_reserved(node.name, node.span)
             self._define_binder(
                 node,
                 decl_node_id=node.node_id,
                 name=node.name,
-                mutable=False,
-                kind=BinderKind.let_binding,
             )
 
     def _resolve_var(self, node: VarDecl) -> None:
@@ -2897,37 +3034,45 @@ class _Resolver:
             self._check_not_reserved(node.name, node.span)
             # Resolve RHS before defining the name (lambda non-recursion).
             self._resolve_expr(node.value)
-            self._define_binder(
-                node,
-                decl_node_id=node.node_id,
-                name=node.name,
-                mutable=True,
-                kind=BinderKind.var_binding,
-            )
+            self._define_binder(node, decl_node_id=node.node_id, name=node.name)
 
-    def _define_binder(
+    def _binder_ref(
         self,
-        node: LetDecl | VarDecl,
+        node: LetDecl | VarDecl | BuiltinVarDecl,
         *,
         decl_node_id: int,
         name: str,
-        mutable: bool,
-        kind: BinderKind,
-    ) -> None:
+        scope_path: ScopePath = (),
+    ) -> BindingRef:
+        """Build the ``BindingRef`` one ``let``/``var``/``builtin var`` binder resolves to.
+
+        Mutability and kind follow *node*'s own type, the same for a binder
+        looked up before its own textual position (the static-root pre-passes
+        ``_register_static_binding_declaration``/``_register_builtin_var_declaration``)
+        as for one defined at it (``_define_binder``).
+        """
+        if isinstance(node, VarDecl):
+            mutable, kind = True, BinderKind.var_binding
+        elif isinstance(node, BuiltinVarDecl):
+            mutable, kind = True, BinderKind.builtin_var_binding
+        else:
+            mutable, kind = False, BinderKind.let_binding
+        return BindingRef(
+            name=name,
+            mutable=mutable,
+            decl_span=node.span,
+            decl_node_id=decl_node_id,
+            kind=kind,
+            module_id=self._module_id,
+            scope_path=scope_path,
+            is_param=is_param_declaration(node.attributes),
+        )
+
+    def _define_binder(self, node: LetDecl | VarDecl, *, decl_node_id: int, name: str) -> None:
         """Define a resolved simple-name binder using its declaration identity."""
         if name == "_":
             return
-        self._define(
-            name,
-            BindingRef(
-                name=name,
-                mutable=mutable,
-                decl_span=node.span,
-                decl_node_id=decl_node_id,
-                kind=kind,
-                module_id=self._module_id,
-            ),
-        )
+        self._define(name, self._binder_ref(node, decl_node_id=decl_node_id, name=name))
 
     def _resolve_assign(self, node: AssignStmt) -> None:
         target = node.target
@@ -2981,9 +3126,9 @@ class _Resolver:
         through its path while a scoped ``let`` -- or a ``def``, a type, or
         an agent sharing its path -- reuses the immutable-binder diagnostic
         below. Only when the qualifier does not name a local scope path is a
-        cross-module target attempted; only a ``builtin var`` binding is
-        assignable across a module boundary (the sole mutable exported
-        binding kind).
+        cross-module target attempted; only an exported ``var`` -- ordinary or
+        ``builtin var`` -- is assignable across a module boundary (a
+        cross-module ``let`` reuses the immutable-binder diagnostic too).
         """
         assert target.qualifier is not None
         qualifier = target.qualifier
@@ -4198,23 +4343,24 @@ class _Resolver:
             Source span of the reference site (for synthetic decl_span).
         """
         key = (owning_module, src_name)
-        decl_node_id, decl_span, kind, is_builtin, is_method = self._decl_info.get(
-            key, (-1, span, BinderKind.function_binding, False, False)
+        info = self._decl_info.get(
+            key, DeclInfo(decl_node_id=-1, decl_span=span, kind=BinderKind.function_binding)
         )
         path = (src_name,) if isinstance(src_name, str) else src_name
         return BindingRef(
             name=path[-1],
-            # Only ``builtin var`` bindings are mutable across a module boundary;
-            # every other exported binding (functions, constructors, …) is
-            # immutable at the reference site.
-            mutable=kind is BinderKind.builtin_var_binding,
-            decl_span=decl_span,
-            decl_node_id=decl_node_id,
-            kind=kind,
+            # Only ``var``/``builtin var`` bindings are mutable across a module
+            # boundary; every other exported binding (functions, constructors,
+            # exported ``let``s, …) is immutable at the reference site.
+            mutable=info.kind in (BinderKind.builtin_var_binding, BinderKind.var_binding),
+            decl_span=info.decl_span,
+            decl_node_id=info.decl_node_id,
+            kind=info.kind,
             module_id=owning_module,
             scope_path=path[:-1],
-            is_builtin=is_builtin,
-            is_method=is_method,
+            is_builtin=info.is_builtin,
+            is_method=info.is_method,
+            is_param=info.is_param,
         )
 
     def _spaced_qualifier_repair(
@@ -4237,11 +4383,13 @@ class _Resolver:
         if not isinstance(result, QualResolutionFound):
             return None
         if advisory.type_qualified:
-            _node_id, _span, kind, _is_builtin, _is_method = self._decl_info.get(
+            info = self._decl_info.get(
                 result.qname,
-                (-1, advisory.dcolon_span, BinderKind.let_binding, False, False),
+                DeclInfo(
+                    decl_node_id=-1, decl_span=advisory.dcolon_span, kind=BinderKind.let_binding
+                ),
             )
-            if kind is not BinderKind.constructor_binding:
+            if info.kind is not BinderKind.constructor_binding:
                 return None
         rendered = render_qualifier(advisory.segments, anchored=advisory.anchored)
         return AglScopeError(
@@ -4556,18 +4704,19 @@ class _Resolver:
                 # ordinary imported member; its declaration kind is what makes it
                 # a constructor spelling.
                 atom_path = _bare_path(qname[1])
-                decl_node_id, _decl_span, kind, _is_builtin, _is_method = self._decl_info.get(
-                    qname, (-1, node.span, BinderKind.let_binding, False, False)
+                fallback = DeclInfo(
+                    decl_node_id=-1, decl_span=node.span, kind=BinderKind.let_binding
                 )
-                if kind is BinderKind.constructor_binding:
+                info = self._decl_info.get(qname, fallback)
+                if info.kind is BinderKind.constructor_binding:
                     return (
                         ConstructorRef(
                             owner_name=atom_path[-1],
-                            owner_decl_node_id=decl_node_id,
+                            owner_decl_node_id=info.decl_node_id,
                             type_params=(),
                             owner_module_id=qname[0],
                             owner_path=atom_path[:-1],
-                            is_builtin=_is_builtin,
+                            is_builtin=info.is_builtin,
                         ),
                     )
         if self._resolve_constructor_chain(

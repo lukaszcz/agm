@@ -12,6 +12,7 @@ from agm.agl.ir.contracts import ContractRequest
 from agm.agl.ir.ids import ContractId, FunctionId, SymbolId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import ExecutableModule, FunctionDescriptor, SymbolDescriptor
+from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.lower.lowerer import _LinkState
 from agm.agl.syntax.resources import ResourceError, resolve_resource
 
@@ -28,6 +29,7 @@ class LoweredModule:
     function_symbols: dict[int, SymbolId]
     function_ids: dict[int, FunctionId]
     defaults: dict[BuiltinVarKey | str, IrExpr]
+    program_configs: dict[SymbolId, tuple[tuple[StaticBindingKey, IrExpr], ...]]
     resources: tuple[tuple[Path | None, str | None, Path], ...]
 
     def link_into(self, link: _LinkState) -> None:
@@ -44,6 +46,7 @@ def capture(
     module: ExecutableModule,
     link: _LinkState,
     defaults: dict[BuiltinVarKey | str, IrExpr],
+    program_configs: dict[SymbolId, tuple[tuple[StaticBindingKey, IrExpr], ...]],
     resources: tuple[tuple[Path | None, str | None, Path], ...],
     contract_start: int,
     contract_end: int,
@@ -68,6 +71,7 @@ def capture(
         {nid: sid for nid, sid in link.fn_node_to_sym.items() if sid in symbols},
         {nid: fid for nid, fid in link.fn_node_to_id.items() if fid in functions},
         defaults,
+        program_configs,
         resources,
     )
 

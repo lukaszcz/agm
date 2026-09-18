@@ -214,8 +214,12 @@ parenthesized block passed as an argument carries its own parentheses:
 ## Attributes
 
 ```ebnf
-attributes ::= attribute+
-attribute  ::= "@" NAME ["(" arg_list? ")"] NEWLINE?
+attributes    ::= attribute+
+attribute     ::= "@" NAME ["(" attr_arg_list? ")"] NEWLINE?
+attr_arg_list ::= attr_arg ("," attr_arg)* ","?
+attr_arg      ::= element_expr                    (* positional: every attribute but @config *)
+                | attr_key "=" element_expr       (* keyed: @config only *)
+attr_key      ::= name | qualifier_chain name
 ```
 
 An attribute prefixes a **defining declaration**: a record, an enum, an enum
@@ -227,8 +231,10 @@ own and take no attribute.
 [Lexical structure](lexical-structure.md#attributes) gives the placements an
 attribute may take.
 
-An attribute's arguments are an ordinary `arg_list`; every built-in attribute
-takes literal constants only, positionally. The catalog, per-attribute
+Every built-in attribute but `@config` takes literal constants only,
+positionally. `@config` instead takes one or more keyed entries, each an
+`attr_key` — a bare or `::`-qualified reference, resolved like any other
+reference — paired with a constant value. The catalog, per-attribute
 semantics, and the errors an unknown, misplaced, repeated, or contradicted
 attribute raises: [Attributes](attributes.md).
 
@@ -437,8 +443,9 @@ Assignment has type `unit` and returns `()`. `assign_target`'s qualifier
 accepts any number of segments: a local scope path (`A::B::count`) reaches a
 scoped `var` exactly as a qualified read does, while a bare (non-indexed)
 cross-module target — written with a qualifier, or bare when an import tail or
-`use` puts the name in scope — is valid only when it resolves to a `builtin var`;
-type-qualified constructor forms are not assignment targets. An indexed
+`use` puts the name in scope — is valid only when it resolves to an exported
+`var` or a `builtin var`; type-qualified constructor forms are not assignment
+targets. An indexed
 assignment target's object expression is evaluated like any other read, so
 `assign_target` accepts any array- or dict-typed expression there; a field
 assignment likewise accepts any record-typed postfix receiver, provided its

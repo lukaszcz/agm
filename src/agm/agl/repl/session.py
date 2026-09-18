@@ -117,6 +117,14 @@ class _BootstrapSnapshot:
     checked_modules: dict["ModuleId", "CheckedModule"]
 
 
+@dataclass(frozen=True, slots=True)
+class _InfoReference:
+    """Binding and constructor identities selected for one ``:info`` name."""
+
+    binding: "BindingRef | None"
+    constructor: "ConstructorRef | None"
+
+
 # Bootstrap images retain complete frontend graphs, so keep only a small working
 # set per process. LRU preserves the images active projects are most likely to
 # reopen without allowing one-off roots or capability combinations to grow the
@@ -1779,7 +1787,9 @@ class ReplSession:
             return None
 
         scope_path, local_name = parts[:-1], parts[-1]
-        ref = self._resolve_info_reference(name)
+        resolved_reference = self._resolve_info_reference(name)
+        ref = None if resolved_reference is None else resolved_reference.binding
+        constructor = None if resolved_reference is None else resolved_reference.constructor
         location = (
             _format_repl_location(ref.decl_span)
             if ref is not None and ref.module_id.is_entry
@@ -1844,19 +1854,19 @@ class ReplSession:
             )
             display = _format_info_section("Type", definition)
             return f"{name} is a generic {library_generic.kind} type.\n{display}"
-        constructor_signature = self._library_constructor_signature(name)
-        if constructor_signature is not None:
-            return "\n".join(
-                (
-                    f"{name} is a constructor.",
-                    _format_info_section(
-                        "Signature", _format_constructor_signature(name, constructor_signature)
-                    ),
-                )
+        if constructor is None:
+            return None
+        constructor_signature = self._constructor_signature(constructor)
+        return "\n".join(
+            (
+                f"{name} is a constructor.",
+                _format_info_section(
+                    "Signature", _format_constructor_signature(name, constructor_signature)
+                ),
             )
-        return None
+        )
 
-    def _resolve_info_reference(self, name: str) -> "BindingRef | None":
+    def _resolve_info_reference(self, name: str) -> _InfoReference | None:
         """Resolve NAME with the REPL entry resolver, without type-checking it."""
         from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.parser import parse_program_seeded
@@ -1877,12 +1887,16 @@ class ReplSession:
         except AglError:
             return None if reference is None else self._canonical_library_reference(reference)
         entry = resolved.modules[resolved.entry_id].resolved
-        return entry.resolution.get(reference.node_id) or self._canonical_library_reference(
-            reference
+        binding = entry.resolution.get(reference.node_id)
+        constructor = entry.constructor_refs.get(reference.node_id)
+        return (
+            _InfoReference(binding=binding, constructor=constructor)
+            if binding is not None or constructor is not None
+            else self._canonical_library_reference(reference)
         )
 
-    def _canonical_library_reference(self, reference: "VarRef") -> "BindingRef | None":
-        """Return the retained declaration named by REFERENCE's module path."""
+    def _canonical_library_reference(self, reference: "VarRef") -> _InfoReference | None:
+        """Return retained identities named by REFERENCE's canonical module path."""
         from agm.agl.modules.ids import ModuleId
 
         qualifier = reference.qualifier
@@ -1893,7 +1907,14 @@ class ReplSession:
         if module is None:
             return None
         scope_path = tuple(segment.name for segment in qualifier.segments[1:])
-        return module.resolved.declarations.get((module_id, scope_path, reference.name))
+        binding = module.resolved.declarations.get((module_id, scope_path, reference.name))
+        candidates = module.resolved.constructor_candidates_by_path.get(
+            (scope_path, reference.name), ()
+        )
+        constructor = candidates[0] if len(candidates) == 1 else None
+        if binding is None and constructor is None:
+            return None
+        return _InfoReference(binding=binding, constructor=constructor)
 
     def _info_type_env(self, ref: "BindingRef") -> "TypeEnvironment":
         """Return the retained type environment that owns REF."""
@@ -1909,24 +1930,28 @@ class ReplSession:
         ]
         return matches[0] if len(matches) == 1 else None
 
-    def _library_constructor_signature(self, name: str) -> "ConstructorSignature | None":
-        """Return the sole retained constructor signature named *name*, if any."""
-        from agm.agl.semantics.types import EnumType
+    def _constructor_signature(self, constructor: "ConstructorRef") -> "ConstructorSignature":
+        """Return the signature for the constructor identity selected by scope."""
+        from agm.agl.semantics.types import TypeVarType
+        from agm.agl.typecheck.env import ConstructorSignature
 
-        matches: list[ConstructorSignature] = []
-        for checked in self._retained_checked_modules.values():
-            for generic in checked.type_env.all_generic_types().values():
-                if not isinstance(generic.template, EnumType):
-                    continue
-                member = checked.type_env.type_table.enum_member_names(generic.template).get(name)
-                if member is None:
-                    continue
-                signature = checked.type_env.get_ctor_sig_from_module(
-                    member.module_id, member.name, scope_path=member.scope_path
-                )
-                assert signature is not None
-                matches.append(signature)
-        return matches[0] if len(matches) == 1 else None
+        checked = self._retained_checked_modules.get(constructor.owner_module_id)
+        type_env = self._type_env if checked is None else checked.type_env
+        signature = type_env.get_constructor_signature(
+            constructor.owner_name, scope_path=constructor.owner_path
+        )
+        if signature is not None:
+            return signature
+        typedef = type_env.type_table.get_by_id(constructor.owner_decl_node_id)
+        assert typedef is not None and typedef.kind == "record"
+        type_args = tuple(TypeVarType(name) for name in constructor.type_params)
+        return ConstructorSignature(
+            owner_name=constructor.owner_name,
+            field_names=tuple(name for name, _typ in typedef.fields),
+            field_templates=tuple(typ for _name, typ in typedef.fields),
+            result_template=typedef.handle(type_args),
+            type_params=constructor.type_params,
+        )
 
     def type_names(self) -> frozenset[str]:
         """Return the names of types declared in prior promoted entries.

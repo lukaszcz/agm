@@ -696,6 +696,37 @@ class TestInfo:
             "Some is a constructor.\nSignature:\n  Some[T](value: T) -> std/option::Option::Some[T]"
         )
 
+    @pytest.mark.parametrize("name", ("None", "Option::None", "std/option::Option::None"))
+    def test_info_reports_each_visible_spelling_of_a_constructor(self, name: str) -> None:
+        outcome = meta_mod.dispatch_meta(f":info {name}", _session_ctx(_open_session()))
+
+        assert outcome.text is not None
+        assert outcome.text.startswith(
+            f"{name} is a constructor.\nSignature:\n  {name}() -> std/option::Option::None"
+        )
+
+    def test_info_reports_a_constructor_exposed_by_a_repl_use(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("use Option::{None as Nothing}").ok
+
+        outcome = meta_mod.dispatch_meta(":info Nothing", _session_ctx(session))
+
+        assert outcome.text is not None
+        assert outcome.text.startswith(
+            "Nothing is a constructor.\nSignature:\n  Nothing() -> std/option::Option::None"
+        )
+
+    def test_info_reports_a_constructor_declared_in_the_repl(self) -> None:
+        session = _open_session()
+        assert session.eval_entry("enum State = | Ready").ok
+
+        outcome = meta_mod.dispatch_meta(":info Ready", _session_ctx(session))
+
+        assert outcome.text is not None
+        assert outcome.text.startswith(
+            "Ready is a constructor.\nSignature:\n  Ready() -> State::Ready"
+        )
+
     def test_info_reports_a_type_definition(self) -> None:
         session = _open_session()
         assert session.eval_entry("record Point\n  x: int\n  y: int").ok

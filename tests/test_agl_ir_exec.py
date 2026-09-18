@@ -87,9 +87,15 @@ def _fail(returncode: int, stdout: str = "", stderr: str = "") -> ProcessCapture
 # ---------------------------------------------------------------------------
 
 
-def test_t1_text_exec() -> None:
-    """exec() with text output: strips trailing newline."""
-    source = 'let result: text = exec("echo hello")\nresult'
+@pytest.mark.parametrize(
+    "source",
+    (
+        pytest.param('let result: text = exec("echo hello")\nresult', id="call_form"),
+        pytest.param("let result: text = exec $ echo hello\nresult", id="verbatim_literal"),
+    ),
+)
+def test_text_exec_strips_trailing_newline(source: str) -> None:
+    """exec() with text output strips a trailing newline, in call and verbatim-literal form."""
     commands = {"echo hello": _ok("hello\n")}
     ir = evaluate_ir_with_shell(source, commands)
     from agm.agl.semantics.values import TextValue

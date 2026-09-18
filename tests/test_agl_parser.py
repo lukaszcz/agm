@@ -3626,6 +3626,34 @@ class TestLarkErrorMapping:
         assert span.start_line == 2
 
     @pytest.mark.parametrize(
+        ("source", "expected_line"),
+        (
+            pytest.param("case x of $ a", 1, id="case_of_verbatim"),
+            pytest.param("if $ a", 1, id="if_verbatim"),
+            pytest.param("let x = $ a %{y}\ncase z of $ b", 2, id="multiline_verbatim"),
+        ),
+    )
+    def test_verbatim_literal_end_of_input_error_points_at_the_end_of_the_source(
+        self, source: str, expected_line: int
+    ) -> None:
+        """A verbatim literal's zero-width closer must not collapse the span to (1, 1).
+
+        Lark's LALR parser borrows the ``$END`` token's position from the last
+        token it consumed; a token with an empty value (the verbatim literal's
+        closer) is falsy, so Lark substitutes a synthetic ``(1, 1, offset 0)``
+        rather than borrowing.  Compare a quoted-string equivalent such as
+        `case x of "a"`, whose closing token has a real spelling and so already
+        borrows a meaningful, non-degenerate position.
+        """
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+
+        span = exc_info.value.source_span
+        assert span.start_line == expected_line
+        assert span.start_offset != 0
+        assert span.start_offset == len(source)
+
+    @pytest.mark.parametrize(
         "source",
         [
             "def g() -> int =\n  let x = [1,\n",
@@ -5187,6 +5215,85 @@ print exec$ true
             result = run_inline_command(PipelineDriver(), "exec$ true")
 
         assert result.ok
+
+
+class TestVerbatimTextLiteral:
+    """`$ ...` builds the same AST as the equivalent quoted template."""
+
+    @pytest.mark.parametrize(
+        ("verbatim_source", "quoted_source"),
+        (
+            pytest.param("$ hello", '"hello"', id="block_item"),
+            pytest.param("let x = $ hello", 'let x = "hello"', id="let_rhs"),
+            pytest.param("var x = $ hello", 'var x = "hello"', id="var_rhs"),
+            pytest.param("var x = 0\nx := $ hello", 'var x = 0\nx := "hello"', id="assign_rhs"),
+            pytest.param("def f() = $ hello", 'def f() = "hello"', id="inline_def_body"),
+            pytest.param("return $ hello", 'return "hello"', id="return_expr"),
+            pytest.param("ask $ hello", 'ask "hello"', id="juxt_ask"),
+            pytest.param("exec $ hello", 'exec "hello"', id="juxt_exec"),
+            pytest.param("r.ask $ hello", 'r.ask "hello"', id="juxt_dotted_ask"),
+            pytest.param("ask::[Review] $ hello", 'ask::[Review] "hello"', id="juxt_typed_ask"),
+            pytest.param("session.ask $ hello", 'session.ask "hello"', id="juxt_session_ask"),
+            pytest.param("infixl ++\na ++ $ b", 'infixl ++\na ++ "b"', id="infix_right_operand"),
+            pytest.param(
+                "if true =>\n  $ a\n| else =>\n  $ b",
+                'if true =>\n  "a"\n| else =>\n  "b"',
+                id="multiline_branch_bodies",
+            ),
+            pytest.param("r with x = $ hello", 'r with x = "hello"', id="with_value"),
+            pytest.param(
+                "let f = fn(x) => $ hello",
+                'let f = fn(x) => "hello"',
+                id="lambda_body",
+            ),
+            pytest.param(
+                "case x of\n| $\n  hello\n=> a",
+                'case x of | "hello" => a',
+                id="block_form_literal_pattern",
+            ),
+            pytest.param("ask $ hi %{x}", 'ask "hi %{x}"', id="interpolated_hole"),
+            pytest.param("ask $\n  a\n  b", 'ask "a\\nb"', id="block_form_juxt_arg"),
+            pytest.param(
+                "let x = ask $\n  a\n  b\nx",
+                'let x = ask "a\\nb"\nx',
+                id="block_form_followed_by_an_item",
+            ),
+        ),
+    )
+    def test_matches_the_equivalent_quoted_template(
+        self, verbatim_source: str, quoted_source: str
+    ) -> None:
+        verbatim_program = parse_program(verbatim_source)
+        quoted_program = parse_program(quoted_source)
+        assert items(verbatim_program)[-1] == items(quoted_program)[-1]
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            pytest.param("print ask $ x", id="verbatim"),
+            pytest.param('print ask "x"', id="quoted"),
+        ),
+    )
+    def test_juxtaposition_does_not_chain(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+        assert exc_info.value.source_span.start_offset == 10
+
+    def test_juxtaposition_chains_through_an_infix_pipe(self) -> None:
+        verbatim_call = items(parse_program("infixr <|\nprint <| ask $ x"))[-1]
+        quoted_call = items(parse_program('infixr <|\nprint <| ask "x"'))[-1]
+        assert verbatim_call == quoted_call
+        assert isinstance(verbatim_call, Call)
+        assert isinstance(verbatim_call.callee, VarRef)
+        assert verbatim_call.callee.name == "<|"
+
+    def test_same_line_swallowing_yields_a_single_branch(self) -> None:
+        expr = first(parse("if c => $ a | else => $ b"))
+        assert isinstance(expr, If)
+        assert len(expr.branches) == 1
+        body = expr.branches[0].body
+        assert isinstance(body, StringLit)
+        assert body.value == "a | else => $ b"
 
 
 class TestEmptyModule:

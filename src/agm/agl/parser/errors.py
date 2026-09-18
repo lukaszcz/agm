@@ -196,6 +196,22 @@ def _span_from_token(
     )
 
 
+def _end_of_source_span(source_text: str) -> SourceSpan:
+    """Span pinpointing the end of *source_text*."""
+    offset = len(source_text)
+    last_newline = source_text.rfind("\n")
+    line = source_text.count("\n") + 1
+    col = offset - last_newline
+    return SourceSpan(
+        start_line=line,
+        start_col=col,
+        end_line=line,
+        end_col=col + 1,
+        start_offset=offset,
+        end_offset=offset + 1,
+    )
+
+
 def _make_chained_comparison_error(span: SourceSpan) -> AglSyntaxError:
     """Targeted diagnostic for chained comparisons.
 
@@ -336,7 +352,14 @@ def syntax_error_from_lark(
         line = tok.line if tok.line is not None else 1
         col = tok.column if tok.column is not None else 1
         pos = tok.start_pos if tok.start_pos is not None else 0
-        span = _span_from_token(line, col, pos, tok.end_line, tok.end_column, tok.end_pos)
+        if tok.type == "$END" and tok.end_pos is None and source_text is not None:
+            # Lark borrows $END's position from the last token unless that
+            # token is falsy (zero-width, e.g. VERBATIM_END); its synthetic
+            # (1, 1) fallback has no end_pos.
+            span = _end_of_source_span(source_text)
+            pos = span.start_offset
+        else:
+            span = _span_from_token(line, col, pos, tok.end_line, tok.end_column, tok.end_pos)
         if _is_missing_arrow_after_else(
             source_text=source_text, token_pos=pos, expected=set(exc.expected)
         ):

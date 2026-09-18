@@ -298,11 +298,11 @@ def _expected_type(checked: CheckedModule, expected: Type | str) -> Type | None:
     return declared.handle() if declared is not None else checked.type_env.get_type(expected)
 
 
-def assert_raw_tail_type_parity(
-    raw_source: str, call_source: str
+def assert_builtin_call_type_parity(
+    source: str, call_source: str
 ) -> tuple[CheckedModule, CheckedModule]:
-    """Check that equivalent raw and call forms select the same builtin behavior."""
-    raw_checked = accept_type(raw_source)
+    """Check that equivalent sugared and call forms select the same builtin behavior."""
+    sugared_checked = accept_type(source)
     call_checked = accept_type(call_source)
 
     def selected_builtin_behavior(checked: CheckedModule) -> tuple[object, ...]:
@@ -318,8 +318,8 @@ def assert_raw_tail_type_parity(
             for site in checked.call_sites
         )
 
-    assert selected_builtin_behavior(raw_checked) == selected_builtin_behavior(call_checked)
-    return raw_checked, call_checked
+    assert selected_builtin_behavior(sugared_checked) == selected_builtin_behavior(call_checked)
+    return sugared_checked, call_checked
 
 
 def mk_span(line: int = 1, col: int = 1) -> SourceSpan:
@@ -3329,7 +3329,7 @@ class TestRawTailTypingParity:
     def test_explicit_type_argument_matches_call_form(
         self, raw_source: str, call_source: str, expected_type: Type | str
     ) -> None:
-        raw_checked, _ = assert_raw_tail_type_parity(raw_source, call_source)
+        raw_checked, _ = assert_builtin_call_type_parity(raw_source, call_source)
         assert raw_checked.call_sites[0].target_type == _expected_type(raw_checked, expected_type)
 
     @pytest.mark.parametrize(
@@ -3385,7 +3385,7 @@ class TestRawTailTypingParity:
     def test_contextual_target_matches_call_form(
         self, raw_source: str, call_source: str, expected_type: Type | str
     ) -> None:
-        raw_checked, _ = assert_raw_tail_type_parity(raw_source, call_source)
+        raw_checked, _ = assert_builtin_call_type_parity(raw_source, call_source)
         assert raw_checked.call_sites[0].target_type == _expected_type(raw_checked, expected_type)
 
     @pytest.mark.parametrize(
@@ -3414,13 +3414,13 @@ class TestRawTailTypingParity:
         expected_type: Type | str,
         structured_exec: bool,
     ) -> None:
-        raw_checked, _ = assert_raw_tail_type_parity(raw_source, call_source)
+        raw_checked, _ = assert_builtin_call_type_parity(raw_source, call_source)
         call_site = raw_checked.call_sites[0]
         assert call_site.target_type == _expected_type(raw_checked, expected_type)
         assert raw_checked.contract_specs[call_site.node_id].structured_exec is structured_exec
 
     def test_exec_statement_discard_matches_call_form(self) -> None:
-        raw_checked, _ = assert_raw_tail_type_parity("exec$ true\n()", 'exec("true")\n()')
+        raw_checked, _ = assert_builtin_call_type_parity("exec$ true\n()", 'exec("true")\n()')
         call_site = raw_checked.call_sites[0]
         assert raw_checked.node_types[call_site.node_id] == UnitType()
         assert raw_checked.contract_specs[call_site.node_id] == OutputContractSpec(
@@ -3432,6 +3432,46 @@ class TestRawTailTypingParity:
         accept_type(
             'let reviewer = AgentCommand("reviewer")\nreviewer.ask("prompt")',
             capabilities=no_agent_caps(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Verbatim `$` literal target-type parity
+# ---------------------------------------------------------------------------
+
+
+class TestVerbatimLiteralTypingParity:
+    """Explicit type arguments on the callee infer through a `$` juxtaposition argument."""
+
+    @pytest.mark.parametrize(
+        ("verbatim_source", "call_source", "expected_type"),
+        (
+            pytest.param(
+                "let result = exec::[json] $ printf-json\nresult",
+                'let result = exec::[json]("printf-json")\nresult',
+                JsonType(),
+                id="exec-json",
+            ),
+            pytest.param(
+                "let result = exec::[text] $ echo hello\nresult",
+                'let result = exec::[text]("echo hello")\nresult',
+                TextType(),
+                id="exec-text",
+            ),
+            pytest.param(
+                "record Review\n  approved: bool\nlet result = ask::[Review] $ review it\nresult",
+                'record Review\n  approved: bool\nlet result = ask::[Review]("review it")\nresult',
+                "Review",
+                id="ask",
+            ),
+        ),
+    )
+    def test_explicit_type_argument_matches_call_form(
+        self, verbatim_source: str, call_source: str, expected_type: Type | str
+    ) -> None:
+        verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
+        assert verbatim_checked.call_sites[0].target_type == _expected_type(
+            verbatim_checked, expected_type
         )
 
 

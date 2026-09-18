@@ -2,7 +2,7 @@
 
 The hand-written lexer handles layout (INDENT/DEDENT), string templates with `%{}` expressions and `${NAME}` environment interpolation, raw tails (`exec$`, `ask$`), and the tight slash-path and `::` qualifier syntax. A Lark LALR grammar recognizes the token stream, and the AST builder validates and constructs frozen dataclass nodes with stable ids. Comments produce no tokens, but their spans are exposed as a side channel for highlighters.
 
-Single- and triple-quoted templates share hole recognition and token emission; raw tails reuse the expression-hole scanner. Environment holes scan names with the shared identifier rules and desugar to expression tokens. Triple-quoted dedenting measures indentation across literal/hole segments, assembles retained line slices, and maps only literal boundaries, preserving hole tokens' source positions without per-character position tables.
+Single- and triple-quoted templates share hole recognition and token emission; raw tails reuse the expression-hole scanner. Environment holes scan names with the shared identifier rules and desugar to expression tokens. Triple-quoted dedenting measures indentation across literal/hole segments, assembles retained line slices, and maps only literal boundaries, preserving hole tokens' source positions without per-character position tables. A `$` verbatim literal (to end of line, or an indented block) reuses the same template tokens, hole scanner, and `template` grammar rule as a quoted template.
 
 The lexer's escape, number, identifier, and environment-hole scanning rules live in `agl/value_syntax/lexical.py`, a leaf below the lexer that also backs the value-syntax reader (`agl/value_syntax/reader.py`), so both scan AgL literals identically.
 

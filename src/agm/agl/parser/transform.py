@@ -3123,8 +3123,9 @@ class AstBuilder(Transformer):
     def _build_template(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
         """Build a template expression from *args*, collapsing a hole-free value to text.
 
-        Non-segment children (delimiter tokens) are skipped, so quoted and
-        raw-tail payloads can hand their raw argument list straight through.
+        Non-segment children (delimiter tokens) are skipped, so quoted
+        templates, `$` verbatim literals, and raw-tail payloads can hand
+        their raw argument list straight through.
         """
         nonempty_segments = tuple(
             segment
@@ -3144,7 +3145,7 @@ class AstBuilder(Transformer):
         return syntax.Template(segments=nonempty_segments, span=span, node_id=nid)
 
     def template(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
-        """Build a quoted template expression from its segment children."""
+        """Build a quoted or `$` verbatim template expression from its segment children."""
         return self._build_template(meta, args)
 
     def raw_tail(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:

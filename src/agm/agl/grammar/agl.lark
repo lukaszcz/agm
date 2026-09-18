@@ -69,6 +69,7 @@
 
 %declare _NEWLINE _INDENT _DEDENT
 %declare TEMPLATE_START STRING_FRAGMENT INTERP_START INTERP_END TEMPLATE_END
+%declare VERBATIM_START VERBATIM_END
 %declare RAW_TAIL_NAME RAW_TAIL_START RAW_FRAGMENT RAW_TAIL_END
 
 // ---------------------------------------------------------------------------
@@ -819,6 +820,7 @@ var_ref:     name
 // ---------------------------------------------------------------------------
 
 template: TEMPLATE_START template_segment* TEMPLATE_END
+        | VERBATIM_START template_segment+ VERBATIM_END
 
 template_segment: STRING_FRAGMENT    -> tmpl_text
                 | interp             -> tmpl_interp

@@ -123,8 +123,9 @@ _HELP_TEXTS: dict[str, str] = {
         agm wsp list        [-v|--verbose]
 
         Manage AGM workspaces. A workspace may be the main repo or a linked
-        Git worktree, interpreted with AGM project config, workspace config,
-        dependency environment, setup scripts, and tmux session lifecycle.
+        Git worktree in the project's worktrees directory, interpreted with
+        AGM project config, workspace config, dependency environment, setup
+        scripts, and tmux session lifecycle.
     """),
     "sync": textwrap.dedent("""\
         agm sync fetch
@@ -832,9 +833,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("sync", "pull"): textwrap.dedent("""\
         agm sync pull
 
-        Run agm sync fetch, then run git merge in every Git worktree: all
-        dependency worktrees, the main repository workspace, and every branch
-        workspace.
+        Run agm sync fetch, then run git merge in the main workspace, every
+        branch workspace, and all dependency worktrees.
     """),
     ("config", "cp"): textwrap.dedent("""\
         agm config cp DIRNAME

@@ -31,6 +31,7 @@ from agm.project.layout import (
     discover_current_project_dir,
     project_deps_dir,
     project_repo_dir,
+    project_workspaces,
 )
 
 _P = ParamSpec("_P")
@@ -395,10 +396,11 @@ def complete_open_target(incomplete: str) -> list[str]:
 
 @_completes_quietly
 def complete_close_branch(incomplete: str) -> list[str]:
-    repo_dir = _resolve_project_repo_dir()
-    if repo_dir is None:
+    project_dir = discover_current_project_dir()
+    if project_dir is None:
         return []
-    return _match(_worktree_branch_candidates(repo_dir), incomplete)
+    names = {ws.name for ws in project_workspaces(project_dir) if not ws.main}
+    return _match(names, incomplete)
 
 
 @_completes_quietly

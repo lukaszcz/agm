@@ -10,7 +10,7 @@ import pytest
 import agm.commands.workspace.close as close_module
 from agm.cli_support.args import CloseArgs
 from agm.commands.workspace.close import close_workspace
-from tests._git_helpers import git_output, init_repo
+from tests._git_helpers import add_linked_worktree, git_output, git_run, init_repo
 
 
 def _make_git_close_project(
@@ -158,6 +158,47 @@ class TestCloseSession:
         assert worktree.is_dir()
         assert _branch_exists(repo, "main", env)
         assert _branch_exists(repo, "feature", env)
+
+    def test_refuses_git_worktree_outside_the_workspaces(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project, repo, _ = _make_git_close_project(tmp_path, env)
+        outside = add_linked_worktree(repo, tmp_path / "elsewhere", env, branch="outside")
+
+        with pytest.raises(SystemExit) as raised:
+            close_workspace(branch="outside", cwd=project)
+
+        assert raised.value.code == 1
+        assert outside.is_dir()
+        assert _branch_exists(repo, "outside", env)
+
+    def test_closes_workspace_whose_head_is_detached(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        project, repo, worktree = _make_git_close_project(tmp_path, env)
+        _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
+        git_run(worktree, ["checkout", "-q", "--detach"], env)
+
+        close_workspace(branch="feature", cwd=project)
+
+        assert not worktree.exists()
+        assert not _branch_exists(repo, "feature", env)
+
+    def test_keeps_workspace_whose_branch_no_longer_exists(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project, repo, worktree = _make_git_close_project(tmp_path, env)
+        git_run(worktree, ["checkout", "-q", "-b", "other"], env)
+        git_run(repo, ["branch", "-q", "-D", "feature"], env)
+
+        with pytest.raises(SystemExit) as raised:
+            close_workspace(branch="feature", cwd=project)
+
+        assert raised.value.code == 1
+        assert worktree.is_dir()
 
     def test_exits_without_removing_worktree_when_branch_not_deletable(
         self,

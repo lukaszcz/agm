@@ -22,6 +22,20 @@ class CurrentWorkspace:
     branch: str | None
 
 
+@dataclass(frozen=True)
+class Workspace:
+    """An AGM workspace: the main repository or a worktree under the worktrees directory."""
+
+    name: str
+    """``repo`` for the main workspace, else the path relative to the worktrees directory."""
+    path: Path
+    branch: str | None
+    """Checked-out branch; ``None`` when HEAD is detached."""
+    main: bool
+
+
+MAIN_WORKSPACE_NAME = "repo"
+
 _DOTENV_CONFIG_FILES = frozenset({".env", ".env.local"})
 _DOT_CONFIG_COPY_EXCLUDES = frozenset({".git"})
 
@@ -303,6 +317,30 @@ def default_worktrees_dir(project_dir: Path) -> Path:
     return project_dir / "worktrees"
 
 
+def _workspace_name(workspace: Workspace) -> str:
+    return workspace.name
+
+
+def project_workspaces(project_dir: Path, *, env: dict[str, str] | None = None) -> list[Workspace]:
+    """Return the main workspace, then branch workspaces sorted by name.
+
+    Git worktrees outside the project's worktrees directory are not workspaces.
+    """
+
+    repo_dir = project_repo_dir(project_dir).resolve(strict=False)
+    worktrees_dir = default_worktrees_dir(project_dir).resolve(strict=False)
+    main: list[Workspace] = []
+    branches: list[Workspace] = []
+    for worktree in git_helpers.worktree_list(repo_dir, env=env):
+        path = worktree.path.resolve(strict=False)
+        if path == repo_dir:
+            main.append(Workspace(MAIN_WORKSPACE_NAME, worktree.path, worktree.branch, main=True))
+        elif worktrees_dir in path.parents:
+            name = path.relative_to(worktrees_dir).as_posix()
+            branches.append(Workspace(name, worktree.path, worktree.branch, main=False))
+    return main + sorted(branches, key=_workspace_name)
+
+
 def project_config_dir(project_dir: Path) -> Path:
     """Return the shared project config directory."""
 
@@ -324,7 +362,7 @@ def project_notes_dir(project_dir: Path) -> Path:
 def is_main_workspace_branch(project_dir: Path, branch: str, *, repo_branch: str) -> bool:
     """Return whether *branch* resolves to the main workspace."""
 
-    return branch in {"repo", repo_branch}
+    return branch in {MAIN_WORKSPACE_NAME, repo_branch}
 
 
 def branch_worktree_path(project_dir: Path, branch: str, *, repo_branch: str) -> Path:
@@ -362,7 +400,7 @@ def branch_session_name(project_dir: Path, branch: str) -> str:
 
     name = _tmux_session_name(project_name(project_dir))
 
-    if branch == "repo":
+    if branch == MAIN_WORKSPACE_NAME:
         return name
 
     repo_branch = git_helpers.current_branch(project_repo_dir(project_dir))

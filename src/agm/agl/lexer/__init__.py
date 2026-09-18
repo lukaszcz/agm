@@ -6,6 +6,9 @@ Public API
   ``Lark(grammar, parser="lalr", lexer=AglLexer)``.
 - :class:`LexError` — span-aware lexical error raised by the scanner /
   layout filter.
+- :class:`IncompleteInputError` — a :class:`LexError` subtype raised only when
+  more input could complete the construct; :class:`UnterminatedTripleQuotedStringError`
+  narrows it to an unclosed triple-quoted string.
 - :func:`tokenize` — convenience helper: tokenize a source string and return
   the full token list (useful for tests and diagnostics).
 - :func:`lex_comment_spans` — offsets of the ``#`` comments the scan skipped
@@ -20,7 +23,7 @@ from typing import Iterator
 
 from lark.lexer import Token
 
-from agm.agl.lexer.errors import LexError
+from agm.agl.lexer.errors import IncompleteInputError, LexError, UnterminatedTripleQuotedStringError
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.lexer import (
     AglLexer,
@@ -34,8 +37,10 @@ from agm.agl.syntax.advisories import SpacedQualifier
 
 __all__ = [
     "AglLexer",
+    "IncompleteInputError",
     "LexError",
     "SpacedQualifier",
+    "UnterminatedTripleQuotedStringError",
     "lex_comment_spans",
     "lex_tab_warnings",
     "spaced_qualifier_collector",

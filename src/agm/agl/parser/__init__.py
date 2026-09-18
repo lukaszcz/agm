@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.parser.parser import (
-    has_open_raw_tail_block,
+    has_open_verbatim_block,
     has_unterminated_triple_quoted_string,
     is_incomplete_source,
     parse_program,
@@ -35,7 +35,7 @@ from agm.agl.parser.wrap import wrap_inline_program
 
 __all__ = [
     "AglSyntaxError",
-    "has_open_raw_tail_block",
+    "has_open_verbatim_block",
     "has_unterminated_triple_quoted_string",
     "is_incomplete_source",
     "parse_program",

@@ -237,6 +237,35 @@ class TestIsIncomplete:
 
     @pytest.mark.parametrize(
         "source",
+        [
+            "ask $",
+            "ask::[text] $",
+            "let reply = ask $",
+            "ask $\n  echo hi",
+            "ask $   \n  echo hi",
+            "def f() =>\n  ask $\n    body",
+            "let a = $\n  one\nlet b = $\n  two",
+        ],
+    )
+    def test_dollar_verbatim_headers_open_blocks(self, source: str) -> None:
+        assert is_incomplete(source) is True
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "ask $ echo hi",
+            "ask $\n  echo hi\nnext",
+            "let x: text = ask $\n    echo hi\n# trailing comment",
+            "ask $  # c",
+            "ask $\n  echo\n  ",
+            "let a = $\n  one\nlet b = $ two",
+        ],
+    )
+    def test_closed_dollar_verbatim_blocks_submit(self, source: str) -> None:
+        assert is_incomplete(source) is False
+
+    @pytest.mark.parametrize(
+        "source",
         ["record R", "enum E", "case x of", "try", "do agent", "if x == 1 =>", "1 +"],
     )
     def test_incomplete_sources(self, source: str) -> None:

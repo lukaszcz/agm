@@ -40,7 +40,7 @@ from lark.lexer import Token
 
 from agm.agl.diagnostics import Diagnostic, SourceSpan
 from agm.agl.keywords import KEYWORDS
-from agm.agl.lexer.errors import LexError
+from agm.agl.lexer.errors import IncompleteInputError, LexError, UnterminatedTripleQuotedStringError
 from agm.agl.lexer.tokens import (
     ARROW,
     ASSIGN,
@@ -710,7 +710,9 @@ class _Scanner:
         while True:
             if self._at_end():
                 span = self._span_here()
-                raise LexError("Unterminated triple-quoted string literal", span=span)
+                raise UnterminatedTripleQuotedStringError(
+                    "Unterminated triple-quoted string literal", span=span
+                )
             ch = self._peek()
             if ch == quote and self._peek(1) == quote and self._peek(2) == quote:
                 # End of triple-quoted string; record the closing-quote position.
@@ -825,9 +827,17 @@ class _Scanner:
         self._col += line_end - self._pos
         self._pos = line_end
 
-    def _payload_error(self, message: str, start_pos: int, line: int, col: int) -> LexError:
+    def _payload_error(
+        self,
+        message: str,
+        start_pos: int,
+        line: int,
+        col: int,
+        *,
+        error_cls: type[LexError] = LexError,
+    ) -> LexError:
         """Build a raw-tail or verbatim-literal diagnostic anchored at a source location."""
-        return LexError(
+        return error_cls(
             message,
             span=SourceSpan(line, col, line, col, start_pos, start_pos),
         )
@@ -987,14 +997,21 @@ class _Scanner:
         )
 
     def _scan_block(
-        self, parent_indent: int, fragment_type: str, *, empty_error: str | None
+        self,
+        parent_indent: int,
+        fragment_type: str,
+        *,
+        empty_error: str | None,
+        empty_error_anchor: tuple[int, int, int] | None = None,
     ) -> Iterator[Token]:
         """Consume an indented block and emit its single payload.
 
         Shared by a raw tail and a `$` verbatim literal (see the section
         docstring above).  *empty_error* is ``None`` for a raw tail (an empty
         payload silently closes; the parser reports it) or a message for a `$`
-        literal, which raises a ``LexError`` immediately instead.
+        literal, which raises a ``LexError`` immediately instead, anchored at
+        *empty_error_anchor* (the opener) when given, else the header's own
+        line break.
         """
         header_newline = (self._pos, self._line, self._col)
         self._advance()  # header newline
@@ -1048,7 +1065,8 @@ class _Scanner:
 
         if margin is None:
             if empty_error is not None:
-                raise self._payload_error(empty_error, *header_newline)
+                anchor = empty_error_anchor if empty_error_anchor is not None else header_newline
+                raise self._payload_error(empty_error, *anchor)
             # No payload; the parser reports the empty raw tail.  The header's
             # own line break still has to separate it from the next item.
             self._pending_block_newline = self._block_newline_token(*header_newline, next_indent)
@@ -1065,6 +1083,7 @@ class _Scanner:
         *,
         start_type: str | None = None,
         empty_error: str | None,
+        empty_error_anchor: tuple[int, int, int] | None = None,
     ) -> Iterator[Token]:
         """Scan the inline-or-block payload at the cursor, shared by both forms.
 
@@ -1075,7 +1094,11 @@ class _Scanner:
         a `$` literal has none, since ``VERBATIM_START`` already marks it).
         *empty_error* is forwarded to :meth:`_scan_block`, and also applies to
         an immediately-empty payload (`$`/name at EOF or followed only by
-        spaces).
+        spaces), which raises :class:`~agm.agl.lexer.errors.IncompleteInputError`
+        rather than a plain :class:`LexError` — more input (a payload) could
+        still complete the construct.  *empty_error_anchor* pins both of those
+        diagnostics at the opener (e.g. the `$`) instead of the payload
+        position; ``None`` for a raw tail, which never raises here.
         """
         while self._peek() in (" ", "\t"):
             self._advance()
@@ -1089,12 +1112,26 @@ class _Scanner:
         payload_end_state: tuple[int, int, int]
         if self._at_end():
             if empty_error is not None:
-                raise self._payload_error(empty_error, payload_start, payload_line, payload_col)
+                anchor = (
+                    empty_error_anchor
+                    if empty_error_anchor is not None
+                    else (payload_start, payload_line, payload_col)
+                )
+                raise self._payload_error(
+                    empty_error,
+                    *anchor,
+                    error_cls=IncompleteInputError,
+                )
             payload_end_state = (self._pos, self._line, self._col)
         elif self._peek() == "\n":
             parent_indent, _ = self._indent_info(self._line_start_pos)
             self._payload_end = None
-            yield from self._scan_block(parent_indent, fragment_type, empty_error=empty_error)
+            yield from self._scan_block(
+                parent_indent,
+                fragment_type,
+                empty_error=empty_error,
+                empty_error_anchor=empty_error_anchor,
+            )
             payload_end_state = self._payload_end or (self._pos, self._line, self._col)
             self._payload_end = None
         else:
@@ -1140,9 +1177,9 @@ class _Scanner:
         Emits ``VERBATIM_START``, the payload, and ``VERBATIM_END``.  Reuses
         the shared inline/block payload scanner and the shared hole scanner;
         only ``%{expr}`` holes interpolate, and an empty literal is a lex
-        error.  Inside brackets (including a `%{...}` hole) the error is
-        deferred like a raw tail's, so an unclosed bracket still yields the
-        parser's diagnostic.
+        error anchored at the `$` itself.  Inside brackets (including a
+        `%{...}` hole) the error is deferred like a raw tail's, so an
+        unclosed bracket still yields the parser's diagnostic.
         """
         yield self._make_token(VERBATIM_START, "$", start_pos, start_line, start_col)
         if self._bracket_depth > 0:
@@ -1155,7 +1192,10 @@ class _Scanner:
             return
 
         yield from self._scan_payload(
-            STRING_FRAGMENT, VERBATIM_END, empty_error="empty verbatim text literal"
+            STRING_FRAGMENT,
+            VERBATIM_END,
+            empty_error="empty verbatim text literal",
+            empty_error_anchor=(start_pos, start_line, start_col),
         )
 
     # ------------------------------------------------------------------

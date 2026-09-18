@@ -14,8 +14,10 @@ from lark.lexer import LexerState, TextSlice
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.lexer import (
     AglLexer,
+    IncompleteInputError,
     LexError,
     SpacedQualifier,
+    UnterminatedTripleQuotedStringError,
     lex_comment_spans,
     lex_tab_warnings,
     spaced_qualifier_collector,
@@ -853,6 +855,11 @@ class TestSingleQuotedStrings:
         # The missing closing delimiter is reported at end of input.
         assert (span.start_offset, span.end_offset) == (len(source), len(source))
 
+    @pytest.mark.parametrize("quote", ('"""', "'''"))
+    def test_unterminated_triple_quoted_string_raises_its_own_error_type(self, quote: str) -> None:
+        with pytest.raises(UnterminatedTripleQuotedStringError):
+            tok(f"{quote}hello")
+
 
 # ---------------------------------------------------------------------------
 # Raw-tail forms
@@ -1344,6 +1351,34 @@ class TestVerbatimLiteral:
     def test_empty_literal_is_a_lex_error(self, source: str) -> None:
         with pytest.raises(LexError):
             tok(source)
+
+    @pytest.mark.parametrize("source", ("$", "$   "))
+    def test_empty_literal_at_eof_is_incomplete_input(self, source: str) -> None:
+        # Nothing (not even a newline) follows the header: more input (a
+        # payload) could still complete the literal, so a REPL should keep
+        # prompting rather than report this as a real error.  The span is
+        # anchored at the `$` itself, not the payload start after any
+        # trailing whitespace.
+        with pytest.raises(IncompleteInputError) as exc_info:
+            tok(source)
+        span = exc_info.value.span
+        assert (span.start_line, span.start_col, span.start_offset) == (1, 1, 0)
+
+    @pytest.mark.parametrize("source", ("$\n", "$\n\n", "$\n  \n", "$\nx", "x = $\ny"))
+    def test_empty_literal_followed_by_a_line_is_a_real_error(self, source: str) -> None:
+        # A line break was already typed with no payload on it: this is a
+        # genuine mistake, not something more input could still complete.
+        # The span is anchored at the `$` itself, same as the EOF case above.
+        with pytest.raises(LexError) as exc_info:
+            tok(source)
+        assert not isinstance(exc_info.value, IncompleteInputError)
+        span = exc_info.value.span
+        dollar_offset = source.index("$")
+        assert (span.start_line, span.start_col, span.start_offset) == (
+            1,
+            dollar_offset + 1,
+            dollar_offset,
+        )
 
     def test_block_followed_by_a_true_dedent_closes_the_enclosing_indent(self) -> None:
         assert tok("def f() =\n  $\n    a\nz") == [

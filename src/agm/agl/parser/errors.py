@@ -343,8 +343,6 @@ def syntax_error_from_lark(
     from agm.agl.lexer.errors import LexError
 
     if isinstance(exc, LexError):
-        # LexError already carries a SourceSpan.
-        assert exc.span is not None
         return AglSyntaxError(str(exc), span=exc.span)
 
     if isinstance(exc, UnexpectedToken):

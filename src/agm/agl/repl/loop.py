@@ -23,7 +23,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from agm.agl.parser import (
-    has_open_raw_tail_block,
+    has_open_verbatim_block,
     has_unterminated_triple_quoted_string,
     is_incomplete_source,
 )
@@ -73,8 +73,8 @@ def is_incomplete(text: str) -> bool:
     Enter on an empty continuation line, so the buffer ends with ``\\n`` —
     likewise force-submits so the user can always escape a continuation even when
     the buffer is still syntactically incomplete.  Otherwise the structured
-    parser signal decides, except that a registered raw-tail block stays open
-    until its payload is closed by a blank line or dedent.
+    parser signal decides, except that an open `$`-literal or raw-tail block
+    stays open until its payload is closed by a blank line or dedent.
 
     Both front ends drive this same predicate — the prompt_toolkit console from
     its multiline Enter key binding, the plain console from its line-accumulating
@@ -85,7 +85,7 @@ def is_incomplete(text: str) -> bool:
         return False
     if text.endswith("\n") and not has_unterminated_triple_quoted_string(text):
         return False
-    return is_incomplete_source(text) or has_open_raw_tail_block(text)
+    return is_incomplete_source(text) or has_open_verbatim_block(text)
 
 
 # ``has_runnable_statements`` (the blank/comment-only-entry predicate) lives in

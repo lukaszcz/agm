@@ -3384,6 +3384,20 @@ class TestReplSeam:
         assert is_incomplete_source(source)
         assert not has_unterminated_triple_quoted_string(f"{source}{quote}")
 
+    @pytest.mark.parametrize("source", ["ask $", "ask $   "])
+    def test_is_incomplete_source_empty_dollar_verbatim_literal(self, source: str) -> None:
+        """A bare `$` header at end of input is incomplete, not a real error."""
+        assert is_incomplete_source(source)
+
+    @pytest.mark.parametrize("source", ["ask $\n  ", "x = $\ny"])
+    def test_is_incomplete_source_real_dollar_verbatim_error(self, source: str) -> None:
+        """A `$` literal with no payload but a following line is a real error."""
+        assert not is_incomplete_source(source)
+
+    def test_is_incomplete_source_raw_tail_header_is_not_incomplete(self) -> None:
+        """A registered raw-tail header's empty payload defers to the parser."""
+        assert not is_incomplete_source("exec$")
+
 
 # ---------------------------------------------------------------------------
 # Negative cases (parse errors)

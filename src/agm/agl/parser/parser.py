@@ -32,9 +32,9 @@ from lark.exceptions import (
 
 import agm.agl.syntax as syntax
 from agm.agl.lexer import tokenize
-from agm.agl.lexer.errors import LexError
+from agm.agl.lexer.errors import IncompleteInputError, LexError, UnterminatedTripleQuotedStringError
 from agm.agl.lexer.lexer import build_parser
-from agm.agl.lexer.tokens import RAW_TAIL_END, RAW_TAIL_START
+from agm.agl.lexer.tokens import RAW_TAIL_END, RAW_TAIL_START, VERBATIM_END, VERBATIM_START
 from agm.agl.parser.errors import AglSyntaxError, syntax_error_from_lark
 from agm.agl.parser.transform import AstBuilder, resolve_program_infix
 from agm.agl.syntax.spans import SourceId
@@ -81,21 +81,32 @@ def has_unterminated_triple_quoted_string(text: str) -> bool:
     try:
         _PARSER.parse(text)
     except LexError as exc:
-        return str(exc) == "Unterminated triple-quoted string literal"
+        return isinstance(exc, UnterminatedTripleQuotedStringError)
     except LarkError:
         return False
     return False
 
 
-def has_open_raw_tail_block(text: str) -> bool:
-    """Return ``True`` when a raw-tail block payload runs to the end of *text*.
+# Opener/closer token kinds of a block-form payload: a raw tail and a `$`
+# verbatim literal.
+_BLOCK_OPENER_TOKENS: tuple[str, ...] = (RAW_TAIL_START, VERBATIM_START)
+_BLOCK_CLOSER_TOKENS: tuple[str, ...] = (RAW_TAIL_END, VERBATIM_END)
 
-    An unclosed raw-tail block is not a parse failure — the lexer happily ends
-    the payload at end of input — so :func:`is_incomplete_source` cannot see it.
-    A REPL still needs to keep prompting, which is what this answers.  Only the
-    *last* payload can reach the buffer end, and it is a block (rather than an
-    inline tail that is already complete) exactly when its header line has no
-    text after the raw-tail name.
+
+def has_open_verbatim_block(text: str) -> bool:
+    """Return ``True`` when a `$`-literal or raw-tail block payload is still open.
+
+    An unclosed block payload is not a parse failure — the lexer happily ends
+    it at end of input — so :func:`is_incomplete_source` cannot see it. A REPL
+    still needs to keep prompting, which is what this answers. Only the *last*
+    payload can reach the buffer end, and it is a block (rather than an inline
+    payload that is already complete) exactly when its header line has no text
+    after the opener.
+
+    A bare `$` header with nothing typed after it yet (e.g. ``ask $``) raises
+    an ``IncompleteInputError`` instead of closing silently (unlike a raw
+    tail's empty payload); :func:`is_incomplete_source` already reports that
+    as incomplete, so any lex error here is simply not an open block.
     """
     try:
         tokens = list(tokenize(text))
@@ -103,9 +114,9 @@ def has_open_raw_tail_block(text: str) -> bool:
         return False
     payload_starts: list[int] = []
     for token in tokens:
-        if token.type == RAW_TAIL_START:
-            payload_starts.append(token.start_pos if token.start_pos is not None else 0)
-        elif token.type == RAW_TAIL_END and token.end_pos == len(text) and payload_starts:
+        if token.type in _BLOCK_OPENER_TOKENS:
+            payload_starts.append(token.end_pos if token.end_pos is not None else 0)
+        elif token.type in _BLOCK_CLOSER_TOKENS and token.end_pos == len(text) and payload_starts:
             line_end = text.find("\n", payload_starts[-1])
             header_tail = text[payload_starts[-1] : len(text) if line_end < 0 else line_end]
             return header_tail.strip() == ""
@@ -247,7 +258,8 @@ def is_incomplete_source(text: str) -> bool:
     - ``UnexpectedToken`` on a real token where an ``_INDENT`` was expected (the
       user hit Enter right after a block-opening ``=>``/header but has not yet
       indented the suite body) → incomplete.
-    - ``LexError`` for an unterminated triple-quoted string → incomplete. Other
+    - ``IncompleteInputError`` (an unterminated triple-quoted string, or an
+      empty `$` verbatim literal running to end of input) → incomplete. Other
       lexical failures remain complete so the REPL submits and the user sees the
       genuine error instead of being trapped in a continuation prompt.
     - Any other failure (``UnexpectedCharacters``, a wrong token mid-line such
@@ -280,7 +292,7 @@ def is_incomplete_source(text: str) -> bool:
         else:
             result = "_INDENT" in exc.expected
     except LexError as exc:
-        result = str(exc) == "Unterminated triple-quoted string literal"
+        result = isinstance(exc, IncompleteInputError)
     except LarkError:
         # Any other parse failure (``UnexpectedCharacters`` and the residual
         # ``LarkError`` family) is a real error the user should see immediately,

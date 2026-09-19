@@ -10,7 +10,7 @@ Collection iterators retain live array indexing so mutations ahead of the cursor
 
 ## Control Flow
 
-`break`, `continue`, and `return` propagate as internal Python signals caught only by their owning construct, so they unwind through `try`/`catch`, which catches only AgL raises. `IrCase` dispatches on member-record identity or literal key; a switch with no matching arm is malformed IR, never a runtime match failure. Recursion is bounded by `max_call_depth`, raising a catchable `RecursionError`; the Python limit is raised so the AgL guard fires first.
+`break`, `continue`, and `return` propagate as internal Python signals caught only by their owning construct, so they unwind through `try`/`catch`, which catches only AgL raises. A specific `catch` matches by nominal conformance (exact identity, then the value's `base` chain on a miss). `IrCase` dispatches on member-record identity or literal key; a switch with no matching arm is malformed IR, never a runtime match failure. Recursion is bounded by `max_call_depth`, raising a catchable `RecursionError`; the Python limit is raised so the AgL guard fires first.
 
 ## Host-Backed Operations
 
@@ -18,7 +18,7 @@ Effects are dispatched by contract identity through `eval/effects.py`, the seam 
 
 - **Agents.** An explicit-agent `ask` decodes its `Agent` record to a host spec and opens an ephemeral session spanning the parse-retry loop; a free `ask` uses the snapshotted default session; session nodes drive persistent handles. Output is shaped by the contract's format and decode descriptors; a unit contract dispatches once and discards the response.
 - **Shell.** `exec` returns a structured result or parses stdout per its contract. Environment, working directory, and idle timeout come from operands or standard-library bindings; spawn failures and timeouts raise `ExecError`.
-- **Conversions.** Casts and `std/value::parse`/`try-parse` execute pre-resolved recipes and parse strictly (strict JSON or AgL value syntax, never lenient recovery), raising `CastError` or `ValueParseError` per their failure mode, with `try-parse` composed from an ordinary `try`/`catch`; agent and `exec` output keep the configurable strict/lenient codec.
+- **Conversions.** Casts and `std/value::parse`/`try-parse` execute pre-resolved recipes and parse strictly (strict JSON or AgL value syntax, never lenient recovery), raising `CastError` or `ValueParseError` per their failure mode, with `try-parse` composed from an ordinary `try`/`catch`; agent and `exec` output keep the configurable strict/lenient codec. Nominal casts and `is` share that conformance check (`ir.program.nominal_conforms`), so an exception downcast or `is` accepts descendants.
 - **Resources** evaluate to their embedded absolute paths. Host-minted values (built-in exceptions, `ExecResult`, `AgentRequest`, `Option` members) take identity from the per-program builtin nominal table so they render and match like source-constructed values.
 - **Externs** delegate to the FFI registry ([ffi.md](ffi.md)).
 

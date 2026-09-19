@@ -162,9 +162,11 @@ constructor directly (`mylib::Red`). Qualification states the owner explicitly
 but is not required when the scrutinee type selects a same-spelled constructor;
 when present, it must identify the scrutinee's exact nominal type. A module route uses slash segments,
 as in `company/colors::Color::Red` or `company/colors::Point`; constructor
-qualification itself uses `::`, never `.`. A named scope qualifies a pattern
-through the same chain, so a scoped constructor is written with its exact path
-(`Shapes::Point(x)`, `mylib::Shapes::Point(x)`); see [Scopes](scopes.md).
+qualification itself uses `::`, never `.`. A named scope qualifies a pattern,
+or an `is`/`is not` right-hand side ([Expressions](expressions.md)), through
+the same chain, so a scoped constructor or exception is written with its
+exact path (`Shapes::Point(x)`, `mylib::Shapes::Point(x)`); see
+[Scopes](scopes.md).
 
 **Payload sub-patterns** follow the same positional-greedy binding as calls:
 
@@ -367,4 +369,18 @@ same way as in a pattern:
 let probe: Option[int] = Some(value = 99)
 if probe is Option::Some => print "probe is some"
 if probe is not Option::None => print "probe is not none"
+```
+
+`is` / `is not` also test exception subtyping: `e is T` holds when `e`'s
+runtime type is `T` or a descendant of it in its `extends` chain. There is
+no constructor-pattern counterpart for exceptions (Rule 1 above); use
+`case e as? T of` to test and destructure together:
+
+<!-- agl-check: fragment -->
+```agl
+if e is HttpTimeoutError => print "timed out"
+
+case e as? Detailed of
+  | Some(value) => print "detail: %{value.detail}"
+  | None => print e.message
 ```

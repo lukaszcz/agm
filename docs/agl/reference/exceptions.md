@@ -37,6 +37,30 @@ own fields. Exception fields do not accept `var` and cannot be reassigned.
 `builtin exception` is the standard-library form for host-recognized exception
 types; the name, base, and fields must match the recognized shape exactly.
 
+### Casts and `is`
+
+An exception value can be widened to an ancestor in its `extends` chain
+(including the root `Exception`) or narrowed to a descendant with `as`/`as?`;
+widening is a no-op, and narrowing is checked against the value's runtime
+type. `is`/`is not` test the same relation without converting: `x is T`
+holds exactly when `x as? T` is `Some`. An unrelated type, including a
+sibling, is a static error in all three forms. See
+[Casts and convertibility](types.md#casts-and-convertibility) for the full
+rule and matrix.
+
+```agl
+exception Problem extends Exception
+  code: int
+
+exception Detailed extends Problem
+  detail: text
+
+def describe(e: Problem) -> text =
+  case e as? Detailed of
+    | Some(value) => "detailed: %{value.detail}"
+    | None => "problem: %{e.code}"
+```
+
 ### Methods
 
 An exception type may declare methods. A method declared on an exception is
@@ -172,15 +196,35 @@ caught by `catch`; it unwinds to the nearest enclosing function.
 
 Catch patterns:
 
-- `catch SomeError` / `catch SomeError as e` — matches exactly the named
-  exception type, whether built-in or user-declared. It does not match that
-  type's subtypes. `SomeError` names whichever declaration of that name is in
-  scope where the `catch` clause is written; in the REPL, a name that is
-  later redeclared keeps naming its original declaration in a `catch` clause
-  written before the redeclaration, while a `catch` clause written afterward
-  names the new one.
+- `catch SomeError` / `catch SomeError as e` — matches a raised value whose
+  runtime type is `SomeError` or any descendant of it in its `extends`
+  chain, whether built-in or user-declared; `e` is typed `SomeError`.
+  `SomeError` names whichever declaration of that name is in scope where the
+  `catch` clause is written; in the REPL, a name that is later redeclared
+  keeps naming its original declaration in a `catch` clause written before
+  the redeclaration — and that clause also matches descendants of the old
+  declaration declared in later entries — while a `catch` clause written
+  afterward names the new declaration.
 - `catch _` / `catch _ as e` — matches anything; `e` has type `Exception`.
 - `catch Exception as e` — equivalent to `catch _ as e`.
+
+Handlers are tried in the order written; the first whose type matches the
+raised value's runtime type wins. A handler that can never fire is a
+**static error**: one written for the same type as an earlier handler, for a
+type an earlier handler already covers (an ancestor of it), or after a
+catch-all (`_` or `Exception`).
+
+<!-- agl-check: fragment -->
+```agl
+try
+  raise Detailed(message = "m", code = 1, detail = "x")
+catch Detailed as d =>        # most specific first
+  print(d.detail)
+catch Problem as p =>         # Problem and any other descendant
+  print(p.code)
+catch _ as e =>
+  print(e.message)
+```
 
 There is no `finally`.
 
@@ -421,8 +465,10 @@ value the host rejects.
 ### `CastError`
 
 A fallible `as` cast failed at runtime: the source value did not conform to
-the target type. This includes an enum-to-member identity downcast or an
-overlapping-enum cast when the value's constructor is absent from the target.
+the target type. This includes an enum-to-member identity downcast, an
+overlapping-enum cast when the value's constructor is absent from the
+target, or an exception downcast when the value's runtime type is not the
+target or one of the target's descendants.
 
 ```text
 source-type: text   # name of the source type, e.g. "json"
@@ -548,6 +594,11 @@ how equality and tracing treat one.
 | `std/regex` pattern compilation — Python `re` rejects the pattern | `RegexError` |
 | Rendering, `as text`, or `as json` encounters a reference cycle, including a record-closed cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
+
+A `catch` of a base exception type handles every exception whose type
+descends from it, not only the types listed above. For example, `std/http`
+declares its transport and decode failures as subtypes of `HttpError`;
+`catch HttpError as e` handles all of them.
 
 An exception that reaches the top of the program uncaught terminates the
 run; the host reports the exception's type, fields, and source location, and

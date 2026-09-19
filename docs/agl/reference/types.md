@@ -978,8 +978,10 @@ Typing is exact nominal matching with these implicit coercions:
    containers.
 5. **A derived exception widens to any ancestor in its `extends` chain.** This
    applies only against a known base-exception slot and preserves the value's
-   concrete identity. It does not propagate through containers, and `catch`
-   matching remains exact.
+   concrete identity; the same widening is available explicitly as `as` to a
+   named ancestor type. It does not propagate through containers. See
+   [`try`/`catch`](exceptions.md#try--catch) for how a `catch` clause matches
+   this hierarchy.
 6. There are no other implicit conversions. In particular, an `array` or
    `dict` value — even one that is JSON-shaped — is never implicitly absorbed
    into `json`: an implicit conversion never copies a data structure, and
@@ -1014,6 +1016,15 @@ identity and returns the same record value on success. Two enums may be cast
 when their instantiated constructor sets overlap. The cast checks whether the
 runtime constructor belongs to that overlap; a subset-to-superset cast is
 total and needs no runtime check.
+
+An exception value follows the same identity-cast shape over its `extends`
+chain. Casting to itself or any ancestor, including the root `Exception`, is
+a compile-time-checked no-op. Casting to a descendant is a fallible identity
+downcast: it succeeds when the value's runtime type is the target or one of
+the target's own descendants, and raises `CastError` otherwise. Casting
+between unrelated exception types, including siblings, is a static error, as
+is casting `text` or `json` to an exception type. See
+[Exceptions](exceptions.md#casts-and-is) for `is`/`is not` and examples.
 
 The target type `T` is a type expression written the same way as any other
 type annotation (`int`, `array[text]`, `MyRecord`, etc.).
@@ -1059,6 +1070,9 @@ may raise `CastError`.
 | enum `A` | enum `B` sharing some but not all constructors of `A` | fallible identity cast — checks that the runtime constructor belongs to both enums |
 | enum `E` | `text` | fallible — strict JSON or AgL value syntax parse, then member validation |
 | enum `E` | `json` | fallible — member validation |
+| exception type `T` | `T` itself, or any descendant of `T` in its `extends` chain | total identity upcast (no-op) — includes casting to the root `Exception` |
+| exception type `T` | any ancestor of `T` in its `extends` chain | fallible identity downcast — checks that the runtime type is `T` or a descendant of `T` |
+| exception type | `text`, `json` | **static cast error** — an exception cannot be decoded from text or JSON |
 | `Agent` | `text` | fallible — shorthand, a JSON object, or an `Agent` member constructor call; no verbatim command fallback |
 | `Agent` | `json` | fallible — validates a tagged `Agent` member object |
 | any type | `unit`, function type | **static cast error** |

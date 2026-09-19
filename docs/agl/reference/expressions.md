@@ -698,7 +698,10 @@ reference cycle; their `as?` forms yield `None` instead. Casting from an enum
 to one of its member records is an identity downcast;
 casting a member record to a containing enum is an identity upcast. Enums can
 be cast when they share constructors; the runtime constructor must belong to
-the target enum.
+the target enum. An exception value follows the same identity-cast shape over
+its `extends` chain: casting to itself or an ancestor, including the root
+`Exception`, is a no-op; casting to a descendant checks the runtime type.
+Unrelated exception types, including siblings, are a static error.
 The full conversion matrix and semantics are in
 [Types](types.md#casts-and-convertibility).
 
@@ -757,21 +760,35 @@ finite-schema restriction applies as for an agent output type: a
 whose reachable instantiations never close cannot be used as a cast target
 either — a static error at the `as`/`as?` expression, not a runtime failure.
 
-### Enum-member tests: `is`, `is not`
+### Enum-member and exception tests: `is`, `is not`
 
 <!-- agl-check: fragment -->
 ```agl
 review is Pass
 status is Status::Blocked     # qualified; aliases resolve transparently
+error is HttpError            # exception: HttpError or a descendant of it
 ```
 
-The left operand must have enum type; the member must belong to that enum.
-A member may be written by its bare injected name, its record declaration name,
-or a qualified enum-member spelling. The test compares nominal member identity.
-When one bare spelling exposes members from several enums, the left operand's
-enum type selects the member; several distinct matching members remain ambiguous.
-It does not narrow the static type of the left operand in either branch; cast to
-the member record before accessing that record's fields or methods.
+The left operand must have enum or exception type.
+
+For an **enum** left operand, the right-hand name must be one of that enum's
+members. A member may be written by its bare injected name, its record
+declaration name, or a qualified enum-member spelling. The test compares
+nominal member identity. When one bare spelling exposes members from several
+enums, the left operand's enum type selects the member; several distinct
+matching members remain ambiguous.
+
+For an **exception** left operand, the right-hand name must name the left
+operand's static type, an ancestor of it in its `extends` chain, or a
+descendant; an unrelated type is a static error. `x is T` holds exactly when
+`x as? T` is `Some` — see [Casts and convertibility](types.md#casts-and-convertibility).
+
+Either right-hand name may be qualified, including through a named scope, the
+same way a [constructor pattern](pattern-matching.md#module-qualified-constructor-patterns)
+is.
+
+`is`/`is not` never narrows the static type of the left operand; cast to the
+target type first to access its fields or methods.
 
 ### Operators as function values
 

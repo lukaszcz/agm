@@ -123,17 +123,26 @@ rules:
         end: "$"
         skip: "\\\\."
         rules:
-            - special: "%\\{|\\}"
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
-    # Template strings. AgL strings may contain %{...}; this highlights the
-    # interpolation delimiters without trying to parse nested AgL expressions.
+    # Template strings and `$' payloads contain unescaped `%{...}' holes. A
+    # nested region faces their delimiters without styling literal braces or
+    # escaped hole openers.
     - constant.string:
         start: "\"\"\""
         end: "\"\"\""
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "%\\{|\\}"
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
     - constant.string:
         start: "'''"
@@ -141,7 +150,11 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "%\\{|\\}"
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
     - constant.string:
         start: "\""
@@ -149,7 +162,11 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "%\\{|\\}"
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
     - constant.string:
         start: "'"
@@ -157,7 +174,11 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "%\\{|\\}"
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
     - comment:
         start: "#"

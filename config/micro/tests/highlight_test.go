@@ -90,6 +90,26 @@ func assertFace(t *testing.T, source, substring, group string) {
 	}
 }
 
+// assertNotFace fails if any rune of substring in source carries group.
+// substring must occur exactly once for the same reason as assertFace.
+func assertNotFace(t *testing.T, source, substring, group string) {
+	t.Helper()
+	first := strings.Index(source, substring)
+	if first < 0 {
+		t.Fatalf("%q does not occur in %q", substring, source)
+	}
+	if strings.Index(source[first+1:], substring) >= 0 {
+		t.Fatalf("%q occurs more than once in %q", substring, source)
+	}
+	all := faces(t, source)
+	start := len([]rune(source[:first]))
+	for i := range []rune(substring) {
+		if all[start+i] == group {
+			t.Errorf("in %q: %q is faced as %q", source, substring, group)
+		}
+	}
+}
+
 // The builtin call names, mirroring BUILTIN_CALL_NAMES in
 // src/agm/agl/scope/symbols.py. Keep this list in step with that one.
 var builtins = []string{
@@ -225,6 +245,11 @@ func TestStringsAndComments(t *testing.T) {
 	assertFace(t, `let s = "hi %{name}"`, "%{", "special")
 }
 
+func TestTemplateLiteralBracesAndEscapedHolesStayStrings(t *testing.T) {
+	assertFace(t, `let s = "literal }"`, "}", "constant.string")
+	assertNotFace(t, `let s = "escaped \%{name}"`, "%{", "special")
+}
+
 // A `var' marker declares a mutable record or enum-member field, so the
 // keyword has to face wherever a field is declared -- in a layout body, in an
 // inline field list, and in an enum member's payload.
@@ -292,6 +317,8 @@ func TestVerbatimPayloadInterpolationHoleIsFaced(t *testing.T) {
 	assertFace(t, "ask $ Summarize %{topic} please", "%{", "special")
 	assertFace(t, "ask $ Summarize %{topic} please", "}", "special")
 	assertFace(t, "exec $ echo ${HOME}", "${", "constant.string")
+	assertNotFace(t, "exec $ echo ${HOME}", "}", "special")
+	assertFace(t, "ask $ escaped \\%{topic}", "%{", "constant.string")
 }
 
 // A declaration attribute is a `@name' prefix, optionally followed by an

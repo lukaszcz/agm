@@ -36,6 +36,51 @@ prelude is.
 
 Use `\${` to write a literal `${` in a string template.
 
+## The `$` literal
+
+A `$` at the start of a token opens a **verbatim text literal** (`$`
+literal), a third template spelling alongside quoted and triple-quoted
+templates
+([Lexical structure](lexical-structure.md#verbatim-literals)). It denotes the
+same kind of value — a template, evaluating to `text` — but treats its
+payload differently from a quoted template:
+
+- Only `%{expr}` holes interpolate, with the same expression-hole rules and
+  uniform rendering as any other template.
+- `${NAME}` is **not** an environment hole here: unlike in a quoted template,
+  it is inert payload text and reaches the value unchanged, along with
+  `$VAR`, `$(cmd)`, and every other dollar form. Read the environment in a
+  `$` literal with `%{getenv("NAME")}` (`std/prelude`, no import needed):
+
+  ```agl
+  program def main() -> unit =
+    let region: text = ask $ Deploy region is %{getenv("REGION")}.
+  ```
+
+- The only escape is `\%{`, for a literal `%{`; `#`, `;`, quotes,
+  parentheses, and ordinary backslashes are all literal payload text, never
+  AgL syntax.
+
+The payload's extent, whitespace trimming, block dedent, the empty-literal
+error, and the bracket-placement restriction are lexical rules, specified in
+[Lexical structure](lexical-structure.md#verbatim-literals).
+
+Because the literal swallows to end of line like a comment, and because
+[juxtaposition never chains](lexical-structure.md#operator-precedence), a `$`
+literal is always the last thing on its line and supplies at most one
+argument directly; pipe the result instead of nesting another call after it:
+
+```agl
+program def main() -> unit =
+  let dir = "."
+  print <| exec::[text] $ printf '%s' %{dir}
+```
+
+[Shell execution](shell-execution.md) and [Agent calls](agent-calls.md) show
+it supplying `exec`'s and `ask`'s single argument, including on a method
+receiver (`reviewer.ask $ …`) and with explicit type arguments
+(`ask::[T] $ …`).
+
 ## Runtime interpolation
 
 A template can also be interpolated at runtime, against a dictionary of names
@@ -163,3 +208,5 @@ commands. See [Shell execution](shell-execution.md) for details.
 - Newline inside `%{…}` — lexical error.
 - Unterminated string, unterminated interpolation, unknown escape — lexical
   errors.
+- An empty `$` literal, or one written inside brackets — lexical errors (see
+  [The `$` literal](#the--literal) above).

@@ -64,8 +64,9 @@ program def main() -> unit =
 
 With named arguments, parentheses are required.
 
-A `$` verbatim literal ([Templates](grammar.md#templates)) may supply the same
-single argument, inline or as a block:
+A `$` literal
+([Strings and interpolation](strings-and-interpolation.md#the--literal)) may
+supply the same single argument, inline or as a block:
 
 ```agl
 program def main() -> unit =
@@ -77,14 +78,27 @@ program def main() -> unit =
     done
 ```
 
-The payload is verbatim shell text, except that inline payloads discard
-trailing spaces and tabs, and a block form drops blank lines that trail its
-last content line (blank lines before and between content lines are kept).
-Quotes, parentheses, `#`, `;`, every dollar form such as `$HOME`, `${name}`,
-`$(date)`, and `$1`, and ordinary backslashes all reach the shell unchanged.
-Only `%{expr}` interpolates; write `\%{` for a literal `%{`. The `$` literal
-needs a nonempty inline command or a block with at least one nonblank line.
-For example, this command passes `%{literal}` to the shell:
+Its payload reaches the shell **verbatim** except for `%{expr}` interpolation:
+quotes, parentheses, `#`, `;`, every dollar form the shell itself recognizes
+— `$HOME`, `${name}`, `$(date)`, `$1` — and ordinary backslashes all pass
+through unexpanded by AgL, so it is the shell, using `exec`'s `env`, that
+expands them at run time:
+
+```agl
+program def main() -> unit =
+  let home: text = exec $ printf '%s' "${HOME}"
+```
+
+Juxtaposition never chains, so `print exec $ date` is a parse error; pipe
+instead:
+
+```agl
+program def main() -> unit =
+  print <| exec::[text] $ date
+```
+
+The only escape is `\%{`, which writes a literal `%{`. For
+example, this command passes `%{literal}` to the shell:
 
 ```agl
 program def main() -> unit =

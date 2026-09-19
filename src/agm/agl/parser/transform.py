@@ -34,6 +34,7 @@ from lark.lexer import Token
 from lark.tree import Meta
 
 import agm.agl.syntax as syntax
+from agm.agl.diagnostics import dollar_spacing_hint
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
@@ -3569,9 +3570,10 @@ def _validate_infix_chains(
                 )
             spec = chain_table.get(operator.name)
             if spec is None:
+                hint = dollar_spacing_hint(operator.name) or ""
                 raise AglSyntaxError(
                     f"Operator '{operator.name}' must be declared with infixl or infixr "
-                    "before use.",
+                    f"before use.{hint}",
                     span=operator.span,
                 )
             priority, assoc, _builtin = spec

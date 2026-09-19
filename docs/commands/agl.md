@@ -560,7 +560,7 @@ call `resource`/`resource-dir`; imported file-backed modules use them normally.
 In both front ends:
 
 - Multiline editing is **AgL-aware**: Enter on an unterminated block (`record`, `enum`, `if`,
-  `case`, `try`, `do`, …) or a `$` verbatim-literal header with nothing after it (`exec $`,
+  `case`, `try`, `do`, …) or a `$` literal header with nothing after it (`exec $`,
   `ask $`) opens a `...>` continuation; a complete entry submits.
   Enter on a blank continuation line force-submits. The plain front end applies the same
   completeness test to stdin lines, except that an entry whose latest line is indented stays

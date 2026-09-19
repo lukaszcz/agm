@@ -108,8 +108,10 @@ With named arguments, parentheses are required:
 let r: Review = reviewer.ask("Review %{artifact}")
 ```
 
-A `$` verbatim literal ([Templates](grammar.md#templates)) may supply the same
-single argument, inline or as a block; explicit type arguments and
+A `$` literal
+([Strings and interpolation](strings-and-interpolation.md#the--literal)) may
+supply the same single argument, inline or as a block; explicit type
+arguments — on either the free function or a receiver method — and
 target-type inference work exactly as for a quoted prompt:
 
 ```agl
@@ -117,18 +119,21 @@ record Review
   summary: text
 
 program def main() -> unit =
+  let reviewer: Agent = AgentCommand("reviewer")
   let subject = "the release notes"
   let summary: text = ask $ Summarize %{subject}.
-  let review: Review = ask::[Review] $
+  let review: Review = reviewer.ask::[Review] $
     Review %{subject} and provide a concise summary.
 ```
 
-Its payload is verbatim except for `%{expr}` interpolation and trailing spaces
-and tabs in an inline prompt; `\%{` writes a literal `%{`. It needs a nonempty
-inline prompt or a block with at least one nonblank line. A bare `ask $ ...`
-uses the default session and `reviewer.ask $ ...` opens the short-lived
-session for its receiver. Use `ask(...)` or `reviewer.ask(...)` when setting
-`format`, `strict-json`, or `on-parse-error`.
+A bare `ask $ ...` uses the default session and `reviewer.ask $ ...` opens
+the short-lived session for its receiver. Use `ask(...)` or
+`reviewer.ask(...)` when setting `format`, `strict-json`, or
+`on-parse-error`. Read the environment in the prompt with
+`%{getenv("VAR")}` — `${VAR}` reaches the agent verbatim, not as an
+environment hole — and pipe the result when chaining is needed, as in
+`print <| ask $ …`
+([Strings and interpolation](strings-and-interpolation.md#the--literal)).
 
 ## Agents as values
 
@@ -201,7 +206,7 @@ share it:
 ```agl
 let session = Session::open(AgentClaude("sonnet", "medium"), name = "review")
 let first: text = session.ask("Read the artifact.")
-let second: text = session.ask("Now list the risks.")
+let second: text = session.ask $ Now list the risks.
 let branch = session.fork()
 session.close()
 branch.close()

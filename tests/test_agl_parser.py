@@ -3528,6 +3528,50 @@ class TestDollarSpacingHint:
         assert "$ …" not in str(err)
 
 
+class TestPipingHint:
+    """Juxtaposition takes one argument; a further `$` literal gets a piping hint."""
+
+    def test_dollar_literal_chained_after_two_names_gets_a_hint(self) -> None:
+        """`print exec $ date`: `print exec` is already a full application."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("program def main() -> unit =\n  print exec $ date\n")
+        assert "pipe" in str(exc_info.value)
+
+    def test_dollar_literal_chained_after_a_name_and_a_juxt_arg_gets_a_hint(self) -> None:
+        """`f x $ y`: `f x` is already a full application."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("program def main() -> unit =\n  f x $ y\n")
+        assert "pipe" in str(exc_info.value)
+
+    def test_dollar_literal_opener_not_preceded_by_two_operands_gets_no_hint(self) -> None:
+        """`let $ = 1`: only `let` (a keyword) precedes the `$` opener."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("program def main() -> unit =\n  let $ = 1\n  print(1)\n")
+        assert "pipe" not in str(exc_info.value)
+
+    def test_offending_token_other_than_dollar_opener_gets_no_piping_hint(self) -> None:
+        """`f x y`: the offending token is a plain NAME, not a `$` opener."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("f x y")
+        assert "pipe" not in str(exc_info.value)
+
+    def test_missing_tokens_gets_no_piping_hint(self) -> None:
+        """No materialized token pass: nothing to inspect, no hint, no crash."""
+        offending = Token("VERBATIM_START", "$", start_pos=5, line=1, column=6)
+        err = syntax_error_from_lark(UnexpectedToken(offending, expected={"NAME"}))
+        assert "pipe" not in str(err)
+
+    def test_dollar_literal_opener_preceded_by_a_non_operand_token_gets_no_hint(self) -> None:
+        """Two tokens precede the `$` opener, but the nearer one is not operand-ending."""
+        name = Token("NAME", "x", start_pos=1, line=1, column=2)
+        op = Token("EQ", "=", start_pos=5, line=1, column=6)
+        offending = Token("VERBATIM_START", "$", start_pos=10, line=1, column=11)
+        err = syntax_error_from_lark(
+            UnexpectedToken(offending, expected={"NAME"}), tokens=[name, op, offending]
+        )
+        assert "pipe" not in str(err)
+
+
 # ---------------------------------------------------------------------------
 # Full program examples (integration)
 # ---------------------------------------------------------------------------

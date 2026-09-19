@@ -762,12 +762,10 @@ delimiters and any interpolation; its escapes and, for triple-quoted templates,
 dedent are described in [Lexical structure](lexical-structure.md). Newlines are
 not permitted inside `%{…}`.
 
-A `$` template's `verbatim_text` is literal text drawn from the rest of its
-line or a following indented block, taken as-is except that `%{expr}`
-interpolates and `\%{` is a literal `%{`; `${NAME}`, `$VAR`, and `$(cmd)` are
-not holes and stay verbatim. An inline payload discards trailing spaces and
-tabs; a block payload drops the blank lines that trail its last content line.
-It is not valid inside brackets — use a quoted template there instead.
+A `$` template's payload (its `verbatim_text`) is specified in
+[Lexical structure](lexical-structure.md#verbatim-literals); its
+interpolation semantics are in
+[Strings and interpolation](strings-and-interpolation.md#the--literal).
 
 ```agl
 program def main() -> unit =

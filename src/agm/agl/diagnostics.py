@@ -206,6 +206,17 @@ def dollar_spacing_hint(name: str) -> str | None:
     return f" Write '{stem} $ …' with a space before the verbatim literal."
 
 
+def piping_hint() -> str:
+    """Return a hint suggesting piping for a `$` literal chained as a further argument.
+
+    Application by juxtaposition (``f x``) takes exactly one argument; a
+    further juxtaposed argument is rejected the same way whether it is a name
+    (``f x y``) or a `$` literal (``f x $ y``). The hint suggests piping the
+    literal in instead, e.g. ``print <| exec $ date``.
+    """
+    return " Juxtaposition never chains; pipe the `$` literal instead, e.g. `print <| exec $ date`."
+
+
 class AglError(Exception):
     """Base class for all fatal AgL pipeline errors.
 

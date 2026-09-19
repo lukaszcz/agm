@@ -16,7 +16,11 @@ Special cases:
 - Every message produced from a Lark exception (not a ``LexError``) gets a
   uniform final pass: a spacing hint is appended when a NAME token ending in
   ``$`` appears on the offending token's line before it, e.g. ``exec$ date``
-  lexes as one NAME, not ``exec`` applied to a ``$ date`` verbatim literal.
+  lexes as one NAME, not ``exec`` applied to a ``$ date`` verbatim literal;
+  and a piping hint is appended when the offending token is a `$` literal
+  opener immediately preceded by two operand-ending tokens (a further
+  juxtaposed argument, e.g. ``print exec $ date``), since juxtaposition never
+  chains.
 """
 
 from __future__ import annotations
@@ -24,8 +28,19 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Sequence
 
-from agm.agl.diagnostics import AglError, dollar_spacing_hint
-from agm.agl.lexer.tokens import NAME
+from agm.agl.diagnostics import AglError, dollar_spacing_hint, piping_hint
+from agm.agl.keywords import KW_FALSE, KW_NULL, KW_TRUE
+from agm.agl.lexer.tokens import (
+    DECIMAL,
+    INT,
+    NAME,
+    RBRACE,
+    RPAR,
+    RSQB,
+    TEMPLATE_END,
+    VERBATIM_END,
+    VERBATIM_START,
+)
 from agm.agl.syntax.spans import SourceSpan
 
 if TYPE_CHECKING:
@@ -318,6 +333,61 @@ def _dollar_spacing_hint(
     return ""
 
 
+# Token types that can END an operand: a name, a literal, or a closing
+# bracket. Used to recognize a `$` literal opener rejected as a further
+# juxtaposed argument (juxtaposition applies exactly one argument, so a THIRD
+# juxtaposed token — name or `$` literal alike — is always rejected the same
+# way).
+_OPERAND_ENDING_TOKEN_TYPES: frozenset[str] = frozenset(
+    {
+        NAME,
+        INT,
+        DECIMAL,
+        TEMPLATE_END,
+        VERBATIM_END,
+        RPAR,
+        RSQB,
+        RBRACE,
+        KW_TRUE.upper(),
+        KW_FALSE.upper(),
+        KW_NULL.upper(),
+    }
+)
+
+
+def _piping_hint(
+    tokens: Sequence[Token] | None,
+    *,
+    offending_type: str | None,
+    line: int,
+    pos: int,
+) -> str:
+    """Hint suffix when a `$` literal opener is rejected as a further juxtaposed argument.
+
+    Fires only when the offending token is a `$` literal opener (a
+    ``VERBATIM_START``) and the two tokens immediately preceding it on its own
+    line are both operand-ending (see :data:`_OPERAND_ENDING_TOKEN_TYPES`) —
+    the shape of ``f x $ y``, where ``f x`` is already a full juxtaposed
+    application and the `$` literal was meant as a further, piped argument.
+    Delegates the wording to :func:`~agm.agl.diagnostics.piping_hint`.
+    """
+    if offending_type != VERBATIM_START or not tokens:
+        return ""
+    preceding = [
+        tok
+        for tok in tokens
+        if tok.start_pos is not None and tok.start_pos < pos and tok.line == line
+    ]
+    if len(preceding) < 2:
+        return ""
+    if (
+        preceding[-1].type in _OPERAND_ENDING_TOKEN_TYPES
+        and preceding[-2].type in _OPERAND_ENDING_TOKEN_TYPES
+    ):
+        return piping_hint()
+    return ""
+
+
 def syntax_error_from_lark(
     exc: Exception,
     *,
@@ -347,9 +417,15 @@ def syntax_error_from_lark(
         return AglSyntaxError(str(exc), span=exc.span)
 
     error = _lark_error_message(exc, filename=filename, source_text=source_text)
+    offending_type = exc.token.type if isinstance(exc, UnexpectedToken) else None
     hint = _dollar_spacing_hint(
         tokens,
-        offending_type=exc.token.type if isinstance(exc, UnexpectedToken) else None,
+        offending_type=offending_type,
+        line=error.source_span.start_line,
+        pos=error.source_span.start_offset,
+    ) or _piping_hint(
+        tokens,
+        offending_type=offending_type,
         line=error.source_span.start_line,
         pos=error.source_span.start_offset,
     )

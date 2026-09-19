@@ -77,7 +77,7 @@ program def main(spec: text) -> unit =
 | [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, the library types the language itself names (`ExecResult`, `ParsePolicy`, `Agent`, `AgentRequest`, `SessionTransport`, `Session`, `SessionStats`), assignability, casts and convertibility (`as`/`as?`), mutable record fields and reference semantics, cycles, copying (`copy`/`shallow-copy`), and parsing (`parse`/`try-parse`) |
 | [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, JSON parsing, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
-| [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `%{…}` interpolation, uniform rendering rules |
+| [Strings and interpolation](strings-and-interpolation.md) | Templates, `$` literals, escapes, `%{…}` interpolation, uniform rendering rules |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
 | [Control flow](control-flow.md) | `if`, `case`, unified loops (`for`/`while`/`do`/`until`/`done`), `break`, `continue` |
 | [Pattern matching](pattern-matching.md) | Patterns, source priority, exhaustiveness, redundancy |

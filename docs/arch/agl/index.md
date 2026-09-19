@@ -35,7 +35,7 @@ The firewall is semantic, not an I/O boundary. AgL reuses AGM's lower layers rat
 
 ## Expression-Oriented Design
 
-AgL has no statement category. Bindings, assignment, loops, and `if` without `else` are expressions with a type, and a block yields its last item. Built-ins such as `print`, `exec`, and `ask` are ordinary calls classified during resolution; runtime built-in references are first-class, occurrence-specialized function values. A `$` verbatim literal is a template like a quoted string, so it reaches `exec`/`ask` through the same single-argument call sugar as any other template. Methods are selected from reachable declarations by receiver type for nominal and builtin receivers alike; lowering consumes the checker's `method_selections` unchanged. This uniformity is why the AST has a single call node and why the type system carries a unit type.
+AgL has no statement category. Bindings, assignment, loops, and `if` without `else` are expressions with a type, and a block yields its last item. Built-ins such as `print`, `exec`, and `ask` are ordinary calls classified during resolution; runtime built-in references are first-class, occurrence-specialized function values. A `$` literal is a template like a quoted string, so it reaches `exec`/`ask` through the same single-argument call sugar as any other template. Methods are selected from reachable declarations by receiver type for nominal and builtin receivers alike; lowering consumes the checker's `method_selections` unchanged. This uniformity is why the AST has a single call node and why the type system carries a unit type.
 
 ## Programs and Modules
 

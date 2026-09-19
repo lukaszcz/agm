@@ -135,6 +135,7 @@ from agm.agl.ir.program import (
     FunctionDescriptor,
     IrFunctionBody,
     ValueDescriptors,
+    nominal_conforms,
 )
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.ir.validate import InvalidIrError
@@ -1699,11 +1700,16 @@ class IrInterpreter:
                 target_label=target_label,
             ):
                 value = self._eval(val_expr)
-                if not isinstance(value, RecordValue):
+                if not isinstance(value, (RecordValue, ExceptionValue)):
                     raise InvalidIrError(
-                        f"IrNominalCast: value is not a record, got {type(value).__name__}"
+                        "IrNominalCast: value is not a record or exception,"
+                        f" got {type(value).__name__}"
                     )
-                if value.nominal in nominals:
+                matched = value.nominal in nominals or (
+                    isinstance(value, ExceptionValue)
+                    and nominal_conforms(self._program.nominals, value.nominal, nominals)
+                )
+                if matched:
                     return self._option_some(value) if test_only else value
                 if test_only:
                     return self._option_none()
@@ -1726,7 +1732,11 @@ class IrInterpreter:
                     raise InvalidIrError(
                         f"IrNominalIs: value is not nominal, got {type(value).__name__}"
                     )
-                return BoolValue((value.nominal == nominal) != negated)
+                matched = value.nominal == nominal or (
+                    isinstance(value, ExceptionValue)
+                    and nominal_conforms(self._program.nominals, value.nominal, (nominal,))
+                )
+                return BoolValue(matched != negated)
 
             case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
                 source_value = self._eval(val_expr)
@@ -1785,7 +1795,13 @@ class IrInterpreter:
                 except AglRaise as exc:
                     pending = exc
                 for handler in handlers:
-                    if handler.nominal is None or handler.nominal == pending.exc.nominal:
+                    if (
+                        handler.nominal is None
+                        or handler.nominal == pending.exc.nominal
+                        or nominal_conforms(
+                            self._program.nominals, pending.exc.nominal, (handler.nominal,)
+                        )
+                    ):
                         if handler.symbol is not None:
                             self._frame[handler.symbol] = pending.exc
                         return self._eval(handler.body)

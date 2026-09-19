@@ -42,6 +42,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
     EXCEPTION_BASE,
+    CastKind,
     InferenceVarType,
     TypeVarType,
     contains_inference_var,
@@ -5762,6 +5763,76 @@ class TestTryCatch:
         assert binder_type.name == EXCEPTION_BASE.name
 
 
+class TestCatchReachability:
+    """A catch handler that can never fire because an earlier one already
+    catches its type (or every type) is a static error."""
+
+    _HIERARCHY = (
+        "exception Problem extends Exception\n"
+        "  code: int\n"
+        "exception Detailed extends Problem\n"
+        "  detail: text\n"
+        "exception Unrelated extends Exception()\n"
+        "exception MyRoot\n"
+        "  note: text\n"
+        "exception Mine extends MyRoot\n"
+        "  count: int\n"
+    )
+
+    def _later_span(self, source: str) -> SourceSpan:
+        """Span of the last catch clause, from an independent parse."""
+        program = parse_program(source)
+        try_node = program.body.items[-1]
+        assert isinstance(try_node, Try)
+        return try_node.handlers[-1].span
+
+    def test_duplicate_handler_is_rejected(self) -> None:
+        source = self._HIERARCHY + "try 1 catch Problem => 2 catch Problem => 3"
+        err = reject_type(source)
+        assert isinstance(err, AglTypeError)
+        assert err.span == self._later_span(source)
+
+    def test_descendant_handler_after_its_ancestor_is_rejected(self) -> None:
+        source = self._HIERARCHY + "try 1 catch Problem => 2 catch Detailed => 3"
+        err = reject_type(source)
+        assert isinstance(err, AglTypeError)
+        assert err.span == self._later_span(source)
+
+    def test_handler_after_wildcard_is_rejected(self) -> None:
+        source = self._HIERARCHY + "try 1 catch _ => 2 catch Problem => 3"
+        err = reject_type(source)
+        assert isinstance(err, AglTypeError)
+        assert err.span == self._later_span(source)
+
+    def test_handler_after_exception_root_is_rejected(self) -> None:
+        source = self._HIERARCHY + "try 1 catch Exception => 2 catch Problem => 3"
+        err = reject_type(source)
+        assert isinstance(err, AglTypeError)
+        assert err.span == self._later_span(source)
+
+    def test_most_specific_first_order_is_accepted(self) -> None:
+        source = self._HIERARCHY + "try 1 catch Detailed => 2 catch Problem => 3 catch _ => 4"
+        r = accept_type(source)
+        assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
+
+    def test_sibling_handlers_are_accepted(self) -> None:
+        source = self._HIERARCHY + "try 1 catch Detailed => 2 catch Unrelated => 3"
+        r = accept_type(source)
+        assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
+
+    def test_handler_for_a_user_declared_root_does_not_shadow_the_wildcard(self) -> None:
+        """A user-declared base-less exception is not the catch-all, so a wildcard
+        handler after it is still reachable."""
+        source = self._HIERARCHY + "try 1 catch MyRoot => 2 catch _ => 3"
+        r = accept_type(source)
+        assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
+
+    def test_handler_for_a_user_declared_root_does_not_shadow_an_unrelated_handler(self) -> None:
+        source = self._HIERARCHY + "try 1 catch MyRoot => 2 catch Unrelated => 3"
+        r = accept_type(source)
+        assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
+
+
 # ---------------------------------------------------------------------------
 # Raise
 # ---------------------------------------------------------------------------
@@ -6951,6 +7022,22 @@ class TestIsTest:
         # A variant of some other enum is not a legal qualifier here.
         reject_type("enum E\n  | A\n  | B\nenum F\n  | C\nlet e: E = E::A()\ne is F::C")
 
+    def test_is_test_scope_qualified_enum_member_record(self) -> None:
+        """A scope-qualified enum member declared inside a plain (non-type) scope."""
+        r = accept_type(
+            "scope Lib\n"
+            "  record R\n"
+            "    x: int\n"
+            "end Lib\n"
+            "\n"
+            "enum Shape = ::Lib::R | Other\n"
+            "let s: Shape = Lib::R(x = 1)\n"
+            "s is Lib::R"
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, IsTest)
+        assert r.node_types[test.node_id] == BoolType()
+
     def test_is_test_qualifier_not_enum_raises(self) -> None:
         # Exercises the error path when the qualifier resolves to a non-enum type.
         err = reject_type("enum A\n  | X\nrecord R\n  x: int\nlet a = A::X()\na is R::X")
@@ -6986,6 +7073,167 @@ class TestIsTest:
             "enum Left\n  | Same\n  | OnlyLeft\nenum Right\n  | Same\n  | OnlyRight\n"
             "let value: Left = Left::Same()\nvalue is OnlyRight"
         )
+
+
+_EXCEPTION_IS_HIERARCHY = (
+    "exception Problem extends Exception\n"
+    "  code: int\n"
+    "exception Detailed extends Problem\n"
+    "  detail: text\n"
+    "exception Unrelated extends Exception()\n"
+)
+
+
+class TestExceptionIsTest:
+    def test_bare_same_type_accepted(self) -> None:
+        r = accept_type(
+            _EXCEPTION_IS_HIERARCHY
+            + 'let d = Detailed(message = "m", code = 1, detail = "x")\nd is Detailed'
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, IsTest)
+        assert r.node_types[test.node_id] == BoolType()
+
+    def test_bare_ancestor_accepted(self) -> None:
+        r = accept_type(
+            _EXCEPTION_IS_HIERARCHY
+            + 'let d = Detailed(message = "m", code = 1, detail = "x")\nd is Problem'
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, IsTest)
+        assert r.node_types[test.node_id] == BoolType()
+
+    def test_bare_descendant_accepted(self) -> None:
+        r = accept_type(
+            _EXCEPTION_IS_HIERARCHY
+            + 'let p: Problem = Detailed(message = "m", code = 1, detail = "x")\np is Detailed'
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, IsTest)
+        assert r.node_types[test.node_id] == BoolType()
+
+    def test_bare_root_accepted(self) -> None:
+        r = accept_type(
+            _EXCEPTION_IS_HIERARCHY
+            + 'let d = Detailed(message = "m", code = 1, detail = "x")\nd is Exception'
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, IsTest)
+        assert r.node_types[test.node_id] == BoolType()
+
+    def test_qualified_rhs_accepted(self) -> None:
+        r = accept_type(
+            "scope Lib\n"
+            "  exception Base extends Exception\n"
+            "    code: int\n"
+            "  exception Detailed extends Base\n"
+            "    detail: text\n"
+            "end Lib\n"
+            "\n"
+            'let d = Lib::Detailed(message = "m", code = 1, detail = "x")\n'
+            "d is Lib::Detailed"
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, IsTest)
+        assert r.node_types[test.node_id] == BoolType()
+
+    def test_qualified_ancestor_accepted(self) -> None:
+        r = accept_type(
+            "scope Lib\n"
+            "  exception Base extends Exception\n"
+            "    code: int\n"
+            "  exception Detailed extends Base\n"
+            "    detail: text\n"
+            "end Lib\n"
+            "\n"
+            'let d = Lib::Detailed(message = "m", code = 1, detail = "x")\n'
+            "d is Lib::Base"
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, IsTest)
+        assert r.node_types[test.node_id] == BoolType()
+
+    def test_qualified_unrelated_rejected(self) -> None:
+        src = (
+            "scope Lib\n"
+            "  exception Base extends Exception\n"
+            "    code: int\n"
+            "  exception Detailed extends Base\n"
+            "    detail: text\n"
+            "  exception Other extends Exception()\n"
+            "end Lib\n"
+            "\n"
+            'let d = Lib::Detailed(message = "m", code = 1, detail = "x")\n'
+            "d is Lib::Other"
+        )
+        err = reject_type(src)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert src[err.span.start_offset : err.span.end_offset] == "d is Lib::Other"
+
+    def test_qualified_unknown_name_rejected(self) -> None:
+        src = (
+            "scope Lib\n"
+            "  exception Base extends Exception\n"
+            "    code: int\n"
+            "  exception Detailed extends Base\n"
+            "    detail: text\n"
+            "end Lib\n"
+            "\n"
+            'let d = Lib::Detailed(message = "m", code = 1, detail = "x")\n'
+            "d is Lib::Unknown"
+        )
+        err = reject_type(src)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert src[err.span.start_offset : err.span.end_offset] == "d is Lib::Unknown"
+
+    def test_qualified_unknown_module_route_reports_route_cause(self) -> None:
+        """A qualifier naming no route at all raises before the generic relatedness check.
+
+        The resolver defers this route failure (``defer_route_diagnostics``);
+        the checker must surface it rather than falling back to the generic
+        "no exception related" message it uses for a resolvable, unrelated RHS
+        (``test_qualified_unrelated_rejected``).
+        """
+        src = _EXCEPTION_IS_HIERARCHY + (
+            'let d = Detailed(message = "m", code = 1, detail = "x")\nd is nosuch::X'
+        )
+        err = reject_type(src)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert src[err.span.start_offset : err.span.end_offset] == "d is nosuch::X"
+
+    def test_is_not_exception(self) -> None:
+        r = accept_type(
+            _EXCEPTION_IS_HIERARCHY
+            + 'let d = Detailed(message = "m", code = 1, detail = "x")\nd is not Problem'
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, IsTest)
+        assert test.negated
+        assert r.node_types[test.node_id] == BoolType()
+
+    def test_unrelated_exception_rejected(self) -> None:
+        src = _EXCEPTION_IS_HIERARCHY + (
+            'let d = Detailed(message = "m", code = 1, detail = "x")\nd is Unrelated'
+        )
+        err = reject_type(src)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert src[err.span.start_offset : err.span.end_offset] == "d is Unrelated"
+
+    def test_same_named_enum_member_candidate_is_filtered_out(self) -> None:
+        """A bare RHS spelling shared with an enum member resolves to the exception."""
+        r = accept_type(
+            "enum Something\n"
+            "  | Detailed\n"
+            + _EXCEPTION_IS_HIERARCHY
+            + 'let d = Detailed(message = "m", code = 1, detail = "x")\nd is Detailed'
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, IsTest)
+        assert r.node_types[test.node_id] == BoolType()
 
 
 # ---------------------------------------------------------------------------
@@ -13263,7 +13511,6 @@ class TestCast:
 
     def test_record_as_json_accepted(self) -> None:
         """record as json is now TOTAL_JSON (explicit nominal→json cast)."""
-        from agm.agl.semantics.types import CastKind
 
         r = accept_type("record R\n  x: int\nlet r = R(x = 1)\nr as json")
         assert r
@@ -13323,7 +13570,6 @@ class TestCast:
 
     def test_cast_spec_stored(self) -> None:
         """CastSpec is stored in CheckedModule.cast_specs."""
-        from agm.agl.semantics.types import CastKind
 
         r = accept_type("1 as text")
         assert len(r.cast_specs) == 1
@@ -13332,7 +13578,6 @@ class TestCast:
 
     def test_as_question_spec_stored(self) -> None:
         """as? CastSpec is stored with same kind as as."""
-        from agm.agl.semantics.types import CastKind
 
         r = accept_type('"hello" as? int')
         assert len(r.cast_specs) == 1
@@ -13361,7 +13606,6 @@ class TestCast:
         )
 
     def test_explicit_enum_widening_is_a_total_noop(self) -> None:
-        from agm.agl.semantics.types import CastKind
 
         checked = accept_type(
             "enum Narrow | Shared\n"
@@ -13450,6 +13694,107 @@ class TestCast:
             "enum Left | LeftOnly\nenum Right | RightOnly\nlet left: Left = LeftOnly\nleft as Right"
         )
         assert "cannot cast" in str(err).lower()
+
+
+# ---------------------------------------------------------------------------
+# Exception casts: ancestry-directed upcast (total)/downcast (nominal), per
+# the same CastKind machinery enum member/owner casts already use.
+# ---------------------------------------------------------------------------
+
+_EXCEPTION_HIERARCHY = (
+    "exception Problem extends Exception\n"
+    "  code: int\n"
+    "exception Detailed extends Problem\n"
+    "  detail: text\n"
+)
+
+
+class TestExceptionCast:
+    def test_upcast_to_immediate_ancestor_is_total_noop(self) -> None:
+        checked = accept_type(
+            _EXCEPTION_HIERARCHY
+            + 'let d = Detailed(message = "m", code = 1, detail = "x")\nd as Problem'
+        )
+        cast = checked.resolved.program.body.items[-1]
+        assert isinstance(cast, Cast)
+        assert repr(checked.node_types[cast.node_id]) == "Problem"
+        spec = next(iter(checked.cast_specs.values()))
+        assert spec.kind == CastKind.IDENTITY_UPCAST
+
+    def test_upcast_to_root_is_total_noop(self) -> None:
+        checked = accept_type(
+            _EXCEPTION_HIERARCHY
+            + 'let d = Detailed(message = "m", code = 1, detail = "x")\nd as Exception'
+        )
+        cast = checked.resolved.program.body.items[-1]
+        assert isinstance(cast, Cast)
+        assert repr(checked.node_types[cast.node_id]) == "Exception"
+        spec = next(iter(checked.cast_specs.values()))
+        assert spec.kind == CastKind.IDENTITY_UPCAST
+
+    def test_downcast_yields_target_type(self) -> None:
+        checked = accept_type(
+            _EXCEPTION_HIERARCHY
+            + 'let p: Problem = Detailed(message = "m", code = 1, detail = "x")\np as Detailed'
+        )
+        cast = checked.resolved.program.body.items[-1]
+        assert isinstance(cast, Cast)
+        assert repr(checked.node_types[cast.node_id]) == "Detailed"
+        spec = next(iter(checked.cast_specs.values()))
+        assert spec.kind == CastKind.NOMINAL_DOWNCAST
+
+    def test_as_question_downcast_yields_option(self) -> None:
+        r = accept_type(
+            _EXCEPTION_HIERARCHY
+            + 'let p: Problem = Detailed(message = "m", code = 1, detail = "x")\np as? Detailed'
+        )
+        test = r.resolved.program.body.items[-1]
+        assert isinstance(test, Cast)
+        assert repr(r.node_types[test.node_id]) == "std/option::Option[Detailed]"
+
+    def test_same_exception_cast_is_total_noop(self) -> None:
+        checked = accept_type(
+            _EXCEPTION_HIERARCHY
+            + 'let p: Problem = Detailed(message = "m", code = 1, detail = "x")\np as Problem'
+        )
+        spec = next(iter(checked.cast_specs.values()))
+        assert spec.kind == CastKind.TOTAL_NOOP
+
+    def test_unrelated_exception_cast_rejected(self) -> None:
+        src = (
+            _EXCEPTION_HIERARCHY
+            + "exception Other extends Exception()\n"
+            + 'let p: Problem = Detailed(message = "m", code = 1, detail = "x")\np as Other'
+        )
+        err = reject_type(src)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert src[err.span.start_offset : err.span.end_offset] == "p as Other"
+
+    def test_sibling_exception_cast_rejected(self) -> None:
+        src = (
+            _EXCEPTION_HIERARCHY
+            + "exception Sibling extends Problem()\n"
+            + 'let d: Detailed = Detailed(message = "m", code = 1, detail = "x")\nd as Sibling'
+        )
+        err = reject_type(src)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert src[err.span.start_offset : err.span.end_offset] == "d as Sibling"
+
+    def test_text_as_exception_rejected(self) -> None:
+        src = _EXCEPTION_HIERARCHY + '"text" as Detailed'
+        err = reject_type(src)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert src[err.span.start_offset : err.span.end_offset] == '"text" as Detailed'
+
+    def test_json_as_question_exception_rejected(self) -> None:
+        src = _EXCEPTION_HIERARCHY + "let j: json = 1\nj as? Detailed"
+        err = reject_type(src)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert src[err.span.start_offset : err.span.end_offset] == "j as? Detailed"
 
 
 # ---------------------------------------------------------------------------

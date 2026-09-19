@@ -615,11 +615,16 @@ class IrConvert:
 
 @dataclass(frozen=True, slots=True)
 class IrNominalCast:
-    """Identity cast accepting one or more enum member records.
+    """Fallible downcast accepted by nominal conformance.
+
+    ``nominals`` is either the member records of one enum, or exactly one
+    exception nominal; the value conforms when its own nominal is one of
+    ``nominals`` or, for an exception, descends from one through ``base``
+    links (see :func:`agm.agl.ir.program.nominal_conforms`).
 
     ``test_only`` (the ``as?`` operator) evaluates to ``Option::Some`` carrying
-    the member value, and to ``Option::None`` on a nominal mismatch instead of
-    raising ``CastError``. The labels are statically selected source type names
+    the value, and to ``Option::None`` on a mismatch instead of raising
+    ``CastError``. The labels are statically selected source/target type names
     for a failed ordinary cast.
     """
 
@@ -633,7 +638,11 @@ class IrNominalCast:
 
 @dataclass(frozen=True, slots=True)
 class IrNominalIs:
-    """IR nominal-member test (``is`` / ``is not``)."""
+    """IR nominal-conformance test (``is`` / ``is not``).
+
+    True when the value's nominal is ``nominal`` or, for an exception,
+    descends from it (see :func:`agm.agl.ir.program.nominal_conforms`).
+    """
 
     location: Location
     nominal: NominalId
@@ -702,9 +711,9 @@ class IrReturn:
 class IrCatchHandler:
     """A single catch handler in an ``IrTry`` node.
 
-    ``nominal`` identifies the exception type: ``None`` is catch-all (catches
-    everything); set is a specific exact match by module-qualified
-    ``ExceptionValue.nominal``.
+    ``nominal`` identifies the exception type: ``None`` is catch-all (matches
+    every exception); set matches that type and any of its descendants
+    (:func:`~agm.agl.ir.program.nominal_conforms` against ``ExceptionValue.nominal``).
 
     ``symbol`` is the ``SymbolId`` of the binding variable when the handler
     declares one (``catch SomeError e => ...``); ``None`` otherwise.  The
@@ -726,8 +735,8 @@ class IrTry:
     Semantics mirror legacy ``_eval_try``:
     - Evaluate ``body``; if it completes normally, return its value.
     - On ``AglRaise``, iterate ``handlers`` in order; the first handler that
-      matches (catch-all when ``nominal is None``; specific when
-      ``nominal == exc.nominal``) wins.
+      matches wins: catch-all when ``nominal is None``, otherwise the raised
+      exception's nominal equals the handler's or descends from it.
     - If a handler matches and ``handler.symbol`` is not ``None``, bind the
       caught ``ExceptionValue`` in the current frame under that symbol.
     - Evaluate the handler's ``body`` and return its value.

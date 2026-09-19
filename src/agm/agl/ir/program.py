@@ -17,7 +17,7 @@ and evaluation.
 from __future__ import annotations
 
 import enum
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
@@ -46,6 +46,7 @@ __all__ = [
     "SymbolDescriptor",
     "ValueDescriptors",
     "VariantDescriptor",
+    "nominal_conforms",
 ]
 
 
@@ -144,6 +145,11 @@ class NominalDescriptor:
                        is: two snapshots of the same identity taken before
                        and after a later redeclaration must still compare
                        equal.
+    ``base``         — for EXCEPTION, the parent's ``NominalId`` (the
+                       ``extends`` target), or ``None`` for a hierarchy root;
+                       always ``None`` for RECORD and ENUM. The runtime mirror
+                       of ``TypeTable.ancestor_defs``, walked by
+                       :func:`nominal_conforms`.
 
     Safe defaults for ``fields`` and ``variants`` are ``()`` so construction sites
     can omit them when the descriptor does not need nominal details.
@@ -159,11 +165,31 @@ class NominalDescriptor:
     mutable_fields: frozenset[str] = frozenset()
     positional_fields: tuple[str, ...] = ()
     bears_name_path: bool = field(default=True, compare=False)
+    base: NominalId | None = None
 
     @property
     def display_name(self) -> str:
         """The scoped source spelling this declaration was written under."""
         return spell_scope_path((*self.scope_path, self.declared_name))
+
+
+def nominal_conforms(
+    nominals: Mapping[NominalId, NominalDescriptor],
+    nominal: NominalId,
+    accepted: Collection[NominalId],
+) -> bool:
+    """Return whether *nominal* is in *accepted*, or reaches one through ``base`` links.
+
+    Tries exact membership first, then walks the linked descriptor's base
+    chain on a miss. Record and enum descriptors have no base, so this is
+    exact membership for them.
+    """
+    current: NominalId | None = nominal
+    while current is not None:
+        if current in accepted:
+            return True
+        current = nominals[current].base
+    return False
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,36 @@
+# Cross-module exception downcast and catch: `lib::detail-of` casts against
+# `Detailed`, and `lib::guarded` catches `Problem`, both against `VeryDetailed`,
+# a type this module extends with, declared after `lib` was compiled.
+# Soundness requires casts and catches to see the full accumulated hierarchy,
+# not just what `lib` itself could see when it was lowered.
+# `qualified-is` runs a qualified `is` test (`e is lib::Detailed`) against a
+# root exception this module never declares, reached only through the `lib`
+# route rather than a local `TYPE::` owner.
+import lib::*
+
+exception VeryDetailed extends Detailed
+  hint: text
+
+program def main(kind: text) -> unit =
+  if
+    | kind == "very-detailed" =>
+        let e = VeryDetailed(message = "m", code = 1, detail = "d", hint = "h")
+        case detail-of(e) of
+          | Some(value) => print "detail: %{value.detail}"
+          | None => print "none"
+        print "is-detailed: %{is-detailed(e)}"
+    | kind == "guarded-catches-very-detailed" =>
+        let code =
+          guarded(fn() => raise VeryDetailed(message = "m", code = 3, detail = "d", hint = "h"))
+        print "guarded: %{code}"
+    | kind == "qualified-is" =>
+        let e = Detailed(message = "m", code = 4, detail = "d")
+        let base = Problem(message = "m", code = 5)
+        print "self: %{e is lib::Detailed}"
+        print "ancestor: %{e is lib::Problem}"
+        print "mismatch: %{base is lib::Detailed}"
+    | else =>
+        let e = Problem(message = "m", code = 2)
+        case detail-of(e) of
+          | Some(value) => print "detail: %{value.detail}"
+          | None => print "none"

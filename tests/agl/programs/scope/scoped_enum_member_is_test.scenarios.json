@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "scope_qualified_enum_member_resolves_for_is",
+      "expect": {
+        "stdout": "true\nfalse\n"
+      }
+    }
+  ]
+}

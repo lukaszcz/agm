@@ -1,0 +1,15 @@
+# `detail-of` downcasts to `Detailed`; the importer passes a descendant
+# declared after this module was lowered, which conforms through the linked
+# descriptors' `base` chain.
+exception Problem extends Exception
+  code: int
+exception Detailed extends Problem
+  detail: text
+
+def detail-of(e: Problem) -> Option[Detailed] = e as? Detailed
+def is-detailed(e: Problem) -> bool = e is Detailed
+
+# `guarded`'s handler is compiled here against this module's `Problem`; it
+# also catches a descendant the importer declares after `lib` is lowered.
+def guarded(f: () -> int) -> int =
+  try f() catch Problem as p => p.code

@@ -1,0 +1,8 @@
+exception Problem extends Exception
+  code: int
+
+exception Detailed extends Problem
+  detail: text
+
+program def main() -> unit =
+  let _ = "boom" as Detailed

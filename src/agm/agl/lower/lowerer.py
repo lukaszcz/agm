@@ -147,6 +147,7 @@ from agm.agl.ir.program import (
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
+from agm.agl.lower.nominal_descriptors import exception_descriptor
 from agm.agl.matchcompile import (
     BoolConstructor,
     CaseSite,
@@ -353,17 +354,10 @@ def _add_builtin_nominals(
     for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
         if reserved_fallback_superseded(exc_name, type_table):
             continue
-        nominal = NominalId(require_reserved_nominal_id(exc_name))
-        nominals[nominal] = NominalDescriptor(
-            nominal=nominal,
-            module_id=RESERVED_ID,
-            scope_path=(),
-            declared_name=exc_name,
-            kind=NominalKind.EXCEPTION,
-            fields=tuple(type_table.exception_fields(exc_type).keys()),
-            variants=(),
-            positional_fields=positional_field_names(type_table.field_kinds(exc_type)),
+        descriptor = exception_descriptor(
+            type_table.exception_def(exc_type), exc_type, type_table, bears_name_path=True
         )
+        nominals[descriptor.nominal] = descriptor
 
 
 def builtin_nominals_from_declarations(type_table: TypeTable) -> BuiltinNominals:
@@ -1426,18 +1420,9 @@ class _Lowerer:
                 if spec.kind is CastKind.IDENTITY_UPCAST and not test_only:
                     return inner
                 if spec.kind is CastKind.NOMINAL_DOWNCAST:
-                    assert isinstance(source_type, EnumType)
-                    accepted_members: tuple[RecordType, ...]
-                    if isinstance(spec.target_type, RecordType):
-                        accepted_members = (spec.target_type,)
-                    else:
-                        assert isinstance(spec.target_type, EnumType)
-                        accepted_members = self._type_table.shared_enum_members(
-                            source_type, spec.target_type
-                        )
                     return IrNominalCast(
                         location=self._loc(span),
-                        nominals=tuple(NominalId(member.decl_id) for member in accepted_members),
+                        nominals=self._downcast_accepted_nominals(source_type, spec.target_type),
                         value=inner,
                         test_only=test_only,
                         source_label=repr(source_type),
@@ -2477,6 +2462,21 @@ class _Lowerer:
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
+    def _downcast_accepted_nominals(
+        self, source_type: Type, target_type: Type
+    ) -> tuple[NominalId, ...]:
+        """Accepted nominals for a ``NOMINAL_DOWNCAST``: an enum member set, or one exception."""
+        if isinstance(target_type, ExceptionType):
+            return (NominalId(target_type.decl_id),)
+        assert isinstance(source_type, EnumType)
+        if isinstance(target_type, RecordType):
+            return (NominalId(target_type.decl_id),)
+        assert isinstance(target_type, EnumType)
+        return tuple(
+            NominalId(member.decl_id)
+            for member in self._type_table.shared_enum_members(source_type, target_type)
+        )
+
     def _lower_recipe_convert(
         self,
         value_ir: IrExpr,
@@ -3263,20 +3263,26 @@ class _Lowerer:
 
     def _lower_catch_clause(self, clause: "CatchClause") -> IrCatchHandler:
         """Lower a ``CatchClause`` to an ``IrCatchHandler``."""
-        # Determine nominal.  It must carry the resolved exception's own
+        # Determine nominal.  It carries the resolved exception's own
         # declaration identity (``decl_id`` — the reserved identity for a
         # built-in, or the declaring AST node for an entry or library
-        # exception) because specific catches match exactly by
-        # ``ExceptionValue.nominal`` at runtime.
+        # exception); the interpreter matches it and its descendants by
+        # conformance at runtime. ``None`` is the catch-all: `_`/absent, or a
+        # clause resolving to the built-in ``Exception`` root, reserved or
+        # loaded (an identity check, never a spelling test).
         exc_type = clause.exc_type
-        if exc_type is None or exc_type == "_" or exc_type == "Exception":
+        if exc_type is None or exc_type == "_":
             nominal: NominalId | None = None
         else:
             resolved = self._checked.type_env.resolve_named_type(exc_type, span=clause.span)
             assert isinstance(resolved, ExceptionType), (
                 f"compiler bug: catch clause type {exc_type!r} did not resolve to an ExceptionType"
             )
-            nominal = NominalId(resolved.decl_id)
+            nominal = (
+                None
+                if self._type_table.is_builtin_exception_root(resolved.decl_id)
+                else NominalId(resolved.decl_id)
+            )
 
         # Allocate a SymbolId for the binding variable when present.
         # public=False: catch-clause binders are not top-level exported names.

@@ -3243,10 +3243,17 @@ class _Resolver:
                 self._is_test_constructor_candidates[expr.node_id] = candidates
                 if len(candidates) == 1:
                     self._constructor_refs[expr.node_id] = candidates[0]
-            else:
-                self._resolve_constructor_chain(
+            elif (
+                not self._resolve_constructor_chain(
                     expr.node_id, expr.qualifier, expr.variant, defer_route_diagnostics=True
                 )
+                and self._validate_local_scope_chain(expr.qualifier) is None
+            ):
+                # A module route naming a root record or exception, e.g. `mod::Child`;
+                # a local-scope qualifier's route clash stays deferred to the checker.
+                imported = self._imported_atom_constructor(expr.qualifier, expr.variant)
+                if imported is not None:
+                    self._constructor_refs[expr.node_id] = imported
             self._resolve_expr(expr.expr)
         elif isinstance(expr, Cast):
             self._resolve_expr(expr.expr)
@@ -3574,21 +3581,35 @@ class _Resolver:
         return path
 
     def _check_local_scope_route_ambiguity(
-        self, chain: QualifierChain, name: str, path: ScopePath
-    ) -> None:
-        """Raise if *chain* names both a local scope path and a module route.
+        self,
+        chain: QualifierChain,
+        name: str,
+        path: ScopePath,
+        *,
+        defer_route_diagnostics: bool = False,
+    ) -> bool:
+        """Reject *chain* naming both a local scope path and a module route.
 
-        Shared by qualified value resolution and qualified assignment so a
-        read and a write of the same spelling agree: a leading qualifier
-        segment that is genuinely both a local scope (or type name) and an
-        imported module route is ambiguous regardless of which direction the
-        reference goes.
+        Shared by qualified value resolution, qualified assignment, and
+        constructor-chain resolution (both the type-owner and the plain-scope
+        branches) so a read, a write, and a constructor reference of the same
+        spelling agree: a leading qualifier segment that is genuinely both a
+        local scope (or type name) and an imported module route is ambiguous
+        regardless of which direction the reference goes or which local
+        declaration it would otherwise resolve to.
+
+        Returns ``True`` when unambiguous. Patterns and ``is`` tests defer
+        the diagnostic until the checker can assess it against the type being
+        matched; those callers pass ``defer_route_diagnostics=True`` and get
+        ``False`` back instead of the raise.
         """
         relative_path = tuple(segment.name for segment in chain.segments)
         if not (
             chain.anchor is None and qualifier_contributes(self._import_env, relative_path, name)
         ):
-            return
+            return True
+        if defer_route_diagnostics:
+            return False
         local_kind = "a type name" if path in self._type_paths else "a local scope"
         raise AglScopeError(
             f"Qualifier '{relative_path[0]}' is both {local_kind} and a module route for "
@@ -3793,23 +3814,27 @@ class _Resolver:
             )
         local_path = self._validate_local_scope_chain(chain)
         if local_path in self._type_paths:
-            if chain.anchor is None and qualifier_contributes(
-                self._import_env,
-                tuple(segment.name for segment in chain.segments),
-                variant,
+            if not self._check_local_scope_route_ambiguity(
+                chain, variant, local_path, defer_route_diagnostics=defer_route_diagnostics
             ):
-                if defer_route_diagnostics:
-                    return False
-                rendered = "::".join(segment.name for segment in chain.segments)
-                raise AglScopeError(
-                    f"Qualifier '{rendered}' is both a type name and a module route for "
-                    f"'{variant}'. {qualification_repair_guidance()}",
-                    span=chain.span,
-                )
+                return False
             self._constructor_refs[node_id] = self._constructor_for_type_path(
                 local_path, variant, chain.span
             )
             return True
+        if local_path is not None:
+            # A plain scope block (not itself a type), e.g. a record or
+            # exception declared directly inside ``scope S``: mirrors the
+            # scoped lookup ``_qualified_pattern_constructor_candidates``
+            # performs for a qualified pattern spelling.
+            scoped = self._scoped_constructor_candidates.get((local_path, variant), ())
+            if len(scoped) == 1:
+                if not self._check_local_scope_route_ambiguity(
+                    chain, variant, local_path, defer_route_diagnostics=defer_route_diagnostics
+                ):
+                    return False
+                self._constructor_refs[node_id] = scoped[0]
+                return True
         try:
             owner = self._imported_chain_owner(chain, variant)
         except AglScopeError:
@@ -4694,36 +4719,40 @@ class _Resolver:
             scoped = self._scoped_constructor_candidates.get((local_path, node.name), ())
             if scoped:
                 return tuple(scoped)
-        if chain.anchor is not QualifierAnchor.CURRENT_MODULE and chain.segments:
-            qname = self._try_resolve_qualified_qname(chain, node.name)
-            if qname is not None:
-                imported = self._cross_module_constructor_refs.get(qname)
-                if imported is not None:
-                    return (imported,)
-                # A root record, exception, or alias constructor is reached as an
-                # ordinary imported member; its declaration kind is what makes it
-                # a constructor spelling.
-                atom_path = _bare_path(qname[1])
-                fallback = DeclInfo(
-                    decl_node_id=-1, decl_span=node.span, kind=BinderKind.let_binding
-                )
-                info = self._decl_info.get(qname, fallback)
-                if info.kind is BinderKind.constructor_binding:
-                    return (
-                        ConstructorRef(
-                            owner_name=atom_path[-1],
-                            owner_decl_node_id=info.decl_node_id,
-                            type_params=(),
-                            owner_module_id=qname[0],
-                            owner_path=atom_path[:-1],
-                            is_builtin=info.is_builtin,
-                        ),
-                    )
+        imported = self._imported_atom_constructor(chain, node.name)
+        if imported is not None:
+            return (imported,)
         if self._resolve_constructor_chain(
             node.node_id, chain, node.name, defer_route_diagnostics=True
         ):
             return (self._constructor_refs[node.node_id],)
         return ()
+
+    def _imported_atom_constructor(self, chain: QualifierChain, name: str) -> ConstructorRef | None:
+        """Return the constructor an import route owning the complete ``chain::name`` atom names."""
+        if chain.anchor is QualifierAnchor.CURRENT_MODULE or not chain.segments:
+            return None
+        qname = self._try_resolve_qualified_qname(chain, name)
+        if qname is None:
+            return None
+        imported = self._cross_module_constructor_refs.get(qname)
+        if imported is not None:
+            return imported
+        # A root record, exception, or alias constructor is reached as an
+        # ordinary imported member; its declaration kind is what makes it a
+        # constructor spelling.
+        info = self._decl_info.get(qname)
+        if info is None or info.kind is not BinderKind.constructor_binding:
+            return None
+        atom_path = _bare_path(qname[1])
+        return ConstructorRef(
+            owner_name=atom_path[-1],
+            owner_decl_node_id=info.decl_node_id,
+            type_params=(),
+            owner_module_id=qname[0],
+            owner_path=atom_path[:-1],
+            is_builtin=info.is_builtin,
+        )
 
     def _try_resolve_qualified_qname(
         self, chain: QualifierChain, name: str

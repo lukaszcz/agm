@@ -109,6 +109,42 @@ def test_a_warm_checked_module_cache_still_resolves_an_unannotated_imported_var_
         assert capsys.readouterr().out == "5\n"
 
 
+def test_exception_downcast_and_is_stay_stable_across_a_warm_artifact_cache_reuse(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A descendant declared only in the entry module still conforms, via
+    `as?`, `is`, and a `catch` of the library's base type, after the library
+    module's checked/lowered artifacts are served from the warm cache."""
+    lib_path = tmp_path / "lib.agl"
+    lib_path.write_text(
+        "exception Problem extends Exception\n"
+        "  code: int\n"
+        "exception Detailed extends Problem\n"
+        "  detail: text\n"
+        "def detail-of(e: Problem) -> Option[Detailed] = e as? Detailed\n"
+        "def is-detailed(e: Problem) -> bool = e is Detailed\n"
+        "def guarded(f: () -> int) -> int =\n"
+        "  try f() catch Problem as p => p.code\n"
+    )
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = """\
+import lib::*
+exception VeryDetailed extends Detailed
+  hint: text
+let v = VeryDetailed(message = "m", code = 1, detail = "d", hint = "h")
+case detail-of(v) of
+  | Some(value) => print(value.detail)
+  | None => print("none")
+print(is-detailed(v))
+print(guarded(fn() => raise VeryDetailed(message = "m", code = 2, detail = "d", hint = "h")))
+"""
+    for _ in range(2):
+        result = run_inline_command(runtime, source, roots=roots)
+        assert result.ok, result.diagnostics
+        assert capsys.readouterr().out == "d\ntrue\n2\n"
+
+
 def test_editing_an_unannotated_exported_binding_type_invalidates_the_warm_cache(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

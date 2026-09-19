@@ -4377,6 +4377,64 @@ def test_route_qualified_generic_enum_owner_is_accepted_in_an_is_test(tmp_path: 
     assert ENTRY_ID in checked.modules
 
 
+def test_qualified_is_test_resolves_root_exception_via_module_route(tmp_path: Path) -> None:
+    """``e is mod::Child`` resolves a root exception named directly by a module route.
+
+    A root exception has no ``TYPE::`` owner for the resolver's type-owner
+    branch to find (unlike an enum variant); the qualified route must resolve
+    the constructor as an ordinary imported member instead. Covers a
+    descendant, its negation, and an ancestor of the left-hand side type.
+    """
+    modules = {
+        "entry": (
+            "import mod\n"
+            'let e: mod::Base = mod::Child(message = "m", url = "u")\n'
+            "let descendant = e is mod::Child\n"
+            "let excludes = e is not mod::Child\n"
+            "let ancestor = e is mod::Base\n"
+            "ancestor"
+        ),
+        "mod": "exception Base extends Exception\n  url: text\nexception Child extends Base()\n",
+    }
+    cg = _check_program(tmp_path, modules)
+    for name in ("descendant", "excludes", "ancestor"):
+        assert _binding_value_type(cg, ENTRY_ID, name) == BoolType()
+
+    from agm.agl.syntax.nodes import LetDecl
+
+    module = cg.modules[ENTRY_ID]
+    descendant_decl = next(
+        item
+        for item in _module_items(module)
+        if isinstance(item, LetDecl) and item.name == "descendant"
+    )
+    resolved = module.constructor_ref_for(descendant_decl.value.node_id)
+    assert resolved is not None
+    assert (resolved.owner_name, resolved.owner_path, resolved.owner_module_id) == (
+        "Child",
+        (),
+        ModuleId.from_path("mod"),
+    )
+
+
+def test_qualified_is_test_rejects_unrelated_root_exception_across_modules(
+    tmp_path: Path,
+) -> None:
+    """An unrelated qualified exception 'is' target is a static type error, not a scope failure."""
+    modules = {
+        "entry": (
+            'import mod\nlet e: mod::Base = mod::Child(message = "m", url = "u")\ne is mod::Other'
+        ),
+        "mod": (
+            "exception Base extends Exception\n  url: text\n"
+            "exception Child extends Base()\n"
+            "exception Other extends Exception\n  code: int\n"
+        ),
+    }
+    with pytest.raises(AglTypeError):
+        _check_program(tmp_path, modules)
+
+
 # ---------------------------------------------------------------------------
 # Builtin declaration uniqueness
 # ---------------------------------------------------------------------------

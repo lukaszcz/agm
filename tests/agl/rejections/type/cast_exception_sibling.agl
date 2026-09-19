@@ -1,0 +1,11 @@
+exception Problem extends Exception
+  code: int
+
+exception Detailed extends Problem
+  detail: text
+
+exception Sibling extends Problem()
+
+program def main() -> unit =
+  let d: Detailed = Detailed(message = "bad", code = 1, detail = "x")
+  let _ = d as Sibling

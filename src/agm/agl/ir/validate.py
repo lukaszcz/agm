@@ -16,6 +16,9 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        ``program.modules``; a ``FunctionId`` owner must exist in the
        functions table.
     3. Each ``program.nominals`` entry: ``descriptor.nominal`` equals its key.
+       An EXCEPTION descriptor's ``base`` is ``None`` or an EXCEPTION
+       descriptor present in the table, and the base chain is acyclic;
+       RECORD and ENUM descriptors have ``base is None``.
     4. Every ``SymbolId`` referenced by ``IrLoad``/``IrBind``/``IrAssign``
        exists in ``program.symbols``.
     5. The root symbol of every ``IrAssign`` is mutable (``mutable=True``).
@@ -349,6 +352,29 @@ def _check_record_nominal(nominal: NominalId, ctx: _Context, node_name: str) -> 
         raise InvalidIrError(f"{node_name} references non-record nominal {nominal!r}")
 
 
+def _check_downcast_nominals(
+    nominals: tuple[NominalId, ...], ctx: _Context, node_name: str
+) -> None:
+    """Require a downcast's accepted set: all RECORD, or exactly one EXCEPTION."""
+    for nominal in nominals:
+        _check_nominal_in_table(nominal, ctx)
+    kinds = {ctx.program.nominals[n].kind for n in nominals}
+    if kinds == {NominalKind.RECORD}:
+        return
+    if kinds == {NominalKind.EXCEPTION} and len(nominals) == 1:
+        return
+    raise InvalidIrError(
+        f"{node_name} nominals {nominals!r} must be RECORD members or exactly one EXCEPTION"
+    )
+
+
+def _check_nominal_is_target(nominal: NominalId, ctx: _Context, node_name: str) -> None:
+    """Require an `is`-test target to be a record or exception identity."""
+    _check_nominal_in_table(nominal, ctx)
+    if ctx.program.nominals[nominal].kind not in (NominalKind.RECORD, NominalKind.EXCEPTION):
+        raise InvalidIrError(f"{node_name} references non-record/non-exception nominal {nominal!r}")
+
+
 def _check_mutable_record_field(nominal: NominalId, field: str, ctx: _Context) -> None:
     """Require a mutable field on the precise record declaration for a store."""
     _check_record_nominal(nominal, ctx, "IrFieldSet")
@@ -672,6 +698,10 @@ def _validate_catch_handler(handler: IrCatchHandler, ctx: _Context) -> None:
     if ctx.deep:
         if handler.nominal is not None:
             _check_nominal_in_table(handler.nominal, ctx)
+            if ctx.program.nominals[handler.nominal].kind is not NominalKind.EXCEPTION:
+                raise InvalidIrError(
+                    f"IrCatchHandler references non-EXCEPTION nominal {handler.nominal!r}"
+                )
         if handler.symbol is not None:
             if handler.symbol not in ctx.program.symbols:
                 raise InvalidIrError(
@@ -1046,14 +1076,13 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             if ctx.deep:
                 if not nominals:
                     raise InvalidIrError("IrNominalCast requires at least one nominal")
-                for nominal in nominals:
-                    _check_record_nominal(nominal, ctx, "IrNominalCast")
+                _check_downcast_nominals(nominals, ctx, "IrNominalCast")
             _validate_expr(val, ctx)
 
         case IrNominalIs(nominal=nominal, value=val):
             _validate_location(node.location, ctx)
             if ctx.deep:
-                _check_record_nominal(nominal, ctx, "IrNominalIs")
+                _check_nominal_is_target(nominal, ctx, "IrNominalIs")
             _validate_expr(val, ctx)
 
         case IrConvert(value=val, recipe=recipe):
@@ -1355,6 +1384,27 @@ def _validate_program_tables(ctx: _Context) -> None:
             raise InvalidIrError(
                 "enum and exception descriptors must have empty mutable_fields "
                 f"for nominal {nom_key!r}"
+            )
+
+        if nom_desc.kind is NominalKind.EXCEPTION:
+            visited: set[NominalId] = {nom_key}
+            current = nom_desc.base
+            while current is not None:
+                if current in visited:
+                    raise InvalidIrError(
+                        f"exception descriptor base chain starting at nominal {nom_key!r} is cyclic"
+                    )
+                visited.add(current)
+                base_desc = program.nominals.get(current)
+                if base_desc is None or base_desc.kind is not NominalKind.EXCEPTION:
+                    raise InvalidIrError(
+                        f"exception descriptor for nominal {nom_key!r} has base={current!r},"
+                        " which is not an exception descriptor in program.nominals"
+                    )
+                current = base_desc.base
+        elif nom_desc.base is not None:
+            raise InvalidIrError(
+                f"{nom_desc.kind!r} descriptor for nominal {nom_key!r} must not set base"
             )
 
         if nom_desc.kind is NominalKind.ENUM:

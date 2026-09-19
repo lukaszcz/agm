@@ -1,0 +1,15 @@
+# A record declared inside a plain (non-type) `scope` block, referenced as an
+# enum member, resolves through that scope path as an `is` target -- `Lib` is
+# a scope, not itself a type, so it falls to the scoped-constructor fallback.
+scope Lib
+  record Circle
+    radius: int
+end Lib
+
+enum Shape = ::Lib::Circle | Square(side: int)
+
+program def main() -> unit =
+  let s: Shape = Lib::Circle(radius = 3)
+
+  print(s is Lib::Circle)
+  print(s is Square)

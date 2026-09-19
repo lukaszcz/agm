@@ -44,6 +44,7 @@ from agm.agl.semantics.type_table import (
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
+    EXCEPTION_BASE,
     ArrayType,
     BoolType,
     BottomType,
@@ -2883,6 +2884,138 @@ class TestCastClassification:
         table = _bad_record_table()
         bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029))
         assert cast_classification(bad, JsonType(), table) == CastKind.STATIC_ERROR
+
+
+def _exception_hierarchy_table() -> TypeTable:
+    """Root -> Mid -> Leaf, a sibling of Mid off Root, and an unrelated Other root."""
+    table = TypeTable()
+    table.register(
+        TypeDef(
+            kind="exception", name="Root", module_id=ENTRY_ID, abstract=True, decl_node_id=700040
+        )
+    )
+    table.register(
+        TypeDef(kind="exception", name="Mid", module_id=ENTRY_ID, base=700040, decl_node_id=700041)
+    )
+    table.register(
+        TypeDef(kind="exception", name="Leaf", module_id=ENTRY_ID, base=700041, decl_node_id=700042)
+    )
+    table.register(
+        TypeDef(
+            kind="exception",
+            name="Sibling",
+            module_id=ENTRY_ID,
+            base=700040,
+            decl_node_id=700043,
+        )
+    )
+    table.register(
+        TypeDef(
+            kind="exception", name="Other", module_id=ENTRY_ID, abstract=True, decl_node_id=700044
+        )
+    )
+    return table
+
+
+class TestExceptionCastClassification:
+    """The exception -> exception branch of the cast matrix (ancestry-directed)."""
+
+    def test_same_exception_is_total_noop(self) -> None:
+        table = _exception_hierarchy_table()
+        mid = ExceptionType(name="Mid", module_id=ENTRY_ID, decl_id=700041)
+        assert cast_classification(mid, mid, table) == CastKind.TOTAL_NOOP
+
+    def test_upcast_to_immediate_ancestor(self) -> None:
+        table = _exception_hierarchy_table()
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700042)
+        mid = ExceptionType(name="Mid", module_id=ENTRY_ID, decl_id=700041)
+        assert cast_classification(leaf, mid, table) == CastKind.IDENTITY_UPCAST
+
+    def test_upcast_to_root(self) -> None:
+        table = _exception_hierarchy_table()
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700042)
+        root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=700040)
+        assert cast_classification(leaf, root, table) == CastKind.IDENTITY_UPCAST
+
+    def test_one_level_downcast(self) -> None:
+        table = _exception_hierarchy_table()
+        mid = ExceptionType(name="Mid", module_id=ENTRY_ID, decl_id=700041)
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700042)
+        assert cast_classification(mid, leaf, table) == CastKind.NOMINAL_DOWNCAST
+
+    def test_multi_level_downcast(self) -> None:
+        table = _exception_hierarchy_table()
+        root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=700040)
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700042)
+        assert cast_classification(root, leaf, table) == CastKind.NOMINAL_DOWNCAST
+
+    def test_sibling_exceptions_are_a_static_error(self) -> None:
+        table = _exception_hierarchy_table()
+        mid = ExceptionType(name="Mid", module_id=ENTRY_ID, decl_id=700041)
+        sibling = ExceptionType(name="Sibling", module_id=ENTRY_ID, decl_id=700043)
+        assert cast_classification(mid, sibling, table) == CastKind.STATIC_ERROR
+
+    def test_unrelated_exceptions_are_a_static_error(self) -> None:
+        table = _exception_hierarchy_table()
+        mid = ExceptionType(name="Mid", module_id=ENTRY_ID, decl_id=700041)
+        other = ExceptionType(name="Other", module_id=ENTRY_ID, decl_id=700044)
+        assert cast_classification(mid, other, table) == CastKind.STATIC_ERROR
+
+    def test_text_to_exception_still_static_error(self) -> None:
+        table = _exception_hierarchy_table()
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700042)
+        assert cast_classification(TextType(), leaf, table) == CastKind.STATIC_ERROR
+
+    def test_json_to_exception_still_static_error(self) -> None:
+        table = _exception_hierarchy_table()
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700042)
+        assert cast_classification(JsonType(), leaf, table) == CastKind.STATIC_ERROR
+
+
+class TestIsExceptionAncestor:
+    def test_true_for_direct_and_transitive_ancestor(self) -> None:
+        table = _exception_hierarchy_table()
+        assert table.is_exception_ancestor(700041, 700042)  # Mid is Leaf's ancestor
+        assert table.is_exception_ancestor(700040, 700042)  # Root is Leaf's ancestor
+
+    def test_false_for_self_sibling_and_descendant(self) -> None:
+        table = _exception_hierarchy_table()
+        assert not table.is_exception_ancestor(700042, 700042)
+        assert not table.is_exception_ancestor(700043, 700041)  # Sibling, not an ancestor of Mid
+        assert not table.is_exception_ancestor(700042, 700041)  # Leaf is Mid's descendant
+
+
+class TestIsBuiltinExceptionRoot:
+    def test_true_for_reserved_root(self) -> None:
+        table = create_seeded_type_table()
+        assert table.is_builtin_exception_root(EXCEPTION_BASE.decl_id)
+
+    def test_true_for_builtin_declaration_with_no_base(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Exception",
+                module_id=ENTRY_ID,
+                abstract=True,
+                is_builtin=True,
+                decl_node_id=700046,
+            )
+        )
+        assert table.is_builtin_exception_root(700046)
+
+    def test_false_for_user_declaration_with_no_base(self) -> None:
+        table = _exception_hierarchy_table()
+        assert not table.is_builtin_exception_root(700040)
+
+    def test_false_for_declaration_with_a_base(self) -> None:
+        table = _exception_hierarchy_table()
+        assert not table.is_builtin_exception_root(700041)
+
+    def test_false_for_non_exception_declaration(self) -> None:
+        table = TypeTable()
+        table.register(TypeDef(kind="record", name="R", module_id=ENTRY_ID, decl_node_id=700045))
+        assert not table.is_builtin_exception_root(700045)
 
 
 class TestParseClassification:

@@ -4249,8 +4249,11 @@ class _Checker:
         )
         handler_types: list[Type] = [body_type]
         handler_bodies: list[Expr] = []
+        earlier_clause_types: list[ExceptionType | None] = []
         for clause in node.handlers:
-            ht = self._check_catch_clause(clause, expected=expected)
+            ht, clause_type = self._check_catch_clause(clause, expected=expected)
+            self._check_catch_reachable(clause, clause_type, earlier_clause_types)
+            earlier_clause_types.append(clause_type)
             handler_types.append(self._branch_result(ht, expected, clause.body))
             handler_bodies.append(clause.body)
         try:
@@ -4268,7 +4271,11 @@ class _Checker:
         )
         return result
 
-    def _check_catch_clause(self, clause: CatchClause, *, expected: Type | None) -> Type:
+    def _check_catch_clause(
+        self, clause: CatchClause, *, expected: Type | None
+    ) -> tuple[Type, ExceptionType | None]:
+        """Check a catch clause; also return its resolved type, or ``None`` for `_`."""
+        clause_type: ExceptionType | None
         if clause.exc_type is None or clause.exc_type == "_":
             from agm.agl.semantics.types import EXCEPTION_BASE
 
@@ -4276,6 +4283,7 @@ class _Checker:
             selected = EXCEPTION_BASE if standard is None else standard.handle()
             assert isinstance(selected, ExceptionType)
             exc_type: ExceptionType = selected
+            clause_type = None
         else:
             # resolve_named_type is used instead of get_type so exception types exposed
             # by import tails (in cross-module program context) are found as well.
@@ -4287,9 +4295,40 @@ class _Checker:
                 )
             exc_type = resolved
             self._builtins.check_caught_exception_contract(exc_type, span=clause.span)
+            clause_type = exc_type
         if clause.binding is not None:
             self._env.set_binding_type(clause.node_id, exc_type)
-        return self._check_expr(clause.body, expected=expected)
+        return self._check_expr(clause.body, expected=expected), clause_type
+
+    def _check_catch_reachable(
+        self,
+        clause: CatchClause,
+        clause_type: ExceptionType | None,
+        earlier: list[ExceptionType | None],
+    ) -> None:
+        """Reject *clause* when an earlier handler already catches everything it would.
+
+        An earlier `_` (``None``) or built-in ``Exception`` root catches
+        everything; otherwise *clause* is unreachable when an earlier handler's
+        type equals its own or is one of its ancestors.
+        """
+        table = self._env.type_table
+        for earlier_type in earlier:
+            if earlier_type is None or table.is_builtin_exception_root(earlier_type.decl_id):
+                raise AglTypeError(
+                    "this catch handler can never match: an earlier handler already"
+                    " catches everything.",
+                    span=clause.span,
+                )
+            if clause_type is not None and (
+                earlier_type.decl_id == clause_type.decl_id
+                or table.is_exception_ancestor(earlier_type.decl_id, clause_type.decl_id)
+            ):
+                raise AglTypeError(
+                    f"this catch handler can never match: an earlier handler for"
+                    f" '{earlier_type.name}' already catches '{clause_type.name}'.",
+                    span=clause.span,
+                )
 
     # --- raise ---
 
@@ -4812,9 +4851,12 @@ class _Checker:
                     f"an abstract type variable '{expr_type.name}' cannot be tested with 'is'.",
                     span=node.span,
                 )
+            if isinstance(expr_type, ExceptionType):
+                return self._check_exception_is_test(node, expr_type)
             if not isinstance(expr_type, EnumType):
                 raise AglTypeError(
-                    f"'is' / 'is not' requires an enum-typed left-hand side; got '{expr_type!r}'.",
+                    "'is' / 'is not' requires an enum-typed or exception-typed left-hand side; "
+                    f"got '{expr_type!r}'.",
                     span=node.span,
                 )
             enum_type = expr_type
@@ -4866,6 +4908,69 @@ class _Checker:
                 span=node.span,
             )
             return BoolType()
+
+    def _check_exception_is_test(self, node: IsTest, exception_type: ExceptionType) -> BoolType:
+        """Check ``is``/``is not`` whose left-hand side is an exception type.
+
+        The right-hand side must name the same exception declaration, an
+        ancestor, or a descendant, mirroring the cast matrix
+        (``x is T`` ⟺ ``x as? T`` is ``Some``); an unrelated exception is a
+        static error.
+        """
+        constructor = self._constructor_ref_for(node.node_id)
+        if node.qualifier is None:
+            matching = tuple(
+                candidate
+                for candidate in self._resolved.is_test_constructor_candidates.get(node.node_id, ())
+                if self._is_related_exception_candidate(exception_type, candidate)
+            )
+            constructor = self._unique_constructor_candidate(
+                node.variant,
+                node.span,
+                exception_type,
+                matching,
+                subject="'is' member",
+            )
+            if constructor is not None:
+                self._record_is_test_constructor_ref(node.node_id, constructor)
+        elif constructor is None:
+            self._check_exception_variant_qualification(node.qualifier, node.variant, node.span)
+        if constructor is None or not self._is_related_exception_candidate(
+            exception_type, constructor
+        ):
+            raise AglTypeError(
+                f"'is' target '{node.variant}' names no exception related to '{exception_type!r}'.",
+                span=node.span,
+            )
+        return BoolType()
+
+    def _check_exception_variant_qualification(
+        self, qualifier: QualifierChain, variant: str, span: SourceSpan
+    ) -> None:
+        """Surface a deferred qualifier-route failure for a qualified exception 'is' target.
+
+        The resolver defers a bad route or a local/import clash on ``is``
+        tests (``defer_route_diagnostics``), leaving the constructor
+        unresolved; resolving the spelling as a ``QUALIFIER::Name`` type raises
+        the real cause. A valid route falls through to the caller's mismatch.
+        """
+        self._env.resolve_qualified_name_type(qualifier, variant, span=span)
+
+    def _is_related_exception_candidate(
+        self, exception_type: ExceptionType, candidate: ConstructorRef
+    ) -> bool:
+        """Whether *candidate* is *exception_type*'s own declaration, an ancestor, or descendant."""
+        table = self._env.type_table
+        typedef = table.get_by_id(candidate.owner_decl_node_id)
+        if typedef is None or typedef.kind != "exception":
+            return False
+        decl_id = candidate.owner_decl_node_id
+        target_id = exception_type.decl_id
+        return (
+            decl_id == target_id
+            or table.is_exception_ancestor(decl_id, target_id)
+            or table.is_exception_ancestor(target_id, decl_id)
+        )
 
     def _qualified_constructor_typed_call_error(self, span: SourceSpan) -> AglTypeError:
         return AglTypeError(
@@ -6060,7 +6165,7 @@ class _Checker:
     def _unique_constructor_candidate(
         name: str,
         span: SourceSpan,
-        owner_type: RecordType | EnumType,
+        owner_type: RecordType | EnumType | ExceptionType,
         candidates: tuple[ConstructorRef, ...],
         *,
         subject: str,

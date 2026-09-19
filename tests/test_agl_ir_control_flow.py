@@ -484,6 +484,62 @@ r
 
 
 # ---------------------------------------------------------------------------
+# IR evaluation tests — a base handler catches a descendant (conformance)
+# ---------------------------------------------------------------------------
+
+_CATCH_HIERARCHY = """\
+exception Problem extends Exception
+  code: int
+exception Detailed extends Problem
+  detail: text
+exception VeryDetailed extends Detailed()
+"""
+
+
+def test_try_base_handler_catches_a_multi_level_descendant() -> None:
+    """try: a base handler matches a raised descendant two levels down through the
+    base walk."""
+    source = f"""\
+{_CATCH_HIERARCHY}
+let r = try
+  raise VeryDetailed(message = "m", code = 1, detail = "d")
+catch Problem as p =>
+  p.code
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(1)
+
+
+def test_try_handler_matches_its_own_exact_type() -> None:
+    """try: a handler matches the raised type itself, with no base walk needed."""
+    source = f"""\
+{_CATCH_HIERARCHY}
+let r = try
+  raise Problem(message = "m", code = 2)
+catch Problem as p =>
+  p.code
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == IntValue(2)
+
+
+def test_try_sibling_handler_does_not_match() -> None:
+    """try: a handler for an unrelated sibling type does not match; re-raises."""
+    source = f"""\
+{_CATCH_HIERARCHY}
+exception Other extends Problem
+  note: text
+try
+  raise Other(message = "m", code = 1, note = "n")
+catch Detailed =>
+  ()
+"""
+    evaluate_ir_raises(source)
+
+
+# ---------------------------------------------------------------------------
 # IR evaluation tests — first-match ordering
 # ---------------------------------------------------------------------------
 
@@ -683,6 +739,58 @@ def test_lower_try_catchall_shape() -> None:
     assert handler.symbol is None
 
 
+def test_lower_try_catch_of_the_hierarchy_root_lowers_to_catchall() -> None:
+    """Golden lowering: a clause resolving to the exception hierarchy root is catch-all."""
+    from agm.agl.ir.program import ExecutableProgram
+
+    source = "let r = try\n  1\ncatch Exception =>\n  2\nr\n"
+    prog = _lower(source)
+    assert isinstance(prog, ExecutableProgram)
+    items = inline_main_items(prog)
+    ir_bind = let_root_capture(items[0])
+    ir_try = ir_bind.value
+    assert isinstance(ir_try, IrTry)
+    handler = ir_try.handlers[0]
+    assert isinstance(handler, IrCatchHandler)
+    assert handler.nominal is None
+
+
+def test_lower_try_catch_of_a_non_root_type_keeps_its_own_nominal() -> None:
+    """Golden lowering: a non-root clause lowers to its own resolved nominal, not None."""
+    from agm.agl.ir.program import ExecutableProgram
+
+    source = "let r = try\n  1\ncatch Abort =>\n  2\nr\n"
+    prog = _lower(source)
+    assert isinstance(prog, ExecutableProgram)
+    items = inline_main_items(prog)
+    ir_bind = let_root_capture(items[0])
+    ir_try = ir_bind.value
+    assert isinstance(ir_try, IrTry)
+    handler = ir_try.handlers[0]
+    assert isinstance(handler, IrCatchHandler)
+    assert handler.nominal == nominal_id_for(prog, "Abort")
+
+
+def test_lower_try_catch_of_a_user_declared_root_keeps_its_own_nominal() -> None:
+    """Golden lowering: a user-declared base-less exception is not the catch-all,
+    so a clause naming it lowers to its own nominal, not None."""
+    from agm.agl.ir.program import ExecutableProgram
+
+    source = (
+        "exception MyRoot\n  note: text\nexception MyRootChild extends MyRoot()\n"
+        "let r = try\n  1\ncatch MyRoot =>\n  2\nr\n"
+    )
+    prog = _lower(source)
+    assert isinstance(prog, ExecutableProgram)
+    items = inline_main_items(prog)
+    ir_bind = let_root_capture(items[0])
+    ir_try = ir_bind.value
+    assert isinstance(ir_try, IrTry)
+    handler = ir_try.handlers[0]
+    assert isinstance(handler, IrCatchHandler)
+    assert handler.nominal == nominal_id_for(prog, "MyRoot")
+
+
 # ---------------------------------------------------------------------------
 # Defensive evaluator tests (hand-built IR)
 # ---------------------------------------------------------------------------
@@ -793,6 +901,36 @@ def test_validate_ir_try_handler_nominal_missing() -> None:
     )
     prog = _make_program((ir_try,))
     with pytest.raises(InvalidIrError, match="not in program.nominals"):
+        validate_ir(prog, deep=True)
+
+
+def test_validate_ir_try_handler_nominal_not_exception() -> None:
+    """Negative validate: IrTry handler nominal is a record, not an exception."""
+    loc = _DUMMY_LOC
+    record_nominal = NominalId(5)
+    handler = IrCatchHandler(
+        nominal=record_nominal,
+        symbol=None,
+        body=IrConstUnit(loc),
+    )
+    ir_try = IrTry(
+        location=loc,
+        body=IrConstInt(loc, 1),
+        handlers=(handler,),
+    )
+    nominals = {
+        record_nominal: NominalDescriptor(
+            nominal=record_nominal,
+            module_id=STD_PRELUDE_ID,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            variants=(),
+        ),
+    }
+    prog = _make_program((ir_try,), nominals=nominals)
+    with pytest.raises(InvalidIrError):
         validate_ir(prog, deep=True)
 
 

@@ -1,0 +1,61 @@
+# Exception downcasts, upcasts, `as?`, and `is`/`is not` over a user hierarchy.
+# `report` narrows a caught exception with `as?` after `catch _ as e`: the
+# pattern inclusive `catch` motivates, and the one this program targets.
+exception Problem extends Exception
+  code: int
+exception Detailed extends Problem
+  detail: text
+exception VeryDetailed extends Detailed
+  hint: text
+exception Other extends Exception
+  note: text
+
+def report(kind: text) -> text =
+  try
+    if
+      | kind == "detailed" => raise Detailed(message = "m", code = 1, detail = "d")
+      | kind == "very-detailed" =>
+          raise VeryDetailed(message = "m", code = 2, detail = "d", hint = "h")
+      | kind == "problem" => raise Problem(message = "m", code = 3)
+      | kind == "other" => raise Other(message = "m", note = "n")
+      | else => "no failure"
+  catch _ as e =>
+    case e as? Detailed of
+      | Some(value) => "detailed: %{value.detail} (code %{value.code})"
+      | None =>
+          case e as? Problem of
+            | Some(value) => "problem: %{value.code}"
+            | None => "other: %{e.message}"
+
+program def main(kind: text) -> unit =
+  if
+    | kind == "upcasts" =>
+        let d = Detailed(message = "m", code = 1, detail = "d")
+        let as-problem: Problem = d as Problem
+        let as-root: Exception = d as Exception
+        print "upcast problem: %{as-problem.code}"
+        print "upcast root: %{as-root.message}"
+    | kind == "failed-cast" =>
+        try
+          let p: Problem = Problem(message = "m", code = 7)
+          print "bad: %{(p as Detailed).detail}"
+        catch CastError as e =>
+          print "source: %{e.source-type}"
+          print "target: %{e.target-type}"
+          print "raw: %{e.raw}"
+    | kind == "as-question" =>
+        let p: Problem = Problem(message = "m", code = 9)
+        case p as? Detailed of
+          | Some(value) => print "some: %{value.detail}"
+          | None => print "none"
+    | kind == "is-test" =>
+        let d: Problem = Detailed(message = "m", code = 5, detail = "d")
+        print "is-detailed: %{d is Detailed}"
+        print "is-not-detailed: %{d is not Detailed}"
+        print "is-very-detailed: %{d is VeryDetailed}"
+        let v: Problem = VeryDetailed(message = "m", code = 6, detail = "d", hint = "h")
+        print "very-is-detailed: %{v is Detailed}"
+        print "very-is-not-detailed: %{v is not Detailed}"
+        print "very-is-problem: %{v is Problem}"
+    | else =>
+        print(report(kind))

@@ -37,6 +37,7 @@ from agm.agl.lower.lowerer import (
     builtin_nominals_from_declarations,
     reserved_fallback_superseded,
 )
+from agm.agl.lower.nominal_descriptors import exception_descriptor
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_ENV_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
@@ -96,6 +97,25 @@ def _record_descriptor(
     )
 
 
+def _descriptor_for_skipped_identity(
+    nominal: NominalId, type_table: TypeTable
+) -> NominalDescriptor:
+    """Build a descriptor for an identity a kept declaration references but that was itself skipped.
+
+    A retained enum's member, or a retained exception's base, may itself be a
+    reserved fallback superseded by a loaded standard declaration -- excluded
+    from the main declaration pass, but still needed for IR identity and
+    validation, so it is added here with ``bears_name_path=False``.
+    """
+    typedef = type_table.get_by_id(nominal.value)
+    assert typedef is not None
+    handle = typedef.handle()
+    if isinstance(handle, RecordType):
+        return _record_descriptor(typedef, handle, type_table, bears_name_path=False)
+    assert isinstance(handle, ExceptionType)
+    return exception_descriptor(typedef, handle, type_table, bears_name_path=False)
+
+
 def _add_missing_enum_member_descriptors(
     nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
 ) -> None:
@@ -114,11 +134,30 @@ def _add_missing_enum_member_descriptors(
         if variant.member not in nominals
     }
     for nominal in missing:
-        typedef = type_table.get_by_id(nominal.value)
-        assert typedef is not None and typedef.kind == "record"
-        handle = typedef.handle()
-        assert isinstance(handle, RecordType)
-        nominals[nominal] = _record_descriptor(typedef, handle, type_table, bears_name_path=False)
+        nominals[nominal] = _descriptor_for_skipped_identity(nominal, type_table)
+
+
+def _add_missing_exception_base_descriptors(
+    nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
+) -> None:
+    """Close the nominal table over exception bases referenced by retained exceptions.
+
+    A kept exception may extend a reserved base whose owning fallback was
+    itself superseded by a loaded standard declaration, so that base still
+    needs a non-name-bearing descriptor, transitively up its own base chain.
+    """
+    pending = [
+        descriptor.base
+        for descriptor in nominals.values()
+        if descriptor.kind is NominalKind.EXCEPTION
+    ]
+    while pending:
+        nominal = pending.pop()
+        if nominal is None or nominal in nominals:
+            continue
+        descriptor = _descriptor_for_skipped_identity(nominal, type_table)
+        nominals[nominal] = descriptor
+        pending.append(descriptor.base)
 
 
 def _exception_field_encodes(
@@ -357,16 +396,9 @@ def lower_program(
                     bears_name_path=bears_name_path,
                 )
             case _:
-                link.nominals[nominal] = NominalDescriptor(
-                    nominal=nominal,
-                    module_id=typedef.module_id,
-                    scope_path=typedef.scope_path,
-                    declared_name=typedef.name,
-                    kind=NominalKind.EXCEPTION,
-                    fields=tuple(type_table.exception_fields(handle).keys()),
-                    variants=(),
-                    positional_fields=positional_field_names(type_table.field_kinds(handle)),
-                    bears_name_path=bears_name_path,
+                assert isinstance(handle, ExceptionType)
+                link.nominals[nominal] = exception_descriptor(
+                    typedef, handle, type_table, bears_name_path=bears_name_path
                 )
 
     _add_builtin_nominals(link.nominals, type_table)
@@ -414,6 +446,7 @@ def lower_program(
                 )
 
     _add_missing_enum_member_descriptors(link.nominals, type_table)
+    _add_missing_exception_base_descriptors(link.nominals, type_table)
 
     # Step 3: Phase 1 — pre-allocate every static runtime symbol before any
     # body is lowered. Function ids enable calls across root and named-scope

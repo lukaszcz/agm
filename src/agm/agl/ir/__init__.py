@@ -159,6 +159,7 @@ from agm.agl.ir.program import (
     SourceFile,
     SymbolDescriptor,
     VariantDescriptor,
+    nominal_conforms,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.zones import ParamZone
@@ -303,5 +304,6 @@ __all__ = [
     "VariantDecode",
     "VariantDescriptor",
     "VariantEncode",
+    "nominal_conforms",
     "validate_ir",
 ]

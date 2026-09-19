@@ -1,0 +1,10 @@
+exception Problem extends Exception
+  code: int
+
+program def main() -> unit =
+  try
+    ()
+  catch Exception as e =>
+    print(e.message)
+  catch Problem as p =>
+    print(p.code)

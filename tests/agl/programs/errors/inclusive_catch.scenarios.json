@@ -1,0 +1,58 @@
+{
+  "scenarios": [
+    {
+      "name": "most_specific_handler_wins_over_its_own_ancestor",
+      "params": {
+        "mode": "most-specific-first"
+      },
+      "expect": {
+        "stdout": "detailed: d\n"
+      }
+    },
+    {
+      "name": "base_handler_catches_a_multi_level_descendant",
+      "params": {
+        "mode": "base-catches-descendant"
+      },
+      "expect": {
+        "stdout": "caught by base: 2\n"
+      }
+    },
+    {
+      "name": "sibling_falls_through_to_wildcard",
+      "params": {
+        "mode": "sibling-falls-to-wildcard"
+      },
+      "expect": {
+        "stdout": "fell through: m\n"
+      }
+    },
+    {
+      "name": "reraise_from_a_base_handler_is_caught_by_the_outer_handler",
+      "params": {
+        "mode": "reraise-caught-by-outer"
+      },
+      "expect": {
+        "stdout": "outer caught: d\n"
+      }
+    },
+    {
+      "name": "user_declared_root_catches_its_own_descendant",
+      "params": {
+        "mode": "user-declared-root-catches-own-descendant"
+      },
+      "expect": {
+        "stdout": "root caught: n\n"
+      }
+    },
+    {
+      "name": "user_declared_root_does_not_catch_an_unrelated_exception",
+      "params": {
+        "mode": "user-declared-root-does-not-catch-unrelated"
+      },
+      "expect": {
+        "stdout": "fell through: m\n"
+      }
+    }
+  ]
+}

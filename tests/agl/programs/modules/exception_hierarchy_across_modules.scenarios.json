@@ -1,0 +1,56 @@
+{
+  "scenarios": [
+    {
+      "name": "descendant_declared_in_the_importer_conforms",
+      "module_roots": [
+        "program_modules/modules/exception_hierarchy_across_modules"
+      ],
+      "params": {
+        "kind": "very-detailed"
+      },
+      "expect": {
+        "stdout": "detail: d\nis-detailed: true\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "the_base_type_itself_does_not_conform",
+      "module_roots": [
+        "program_modules/modules/exception_hierarchy_across_modules"
+      ],
+      "params": {
+        "kind": "problem"
+      },
+      "expect": {
+        "stdout": "none\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "guarded_catches_a_descendant_declared_in_the_importer",
+      "module_roots": [
+        "program_modules/modules/exception_hierarchy_across_modules"
+      ],
+      "params": {
+        "kind": "guarded-catches-very-detailed"
+      },
+      "expect": {
+        "stdout": "guarded: 3\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "qualified_is_test_against_a_lib_exception",
+      "module_roots": [
+        "program_modules/modules/exception_hierarchy_across_modules"
+      ],
+      "params": {
+        "kind": "qualified-is"
+      },
+      "expect": {
+        "stdout": "self: true\nancestor: true\nmismatch: false\n",
+        "calls": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,94 @@
+{
+  "scenarios": [
+    {
+      "name": "raised_detailed_downcasts_after_catch_all",
+      "params": {
+        "kind": "detailed"
+      },
+      "expect": {
+        "stdout": "detailed: d (code 1)\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "raised_very_detailed_downcasts_through_two_levels",
+      "params": {
+        "kind": "very-detailed"
+      },
+      "expect": {
+        "stdout": "detailed: d (code 2)\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "raised_problem_falls_back_to_the_ancestor_cast",
+      "params": {
+        "kind": "problem"
+      },
+      "expect": {
+        "stdout": "problem: 3\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "raised_unrelated_exception_matches_neither_cast",
+      "params": {
+        "kind": "other"
+      },
+      "expect": {
+        "stdout": "other: m\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "no_failure",
+      "params": {
+        "kind": "none"
+      },
+      "expect": {
+        "stdout": "no failure\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "upcasts_including_to_the_root_are_no_ops",
+      "params": {
+        "kind": "upcasts"
+      },
+      "expect": {
+        "stdout": "upcast problem: 1\nupcast root: m\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "failed_as_raises_cast_error_with_static_source_type",
+      "params": {
+        "kind": "failed-cast"
+      },
+      "expect": {
+        "stdout": "source: Problem\ntarget: Detailed\nraw: Problem(message = \"m\", code = 7)\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "failed_as_question_yields_none",
+      "params": {
+        "kind": "as-question"
+      },
+      "expect": {
+        "stdout": "none\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "is_and_is_not_test_conformance",
+      "params": {
+        "kind": "is-test"
+      },
+      "expect": {
+        "stdout": "is-detailed: true\nis-not-detailed: false\nis-very-detailed: false\nvery-is-detailed: true\nvery-is-not-detailed: false\nvery-is-problem: true\n",
+        "calls": {}
+      }
+    }
+  ]
+}

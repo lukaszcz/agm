@@ -1,0 +1,10 @@
+import std/http
+import std/http::HttpError
+
+scope http
+  exception HttpTimeoutError extends HttpError()
+end http
+
+def f(e: HttpError) -> bool = e is http::HttpTimeoutError
+
+program def main() -> unit = ()

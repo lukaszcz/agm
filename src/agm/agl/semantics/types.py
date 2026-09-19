@@ -1169,8 +1169,8 @@ class CastKind(_enum.Enum):
     TOTAL_NOOP = "TOTAL_NOOP"  # source already assignable to target (no-op/widen)
     TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text; a cyclic walk can fail
     TOTAL_JSON = "TOTAL_JSON"  # convert to json; a cyclic walk can fail
-    IDENTITY_UPCAST = "IDENTITY_UPCAST"  # member record → containing enum
-    NOMINAL_DOWNCAST = "NOMINAL_DOWNCAST"  # enum → member record or overlapping enum
+    IDENTITY_UPCAST = "IDENTITY_UPCAST"  # member record → containing enum; exception → ancestor
+    NOMINAL_DOWNCAST = "NOMINAL_DOWNCAST"  # enum → member/overlapping enum; exception → descendant
     FALLIBLE = "FALLIBLE"  # runtime-fallible conversion
     STATIC_ERROR = "STATIC_ERROR"  # statically impossible — raise AglTypeError
 

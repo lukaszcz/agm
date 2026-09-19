@@ -230,6 +230,97 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == TextValue("fault 7")
 
+    def test_exception_downcast_accepts_a_descendant_declared_in_a_later_entry(self) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "exception Problem extends Exception\n"
+            "  code: int\n"
+            "exception Detailed extends Problem\n"
+            "  detail: text\n"
+            "def detail-of(e: Problem) -> Option[Detailed] = e as? Detailed"
+        ).ok
+        assert session.eval_entry("exception VeryDetailed extends Detailed\n  hint: text").ok
+
+        result = session.eval_entry(
+            'case detail-of(VeryDetailed(message = "m", code = 1, detail = "d", hint = "h")) of\n'
+            "  | Some(value) => value.detail\n"
+            '  | None => "none"\n'
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue("d")
+
+        is_result = session.eval_entry(
+            'VeryDetailed(message = "m", code = 1, detail = "d", hint = "h") is Detailed'
+        )
+
+        assert is_result.ok, is_result.diagnostics
+        assert is_result.value == BoolValue(True)
+
+    def test_exception_downcast_keeps_its_identity_across_a_redeclaration(self) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "exception Problem extends Exception\n"
+            "  code: int\n"
+            "exception Detailed extends Problem\n"
+            "  detail: text\n"
+            "def detail-of(e: Problem) -> Option[Detailed] = e as? Detailed"
+        ).ok
+
+        redeclared = session.eval_entry("exception Detailed extends Problem\n  detail: text")
+        assert redeclared.ok, redeclared.diagnostics
+
+        stale = session.eval_entry(
+            'case detail-of(Detailed(message = "m", code = 1, detail = "d")) of\n'
+            '  | Some(value) => "some"\n'
+            '  | None => "none"\n'
+        )
+        assert stale.ok, stale.diagnostics
+        assert stale.value == TextValue("none")
+
+        assert session.eval_entry(
+            'let p: Problem = Detailed(message = "m", code = 1, detail = "d")'
+        ).ok
+        fresh_cast = session.eval_entry(
+            'case p as? Detailed of\n  | Some(value) => "some"\n  | None => "none"\n'
+        )
+        assert fresh_cast.ok, fresh_cast.diagnostics
+        assert fresh_cast.value == TextValue("some")
+
+    def test_catch_of_a_base_type_includes_a_descendant_and_keeps_identity_across_redeclaration(
+        self,
+    ) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "exception Problem extends Exception\n"
+            "  code: int\n"
+            "exception Detailed extends Problem\n"
+            "  detail: text\n"
+            "def guarded(f: () -> int) -> int = try f() catch Problem as p => p.code"
+        ).ok
+        assert session.eval_entry("exception VeryDetailed extends Detailed\n  hint: text").ok
+
+        # `guarded`'s handler, compiled against entry 1's `Problem`, also
+        # catches a multi-level descendant declared in a later entry.
+        caught = session.eval_entry(
+            'guarded(fn() => raise VeryDetailed(message = "m", code = 9, detail = "d", hint = "h"))'
+        )
+        assert caught.ok, caught.diagnostics
+        assert caught.value == IntValue(9)
+
+        redeclared = session.eval_entry("exception Problem extends Exception\n  code: int")
+        assert redeclared.ok, redeclared.diagnostics
+        assert session.eval_entry("exception Detailed extends Problem\n  detail: text").ok
+
+        # `guarded` still only knows the OLD `Problem` identity: a descendant
+        # of the NEW `Problem` (same spelling, unrelated declaration) escapes.
+        stale = session.eval_entry(
+            'guarded(fn() => raise Detailed(message = "m", code = 3, detail = "d"))'
+        )
+        assert not stale.ok
+        assert stale.error is not None
+        assert stale.error.type_name == "Detailed"
+
     def test_generic_receiver_method_declared_in_a_later_entry_is_callable(self) -> None:
         session = open_session()
         assert session.eval_entry("record Box[T](value: T)").ok

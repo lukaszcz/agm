@@ -40,7 +40,7 @@ from agm.agl.ir.contracts import (
     VariantEncode,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.ir.nodes import IrBind, IrConvert, IrNominalCast, IrSequence
+from agm.agl.ir.nodes import IrBind, IrConvert, IrLoad, IrNominalCast, IrSequence
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors, VariantDescriptor
 from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID
@@ -49,6 +49,7 @@ from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
     DecimalValue,
+    ExceptionValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -405,6 +406,130 @@ let upcast = Circle(radius = 3) as? Shape
     assert values["is-circle"] == _some(RecordValue(circle_nominal, {"radius": IntValue(2)}))
     assert values["is-square"] == _none()
     assert values["upcast"] == _some(RecordValue(circle_nominal, {"radius": IntValue(3)}))
+
+
+# ---------------------------------------------------------------------------
+# Exception casts and `is`: ancestry-conformant downcasts, no-op upcasts
+# ---------------------------------------------------------------------------
+
+_HIERARCHY = """\
+exception Problem extends Exception
+  code: int
+exception Detailed extends Problem
+  detail: text
+exception VeryDetailed extends Detailed
+  hint: text
+"""
+
+
+def test_exception_upcast_as_lowers_to_the_operand() -> None:
+    """An `as` upcast, including to the root, is the operand with no wrapping node."""
+    source = f"""\
+{_HIERARCHY}
+let d = Detailed(message = "m", code = 1, detail = "x")
+let p = d as Problem
+let root = d as Exception
+()
+"""
+    program = lower_inline_ir(source, default_stdlib=False)
+    assert isinstance(_program_bound_value(program, "p"), IrLoad)
+    assert isinstance(_program_bound_value(program, "root"), IrLoad)
+
+
+def test_exception_upcast_as_question_lowers_to_noop_convert() -> None:
+    """An `as?` upcast still runs the NOOP recipe (wrapped in `Some`), never a nominal test."""
+    source = f"""\
+{_HIERARCHY}
+let p = Problem(message = "m", code = 1)
+let r = p as? Exception
+()
+"""
+    program = lower_inline_ir(source, default_stdlib=False)
+    r_lowered = _program_bound_value(program, "r")
+    assert isinstance(r_lowered, IrConvert)
+    assert r_lowered.recipe.strategy is ConversionStrategy.NOOP
+    assert r_lowered.failure_mode is ConversionFailureMode.RETURN_OPTION
+    validate_ir(program, deep=True)
+    values = evaluate_ir(source, default_stdlib=False)
+    assert values["r"] == _some(values["p"])
+    assert isinstance(values["r"], RecordValue)
+    assert values["r"].fields["value"] is values["p"]
+
+
+def test_exception_downcast_lowers_to_a_single_exception_nominal() -> None:
+    source = f"""\
+{_HIERARCHY}
+let p: Problem = Detailed(message = "m", code = 1, detail = "x")
+let back = p as Detailed
+let maybe = p as? Detailed
+()
+"""
+    program = lower_inline_ir(source, default_stdlib=False)
+    back = _program_bound_value(program, "back")
+    maybe = _program_bound_value(program, "maybe")
+    assert isinstance(back, IrNominalCast) and back.test_only is False
+    assert isinstance(maybe, IrNominalCast) and maybe.test_only is True
+    assert len(back.nominals) == 1
+    assert program.nominals[back.nominals[0]].kind is NominalKind.EXCEPTION
+    validate_ir(program, deep=True)
+
+
+def test_exception_downcast_accepts_the_exact_type_and_a_multi_level_descendant() -> None:
+    source = f"""\
+{_HIERARCHY}
+let exact = (Detailed(message = "m", code = 1, detail = "x") as Problem) as Detailed
+let deep = (VeryDetailed(message = "m", code = 2, detail = "y", hint = "h") as Problem) as Detailed
+()
+"""
+    values = evaluate_ir(source, default_stdlib=False)
+    assert isinstance(values["exact"], ExceptionValue)
+    assert values["exact"].fields["detail"] == TextValue("x")
+    assert isinstance(values["deep"], ExceptionValue)
+    assert values["deep"].fields["hint"] == TextValue("h")
+
+
+def test_exception_downcast_rejects_a_sibling_value() -> None:
+    source = f"""\
+{_HIERARCHY}
+exception Other extends Problem
+  note: text
+let p: Problem = Other(message = "m", code = 1, note = "n")
+let maybe = p as? Detailed
+()
+"""
+    assert evaluate_ir(source, default_stdlib=False)["maybe"] == _none()
+
+
+def test_exception_downcast_cast_error_reports_the_static_source_type() -> None:
+    """`source-type` is the static (annotated) source type, not the runtime type."""
+    source = f"""\
+{_HIERARCHY}
+let d = Detailed(message = "m", code = 1, detail = "x")
+let p: Problem = d
+let bad = p as VeryDetailed
+()
+"""
+    ir_exc = evaluate_ir_raises(source, default_stdlib=False)
+    assert ir_exc.type_name == "CastError"
+    assert ir_exc.fields["source-type"] == "Problem"
+    assert ir_exc.fields["target-type"] == "VeryDetailed"
+    assert ir_exc.fields["raw"] == 'Detailed(message = "m", code = 1, detail = "x")'
+
+
+def test_exception_cast_returns_the_same_value_with_no_copy() -> None:
+    source = f"""\
+{_HIERARCHY}
+let d = Detailed(message = "m", code = 1, detail = "x")
+let up = d as Problem
+let down = up as Detailed
+let maybe = up as? Detailed
+()
+"""
+    values = evaluate_ir(source, default_stdlib=False)
+    assert values["up"] is values["d"]
+    assert values["down"] is values["d"]
+    assert isinstance(values["maybe"], RecordValue)
+    assert values["maybe"].fields["value"] is values["d"]
 
 
 def test_golden_total_as_question_lowers_to_ir_convert() -> None:

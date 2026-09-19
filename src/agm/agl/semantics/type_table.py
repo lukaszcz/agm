@@ -586,6 +586,25 @@ class TypeTable:
         chain = self._exception_chain(typedef.base, caller="ancestor_defs")
         return tuple(base_def for _base_id, base_def in reversed(chain))
 
+    def is_exception_ancestor(self, ancestor_id: DeclId, decl_id: DeclId) -> bool:
+        """Whether *ancestor_id* is in *decl_id*'s exception base chain."""
+        return any(ancestor.decl_node_id == ancestor_id for ancestor in self.ancestor_defs(decl_id))
+
+    def is_builtin_exception_root(self, decl_id: DeclId) -> bool:
+        """Whether *decl_id* is the built-in ``Exception`` root: reserved or ``builtin``, no base.
+
+        Every other built-in exception extends it, so this is its identity in any
+        graph, whether the reserved fallback or a loaded standard declaration. A
+        user-declared base-less exception is not the root.
+        """
+        typedef = self._defs.get(decl_id)
+        return (
+            typedef is not None
+            and typedef.kind == "exception"
+            and typedef.base is None
+            and (typedef.module_id.is_reserved or typedef.is_builtin)
+        )
+
     def _invalidate_cache_for(self, decl_id: DeclId) -> None:
         self._record_fields_cache.pop(decl_id, None)
         self._enum_members_cache.pop(decl_id, None)
@@ -1719,10 +1738,7 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
             return False
         return table.enum_is_subset(value_type, target_type)
     if isinstance(value_type, ExceptionType) and isinstance(target_type, ExceptionType):
-        return any(
-            ancestor.decl_node_id == target_type.decl_id
-            for ancestor in table.ancestor_defs(value_type.decl_id)
-        )
+        return table.is_exception_ancestor(target_type.decl_id, value_type.decl_id)
     return False
 
 
@@ -1760,7 +1776,19 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
         target, (UnitType, FunctionType, BottomType)
     ):
         return CastKind.STATIC_ERROR
-    # ExceptionType as target is not in the matrix
+    # Exception hierarchy casts: same declaration is a no-op, an ancestor
+    # (including the root) is an upcast, a descendant is a runtime-checked
+    # downcast; unrelated exceptions are a static error.
+    if isinstance(source, ExceptionType) and isinstance(target, ExceptionType):
+        if source.decl_id == target.decl_id:
+            return CastKind.TOTAL_NOOP
+        if table.is_exception_ancestor(target.decl_id, source.decl_id):
+            return CastKind.IDENTITY_UPCAST
+        if table.is_exception_ancestor(source.decl_id, target.decl_id):
+            return CastKind.NOMINAL_DOWNCAST
+        return CastKind.STATIC_ERROR
+    # Every other source (text/json/etc.) casting to an exception is a static
+    # error: exception construction is never implicit or fallible-decoded.
     if isinstance(target, ExceptionType):
         return CastKind.STATIC_ERROR
 

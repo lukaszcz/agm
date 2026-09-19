@@ -97,6 +97,7 @@ from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
+    ExceptionValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -927,8 +928,8 @@ class TestDefensiveErrors:
         with pytest.raises(InvalidIrError, match="IrNominalIs"):
             IrInterpreter(prog).run()
 
-    def test_ir_nominal_cast_on_non_record_raises(self) -> None:
-        """IrNominalCast accepts only record values from checked enum slots."""
+    def test_ir_nominal_cast_on_non_record_non_exception_raises(self) -> None:
+        """IrNominalCast accepts only record or exception values."""
         from agm.agl.ir import IrNominalCast, NominalId
 
         prog = _make_program(
@@ -945,6 +946,106 @@ class TestDefensiveErrors:
         )
         with pytest.raises(InvalidIrError, match="IrNominalCast"):
             IrInterpreter(prog).run()
+
+    def test_ir_nominal_cast_accepts_an_exact_exception_value(self) -> None:
+        """IrNominalCast succeeds on an ExceptionValue whose nominal is accepted exactly."""
+        from agm.agl.ir import IrMakeException, IrNominalCast, NominalId
+
+        exc_nominal = NominalId(4)
+        out_sym, out_desc = _let_sym(0, "out")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrNominalCast(
+                        _LOC,
+                        nominals=(exc_nominal,),
+                        value=IrMakeException(_LOC, exc_nominal, ()),
+                        test_only=False,
+                        source_label="Problem",
+                        target_label="Problem",
+                    ),
+                ),
+            ),
+            {out_sym: out_desc},
+        )
+        result = IrInterpreter(prog).run()
+        assert result["out"] == ExceptionValue(nominal=exc_nominal, fields={})
+
+    def test_ir_nominal_cast_accepts_an_exception_descendant_through_base_conformance(
+        self,
+    ) -> None:
+        """A miss on the exact nominal walks the `base` chain for an ExceptionValue."""
+        from agm.agl.ir import IrMakeException, IrNominalCast, NominalId
+
+        root_nominal = NominalId(4)
+        leaf_nominal = NominalId(5)
+        nominals = {
+            root_nominal: NominalDescriptor(
+                root_nominal, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION
+            ),
+            leaf_nominal: NominalDescriptor(
+                leaf_nominal, ENTRY_ID, (), "Detailed", NominalKind.EXCEPTION, base=root_nominal
+            ),
+        }
+        out_sym, out_desc = _let_sym(0, "out")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrNominalCast(
+                        _LOC,
+                        nominals=(root_nominal,),
+                        value=IrMakeException(_LOC, leaf_nominal, ()),
+                        test_only=False,
+                        source_label="Problem",
+                        target_label="Problem",
+                    ),
+                ),
+            ),
+            {out_sym: out_desc},
+            nominals=nominals,
+        )
+        result = IrInterpreter(prog).run()
+        assert result["out"] == ExceptionValue(nominal=leaf_nominal, fields={})
+
+    def test_ir_nominal_is_accepts_an_exception_descendant_through_base_conformance(
+        self,
+    ) -> None:
+        """A miss on the exact nominal walks the `base` chain for `is` on an ExceptionValue."""
+        from agm.agl.ir import IrMakeException, IrNominalIs, NominalId
+
+        root_nominal = NominalId(4)
+        leaf_nominal = NominalId(5)
+        nominals = {
+            root_nominal: NominalDescriptor(
+                root_nominal, ENTRY_ID, (), "Problem", NominalKind.EXCEPTION
+            ),
+            leaf_nominal: NominalDescriptor(
+                leaf_nominal, ENTRY_ID, (), "Detailed", NominalKind.EXCEPTION, base=root_nominal
+            ),
+        }
+        out_sym, out_desc = _let_sym(0, "out")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrNominalIs(
+                        _LOC,
+                        root_nominal,
+                        IrMakeException(_LOC, leaf_nominal, ()),
+                        False,
+                    ),
+                ),
+            ),
+            {out_sym: out_desc},
+            nominals=nominals,
+        )
+        result = IrInterpreter(prog).run()
+        assert result["out"] == BoolValue(True)
 
 
 # ---------------------------------------------------------------------------

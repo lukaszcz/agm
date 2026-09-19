@@ -222,3 +222,69 @@ def test_validate_ir_nominal_is_requires_member_record() -> None:
     enum = NominalDescriptor(member_id, ENTRY_ID, (), "Color", NominalKind.ENUM, variants=())
     with pytest.raises(InvalidIrError, match="non-record"):
         validate_ir(_variant_is_program(node, {member_id: enum}), deep=True)
+
+
+# ---------------------------------------------------------------------------
+# Exception nominals: single-nominal cast, `is`, and rejected shapes
+# ---------------------------------------------------------------------------
+
+
+def _exc_descriptor(nominal_id: int, *, base: NominalId | None = None) -> NominalDescriptor:
+    return NominalDescriptor(
+        NominalId(nominal_id), ENTRY_ID, (), "E", NominalKind.EXCEPTION, base=base
+    )
+
+
+def test_validate_accepts_a_single_exception_nominal_cast() -> None:
+    exc = _exc_descriptor(1)
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    node = IrNominalCast(
+        location=loc,
+        nominals=(exc.nominal,),
+        value=IrConstInt(loc, 1),
+        test_only=False,
+        source_label="Source",
+        target_label="Target",
+    )
+    validate_ir(_variant_is_program(node, {exc.nominal: exc}), deep=True)  # no exception
+
+
+def test_validate_accepts_an_exception_is_target() -> None:
+    exc = _exc_descriptor(1)
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    node = IrNominalIs(location=loc, nominal=exc.nominal, value=IrConstInt(loc, 1), negated=False)
+    validate_ir(_variant_is_program(node, {exc.nominal: exc}), deep=True)  # no exception
+
+
+def test_validate_rejects_a_cast_mixing_record_and_exception_nominals() -> None:
+    record = NominalDescriptor(NominalId(1), ENTRY_ID, (), "Red", NominalKind.RECORD)
+    exc = _exc_descriptor(2)
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    node = IrNominalCast(
+        location=loc,
+        nominals=(record.nominal, exc.nominal),
+        value=IrConstInt(loc, 1),
+        test_only=False,
+        source_label="Source",
+        target_label="Target",
+    )
+    program = _variant_is_program(node, {record.nominal: record, exc.nominal: exc})
+    with pytest.raises(InvalidIrError):
+        validate_ir(program, deep=True)
+
+
+def test_validate_rejects_a_cast_with_multiple_exception_nominals() -> None:
+    left = _exc_descriptor(1)
+    right = _exc_descriptor(2)
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    node = IrNominalCast(
+        location=loc,
+        nominals=(left.nominal, right.nominal),
+        value=IrConstInt(loc, 1),
+        test_only=False,
+        source_label="Source",
+        target_label="Target",
+    )
+    program = _variant_is_program(node, {left.nominal: left, right.nominal: right})
+    with pytest.raises(InvalidIrError):
+        validate_ir(program, deep=True)

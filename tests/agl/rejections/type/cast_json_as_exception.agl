@@ -1,0 +1,9 @@
+exception Problem extends Exception
+  code: int
+
+exception Detailed extends Problem
+  detail: text
+
+program def main() -> unit =
+  let j: json = 1
+  let _ = j as? Detailed

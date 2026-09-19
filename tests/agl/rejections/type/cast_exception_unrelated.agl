@@ -1,0 +1,8 @@
+exception Problem extends Exception
+  code: int
+
+exception Other extends Exception()
+
+program def main() -> unit =
+  let p: Problem = Problem(message = "bad", code = 1)
+  let _ = p as Other

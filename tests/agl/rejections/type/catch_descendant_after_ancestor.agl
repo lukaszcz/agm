@@ -1,0 +1,13 @@
+exception Problem extends Exception
+  code: int
+
+exception Detailed extends Problem
+  detail: text
+
+program def main() -> unit =
+  try
+    ()
+  catch Problem as p =>
+    print(p.code)
+  catch Detailed as d =>
+    print(d.detail)

@@ -2309,7 +2309,7 @@ class TypeEnvironment:
                 )
                 if owner_member is not None:
                     return owner_member
-                return self._resolve_qualified_name_type(
+                return self.resolve_qualified_name_type(
                     type_expr.qualifier, type_expr.name, span=eff_span
                 )
             return self._resolve_name_type(
@@ -2527,7 +2527,7 @@ class TypeEnvironment:
             span=span,
         )
 
-    def _resolve_qualified_name_type(
+    def resolve_qualified_name_type(
         self,
         qualifier: QualifierChain,
         name: str,

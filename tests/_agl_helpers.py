@@ -66,6 +66,7 @@ from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.loader import ModuleGraph
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import ArgumentPreflight, PreparedProgram, ProgramDiscovery, RunResult
 from agm.agl.runtime.arguments import ProgramArguments
@@ -92,6 +93,7 @@ from agm.agl.syntax import (
     AssignStmt,
     Block,
     BuiltinVarDecl,
+    Call,
     EnumDef,
     ExceptionDef,
     ExportDecl,
@@ -133,9 +135,10 @@ def dummy_span() -> SourceSpan:
     return SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
 
 
-#: Capability catalog for method-selection tests: shell exec plus every
-#: codec kind a member/enum/exception method-resolution test needs to check.
-METHOD_SELECTION_CAPS = HostCapabilities(
+#: Capability catalog for AgL program/module typechecking tests: shell exec
+#: plus every codec kind a member/enum/exception method-resolution test needs
+#: to check.
+AGL_TEST_CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -144,12 +147,19 @@ METHOD_SELECTION_CAPS = HostCapabilities(
 )
 
 
-def check_method_selection_program(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
-    """Build and typecheck a multi-module graph with :data:`METHOD_SELECTION_CAPS`."""
+def check_agl_graph(graph: ModuleGraph) -> CheckedProgram:
+    """Resolve and typecheck a loaded multi-module graph with :data:`AGL_TEST_CAPS`."""
+    return check_program(resolve_program(graph), AGL_TEST_CAPS)
+
+
+def check_agl_program(
+    tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
+) -> CheckedProgram:
+    """Build and typecheck a multi-module graph with :data:`AGL_TEST_CAPS`."""
     from tests.agl.ir_harness import make_graph_from_files
 
-    graph = make_graph_from_files(tmp_path, modules)
-    return check_program(resolve_program(graph), METHOD_SELECTION_CAPS)
+    graph = make_graph_from_files(tmp_path, modules, default_stdlib=default_stdlib)
+    return check_agl_graph(graph)
 
 
 def checked_module_items(module: CheckedModule) -> tuple[Item, ...]:
@@ -158,6 +168,22 @@ def checked_module_items(module: CheckedModule) -> tuple[Item, ...]:
     if items and isinstance(items[-1], FuncDef) and items[-1].is_synthetic:
         return items[-1].body.items if isinstance(items[-1].body, Block) else (items[-1].body,)
     return items
+
+
+def final_entry_call(checked: CheckedProgram) -> Call:
+    """The entry module's final top-level statement, asserted to be a call expression."""
+    call = checked_module_items(checked.modules[ENTRY_ID])[-1]
+    assert isinstance(call, Call), f"expected the entry to end in a call, got {call!r}"
+    return call
+
+
+def checked_program_selection_key(checked: CheckedProgram) -> tuple[object, ...]:
+    """The declaration identity (module, scope path, name) the entry's final call selected."""
+    call = final_entry_call(checked)
+    module = checked.modules[ENTRY_ID]
+    selection = module.method_selections.get(call.callee.node_id)
+    assert selection is not None, "expected the final call to select a method, not a field"
+    return selection.declaration_key
 
 
 def file_program(source: str) -> str:

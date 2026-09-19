@@ -3161,6 +3161,27 @@ class TestIsExceptionAncestor:
         assert not table.is_exception_ancestor(700042, 700041)  # Leaf is Mid's descendant
 
 
+class TestExceptionDescendants:
+    def test_returns_every_transitive_descendant(self) -> None:
+        table = _exception_hierarchy_table()
+
+        descendants = {typedef.decl_node_id for typedef in table.exception_descendants(700040)}
+
+        assert descendants == {700041, 700042, 700043}  # Mid, Leaf, Sibling -- not Other
+
+    def test_empty_for_a_declaration_with_no_children(self) -> None:
+        table = _exception_hierarchy_table()
+        assert table.exception_descendants(700042) == ()  # Leaf has none
+
+    def test_skips_an_orphaned_descendant(self) -> None:
+        table = _exception_hierarchy_table()
+        table.orphan(700043)  # Sibling never took effect
+
+        descendants = {typedef.decl_node_id for typedef in table.exception_descendants(700040)}
+
+        assert descendants == {700041, 700042}
+
+
 class TestIsBuiltinExceptionRoot:
     def test_true_for_reserved_root(self) -> None:
         table = create_seeded_type_table()

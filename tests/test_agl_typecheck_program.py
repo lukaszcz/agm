@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
@@ -22,7 +21,6 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     contains_inference_var,
 )
-from agm.agl.syntax.nodes import Block, FuncDef, Item
 from agm.agl.typecheck import (
     AglTypeError,
     ArrayType,
@@ -42,21 +40,19 @@ from agm.agl.typecheck import (
     assert_checked_program_closed,
     check_program,
 )
-from tests._agl_helpers import strip_decl_ids
+from tests._agl_helpers import (
+    AGL_TEST_CAPS,
+    check_agl_graph,
+    check_agl_program,
+    checked_module_items,
+    strip_decl_ids,
+)
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_and_check_repl_entry
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-_CAPS = HostCapabilities(
-    supports_shell_exec=True,
-    codec_kinds={
-        "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
-    },
-)
 
 
 def _check(
@@ -69,20 +65,8 @@ def _check(
     land in a type table that already carries the seed's registered owners.
     """
     return resolve_and_check_inline_entry(
-        src, _CAPS, seed_env=seed_env, default_stdlib=default_stdlib
+        src, AGL_TEST_CAPS, seed_env=seed_env, default_stdlib=default_stdlib
     )
-
-
-def _check_graph(graph: ModuleGraph) -> CheckedProgram:
-    """Resolve and typecheck a loaded multi-module graph."""
-    return check_program(resolve_program(graph), _CAPS)
-
-
-def _check_program(
-    tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
-) -> CheckedProgram:
-    """Build and typecheck a multi-module graph; returns CheckedProgram."""
-    return _check_graph(_make_graph_from_files(tmp_path, modules, default_stdlib=default_stdlib))
 
 
 def _with_reversed_module_discovery_order(graph: ModuleGraph) -> ModuleGraph:
@@ -94,20 +78,12 @@ def _with_reversed_module_discovery_order(graph: ModuleGraph) -> ModuleGraph:
     )
 
 
-def _module_items(module: CheckedModule) -> tuple[Item, ...]:
-    """Return an entry's test-only inline items or a file module's root items."""
-    items = module.resolved.program.body.items
-    if items and isinstance(items[-1], FuncDef) and items[-1].is_synthetic:
-        return items[-1].body.items if isinstance(items[-1].body, Block) else (items[-1].body,)
-    return items
-
-
 def _binding_value_type(cg: CheckedProgram, module_id: ModuleId, name: str) -> Type:
     """Inferred type of a source ``let``/``var <name> = ...`` in *module_id*."""
     from agm.agl.syntax.nodes import LetDecl, VarDecl
 
     module = cg.modules[module_id]
-    for item in _module_items(module):
+    for item in checked_module_items(module):
         if isinstance(item, VarDecl) and item.name == name:
             return module.node_types[item.value.node_id]
         if isinstance(item, LetDecl) and item.name == name:
@@ -134,7 +110,7 @@ def test_check_program_importable() -> None:
 
 
 def test_opened_alias_resolves_while_its_type_body_is_being_built(tmp_path: Path) -> None:
-    _check_program(
+    check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -159,7 +135,7 @@ def test_foreign_method_receiver_checks_and_selects_through_its_declaring_type(
     tmp_path: Path,
 ) -> None:
     """An orphan method shares its foreign receiver with direct and dot calls."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -196,7 +172,7 @@ def test_foreign_method_receiver_checks_and_selects_through_its_declaring_type(
 
 
 def test_nested_imported_receiver_annotations_resolve(tmp_path: Path) -> None:
-    _check_program(
+    check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -223,7 +199,7 @@ def test_foreign_method_receiver_annotation_must_match_its_owner(tmp_path: Path)
     )
 
     with pytest.raises(AglTypeError):
-        _check_graph(graph)
+        check_agl_graph(graph)
 
 
 def test_declaration_type_lookup_falls_back_to_the_shared_type_table() -> None:
@@ -235,7 +211,7 @@ def test_declaration_type_lookup_falls_back_to_the_shared_type_table() -> None:
 
 def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path) -> None:
     """Program context lets an unannotated def infer inside its own module."""
-    cg = _check_program(
+    cg = check_agl_program(
         tmp_path,
         {
             "entry": "import lib\n1",
@@ -247,7 +223,7 @@ def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path)
 
 
 def test_single_module_program_infers_direct_recursive_return(tmp_path: Path) -> None:
-    graph = _check_program(
+    graph = check_agl_program(
         tmp_path,
         {"entry": ("def fib(n: int) =\n  if n < 2 => n else => fib(n - 1) + fib(n - 2)\nfib(8)")},
     )
@@ -256,7 +232,7 @@ def test_single_module_program_infers_direct_recursive_return(tmp_path: Path) ->
 
 
 def test_single_module_program_infers_forward_and_mutual_returns(tmp_path: Path) -> None:
-    graph = _check_program(
+    graph = check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -304,7 +280,7 @@ def test_static_root_var_naming_a_single_enum_case_is_rejected(
     """An unannotated static-root ``var`` may not infer a single enum-member
     type, whichever enum -- prelude or user-declared -- names it."""
     with pytest.raises(AglTypeError):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {"entry": f"{decls}var v = {initializer}\nprogram def main() -> unit = ()\n"},
         )
@@ -313,7 +289,7 @@ def test_static_root_var_naming_a_single_enum_case_is_rejected(
 def test_candidate_seeding_defers_binding_that_calls_unannotated_orphan_method() -> None:
     checked = resolve_and_check_repl_entry(
         "let answer: int = Some(value = 1).answer()\ndef Option::answer[T](self) = 42\nanswer",
-        _CAPS,
+        AGL_TEST_CAPS,
     )
 
     result = checked.resolved.program.body.items[-1]
@@ -323,7 +299,7 @@ def test_candidate_seeding_defers_binding_that_calls_unannotated_orphan_method()
 def test_candidate_dependency_flows_through_top_level_binding_to_orphan_method() -> None:
     checked = resolve_and_check_repl_entry(
         "record R\n  value: int\nlet x = R(value = 0).m()\ndef f() = x\ndef R::m(self) = 1\nf()",
-        _CAPS,
+        AGL_TEST_CAPS,
     )
 
     assert checked.function_signatures["f"].result == IntType()
@@ -338,7 +314,7 @@ def test_candidate_seeding_keeps_unrelated_same_named_field_binding() -> None:
         "let seed = Payload(answer = 42).answer\n"
         "def Option::answer[T](self) = seed\n"
         "Some(value = 1).answer()",
-        _CAPS,
+        AGL_TEST_CAPS,
     )
 
     result = checked.resolved.program.body.items[-1]
@@ -352,7 +328,7 @@ def test_candidate_seeding_defers_field_whose_receiver_uses_candidate_method() -
         "let seed = Some(value = Payload(answer = 42)).answer().answer\n"
         "def Option::answer[T](self) = self.unwrap()\n"
         "seed",
-        _CAPS,
+        AGL_TEST_CAPS,
     )
 
     result = checked.resolved.program.body.items[-1]
@@ -363,7 +339,7 @@ def test_candidate_seeding_defers_invalid_same_named_field_receiver() -> None:
     with pytest.raises(AglTypeError):
         resolve_and_check_repl_entry(
             "let seed = (1 + true).answer\ndef Option::answer[T](self) = self.unwrap()\nseed",
-            _CAPS,
+            AGL_TEST_CAPS,
         )
 
 
@@ -422,7 +398,7 @@ def test_builtin_header_has_standalone_program_signature_parity(tmp_path: Path) 
     source = "builtin def print[T](value: T) -> unit\n()"
 
     standalone = _check(source, default_stdlib=False)
-    program = _check_program(tmp_path, {"entry": source}, default_stdlib=False)
+    program = check_agl_program(tmp_path, {"entry": source}, default_stdlib=False)
 
     assert program.modules[ENTRY_ID].function_signatures == standalone.function_signatures
 
@@ -510,7 +486,7 @@ def test_std_exec_execresult_reports_std_exec_as_its_owning_module(tmp_path: Pat
     ``std/exec`` itself, not the entry module or any placeholder.
     """
     std_exec_id = ModuleId.from_path("std/exec")
-    cg = _check_program(tmp_path, {"entry": "()"})
+    cg = check_agl_program(tmp_path, {"entry": "()"})
     std_exec = cg.modules[std_exec_id]
     handle = std_exec.type_env.get_type("ExecResult")
     assert isinstance(handle, RecordType)
@@ -524,7 +500,7 @@ def test_program_warnings_follow_module_presentation_order(tmp_path: Path) -> No
     sequence (dependency-first) than in the presented module list, so a warning
     from each exposes any ordering that follows inference order instead.
     """
-    cg = _check_program(
+    cg = check_agl_program(
         tmp_path,
         {
             "entry": "import libB\nlibB::b()",
@@ -562,7 +538,7 @@ def test_check_program_basic(tmp_path: Path) -> None:
             "record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 0, y = 0)"
         ),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert ENTRY_ID in cg.modules
     mylib_id = ModuleId.from_path("mylib")
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
@@ -591,7 +567,7 @@ def test_cross_module_type_not_assignable(tmp_path: Path) -> None:
         "bar": ("enum Color\n  | Red\n  | Blue\ndef makeColor() -> Color = Red"),
     }
     with pytest.raises(AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
@@ -611,7 +587,7 @@ def test_qualified_type_ref_in_annotation(tmp_path: Path) -> None:
         "mylib": ("record Point\n  x: int\n  y: int\ndef mkPoint() -> Point = Point(x = 1, y = 2)"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     # Pin the specific binding type — not any(t == point_type) over all nodes,
     # which could pass spuriously via an intermediate call node of the same type.
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
@@ -631,7 +607,7 @@ def test_qualified_type_ref_in_constructor(tmp_path: Path) -> None:
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
         "Red", scope_path=("Color",), module_id=mylib_id
     )
@@ -654,7 +630,7 @@ def test_qualified_type_ref_in_cast(tmp_path: Path) -> None:
         "mylib": ("record Point\n  x: int\n  y: int"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Point", module_id=mylib_id
     )
@@ -678,7 +654,7 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     # Pin c's concrete member identity to mylib.
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
         "Red", scope_path=("Color",), module_id=mylib_id
@@ -697,7 +673,7 @@ def test_unqualified_open_import_type(tmp_path: Path) -> None:
         "mylib": ("record Point\n  x: int\n  y: int\ndef mkPoint() -> Point = Point(x = 0, y = 0)"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Point", module_id=mylib_id
     )
@@ -722,7 +698,7 @@ def test_unqualified_type_clash_on_use(tmp_path: Path) -> None:
         "libB": ("enum Color\n  | Green\n  | Yellow"),
     }
     with pytest.raises(AglTypeError, match="[Aa]mbiguous"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
@@ -748,7 +724,7 @@ def test_positive_import_tail_retains_qualified_members(tmp_path: Path) -> None:
             "def mkRect() -> Rect = Rect(w = 10, h = 5)"
         ),
     }
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
     value_type = _binding_value_type(checked, ENTRY_ID, "r")
     assert isinstance(value_type, RecordType)
     assert value_type.name == "Rect"
@@ -767,7 +743,7 @@ def test_plain_import_does_not_expose_type_names_bare(tmp_path: Path) -> None:
         "mylib": ("record Hidden\n  x: int\ndef mkHidden() -> Hidden = Hidden(x = 1)"),
     }
     with pytest.raises(AglTypeError, match="Unknown type"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
@@ -790,7 +766,7 @@ def test_whole_graph_type_pre_pass_with_cycles(tmp_path: Path) -> None:
             'import modA\nenum Color\n  | Red\n  | Blue\ndef wrapA(f: modA::Foo) -> text = "ok"'
         ),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     mid_a = ModuleId.from_path("modA")
     mid_b = ModuleId.from_path("modB")
     assert mid_a in cg.modules
@@ -813,7 +789,7 @@ def test_imported_exception_child_inherits_base_fields(tmp_path: Path) -> None:
         ),
         "z": ("exception Base extends Exception\n  detail: text"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     child_type = cg.program_type_table[(ModuleId.from_path("a"), "Child")]
     assert isinstance(child_type, ExceptionType)
     type_table = cg.modules[ModuleId.from_path("a")].type_env.type_table
@@ -829,7 +805,7 @@ def test_imported_exception_base_ignores_non_type_export(tmp_path: Path) -> None
         "z": "def Base() -> int = 1",
     }
     with pytest.raises(AglTypeError, match="'Base'"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
@@ -843,7 +819,7 @@ def test_enum_variant_qualification(tmp_path: Path) -> None:
         "entry": ("import mylib\nlet c: mylib::Color = mylib::Color::Red\nc"),
         "mylib": ("enum Color\n  | Red\n  | Green\n  | Blue"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     mylib_id = ModuleId.from_path("mylib")
     assert (mylib_id, "Color") in cg.program_type_table
     color_type = cg.program_type_table[(mylib_id, "Color")]
@@ -872,7 +848,7 @@ def test_self_ref_type(tmp_path: Path) -> None:
         ),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Point", module_id=mylib_id
     )
@@ -901,7 +877,7 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert (mylib_id, "Color") in cg.program_type_table
     color_type = cg.program_type_table[(mylib_id, "Color")]
     assert isinstance(color_type, EnumType)
@@ -920,7 +896,7 @@ def test_bare_constructor_uses_its_open_imported_owner_module(tmp_path: Path) ->
         "second": "enum Choice\n  | Second",
     }
 
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
 
     assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == RecordType(
         "First", scope_path=("Choice",), module_id=ModuleId.from_path("first")
@@ -937,7 +913,7 @@ def test_generic_bare_constructor_uses_its_open_imported_owner_module(tmp_path: 
         "second": "enum Choice[T]\n  | Second(value: T)",
     }
 
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
 
     assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == RecordType(
         "First", (IntType(),), scope_path=("Choice",), module_id=ModuleId.from_path("first")
@@ -955,7 +931,7 @@ def test_program_type_table_populated(tmp_path: Path) -> None:
         "entry": ("import mylib\n()"),
         "mylib": ("record Point\n  x: int\n  y: int\nenum Direction\n  | North\n  | South"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     mylib_id = ModuleId.from_path("mylib")
     assert (mylib_id, "Point") in cg.program_type_table
     assert (mylib_id, "Direction") in cg.program_type_table
@@ -980,7 +956,7 @@ def test_checked_module_shape(tmp_path: Path) -> None:
         "entry": ("import mylib\ndef foo() -> int = mylib::getValue()\nlet x = foo()\nx"),
         "mylib": ("def getValue() -> int = 42"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     entry_mod = cg.modules[ENTRY_ID]
     assert isinstance(entry_mod, CheckedModule)
     assert hasattr(entry_mod, "node_types")
@@ -997,7 +973,7 @@ def test_checked_module_shape(tmp_path: Path) -> None:
 
 def test_checked_module_graph_entry_id(tmp_path: Path) -> None:
     """CheckedProgram.entry_id == ENTRY_ID."""
-    cg = _check_program(tmp_path, {"entry": "()"})
+    cg = check_agl_program(tmp_path, {"entry": "()"})
     assert cg.entry_id == ENTRY_ID
 
 
@@ -1012,7 +988,7 @@ def test_type_alias_in_module_graph(tmp_path: Path) -> None:
         "entry": ("import mylib\nlet n: mylib::Number = 42\nn"),
         "mylib": "type Number = int",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     mylib_id = ModuleId.from_path("mylib")
     assert (mylib_id, "Number") in cg.program_type_table
     # The alias should resolve to int
@@ -1023,7 +999,7 @@ def test_type_alias_in_module_graph(tmp_path: Path) -> None:
 
 def test_later_module_alias_available_to_entry_type_body(tmp_path: Path) -> None:
     """Entry type bodies can reference aliases from later-sorting imported modules."""
-    cg = _check_program(
+    cg = check_agl_program(
         tmp_path,
         {
             "entry": "import zzz\nrecord Box\n  value: zzz::Alias\nlet b = Box(value = 1)\nb",
@@ -1040,7 +1016,7 @@ def test_later_module_alias_available_to_entry_type_body_via_open_import(
 ) -> None:
     """Entry type bodies can reference aliases exposed by import tails before
     their module's turn."""
-    cg = _check_program(
+    cg = check_agl_program(
         tmp_path,
         {
             "entry": "import zzz::*\nrecord Box\n  value: Alias\nlet b = Box(value = 1)\nb",
@@ -1089,7 +1065,7 @@ def test_cross_module_owner_applied_inline_member_aliases_substitute_captured_pa
     tmp_path: Path,
 ) -> None:
     """Imported aliases preserve owner-applied inline member specialization."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -1137,7 +1113,7 @@ def test_cross_module_owner_applied_inline_member_rejects_a_second_type_applicat
 ) -> None:
     """An imported generic alias cannot reapply a member after its owner."""
     with pytest.raises(AglTypeError, match="type arguments"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import lib\n()",
@@ -1180,7 +1156,7 @@ def test_inline_member_records_resolve_in_local_type_positions() -> None:
 
 
 def test_importing_an_enum_scope_subtree_exposes_member_record_types(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import lib::{Tree}\nrecord Holder(node: Tree::Node[int])\n()",
@@ -1198,7 +1174,7 @@ def test_importing_an_enum_scope_subtree_exposes_member_record_types(tmp_path: P
 
 def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> None:
     """A generic alias retains its enum variant constructor signature."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import lib\nlet value = lib::Alias[int]::some(value = 1)\nvalue",
@@ -1212,7 +1188,7 @@ def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> No
 
 
 def test_exact_use_of_enum_alias_constructs_variant(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import lib\nuse lib::{Alias}\nlet value = Alias::some(value = 1)\nvalue",
@@ -1228,7 +1204,7 @@ def test_exact_use_of_enum_alias_constructs_variant(tmp_path: Path) -> None:
 def test_used_enum_alias_follows_a_qualified_target_in_its_declaring_module(
     tmp_path: Path,
 ) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import lib\nuse lib::{Alias}\nlet value = Alias::some\nvalue",
@@ -1246,7 +1222,7 @@ def test_used_enum_alias_follows_a_qualified_target_in_its_declaring_module(
 def test_used_alias_of_referenced_enum_member_selects_the_record_constructor(
     tmp_path: Path,
 ) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": ("import lib\nuse lib::{Alias}\nlet value = Alias::Shared(value = 1)\nvalue"),
@@ -1272,7 +1248,7 @@ def test_used_alias_of_referenced_enum_rejects_unknown_or_unresolved_members(
     tmp_path: Path, library: str
 ) -> None:
     with pytest.raises(AglScopeError, match="not a member"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import lib\nuse lib::{Alias}\nAlias::Missing",
@@ -1283,7 +1259,7 @@ def test_used_alias_of_referenced_enum_rejects_unknown_or_unresolved_members(
 
 
 def test_use_of_generic_enum_alias_constructs_variant(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -1302,7 +1278,7 @@ def test_use_of_generic_enum_alias_constructs_variant(tmp_path: Path) -> None:
 
 
 def test_use_of_generic_enum_alias_qualifies_is_variant(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -1322,7 +1298,7 @@ def test_use_of_generic_enum_alias_qualifies_is_variant(tmp_path: Path) -> None:
 
 def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child(tmp_path: Path) -> None:
     with pytest.raises(AglScopeError):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": (
@@ -1340,7 +1316,7 @@ def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child(tmp_path: Pa
 
 def test_imported_generic_alias_to_record_constructs_transparently(tmp_path: Path) -> None:
     """A generic alias constructs its nominal record target."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import lib\nlet box = lib::Alias(value = 1)\nbox",
@@ -1354,7 +1330,7 @@ def test_imported_generic_alias_to_record_constructs_transparently(tmp_path: Pat
 
 
 def test_imported_generic_alias_preserves_constructor_constraints(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import lib\nlet box = lib::Alias::[int](value = [1])\nbox",
@@ -1370,7 +1346,7 @@ def test_imported_generic_alias_preserves_constructor_constraints(tmp_path: Path
 def test_imported_generic_alias_to_non_nominal_is_a_type_error(tmp_path: Path) -> None:
     """A constructor-classified alias with a non-nominal target fails normally."""
     with pytest.raises(AglTypeError):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import lib\nlib::Alias(value = 1)",
@@ -1380,7 +1356,7 @@ def test_imported_generic_alias_to_non_nominal_is_a_type_error(tmp_path: Path) -
 
 
 def test_imported_alias_to_record_remains_constructible(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -1407,7 +1383,7 @@ def test_imported_alias_to_record_remains_constructible(tmp_path: Path) -> None:
 
 def test_imported_alias_to_non_nominal_named_type_is_not_constructible(tmp_path: Path) -> None:
     with pytest.raises(AglTypeError, match="constructible"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import lib\nlib::Alias(value = 1)",
@@ -1426,7 +1402,7 @@ def test_local_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
     ``ConstructorRef`` for the alias used to trigger.
     """
     with pytest.raises(AglTypeError, match="not a value"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "enum Color\n  | Red\n  | Blue\n\ntype Palette = Color\n\nprint(Palette)",
@@ -1436,7 +1412,7 @@ def test_local_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
 
 def test_local_alias_of_record_remains_constructible(tmp_path: Path) -> None:
     """A local nominal alias of a record keeps its bare zero-variant constructor."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -1455,7 +1431,7 @@ def test_local_alias_of_record_remains_constructible(tmp_path: Path) -> None:
 def test_open_imported_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
     """A nominal enum alias exposed by an import tail keeps its "type name" diagnostic."""
     with pytest.raises(AglTypeError, match="not a value"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import pal::*\nprint(Palette)",
@@ -1477,7 +1453,7 @@ def test_module_qualified_alias_of_imported_enum_is_a_type_name_not_a_value(
     EnumType" assertion.
     """
     with pytest.raises(AglTypeError, match="not a value"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import pal\ntype Local = pal::Color\nprint(Local)",
@@ -1497,7 +1473,7 @@ def test_open_imported_bare_alias_of_imported_enum_is_a_type_name_not_a_value(
     reaches the enum through an unqualified name exposed by an import tail.
     """
     with pytest.raises(AglTypeError, match="not a value"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import pal::*\ntype Local = Color\nprint(Local)",
@@ -1515,7 +1491,7 @@ def test_imported_generic_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Pat
     diagnostic rather than leaking an internal assertion.
     """
     with pytest.raises(AglTypeError, match="not a value"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import lib\nprint(lib::Alias)",
@@ -1527,7 +1503,7 @@ def test_imported_generic_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Pat
 def test_imported_generic_alias_of_enum_is_not_callable(tmp_path: Path) -> None:
     """The same alias in call position reports the same diagnostic."""
     with pytest.raises(AglTypeError, match="not a value"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import lib\nprint(lib::Alias(1))",
@@ -1538,7 +1514,7 @@ def test_imported_generic_alias_of_enum_is_not_callable(tmp_path: Path) -> None:
 
 def test_imported_generic_alias_to_record_is_a_constructor_value(tmp_path: Path) -> None:
     """A generic alias retains its target record constructor signature."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": ("import lib\nlet factory: (int) -> lib::Box[int] = lib::Alias\nfactory"),
@@ -1555,7 +1531,7 @@ def test_later_module_parameterized_alias_available_to_entry_type_body(
     tmp_path: Path,
 ) -> None:
     """Entry type bodies can reference parameterized aliases from later modules."""
-    cg = _check_program(
+    cg = check_agl_program(
         tmp_path,
         {
             "entry": "import zzz\nrecord Box\n  xs: zzz::Alias[int]\nlet b = Box(xs = [])\nb",
@@ -1571,7 +1547,7 @@ def test_later_module_parameterized_alias_available_via_open_import(
     tmp_path: Path,
 ) -> None:
     """Parameterized aliases exposed by import tails resolve lazily before their module's turn."""
-    cg = _check_program(
+    cg = check_agl_program(
         tmp_path,
         {
             "entry": "import zzz::*\nrecord Box\n  xs: Alias[int]\nlet b = Box(xs = [])\nb",
@@ -1588,7 +1564,7 @@ def test_later_module_parameterized_alias_bare_reference_is_rejected(
 ) -> None:
     """A lazy parameterized alias exposed by an import tail still requires type arguments."""
     with pytest.raises(AglTypeError, match="1 type argument"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import zzz::*\nrecord Box\n  xs: Alias\nBox(xs = [])",
@@ -1600,7 +1576,7 @@ def test_later_module_parameterized_alias_bare_reference_is_rejected(
 def test_resolve_named_type_treats_open_parameterized_alias_as_non_concrete(
     tmp_path: Path,
 ) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import library/remote::{Alias}\n()",
@@ -1614,7 +1590,7 @@ def test_resolve_named_type_treats_open_parameterized_alias_as_non_concrete(
 def test_later_module_cross_alias_cycle_is_rejected(tmp_path: Path) -> None:
     """Lazy cross-module alias resolution rejects transparent alias cycles."""
     with pytest.raises(AglTypeError, match="cycle"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import zzz\nrecord Box\n  value: zzz::Alias\nBox(value = 1)",
@@ -1627,7 +1603,7 @@ def test_later_module_cross_alias_cycle_is_rejected(tmp_path: Path) -> None:
 def test_open_imported_generic_type_bare_reference_is_rejected(tmp_path: Path) -> None:
     """A bare generic nominal type exposed by an import tail is not concrete."""
     with pytest.raises(AglTypeError, match="'Box'"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import zzz::*\nrecord Use\n  value: Box\nUse(value = 1)",
@@ -1639,7 +1615,7 @@ def test_open_imported_generic_type_bare_reference_is_rejected(tmp_path: Path) -
 def test_qualified_generic_type_bare_reference_is_rejected(tmp_path: Path) -> None:
     """A module-qualified generic nominal type still needs its type arguments."""
     with pytest.raises(AglTypeError, match="Box"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": "import lib\nlet value: lib::Box = null\nvalue",
@@ -1660,7 +1636,7 @@ def test_qualified_ref_to_function_is_type_error(tmp_path: Path) -> None:
         "mylib": "def getValue() -> int = 42",
     }
     with pytest.raises(AglTypeError, match="getValue"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
@@ -1670,7 +1646,7 @@ def test_unknown_module_qualifier_error(tmp_path: Path) -> None:
         "mylib": ("record Point\n  x: int\ndef mkPoint() -> Point = Point(x = 1)"),
     }
     with pytest.raises(AglTypeError, match="Unknown module"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
@@ -1680,7 +1656,7 @@ def test_module_qualified_constructor_not_enum_error(tmp_path: Path) -> None:
         "mylib": ("record Point\n  x: int"),
     }
     with pytest.raises(AglScopeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> None:
@@ -1690,7 +1666,7 @@ def test_module_qualified_constructor_missing_variant_error(tmp_path: Path) -> N
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglScopeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_module_qualified_record_constructor(tmp_path: Path) -> None:
@@ -1700,7 +1676,7 @@ def test_module_qualified_record_constructor(tmp_path: Path) -> None:
         "mylib": ("record Point\n  x: int\n  y: int"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Point", module_id=mylib_id
     )
@@ -1721,7 +1697,7 @@ def test_module_qualified_variant_qualifier_mismatch(tmp_path: Path) -> None:
         "libB": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglTypeError, match="resolves"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> None:
@@ -1731,7 +1707,7 @@ def test_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> Non
         ),
         "mylib": "enum Color\n  | Red\n  | Blue",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "ok") == BoolType()
 
 
@@ -1743,7 +1719,7 @@ def test_slash_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) 
         ),
         "pkg/lib": "enum Color\n  | Red\n  | Blue",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "ok") == BoolType()
 
 
@@ -1753,7 +1729,7 @@ def test_is_test_uses_local_enum_when_alias_route_has_another_owner(tmp_path: Pa
         "lib": "enum Other | Red",
     }
 
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
 
     assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "c")) == RecordType(
         "Red", scope_path=("Color",), module_id=ENTRY_ID
@@ -1761,7 +1737,7 @@ def test_is_test_uses_local_enum_when_alias_route_has_another_owner(tmp_path: Pa
     # Negative control: the module alias is not a route to the variant, so a
     # member only the aliased module declares stays unresolvable.
     with pytest.raises(AglScopeError):
-        _check_program(
+        check_agl_program(
             tmp_path / "alias-route",
             {
                 "entry": modules["entry"].replace("is Color::Red", "is Color::Green"),
@@ -1772,7 +1748,7 @@ def test_is_test_uses_local_enum_when_alias_route_has_another_owner(tmp_path: Pa
 
 
 def test_unknown_enum_owner_form_is_not_visible(tmp_path: Path) -> None:
-    checked = _check_program(tmp_path, {"entry": "enum Color | Red\n0"})
+    checked = check_agl_program(tmp_path, {"entry": "enum Color | Red\n0"})
 
     assert (
         checked.modules[ENTRY_ID].type_env.resolve_enum_owner_form(
@@ -1798,7 +1774,7 @@ def test_renamed_import_hides_original_enum_name_in_patterns_and_is_tests(
     }
 
     with pytest.raises(AglScopeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_pattern_uses_injected_enum_when_alias_route_has_same_owner(tmp_path: Path) -> None:
@@ -1814,7 +1790,7 @@ def test_pattern_uses_injected_enum_when_alias_route_has_same_owner(tmp_path: Pa
         "b": "enum Color | Red",
     }
 
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
 
     # The pattern matches the injected ``a::Color::Red``, not the same-named
     # variant reachable through the ``b`` alias.
@@ -1847,7 +1823,7 @@ def test_qualified_type_is_nameable_when_the_import_tail_omits_it(tmp_path: Path
             "def mkPoint() -> Point = Point(x = 1)"
         ),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "n")) == RecordType(
         "Point", module_id=ModuleId.from_path("mylib")
     )
@@ -1866,7 +1842,7 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
         "mylib": ("record Point\n  x: int\nenum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglTypeError, match="enum type"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> None:
@@ -1882,7 +1858,7 @@ def test_module_qualified_variant_unknown_enum_in_pattern(tmp_path: Path) -> Non
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
@@ -1892,7 +1868,7 @@ def test_module_qualified_enum_as_constructor_error(tmp_path: Path) -> None:
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglTypeError, match="not a value"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
@@ -1902,7 +1878,7 @@ def test_module_qualified_unknown_constructor_error(tmp_path: Path) -> None:
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     with pytest.raises(AglScopeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
@@ -1917,7 +1893,7 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
         "Red", scope_path=("Color",), module_id=mylib_id
     )
@@ -1933,7 +1909,7 @@ def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
             'def boom() -> ::Abort = raise Abort(message = "oops")'
         ),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     t = _binding_value_type(cg, ENTRY_ID, "e")
     assert isinstance(t, ExceptionType)
     assert t.name == "Abort"
@@ -1946,7 +1922,7 @@ def test_qualified_type_annotation_must_match_the_bound_value(tmp_path: Path) ->
         "mylib": ("record Secret\n  x: int\ndef pub() -> int = 1"),
     }
     with pytest.raises(AglTypeError, match="Secret"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> None:
@@ -1962,7 +1938,7 @@ def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> 
         "mylib": ("record Point\n  x: int\nenum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == RecordType(
         "Red", scope_path=("Color",), module_id=mylib_id
     )
@@ -1981,7 +1957,7 @@ def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
         "mylib": ("enum Color\n  | Red\n  | Blue"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == RecordType(
         "Red", scope_path=("Color",), module_id=mylib_id
     )
@@ -2018,7 +1994,7 @@ def test_cross_module_field_type_single_direction(tmp_path: Path) -> None:
         ),
         "payload": ("record Data\n  n: int"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
 
     payload_id = ModuleId.from_path("payload")
     lib_id = ModuleId.from_path("lib")
@@ -2043,7 +2019,7 @@ def test_cross_module_field_type_single_direction(tmp_path: Path) -> None:
 
 def test_cross_module_generic_record_field_access(tmp_path: Path) -> None:
     """A generic imported record field retains its selected type argument."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import lib\nlet box = lib::Box(value = 1)\nbox.value",
@@ -2094,7 +2070,7 @@ def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
             "def makeBar() -> Bar = Bar(f = modA::makeFoo())"
         ),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
 
     mod_a = ModuleId.from_path("modA")
     mod_b = ModuleId.from_path("modB")
@@ -2143,7 +2119,7 @@ def test_cross_module_enum_variant_field_type(tmp_path: Path) -> None:
         ),
         "payload": ("record Data\n  n: int"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
 
     payload_id = ModuleId.from_path("payload")
     carrier_id = ModuleId.from_path("carrier")
@@ -2185,7 +2161,7 @@ def test_structural_type_cycle_across_modules_is_uninhabitable(tmp_path: Path) -
         ),
     }
     with pytest.raises(_AglTypeError) as exc_info:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
     assert "uninhabitable" in str(exc_info.value).lower()
 
 
@@ -2229,7 +2205,7 @@ def test_cross_module_generic_argument_cycle_is_uninhabitable(tmp_path: Path) ->
         "lib2": ("import lib1\nrecord B\n  a: lib1::Box[lib1::A]\n"),
     }
     with pytest.raises(AglTypeError, match="uninhabitable"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_record_exception_field_cycle_across_check_is_uninhabitable(tmp_path: Path) -> None:
@@ -2246,7 +2222,7 @@ def test_record_exception_field_cycle_across_check_is_uninhabitable(tmp_path: Pa
         "lib": ("record R\n  e: E\nexception E extends Exception\n  r: R\n"),
     }
     with pytest.raises(_AglTypeError) as exc_info:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
     assert "uninhabitable" in str(exc_info.value).lower()
 
 
@@ -2279,7 +2255,7 @@ def test_cross_module_mismatch_message_qualifies_type(tmp_path: Path) -> None:
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
 
     with pytest.raises(_AglTypeError) as exc_info:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
     msg = str(exc_info.value)
     # The error message must distinguish the two Color types by their module
@@ -2307,7 +2283,7 @@ def test_type_expr_deps_self_ref_qualifier(tmp_path: Path) -> None:
         ),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
@@ -2326,7 +2302,7 @@ def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
         "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
@@ -2346,7 +2322,7 @@ def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
         "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
@@ -2365,7 +2341,7 @@ def test_type_expr_deps_array_field(tmp_path: Path) -> None:
         "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
@@ -2384,7 +2360,7 @@ def test_type_expr_deps_dict_field(tmp_path: Path) -> None:
         "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
@@ -2400,7 +2376,7 @@ def test_type_expr_deps_alias_to_cross_module(tmp_path: Path) -> None:
         ),
         "payload": ("record Data\n  n: int"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     mylib_id = ModuleId.from_path("mylib")
     t = cg.program_type_table[(mylib_id, "MyNum")]
     assert isinstance(t, IntType)
@@ -2427,7 +2403,7 @@ def test_cross_module_structural_cycle_is_uninhabitable(tmp_path: Path) -> None:
         "modB": ("import modA\nrecord Bar\n  other: modA::Foo"),
     }
     with pytest.raises(_AglTypeError) as exc_info:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
     assert "uninhabitable" in str(exc_info.value).lower()
 
 
@@ -2453,7 +2429,7 @@ def test_record_type_repr_qualified_with_module(tmp_path: Path) -> None:
         "bar": ("record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 1, y = 1)"),
     }
     with pytest.raises(_AglTypeError) as exc_info:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
     msg = str(exc_info.value)
     # Both module qualifiers must appear in the mismatch message
@@ -2483,7 +2459,7 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
         "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "w")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
@@ -2507,7 +2483,7 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
         "payload": ("record Data\n  n: int"),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
@@ -2523,7 +2499,7 @@ def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
         ),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "w")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
@@ -2539,7 +2515,7 @@ def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
         ),
     }
     mylib_id = ModuleId.from_path("mylib")
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "w")) == RecordType(
         "Wrapper", module_id=mylib_id
     )
@@ -2566,7 +2542,7 @@ def test_builtin_shadowing_type_raises_type_error(tmp_path: Path) -> None:
         ),
     }
     with pytest.raises(_AglTypeError, match="built-in"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_field_type_with_unimported_qualifier_is_type_error(tmp_path: Path) -> None:
@@ -2581,7 +2557,7 @@ def test_field_type_with_unimported_qualifier_is_type_error(tmp_path: Path) -> N
         ),
     }
     with pytest.raises(_AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_field_type_with_unknown_qualified_name_is_type_error(tmp_path: Path) -> None:
@@ -2599,7 +2575,7 @@ def test_field_type_with_unknown_qualified_name_is_type_error(tmp_path: Path) ->
         "payload": ("record Data\n  n: int"),
     }
     with pytest.raises(_AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_field_type_with_qualified_function_name_is_type_error(tmp_path: Path) -> None:
@@ -2617,7 +2593,7 @@ def test_field_type_with_qualified_function_name_is_type_error(tmp_path: Path) -
         "payload": ("def getValue() -> int = 42"),
     }
     with pytest.raises(_AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_field_type_with_open_imported_function_name_is_type_error(tmp_path: Path) -> None:
@@ -2634,7 +2610,7 @@ def test_field_type_with_open_imported_function_name_is_type_error(tmp_path: Pat
         "payload": ("def getValue() -> int = 42"),
     }
     with pytest.raises(_AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
@@ -2669,7 +2645,7 @@ def test_cross_file_mutual_recursion_qualified(tmp_path: Path) -> None:
         ),
         "entry": ("import even\nlet result = even::is-even(10)\nresult"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     mid_even = ModuleId.from_path("even")
     mid_odd = ModuleId.from_path("odd")
     assert mid_even in cg.modules
@@ -2701,7 +2677,7 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
         ),
         "entry": ("import even::*\nlet result = is-even(10)\nresult"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     mid_even = ModuleId.from_path("even")
     mid_odd = ModuleId.from_path("odd")
     assert mid_even in cg.modules
@@ -2717,7 +2693,7 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
 
 def test_importer_consumes_inferred_unannotated_dependency(tmp_path: Path) -> None:
     """A closed dependency candidate is available while inferring its importer."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import lib\ndef use() = lib::answer()\nuse()",
@@ -2760,13 +2736,13 @@ def test_unannotated_binding_pre_pass_type_matches_the_authoritative_check(
     }
     graph = _make_graph_from_files(tmp_path, modules, default_stdlib=True)
     resolved = resolve_program(graph)
-    prepared = _prepare_program(resolved, _CAPS)
-    checked = check_program(resolved, _CAPS)
+    prepared = _prepare_program(resolved, AGL_TEST_CAPS)
+    checked = check_program(resolved, AGL_TEST_CAPS)
 
     lib = checked.modules[ModuleId.from_path("lib")]
     pre_pass_table = prepared.program_static_binding_table
     checked_names = set()
-    for item in _module_items(lib):
+    for item in checked_module_items(lib):
         if not isinstance(item, (LetDecl, VarDecl)):
             continue
         node_id = static_binding_node_id(item)
@@ -2788,7 +2764,7 @@ def test_import_cycle_infers_cross_module_mutual_returns(
     tmp_path: Path, import_form: str, even_call: str, odd_call: str
 ) -> None:
     """One candidate graph spans qualified and import-tail module cycles."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import even\nlet result = even::is-even(10)\nresult",
@@ -2813,7 +2789,7 @@ def test_import_cycle_infers_cross_module_mutual_returns(
 
 def test_same_named_candidates_in_distinct_modules_keep_node_identity(tmp_path: Path) -> None:
     """Same-spelled candidates retain their distinct module-qualified results."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -2844,8 +2820,8 @@ def test_candidate_results_are_independent_of_module_discovery_order(tmp_path: P
     assert tuple(graph.modules) != tuple(reversed_graph.modules)
     assert graph.sccs != reversed_graph.sccs
 
-    forward = _check_graph(graph)
-    reverse = _check_graph(reversed_graph)
+    forward = check_agl_graph(graph)
+    reverse = check_agl_graph(reversed_graph)
 
     for checked in (forward, reverse):
         assert (
@@ -2860,7 +2836,7 @@ def test_candidate_results_are_independent_of_module_discovery_order(tmp_path: P
 
 def test_unannotated_helper_participates_in_caller_signature_inference(tmp_path: Path) -> None:
     """An unannotated helper's inferred result flows into its same-module caller."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": "import lib\nlib::public()",
@@ -2887,7 +2863,7 @@ def test_cross_module_underconstrained_cycle_reports_each_declaration(tmp_path: 
     errors: list[AglTypeError] = []
     for ordered_graph in (graph, _with_reversed_module_discovery_order(graph)):
         with pytest.raises(AglTypeError) as raised:
-            _check_graph(ordered_graph)
+            check_agl_graph(ordered_graph)
         errors.append(raised.value)
 
     def declaration_sources(error: AglTypeError) -> tuple[str, tuple[str, ...]]:
@@ -2915,7 +2891,7 @@ def test_graph_func_def_with_defaulted_param(tmp_path: Path) -> None:
         "lib": "def add(a: int, b: int = 0) -> int = a + b",
         "entry": "import lib\nlet r = lib::add(10)\nr",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
@@ -2928,7 +2904,7 @@ def test_graph_func_def_required_after_default_error(tmp_path: Path) -> None:
         "entry": "import lib\nlet r = lib::bad(1, 2)\nr",
     }
     with pytest.raises(_AglTypeError, match="default"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_graph_func_def_builtin_type_name_error(tmp_path: Path) -> None:
@@ -2944,7 +2920,7 @@ def test_graph_func_def_builtin_type_name_error(tmp_path: Path) -> None:
         "entry": "import lib\n()",
     }
     with pytest.raises(_AglTypeError, match="built-in"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
@@ -2969,7 +2945,7 @@ def test_cross_module_same_name_qualified_call_false_reject(tmp_path: Path) -> N
         "entry": ("import lib\ndef helper(s: text) -> text = s\nlet r = lib::helper(5)\nr"),
     }
     # Must NOT raise — the call uses lib's signature (int param).
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
@@ -2992,7 +2968,7 @@ def test_cross_module_same_name_qualified_call_false_accept(tmp_path: Path) -> N
         "entry": ("import lib\ndef helper(n: int) -> int = n\nlet r = lib::helper(5)\nr"),
     }
     with pytest.raises(_AglTypeError, match="Type mismatch"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_two_library_functions_same_name_different_signatures(tmp_path: Path) -> None:
@@ -3023,7 +2999,7 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
             "rb"
         ),
     }
-    cg = _check_program(tmp_path, modules_ok)
+    cg = check_agl_program(tmp_path, modules_ok)
     assert _binding_value_type(cg, ENTRY_ID, "ra") == IntType()
     assert _binding_value_type(cg, ENTRY_ID, "rb") == TextType()
 
@@ -3043,7 +3019,7 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
         ),
     }
     with pytest.raises(_AglTypeError, match="Type mismatch"):
-        _check_program(tmp_path2, modules_bad)
+        check_agl_program(tmp_path2, modules_bad)
 
 
 # ---------------------------------------------------------------------------
@@ -3107,10 +3083,10 @@ def test_open_nullary_candidate_defers_duplicate_binder_until_selection(
     }
     if library_source is not None:
         modules["lib"] = library_source
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
 
     entry = checked.modules[ENTRY_ID]
-    case = _module_items(entry)[-1]
+    case = checked_module_items(entry)[-1]
     from agm.agl.syntax.nodes import Case, ConstructorPattern
 
     assert isinstance(case, Case)
@@ -3178,7 +3154,7 @@ def test_cross_module_named_only_constructor_rejects_positional_args(tmp_path: P
         "entry": "import lib\nlib::Point(1, 2)",
     }
     with pytest.raises(AglTypeError, match="named"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_cross_module_generic_constructor_call_explicit_type_args(tmp_path: Path) -> None:
@@ -3188,7 +3164,7 @@ def test_cross_module_generic_constructor_call_explicit_type_args(tmp_path: Path
         "lib": "record Box[T]\n  value: T",
         "entry": "import lib\nlet r = lib::Box::[int](value = 1)\nr",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
@@ -3201,7 +3177,7 @@ def test_cross_module_generic_constructor_call_inferred_type_args(tmp_path: Path
         "lib": "record Box[T]\n  value: T",
         "entry": "import lib\nlet r = lib::Box(value = 1)\nr",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
@@ -3234,7 +3210,7 @@ def test_imported_generic_constructor_values_use_later_sibling_evidence(tmp_path
             "n"
         ),
     }
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
     box_type = RecordType("Box", module_id=lib_id, type_args=(IntType(),))
     option_type = EnumType("Option", module_id=lib_id, type_args=(IntType(),))
     assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "b")) == box_type
@@ -3254,7 +3230,7 @@ def test_cross_module_non_generic_constructor_value_type_apply_rejected(tmp_path
         "entry": "import lib\nlet factory = lib::Point::[int]\nfactory",
     }
     with pytest.raises(AglTypeError, match="generic constructor"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_open_imported_generic_constructor_value_uses_later_sibling_evidence(
@@ -3270,7 +3246,7 @@ def test_open_imported_generic_constructor_value_uses_later_sibling_evidence(
             "result"
         ),
     }
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "result")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
@@ -3282,7 +3258,7 @@ def test_open_imported_generic_type_in_annotation(tmp_path: Path) -> None:
         "lib": "record Box[T]\n  value: T",
         "entry": "import lib::*\nlet x: Box[int] = Box(value = 1)\nx",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
@@ -3294,7 +3270,7 @@ def test_qualified_generic_type_in_annotation(tmp_path: Path) -> None:
         "lib": "record Box[T]\n  value: T",
         "entry": "import lib\nlet x: lib::Box[int] = lib::Box(value = 1)\nx",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
@@ -3307,7 +3283,7 @@ def test_qualified_imported_generic_type_in_type_definition(tmp_path: Path) -> N
         "entry": "import wrapper\n()",
     }
 
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
 
     wrapped = cg.program_type_table[(ModuleId.from_path("wrapper"), "Wrapped")]
     assert strip_decl_ids(wrapped) == EnumType("Wrapped", module_id=ModuleId.from_path("wrapper"))
@@ -3320,7 +3296,7 @@ def test_open_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
         "entry": "import wrapper::*\n()",
     }
 
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
 
     wrapped = cg.program_type_table[(ModuleId.from_path("wrapper"), "Wrapped")]
     assert strip_decl_ids(wrapped) == RecordType("Wrapped", module_id=ModuleId.from_path("wrapper"))
@@ -3341,7 +3317,7 @@ def test_earlier_sorting_module_field_references_later_module_generic(tmp_path: 
         "entry": "import a\n()",
     }
 
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
 
     a_id = ModuleId.from_path("a")
     lib_id = ModuleId.from_path("lib")
@@ -3360,7 +3336,7 @@ def test_ambiguous_open_imported_generic_type_rejected(tmp_path: Path) -> None:
         "entry": "import a::*\nimport b::*\nlet x: Box[int] = null\nx",
     }
     with pytest.raises(AglTypeError, match="[Aa]mbiguous.*'Box'"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_open_imported_non_generic_type_application_rejected(tmp_path: Path) -> None:
@@ -3369,7 +3345,7 @@ def test_open_imported_non_generic_type_application_rejected(tmp_path: Path) -> 
         "entry": "import lib::*\nlet x: Point[int] = null\nx",
     }
     with pytest.raises(AglTypeError, match="type arguments"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 @pytest.mark.parametrize(
@@ -3394,7 +3370,7 @@ def test_qualified_type_application_errors(tmp_path: Path, entry: str, message: 
         "entry": entry,
     }
     with pytest.raises(AglTypeError, match=message):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_unknown_applied_type_with_import_environment_rejected(tmp_path: Path) -> None:
@@ -3403,7 +3379,7 @@ def test_unknown_applied_type_with_import_environment_rejected(tmp_path: Path) -
         "entry": "import lib\nlet x: Missing[int] = null\nx",
     }
     with pytest.raises(AglTypeError, match="'Missing'"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) -> None:
@@ -3412,7 +3388,7 @@ def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) 
         "lib": "enum Option[T]\n  | none\n  | some(value: T)",
         "entry": "import lib\nlet r = lib::Option[int]::some(value = 1)\nr",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == RecordType(
         "some", (IntType(),), scope_path=("Option",), module_id=lib_id
     )
@@ -3424,7 +3400,7 @@ def test_cross_module_qualified_generic_nullary_constructor_as_value(tmp_path: P
         "lib": "enum Option[T]\n  | none\n  | some(value: T)",
         "entry": "import lib\nlet n: lib::Option[int] = lib::Option::none\nn",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "n")) == RecordType(
         "none", scope_path=("Option",), module_id=lib_id
     )
@@ -3448,7 +3424,7 @@ def test_cross_module_direct_member_owner_type_args_preserve_member_result(tmp_p
             "value"
         ),
     }
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "n")) == RecordType(
         "none", scope_path=("Option",), module_id=lib_id
     )
@@ -3470,7 +3446,7 @@ def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path:
         "lib": "enum Choice[T]\n  | none\n  | some(value: T)",
         "entry": "import lib::*\nlet f = some::[int]\nf",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "f")) == FunctionType(
         (IntType(),), RecordType("some", (IntType(),), scope_path=("Choice",), module_id=lib_id)
     )
@@ -3487,7 +3463,7 @@ def test_open_imported_generic_constructor_nullary_type_apply_as_value(tmp_path:
         "lib": "enum Choice[T]\n  | none\n  | some(value: T)",
         "entry": "import lib::*\nlet z = none::[int]\nz",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "z")) == RecordType(
         "none", scope_path=("Choice",), module_id=lib_id
     )
@@ -3495,7 +3471,7 @@ def test_open_imported_generic_constructor_nullary_type_apply_as_value(tmp_path:
 
 def test_cross_module_enum_type_cannot_be_called_as_a_record_constructor(tmp_path: Path) -> None:
     with pytest.raises(AglTypeError, match="enum type"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "lib": "enum Choice\n  | none",
@@ -3505,7 +3481,7 @@ def test_cross_module_enum_type_cannot_be_called_as_a_record_constructor(tmp_pat
 
 
 def test_cross_module_record_constructor_values_preserve_their_call_shape(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "lib": "record Box[T]\n  value: T\nrecord Point\n  value: int",
@@ -3546,7 +3522,7 @@ def test_cross_module_non_generic_constructor_type_args_rejected(tmp_path: Path)
         "entry": "import lib\nlib::Point::[int](x = 1)",
     }
     with pytest.raises(AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_qualified_same_named_exceptions_keep_module_field_kinds(tmp_path: Path) -> None:
@@ -3556,7 +3532,7 @@ def test_qualified_same_named_exceptions_keep_module_field_kinds(tmp_path: Path)
         "b": "exception Boom extends Exception\n  b: text",
         "entry": 'import a\nimport b\na::Boom(message = "x", a = 1)',
     }
-    _check_program(tmp_path, modules)
+    check_agl_program(tmp_path, modules)
 
 
 def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:
@@ -3572,7 +3548,7 @@ def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:
         "lib": "enum Opt[T]\n  | None\n  | Wrap(value: T)",
         "entry": "import lib\n()",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert (lib_id, "Opt") not in cg.program_type_table
 
     lib_generics = cg.modules[lib_id].type_env.all_generic_types()
@@ -3679,7 +3655,7 @@ def test_parameterized_alias_in_graph_mode(tmp_path: Path) -> None:
         "lib": ("type Loose[A,B] = dict[text, json]\nrecord Wrapper\n  data: Loose[int,text]"),
         "entry": ("import lib\n()"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     # Wrapper is in the graph type table with the correct module_id
     assert (lib_id, "Wrapper") in cg.program_type_table
     wrapper = cg.program_type_table[(lib_id, "Wrapper")]
@@ -3695,7 +3671,7 @@ def test_imported_parameterized_alias_in_type_definition(tmp_path: Path) -> None
         "entry": "import wrapper\n()",
     }
 
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
 
     assert strip_decl_ids(cg.program_type_table[(wrapper_id, "Wrapped")]) == RecordType(
         "Wrapped", module_id=wrapper_id
@@ -3708,7 +3684,7 @@ def test_imported_parameterized_alias_in_function_signature(tmp_path: Path) -> N
         "entry": "import lib\ndef f(x: lib::Id[int]) -> lib::Id[int] = x\nf(1)",
     }
 
-    _check_program(tmp_path, modules)
+    check_agl_program(tmp_path, modules)
 
 
 def test_same_module_parameterized_alias_in_function_signature(tmp_path: Path) -> None:
@@ -3717,7 +3693,7 @@ def test_same_module_parameterized_alias_in_function_signature(tmp_path: Path) -
         "entry": "type Box[T] = array[T]\ndef f(x: Box[int]) -> int = 1\nf([1])",
     }
 
-    _check_program(tmp_path, modules)
+    check_agl_program(tmp_path, modules)
 
 
 def test_same_module_parameterized_alias_bare_reference_is_rejected(tmp_path: Path) -> None:
@@ -3726,7 +3702,7 @@ def test_same_module_parameterized_alias_bare_reference_is_rejected(tmp_path: Pa
     }
 
     with pytest.raises(AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 def test_open_imported_parameterized_alias_in_type_definition(tmp_path: Path) -> None:
@@ -3737,7 +3713,7 @@ def test_open_imported_parameterized_alias_in_type_definition(tmp_path: Path) ->
         "entry": "import wrapper::*\n()",
     }
 
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
 
     assert strip_decl_ids(cg.program_type_table[(wrapper_id, "Wrapped")]) == RecordType(
         "Wrapped", module_id=wrapper_id
@@ -3751,7 +3727,7 @@ def test_imported_parameterized_alias_arity_mismatch_rejected(tmp_path: Path) ->
     }
 
     with pytest.raises(AglTypeError, match="1 type argument"):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
@@ -3855,7 +3831,7 @@ def test_cross_module_generic_func_call_inferred(tmp_path: Path) -> None:
         "lib": "def id[T](x: T) -> T = x",
         "entry": ("import lib\nlet r = lib::id(5)\nr"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
@@ -3872,7 +3848,7 @@ def test_cross_module_generic_func_call_open_import_inferred(tmp_path: Path) -> 
         "lib": "def id[T](x: T) -> T = x",
         "entry": ("import lib::*\nlet r = id(5)\nr"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
@@ -3891,7 +3867,7 @@ def test_cross_module_generic_func_call_explicit_type_args(tmp_path: Path) -> No
         "lib": "def id[T](x: T) -> T = x",
         "entry": ("import lib\nlet r = lib::id::[int](5)\nr"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "r") == IntType()
 
 
@@ -3915,7 +3891,7 @@ def test_cross_module_generic_func_as_value_d5(tmp_path: Path) -> None:
         "lib": "def id[T](x: T) -> T = x",
         "entry": ("import lib::*\nlet f: (int) -> int = id\nf(1)"),
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     assert _binding_value_type(cg, ENTRY_ID, "f") == FunctionType(
         params=(IntType(),), result=IntType()
     )
@@ -3935,7 +3911,7 @@ def test_cross_module_generic_func_call_wrong_type_rejected(tmp_path: Path) -> N
         "entry": ('import lib\nlib::add(5, "hello")'),
     }
     with pytest.raises(AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
@@ -3945,7 +3921,7 @@ def test_cross_module_generic_func_call_wrong_type_rejected(tmp_path: Path) -> N
 
 def test_graph_infers_unannotated_local_def_despite_imported_same_name(tmp_path: Path) -> None:
     """Graph signatures are keyed by declaration id, not a colliding import name."""
-    graph = _check_program(
+    graph = check_agl_program(
         tmp_path,
         {
             "id": "def relay(value: int) -> int = value",
@@ -3958,7 +3934,7 @@ def test_graph_infers_unannotated_local_def_despite_imported_same_name(tmp_path:
 
 def test_cross_module_higher_order_generic_inference(tmp_path: Path) -> None:
     """Imported rank-1 schemes constrain one another within the entry expression."""
-    graph = _check_program(
+    graph = check_agl_program(
         tmp_path,
         {
             "app": "def app[T](f: T -> T, value: T) -> T = f(value)",
@@ -3974,7 +3950,7 @@ def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
     tmp_path: Path,
 ) -> None:
     """Two imported generic uses solve independently in one enclosing expression."""
-    graph = _check_program(
+    graph = check_agl_program(
         tmp_path,
         {
             "id": "def id[T](value: T) -> T = value",
@@ -4011,7 +3987,7 @@ def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
 
 
 def test_checked_module_graph_rejects_a_flexible_graph_type(tmp_path: Path) -> None:
-    graph = _check_program(
+    graph = check_agl_program(
         tmp_path,
         {
             "lib": "record Box\n  value: int",
@@ -4037,7 +4013,7 @@ def test_checked_module_graph_rejects_a_flexible_graph_type(tmp_path: Path) -> N
 def test_imported_generic_conflict_keeps_source_labels_for_both_constraints(tmp_path: Path) -> None:
     """A conflict in an importing module retains its original source on primary and note."""
     with pytest.raises(AglTypeError) as exc_info:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "id": "def same[T](left: T, right: T) -> T = left",
@@ -4055,7 +4031,7 @@ def test_imported_generic_conflict_keeps_source_labels_for_both_constraints(tmp_
 
 def test_checked_modules_publish_only_their_own_function_signatures(tmp_path: Path) -> None:
     """Imported signature lookup state is not exposed as a module's checked declarations."""
-    graph = _check_program(
+    graph = check_agl_program(
         tmp_path,
         {
             "id": "def shared[T](value: T) -> T = value",
@@ -4078,7 +4054,7 @@ def test_checked_modules_publish_only_their_own_function_signatures(tmp_path: Pa
 
 def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path: Path) -> None:
     """Program header collection publishes a foreign type's method with its type."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "shapes": ("record Point\n  x: int\ndef Point::radius(self) -> int = self.x\n"),
@@ -4104,7 +4080,7 @@ def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path:
 def test_only_recognized_host_methods_are_admitted_before_lowering(tmp_path: Path) -> None:
     """Host methods use the same host-signature validation as root builtins."""
     with pytest.raises(AglTypeError, match="invalid signature"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": (
@@ -4117,7 +4093,7 @@ def test_only_recognized_host_methods_are_admitted_before_lowering(tmp_path: Pat
         )
 
     with pytest.raises(AglTypeError, match="invalid signature"):
-        _check_program(tmp_path, {"entry": "builtin def print(value: text) -> text\n()"})
+        check_agl_program(tmp_path, {"entry": "builtin def print(value: text) -> text\n()"})
 
 
 def test_builtin_def_result_type_argument_mismatch_is_rejected(tmp_path: Path) -> None:
@@ -4127,7 +4103,7 @@ def test_builtin_def_result_type_argument_mismatch_is_rejected(tmp_path: Path) -
     would let a call site's static type disagree with what the host actually
     raises/returns at runtime."""
     with pytest.raises(AglTypeError, match="invalid signature"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": (
@@ -4147,7 +4123,7 @@ def test_builtin_def_result_type_ordinary_exception_is_rejected(tmp_path: Path) 
     name and scope path alone would let a call site's static type disagree
     with the real standard-library exception the host actually raises."""
     with pytest.raises(AglTypeError, match="invalid signature"):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": (
@@ -4165,7 +4141,7 @@ def test_builtin_def_result_type_ordinary_exception_is_rejected(tmp_path: Path) 
 def test_builtin_def_result_type_scoped_builtin_exception_is_accepted(tmp_path: Path) -> None:
     """A scoped ``builtin exception ValueParseError`` matching the canonical
     shape still satisfies a scoped ``builtin def try-parse``'s result type."""
-    _check_program(
+    check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -4188,7 +4164,7 @@ def test_mutually_recursive_method_headers_are_available_before_body_checking(
     tmp_path: Path,
 ) -> None:
     """Methods retain ordinary forward-reference behavior through header collection."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -4220,7 +4196,7 @@ def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final
     tmp_path: Path,
 ) -> None:
     """Method candidates across an import cycle replace provisional signatures."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "a": (
@@ -4354,13 +4330,13 @@ def test_named_only_param_in_graph_function(tmp_path: Path) -> None:
         "lib": "def add-named(x: int, @arg-named z: int) -> int = x + z",
         "entry": ("import lib::*\nlet z = 5\nadd-named(3, z)"),
     }
-    cg: object = _check_program(tmp_path, modules)
+    cg: object = check_agl_program(tmp_path, modules)
     assert isinstance(cg, CheckedProgram)
 
 
 def test_route_qualified_generic_enum_owner_is_accepted_in_an_is_test(tmp_path: Path) -> None:
     """``o is lib::Opt::none`` resolves the imported generic owner's parameters."""
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "lib": "enum Opt[T]\n  | some(v: T)\n  | none\n",
@@ -4392,7 +4368,7 @@ def test_qualified_is_test_resolves_root_exception_via_module_route(tmp_path: Pa
         ),
         "mod": "exception Base extends Exception\n  url: text\nexception Child extends Base()\n",
     }
-    cg = _check_program(tmp_path, modules)
+    cg = check_agl_program(tmp_path, modules)
     for name in ("descendant", "excludes", "ancestor"):
         assert _binding_value_type(cg, ENTRY_ID, name) == BoolType()
 
@@ -4401,7 +4377,7 @@ def test_qualified_is_test_resolves_root_exception_via_module_route(tmp_path: Pa
     module = cg.modules[ENTRY_ID]
     descendant_decl = next(
         item
-        for item in _module_items(module)
+        for item in checked_module_items(module)
         if isinstance(item, LetDecl) and item.name == "descendant"
     )
     resolved = module.constructor_ref_for(descendant_decl.value.node_id)
@@ -4428,7 +4404,7 @@ def test_qualified_is_test_rejects_unrelated_root_exception_across_modules(
         ),
     }
     with pytest.raises(AglTypeError):
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
 
 # ---------------------------------------------------------------------------
@@ -4443,7 +4419,7 @@ def test_root_builtin_declared_in_two_modules_is_rejected(tmp_path: Path) -> Non
     the root path — the program-wide case a single-module check cannot see.
     """
     with pytest.raises(AglTypeError) as raised:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "lib": "builtin def print[T](value: T) -> unit\n",
@@ -4473,7 +4449,7 @@ def test_method_and_record_field_cannot_share_a_name_in_either_source_order(
     tmp_path: Path, source: str, line: int
 ) -> None:
     with pytest.raises(AglTypeError) as raised:
-        _check_program(tmp_path, {"entry": source})
+        check_agl_program(tmp_path, {"entry": source})
 
     assert raised.value.span is not None and raised.value.span.start_line == line
     assert "label" in str(raised.value).lower()
@@ -4507,7 +4483,7 @@ def test_method_cannot_share_a_name_with_an_inherited_exception_field(
     tmp_path: Path, source: str, line: int
 ) -> None:
     with pytest.raises(AglTypeError) as raised:
-        _check_program(tmp_path, {"entry": source})
+        check_agl_program(tmp_path, {"entry": source})
 
     assert raised.value.span is not None and raised.value.span.start_line == line
     assert "code" in str(raised.value).lower()
@@ -4529,7 +4505,7 @@ def test_orphan_method_cannot_collide_with_a_foreign_owner_or_ancestor_field(
     tmp_path: Path, declarations: str, receiver: str, member: str
 ) -> None:
     with pytest.raises(AglTypeError) as raised:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "shapes": declarations,
@@ -4593,7 +4569,7 @@ def test_check_module_rejects_a_method_shadowing_a_builtin_exception_field() -> 
 
 
 def test_method_names_are_independent_between_unrelated_types(tmp_path: Path) -> None:
-    _check_program(
+    check_agl_program(
         tmp_path,
         {
             "entry": (
@@ -4611,7 +4587,7 @@ def test_method_names_are_independent_between_unrelated_types(tmp_path: Path) ->
 
 def test_enum_method_name_matching_a_variant_is_a_duplicate_declaration(tmp_path: Path) -> None:
     with pytest.raises(AglScopeError) as raised:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {"entry": ("enum Signal\n  | ready\ndef Signal::ready(self) -> int = 1\n()")},
         )
@@ -4620,7 +4596,7 @@ def test_enum_method_name_matching_a_variant_is_a_duplicate_declaration(tmp_path
 
 
 def test_plain_function_can_operate_on_an_imported_type(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "shapes": "record Point\n  x: int\n",
@@ -4632,7 +4608,7 @@ def test_plain_function_can_operate_on_an_imported_type(tmp_path: Path) -> None:
         },
     )
 
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    result = checked_module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
 
 
@@ -4641,17 +4617,17 @@ def test_plain_function_can_operate_on_an_imported_type(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_option_member_fallback_selects_a_visible_orphan_method(tmp_path: Path) -> None:
+def test_option_member_selects_a_visible_orphan_method(tmp_path: Path) -> None:
     modules = {
         "extension": 'def Option::describe[T](self) -> text = "option"\n',
         "entry": "import extension\nlet description = Some(value = 1).describe()\n",
     }
 
-    checked = _check_program(tmp_path, modules)
+    checked = check_agl_program(tmp_path, modules)
 
     assert _binding_value_type(checked, ENTRY_ID, "description") == TextType()
     with pytest.raises(AglTypeError):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 **modules,
@@ -4663,15 +4639,17 @@ def test_option_member_fallback_selects_a_visible_orphan_method(tmp_path: Path) 
         )
 
 
-def test_option_member_fallback_ignores_an_unreachable_direct_method(tmp_path: Path) -> None:
-    checked = _check_program(
+def test_option_member_selects_a_visible_enum_orphan_over_an_unreachable_direct_method(
+    tmp_path: Path,
+) -> None:
+    checked = check_agl_program(
         tmp_path,
         {
             "direct": 'def Option::Some::describe[T](self) -> text = "some"\n',
             "bridge": "import direct\n",
-            "fallback": 'def Option::describe[T](self) -> text = "option"\n',
+            "extension": 'def Option::describe[T](self) -> text = "option"\n',
             "entry": (
-                "import bridge\nimport fallback\nlet description = Some(value = 1).describe()\n"
+                "import bridge\nimport extension\nlet description = Some(value = 1).describe()\n"
             ),
         },
     )
@@ -4684,9 +4662,9 @@ def test_non_agent_record_does_not_gain_agent_methods_without_stdlib() -> None:
         _check('record Worker()\nWorker().ask("hello")', default_stdlib=False)
 
 
-def test_hidden_agent_member_method_is_not_synthesized(tmp_path: Path) -> None:
+def test_agent_member_call_is_rejected_when_its_ask_route_is_hidden(tmp_path: Path) -> None:
     with pytest.raises(AglTypeError):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "entry": (
@@ -4717,7 +4695,7 @@ def test_orphan_method_requires_its_declaring_module_to_be_reachable(tmp_path: P
     }
 
     with pytest.raises(AglTypeError) as raised:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
     assert "visible" in str(raised.value).lower()
     assert raised.value.span is not None and raised.value.span.start_line == 6
@@ -4729,15 +4707,15 @@ def test_visible_orphan_method_is_selected_and_hiding_removes_it(tmp_path: Path)
         "metrics": "import shapes::*\ndef Point::norm(self) -> int = self.x\n",
         "entry": "import shapes\nimport metrics\nshapes::Point(x = 1).norm()\n",
     }
-    checked = _check_program(tmp_path, modules)
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    checked = check_agl_program(tmp_path, modules)
+    result = checked_module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
 
     modules["entry"] = (
         "import shapes\nimport metrics hiding Point::norm\nshapes::Point(x = 1).norm()\n"
     )
     with pytest.raises(AglTypeError) as raised:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
     assert "visible" in str(raised.value).lower()
 
 
@@ -4750,7 +4728,7 @@ def test_same_level_visible_methods_are_ambiguous(tmp_path: Path) -> None:
     }
 
     with pytest.raises(AglTypeError) as raised:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
 
     assert "ambiguous" in str(raised.value).lower()
 
@@ -4828,7 +4806,7 @@ def test_pair_rejection_reports_the_later_declaration_regardless_of_order() -> N
 def test_cross_module_member_and_enum_method_pair_is_accepted_at_declaration(
     tmp_path: Path,
 ) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "lib": 'record Saved(id: int)\ndef Saved::describe(self) -> text = "one"\n',
@@ -4841,7 +4819,7 @@ def test_cross_module_member_and_enum_method_pair_is_accepted_at_declaration(
         },
     )
 
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    result = checked_module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == UnitType()
 
 
@@ -4850,7 +4828,7 @@ def test_enum_method_named_like_a_member_field_is_legal_to_declare() -> None:
         'enum Shape\n  | Circle(name: text)\ndef Shape::name(self) -> text = "shape"\n()'
     )
 
-    result = _module_items(checked)[-1]
+    result = checked_module_items(checked)[-1]
     assert checked.node_types[result.node_id] == UnitType()
 
 
@@ -4865,7 +4843,7 @@ def test_unrelated_owners_with_the_same_method_name_are_not_a_pair() -> None:
         "()"
     )
 
-    result = _module_items(checked)[-1]
+    result = checked_module_items(checked)[-1]
     assert checked.node_types[result.node_id] == UnitType()
 
 
@@ -4880,8 +4858,47 @@ def test_two_enums_each_owning_a_distinct_record_are_not_a_pair() -> None:
         "()"
     )
 
-    result = _module_items(checked)[-1]
+    result = checked_module_items(checked)[-1]
     assert checked.node_types[result.node_id] == UnitType()
+
+
+def test_same_module_pair_between_two_third_module_orphans_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        check_agl_program(
+            tmp_path,
+            {
+                "lib": "record Saved(id: int)\n",
+                "store": "import lib\nenum Stored = lib::Saved | Fresh(value: int)\n",
+                "ext": (
+                    "import lib::*\n"
+                    "import store::*\n"
+                    'def Saved::describe(self) -> text = "one"\n'
+                    'def Stored::describe(self) -> text = "two"\n'
+                ),
+                "entry": "import lib\nimport store\nimport ext\n()\n",
+            },
+        )
+
+    assert "conflicts" in str(raised.value).lower()
+
+
+def test_same_module_orphan_and_home_enum_method_pair_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        check_agl_program(
+            tmp_path,
+            {
+                "lib": "record Saved(id: int)\n",
+                "ext": (
+                    "import lib::*\n"
+                    "enum Stored = lib::Saved | Fresh(value: int)\n"
+                    'def Saved::describe(self) -> text = "one"\n'
+                    'def Stored::describe(self) -> text = "two"\n'
+                ),
+                "entry": "import lib\nimport ext\n()\n",
+            },
+        )
+
+    assert "conflicts" in str(raised.value).lower()
 
 
 @pytest.mark.parametrize(
@@ -4896,7 +4913,7 @@ def test_two_enums_each_owning_a_distinct_record_are_not_a_pair() -> None:
 def test_orphan_method_is_visible_through_each_import_route(
     tmp_path: Path, method_route: str
 ) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "shapes": "record Point\n  x: int\n",
@@ -4905,12 +4922,12 @@ def test_orphan_method_is_visible_through_each_import_route(
         },
     )
 
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    result = checked_module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
 
 
 def test_facade_reexport_makes_an_orphan_method_visible(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "shapes": "record Point\n  x: int\n",
@@ -4920,12 +4937,12 @@ def test_facade_reexport_makes_an_orphan_method_visible(tmp_path: Path) -> None:
         },
     )
 
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    result = checked_module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
 
 
 def test_method_consumer_needs_no_route_to_its_receiver_type(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "shapes": "record Point\n  x: int\n",
@@ -4950,7 +4967,7 @@ def test_method_consumer_needs_no_route_to_its_receiver_type(tmp_path: Path) -> 
     assert _binding_value_type(checked, ENTRY_ID, "direct") == IntType()
 
     with pytest.raises(AglScopeError):
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "shapes": "record Point\n  x: int\n",
@@ -4966,7 +4983,7 @@ def test_method_consumer_needs_no_route_to_its_receiver_type(tmp_path: Path) -> 
 
 def test_home_and_orphan_methods_are_ambiguous_with_declaration_spans(tmp_path: Path) -> None:
     with pytest.raises(AglTypeError) as raised:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "shapes": ("record Point\n  x: int\ndef Point::norm(self) -> int = self.x\n"),
@@ -4981,7 +4998,7 @@ def test_home_and_orphan_methods_are_ambiguous_with_declaration_spans(tmp_path: 
 
 
 def test_qualified_method_call_repairs_a_same_level_ambiguity(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "shapes": "record Point\n  x: int\n",
@@ -4996,7 +5013,7 @@ def test_qualified_method_call_repairs_a_same_level_ambiguity(tmp_path: Path) ->
         },
     )
 
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    result = checked_module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
 
 
@@ -5013,7 +5030,7 @@ def test_exception_chain_pair_is_ambiguous_on_derived_receiver_but_not_base(
         ),
     }
 
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             **modules,
@@ -5027,11 +5044,11 @@ def test_exception_chain_pair_is_ambiguous_on_derived_receiver_but_not_base(
             ),
         },
     )
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    result = checked_module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
 
     with pytest.raises(AglTypeError) as raised:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 **modules,
@@ -5058,7 +5075,7 @@ def test_hiding_or_qualifying_cannot_repair_an_orphan_method_field_collision(
     tmp_path: Path, entry: str
 ) -> None:
     with pytest.raises(AglTypeError) as raised:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "shapes": "record Point\n  var describe: int\n",
@@ -5071,7 +5088,7 @@ def test_hiding_or_qualifying_cannot_repair_an_orphan_method_field_collision(
 
 
 def test_unimported_orphan_method_does_not_clash_with_a_field(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "shapes": "record Point\n  describe: int\n",
@@ -5079,7 +5096,7 @@ def test_unimported_orphan_method_does_not_clash_with_a_field(tmp_path: Path) ->
             "entry": "import shapes\nlet point = shapes::Point(describe = 1)\npoint.describe\n",
         },
     )
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    result = checked_module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
 
 
@@ -5094,7 +5111,7 @@ def test_base_method_and_derived_field_clash_only_for_derived_static_type() -> N
         "let base: Base = derived\n"
         "base.describe()"
     )
-    result = _module_items(checked)[-1]
+    result = checked_module_items(checked)[-1]
     assert checked.node_types[result.node_id] == TextType()
 
     with pytest.raises(AglTypeError) as raised:
@@ -5111,7 +5128,7 @@ def test_base_method_and_derived_field_clash_only_for_derived_static_type() -> N
 
 def test_orphan_method_cannot_collide_with_a_foreign_owner_field(tmp_path: Path) -> None:
     with pytest.raises(AglTypeError) as raised:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "errors": (
@@ -5133,7 +5150,7 @@ def test_orphan_method_cannot_collide_with_a_foreign_owner_field(tmp_path: Path)
 
 def test_foreign_field_collision_is_reported_at_the_method_file(tmp_path: Path) -> None:
     with pytest.raises(AglTypeError) as raised:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "shapes": "\n" * 30 + "record Point\n  describe: int\n",
@@ -5149,7 +5166,7 @@ def test_foreign_field_collision_is_reported_at_the_method_file(tmp_path: Path) 
 
 
 def test_base_method_and_derived_field_are_legal_across_modules(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "errors": (
@@ -5167,7 +5184,7 @@ def test_base_method_and_derived_field_are_legal_across_modules(tmp_path: Path) 
 
 def test_option_member_field_and_visible_option_method_are_ambiguous(tmp_path: Path) -> None:
     with pytest.raises(AglTypeError) as raised:
-        _check_program(
+        check_agl_program(
             tmp_path,
             {
                 "methods": "def Option::value[T](self) -> T = self.unwrap()\n",
@@ -5188,19 +5205,19 @@ def test_assignment_target_respects_method_visibility(tmp_path: Path) -> None:
         ),
     }
     with pytest.raises(AglTypeError) as hidden:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
     assert "visible" in str(hidden.value).lower()
 
     modules["entry"] = (
         "import shapes\nimport metrics\nlet point = shapes::Point(x = 1)\npoint.norm := 2\n"
     )
     with pytest.raises(AglTypeError) as selected:
-        _check_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
     assert "assignable" in str(selected.value).lower()
 
 
 def test_builtin_methods_may_be_declared_outside_their_standard_module(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_agl_program(
         tmp_path,
         {
             "methods": "def text::shout(self) -> text = self\n",
@@ -5208,5 +5225,5 @@ def test_builtin_methods_may_be_declared_outside_their_standard_module(tmp_path:
         },
     )
 
-    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    result = checked_module_items(checked.modules[ENTRY_ID])[-1]
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == TextType()

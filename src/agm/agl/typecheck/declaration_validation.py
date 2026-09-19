@@ -66,14 +66,15 @@ def builtin_method_receiver_for(
 class _MemberDeclaration:
     """A source member declaration whose name occupies a nominal member namespace.
 
-    ``module_id`` names a method's declaring module (the module whose program
-    declares the function, not its owner's — orphan methods exist); absent
-    for a field, which never participates in the same-module pair rule.
+    ``module_id`` is the declaration's owning module: a method's declaring
+    module (the module whose program declares the function, not its owner's
+    — orphan methods exist), or a field's owner's own module (a field never
+    participates in the same-module pair rule, so its value is unused there).
     """
 
     kind: Literal["field", "method"]
     span: SourceSpan | None
-    module_id: ModuleId | None = None
+    module_id: ModuleId
 
 
 @dataclass(slots=True)
@@ -104,7 +105,9 @@ def _index_registered_owner(index: _MemberIndex, type_table: TypeTable, owner_id
     assert typedef is not None, "compiler bug: related owner is not registered"
     members = index.members.setdefault(owner_id, {})
     for field_name, _field_type in typedef.fields:
-        members.setdefault(field_name, []).append(_MemberDeclaration("field", None))
+        members.setdefault(field_name, []).append(
+            _MemberDeclaration("field", None, typedef.module_id)
+        )
     for method_name, methods in type_table.declared_methods(owner_id).items():
         same_named = members.setdefault(method_name, [])
         same_named.extend(
@@ -137,7 +140,7 @@ def _member_declarations(
                         for member in same_named
                         if not (member.kind == "field" and member.span is None)
                     ]
-                    same_named.append(_MemberDeclaration("field", source_field.span))
+                    same_named.append(_MemberDeclaration("field", source_field.span, module_id))
         for function in static_function_items(resolved.program.body.items):
             owner_path = resolved.receiver_owner_for(module_id, function)
             if (
@@ -196,10 +199,7 @@ def _level_mates(type_table: TypeTable, owner_id: DeclId) -> tuple[DeclId, ...]:
         case "exception":
             ancestors = tuple(base.decl_node_id for base in type_table.ancestor_defs(owner_id))
             descendants = tuple(
-                candidate.decl_node_id
-                for candidate in type_table.entries()
-                if candidate.kind == "exception"
-                and type_table.is_exception_ancestor(owner_id, candidate.decl_node_id)
+                descendant.decl_node_id for descendant in type_table.exception_descendants(owner_id)
             )
             return ancestors + descendants
         case "record":
@@ -246,17 +246,20 @@ def _raise_collision(
     A field/method clash on one owner (``owner_id == conflicting_id``) always
     prefers whichever of the two came later. A method pair between two
     related owners (``prefer_later``) does too, since either side may be the
-    later declaration. An ancestor field clash never swaps: the method stays
-    ``declared`` regardless of source order, since the field's owner is a
-    different, unrelated type.
+    later declaration; there, a span-less side (a retained declaration from
+    an earlier compile unit) is also never preferred over a spanned one, so
+    the report always lands on a real declaration. An ancestor field clash
+    never swaps: the method stays ``declared`` regardless of source order,
+    since the field's owner is a different, unrelated type.
     """
-    if (
+    swap = (
         (prefer_later or owner_id == conflicting_id)
         and declared.span is not None
         and conflicting.span is not None
         and declared.span.source == conflicting.span.source
         and declared.span.start_offset < conflicting.span.start_offset
-    ):
+    ) or (prefer_later and declared.span is None and conflicting.span is not None)
+    if swap:
         owner_id, conflicting_id = conflicting_id, owner_id
         declared, conflicting = conflicting, declared
 
@@ -351,12 +354,12 @@ def validate_method_declaration_collisions(
     """Reject field collisions and same-module, same-level method pairs.
 
     A method collides with a field of its owner or an ancestor regardless of
-    module. A method also collides with a same-named, same-module method on a
-    level mate (an exception ancestor/descendant, a record's counted owning
-    enum, or an enum's counted member) — two methods that would tie at one
-    selection level (see :meth:`TypeTable.method_candidates`) if declared by
-    the same module. Cross-module pairs stay legal; they are a call-site
-    ambiguity instead.
+    module. A method also collides with a same-named, same-module method
+    declared on a record and a current enum that declares or references it,
+    or on an exception and one of its ancestors or descendants — the only
+    pairs one selection level (see :meth:`TypeTable.method_candidates`) can
+    join. Cross-module pairs stay legal; they are a call-site ambiguity
+    instead.
     """
     index = _member_declarations(modules, type_table)
 
@@ -366,10 +369,19 @@ def validate_method_declaration_collisions(
         ancestors = tuple(base.decl_node_id for base in type_table.ancestor_defs(owner_id))
         for ancestor in ancestors:
             _index_registered_owner(index, type_table, ancestor)
-        mates = _level_mates(type_table, owner_id)
+        same_named_by_name = index.members[owner_id]
+        # The level-mate scan (an exception's descendants especially) costs a
+        # table-wide pass, so it only runs for an owner that actually
+        # declares a method here.
+        has_method = any(
+            member.kind == "method"
+            for same_named_members in same_named_by_name.values()
+            for member in same_named_members
+        )
+        mates = _level_mates(type_table, owner_id) if has_method else ()
         for mate in mates:
             _index_registered_owner(index, type_table, mate)
-        for name, same_named_members in index.members[owner_id].items():
+        for name, same_named_members in same_named_by_name.items():
             for method in (member for member in same_named_members if member.kind == "method"):
                 field = next(
                     (member for member in same_named_members if member.kind == "field"), None
@@ -379,7 +391,12 @@ def validate_method_declaration_collisions(
                 conflict = _ancestor_field(index, ancestors, name)
                 if conflict is not None:
                     _raise_collision(type_table, owner_id, name, method, *conflict)
-                assert method.module_id is not None, "compiler bug: method has no declaring module"
+                if method.span is None:
+                    # A retained declaration from an earlier compile unit:
+                    # the pair check only starts from the new declaration's
+                    # own owner, which the symmetric level-mate relation
+                    # always reaches in turn.
+                    continue
                 pair = _related_method(index, mates, name, method.module_id)
                 if pair is not None:
                     _raise_collision(type_table, owner_id, name, method, *pair, prefer_later=True)

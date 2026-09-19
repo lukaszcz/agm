@@ -312,8 +312,9 @@ method's route to reach the field, or call the method by a qualified path. An
 enum method named like a member field stays legal to declare: it clashes with
 the field only on a member-typed receiver, since an enum-typed receiver has
 no fields and simply selects the method. A method declaration itself is
-rejected only when its resolved owner or an ancestor already has a field of
-that name.
+rejected when its resolved owner or an ancestor already has a field of that
+name (see below for the other rejection: a same-module, same-level method
+pair).
 
 When the selected method belongs to an owning enum `E` rather than to the
 member itself, the receiver **widens** to `E` — an identity upcast, so

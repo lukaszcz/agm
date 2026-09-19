@@ -56,7 +56,7 @@ diagnostic (agent output target, cast target, parameter type).
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
@@ -326,6 +326,10 @@ class TypeTable:
         # Whole-table finiteness fixpoint (see :meth:`has_finite_schema`),
         # cached and invalidated the same way as ``_non_data_caps``.
         self._finite_closure: FiniteClosure | None = None
+        # Exception declaration id -> its direct children's ids, built in one
+        # pass over ``_defs``. Whole-table, rebuilt on any registration
+        # change; feeds :meth:`exception_descendants`.
+        self._exception_children: dict[DeclId, tuple[DeclId, ...]] | None = None
 
     def register(self, typedef: TypeDef) -> None:
         """Register *typedef* under its own declaration identity.
@@ -372,6 +376,7 @@ class TypeTable:
             self._non_data_caps = None
             self._member_enum_owners = None
             self._finite_closure = None
+            self._exception_children = None
             return
         if self_validation_enabled() and existing != typedef:
             raise AssertionError(
@@ -606,6 +611,43 @@ class TypeTable:
         """Whether *ancestor_id* is in *decl_id*'s exception base chain."""
         return any(ancestor.decl_node_id == ancestor_id for ancestor in self.ancestor_defs(decl_id))
 
+    def _exception_children_index(self) -> Mapping[DeclId, tuple[DeclId, ...]]:
+        """Return the memoized exception declaration id -> direct children ids index.
+
+        Built in one pass over every registered exception, skipping an
+        orphaned one on either end of the parent-child link (see
+        :meth:`orphan`).
+        """
+        index = self._exception_children
+        if index is None:
+            built: dict[DeclId, list[DeclId]] = {}
+            for decl_id, typedef in self._defs.items():
+                if typedef.kind != "exception" or decl_id in self._orphaned:
+                    continue
+                if typedef.base is not None and typedef.base not in self._orphaned:
+                    built.setdefault(typedef.base, []).append(decl_id)
+            index = {parent: tuple(children) for parent, children in built.items()}
+            self._exception_children = index
+        return index
+
+    def exception_descendants(self, decl_id: DeclId) -> tuple[TypeDef, ...]:
+        """Return every exception descending from *decl_id*, breadth-first.
+
+        Reads the memoized parent-to-children index, so a caller checking one
+        owner never rescans the whole table.
+        """
+        index = self._exception_children_index()
+        result: list[TypeDef] = []
+        frontier = [decl_id]
+        while frontier:
+            next_frontier: list[DeclId] = []
+            for parent in frontier:
+                for child_id in index.get(parent, ()):
+                    result.append(self._defs[child_id])
+                    next_frontier.append(child_id)
+            frontier = next_frontier
+        return tuple(result)
+
     def is_builtin_exception_root(self, decl_id: DeclId) -> bool:
         """Whether *decl_id* is the built-in ``Exception``, reserved or loaded.
 
@@ -635,6 +677,7 @@ class TypeTable:
         self._non_data_caps = None
         self._member_enum_owners = None
         self._finite_closure = None
+        self._exception_children = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
         """Return *handle*'s field types with its ``type_args`` substituted in.
@@ -737,10 +780,14 @@ class TypeTable:
             self._member_enum_owners = index
         return index
 
+    def _enum_defs_owning_id(self, record_decl_id: DeclId) -> tuple[TypeDef, ...]:
+        """Return the enum definitions naming *record_decl_id* a member, registration order."""
+        owners = self._member_enum_owner_index().get(record_decl_id, ())
+        return tuple(self._defs[owner_id] for owner_id in owners)
+
     def _enum_defs_owning(self, record: RecordType) -> tuple[TypeDef, ...]:
         """Return the enum definitions *record* is a member of, in registration order."""
-        owners = self._member_enum_owner_index().get(record.decl_id, ())
-        return tuple(self._defs[owner_id] for owner_id in owners)
+        return self._enum_defs_owning_id(record.decl_id)
 
     @staticmethod
     def _match_enum_member_template(
@@ -756,6 +803,19 @@ class TypeTable:
             return None
         return match_nominal_owner_template(TypeTemplate(member, enum_def.type_params), record)
 
+    def _enum_membership_matches(
+        self, owner_defs: tuple[TypeDef, ...], record: RecordType
+    ) -> Iterator[tuple[TypeDef, TypeTemplateMatch]]:
+        """Yield each of *owner_defs* paired with its member match for *record*.
+
+        Skips an owner whose member template does not bind against *record*.
+        """
+        for typedef in owner_defs:
+            member = next(item for item in typedef.members if item.decl_id == record.decl_id)
+            match = self._match_enum_member_template(typedef, member, record)
+            if match is not None:
+                yield typedef, match
+
     def owning_enum_defs_for_selection(self, record_decl_id: DeclId) -> tuple[TypeDef, ...]:
         """Return the record identity's counted owning enum defs, registration order.
 
@@ -766,11 +826,10 @@ class TypeTable:
         """
         record_def = self._defs.get(record_decl_id)
         record_is_current = record_def is not None and self.is_current(record_def)
-        owners = self._member_enum_owner_index().get(record_decl_id, ())
         return tuple(
-            self._defs[owner_id]
-            for owner_id in owners
-            if not (record_is_current and not self.is_current(self._defs[owner_id]))
+            enum_def
+            for enum_def in self._enum_defs_owning_id(record_decl_id)
+            if not (record_is_current and not self.is_current(enum_def))
         )
 
     def owning_enums_for_selection(
@@ -782,14 +841,11 @@ class TypeTable:
         captured enum parameter's binding is present; a phantom (uncaptured)
         parameter is absent.
         """
-        result: list[tuple[TypeDef, Mapping[str, Type]]] = []
-        for enum_def in self.owning_enum_defs_for_selection(record.decl_id):
-            member = next(item for item in enum_def.members if item.decl_id == record.decl_id)
-            match = self._match_enum_member_template(enum_def, member, record)
-            if match is None:
-                continue
-            result.append((enum_def, dict(match.bindings)))
-        return tuple(result)
+        owner_defs = self.owning_enum_defs_for_selection(record.decl_id)
+        return tuple(
+            (enum_def, dict(match.bindings))
+            for enum_def, match in self._enum_membership_matches(owner_defs, record)
+        )
 
     def records_share_enum_membership(self, records: tuple[RecordType, ...]) -> bool:
         """Return whether *records* belong to one currently nameable enum instantiation.
@@ -837,13 +893,7 @@ class TypeTable:
         of semantic validation.
         """
         owners: list[EnumType] = []
-        for typedef in self._enum_defs_owning(handle):
-            # The owner index only yields enums that declare or reference this
-            # member, so the lookup always succeeds.
-            member = next(item for item in typedef.members if item.decl_id == handle.decl_id)
-            match = self._match_enum_member_template(typedef, member, handle)
-            if match is None:
-                continue
+        for typedef, match in self._enum_membership_matches(self._enum_defs_owning(handle), handle):
             bindings = dict(match.bindings)
             if len(bindings) != len(typedef.type_params):
                 continue

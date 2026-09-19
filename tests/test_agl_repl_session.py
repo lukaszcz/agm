@@ -3105,6 +3105,16 @@ class TestMemberEnumMethodSelectionAcrossEntries:
         assert result.ok, result.diagnostics
         assert result.value == TextValue("old")
 
+    def test_superseded_owning_enum_is_skipped_for_a_current_record(self) -> None:
+        s = open_session()
+        assert s.eval_entry("record Saved(id: int)\nenum Stored = ::Saved | Fresh(value: int)").ok
+        assert s.eval_entry('def Stored::describe(self) -> text = "stored"').ok
+        assert s.eval_entry("enum Stored = Fresh(value: int)").ok
+
+        accepted = s.eval_entry('def Saved::describe(self) -> text = "saved"')
+
+        assert accepted.ok, accepted.diagnostics
+
     def test_new_enum_member_sees_no_methods_until_one_is_declared(self) -> None:
         s = open_session()
         assert s.eval_entry("enum Color\n  | Red\n  | Blue").ok
@@ -3157,6 +3167,64 @@ class TestMemberEnumMethodSelectionAcrossEntries:
         assert s.eval_entry('def Base::describe(self) -> text = "base"').ok
 
         rejected = s.eval_entry('def Derived::describe(self) -> text = "derived"')
+
+        assert not rejected.ok
+        assert "conflicts" in rejected.diagnostics[0].message.lower()
+
+    def test_pair_completed_alongside_an_unrelated_method_blames_the_new_declaration(
+        self,
+    ) -> None:
+        """The rejected span is the new entry's own declaration, not the retained one.
+
+        The entry also declares an unrelated method on the earlier owner
+        (``Saved::other``), so the validation loop visits that owner - whose
+        only ``describe`` is the earlier, span-less, registered one - before
+        it reaches the owner that actually completes the pair this entry.
+        """
+        s = open_session()
+        assert s.eval_entry("record Saved(id: int)\nenum Stored = ::Saved | Fresh(value: int)").ok
+        assert s.eval_entry('def Saved::describe(self) -> text = "one"').ok
+
+        rejected = s.eval_entry(
+            'def Saved::other(self) -> text = "o"\ndef Stored::describe(self) -> text = "two"'
+        )
+
+        assert not rejected.ok
+        message = rejected.diagnostics[0].message
+        assert "Stored" in message and "Saved" in message
+        assert rejected.diagnostics[0].line == 2
+
+    def test_exception_pair_completed_alongside_an_unrelated_method_blames_the_new_declaration(
+        self,
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("exception Base extends Exception()").ok
+        assert s.eval_entry("exception Derived extends Base()").ok
+        assert s.eval_entry('def Base::describe(self) -> text = "base"').ok
+
+        rejected = s.eval_entry(
+            'def Base::other(self) -> text = "o"\ndef Derived::describe(self) -> text = "derived"'
+        )
+
+        assert not rejected.ok
+        message = rejected.diagnostics[0].message
+        assert "Derived" in message and "Base" in message
+        assert rejected.diagnostics[0].line == 2
+
+    def test_superseded_exception_descendant_pairs_with_its_current_base(self) -> None:
+        """A superseded descendant still counts against its live base's methods.
+
+        Redeclaring ``Derived`` supersedes it (its earlier identity stays
+        registered, unlike an orphaned, never-promoted declaration), so its
+        earlier ``describe`` method still pairs with a later ``Parent::describe``.
+        """
+        s = open_session()
+        assert s.eval_entry("exception Parent extends Exception()").ok
+        assert s.eval_entry("exception Derived extends Parent()").ok
+        assert s.eval_entry('def Derived::describe(self) -> text = "derived"').ok
+        assert s.eval_entry("exception Derived extends Parent()").ok
+
+        rejected = s.eval_entry('def Parent::describe(self) -> text = "parent"')
 
         assert not rejected.ok
         assert "conflicts" in rejected.diagnostics[0].message.lower()

@@ -22,7 +22,7 @@ from pathlib import Path
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope import AglScopeError
-from agm.agl.syntax.nodes import Call, LetDecl
+from agm.agl.syntax.nodes import LetDecl
 from agm.agl.typecheck import (
     AglTypeError,
     ArrayType,
@@ -35,15 +35,16 @@ from agm.agl.typecheck import (
     Type,
 )
 from tests._agl_helpers import (
-    METHOD_SELECTION_CAPS,
-    check_method_selection_program,
+    AGL_TEST_CAPS,
+    check_agl_program,
     checked_module_items,
+    checked_program_selection_key,
 )
 from tests.agl.module_graph import resolve_and_check_repl_entry
 
 
 def accept_type(source: str) -> CheckedModule:
-    return resolve_and_check_repl_entry(source, METHOD_SELECTION_CAPS)
+    return resolve_and_check_repl_entry(source, AGL_TEST_CAPS)
 
 
 def reject_type(source: str) -> AglTypeError | AglScopeError:
@@ -56,7 +57,7 @@ def reject_type(source: str) -> AglTypeError | AglScopeError:
 
 def reject_program(tmp_path: Path, modules: dict[str, str]) -> AglTypeError | AglScopeError:
     try:
-        check_method_selection_program(tmp_path, modules)
+        check_agl_program(tmp_path, modules)
     except (AglTypeError, AglScopeError) as exc:
         return exc
     raise AssertionError("expected the program to be rejected")
@@ -72,16 +73,6 @@ def _final_type(checked: CheckedModule) -> Type:
 def _program_final_type(checked: CheckedProgram) -> Type:
     module = checked.modules[ENTRY_ID]
     return _final_type(module)
-
-
-def _entry_selection_key(checked: CheckedProgram) -> tuple[object, ...]:
-    """The declaration identity (module, scope path, name) the entry's final call selected."""
-    module = checked.modules[ENTRY_ID]
-    call = checked_module_items(module)[-1]
-    assert isinstance(call, Call), f"expected the entry to end in a call, got {call!r}"
-    selection = module.method_selections.get(call.callee.node_id)
-    assert selection is not None, "expected the final call to select a method, not a field"
-    return selection.declaration_key
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +284,7 @@ def test_exception_inherited_only_method_is_selected_from_the_descendant(
         ),
         "methods": "import errors::*\ndef Base::status(self) -> int = self.code\n",
     }
-    checked = check_method_selection_program(
+    checked = check_agl_program(
         tmp_path,
         {
             **modules,
@@ -329,7 +320,7 @@ def test_cross_module_orphan_pair_is_ambiguous_at_the_call_site(tmp_path: Path) 
 
 
 def test_hiding_one_orphans_route_repairs_the_ambiguity(tmp_path: Path) -> None:
-    checked = check_method_selection_program(
+    checked = check_agl_program(
         tmp_path,
         {
             **_PALETTE_MODULES,
@@ -340,7 +331,11 @@ def test_hiding_one_orphans_route_repairs_the_ambiguity(tmp_path: Path) -> None:
         },
     )
     assert _program_final_type(checked) == TextType()
-    assert _entry_selection_key(checked) == (ModuleId.from_path("cool"), ("Color",), "label")
+    assert checked_program_selection_key(checked) == (
+        ModuleId.from_path("cool"),
+        ("Color",),
+        "label",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +365,7 @@ def test_referenced_record_method_is_ambiguous_once_the_referencing_enum_is_impo
 
 
 def test_referenced_record_ambiguity_is_repaired_by_a_qualified_call(tmp_path: Path) -> None:
-    checked = check_method_selection_program(
+    checked = check_agl_program(
         tmp_path,
         {
             **_LIB_STORE_MODULES,
@@ -385,7 +380,7 @@ def test_referenced_record_ambiguity_is_repaired_by_a_qualified_call(tmp_path: P
 def test_referenced_record_ambiguity_is_repaired_by_widening_the_receiver(
     tmp_path: Path,
 ) -> None:
-    checked = check_method_selection_program(
+    checked = check_agl_program(
         tmp_path,
         {
             **_LIB_STORE_MODULES,
@@ -396,7 +391,7 @@ def test_referenced_record_ambiguity_is_repaired_by_widening_the_receiver(
         },
     )
     assert _program_final_type(checked) == TextType()
-    assert _entry_selection_key(checked) == (
+    assert checked_program_selection_key(checked) == (
         ModuleId.from_path("store"),
         ("Stored",),
         "describe",
@@ -406,9 +401,13 @@ def test_referenced_record_ambiguity_is_repaired_by_widening_the_receiver(
 def test_referenced_record_without_importing_the_referencing_enum_selects_its_own_method(
     tmp_path: Path,
 ) -> None:
-    checked = check_method_selection_program(
+    checked = check_agl_program(
         tmp_path,
         {**_LIB_STORE_MODULES, "entry": "import lib\nlib::Saved(id = 1).describe()\n"},
     )
     assert _program_final_type(checked) == TextType()
-    assert _entry_selection_key(checked) == (ModuleId.from_path("lib"), ("Saved",), "describe")
+    assert checked_program_selection_key(checked) == (
+        ModuleId.from_path("lib"),
+        ("Saved",),
+        "describe",
+    )

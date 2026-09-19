@@ -20,9 +20,8 @@ from pathlib import Path
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.syntax.nodes import Call
 from agm.agl.typecheck import AglTypeError, CheckedProgram, TextType
-from tests._agl_helpers import check_method_selection_program, checked_module_items
+from tests._agl_helpers import check_agl_program, checked_program_selection_key, final_entry_call
 
 Selectable = CheckedProgram | AglTypeError | AglScopeError
 
@@ -30,25 +29,9 @@ Selectable = CheckedProgram | AglTypeError | AglScopeError
 def _run_entry(tmp_path: Path, modules: dict[str, str], entry: str) -> Selectable:
     """Typecheck *entry* as the program's entry alongside *modules*; capture rejection."""
     try:
-        return check_method_selection_program(tmp_path, {**modules, "entry": entry})
+        return check_agl_program(tmp_path, {**modules, "entry": entry})
     except (AglTypeError, AglScopeError) as exc:
         return exc
-
-
-def _final_call(checked: CheckedProgram) -> Call:
-    """The entry's final top-level statement, asserted to be a call expression."""
-    call = checked_module_items(checked.modules[ENTRY_ID])[-1]
-    assert isinstance(call, Call), f"expected the entry to end in a call, got {call!r}"
-    return call
-
-
-def _selection_key(checked: CheckedProgram) -> tuple[object, ...]:
-    """The declaration identity (module, scope path, name) the final call selected."""
-    call = _final_call(checked)
-    module = checked.modules[ENTRY_ID]
-    selection = module.method_selections.get(call.callee.node_id)
-    assert selection is not None, "expected the final call to select a method, not a field"
-    return selection.declaration_key
 
 
 def _assert_selects(
@@ -56,7 +39,7 @@ def _assert_selects(
 ) -> None:
     """Assert *result* is a successful check that selected the named declaration."""
     assert isinstance(result, CheckedProgram), f"expected a successful check, got {result!r}"
-    assert _selection_key(result) == (module, scope_path, name)
+    assert checked_program_selection_key(result) == (module, scope_path, name)
 
 
 def _assert_rejected(result: Selectable, keyword: str) -> None:
@@ -341,9 +324,9 @@ def test_field_vs_enum_method_kind_clash_across_receiver_widening(tmp_path: Path
         {},
         declarations + 'let c = Circle(name = "c", r = 1)\nlet s: Shape = c\ns.name()\n',
     )
-    _assert_rejected(member_read, "field")
+    _assert_rejected(member_read, "ambiguous")
     assert isinstance(enum_call, CheckedProgram)
-    assert enum_call.modules[ENTRY_ID].node_types[_final_call(enum_call).node_id] == TextType()
+    assert enum_call.modules[ENTRY_ID].node_types[final_entry_call(enum_call).node_id] == TextType()
 
 
 # ---------------------------------------------------------------------------

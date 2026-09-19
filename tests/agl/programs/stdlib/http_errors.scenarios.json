@@ -1,0 +1,157 @@
+{
+  "scenarios": [
+    {
+      "name": "get_raises_http_url_error_for_an_unsupported_scheme_or_malformed_url",
+      "params": {"root": "/unused", "scenario": "get_raises_transport_error"},
+      "http": [{"fail": "url"}],
+      "expect": {
+        "raises": {
+          "type": "HttpUrlError",
+          "fields": {"url": "https://x/y", "method": {"$case": "Get"}}
+        }
+      }
+    },
+    {
+      "name": "an_invalid_method_token_raises_http_request_error_before_any_request",
+      "params": {"root": "/unused", "scenario": "custom_method_raises_http_request_error"},
+      "http": [],
+      "expect": {
+        "raises": {
+          "type": "HttpRequestError",
+          "fields": {
+            "url": "https://x/y",
+            "method": {"$case": "Other", "name": "BAD METHOD"}
+          }
+        }
+      }
+    },
+    {
+      "name": "get_raises_http_connection_error_when_the_transport_refuses",
+      "params": {"root": "/unused", "scenario": "get_raises_transport_error"},
+      "http": [{"fail": "connection"}],
+      "expect": {
+        "raises": {
+          "type": "HttpConnectionError",
+          "fields": {"url": "https://x/y", "method": {"$case": "Get"}}
+        }
+      }
+    },
+    {
+      "name": "get_raises_http_timeout_error_carrying_the_inactivity_timeout_given",
+      "params": {"root": "/unused", "scenario": "get_raises_http_timeout_error"},
+      "http": [{"fail": "timeout"}],
+      "expect": {
+        "raises": {
+          "type": "HttpTimeoutError",
+          "fields": {"url": "https://x/y", "method": {"$case": "Get"}, "timeout": "5s"}
+        }
+      }
+    },
+    {
+      "name": "get_raises_http_tls_error_when_certificate_verification_fails",
+      "params": {"root": "/unused", "scenario": "get_raises_transport_error"},
+      "http": [{"fail": "tls"}],
+      "expect": {
+        "raises": {
+          "type": "HttpTlsError",
+          "fields": {"url": "https://x/y", "method": {"$case": "Get"}}
+        }
+      }
+    },
+    {
+      "name": "get_raises_http_redirect_error_when_the_redirect_limit_is_exceeded",
+      "params": {"root": "/unused", "scenario": "get_raises_transport_error"},
+      "http": [{"fail": "redirect", "redirects": 2}],
+      "expect": {
+        "raises": {
+          "type": "HttpRedirectError",
+          "fields": {"url": "https://x/y", "method": {"$case": "Get"}, "redirects": 2}
+        }
+      }
+    },
+    {
+      "name": "get_raises_http_decode_error_carrying_status_headers_and_encoding",
+      "params": {"root": "/unused", "scenario": "get_raises_transport_error"},
+      "http": [
+        {"status": 200, "headers": {"Content-Type": "text/plain; charset=ascii"}, "body_hex": "ff"}
+      ],
+      "expect": {
+        "raises": {
+          "type": "HttpDecodeError",
+          "fields": {
+            "url": "https://x/y",
+            "method": {"$case": "Get"},
+            "status": 200,
+            "encoding": "ascii",
+            "headers": {"entries": {"content-type": "text/plain; charset=ascii"}}
+          }
+        }
+      }
+    },
+    {
+      "name": "raise_for_status_raises_http_status_error_carrying_the_response",
+      "params": {"root": "/unused", "scenario": "raise_for_status_raises_http_status_error"},
+      "http": [{"status": 404, "body": "nope"}],
+      "expect": {
+        "raises": {
+          "type": "HttpStatusError",
+          "fields": {
+            "url": "https://x/y",
+            "method": {"$case": "Get"},
+            "response": {"status": 404, "body": "nope"}
+          }
+        }
+      }
+    },
+    {
+      "name": "try_twins_wrap_every_transport_and_decode_failure_kind_as_err",
+      "params": {"root": "/unused", "scenario": "try_twins_wrap_every_transport_failure_kind"},
+      "http": [
+        {"fail": "url"},
+        {"fail": "connection"},
+        {"fail": "timeout"},
+        {"fail": "tls"},
+        {"fail": "redirect"},
+        {"status": 200, "body_hex": "ff"}
+      ],
+      "expect": {
+        "stdout": "url=https://x/y method=GET type=HttpUrlError\nurl=https://x/y method=BAD METHOD type=HttpRequestError\nurl=https://x/y method=GET type=HttpConnectionError\nurl=https://x/y method=GET type=HttpTimeoutError\nurl=https://x/y method=GET type=HttpTlsError\nurl=https://x/y method=GET type=HttpRedirectError\nurl=https://x/y method=GET type=HttpDecodeError\n"
+      }
+    },
+    {
+      "name": "a_catch_of_one_http_error_subtype_does_not_match_a_different_one",
+      "params": {
+        "root": "/unused",
+        "scenario": "specific_catch_does_not_match_a_different_http_error_subtype"
+      },
+      "http": [{"fail": "connection"}],
+      "expect": {
+        "stdout": "",
+        "raises": {
+          "type": "HttpConnectionError",
+          "fields": {"url": "https://x/y", "method": {"$case": "Get"}}
+        }
+      }
+    },
+    {
+      "name": "a_catch_of_the_declared_http_error_subtype_fires",
+      "params": {
+        "root": "/unused",
+        "scenario": "specific_catch_does_not_match_a_different_http_error_subtype"
+      },
+      "http": [{"fail": "timeout"}],
+      "expect": {
+        "stdout": "caught timeout: 5s\n"
+      }
+    },
+    {
+      "name": "saving_to_an_unwritable_destination_raises_fs_error",
+      "params": {"root": "$TEMP_ROOT", "scenario": "save_to_unwritable_path_raises_fs_error"},
+      "filesystem": {},
+      "http": [{"status": 200, "body": "payload"}],
+      "expect": {
+        "raises": {"type": "FsError", "fields": {"operation": "write"}}
+      }
+    }
+  ]
+}

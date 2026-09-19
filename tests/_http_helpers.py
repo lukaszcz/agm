@@ -34,7 +34,11 @@ transport populates it.
 
 ``fail: "<kind>"`` (one of ``url``, ``connection``, ``timeout``, ``tls``,
 ``redirect``) raises the matching ``requests`` exception before any response
-is built, modelling a connect-time failure. ``fail_mid_stream: "<kind>"``
+is built, modelling a connect-time failure. A ``"redirect"`` failure may carry
+an optional ``redirects`` count, attaching a ``response`` whose ``history``
+has that many entries to the raised ``TooManyRedirects`` -- exercising
+``agm.core.http``'s classification of the actual redirect count rather than
+its ``session.max_redirects`` fallback. ``fail_mid_stream: "<kind>"``
 (``connection``, ``timeout``, ``tls``, or ``decode``) first yields the
 scripted body then raises while it is being streamed, exercising the
 failures that ``agm.core.http.perform`` must classify from what ``requests``
@@ -109,7 +113,7 @@ class FakeHttp(requests.adapters.BaseAdapter):
                 stacklevel=2,
             )
         if "fail" in outcome:
-            raise _connect_failure(outcome["fail"], request.url)
+            raise _connect_failure(outcome["fail"], request.url, outcome)
         return _build_response(request, outcome)
 
     def close(self) -> None:
@@ -188,9 +192,16 @@ _CONNECT_FAILURES: dict[str, Callable[[str], requests.exceptions.RequestExceptio
 }
 
 
-def _connect_failure(kind: str, url: str | None) -> requests.exceptions.RequestException:
+def _connect_failure(
+    kind: str, url: str | None, outcome: Mapping[str, Any]
+) -> requests.exceptions.RequestException:
     assert kind in _CONNECT_FAILURES, f"unknown fake HTTP failure kind: {kind!r}"
-    return _CONNECT_FAILURES[kind](url or "")
+    exc = _CONNECT_FAILURES[kind](url or "")
+    if kind == "redirect" and "redirects" in outcome:
+        response = requests.Response()
+        response.history = [requests.Response() for _ in range(outcome["redirects"])]
+        exc.response = response
+    return exc
 
 
 _MID_STREAM_FAILURES: dict[str, Callable[[], BaseException]] = {

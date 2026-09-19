@@ -66,6 +66,8 @@ Layout:
         }
       },
       "shell": [{"command": "printf done", "stdout": "done"}],
+      "http": [{"expect": {"method": "GET", "url": "https://x/y"},
+                "status": 200, "body": "ok"}],
       "runtime": {"default_call_depth_limit": 20, "default_strict_json": true},
       "filesystem": {"directories": ["work"]},
       "expect": {
@@ -135,6 +137,14 @@ Field notes:
   `spawn_error`; omitted fields describe a successful command with empty output.
   The harness rejects an unexpected command and verifies the full script was used,
   so acceptance tests never execute a real shell command.
+- `http` — ordered scripted HTTP exchanges, in `tests/_http_helpers.py`'s `FakeHttp`
+  outcome shape: each object may assert an `expect` (method, url, header subset, body,
+  `timeout`, `verify`) against the actual request and scripts its outcome — `status`,
+  `headers` (a mapping, or a list of `[name, value]` pairs to script repeated headers),
+  a `body` (+ optional `charset`) or `body_hex`, or a `fail`/`fail_mid_stream` kind. The
+  harness installs `FakeHttp` in place of `agm.core.http.open_session` and verifies the
+  full script was used, so acceptance tests never touch the network; an absent key means
+  no HTTP call is allowed.
 - `runtime` — optional `PipelineDriver` constructor overrides
   (`default_call_depth_limit`, `default_strict_json`).
 - `filesystem` — optional fixture in a test-created temporary root. It may declare
@@ -176,7 +186,10 @@ Field notes:
   operation on every created session exactly once, including an `unsupported`
   capability rejection; omit the field to leave operation coverage unchecked.
 - `expect.raises` — the uncaught AgL exception ending the run: its type name, an
-  exact-match subset of its fields, and substrings of its `message` field.
+  exact-match subset of its fields, and substrings of its `message` field. A
+  dict-shaped field value (a nested record) is itself an exact-match subset of
+  its keys, recursively — useful for asserting part of a nested field (e.g. a
+  status and body) while ignoring a nondeterministic one (e.g. elapsed time).
 - `expect.exit_code` — the program must terminate through `SystemExit` with this
   status; it is used for host-termination workflows such as `std/process::exit`.
 - `expect.host_error` — the run must fail pre-execution (program argument

@@ -1,0 +1,58 @@
+# Every HttpError subtype reached through the raising function and through
+# the try- twin, catch's exact-type matching, and a Save write failure.
+import std/fs
+import std/http
+import std/http::HttpTimeoutError
+import std/path
+import std/text
+
+# `HttpError`'s concrete subtype cannot be downcast from a base-typed
+# binding -- AgL has no exception downcast, only same-type `catch`. Its
+# type name is recovered from the value's own record-form rendering
+# instead, sliced off before the `message` field's free-form text so
+# stdout stays exact.
+def describe-http-error(e: http::HttpError) -> unit =
+  let rendered = e as text
+  let type-name = rendered.slice(0, rendered.index-of("("))
+  print("url=%{e.url} method=%{e.method.render()} type=%{type-name}")
+
+program def main(root: path, scenario: text) -> unit =
+  case scenario of
+    | "get_raises_transport_error" =>
+        let _ = http::get("https://x/y")
+        ()
+    | "custom_method_raises_http_request_error" =>
+        let _ = http::request(http::Method::Other("BAD METHOD"), "https://x/y")
+        ()
+    | "get_raises_http_timeout_error" =>
+        let _ = http::get("https://x/y", timeout = Some("5s"))
+        ()
+    | "raise_for_status_raises_http_status_error" =>
+        let _ = http::get("https://x/y").raise-for-status()
+        ()
+    | "try_twins_wrap_every_transport_failure_kind" =>
+        let results = [
+          http::try-get("https://x/y"),
+          http::try-request(http::Method::Other("BAD METHOD"), "https://x/y"),
+          http::try-get("https://x/y"),
+          http::try-get("https://x/y"),
+          http::try-get("https://x/y"),
+          http::try-get("https://x/y"),
+          http::try-get("https://x/y"),
+        ]
+        for result in results do
+          case result of
+            | Ok(_) => ()
+            | Err(_ as e) => describe-http-error(e)
+    | "specific_catch_does_not_match_a_different_http_error_subtype" =>
+        try
+          let _ = http::get("https://x/y", timeout = Some("5s"))
+          ()
+        catch HttpTimeoutError as e =>
+          print("caught timeout: %{e.timeout}")
+    | "save_to_unwritable_path_raises_fs_error" =>
+        let destination = path::join([root, "missing", "out.bin"])
+        let _ = http::download("https://x/y", destination)
+        ()
+    | _ =>
+        ()

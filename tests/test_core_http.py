@@ -623,6 +623,20 @@ def test_perform_classifies_too_many_redirects_with_the_redirect_count() -> None
     adapter.assert_complete()
 
 
+def test_perform_classifies_too_many_redirects_with_a_scripted_redirect_count() -> None:
+    session, adapter = fake_session([{"fail": "redirect", "redirects": 2}])
+
+    with pytest.raises(http.TransportError) as excinfo:
+        http.perform(
+            session,
+            http.RequestSpec(method="GET", url="https://example.org/x", timeout_seconds=5.0),
+        )
+
+    assert excinfo.value.kind == "redirect"
+    assert excinfo.value.redirects == 2
+    adapter.assert_complete()
+
+
 def test_perform_classifies_a_mid_stream_read_timeout_as_timeout() -> None:
     session, adapter = fake_session(
         [{"status": 200, "body_hex": b"partial".hex(), "fail_mid_stream": "timeout"}]

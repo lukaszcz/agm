@@ -1,0 +1,160 @@
+{
+  "scenarios": [
+    {
+      "name": "every_verb_and_a_custom_method_send_their_own_wire_verb",
+      "params": {"root": "/unused", "scenario": "verbs_and_custom_method"},
+      "http": [
+        {"status": 200, "body": "", "expect": {"method": "GET"}},
+        {"status": 200, "body": "", "expect": {"method": "POST"}},
+        {"status": 200, "body": "", "expect": {"method": "PUT"}},
+        {"status": 200, "body": "", "expect": {"method": "PATCH"}},
+        {"status": 200, "body": "", "expect": {"method": "DELETE"}},
+        {"status": 200, "body": "", "expect": {"method": "HEAD"}},
+        {"status": 200, "body": "", "expect": {"method": "OPTIONS"}},
+        {"status": 200, "body": "", "expect": {"method": "PURGE"}}
+      ],
+      "expect": {
+        "stdout": "200\n200\n200\n200\n200\n200\n\n200\n200\n"
+      }
+    },
+    {
+      "name": "query_is_appended_to_the_urls_own_query_and_elapsed_is_non_negative",
+      "params": {"root": "/unused", "scenario": "query_appended_to_existing_query"},
+      "http": [
+        {"status": 200, "body": "", "expect": {"url": "https://x/y?a=1&b=2"}}
+      ],
+      "expect": {
+        "stdout": "200\ntrue\n"
+      }
+    },
+    {
+      "name": "headers_normalise_internally_but_still_reach_the_wire",
+      "params": {"root": "/unused", "scenario": "header_normalisation_on_the_wire"},
+      "http": [
+        {"status": 200, "body": "", "expect": {"headers": {"x-test": "1"}}},
+        {"status": 200, "body": "", "expect": {"headers": {"x-raw": "2"}}},
+        {
+          "status": 200,
+          "headers": {"content-type": "text/plain"},
+          "body": "",
+          "expect": {"headers": {"x-a": "2"}}
+        }
+      ],
+      "expect": {
+        "stdout": "200\n200\n200\ntext/plain\n"
+      }
+    },
+    {
+      "name": "every_body_kind_sends_its_own_content_type_and_payload",
+      "params": {"root": "/unused", "scenario": "body_kinds_send_correct_content_type"},
+      "http": [
+        {
+          "status": 200,
+          "body": "",
+          "expect": {"method": "POST", "body": null, "headers": {"content-type": null}}
+        },
+        {
+          "status": 200,
+          "body": "",
+          "expect": {"headers": {"content-type": "text/plain"}, "body": "hi"}
+        },
+        {
+          "status": 200,
+          "body": "",
+          "expect": {"headers": {"content-type": "application/json"}, "body": "{\"a\": 1}"}
+        },
+        {
+          "status": 200,
+          "body": "",
+          "expect": {
+            "headers": {"content-type": "application/x-www-form-urlencoded"},
+            "body": "a=1"
+          }
+        }
+      ],
+      "expect": {
+        "stdout": "200\n200\n200\n200\n"
+      }
+    },
+    {
+      "name": "every_receive_kind_decodes_drops_or_saves_the_body",
+      "params": {"root": "$TEMP_ROOT", "scenario": "receive_kinds_decode_ignore_and_save"},
+      "filesystem": {},
+      "http": [
+        {"status": 200, "body": "hello"},
+        {"status": 200, "body": "dropped"},
+        {"status": 200, "body": "payload"}
+      ],
+      "expect": {
+        "stdout": "hello\n\n\npayload\n"
+      }
+    },
+    {
+      "name": "cookies_are_sent_as_given_and_response_cookies_reflect_what_was_set",
+      "params": {"root": "/unused", "scenario": "cookies_in_and_out"},
+      "http": [
+        {
+          "status": 200,
+          "headers": {"set-cookie": "resp=out"},
+          "body": "",
+          "expect": {"headers": {"cookie": "req=in"}}
+        }
+      ],
+      "expect": {
+        "stdout": "{\"resp\": \"out\"}\n"
+      }
+    },
+    {
+      "name": "auth_renders_authorization_and_overrides_a_supplied_header",
+      "params": {"root": "/unused", "scenario": "auth_rendering_basic_and_bearer_overrides_header"},
+      "http": [
+        {"status": 200, "body": "", "expect": {"headers": {"authorization": "Basic dXNlcjpwdw=="}}},
+        {"status": 200, "body": "", "expect": {"headers": {"authorization": "Bearer tok"}}},
+        {"status": 200, "body": "", "expect": {"headers": {"authorization": "Bearer tok2"}}}
+      ],
+      "expect": {
+        "stdout": "200\n200\n200\n"
+      }
+    },
+    {
+      "name": "a_redirect_is_followed_to_its_final_url_by_default",
+      "params": {"root": "/unused", "scenario": "redirect_followed_to_final_url"},
+      "http": [
+        {
+          "status": 302,
+          "headers": {"location": "https://x/final"},
+          "body": "",
+          "expect": {"method": "GET", "url": "https://x/start"}
+        },
+        {"status": 200, "body": "", "expect": {"method": "GET", "url": "https://x/final"}}
+      ],
+      "expect": {
+        "stdout": "200\nhttps://x/final\n"
+      }
+    },
+    {
+      "name": "follow_redirects_false_returns_the_3xx_response_unfollowed",
+      "params": {"root": "/unused", "scenario": "redirect_not_followed_returns_3xx"},
+      "http": [
+        {"status": 302, "headers": {"location": "https://x/final"}, "body": ""}
+      ],
+      "expect": {
+        "stdout": "302\nhttps://x/start\n"
+      }
+    },
+    {
+      "name": "a_declared_non_utf8_charset_is_decoded_correctly",
+      "params": {"root": "/unused", "scenario": "declared_non_utf8_charset_decoded_correctly"},
+      "http": [
+        {
+          "status": 200,
+          "headers": {"content-type": "text/plain; charset=iso-8859-1"},
+          "body_hex": "636166e9"
+        }
+      ],
+      "expect": {
+        "stdout": "café\n"
+      }
+    }
+  ]
+}

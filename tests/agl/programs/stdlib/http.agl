@@ -1,0 +1,63 @@
+# std/http's request/response surface against a scripted transport (no
+# network): every verb, query merging, header normalisation, every Body and
+# Receive kind, cookies, Auth rendering, redirects, and charset decoding.
+import std/fs
+import std/http
+import std/path
+
+program def main(root: path, scenario: text) -> unit =
+  case scenario of
+    | "verbs_and_custom_method" =>
+        print(http::get("https://x/y").status)
+        print(http::post("https://x/y").status)
+        print(http::put("https://x/y").status)
+        print(http::patch("https://x/y").status)
+        print(http::delete("https://x/y").status)
+        let head-response = http::head("https://x/y")
+        print(head-response.status)
+        print(head-response.body)
+        print(http::request(http::Method::Options, "https://x/y").status)
+        print(http::request(http::Method::Other("PURGE"), "https://x/y").status)
+    | "query_appended_to_existing_query" =>
+        let response = http::get("https://x/y?a=1", query = {"b": "2"})
+        print(response.status)
+        print(response.elapsed >= 0.0)
+    | "header_normalisation_on_the_wire" =>
+        print(http::get("https://x/y", headers = http::headers({"X-Test": "1"})).status)
+        print(http::get("https://x/y", headers = http::Headers({"X-Raw": "2"})).status)
+        let collapsed = http::get("https://x/y", headers = http::headers({"X-A": "1", "x-a": "2"}))
+        print(collapsed.status)
+        print(collapsed.headers.get("content-type"))
+    | "body_kinds_send_correct_content_type" =>
+        print(http::post("https://x/y", body = http::Body::Empty).status)
+        print(http::post("https://x/y", body = http::Body::Text("hi", "text/plain")).status)
+        print(http::post("https://x/y", body = http::Body::Json({"a": 1})).status)
+        print(http::post("https://x/y", body = http::Body::Form({"a": "1"})).status)
+    | "receive_kinds_decode_ignore_and_save" =>
+        print(http::get("https://x/y").body)
+        print(http::get("https://x/y", receive = http::Receive::Ignore).body)
+        let destination = path::join([root, "saved.bin"])
+        let saved = http::get("https://x/y", receive = http::Receive::Save(destination))
+        print(saved.body)
+        print(fs::read(destination))
+    | "cookies_in_and_out" =>
+        let response = http::get("https://example.org/y", cookies = {"req": "in"})
+        print(response.cookies)
+    | "auth_rendering_basic_and_bearer_overrides_header" =>
+        print(http::get("https://x/y", auth = http::Auth::Basic("user", "pw")).status)
+        print(http::get("https://x/y", auth = http::Auth::Bearer("tok")).status)
+        print(http::get("https://x/y",
+          headers = http::headers({"Authorization": "stale"}),
+          auth = http::Auth::Bearer("tok2")).status)
+    | "redirect_followed_to_final_url" =>
+        let response = http::get("https://x/start")
+        print(response.status)
+        print(response.url)
+    | "redirect_not_followed_returns_3xx" =>
+        let response = http::get("https://x/start", follow-redirects = false)
+        print(response.status)
+        print(response.url)
+    | "declared_non_utf8_charset_decoded_correctly" =>
+        print(http::get("https://x/y").body)
+    | _ =>
+        ()

@@ -59,6 +59,7 @@ from tests._agl_helpers import (
     program_config_engine_seeds,
     run_inline_command,
 )
+from tests._http_helpers import FakeHttp, fake_session
 from tests._process_helpers import FakeShell
 
 AGL_DIR = Path(__file__).parent / "agl"
@@ -873,13 +874,14 @@ def test_inline_entry_with_its_own_program_def_follows_relaxed_binding_order(
 
 def _run_program(
     source: str, scenario: dict[str, Any], program: Path
-) -> tuple[Any, dict[str, ScriptedAgent], FakeShell]:
+) -> tuple[Any, dict[str, ScriptedAgent], FakeShell, FakeHttp]:
     from agm.agl import PipelineDriver
 
     agents = {
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
     }
     shell = FakeShell(scenario.get("shell", []))
+    http_session, http_adapter = fake_session(scenario.get("http", []))
     runtime_options: dict[str, Any] = {}
     runtime_config = scenario.get("runtime", {})
     if runtime_config.get("enforce_command_sessions") is True:
@@ -912,7 +914,10 @@ def _run_program(
     prepare = (
         prepare_inline_command if scenario.get("inline_entry") else PipelineDriver.prepare_program
     )
-    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+    with (
+        unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell),
+        unittest.mock.patch("agm.core.http.open_session", lambda: http_session),
+    ):
         prepared = prepare(
             source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
         )
@@ -928,7 +933,7 @@ def _run_program(
             )
         except SystemExit as exc:
             result = exc
-    return result, agents, shell
+    return result, agents, shell, http_adapter
 
 
 def _assert_host_error(result: Any, agents: dict[str, ScriptedAgent], spec: dict[str, Any]) -> None:
@@ -945,6 +950,22 @@ def _assert_host_error(result: Any, agents: dict[str, ScriptedAgent], spec: dict
         )
 
 
+def _fields_match(actual: Any, expected: Any) -> bool:
+    """``expected`` matches ``actual``, recursing into nested dicts as a subset.
+
+    A dict-shaped expected value is an exact-match subset of the matching
+    actual dict's keys (e.g. asserting only a nested exception field's
+    ``status``/``body`` while ignoring its nondeterministic ``elapsed``);
+    every other value compares with ``==``, exactly as ``expect.raises.fields``
+    already does at the top level.
+    """
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and _fields_match(actual[key], value) for key, value in expected.items()
+        )
+    return bool(actual == expected)
+
+
 def _assert_outcome(result: Any, expect: dict[str, Any]) -> None:
     diags = " | ".join(d.message for d in result.diagnostics)
     assert list(result.diagnostics) == [], f"unexpected static diagnostics: {diags}"
@@ -954,7 +975,9 @@ def _assert_outcome(result: Any, expect: dict[str, Any]) -> None:
         assert result.error.type_name == spec["type"]
         for key, value in spec.get("fields", {}).items():
             actual = result.error.fields[key]
-            assert actual == value, f"{spec['type']}.{key}: expected {value!r}, got {actual!r}"
+            assert _fields_match(actual, value), (
+                f"{spec['type']}.{key}: expected {value!r}, got {actual!r}"
+            )
         message = str(result.error.fields.get("message", ""))
         for needle in spec.get("message_contains", []):
             assert needle in message, f"{needle!r} not in message {message!r}"
@@ -1582,12 +1605,15 @@ def test_program_scenario(
     tmp_path: Path,
 ) -> None:
     scenario = _prepare_temp_filesystem(scenario, tmp_path)
-    result, agents, shell = _run_program(program.read_text(encoding="utf-8"), scenario, program)
+    result, agents, shell, http_adapter = _run_program(
+        program.read_text(encoding="utf-8"), scenario, program
+    )
     out = capsys.readouterr().out
     expect = scenario["expect"]
     if "host_error" in expect:
         _assert_host_error(result, agents, expect["host_error"])
         shell.assert_complete()
+        http_adapter.assert_complete()
         return
     if "exit_code" in expect:
         assert isinstance(result, SystemExit)
@@ -1595,12 +1621,14 @@ def test_program_scenario(
         _assert_output(out, expect)
         _assert_calls(agents, expect)
         shell.assert_complete()
+        http_adapter.assert_complete()
         return
     _assert_outcome(result, expect)
     _assert_output(out, expect)
     _assert_calls(agents, expect)
     _assert_sessions(agents, expect)
     shell.assert_complete()
+    http_adapter.assert_complete()
 
 
 @pytest.mark.parametrize("program", _rejection_params())

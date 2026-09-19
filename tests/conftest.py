@@ -14,9 +14,11 @@ from types import SimpleNamespace
 from typing import Any, NoReturn
 
 import pytest
+import requests
 
 from agm.agl.self_validation import self_validation_enabled, set_self_validation_enabled
 from agm.core import dry_run
+from agm.core import http as core_http
 from tests import _command_coverage
 from tests._durations import (
     pytest_runtest_protocol,
@@ -24,6 +26,7 @@ from tests._durations import (
     pytest_testnodedown,
 )
 from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
+from tests._http_helpers import FakeHttp
 
 # Re-exported so pytest picks the per-test cost accounting up as conftest hooks.
 # Registering the module with ``-p`` instead would break every invocation that
@@ -261,6 +264,43 @@ def installed_agm_prefix(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path], No
         monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
 
     return pin
+
+
+@pytest.fixture(autouse=True)
+def refuse_real_http_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default every test's HTTP transport to one that refuses any request.
+
+    A test that never scripts HTTP must not be able to reach the real network
+    by accident: patch ``agm.core.http.open_session`` to build a session
+    through the real function -- preserving its proxy/cookie/``.netrc``
+    configuration -- with an empty-script ``FakeHttp`` mounted, so an
+    unscripted request fails immediately instead of dialing out.
+
+    A test that scripts HTTP (``tests._http_helpers.install``/``fake_session``,
+    or ``test_agl_e2e.py``'s per-scenario patch) overrides this by patching the
+    same name again afterward, which naturally supersedes this default --
+    exactly the escape hatch ``installed_agm_prefix`` uses for
+    ``detach_installed_agm_prefix``. ``test_core_http.py``'s own
+    ``open_session`` tests need no such opt-out: they build their session
+    through ``fake_session``, which itself calls ``agm.core.http.open_session``
+    and so still exercises the real function's configuration, with this
+    fixture's empty adapter simply replaced by their own scripted one.
+
+    The real function is captured once, before patching, rather than looked
+    up through the (about to be patched) module attribute at call time --
+    otherwise ``fake_session``'s own call to ``open_session`` would recurse
+    into this fixture's replacement.
+    """
+    real_open_session = core_http.open_session
+
+    def refused_session() -> requests.Session:
+        session = real_open_session()
+        adapter = FakeHttp([])
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
+
+    monkeypatch.setattr(core_http, "open_session", refused_session)
 
 
 @pytest.fixture()

@@ -78,8 +78,8 @@ command payload:
 ```agl
 program def main() -> unit =
   let directory = "."
-  let listing: text = exec$ printf '%s\n' %{directory}
-  let home-listing: text = exec$
+  let listing: text = exec $ printf '%s\n' %{directory}
+  let home-listing: text = exec $
     for file in "$HOME"/*; do
       printf '%s\n' "$file"
     done
@@ -96,7 +96,7 @@ this command passes `%{literal}` to the shell:
 
 ```agl
 program def main() -> unit =
-  let marker: text = exec$ printf '\%{literal}'
+  let marker: text = exec $ printf '\%{literal}'
 ```
 
 The backslash in `\%{` is consumed by the escape, so a payload cannot spell a
@@ -107,7 +107,7 @@ backslash from a text literal instead:
 ```agl
 program def main() -> unit =
   let subdir: text = "docs"
-  let path: text = exec$ printf '%s' "C:%{"\\"}%{subdir}"
+  let path: text = exec $ printf '%s' "C:%{"\\"}%{subdir}"
 ```
 
 Raw-tail calls are permitted only in line-final expression positions: block
@@ -144,8 +144,11 @@ exactly as for `ask` ([Agent calls](agent-calls.md)).
 
 ### Structured form — target is `ExecResult`
 
-When no expected type is present, or the annotation is `ExecResult`, `exec`
-returns the `ExecResult` standard-library record:
+When no expected type is present — including when the propagated expectation
+is itself a generic type parameter that nothing else in the enclosing
+expression pins (the default applies only after sibling constraints), as in
+`print <| exec "…"` — or the annotation is `ExecResult`, `exec` returns the
+`ExecResult` standard-library record:
 
 ```text
 stdout:    text

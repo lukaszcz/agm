@@ -1,0 +1,17 @@
+# A `$` literal is an ordinary text argument to a projected method:
+# juxtaposition, not special call syntax.
+record Review
+  summary: text
+
+program def main(subject: text) -> unit =
+  let ag: Agent = AgentCommand("annotator")
+
+  print <| ag.ask $ Summarize %{subject}.
+
+  let block: Review = ag.ask::[Review] $
+    Review %{subject} and identify the key change.
+  print block.summary
+
+  let agents: array[Agent] = [AgentCommand("chain")]
+  let chained: text = agents[0].ask $ Continue %{subject}.
+  print chained

@@ -73,7 +73,7 @@
       }
     },
     {
-      "name": "typed_raw_and_call_form_parse_failures_stay_on_default_agent",
+      "name": "typed_dollar_and_call_form_parse_failures_stay_on_default_agent",
       "params": {
         "document": "migration guide"
       },
@@ -88,7 +88,7 @@
         ]
       },
       "expect": {
-        "stdout": "Guide summary\nExplicit pass\nraw Agent::AgentClaude(model = \"sonnet\", thinking = \"medium\") 1 Review\ncall Agent::AgentClaude(model = \"sonnet\", thinking = \"medium\") 1 Review\n",
+        "stdout": "Guide summary\nExplicit pass\ndollar Agent::AgentClaude(model = \"sonnet\", thinking = \"medium\") 1 Review\ncall Agent::AgentClaude(model = \"sonnet\", thinking = \"medium\") 1 Review\n",
         "calls": {
           "ask": 3,
           "reviewer": 1

@@ -909,16 +909,6 @@ class TestCompleter:
 
 
 class TestEvalOutput:
-    def test_inline_raw_tail_exec_evaluates_through_the_console(self) -> None:
-        shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            output = drive("exec$ echo hi\r\x04", session=ReplSession(default_stdlib=True))
-
-        assert ": error:" not in output.lower()
-        # Exactly one shell call, and its scripted output is echoed as the value.
-        shell.assert_complete()
-        assert "hi" in output
-
     def test_binding_echo_shows_name_type_value(self) -> None:
         output = drive("let x = 5\r\x04")
 

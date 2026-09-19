@@ -17,7 +17,7 @@
         }
       ],
       "expect": {
-        "stdout": "raw raw-failure 7 raw-out raw-err false\ncall call-failure 7 call-out call-err false\n"
+        "stdout": "dollar raw-failure 7 raw-out raw-err false\ncall call-failure 7 call-out call-err false\n"
       }
     },
     {
@@ -37,7 +37,7 @@
         }
       ],
       "expect": {
-        "stdout": "raw raw-failure 2 left raw diagnostics false\ncall call-failure 2 right call diagnostics false\n"
+        "stdout": "dollar raw-failure 2 left raw diagnostics false\ncall call-failure 2 right call diagnostics false\n"
       }
     }
   ]

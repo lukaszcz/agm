@@ -1,0 +1,44 @@
+{
+  "scenarios": [
+    {
+      "name": "reads_the_present_environment_variable",
+      "process_environment": {
+        "NAME": "Ada"
+      },
+      "agents": {
+        "reviewer": ["Hi Ada"]
+      },
+      "expect": {
+        "stdout": "Hi Ada\n",
+        "calls": {"reviewer": 1},
+        "prompts": [
+          {"agent": "reviewer", "call": 0, "equals": "Say hello to Ada (${NAME})."}
+        ]
+      }
+    },
+    {
+      "name": "different_environment_value_changes_the_prompt",
+      "process_environment": {
+        "NAME": "Bo"
+      },
+      "agents": {
+        "reviewer": ["Hi Bo"]
+      },
+      "expect": {
+        "stdout": "Hi Bo\n",
+        "calls": {"reviewer": 1},
+        "prompts": [
+          {"agent": "reviewer", "call": 0, "equals": "Say hello to Bo (${NAME})."}
+        ]
+      }
+    },
+    {
+      "name": "missing_environment_variable_raises_before_any_call",
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "KeyError", "fields": {"key": "NAME"}},
+        "calls": {}
+      }
+    }
+  ]
+}

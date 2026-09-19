@@ -16,6 +16,7 @@ from tests._agl_helpers import agl_roots, let_root_capture
 from tests.agl.ir_harness import (
     completed_bindings,
     evaluate_ir_raises_with_shell,
+    evaluate_ir_with_agents,
     evaluate_ir_with_shell,
     inline_main_items,
     lower_inline_ir,
@@ -495,8 +496,8 @@ def test_exec_with_an_extended_environment_reaches_the_process_boundary() -> Non
     assert calls == [{"base": "override", "preserved": "kept", "extra": "value"}]
 
 
-def test_exec_raw_tail_uses_the_live_std_config_timeout_default() -> None:
-    """An omitted timeout on exec$ reads std/config at the call point."""
+def test_exec_dollar_literal_uses_the_live_std_config_timeout_default() -> None:
+    """An omitted timeout on exec $ reads std/config at the call point."""
     calls: list[float | None] = []
 
     def fake_shell(
@@ -514,7 +515,7 @@ def test_exec_raw_tail_uses_the_live_std_config_timeout_default() -> None:
     source = (
         "import std/config\n"
         'std/config::timeout := Option[text]::Some(value = "2s")\n'
-        "let output: text = exec$ configured\n"
+        "let output: text = exec $ configured\n"
         "output"
     )
     completed_bindings(run_inline_ir_with_shell(source, fake_shell))
@@ -544,8 +545,8 @@ def test_t13_exec_spawn_parameters_and_defaults() -> None:
         'let explicit: text = exec("explicit", env = child, '
         'cwd = Option[text]::Some(value = "/work"), '
         'timeout = Option[text]::Some(value = "2s"))\n'
-        "let ambient: text = exec$ ambient\n"
-        "let configured: text = exec$ configured\n"
+        "let ambient: text = exec $ ambient\n"
+        "let configured: text = exec $ configured\n"
         "()"
     )
     completed_bindings(
@@ -597,3 +598,33 @@ def test_t14_invalid_exec_timeout_raises_type_error_before_shell_execution() -> 
 
     ir_exc = evaluate_ir_raises_with_shell(source, {})
     assert ir_exc.type_name == "TypeError"
+
+
+# ---------------------------------------------------------------------------
+# A direct exec()/ask() call sitting in an unresolved generic parameter slot
+# ---------------------------------------------------------------------------
+#
+# Such a call's own contextual target is a bare, unresolved solver variable
+# until the checker applies the builtin default at region close. These
+# confirm the whole pipeline — not just the checker — runs the finalized
+# default target end to end.
+
+
+def test_exec_in_a_generic_argument_slot_defaults_to_exec_result() -> None:
+    """``id(exec "…")`` infers ``ExecResult`` and executes it."""
+    source = 'def id[A](x: A) -> A = x\nlet result = id(exec "echo hi")\nresult'
+    commands = {"echo hi": _ok("hi\n")}
+    ir = evaluate_ir_with_shell(source, commands)
+    from agm.agl.semantics.values import IntValue, RecordValue
+
+    assert isinstance(ir["result"], RecordValue)
+    assert ir["result"].fields["exit-code"] == IntValue(0)
+
+
+def test_ask_in_a_generic_argument_slot_defaults_to_text() -> None:
+    """``id(ask "…")`` infers ``text`` and executes it."""
+    source = 'def id[A](x: A) -> A = x\nlet result = id(ask "hi")\nresult'
+    ir = evaluate_ir_with_agents(source, {}, default_responses=["hello"])
+    from agm.agl.semantics.values import TextValue
+
+    assert ir["result"] == TextValue("hello")

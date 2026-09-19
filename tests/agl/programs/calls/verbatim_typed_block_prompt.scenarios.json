@@ -1,0 +1,86 @@
+{
+  "scenarios": [
+    {
+      "name": "block_prompt_parses_on_first_attempt",
+      "params": {"topic": "release", "mode": "block"},
+      "agents": {
+        "reviewer": ["{\"title\": \"Ship release\"}"]
+      },
+      "expect": {
+        "stdout": "Ship release\n",
+        "calls": {"reviewer": 1},
+        "prompts": [
+          {
+            "agent": "reviewer",
+            "call": 0,
+            "starts_with": "Draft a task for release.\nKeep the title short."
+          }
+        ]
+      }
+    },
+    {
+      "name": "block_prompt_parse_failure_raises_and_is_caught",
+      "params": {"topic": "migration", "mode": "block"},
+      "agents": {
+        "reviewer": ["not json"]
+      },
+      "expect": {
+        "stdout": "parse error: 1\n",
+        "calls": {"reviewer": 1},
+        "prompts": [
+          {
+            "agent": "reviewer",
+            "call": 0,
+            "starts_with": "Draft a task for migration.\nKeep the title short."
+          }
+        ]
+      }
+    },
+    {
+      "name": "block_prompt_retry_recovers_on_second_attempt",
+      "params": {"topic": "audit", "mode": "retry"},
+      "agents": {
+        "reviewer": ["not json", "{\"title\": \"Audit follow-up\"}"]
+      },
+      "expect": {
+        "stdout": "Audit follow-up\n",
+        "calls": {"reviewer": 2},
+        "prompts": [
+          {
+            "agent": "reviewer",
+            "call": 0,
+            "starts_with": "Draft a task for audit.\nKeep the title short."
+          },
+          {
+            "agent": "reviewer",
+            "call": 1,
+            "starts_with": "Validation errors:"
+          }
+        ]
+      }
+    },
+    {
+      "name": "block_prompt_retry_exhausted_shows_attempt_count",
+      "params": {"topic": "handoff", "mode": "retry"},
+      "agents": {
+        "reviewer": ["not json", "still not json"]
+      },
+      "expect": {
+        "stdout": "parse error: 2\n",
+        "calls": {"reviewer": 2},
+        "prompts": [
+          {
+            "agent": "reviewer",
+            "call": 0,
+            "starts_with": "Draft a task for handoff.\nKeep the title short."
+          },
+          {
+            "agent": "reviewer",
+            "call": 1,
+            "starts_with": "Validation errors:"
+          }
+        ]
+      }
+    }
+  ]
+}

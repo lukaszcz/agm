@@ -1,0 +1,63 @@
+{
+  "scenarios": [
+    {
+      "name": "ambient_variable_present",
+      "process_environment": {
+        "GREETING": "hi"
+      },
+      "shell": [
+        {
+          "command": "printf '%s' \"${GREETING:-unset}\"",
+          "stdout": "hi",
+          "env": {"GREETING": "hi"}
+        },
+        {
+          "command": "printf '%s' \"${GREETING}\"",
+          "stdout": "hi",
+          "env": {"GREETING": "hi"}
+        },
+        {
+          "command": "f=shell-local\nprintf '%s' \"${f}\"",
+          "stdout": "shell-local",
+          "env": {"GREETING": "hi"}
+        },
+        {
+          "command": "date",
+          "stdout": "Wed Jan 01 00:00:00 UTC 2026",
+          "env": {"GREETING": "hi"}
+        }
+      ],
+      "expect": {
+        "stdout": "hi\nhi\nshell-local\nExecResult(stdout = \"Wed Jan 01 00:00:00 UTC 2026\", exit-code = 0, stderr = \"\", timed-out = false)\n"
+      }
+    },
+    {
+      "name": "ambient_variable_absent",
+      "shell": [
+        {
+          "command": "printf '%s' \"${GREETING:-unset}\"",
+          "stdout": "unset",
+          "env": {}
+        },
+        {
+          "command": "printf '%s' \"${GREETING}\"",
+          "stdout": "",
+          "env": {}
+        },
+        {
+          "command": "f=shell-local\nprintf '%s' \"${f}\"",
+          "stdout": "shell-local",
+          "env": {}
+        },
+        {
+          "command": "date",
+          "stdout": "Thu Jan 02 00:00:00 UTC 2026",
+          "env": {}
+        }
+      ],
+      "expect": {
+        "stdout": "unset\n\nshell-local\nExecResult(stdout = \"Thu Jan 02 00:00:00 UTC 2026\", exit-code = 0, stderr = \"\", timed-out = false)\n"
+      }
+    }
+  ]
+}

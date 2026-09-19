@@ -8,7 +8,7 @@
       },
       "shell": [
         {
-          "command": "printf '%s' $VAR \"${var}\" $(echo shell) $1 \"My File Name With Spaces\"; # raw tail text remains shell text",
+          "command": "printf '%s' $VAR \"${var}\" $(echo shell) $1 \"My File Name With Spaces\"; # verbatim text remains shell text",
           "stdout": "shell syntax preserved"
         },
         {
@@ -51,7 +51,7 @@
       },
       "shell": [
         {
-          "command": "printf '%s' $VAR \"${var}\" $(echo shell) $1 \"My File Name With Spaces\"; # raw tail text remains shell text",
+          "command": "printf '%s' $VAR \"${var}\" $(echo shell) $1 \"My File Name With Spaces\"; # verbatim text remains shell text",
           "stdout": "dollars untouched"
         },
         {

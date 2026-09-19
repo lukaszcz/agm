@@ -1,0 +1,27 @@
+# Block-form typed `ask::[Task] $` renders a dedented, newline-joined prompt;
+# a response that fails to parse into T raises AgentParseError, caught like
+# the call form. `on-parse-error = Retry(n = …)` is a call option that a bare
+# `ask::[T] $` prompt argument cannot carry, so a retry binds the `$` block
+# literal to a name first and passes it through `ask(prompt, on-parse-error = …)`.
+record Task
+  title: text
+
+program def main(topic: text, mode: text) -> unit =
+  let reviewer: Agent = AgentCommand("reviewer")
+  if mode == "retry" =>
+    let prompt = $
+      Draft a task for %{topic}.
+      Keep the title short.
+    try
+      let task: Task = reviewer.ask(prompt, on-parse-error = Retry(n = 1))
+      print task.title
+    catch AgentParseError as error =>
+      print "parse error: %{error.attempts}"
+  else =>
+    try
+      let task: Task = reviewer.ask::[Task] $
+        Draft a task for %{topic}.
+        Keep the title short.
+      print task.title
+    catch AgentParseError as error =>
+      print "parse error: %{error.attempts}"

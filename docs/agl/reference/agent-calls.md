@@ -59,7 +59,9 @@ Configured variants still use a lambda around a direct call.
 or as a function parameter name, but it can be referenced as a function value.
 The value is an eta-expanded `text -> T` callable using the default session;
 its result is fixed by an expected function type or explicit `::[T]`, and
-defaults to `text` when unconstrained:
+defaults to `text` when unconstrained — including when the expectation is
+itself a generic type parameter that nothing else in the enclosing expression
+pins (the default applies only after sibling constraints):
 
 ```agl
 program def main() -> unit =
@@ -122,8 +124,8 @@ record Review
 
 program def main() -> unit =
   let subject = "the release notes"
-  let summary: text = ask$ Summarize %{subject}.
-  let review: Review = ask$::[Review]
+  let summary: text = ask $ Summarize %{subject}.
+  let review: Review = ask::[Review] $
     Review %{subject} and provide a concise summary.
 ```
 

@@ -1,0 +1,17 @@
+# `${VAR}` and shell-local `${f}` inside a `$` verbatim literal reach the
+# shell unchanged: unlike a quoted template's `${VAR}` hole, the `$` literal
+# never looks them up, so AgL sends the identical command whether or not the
+# ambient process defines the variable.
+program def main() -> unit =
+  let ambient: text = exec $ printf '%s' "${GREETING:-unset}"
+  print ambient
+
+  let plain: text = exec $ printf '%s' "${GREETING}"
+  print plain
+
+  let local: text = exec $
+    f=shell-local
+    printf '%s' "${f}"
+  print local
+
+  print <| exec $ date

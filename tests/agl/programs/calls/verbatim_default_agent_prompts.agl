@@ -1,24 +1,24 @@
-# Raw and call-form asks use the default agent alongside an explicit Agent call.
+# $-literal and call-form asks use the default agent alongside an explicit Agent call.
 record Review
   approved: bool
   summary: text
 
 program def main(document: text) -> unit =
   let reviewer: Agent = AgentCommand("reviewer")
-  let summary = ask$ Summarize %{document} in one line.
+  let summary = ask $ Summarize %{document} in one line.
   print summary
 
   let explicit: Review = reviewer.ask::[Review]("Explicit review for %{document}.")
   print explicit.summary
 
   try
-    let markdown: Review = ask$::[Review]
+    let markdown: Review = ask::[Review] $
       # Review %{document}
       - correctness
       - style
     print markdown.approved
   catch AgentParseError as error =>
-    print "raw %{error.agent} %{error.attempts} %{error.target-type}"
+    print "dollar %{error.agent} %{error.attempts} %{error.target-type}"
 
   try
     let call-form: Review = ask::[Review]("Call-form review for %{document}.")

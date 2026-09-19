@@ -627,7 +627,7 @@ ordinary call form there.
 ```agl
 program def main() -> unit =
   let path = "."
-  let output: text = exec$ printf '%s' %{path}
+  let output: text = exec $ printf '%s' %{path}
 ```
 
 ## Expressions

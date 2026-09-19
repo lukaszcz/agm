@@ -1,10 +1,10 @@
 program def main() -> unit =
-  # Raw and call-shaped unit exec calls expose identical ExecError fields.
+  # $-literal and call-shaped unit exec calls expose identical ExecError fields.
   try
-    let raw: text = exec$ raw-failure
+    let raw: text = exec $ raw-failure
     ()
   catch ExecError as error =>
-    print "raw %{error.command} %{error.exit-code} %{error.stdout} %{error.stderr} %{error.timed-out}"
+    print "dollar %{error.command} %{error.exit-code} %{error.stdout} %{error.stderr} %{error.timed-out}"
 
   try
     let call: text = exec "call-failure"

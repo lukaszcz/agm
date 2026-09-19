@@ -4882,6 +4882,26 @@ class TestExecProcessEnvironment:
         assert capsys.readouterr().out == "original\nchanged\n"
         assert os.environ["AGL_TEST_ENV"] == "original"
 
+    def test_dollar_literal_hole_is_expanded_by_the_real_shell_not_agl(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``${VAR}`` inside a ``$`` verbatim literal is shell syntax: the real
+        shell expands it against its own environment, set and unset -- AgL's
+        `$` literal never looks environment variables up itself."""
+        agl_file = tmp_path / "dollar_hole.agl"
+        write_file_program(
+            agl_file,
+            "let out: text = exec $ printf '%s' \"${AGL_TEST_DOLLAR_HOLE:-unset}\"\nprint out\n",
+        )
+
+        monkeypatch.setenv("AGL_TEST_DOLLAR_HOLE", "from-shell")
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "from-shell\n"
+
+        monkeypatch.delenv("AGL_TEST_DOLLAR_HOLE", raising=False)
+        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert capsys.readouterr().out == "unset\n"
+
 
 class TestExecProgramSelection:
     """Program-def entry selection requires file programs and wraps inline source."""

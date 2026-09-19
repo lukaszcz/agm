@@ -41,13 +41,11 @@ extern def first?(xs: array[int]) -> Option[int]
 
 ```python
 # Companion
-from agl import nominals
-
-Option = nominals.std.option.Option
+from agl import option_none, option_some
 
 
 def first_option(xs):
-    return Option.Some(value=xs[0]) if len(xs) else getattr(Option, "None")()
+    return option_some(xs[0]) if len(xs) else option_none()
 ```
 
 The supplied name is itself subject to the same rule. Every extern of a module
@@ -65,6 +63,9 @@ imports the program's nominal classes, value constructors, and exception carrier
 ```python
 from agl import AglException, Box, Shape, array, dict, json
 ```
+
+`option_some(value)` and `option_none()` build the standard `Option`; they
+exist only when `std/option` is loaded.
 
 `agl` is available only for the companion import. The imported classes and
 constructors remain valid afterwards. The fixed module name means concurrent

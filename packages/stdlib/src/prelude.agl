@@ -17,4 +17,5 @@ export std/session
 export std/exec
 export std/package
 export std/path::{path}
+export std/url::{url}
 export std/env::{getenv}

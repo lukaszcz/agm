@@ -285,13 +285,15 @@ other module. Two have a language-level role:
   re-exports the modules declaring the types, exceptions, and built-ins the
   language itself refers to, together with the generic sum and product types,
   the receiver scopes that make builtin methods available, `std/path`'s
-  `path` type, and `std/env`'s `getenv`, which environment holes read.
+  `path` type, `std/url`'s `url` type, and `std/env`'s `getenv`, which
+  environment holes read.
 - `std/config` exposes the host engine settings as `builtin var` bindings; see
   [Host environment](host-environment.md).
 
 Every other `std/*` module carries no special status; the prelude re-exports
 the first six rows below in full, the receiver scopes from the following two
-rows, `std/path`'s `path` type alone, and `std/env`'s `getenv` alone. The rest are imported explicitly:
+rows, `std/path`'s `path` type alone, `std/url`'s `url` type alone, and
+`std/env`'s `getenv` alone. The rest are imported explicitly:
 
 | Module | Provides |
 | ------ | -------- |
@@ -308,6 +310,7 @@ rows, `std/path`'s `path` type alone, and `std/env`'s `getenv` alone. The rest a
 | `std/time` | UTC clock, parsing, formatting, and sleeping |
 | `std/random` | a seedable pseudo-random sequence and UUIDs |
 | `std/path` | the `path` type and lexical path manipulation |
+| `std/url` | the `url` type, parsing, rendering, joining, and percent-/query-encoding |
 | `std/fs` | UTF-8 filesystem and directory operations |
 | `std/env` | the ambient environment snapshot and its helpers |
 | `std/process` | process metadata and termination |
@@ -317,7 +320,10 @@ functions, fields, and named arguments alike — is spelled in kebab-case, with
 types and constructors in `CamelCase`. A value naming a filesystem location
 is typed `path` — the builtin `text` alias ([Type aliases](types.md#type-aliases))
 `std/path` declares and the prelude forwards — so a signature says which of its strings are locations
-without making them a separate type. Each module declares the exception
+without making them a separate type. A value naming a URL is typed `url` the
+same way — a plain `text` alias `std/url` declares and the prelude forwards,
+but a plain alias rather than a `builtin type`: no program parameter completes
+it as a location the way a `path` parameter does. Each module declares the exception
 types its own operations raise, so an error type lives beside the operations
 that produce it; the exceptions the language itself raises live in
 `std/errors`. An operation that raises may have a `?` twin returning `Option`,

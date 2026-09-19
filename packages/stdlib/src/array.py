@@ -6,10 +6,9 @@ import builtins
 from functools import cmp_to_key
 from typing import Protocol
 
-from agl import AglException, array, nominals
+from agl import AglException, array, nominals, option_none, option_some
 
 IndexError = nominals.std.errors.IndexError
-Option = nominals.std.option.Option
 Pair = nominals.std.pair.Pair
 
 
@@ -28,12 +27,8 @@ def _element_at(values: object, index: int) -> object:
     return values[index]
 
 
-def _none() -> object:
-    return getattr(Option, "None")()
-
-
 def _option(value: object | None, found: bool) -> object:
-    return Option.Some(value=value) if found else _none()
+    return option_some(value) if found else option_none()
 
 
 def size(values: object) -> int:
@@ -79,8 +74,8 @@ def pop(values: object) -> object:
 
 def pop_option(values: object) -> object:
     if not values:
-        return _none()
-    return Option.Some(value=values.pop())
+        return option_none()
+    return option_some(values.pop())
 
 
 def remove_at(values: object, index: int) -> object:
@@ -167,15 +162,15 @@ def all(values: object, predicate: object) -> bool:
 def find(values: object, predicate: object) -> object:
     for value in values:
         if predicate(value):
-            return Option.Some(value=value)
-    return _none()
+            return option_some(value)
+    return option_none()
 
 
 def find_index(values: object, predicate: object) -> object:
     for index, value in builtins.enumerate(values):
         if predicate(value):
-            return Option.Some(value=index)
-    return _none()
+            return option_some(index)
+    return option_none()
 
 
 def reverse(values: object) -> object:

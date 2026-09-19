@@ -2,22 +2,13 @@
 
 from decimal import Decimal
 
-from agl import AglException, array, json, nominals
+from agl import AglException, array, json, nominals, option_none, option_some
 
 from agm.agl.runtime.codec import extract_json_text
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 
 JsonParseError = nominals.std.errors.JsonParseError
 KeyError = nominals.std.errors.KeyError
-Option = nominals.std.option.Option
-
-
-def _none() -> object:
-    return getattr(Option, "None")()
-
-
-def _some(value: object) -> object:
-    return Option.Some(value=value)
 
 
 def _parse_error(raw: str, message: str) -> None:
@@ -83,7 +74,7 @@ def get(value: object, key: str) -> object:
 
 def get_option(value: object, key: str) -> object:
     raw = value.value
-    return _some(json(raw[key])) if isinstance(raw, dict) and key in raw else _none()
+    return option_some(json(raw[key])) if isinstance(raw, dict) and key in raw else option_none()
 
 
 __all__ = [

@@ -300,6 +300,24 @@ def test_a_declared_path_type_replaces_the_reserved_text_alias() -> None:
         _check('record path(value: int)\nlet p: path = "a"\n()\n', default_stdlib=False)
 
 
+def test_url_type_alias_is_bare_visible_through_the_prelude() -> None:
+    """Unlike ``path``, ``url`` is a plain alias forwarded by an ordinary
+    prelude export, not a globally reserved ``builtin type`` name — it needs
+    the standard library, and only its type name is bare."""
+    _check('let value: url = "https://example.org"\n()\n')
+
+
+def test_url_type_alias_is_undefined_without_the_standard_library() -> None:
+    with pytest.raises(AglTypeError, match="Unknown type 'url'"):
+        _check('let value: url = "https://example.org"\n()\n', default_stdlib=False)
+
+
+def test_url_record_type_is_reachable_only_through_a_qualified_route() -> None:
+    with pytest.raises(AglTypeError, match="Unknown type 'Url'"):
+        _check("def f(value: Url) -> unit = ()\n()\n")
+    _check("import std/url\ndef f(value: url::Url) -> unit = ()\n()\n")
+
+
 def test_builtin_type_shape_must_match() -> None:
     with pytest.raises(AglTypeError, match="Builtin type 'ExecResult' has an invalid definition"):
         _check("builtin record ExecResult\n  stdout: text\n()\n")

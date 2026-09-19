@@ -1,0 +1,81 @@
+{
+  "scenarios": [
+    {
+      "name": "parse_and_render_a_full_url_round_trip",
+      "params": {"mode": 1},
+      "expect": {
+        "stdout": "https\nexample.org\nOption::Some(value = 8443)\n/a/b\n[Pair(first = \"x\", second = \"1\"), Pair(first = \"x\", second = \"2\")]\nOption::Some(value = \"top\")\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "parse_a_minimal_url_leaves_port_query_and_fragment_absent",
+      "params": {"mode": 2},
+      "expect": {"stdout": "Option::None\n\n[]\nOption::None\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "render_reproduces_an_empty_but_present_fragment",
+      "params": {"mode": 3},
+      "expect": {"stdout": "true\n", "calls": {}}
+    },
+    {
+      "name": "join_resolves_relative_absolute_dotdot_query_and_fragment_references",
+      "params": {"mode": 4},
+      "expect": {
+        "stdout": "https://example.org/a/c\nhttps://example.org/c\nhttps://example.org/a/d\nhttps://example.org/a/b?y=2\nhttps://example.org/a/b#bottom\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "encode_decode_and_query_encoding_round_trip",
+      "params": {"mode": 5},
+      "expect": {
+        "stdout": "a%20b%2Fc%3Fd%23e\ntrue\n[Pair(first = \"x\", second = \"1\"), Pair(first = \"x\", second = \"2\"), Pair(first = \"y\", second = \"\")]\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "try_parse_and_optional_parse_report_success_and_failure",
+      "params": {"mode": 6},
+      "expect": {
+        "stdout": "ok\nnot a url\nsome\nnone\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "caught_url_parse_error_carries_the_raw_input_for_a_missing_scheme",
+      "params": {"mode": 7},
+      "expect": {"stdout": "relative/path\n", "calls": {}}
+    },
+    {
+      "name": "caught_url_parse_error_carries_the_raw_input_for_userinfo",
+      "params": {"mode": 8},
+      "expect": {"stdout": "https://user:pass@example.org/\n", "calls": {}}
+    },
+    {
+      "name": "caught_url_parse_error_carries_the_raw_input_for_an_invalid_port",
+      "params": {"mode": 9},
+      "expect": {"stdout": "https://example.org:notaport/\n", "calls": {}}
+    },
+    {
+      "name": "uncaught_missing_host_error_ends_the_run",
+      "params": {"mode": 10},
+      "expect": {"stdout": "", "raises": {"type": "UrlParseError", "fields": {"raw": "https:///path"}}, "calls": {}}
+    },
+    {
+      "name": "ipv6_host_round_trips_with_and_without_a_port",
+      "params": {"mode": 11},
+      "expect": {"stdout": "true\ntrue\n", "calls": {}}
+    },
+    {
+      "name": "strict_decode_failure_is_caught_as_a_url_parse_error",
+      "params": {"mode": 12},
+      "expect": {"stdout": "%zz\n", "calls": {}}
+    },
+    {
+      "name": "render_reconstructs_a_hand_built_record",
+      "params": {"mode": 13},
+      "expect": {"stdout": "https://x/a\n", "calls": {}}
+    }
+  ]
+}

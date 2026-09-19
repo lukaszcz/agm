@@ -1,0 +1,75 @@
+import std/option::Option
+import std/pair::Pair
+import std/result::Result
+
+# A URL. Transparent: a `url` is a `text`. A plain alias, not `builtin type`
+# like `path`: no program parameter completes it as a location.
+type url = text
+
+# `scheme` and `host` are lowercase; an IPv6 `host` is stored without its
+# brackets (e.g. `::1`), zone id kept verbatim as it appeared in the URL
+# (e.g. `::1%25lo` for `[::1%25lo]`, per RFC 6874's `%25` zone delimiter).
+# `path` and `fragment` are stored in canonical percent-encoded form
+# (outside the RFC 3986 `pchar` set, fragment also keeping `/` and `?`; an
+# existing `%XX` escape is left intact); `query` pairs are percent-decoded,
+# so `render` form-encodes them back (`+` for space).
+record Url(scheme: text, host: text, port: Option[int], path: text,
+           query: array[Pair[text, text]], fragment: Option[text])
+
+exception UrlParseError extends Exception
+  raw: text
+
+# Requires `scheme://` authority syntax; the host may be empty only for
+# `file`. Rejects userinfo (`user@host`, which `Url` has no field for),
+# control characters and spaces, an invalid host or port, a malformed
+# percent-encoding anywhere in the URL, and a `path`/`fragment` holding a
+# lone surrogate (which cannot be canonicalized to percent-encoded form).
+# Query is ordered pairs so repeated keys and their order survive a round
+# trip.
+extern def parse(value: url) -> Url
+def try-parse(value: url) -> Result[Url, UrlParseError] =
+  try Ok(parse(value)) catch UrlParseError as e => Err(e)
+def parse?(value: url) -> Option[Url] =
+  try-parse(value).ok()
+
+# Reconstructs canonical URL text from `self`: a bare non-empty `path` gets a
+# leading `/`, a `host` containing `:` is bracketed, and `path`/`fragment` are
+# percent-encoded outside the RFC 3986 `pchar` set (fragment also keeps `/`
+# and `?`) while any existing `%XX` escape is left intact. Round-trips at the
+# record level -- `parse(u.render()) == u` for every `Url` `parse` returns --
+# but the text matches the input only when the input was already canonical.
+# `scheme` and `host` are validated by the same rules `parse` applies (a
+# non-lowercase or otherwise invalid `scheme`, or an invalid `host`, raises
+# `UrlParseError` with `raw` set to that field) since a hand-built record
+# skips the checks parsing would have applied. Also raises `UrlParseError`
+# if `path`, `fragment`, or a `query` entry holds a lone surrogate, which
+# cannot be percent-encoded.
+extern def Url::render(self) -> url
+
+# RFC 3986 reference resolution (section 5.2), for any scheme. `base` must
+# parse and `reference` must pass the same textual checks `parse` applies
+# (control characters/spaces, malformed percent-encoding); a resolved result
+# carrying an authority (e.g. from a `//`-prefixed reference) is re-checked
+# through `parse`, so a bad host, port, or smuggled-in userinfo still raises
+# `UrlParseError`. A result with no authority, such as `g:h`, is not.
+extern def join(base: url, reference: text) -> url
+
+# Percent-encodes every character but `A-Za-z0-9-._~`; space becomes `%20`.
+# Raises `UrlParseError` if `value` holds a lone surrogate, which cannot be
+# percent-encoded.
+extern def encode(value: text) -> text
+# Percent-decodes `value`; raises `UrlParseError` on a malformed `%` escape,
+# invalid UTF-8 after decoding, or `value` holding a lone surrogate.
+extern def decode(value: text) -> text
+
+# Form-encodes ordered pairs into a query string: space becomes `+`. Raises
+# `UrlParseError` if a key or value holds a lone surrogate, which cannot be
+# percent-encoded.
+@extern-name("encode_query")
+extern def encode-query(fields: array[Pair[text, text]]) -> text
+# Parses a query string into ordered pairs: `+` and `%20` both decode to a
+# space, a blank value is kept, and a bare key (`?flag`) yields `("flag", "")`.
+# Raises `UrlParseError` on a malformed `%` escape, invalid UTF-8, or a lone
+# surrogate.
+@extern-name("parse_query")
+extern def parse-query(value: text) -> array[Pair[text, text]]

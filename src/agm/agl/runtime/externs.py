@@ -59,7 +59,9 @@ if TYPE_CHECKING:
     from agm.agl.runtime.trace import TraceStore
 
 # These companion module attributes are APIs, never synthesized nominal aliases.
-_COMPANION_API_NAMES = frozenset({"AglException", "array", "dict", "json", "nominals", "runtime"})
+_COMPANION_API_NAMES = frozenset(
+    {"AglException", "array", "dict", "json", "nominals", "option_none", "option_some", "runtime"}
+)
 
 
 class ExternRuntimeState:
@@ -507,6 +509,10 @@ class ExternRegistry:
             descriptor = self._nominal_by_id[nominal]
             if descriptor.bears_name_path and not descriptor.module_id.is_reserved:
                 leaves[_nominal_identity_path(descriptor)] = cls
+        option_cls = leaves.get(("std", "option", "Option"))
+        if option_cls is not None:
+            setattr(module, "option_none", functools.partial(_option_none, option_cls))
+            setattr(module, "option_some", functools.partial(_option_some, option_cls))
         _build_nominal_namespace(nominals, leaves)
         names: dict[str, list[type[object]]] = {}
         for cls in leaves.values():
@@ -817,3 +823,20 @@ def _dict(values: dict[str, object]) -> AglDictView:
             raise TypeError("AgL dict keys must be str")
         entries[key] = decode_boundary_value(value)
     return AglDictView(DictValue(entries), current_descriptors())
+
+
+def _option_none(option_cls: type) -> object:
+    """Build ``Option::None`` in the standard-library ``Option`` class.
+
+    Bound as ``agl.option_none`` (see ``ExternRegistry._agl_module``): the one
+    shared home for a pattern every stdlib companion otherwise repeats locally.
+    """
+    return cast(object, getattr(option_cls, "None")())
+
+
+def _option_some(option_cls: type, value: object) -> object:
+    """Build ``Option::Some(value)`` in the standard-library ``Option`` class.
+
+    Bound as ``agl.option_some``; see :func:`_option_none`.
+    """
+    return cast(object, getattr(option_cls, "Some")(value=value))

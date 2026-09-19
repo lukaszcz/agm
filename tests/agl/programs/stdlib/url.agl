@@ -1,0 +1,76 @@
+# URL parsing, rendering, joining, and percent-/query-encoding.
+import std/url
+import std/url::UrlParseError
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        let parsed = url::parse("https://example.org:8443/a/b?x=1&x=2#top")
+        print(parsed.scheme)
+        print(parsed.host)
+        print(parsed.port)
+        print(parsed.path)
+        print(parsed.query)
+        print(parsed.fragment)
+        print(parsed.render() == "https://example.org:8443/a/b?x=1&x=2#top")
+    | 2 =>
+        let parsed = url::parse("https://example.org")
+        print(parsed.port)
+        print(parsed.path)
+        print(parsed.query)
+        print(parsed.fragment)
+        print(parsed.render() == "https://example.org")
+    | 3 =>
+        print(url::parse("https://example.org/a#").render() == "https://example.org/a#")
+    | 4 =>
+        print(url::join("https://example.org/a/b", "c"))
+        print(url::join("https://example.org/a/b", "/c"))
+        print(url::join("https://example.org/a/b/c", "../d"))
+        print(url::join("https://example.org/a/b?x=1", "?y=2"))
+        print(url::join("https://example.org/a/b#top", "#bottom"))
+    | 5 =>
+        let encoded = url::encode("a b/c?d#e")
+        print(encoded)
+        print(url::decode(encoded) == "a b/c?d#e")
+        let fields = url::parse-query("x=1&x=2&y=")
+        print(fields)
+        print(url::encode-query(fields) == "x=1&x=2&y=")
+    | 6 =>
+        case url::try-parse("https://example.org") of
+          | Ok(_) => print("ok")
+          | Err(_) => print("err")
+        case url::try-parse("not a url") of
+          | Ok(_) => print("ok")
+          | Err(error) => print(error.raw)
+        case url::parse?("https://example.org") of
+          | Some(_) => print("some")
+          | None => print("none")
+        case url::parse?("not a url") of
+          | Some(_) => print("some")
+          | None => print("none")
+    | 7 =>
+        try
+          let _ = url::parse("relative/path")
+        catch UrlParseError as error => print(error.raw)
+    | 8 =>
+        try
+          let _ = url::parse("https://user:pass@example.org/")
+        catch UrlParseError as error => print(error.raw)
+    | 9 =>
+        try
+          let _ = url::parse("https://example.org:notaport/")
+        catch UrlParseError as error => print(error.raw)
+    | 10 =>
+        let _ = url::parse("https:///path")
+        ()
+    | 11 =>
+        print(url::parse("https://[::1]:8080/a").render() == "https://[::1]:8080/a")
+        print(url::parse("https://[::1]/a").render() == "https://[::1]/a")
+    | 12 =>
+        try
+          let _ = url::decode("%zz")
+        catch UrlParseError as error => print(error.raw)
+    | _ =>
+        let built = url::Url(scheme = "https", host = "x", port = None, path = "a",
+                              query = [], fragment = None)
+        print(built.render())

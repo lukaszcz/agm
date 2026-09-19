@@ -48,6 +48,6 @@ bind an argument.
 ## Companion Python
 
 Python companions follow Python naming and formatting conventions. Their
-generated AgL nominal classes accept fields as keyword arguments, so companion
-calls such as `Option.Some(value=value)` are an FFI boundary requirement, not
-an AgL style violation.
+generated AgL nominal classes accept fields as keyword arguments, so a
+companion call such as `agl.option_some(value)`/`agl.option_none()` is an FFI
+boundary requirement, not an AgL style violation.

@@ -6,10 +6,9 @@ import re
 from functools import lru_cache
 from typing import NoReturn
 
-from agl import AglException, array, dict, nominals
+from agl import AglException, array, dict, nominals, option_none, option_some
 
 Match = nominals.std.regex.Match
-Option = nominals.std.option.Option
 RegexError = nominals.std.regex.RegexError
 
 
@@ -26,13 +25,9 @@ def _compile(pattern: str) -> re.Pattern[str]:
         _regex_error(pattern)
 
 
-def _none() -> object:
-    return getattr(Option, "None")()
-
-
 def _match(match: re.Match[str]) -> object:
     groups = array(
-        [Option.Some(value=value) if value is not None else _none() for value in match.groups()]
+        [option_some(value) if value is not None else option_none() for value in match.groups()]
     )
     named_groups = dict(
         {name: value for name, value in match.groupdict().items() if value is not None}
@@ -54,7 +49,7 @@ def test(pattern: str, s: str) -> bool:
 def find(pattern: str, s: str) -> object:
     """Return the first match as ``Option``, if one occurs."""
     match = _compile(pattern).search(s)
-    return Option.Some(value=_match(match)) if match is not None else _none()
+    return option_some(_match(match)) if match is not None else option_none()
 
 
 def find_all(pattern: str, s: str) -> object:

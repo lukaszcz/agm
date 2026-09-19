@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-from agl import AglException, array, nominals
+from agl import AglException, array, nominals, option_none, option_some
 from agl import dict as agl_dict
 
 KeyError = nominals.std.errors.KeyError
-Option = nominals.std.option.Option
 Pair = nominals.std.pair.Pair
-
-
-def _none() -> object:
-    return getattr(Option, "None")()
 
 
 def _key_error(key: str) -> None:
@@ -29,7 +24,7 @@ def get(values: object, key: str) -> object:
 
 
 def get_option(values: object, key: str) -> object:
-    return Option.Some(value=values[key]) if key in values else _none()
+    return option_some(values[key]) if key in values else option_none()
 
 
 def remove(values: object, key: str) -> object:
@@ -39,7 +34,7 @@ def remove(values: object, key: str) -> object:
 
 
 def remove_option(values: object, key: str) -> object:
-    return Option.Some(value=values.pop(key)) if key in values else _none()
+    return option_some(values.pop(key)) if key in values else option_none()
 
 
 def set(values: object, key: str, value: object) -> None:

@@ -5,9 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path, PurePath
 
-from agl import array, nominals
-
-Option = nominals.std.option.Option
+from agl import array, option_none, option_some
 
 
 def join(parts: list[str]) -> str:
@@ -33,7 +31,7 @@ def stem(path: str) -> str:
 def extension(path: str) -> object:
     """Return *path*'s extension, including its leading dot, when it has one."""
     _, extension = os.path.splitext(path)
-    return Option.Some(value=extension) if extension else getattr(Option, "None")()
+    return option_some(extension) if extension else option_none()
 
 
 def with_extension(path: str, extension: str) -> str:
@@ -87,9 +85,9 @@ def common_prefix(paths: list[str]) -> object:
     An empty sequence, or absolute mixed with relative, has none.
     """
     try:
-        return Option.Some(value=os.path.commonpath(paths))
+        return option_some(os.path.commonpath(paths))
     except ValueError:
-        return getattr(Option, "None")()
+        return option_none()
 
 
 def home() -> str:

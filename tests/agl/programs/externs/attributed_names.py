@@ -1,10 +1,8 @@
-from agl import nominals
-
-Option = nominals.std.option.Option
+from agl import option_none, option_some
 
 
 def first_option(xs):
-    return Option.Some(value=xs[0]) if len(xs) else getattr(Option, "None")()
+    return option_some(xs[0]) if len(xs) else option_none()
 
 
 def total(xs):

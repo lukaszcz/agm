@@ -357,6 +357,20 @@ class TestExternRegistryLoadAndResolve:
             registry.load_companion(mid, py_path)
         assert "lib/mod" in str(excinfo.value)
 
+    def test_companion_importing_option_helpers_without_std_option_fails_to_load(
+        self, tmp_path: Path
+    ) -> None:
+        """``agl.option_none``/``option_some`` exist only once ``std/option``'s
+        ``Option`` is among the registered nominals; without it the ``agl``
+        module simply has no such attribute, so the companion's own import
+        fails like any other missing name."""
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("from agl import option_none\n")
+        mid = ModuleId.from_path("lib/mod")
+        registry = ExternRegistry()
+        with pytest.raises(ExternImportError):
+            registry.load_companion(mid, py_path)
+
     def test_companion_does_not_pollute_sys_path_or_linger_in_sys_modules(
         self, tmp_path: Path
     ) -> None:

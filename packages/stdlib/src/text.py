@@ -1,15 +1,10 @@
 """``std/text`` companion operations, including runtime interpolation and text methods."""
 
-from agl import AglException, array, nominals
+from agl import AglException, array, nominals, option_none, option_some
 
 from agm.util.interp import interp
 
 IndexError = nominals.std.errors.IndexError
-Option = nominals.std.option.Option
-
-
-def _none() -> object:
-    return getattr(Option, "None")()
 
 
 def _index_error(value: str) -> None:
@@ -87,7 +82,7 @@ def index_of(value: str, substring: str) -> int:
 
 def index_of_option(value: str, substring: str) -> object:
     index = value.find(substring)
-    return Option.Some(value=index) if index >= 0 else _none()
+    return option_some(index) if index >= 0 else option_none()
 
 
 def replace(value: str, old: str, new: str) -> str:

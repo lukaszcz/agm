@@ -13,18 +13,24 @@ Special cases:
 - The fallback quotes the unexpected token's spelling, so a token that has none
   is named instead: end of input, end of block, and indentation all reach the
   parser as zero-width layout tokens.
+- Every message produced from a Lark exception (not a ``LexError``) gets a
+  uniform final pass: a spacing hint is appended when a NAME token ending in
+  ``$`` appears on the offending token's line before it, e.g. ``exec$ date``
+  lexes as one NAME, not ``exec`` applied to a ``$ date`` verbatim literal.
 """
 
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
-from agm.agl.diagnostics import AglError
+from agm.agl.diagnostics import AglError, dollar_spacing_hint
+from agm.agl.lexer.tokens import NAME
 from agm.agl.syntax.spans import SourceSpan
 
 if TYPE_CHECKING:
     from lark.exceptions import UnexpectedToken
+    from lark.lexer import Token
 
 # All comparison operator token types (mirrors tokens.py).  Equality is ``==``
 # (``EQ_EQ``); ``=`` (``EQ``) is a binder / named-arg separator, not a comparison.
@@ -264,11 +270,60 @@ def _is_placeholder_position_error(
     )
 
 
+# Zero-width layout/end token types that carry no line of their own: the
+# spacing hint's anchor line for one of these is borrowed from the last real
+# token before it, the same way Lark borrows $END's reported position.
+_LAYOUT_TOKEN_TYPES: frozenset[str] = frozenset({"_INDENT", "_DEDENT", "_NEWLINE", "$END"})
+
+
+def _dollar_spacing_hint(
+    tokens: Sequence[Token] | None,
+    *,
+    offending_type: str | None,
+    line: int,
+    pos: int,
+) -> str:
+    """Hint suffix when a ``$``-suffixed NAME precedes the error on its anchor line.
+
+    *tokens* is the parse's single materialized token pass (see
+    :func:`~agm.agl.lexer.token_collector`); ``None``/empty when none was
+    captured (a lex error, so no tokens were ever produced). The anchor line
+    is *line* (the offending token's own line), except for a zero-width
+    layout/end token — ``_INDENT``/``_DEDENT``/``_NEWLINE``/``$END`` have no
+    line of their own, so their anchor is the line of the last real token
+    strictly before *pos*. Reports the first ``$``-suffixed NAME on the anchor
+    line before *pos*, delegating the stem check to
+    :func:`~agm.agl.diagnostics.dollar_spacing_hint`.
+    """
+    if not tokens:
+        return ""
+    anchor_line = line
+    if offending_type in _LAYOUT_TOKEN_TYPES:
+        anchor_line = 0
+        for tok in tokens:
+            if tok.type in _LAYOUT_TOKEN_TYPES or tok.start_pos is None or tok.start_pos >= pos:
+                continue
+            if tok.line is not None:
+                anchor_line = tok.line
+        if not anchor_line:
+            return ""
+    for tok in tokens:
+        if tok.type != NAME or tok.line != anchor_line:
+            continue
+        if tok.start_pos is None or tok.start_pos >= pos:
+            continue
+        hint = dollar_spacing_hint(str(tok))
+        if hint:
+            return hint
+    return ""
+
+
 def syntax_error_from_lark(
     exc: Exception,
     *,
     filename: str = "<agl>",
     source_text: str | None = None,
+    tokens: Sequence[Token] | None = None,
 ) -> AglSyntaxError:
     """Convert a Lark parse exception to ``AglSyntaxError``.
 
@@ -278,13 +333,39 @@ def syntax_error_from_lark(
     - ``lark.exceptions.UnexpectedEOF`` (premature end-of-file)
     - ``agm.agl.lexer.errors.LexError`` (custom lexer error)
     - Generic fallback for any other exception.
+
+    *tokens* is the parse's materialized token pass (see
+    :func:`~agm.agl.lexer.token_collector`); when supplied, every message
+    built from a Lark exception (everything but the ``LexError`` path) gets
+    one uniform final pass appending :func:`_dollar_spacing_hint`.
     """
-    from lark.exceptions import UnexpectedCharacters, UnexpectedEOF, UnexpectedToken
+    from lark.exceptions import UnexpectedToken
 
     from agm.agl.lexer.errors import LexError
 
     if isinstance(exc, LexError):
         return AglSyntaxError(str(exc), span=exc.span)
+
+    error = _lark_error_message(exc, filename=filename, source_text=source_text)
+    hint = _dollar_spacing_hint(
+        tokens,
+        offending_type=exc.token.type if isinstance(exc, UnexpectedToken) else None,
+        line=error.source_span.start_line,
+        pos=error.source_span.start_offset,
+    )
+    if not hint:
+        return error
+    return AglSyntaxError(f"{error}{hint}", span=error.source_span)
+
+
+def _lark_error_message(
+    exc: Exception,
+    *,
+    filename: str,
+    source_text: str | None,
+) -> AglSyntaxError:
+    """Build the syntax-error message for a Lark exception, without the spacing hint."""
+    from lark.exceptions import UnexpectedCharacters, UnexpectedEOF, UnexpectedToken
 
     if isinstance(exc, UnexpectedToken):
         tok = exc.token

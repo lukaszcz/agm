@@ -344,6 +344,22 @@ def test_current_module_anchored_multi_segment_chain_reports_its_unknown_path() 
         resolve_inline_entry("::A::B::C")
 
 
+def test_bare_self_qualified_undefined_name_hints_a_dollar_suffixed_spelling() -> None:
+    """``::exec$`` (a zero-segment self-reference) hints the same fix."""
+    with pytest.raises(AglScopeError) as exc_info:
+        resolve_inline_entry("::exec$")
+
+    assert "exec $" in exc_info.value.to_diagnostic().message
+
+
+def test_current_module_unknown_constructor_owner_hints_a_dollar_suffixed_segment() -> None:
+    """``::exec$::bar`` names the '$'-suffixed segment; the message hints the fix."""
+    with pytest.raises(AglScopeError) as exc_info:
+        resolve_inline_entry("::exec$::bar")
+
+    assert "exec $" in exc_info.value.to_diagnostic().message
+
+
 def test_module_anchored_constructor_chain_never_falls_back_to_a_local_type() -> None:
     with pytest.raises(AglScopeError, match="No module"):
         resolve_inline_entry("enum A | value\n/A::value")

@@ -1282,6 +1282,18 @@ class TestUndefinedRead:
         err = reject_scope("raise nope\n")
         assert "nope" in err.to_diagnostic().message
 
+    def test_undefined_dollar_suffixed_call_gets_a_spacing_hint(self) -> None:
+        """`exec$ date` lexes as one NAME; the undefined-name error hints `exec $ …`."""
+        err = reject_scope("exec$ date")
+        line, msg = diag(err)
+        assert line == 1
+        assert "exec $" in msg
+
+    def test_undefined_name_without_dollar_suffix_gets_no_hint(self) -> None:
+        err = reject_scope("no_such_func(1)")
+        _, msg = diag(err)
+        assert "$ …" not in msg
+
 
 # ---------------------------------------------------------------------------
 # Reserved names: built-in call names cannot be bound

@@ -6412,6 +6412,11 @@ class TestFieldAccess:
         err = reject_type("let x = 42\nx.field")
         assert "record" in str(err).lower() or "field" in str(err).lower()
 
+    def test_dollar_suffixed_member_miss_hints_a_spaced_verbatim_literal(self) -> None:
+        """`a.ask$ "hello"`: `ask$` lexes as one NAME, not `ask` applied to a literal."""
+        err = reject_type('let worker: Agent = AgentCommand("worker")\nworker.ask$ "hello"')
+        assert "ask $" in str(err)
+
     def test_member_record_does_not_fall_back_to_its_enum_methods(self) -> None:
         err = reject_type(
             "enum Signal\n"

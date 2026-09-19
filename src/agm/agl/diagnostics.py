@@ -189,6 +189,23 @@ def static_root_message(
     )
 
 
+def dollar_spacing_hint(name: str) -> str | None:
+    """Return a spacing hint for *name* if it looks like a mistyped verbatim literal.
+
+    A ``$`` inside an identifier is an ordinary character, not the verbatim
+    literal opener: ``exec$ date`` lexes as one NAME, not ``exec`` applied to
+    a ``$ date`` template. For a *name* ending in ``$`` with a nonempty stem,
+    returns a clause suggesting the spaced form; ``None`` when *name* does not
+    end in ``$`` or has no stem (a bare ``$`` is never a NAME — it always
+    opens a verbatim literal at the token-start position). Also fires for a
+    legitimately named ``x$`` binding; the hint is harmless there.
+    """
+    if not name.endswith("$") or len(name) < 2:
+        return None
+    stem = name[:-1]
+    return f" Write '{stem} $ …' with a space before the verbatim literal."
+
+
 class AglError(Exception):
     """Base class for all fatal AgL pipeline errors.
 

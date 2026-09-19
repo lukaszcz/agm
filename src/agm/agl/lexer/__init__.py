@@ -15,6 +15,8 @@ Public API
   (comments carry no token, so highlighters read them from here).
 - :class:`SpacedQualifier` / :func:`spaced_qualifier_collector` — lexical
   advisories for qualifier runs broken by whitespace before ``::``.
+- :func:`token_collector` — the lexer's single materialized token pass, for a
+  diagnostic that must read tokens beyond the offending one without re-lexing.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from agm.agl.lexer.lexer import (
     apply_module_passes,
     spaced_qualifier_collector,
     tab_warning_collector,
+    token_collector,
     unclosed_scope_path,
 )
 from agm.agl.lexer.scanner import lex_comment_spans, lex_tab_warnings, scan
@@ -45,6 +48,7 @@ __all__ = [
     "lex_tab_warnings",
     "spaced_qualifier_collector",
     "tab_warning_collector",
+    "token_collector",
     "unclosed_scope_path",
     "tokenize",
 ]

@@ -31,7 +31,7 @@ from __future__ import annotations
 import contextvars
 import importlib.resources
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Iterator, TypeVar
 
 from lark import Lark
 from lark.lexer import Lexer, LexerState, Token
@@ -84,11 +84,27 @@ from agm.agl.lexer.tokens import (
 from agm.agl.syntax.advisories import SpacedQualifier
 from agm.util.scoping import ScopedVar
 
+_T = TypeVar("_T")
+
+
+@contextmanager
+def _ambient_list_sink(var: contextvars.ContextVar[list[_T] | None]) -> Iterator[list[_T]]:
+    """Bind *var* to a fresh empty list for the ``with`` block and yield it.
+
+    Shared install/teardown for every ambient sink below: a ``ContextVar``
+    holding a list that a single materialized lexer pass deposits into,
+    keeping nested/reentrant parses isolated.
+    """
+    sink: list[_T] = []
+    with ScopedVar(var, sink):
+        yield sink
+
+
 # Ambient sink for TAB advisories produced during a Lark-driven parse.  The
 # lexer scans the source exactly once (no separate TAB pass); when a sink is
 # active, ``AglLexer.lex`` deposits the scan's TAB advisories into it so the
 # caller (e.g. ``PipelineDriver.prepare``) can surface them alongside parse
-# diagnostics.  A ``ContextVar`` keeps nested/reentrant parses isolated.
+# diagnostics.
 _TAB_WARNING_SINK: contextvars.ContextVar[list[Diagnostic] | None] = contextvars.ContextVar(
     "agl_tab_warning_sink", default=None
 )
@@ -102,8 +118,7 @@ def tab_warning_collector() -> Iterator[list[Diagnostic]]:
     populated even when the parse fails (the scan runs to completion before the
     grammar is consulted), so callers get every TAB advisory on every path.
     """
-    sink: list[Diagnostic] = []
-    with ScopedVar(_TAB_WARNING_SINK, sink):
+    with _ambient_list_sink(_TAB_WARNING_SINK) as sink:
         yield sink
 
 
@@ -123,8 +138,28 @@ def spaced_qualifier_collector() -> Iterator[list[SpacedQualifier]]:
     the result alongside the parsed module so later passes can explain a
     reference that whitespace turned into an unrelated expression.
     """
-    sink: list[SpacedQualifier] = []
-    with ScopedVar(_SPACED_QUALIFIER_SINK, sink):
+    with _ambient_list_sink(_SPACED_QUALIFIER_SINK) as sink:
+        yield sink
+
+
+# Ambient sink for the lexer's single materialized token pass.  A Lark parse
+# error only ever sees the *offending* token; a diagnostic that must read
+# other tokens on the same line (e.g. the `$`-spacing hint) needs the whole
+# pass without re-lexing the source, so ``AglLexer.lex`` deposits its result
+# list here once scanning succeeds (a lex error leaves the sink empty).
+_TOKEN_SINK: contextvars.ContextVar[list[Token] | None] = contextvars.ContextVar(
+    "agl_token_sink", default=None
+)
+
+
+@contextmanager
+def token_collector() -> Iterator[list[Token]]:
+    """Collect the materialized token list produced by a parse within the ``with`` block.
+
+    Yields a list that ``AglLexer.lex`` fills with every token of the parse's
+    single lex pass once scanning completes without a ``LexError``.
+    """
+    with _ambient_list_sink(_TOKEN_SINK) as sink:
         yield sink
 
 
@@ -835,6 +870,9 @@ class AglLexer(Lexer):
             sink = _TAB_WARNING_SINK.get()
             if sink is not None:
                 sink.extend(scanner.tab_warnings)
+        token_sink = _TOKEN_SINK.get()
+        if token_sink is not None:
+            token_sink.extend(tokens)
         return iter(tokens)
 
 

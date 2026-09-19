@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TypeAlias as TypingTypeAlias
 
 from agm.agl.attributes import ProgramCommandSpec, ProgramOptionSpec
-from agm.agl.diagnostics import AglError
+from agm.agl.diagnostics import AglError, dollar_spacing_hint
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.external_names import ExternalName
 from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
@@ -330,6 +330,18 @@ def immutable_assignment_message(name: str, kind: BinderKind, *, cross_module: b
     """
     hint = "" if cross_module else " Declare with 'var' to make the variable mutable."
     return f"Cannot assign to '{name}': {immutable_binder_phrase(kind)} (immutable).{hint}"
+
+
+def undefined_name_message(name: str, *, in_module: bool = False) -> str:
+    """Return the canonical undefined-name rejection message for *name*.
+
+    *in_module* selects the current-module-qualified wording. Appends
+    :func:`~agm.agl.diagnostics.dollar_spacing_hint` when *name* looks like a
+    verbatim literal written without a space (``exec$ date``).
+    """
+    scope = " in this module" if in_module else ""
+    hint = dollar_spacing_hint(name) or ""
+    return f"'{name}' is not defined{scope}.{hint}"
 
 
 def duplicate_binder_message(name: str) -> str:

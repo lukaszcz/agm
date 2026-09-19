@@ -46,7 +46,7 @@ from dataclasses import dataclass, field, replace
 from typing import Literal, Protocol, TypeGuard, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.diagnostics import Diagnostic, static_root_message
+from agm.agl.diagnostics import Diagnostic, dollar_spacing_hint, static_root_message
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, is_std_config_root, spell_declaration
 from agm.agl.scope.imports import (
@@ -256,12 +256,17 @@ def _method_declaration_name(method: MethodDef) -> str:
 
 
 def _no_member(obj_type: Type, field: str, span: SourceSpan) -> AglTypeError:
-    """Return the diagnostic for a member the receiver declares neither way."""
+    """Return the diagnostic for a member the receiver declares neither way.
+
+    Appends :func:`~agm.agl.diagnostics.dollar_spacing_hint` when *field*
+    looks like a verbatim literal written without a space (``a.ask$ "hi"``).
+    """
     if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
         subject = f"{obj_type.kind.capitalize()} '{obj_type.name}'"
     else:
         subject = f"Built-in receiver '{obj_type!r}'"
-    return AglTypeError(f"{subject} has no field or method '{field}'.", span=span)
+    hint = dollar_spacing_hint(field) or ""
+    return AglTypeError(f"{subject} has no field or method '{field}'.{hint}", span=span)
 
 
 def _no_type_var_members(obj_type: TypeVarType, members: str, span: SourceSpan) -> AglTypeError:

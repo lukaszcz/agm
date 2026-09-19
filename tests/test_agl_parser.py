@@ -3432,6 +3432,102 @@ class TestNegativeCases:
         assert "'0'" not in str(exc_info.value)
 
 
+class TestDollarSpacingHint:
+    """`exec$ x` lexes as one NAME; a parse error on that line hints the fix."""
+
+    def test_offending_token_on_the_dollar_suffixed_names_own_line_gets_a_hint(self) -> None:
+        """`ask$ let ...`: `let` cannot open a juxt argument, right after `ask$`."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("ask$ let x = 1")
+        assert "ask $" in str(exc_info.value)
+        assert exc_info.value.source_span.start_offset == 5
+
+    def test_offending_token_later_on_the_dollar_suffixed_names_own_line_gets_a_hint(
+        self,
+    ) -> None:
+        """`ask$ a b`: the failure is at `b`, further along `ask$`'s own line."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("ask$ a b")
+        assert "ask $" in str(exc_info.value)
+
+    def test_hole_syntax_error_on_the_dollar_suffixed_names_own_line_gets_a_hint(self) -> None:
+        """`ask$ What is %{x}?`: `%{}` is not template syntax outside a literal."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("ask$ What is %{x}?")
+        assert "ask $" in str(exc_info.value)
+
+    def test_offending_token_in_a_dollar_suffixed_names_own_block_form_gets_a_hint(self) -> None:
+        """A bare `exec$` header followed by an indented block: still one NAME."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("exec$\n  date\n  date")
+        assert "exec $" in str(exc_info.value)
+
+    def test_offending_token_after_a_pipe_on_the_dollar_suffixed_names_line_gets_a_hint(
+        self,
+    ) -> None:
+        """`exec$ ls | wc`: `|` is not a valid juxt continuation."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("exec$ ls | wc")
+        assert "exec $" in str(exc_info.value)
+
+    def test_offending_token_on_a_later_line_gets_no_hint(self) -> None:
+        """`ask$ hello` parses fine; the real error is on the next line, unrelated to it."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("ask$ hello\nlet a b = 1")
+        assert "$ …" not in str(exc_info.value)
+
+    def test_dollar_suffixed_spelling_inside_a_string_gets_no_hint(self) -> None:
+        """`"ask$"` is a string literal, not a NAME token."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program('print "ask$" let')
+        assert "$ …" not in str(exc_info.value)
+
+    def test_dollar_suffixed_spelling_inside_a_comment_gets_no_hint(self) -> None:
+        """A `# ask$` comment produces no token at all."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let a b = 1  # ask$")
+        assert "$ …" not in str(exc_info.value)
+
+    def test_offending_token_after_a_plain_name_gets_no_hint(self) -> None:
+        """`f a b`: juxt does not chain, but `a` does not end in '$'."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("f a b")
+        assert "$ …" not in str(exc_info.value)
+
+    def test_offending_token_after_a_non_identifier_gets_no_hint(self) -> None:
+        """`1 2 3`: the token before `3` is `2`, not an identifier at all."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("1 2 3")
+        assert "$ …" not in str(exc_info.value)
+
+    def test_layout_token_with_no_preceding_real_token_gets_no_hint(self) -> None:
+        """A layout token's anchor search finds nothing before it: no crash, no hint.
+
+        Not reachable through ``parse_program`` (a stray indent always has
+        something real before it); call the mapping helper directly with a
+        materialized token list that starts after the offending position.
+        """
+        offending = Token("_INDENT", "", start_pos=5, line=2, column=1)
+        far_name = Token("NAME", "ask$", start_pos=10, line=2, column=6)
+        err = syntax_error_from_lark(
+            UnexpectedToken(offending, expected={"NAME"}), tokens=[far_name]
+        )
+        assert "$ …" not in str(err)
+
+    def test_layout_anchor_search_skips_a_materialized_token_with_no_line(self) -> None:
+        """A token missing its own line cannot anchor the layout-token hint search.
+
+        Not reachable through ``parse_program`` (the lexer always sets a real
+        token's line); call the mapping helper directly.
+        """
+        offending = Token("_INDENT", "", start_pos=5, line=2, column=1)
+        lineless = Token("NAME", "ask$", start_pos=0, line=None, column=None)
+        err = syntax_error_from_lark(
+            UnexpectedToken(offending, expected={"NAME"}), tokens=[lineless]
+        )
+        assert "$ …" not in str(err)
+
+
 # ---------------------------------------------------------------------------
 # Full program examples (integration)
 # ---------------------------------------------------------------------------

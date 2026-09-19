@@ -1,0 +1,101 @@
+{
+  "scenarios": [
+    {
+      "name": "headers_smart_constructor_normalises_names_merges_and_leaves_inputs_unchanged",
+      "params": {"mode": 1},
+      "expect": {
+        "stdout": "text/plain\ntext/plain\ntrue\ntext/html\napplication/json\n1\n2\ntext/plain\napplication/json\n"
+      }
+    },
+    {
+      "name": "headers_get_option_contains_set_and_remove_are_case_insensitive",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "Option::Some(value = \"text/html\")\nOption::None\napplication/json\nabc\ntrue\nfalse\nOption::None\n"
+      }
+    },
+    {
+      "name": "method_render_covers_every_member_including_other",
+      "params": {"mode": 3},
+      "expect": {
+        "stdout": "GET\nPOST\nPUT\nPATCH\nDELETE\nHEAD\nOPTIONS\nPROPFIND\n"
+      }
+    },
+    {
+      "name": "response_ok_and_raise_for_status_pass_through_a_successful_response",
+      "params": {"mode": 4},
+      "expect": {"stdout": "true\n200\n"}
+    },
+    {
+      "name": "response_raise_for_status_raises_http_status_error_for_a_failed_response",
+      "params": {"mode": 5},
+      "expect": {
+        "stdout": "false\n",
+        "raises": {
+          "type": "HttpStatusError",
+          "fields": {
+            "url": "https://example.org/missing",
+            "method": {"$case": "Get"},
+            "response": {
+              "status": 404,
+              "headers": {"entries": {}},
+              "body": "",
+              "url": "https://example.org/missing",
+              "method": {"$case": "Get"},
+              "cookies": {},
+              "elapsed": 0.2
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "response_json_try_json_and_json_option_on_good_and_bad_bodies",
+      "params": {"mode": 6},
+      "expect": {
+        "stdout": "{\"a\": 1}\n{\"a\": 1}\nOption::Some(value = {\"a\": 1})\nnot json\nOption::None\n"
+      }
+    },
+    {
+      "name": "response_json_raises_json_parse_error_on_a_bad_body",
+      "params": {"mode": 7},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "JsonParseError", "fields": {"raw": "not json"}}
+      }
+    },
+    {
+      "name": "timeout_default_and_source_write_to_none",
+      "params": {"mode": 8},
+      "expect": {
+        "stdout": "Option::Some(value = \"30s\")\nOption::None\n"
+      }
+    },
+    {
+      "name": "timeout_seeded_through_module_params_before_the_source_write",
+      "params": {"mode": 8},
+      "module_params": {
+        "std/http::timeout": {"$case": "Some", "value": "5s"}
+      },
+      "expect": {
+        "stdout": "Option::Some(value = \"5s\")\nOption::None\n"
+      }
+    },
+    {
+      "name": "headers_get_raises_key_error_when_the_name_is_absent",
+      "params": {"mode": 9},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "KeyError", "fields": {"key": "missing"}}
+      }
+    },
+    {
+      "name": "headers_remove_raises_key_error_when_the_name_is_absent",
+      "params": {"mode": 10},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "KeyError", "fields": {"key": "missing"}}
+      }
+    }
+  ]
+}

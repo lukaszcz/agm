@@ -311,6 +311,7 @@ rows, `std/path`'s `path` type alone, `std/url`'s `url` type alone, and
 | `std/random` | a seedable pseudo-random sequence and UUIDs |
 | `std/path` | the `path` type and lexical path manipulation |
 | `std/url` | the `url` type, parsing, rendering, joining, and percent-/query-encoding |
+| `std/http` | HTTP requests, headers, responses, and the http-timeout setting |
 | `std/fs` | UTF-8 filesystem and directory operations |
 | `std/env` | the ambient environment snapshot and its helpers |
 | `std/process` | process metadata and termination |

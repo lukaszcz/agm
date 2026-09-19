@@ -32,6 +32,7 @@ STDLIB_MODULES_DIR = REPO_STDLIB_ROOT / MODULE_TREE_DIRNAME
 EXPECTED_STDLIB_BINDING_SURFACE = {
     "math": frozenset({"pi", "e"}),
     "log": frozenset({"level"}),
+    "http": frozenset({"timeout"}),
 }
 
 # The subset of the surface above that is also ``@param``, mapped to the
@@ -40,6 +41,7 @@ EXPECTED_STDLIB_BINDING_SURFACE = {
 # change.
 EXPECTED_STDLIB_PARAM_SURFACE = {
     "log": {"level": "log-level"},
+    "http": {"timeout": "http-timeout"},
 }
 
 

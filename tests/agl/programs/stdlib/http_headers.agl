@@ -1,0 +1,82 @@
+# std/http's pure-AgL surface: Headers, Method::render, and Response methods
+# on hand-built values, plus the module-owned `timeout` setting.
+import std/http
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        let mixed = http::headers({"Content-Type": "text/plain", "X-Test": "1"})
+        print(mixed.get("content-type"))
+        print(mixed.get("CONTENT-TYPE"))
+        print(mixed.contains("x-test"))
+        let collapsed = http::headers({"Accept": "text/plain", "ACCEPT": "text/html"})
+        print(collapsed.get("accept"))
+        let overlay = http::headers({"content-type": "application/json", "X-New": "2"})
+        let merged = mixed.merged(overlay)
+        print(merged.get("content-type"))
+        print(merged.get("x-test"))
+        print(merged.get("x-new"))
+        print(mixed.get("content-type"))
+        print(overlay.get("content-type"))
+    | 2 =>
+        let built = http::headers({"Accept": "text/html"})
+        print(built.get?("accept"))
+        print(built.get?("missing"))
+        built.set("ACCEPT", "application/json")
+        print(built.get("accept"))
+        built.set("X-Trace", "abc")
+        print(built.get("x-trace"))
+        print(built.contains("x-trace"))
+        built.remove("X-TRACE")
+        print(built.contains("x-trace"))
+        print(built.get?("X-TRACE"))
+    | 3 =>
+        let verbs: array[http::Method] = [
+          http::Method::Get, http::Method::Post, http::Method::Put, http::Method::Patch,
+          http::Method::Delete, http::Method::Head, http::Method::Options,
+          http::Method::Other("PROPFIND"),
+        ]
+        verbs.each(fn(verb: http::Method) => print(verb.render()))
+    | 4 =>
+        let ok-response = http::Response(200, http::headers({}), "", "https://example.org",
+                                          http::Method::Get, {}, 0.1)
+        print(ok-response.ok())
+        let unchanged = ok-response.raise-for-status()
+        print(unchanged.status)
+    | 5 =>
+        let bad-response = http::Response(404, http::headers({}), "", "https://example.org/missing",
+                                           http::Method::Get, {}, 0.2)
+        print(bad-response.ok())
+        let _ = bad-response.raise-for-status()
+        ()
+    | 6 =>
+        let good = http::Response(200, http::headers({}), "{\"a\": 1}", "https://example.org",
+                                   http::Method::Get, {}, 0.1)
+        print(good.json())
+        case good.try-json() of
+          | Ok(value) => print(value)
+          | Err(_) => print("unexpected-err")
+        print(good.json?())
+        let bad = http::Response(200, http::headers({}), "not json", "https://example.org",
+                                  http::Method::Get, {}, 0.1)
+        case bad.try-json() of
+          | Ok(_) => print("unexpected-ok")
+          | Err(error) => print(error.raw)
+        print(bad.json?())
+    | 7 =>
+        let bad = http::Response(200, http::headers({}), "not json", "https://example.org",
+                                  http::Method::Get, {}, 0.1)
+        let _ = bad.json()
+        ()
+    | 8 =>
+        print(http::timeout)
+        http::timeout := None
+        print(http::timeout)
+    | 9 =>
+        let empty = http::headers({})
+        let _ = empty.get("missing")
+        ()
+    | _ =>
+        let built = http::headers({"Accept": "text/html"})
+        built.remove("missing")
+        ()

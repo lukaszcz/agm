@@ -1,0 +1,114 @@
+# Headers/Response need dict and text receiver methods even when a custom
+# standard library has no dependency on receiver-method modules.
+import std/dict
+import std/text
+import std/errors::JsonParseError
+import std/json
+import std/option::Option
+import std/path::path
+import std/result::Result
+import std/url::{url}
+
+# Inactivity timeout for a request: connect and every read must produce
+# bytes within this bound; `None` disables it. Accepts a plain number
+# (seconds) or a number suffixed with `s`, `m`, or `h` (seconds, minutes,
+# hours); text that is not a duration raises `TypeError` when a request
+# uses it, as `exec` does. Every call takes its own `timeout: Option[text]`,
+# defaulting to this setting.
+@param @opt-name("http-timeout") @doc("Inactivity timeout for HTTP requests; None disables it.")
+var timeout: Option[text] = Some("30s")
+
+enum Method = Get | Post | Put | Patch | Delete | Head | Options | Other(name: text)
+
+# Upper-case verb; `Other(name)` renders its name verbatim.
+def Method::render(self) -> text =
+  case self of
+    | Get => "GET"
+    | Post => "POST"
+    | Put => "PUT"
+    | Patch => "PATCH"
+    | Delete => "DELETE"
+    | Head => "HEAD"
+    | Options => "OPTIONS"
+    | Other(name) => name
+
+scope HeadersInternals
+  # Header names are case-insensitive; this is the sole place a name is folded.
+  def lower-name(name: text) -> text = name.lower()
+end HeadersInternals
+
+# The raw record keeps names exactly as given; use the `headers(...)`
+# constructor to normalise them.
+record Headers(entries: dict[text, text])
+
+# Constructor: lowercases every name in `entries`. Names equal up to case
+# collapse to one entry; the later entry wins.
+def headers(entries: dict[text, text]) -> Headers =
+  var normalized: dict[text, text] = {}
+  entries.each(fn(name: text, value: text) =>
+    normalized.set(HeadersInternals::lower-name(name), value))
+  Headers(normalized)
+
+def Headers::get(self, name: text) -> text = self.entries.get(HeadersInternals::lower-name(name))
+def Headers::get?(self, name: text) -> Option[text] =
+  self.entries.get?(HeadersInternals::lower-name(name))
+def Headers::contains(self, name: text) -> bool =
+  self.entries.contains(HeadersInternals::lower-name(name))
+def Headers::set(self, name: text, value: text) -> unit =
+  self.entries.set(HeadersInternals::lower-name(name), value)
+# Raises `KeyError` when `name` is absent.
+def Headers::remove(self, name: text) -> unit =
+  let _ = self.entries.remove(HeadersInternals::lower-name(name))
+  ()
+# `other`'s entries win over `self`'s on a shared name.
+def Headers::merged(self, other: Headers) -> Headers = headers(self.entries.merge(other.entries))
+
+enum Auth = NoAuth | Basic(user: text, password: text) | Bearer(token: text)
+enum Body = Empty | Text(content: text, content-type: text) | Json(value: json)
+          | Form(fields: dict[text, text])
+enum Receive = Decode | Ignore | Save(path: path)
+
+# `method` is the verb the response answers; every `HttpError` these methods
+# raise needs it alongside `url`.
+record Response(status: int, headers: Headers, body: text, url: url, method: Method,
+                cookies: dict[text, text], elapsed: decimal)
+
+def Response::ok(self) -> bool = self.status >= 200 and self.status < 300
+
+def Response::raise-for-status(self) -> Response =
+  if self.ok() => self
+  else => raise HttpStatusError(
+    response = self,
+    url = self.url,
+    method = self.method,
+    message = "HTTP %{self.status} for %{self.method.render()} %{self.url}",
+  )
+
+def Response::json(self) -> json = json::parse(self.body)
+def Response::try-json(self) -> Result[json, JsonParseError] = json::try-parse(self.body)
+def Response::json?(self) -> Option[json] = self.try-json().ok()
+
+exception HttpError extends Exception
+  url: url
+  method: Method
+
+# Unsupported scheme or malformed URL.
+exception HttpUrlError extends HttpError()
+# A request could not be transmitted at all, e.g. a header value with a
+# newline or a method token with invalid characters.
+exception HttpRequestError extends HttpError
+  cause: text
+exception HttpConnectionError extends HttpError
+  cause: text
+exception HttpTimeoutError extends HttpError
+  timeout: text
+exception HttpTlsError extends HttpError
+  cause: text
+exception HttpRedirectError extends HttpError
+  redirects: int
+exception HttpDecodeError extends HttpError
+  status: int
+  headers: Headers
+  encoding: text
+exception HttpStatusError extends HttpError
+  response: Response

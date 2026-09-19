@@ -28,9 +28,9 @@ AgL appears in three places, and all three are checked:
   inside the quotes and whole lines between them.
 
 Structure comes from AgL's own lexer, so a ``scope`` in a comment, a string, or
-a raw-tail payload is never mistaken for a region header. A file the lexer
-rejects -- the deliberate lexical-rejection fixtures -- carries no structure to
-check and is skipped.
+a `$` verbatim literal's payload is never mistaken for a region header. A file
+the lexer rejects -- the deliberate lexical-rejection fixtures -- carries no
+structure to check and is skipped.
 
 Usage::
 

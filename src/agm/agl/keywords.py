@@ -1,6 +1,6 @@
 """Canonical inventory of AgL keywords, reserved and soft.
 
-Imports only the identifier and raw-tail data leaves.
+Imports only the identifier data leaf.
 
 `KEYWORDS` holds the reserved words, which are always keywords; `SOFT_KEYWORDS`
 holds the spellings the lexer promotes contextually and that stay ordinary names
@@ -22,7 +22,6 @@ near the top of that file), and the REPL prompt highlighter in
 
 from __future__ import annotations
 
-from agm.raw_tail_catalog import RAW_TAIL_NAMES
 from agm.util.ident import is_identifier
 
 KW_RECORD = "record"
@@ -161,4 +160,4 @@ SOFT_KEYWORDS: frozenset[str] = (
 
 def is_plain_name(text: str) -> bool:
     """Return whether *text* is an ordinary name: an identifier, reserved nowhere."""
-    return text not in KEYWORDS and text not in RAW_TAIL_NAMES and is_identifier(text)
+    return text not in KEYWORDS and is_identifier(text)

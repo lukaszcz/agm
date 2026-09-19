@@ -341,6 +341,14 @@ class TestAttributeDiagnostics:
         assert resolution.attributes.docs[aliases[0].node_id] == "a count"
         assert resolution.attributes.param_zones == {}
 
+    def test_a_name_attribute_accepts_a_name_ending_in_dollar(self) -> None:
+        """`exec$`/`ask$` are ordinary names, so `@name("exec$")` is a plain identifier."""
+        resolution = resolve_entry('record R\n  @name("exec$")\n  x: int\n')
+
+        record = next(item for item in resolution.program.body.items if isinstance(item, RecordDef))
+        (field,) = record.fields
+        assert resolution.attributes.external_names[field.node_id].name == "exec$"
+
 
 class TestProgramOptions:
     """The command-line presentation the ``@opt-*`` attributes describe."""

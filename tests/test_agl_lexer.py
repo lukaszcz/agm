@@ -35,11 +35,6 @@ def tok(source: str) -> list[tuple[str, str]]:
     return [(t.type, str(t)) for t in tokenize(source)]
 
 
-def raw_fragments(source: str) -> list[str]:
-    """Return the raw-tail payload fragments of *source*, in order."""
-    return [value for typ, value in tok(source) if typ == "RAW_FRAGMENT"]
-
-
 def lark_tok(source: str) -> list[tuple[str, str]]:
     """Return parser-facing ``(type, value)`` pairs for every token in *source*."""
     lexer = AglLexer(None)
@@ -862,252 +857,6 @@ class TestSingleQuotedStrings:
 
 
 # ---------------------------------------------------------------------------
-# Raw-tail forms
-# ---------------------------------------------------------------------------
-
-
-class TestRawTailForms:
-    @pytest.mark.parametrize("name", ("exec$", "ask$"))
-    def test_inline_payload_and_interpolation(self, name: str) -> None:
-        assert tok(f"{name} echo %{'{'}value}}  ") == [
-            ("RAW_TAIL_NAME", name),
-            ("RAW_TAIL_START", ""),
-            ("RAW_FRAGMENT", "echo "),
-            ("INTERP_START", "%{"),
-            ("NAME", "value"),
-            ("INTERP_END", "}"),
-            ("RAW_TAIL_END", ""),
-        ]
-
-    @pytest.mark.parametrize("name", ("exec$", "ask$"))
-    def test_inline_payload_is_verbatim_except_interpolation_escape(self, name: str) -> None:
-        source = rf"""{name} echo '#; "quoted"' \\ \%{{ $HOME ${{shell}} $(date) $1"""
-        assert tok(source) == [
-            ("RAW_TAIL_NAME", name),
-            ("RAW_TAIL_START", ""),
-            ("RAW_FRAGMENT", "echo '#; \"quoted\"' \\\\ %{ $HOME ${shell} $(date) $1"),
-            ("RAW_TAIL_END", ""),
-        ]
-
-    @pytest.mark.parametrize("name", ("exec$", "ask$"))
-    def test_type_args_are_code_tokens_before_payload(self, name: str) -> None:
-        assert tok(f"{name}::[Map[Result]] run") == [
-            ("RAW_TAIL_NAME", name),
-            ("DCOLON", "::"),
-            ("LSQB", "["),
-            ("NAME", "Map"),
-            ("LSQB", "["),
-            ("NAME", "Result"),
-            ("RSQB", "]"),
-            ("RSQB", "]"),
-            ("RAW_TAIL_START", ""),
-            ("RAW_FRAGMENT", "run"),
-            ("RAW_TAIL_END", ""),
-        ]
-
-    @pytest.mark.parametrize("name", ("exec$", "ask$"))
-    def test_type_args_allow_whitespace_inside_the_group(self, name: str) -> None:
-        assert tok(f"{name}::[ T ] run") == [
-            ("RAW_TAIL_NAME", name),
-            ("DCOLON", "::"),
-            ("LSQB", "["),
-            ("NAME", "T"),
-            ("RSQB", "]"),
-            ("RAW_TAIL_START", ""),
-            ("RAW_FRAGMENT", "run"),
-            ("RAW_TAIL_END", ""),
-        ]
-
-    @pytest.mark.parametrize("name", ("exec$", "ask$"))
-    def test_unterminated_type_args_raise_lex_error(self, name: str) -> None:
-        source = f"{name}::[T"
-        with pytest.raises(LexError) as exc_info:
-            tok(source)
-        span = exc_info.value.span
-        assert span is not None
-        # The error is located on the type-argument group that was never closed.
-        assert source[span.start_offset :] == "::[T"
-
-    @pytest.mark.parametrize("name", ("exec$", "ask$"))
-    def test_block_payload_is_dedented_and_inert_to_layout(self, name: str) -> None:
-        source = f"{name}\n  first %{{value}}\n    done\n\n  else\nafter"
-        assert tok(source) == [
-            ("RAW_TAIL_NAME", name),
-            ("RAW_TAIL_START", ""),
-            ("RAW_FRAGMENT", "first "),
-            ("INTERP_START", "%{"),
-            ("NAME", "value"),
-            ("INTERP_END", "}"),
-            ("RAW_FRAGMENT", "\n  done\n\nelse"),
-            ("RAW_TAIL_END", ""),
-            ("_NEWLINE", "0"),
-            ("NAME", "after"),
-        ]
-
-    def test_block_preserves_leading_and_interior_blank_lines(self) -> None:
-        assert tok("exec$\n\n  first\n\n  last") == [
-            ("RAW_TAIL_NAME", "exec$"),
-            ("RAW_TAIL_START", ""),
-            ("RAW_FRAGMENT", "\nfirst\n\nlast"),
-            ("RAW_TAIL_END", ""),
-        ]
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "exec$\n  echo hi\n\nlet y = 1",
-            "exec$\n  echo hi\n\n\nlet y = 1",
-            "exec$\n  echo hi\n\n",
-            "exec$\n  echo hi\n  \n",
-        ),
-    )
-    def test_block_drops_trailing_blank_lines(self, source: str) -> None:
-        assert raw_fragments(source) == ["echo hi"]
-
-    def test_block_tab_straddling_the_margin_keeps_relative_indentation(self) -> None:
-        assert raw_fragments("ask$\n echo start\n\tnested") == ["echo start\n   nested"]
-
-    def test_block_payload_span_ends_at_the_last_payload_line(self) -> None:
-        end = next(t for t in tokenize("exec$\n  echo hi\nlet z = 1") if t.type == "RAW_TAIL_END")
-        assert (end.line, end.column, end.end_line, end.end_column) == (2, 10, 2, 10)
-
-    def test_inline_payload_span_ends_at_the_payload(self) -> None:
-        end = next(t for t in tokenize("exec$ echo hi   ") if t.type == "RAW_TAIL_END")
-        assert (end.line, end.column, end.end_line, end.end_column) == (1, 14, 1, 14)
-
-    def test_empty_block_payload_keeps_the_statement_separator(self) -> None:
-        assert ("_NEWLINE", "0") in tok("exec$\nnext")
-
-    def test_raw_tail_under_an_unclosed_bracket_is_left_to_the_parser(self) -> None:
-        tokens = tok("let a = (1 + 2\nlet b: text = exec$ echo hi\nprint(b)\n")
-        assert ("RAW_TAIL_NAME", "exec$") in tokens
-
-    def test_bracketed_raw_tail_error_points_at_the_first_occurrence(self) -> None:
-        # Two raw tails inside one bracket: the closed bracket really does
-        # enclose them, so the error is reported — anchored at the first.
-        with pytest.raises(LexError) as exc_info:
-            tok("(exec$ a exec$ b)")
-        span = exc_info.value.span
-        assert span is not None
-        assert (span.start_line, span.start_col) == (1, 2)
-
-    def test_under_indented_block_line_is_rejected_at_its_location(self) -> None:
-        with pytest.raises(LexError) as exc_info:
-            tok("exec$\n  first\n next")
-        assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == (3, 2, 3, 2)
-
-    @pytest.mark.parametrize("source", ("exec$", "ask$   ", "exec$\n", "exec$\nnext"))
-    def test_empty_payload_reaches_the_parser(self, source: str) -> None:
-        tokens = tok(source)
-        assert ("RAW_TAIL_START", "") in tokens
-        assert ("RAW_TAIL_END", "") in tokens
-
-    def test_raw_tail_is_rejected_inside_brackets_at_its_location(self) -> None:
-        with pytest.raises(LexError) as exc_info:
-            tok("(exec$ echo hi)")
-        assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == (1, 2, 1, 2)
-
-    def test_raw_tail_after_completed_paren_and_semicolon_is_scanned(self) -> None:
-        for source in ("(1 + 1) exec$ true", "1 + 1; exec$ true"):
-            assert ("RAW_TAIL_NAME", "exec$") in tok(source)
-            assert ("RAW_FRAGMENT", "true") in tok(source)
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "record R\n  exec$: int",
-            "exception X\n  ask$: int",
-            "enum E\n  | ask$",
-            "let x = ::ask$",
-        ),
-    )
-    def test_reserved_raw_names_always_start_raw_tail_scanning(self, source: str) -> None:
-        tokens = tok(source)
-        assert ("RAW_TAIL_NAME", "exec$") in tokens or ("RAW_TAIL_NAME", "ask$") in tokens
-
-    @pytest.mark.parametrize("source", ("def f(exec$: int) -> int = 1", "record R[exec$]"))
-    def test_reserved_raw_names_in_bracket_keys_are_lexically_rejected(self, source: str) -> None:
-        with pytest.raises(LexError) as exc_info:
-            tok(source)
-        span = exc_info.value.span
-        assert span is not None
-        assert (span.start_line, span.start_col) == (1, source.index("exec$") + 1)
-
-    @pytest.mark.parametrize("name", ("exec$", "ask$"))
-    def test_enum_variant_payload_field_name_is_lexically_rejected(self, name: str) -> None:
-        with pytest.raises(LexError) as exc_info:
-            tok(f"enum E\n  | V({name}: int)")
-        span = exc_info.value.span
-        assert span is not None
-        assert (span.start_line, span.start_col) == (2, 7)
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "record R\nexec$ true",
-            "record R\n  field: int\nexec$ true",
-            "record R\n  field: exec$ true",
-            "record R\n  do\n    exec$ true\n  done",
-            "record R\n  x: int\n  @arg-named\n  y: int\nexec$ true",
-            "enum E\n  | V(value: int)\nexec$ true",
-        ),
-    )
-    def test_raw_tail_closes_nominal_context_outside_field_margin(self, source: str) -> None:
-        assert ("RAW_TAIL_NAME", "exec$") in tok(source)
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "for exec$ in [] do 1 done",
-            "case x of value as ask$ => 1",
-            "type exec$ = int",
-            "::ask$",
-        ),
-    )
-    def test_reserved_raw_names_always_start_raw_tail_in_binding_and_qualified_contexts(
-        self, source: str
-    ) -> None:
-        tokens = tok(source)
-        assert ("RAW_TAIL_NAME", "exec$") in tokens or ("RAW_TAIL_NAME", "ask$") in tokens
-
-    @pytest.mark.parametrize("name", ("exec$", "ask$"))
-    def test_qualified_name_starts_raw_tail_scanning(self, name: str) -> None:
-        for source in (f"target.{name}", f"module::{name}", f"module:: {name} echo"):
-            assert ("RAW_TAIL_NAME", name) in tok(source)
-
-    @pytest.mark.parametrize("name", ("exec$", "ask$"))
-    def test_spaced_dcolon_does_not_suppress_raw_tail(self, name: str) -> None:
-        assert tok(f"module :: {name} echo hi") == [
-            ("NAME", "module"),
-            ("DCOLON", "::"),
-            ("RAW_TAIL_NAME", name),
-            ("RAW_TAIL_START", ""),
-            ("RAW_FRAGMENT", "echo hi"),
-            ("RAW_TAIL_END", ""),
-        ]
-
-    @pytest.mark.parametrize("name", ("exec$x", "ask$x"))
-    def test_raw_tail_prefix_identifier_does_not_trigger(self, name: str) -> None:
-        assert tok(name) == [("NAME", name)]
-
-    def test_newline_in_raw_tail_hole_is_rejected(self) -> None:
-        with pytest.raises(LexError):
-            tok("exec$ %{value\n  }")
-
-
-# ---------------------------------------------------------------------------
 # `$` verbatim text literal
 # ---------------------------------------------------------------------------
 
@@ -1136,16 +885,13 @@ class TestVerbatimLiteral:
             ("VERBATIM_END", ""),
         ]
 
-    @pytest.mark.parametrize("name", ("a$b", "foo$bar"))
-    def test_dollar_inside_identifier_is_unaffected(self, name: str) -> None:
-        assert tok(name) == [("NAME", name)]
-
-    @pytest.mark.parametrize("name", ("ask$", "exec$"))
-    def test_reserved_raw_tail_names_still_start_raw_tail_scanning(self, name: str) -> None:
+    @pytest.mark.parametrize("name", ("a$b", "foo$bar", "exec$", "ask$"))
+    def test_dollar_inside_or_ending_a_name_is_unaffected(self, name: str) -> None:
         # The token-start `$` path only fires when `$` itself opens a token;
-        # `ask$`/`exec$` are consumed whole by identifier scanning first, so
-        # they keep triggering the (still-supported) raw-tail path unchanged.
-        assert ("RAW_TAIL_NAME", name) in tok(name)
+        # a `$` elsewhere in a name — inside it or trailing, as in
+        # `exec$`/`ask$` — is consumed whole by identifier scanning first, so
+        # the whole thing lexes as one ordinary name.
+        assert tok(name) == [("NAME", name)]
 
     @pytest.mark.parametrize("op", ("<$>", "%$"))
     def test_dollar_inside_operator_run_is_unaffected(self, op: str) -> None:
@@ -2588,8 +2334,9 @@ class TestIdentifierUnicodeAndSymbols:
         assert tok("do-it-now!") == [("NAME", "do-it-now!")]
 
     def test_dollar_in_identifier(self) -> None:
-        # The raw-tail openers end in ``$``, so a name merely ending in one of
-        # their spellings is a single ordinary identifier, not an opener.
+        # `$` is a legal identifier-continuation character, so a name merely
+        # ending in it is a single ordinary identifier, not a verbatim opener
+        # (which only fires when `$` starts a token).
         assert tok("price$") == [("NAME", "price$")]
         assert tok("do-exec$") == [("NAME", "do-exec$")]
 

@@ -34,7 +34,7 @@ import agm.agl.syntax as syntax
 from agm.agl.lexer import tokenize
 from agm.agl.lexer.errors import IncompleteInputError, LexError, UnterminatedTripleQuotedStringError
 from agm.agl.lexer.lexer import build_parser
-from agm.agl.lexer.tokens import RAW_TAIL_END, RAW_TAIL_START, VERBATIM_END, VERBATIM_START
+from agm.agl.lexer.tokens import VERBATIM_END, VERBATIM_START
 from agm.agl.parser.errors import AglSyntaxError, syntax_error_from_lark
 from agm.agl.parser.transform import AstBuilder, resolve_program_infix
 from agm.agl.syntax.spans import SourceId
@@ -87,14 +87,8 @@ def has_unterminated_triple_quoted_string(text: str) -> bool:
     return False
 
 
-# Opener/closer token kinds of a block-form payload: a raw tail and a `$`
-# verbatim literal.
-_BLOCK_OPENER_TOKENS: tuple[str, ...] = (RAW_TAIL_START, VERBATIM_START)
-_BLOCK_CLOSER_TOKENS: tuple[str, ...] = (RAW_TAIL_END, VERBATIM_END)
-
-
 def has_open_verbatim_block(text: str) -> bool:
-    """Return ``True`` when a `$`-literal or raw-tail block payload is still open.
+    """Return ``True`` when a `$`-literal block payload is still open.
 
     An unclosed block payload is not a parse failure — the lexer happily ends
     it at end of input — so :func:`is_incomplete_source` cannot see it. A REPL
@@ -104,9 +98,9 @@ def has_open_verbatim_block(text: str) -> bool:
     after the opener.
 
     A bare `$` header with nothing typed after it yet (e.g. ``ask $``) raises
-    an ``IncompleteInputError`` instead of closing silently (unlike a raw
-    tail's empty payload); :func:`is_incomplete_source` already reports that
-    as incomplete, so any lex error here is simply not an open block.
+    an ``IncompleteInputError`` instead of closing silently;
+    :func:`is_incomplete_source` already reports that as incomplete, so any
+    lex error here is simply not an open block.
     """
     try:
         tokens = list(tokenize(text))
@@ -114,9 +108,9 @@ def has_open_verbatim_block(text: str) -> bool:
         return False
     payload_starts: list[int] = []
     for token in tokens:
-        if token.type in _BLOCK_OPENER_TOKENS:
+        if token.type == VERBATIM_START:
             payload_starts.append(token.end_pos if token.end_pos is not None else 0)
-        elif token.type in _BLOCK_CLOSER_TOKENS and token.end_pos == len(text) and payload_starts:
+        elif token.type == VERBATIM_END and token.end_pos == len(text) and payload_starts:
             line_end = text.find("\n", payload_starts[-1])
             header_tail = text[payload_starts[-1] : len(text) if line_end < 0 else line_end]
             return header_tail.strip() == ""

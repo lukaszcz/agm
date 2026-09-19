@@ -264,18 +264,17 @@ class TestMultiline:
         assert "first" in output
         assert "second" in output
 
-    @pytest.mark.parametrize("header", ["exec$", "exec $"])
-    def test_exec_header_block_continues_until_blank_line_then_executes(self, header: str) -> None:
-        # A raw-tail (`exec$`) and a `$`-literal (`exec $`) header both open an
-        # interactive block. Enter after each content line must keep collecting
-        # the payload; the blank continuation line closes it and runs one shell
-        # call. The scripted stdout ("ONE"/"TWO") differs from the typed
-        # payload ("echo one"/"echo two") so the assertion cannot pass merely
-        # because the input line was echoed back.
+    def test_exec_header_block_continues_until_blank_line_then_executes(self) -> None:
+        # A `$`-literal (`exec $`) header opens an interactive block. Enter
+        # after each content line must keep collecting the payload; the blank
+        # continuation line closes it and runs one shell call. The scripted
+        # stdout ("ONE"/"TWO") differs from the typed payload ("echo
+        # one"/"echo two") so the assertion cannot pass merely because the
+        # input line was echoed back.
         shell = FakeShell([{"command": "echo one\necho two", "stdout": "ONE\nTWO\n"}])
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             output = drive(
-                f"{header}\r  echo one\r  echo two\r\r\x04",
+                "exec $\r  echo one\r  echo two\r\r\x04",
                 session=ReplSession(default_stdlib=True),
             )
 
@@ -286,13 +285,12 @@ class TestMultiline:
         assert "ONE" in output
         assert "TWO" in output
 
-    @pytest.mark.parametrize("header", ["ask$", "ask $"])
-    def test_ask_header_block_continues_and_uses_mocked_default_agent(self, header: str) -> None:
-        # A raw-tail (`ask$`) and a `$`-literal (`ask $`) header both open an
-        # interactive block that dispatches to the default agent once closed.
+    def test_ask_header_block_continues_and_uses_mocked_default_agent(self) -> None:
+        # A `$`-literal (`ask $`) header opens an interactive block that
+        # dispatches to the default agent once closed.
         agent = _CountingAgent("MOCKED REPLY")
         output = drive(
-            f"{header}\r  summarize this\r\r\x04",
+            "ask $\r  summarize this\r\r\x04",
             session=ReplSession(agent_dispatcher=agent, default_stdlib=True),
         )
 

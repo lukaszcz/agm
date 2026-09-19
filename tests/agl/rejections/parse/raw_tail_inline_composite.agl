@@ -1,1 +1,0 @@
-let command = 1 + exec$ true

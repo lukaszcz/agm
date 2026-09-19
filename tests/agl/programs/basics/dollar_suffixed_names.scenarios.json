@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "named_label",
+      "params": {
+        "label": "release"
+      },
+      "expect": {
+        "stdout": "release:build\nbuild\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "blank_label",
+      "params": {
+        "label": ""
+      },
+      "expect": {
+        "stdout": ":build\nbuild\n",
+        "calls": {}
+      }
+    }
+  ]
+}

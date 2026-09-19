@@ -3304,36 +3304,6 @@ class TestExec:
 
 
 # ---------------------------------------------------------------------------
-# Raw-tail builtin type parity
-# ---------------------------------------------------------------------------
-
-
-class TestRawTailTypingParity:
-    @pytest.mark.parametrize(
-        ("raw_source", "call_source", "expected_type"),
-        (
-            pytest.param(
-                "let result = exec$::[json] printf-json\nresult",
-                'let result = exec::[json]("printf-json")\nresult',
-                JsonType(),
-                id="exec",
-            ),
-            pytest.param(
-                "record Review\n  approved: bool\nlet result = ask$::[Review] review it\nresult",
-                'record Review\n  approved: bool\nlet result = ask::[Review]("review it")\nresult',
-                "Review",
-                id="ask",
-            ),
-        ),
-    )
-    def test_explicit_type_argument_matches_call_form(
-        self, raw_source: str, call_source: str, expected_type: Type | str
-    ) -> None:
-        raw_checked, _ = assert_builtin_call_type_parity(raw_source, call_source)
-        assert raw_checked.call_sites[0].target_type == _expected_type(raw_checked, expected_type)
-
-
-# ---------------------------------------------------------------------------
 # Verbatim `$` literal target-type parity
 # ---------------------------------------------------------------------------
 

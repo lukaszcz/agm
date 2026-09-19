@@ -52,7 +52,6 @@ from agm.agl.lexer import (
 from agm.agl.lexer.tokens import (
     MODPATH,
     MODQUAL,
-    RAW_TAIL_NAME,
     SOFT_KEYWORD_TOKENS,
     VERBATIM_END,
     VERBATIM_START,
@@ -99,7 +98,6 @@ _STRING_TOKENS: frozenset[str] = frozenset(
         "TEMPLATE_END",
         "INTERP_START",
         "INTERP_END",
-        "RAW_FRAGMENT",
         VERBATIM_START,
         VERBATIM_END,
     }
@@ -144,9 +142,8 @@ _OPERATOR_TOKENS: frozenset[str] = frozenset(
 # so they colour like any other name rather than falling through unstyled.
 _MODULE_PATH_TOKENS: frozenset[str] = frozenset({MODPATH, MODQUAL})
 # Token types that colour as keywords: the reserved words (whose token type is
-# the keyword itself), the soft keywords the lexer promoted, and a raw-tail
-# introducer such as ``exec$``.
-_KEYWORD_TOKENS: frozenset[str] = KEYWORDS | SOFT_KEYWORD_TOKENS | {RAW_TAIL_NAME}
+# the keyword itself) and the soft keywords the lexer promoted.
+_KEYWORD_TOKENS: frozenset[str] = KEYWORDS | SOFT_KEYWORD_TOKENS
 # Layout tokens carry no styleable text and are transparent to look-ahead.
 _LAYOUT_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 # Keywords that introduce a type declaration whose following NAME is the type.
@@ -324,8 +321,8 @@ def _styled_spans(
 
     Comments carry no token, so their spans come from the scan's comment side
     channel (:func:`agm.agl.lexer.lex_comment_spans`) rather than from the token
-    stream; a ``#`` inside a string or a raw tail is content, and the scanner is
-    what knows the difference.
+    stream; a ``#`` inside a string or a `$` verbatim literal is content, and
+    the scanner is what knows the difference.
 
     Synthetic zero-width tokens (INDENT/DEDENT/NEWLINE) and unstyled token types
     are skipped.  A lexer error on a half-typed entry yields no spans (plain

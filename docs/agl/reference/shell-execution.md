@@ -49,8 +49,8 @@ exec(
 merges with the AGM process environment. The default is the startup ambient
 `std/env::environ` snapshot. Use `environ.extended(overrides)` when a command
 needs an explicit overlay. `cwd` is an optional working directory and `timeout`
-is an optional idle timeout duration. `exec$` supplies only its command, so it
-uses all three defaults.
+is an optional idle timeout duration. The single-argument sugar below supplies
+only the command, so it uses all three defaults.
 
 ## Single-argument sugar
 
@@ -64,16 +64,8 @@ program def main() -> unit =
 
 With named arguments, parentheses are required.
 
-## Raw-tail `exec$`
-
-`exec$` writes the command directly after the keyword rather than inside a
-string template. The inline form takes the rest of its line; the block form
-collects one dedented, newline-joined shell script. Both produce the same call
-as `exec(<template>)` and accept explicit type arguments. Like every raw-tail
-name, `exec$` may follow a projection: `target.exec$ command` is
-`target.exec(command)` and uses ordinary member resolution. Type arguments
-must touch the name (`exec$::[T]`); in `exec$ ::[T]`, the spaced `::[T]` is
-command payload:
+A `$` verbatim literal ([Templates](grammar.md#templates)) may supply the same
+single argument, inline or as a block:
 
 ```agl
 program def main() -> unit =
@@ -90,9 +82,9 @@ trailing spaces and tabs, and a block form drops blank lines that trail its
 last content line (blank lines before and between content lines are kept).
 Quotes, parentheses, `#`, `;`, every dollar form such as `$HOME`, `${name}`,
 `$(date)`, and `$1`, and ordinary backslashes all reach the shell unchanged.
-Only `%{expr}` interpolates; write `\%{` for a literal `%{`. A raw call needs a
-nonempty inline command or a block with at least one nonblank line. For example,
-this command passes `%{literal}` to the shell:
+Only `%{expr}` interpolates; write `\%{` for a literal `%{`. The `$` literal
+needs a nonempty inline command or a block with at least one nonblank line.
+For example, this command passes `%{literal}` to the shell:
 
 ```agl
 program def main() -> unit =
@@ -110,17 +102,11 @@ program def main() -> unit =
   let path: text = exec $ printf '%s' "C:%{"\\"}%{subdir}"
 ```
 
-Raw-tail calls are permitted only in line-final expression positions: block
-items, binding or assignment right-hand sides, inline function bodies, eligible
-`return` operands, and the final juxtaposition argument (`print exec$ date`).
-They cannot appear inside brackets or before more AgL syntax on the same line.
-See [Grammar](grammar.md#raw-tail-calls) for the complete position rule.
-
-`exec$` has the same typing behavior as `exec`: without an expected type it
-returns `ExecResult`; a non-`ExecResult`/non-`unit` target parses stdout; and a
-`unit` target discards successful output. Use `exec(...)` instead when the
-command needs named parsing options (`format`, `strict-json`, or
-`on-parse-error`) or must occur outside a raw-tail position.
+`exec $ ...` has the same typing behavior as `exec`: without an expected type
+it returns `ExecResult`; a non-`ExecResult`/non-`unit` target parses stdout;
+and a `unit` target discards successful output. Use `exec(...)` instead when
+the command needs named parsing options (`format`, `strict-json`, or
+`on-parse-error`).
 
 ## Interpolation in shell templates
 

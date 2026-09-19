@@ -30,7 +30,7 @@ Per-test cost is accounted in CPU seconds (`tests/_durations.py`), never wall cl
 
 ## Editor Modes
 
-The Emacs mode (`config/emacs/`) and micro rules (`config/micro/`) carry their own suites, `just test-emacs` and `just test-micro`, kept outside `just check` so the gate stays deterministic without those tools. Both modes mirror three inventories owned by the Python sources — the keyword set in `src/agm/agl/keywords.py`, the raw-tail openers in `src/agm/raw_tail_catalog.py`, and the builtin names in `src/agm/agl/scope/symbols.py` — by hand, so a change to any must be carried into both modes.
+The Emacs mode (`config/emacs/`) and micro rules (`config/micro/`) carry their own suites, `just test-emacs` and `just test-micro`, kept outside `just check` so the gate stays deterministic without those tools. Both modes mirror two inventories owned by the Python sources — the keyword set in `src/agm/agl/keywords.py` and the builtin names in `src/agm/agl/scope/symbols.py` — by hand, so a change to either must be carried into both modes.
 
 ## Code Entry Points
 

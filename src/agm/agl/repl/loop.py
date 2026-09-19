@@ -73,8 +73,8 @@ def is_incomplete(text: str) -> bool:
     Enter on an empty continuation line, so the buffer ends with ``\\n`` —
     likewise force-submits so the user can always escape a continuation even when
     the buffer is still syntactically incomplete.  Otherwise the structured
-    parser signal decides, except that an open `$`-literal or raw-tail block
-    stays open until its payload is closed by a blank line or dedent.
+    parser signal decides, except that an open `$`-literal block stays open
+    until its payload is closed by a blank line or dedent.
 
     Both front ends drive this same predicate — the prompt_toolkit console from
     its multiline Enter key binding, the plain console from its line-accumulating

@@ -70,7 +70,6 @@
 %declare _NEWLINE _INDENT _DEDENT
 %declare TEMPLATE_START STRING_FRAGMENT INTERP_START INTERP_END TEMPLATE_END
 %declare VERBATIM_START VERBATIM_END
-%declare RAW_TAIL_NAME RAW_TAIL_START RAW_FRAGMENT RAW_TAIL_END
 
 // ---------------------------------------------------------------------------
 // Identifier / number / operator tokens (%declare — no regex; from custom lexer)
@@ -117,14 +116,7 @@ _sep: _NEWLINE | SEMICOLON
 
 ?item: declaration
      | binder
-     | raw_return_expr
-     | line_final_expr
-
-// The single criterion for where a raw-tail form may appear: a line-final
-// expression position, where a raw payload cannot swallow a grammar-visible
-// continuation marker.  Every such position spells it as ``line_final_expr``.
-?raw_tail_form: raw_call | dotted_raw_call | raw_juxt
-?line_final_expr: raw_tail_form | expr
+     | expr
 
 // ---------------------------------------------------------------------------
 // Declarations (transparent)
@@ -329,7 +321,7 @@ param_def: attributes? field_name (COLON type_expr)? (EQ or_expr)?
 // separator — a newline or `;` — which starts the next block item; `;` cannot
 // extend the body because no body-specific marker distinguishes it. Write a
 // sequence as a parenthesized block (`def f() = (let x = 1; x)`) or as a suite.
-func_body: suite_expr | raw_return_expr | line_final_expr
+func_body: suite_expr | expr
 
 // ---------------------------------------------------------------------------
 // Binders (transparent)
@@ -338,9 +330,9 @@ func_body: suite_expr | raw_return_expr | line_final_expr
 ?binder: let_decl | var_decl | assign_stmt
 
 // A binder's initializer takes the same two shapes a function body does: an
-// indented suite, or one line-final expression.  The suite alternative starts
+// indented suite, or one inline expression.  The suite alternative starts
 // with _INDENT and no expression form can, so the choice is unambiguous.
-_init_value: suite_expr | line_final_expr
+_init_value: suite_expr | expr
 
 let_decl: attributes? "let" decl_head type_ann? EQ _init_value
 var_decl: attributes? VAR decl_head type_ann? EQ _init_value
@@ -567,11 +559,7 @@ inline_assign: postfix ASSIGN or_expr
 
 ?letvar_decl: let_decl | var_decl
 
-// Raw-tail returns only occur at line-final block-item and function-body
-// positions. Inline branch, case, and try bodies use return_expr, so their
-// continuation markers remain grammar-visible instead of becoming raw payload.
 raise_expr: "raise" or_expr
-raw_return_expr: "return" raw_tail_form -> return_expr
 return_expr: "return" or_expr?
 
 // with_expr: functional update — ``target with field = value, ...``.
@@ -825,19 +813,6 @@ template: TEMPLATE_START template_segment* TEMPLATE_END
 template_segment: STRING_FRAGMENT    -> tmpl_text
                 | interp             -> tmpl_interp
 
-raw_juxt: postfix raw_call                                      -> juxt_call
-        | postfix raw_juxt_dotted_receiver type_args? raw_tail -> dotted_raw_juxt
-raw_call: raw_callee type_args? raw_tail
-dotted_raw_call: dotted_raw_head type_args? raw_tail
-dotted_raw_head: postfix DOT RAW_TAIL_NAME
-raw_juxt_dotted_receiver: juxt_atom raw_juxt_tail
-raw_juxt_tail: juxt_postfix_suffix raw_juxt_tail -> raw_juxt_postfix_tail
-             | DOT raw_juxt_member               -> raw_juxt_final_tail
-raw_juxt_member: RAW_TAIL_NAME                -> raw_juxt_terminal
-               | juxt_field_name raw_juxt_tail -> raw_juxt_member_field
-raw_callee: RAW_TAIL_NAME
-raw_tail: RAW_TAIL_START (raw_text | interp)+ RAW_TAIL_END
-raw_text: RAW_FRAGMENT
 type_args: DCOLON LSQB type_arg_list RSQB
 
 interp: INTERP_START expr INTERP_END

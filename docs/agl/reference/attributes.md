@@ -98,10 +98,9 @@ member; or a record declaration (a record's own `@name`/`@json-name` doubles
 as its `$case` tag wherever it is an enum member). Not legal on an enum or
 exception declaration, a parameter, a binding, a function, or a `type` alias.
 
-`@name("…")` takes an AgL identifier that is not a hard keyword and not a
-raw-tail name (`exec$`, `ask$`, …); a soft keyword is fine. It is the
-declaration's alternative external name, and the default JSON name when no
-`@json-name` is given.
+`@name("…")` takes an AgL identifier that is not a hard keyword; a soft
+keyword is fine. It is the declaration's alternative external name, and the
+default JSON name when no `@json-name` is given.
 
 `@json-name("…")` takes any non-empty text except `"$case"` (reserved for
 the enum-member discriminator). It overrides the JSON name only, leaving the

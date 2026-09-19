@@ -165,8 +165,7 @@ lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let` or `var`, may not be
 declared as functions or function parameters, and may not appear as pattern or catch
 binders — but they remain legal as field and method names, which live in a
-type's own member namespace. The distinct raw-tail spellings
-`exec$` and `ask$` are reserved for their raw forms and cannot be used as names.
+type's own member namespace.
 
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,
 `array`, `dict`, and `unit` are **not** reserved; they are recognized
@@ -397,27 +396,21 @@ are valid delimiter characters, giving four forms:
 Escape sequences, triple-quoted dedent normalization, and interpolation
 semantics are covered in [Strings and interpolation](strings-and-interpolation.md).
 
-## Raw-tail forms
+## Verbatim literals
 
-`exec$` and `ask$` begin raw-tail calls, either directly or after a `.`
-projection: `receiver.ask$ prompt`. The lexer emits a `RAW_TAIL_NAME`, then
-`RAW_TAIL_START`, one or more `RAW_FRAGMENT` and interpolation-token runs, and
-`RAW_TAIL_END`. Optional type arguments must be byte-adjacent to the raw name:
-`ask$::[T]` and `receiver.ask$::[T]`. In `ask$ ::[T]` or
-`receiver.ask$ ::[T]`, the spaced `::[T]` instead begins the payload. The
-payload is either the rest of that line or a following indented block. In both
-cases it is one template: its text is verbatim except that `%{expr}`
-interpolates and `\%{` is a literal `%{`. Inline payloads discard trailing
-spaces and tabs; block payloads drop the blank lines that trail the last
-content line.
+A `$` at the start of a token begins a verbatim template, which may stand
+wherever a template may (e.g. `receiver.ask $ prompt`). The payload is either
+the rest of that line or a following indented block. In both cases it is one
+template: its text is verbatim except that `%{expr}` interpolates and `\%{`
+is a literal `%{`. Inline payloads discard trailing spaces and tabs; block
+payloads drop the blank lines that trail the last content line.
 
-A raw-tail call requires a nonempty inline payload or a block with at least one
-nonblank line. It is only recognized at bracket depth zero and must occupy a
-line-final expression position. Its payload therefore owns `#`, `;`, quotes,
-parentheses, dollar forms, and ordinary backslashes rather than treating them
-as AgL syntax. The [Grammar](grammar.md#raw-tail-calls) lists the allowed
-positions; [Shell execution](shell-execution.md#raw-tail-exec) and [Agent
-calls](agent-calls.md#raw-tail-ask) describe the two forms.
+A `$` literal requires a nonempty inline payload or a block with at least one
+nonblank line, and is not valid inside brackets; use a quoted template there.
+Its payload therefore owns `#`, `;`, quotes, parentheses, dollar forms, and
+ordinary backslashes rather than treating them as AgL syntax. [Shell
+execution](shell-execution.md) and [Agent calls](agent-calls.md) show it
+supplying `exec`'s and `ask`'s single argument.
 
 ## Operators and punctuation
 

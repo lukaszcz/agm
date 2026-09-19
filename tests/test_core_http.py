@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+import requests.exceptions
 import urllib3.exceptions
 
 from agm.core import http
@@ -422,11 +423,11 @@ def test_perform_save_streams_the_body_to_disk_and_overwrites(tmp_path: Path) ->
     adapter.assert_complete()
 
 
-def test_perform_save_propagates_an_os_error_unchanged(tmp_path: Path) -> None:
+def test_perform_save_raises_a_save_failure_wrapping_the_os_error(tmp_path: Path) -> None:
     destination = tmp_path / "missing-dir" / "out.bin"
-    session, _adapter = fake_session([{"status": 200, "body_hex": b"hello".hex()}])
+    session, adapter = fake_session([{"status": 200, "body_hex": b"hello".hex()}])
 
-    with pytest.raises(OSError):
+    with pytest.raises(http.SaveFailure) as excinfo:
         http.perform(
             session,
             http.RequestSpec(
@@ -436,6 +437,10 @@ def test_perform_save_propagates_an_os_error_unchanged(tmp_path: Path) -> None:
                 timeout_seconds=5.0,
             ),
         )
+
+    assert excinfo.value.path == destination
+    assert isinstance(excinfo.value.error, OSError)
+    adapter.assert_complete()
 
 
 def test_perform_save_leaves_the_previous_file_on_a_mid_stream_failure(tmp_path: Path) -> None:
@@ -718,6 +723,58 @@ def test_perform_classifies_an_invalid_header_as_request() -> None:
         )
 
     assert excinfo.value.kind == "request"
+    adapter.assert_complete()
+
+
+def test_classify_treats_an_invalid_header_as_a_request_failure_without_its_message() -> None:
+    """``_validate_headers`` now catches every header ``requests`` itself would reject, so this
+    exercises ``_classify``'s own safety net directly rather than through ``perform``."""
+    exc = requests.exceptions.InvalidHeader("Invalid header value b'Bearer secret\\n'")
+
+    result = http._classify(exc, requests.Session())
+
+    assert result.kind == "request"
+    assert "secret" not in result.message
+
+
+def test_perform_names_only_the_header_for_an_invalid_header_value() -> None:
+    """A credential with a control character must never reach the failure message."""
+    session, adapter = fake_session([])
+
+    with pytest.raises(http.TransportError) as excinfo:
+        http.perform(
+            session,
+            http.RequestSpec(
+                method="GET",
+                url="https://example.org/x",
+                headers={"X-Token": "Bearer secret\n"},
+                timeout_seconds=5.0,
+            ),
+        )
+
+    assert excinfo.value.kind == "request"
+    assert "secret" not in excinfo.value.message
+    assert "x-token" in excinfo.value.message.lower()
+    adapter.assert_complete()
+
+
+def test_perform_names_only_the_header_for_an_invalid_rendered_auth_value() -> None:
+    """A ``spec.auth`` string is merged into the request headers before sending."""
+    session, adapter = fake_session([])
+
+    with pytest.raises(http.TransportError) as excinfo:
+        http.perform(
+            session,
+            http.RequestSpec(
+                method="GET",
+                url="https://example.org/x",
+                auth="Bearer secret\n",
+                timeout_seconds=5.0,
+            ),
+        )
+
+    assert excinfo.value.kind == "request"
+    assert "secret" not in excinfo.value.message
     adapter.assert_complete()
 
 

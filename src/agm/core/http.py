@@ -36,6 +36,10 @@ _CHUNK_SIZE = 64 * 1024
 # RFC 9110 tchar: the only characters a method token may contain.
 _METHOD_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 
+# The same header validity rules ``requests.utils.check_header_validity`` applies.
+_HEADER_NAME = re.compile(r"^[^:\s][^:\r\n]*$")
+_HEADER_VALUE = re.compile(r"^\S[^\r\n]*$|^$")
+
 
 class _NoNetrcAuth(requests.auth.AuthBase):
     """A present-but-inert session auth that blocks ``requests``' ``.netrc`` lookup.
@@ -103,6 +107,15 @@ class Save:
 ReceiveSpec = Decode | Ignore | Save
 
 
+class SaveFailure(Exception):
+    """A ``Save`` destination that could not be written; wraps the ``OSError`` cause."""
+
+    def __init__(self, path: Path, error: OSError) -> None:
+        super().__init__(str(error))
+        self.path = path
+        self.error = error
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RequestSpec:
     """One request to perform, already unwrapped from AgL values.
@@ -112,7 +125,9 @@ class RequestSpec:
     itself. ``params`` is appended to any query the url already carries.
     ``method`` is sent verbatim (never case-normalised), so an ``Other``
     method travels exactly as given. ``timeout_seconds`` has no default: the
-    standard library's HTTP module owns the default inactivity timeout.
+    standard library's HTTP module owns the default inactivity timeout. It is
+    positive, or ``None`` to disable the inactivity bound; the caller rejects
+    a non-positive value before building a spec.
     """
 
     method: str
@@ -144,18 +159,19 @@ class StreamedResponse:
 
 
 class TransportError(Exception):
-    """A classified transport failure, raised by :func:`perform`.
+    """A classified transport failure, raised by :func:`perform`."""
 
-    ``redirects`` is filled only for the ``redirect`` kind: the number of
-    redirects actually followed before the limit was exceeded.
-    """
-
-    def __init__(
-        self, kind: TransportErrorKind, message: str, *, redirects: int | None = None
-    ) -> None:
+    def __init__(self, kind: TransportErrorKind, message: str) -> None:
         super().__init__(message)
         self.kind = kind
         self.message = message
+
+
+class RedirectError(TransportError):
+    """A ``redirect``-kind :class:`TransportError`, with the redirects actually followed."""
+
+    def __init__(self, message: str, *, redirects: int) -> None:
+        super().__init__("redirect", message)
         self.redirects = redirects
 
 
@@ -193,6 +209,18 @@ def _validate_method(method: str) -> None:
         raise TransportError("request", f"invalid HTTP method token: {method!r}")
 
 
+def _validate_headers(headers: Mapping[str, str]) -> None:
+    """Raise a ``request``-kind failure naming only the header NAME for an invalid entry.
+
+    Checked before any header reaches ``requests``, whose own validator
+    raises an exception that quotes the value -- unsafe when the value is a
+    credential such as a bearer token or session cookie.
+    """
+    for name, value in headers.items():
+        if not _HEADER_NAME.fullmatch(name) or not _HEADER_VALUE.fullmatch(value):
+            raise TransportError("request", f"invalid HTTP header: {name!r}")
+
+
 def _cookie_jar_for(spec: RequestSpec) -> requests.cookies.RequestsCookieJar:
     """Cookies scoped to *spec*'s request host.
 
@@ -221,6 +249,8 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
     verbatim instead.
     """
     _validate_method(spec.method)
+    headers = _headers_for(spec)
+    _validate_headers(headers)
     timeout = None if spec.timeout_seconds is None else (spec.timeout_seconds, spec.timeout_seconds)
     started = time.monotonic()
     try:
@@ -228,7 +258,7 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
             method=spec.method,
             url=spec.url,
             params=spec.params,
-            headers=_headers_for(spec),
+            headers=headers,
             data=spec.body,
             auth=spec.auth if isinstance(spec.auth, tuple) else None,
             cookies=_cookie_jar_for(spec),
@@ -288,7 +318,15 @@ def _consume(response: requests.Response, receive: ReceiveSpec) -> tuple[str, in
                 sizes.append(len(chunk))
                 yield chunk
 
-        fs.write_bytes_atomic(receive.path, chunks())
+        try:
+            fs.write_bytes_atomic(receive.path, chunks())
+        except requests.exceptions.RequestException:
+            # ``requests.exceptions.RequestException`` is itself an ``OSError``
+            # subclass; a network failure raised while iterating *chunks* must
+            # still reach :func:`perform`'s own classifier, not this catch.
+            raise
+        except OSError as exc:
+            raise SaveFailure(receive.path, exc) from exc
         return "", sum(sizes), ""
     data = response.content
     encoding = resolve_charset(response.headers.get("Content-Type"))
@@ -305,7 +343,6 @@ def _consume(response: requests.Response, receive: ReceiveSpec) -> tuple[str, in
 
 
 _CLASSIFIERS: tuple[tuple[type[requests.exceptions.RequestException], TransportErrorKind], ...] = (
-    (requests.exceptions.InvalidHeader, "request"),
     (requests.exceptions.MissingSchema, "url"),
     (requests.exceptions.InvalidSchema, "url"),
     (requests.exceptions.InvalidURL, "url"),
@@ -322,17 +359,22 @@ def _classify(
     ``requests`` wraps a read timeout raised mid-stream (while a body is
     being iterated) as a plain ``ConnectionError``, losing its timeout
     identity; recover it from the wrapped ``urllib3`` exception before
-    falling back to the ordered classification below. ``_CLASSIFIERS`` lists
-    only the exception types that need a kind other than the ``connection``
-    fallback: ``ConnectTimeout``/``ReadTimeout`` are ``Timeout`` subclasses
-    and need no row of their own, and a bare ``ConnectionError`` or
+    falling back to the ordered classification below. ``InvalidHeader`` is
+    classified without its own message, which quotes the offending value;
+    ``_validate_headers`` catches the ordinary case earlier and names only
+    the header, so this is just a safety net. ``_CLASSIFIERS`` lists only the
+    exception types that need a kind other than the ``connection`` fallback:
+    ``ConnectTimeout``/``ReadTimeout`` are ``Timeout`` subclasses and need no
+    row of their own, and a bare ``ConnectionError`` or
     ``ChunkedEncodingError`` already falls through to ``connection``. Any
     ``RequestException`` matching none of them (an unlisted ``requests``
     failure) still classifies as ``connection``, the catch-all kind.
     """
     if isinstance(exc, requests.exceptions.TooManyRedirects):
         redirects = len(exc.response.history) if exc.response is not None else session.max_redirects
-        return TransportError("redirect", str(exc), redirects=redirects)
+        return RedirectError(str(exc), redirects=redirects)
+    if isinstance(exc, requests.exceptions.InvalidHeader):
+        return TransportError("request", "invalid HTTP header")
     if isinstance(exc, requests.exceptions.ConnectionError) and isinstance(
         exc.__context__, urllib3.exceptions.ReadTimeoutError
     ):

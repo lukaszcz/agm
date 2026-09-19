@@ -257,3 +257,7 @@ def test_identity_stamp_is_settled_false_for_an_mtime_after_the_observed_instant
     stamp = (observed + 3_600_000_000_000, 0, 0)
 
     assert not fs.identity_stamp_is_settled(stamp, observed)
+
+
+def test_fs_error_message_names_the_operation_and_path() -> None:
+    assert fs.fs_error_message("write", "/tmp/x") == "Could not write /tmp/x."

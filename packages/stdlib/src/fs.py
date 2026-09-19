@@ -20,7 +20,7 @@ T = TypeVar("T")
 def _raise_fs_error(path: str, operation: str) -> NoReturn:
     raise AglException(
         FsError(
-            message=f"Could not {operation} {path}.",
+            message=fs.fs_error_message(operation, path),
             path=path,
             operation=operation,
         )

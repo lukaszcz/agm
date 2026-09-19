@@ -2,7 +2,8 @@
 # standard library has no dependency on receiver-method modules.
 import std/dict
 import std/text
-import std/errors::JsonParseError
+import std/errors::{JsonParseError, TypeError}
+import std/fs
 import std/json
 import std/option::Option
 import std/path::path
@@ -69,7 +70,8 @@ enum Body = Empty | Text(content: text, content-type: text) | Json(value: json)
 enum Receive = Decode | Ignore | Save(path: path)
 
 # `method` is the verb the response answers; every `HttpError` these methods
-# raise needs it alongside `url`.
+# raise needs it alongside `url`. `elapsed` is monotonic seconds for the
+# whole exchange, body transfer included.
 record Response(status: int, headers: Headers, body: text, url: url, method: Method,
                 cookies: dict[text, text], elapsed: decimal)
 
@@ -100,6 +102,8 @@ exception HttpRequestError extends HttpError
   cause: text
 exception HttpConnectionError extends HttpError
   cause: text
+# `timeout` is the inactivity timeout given, empty when it was disabled
+# (`timeout = None`).
 exception HttpTimeoutError extends HttpError
   timeout: text
 exception HttpTlsError extends HttpError
@@ -112,3 +116,165 @@ exception HttpDecodeError extends HttpError
   encoding: text
 exception HttpStatusError extends HttpError
   response: Response
+
+scope RequestInternals
+  # `method-text` is `method.render()`, passed alongside `method` so
+  # `Method::render` stays the sole source of verb text.
+  @extern-name("request")
+  extern def send(method-text: text, method: Method, url: url, query: dict[text, text],
+                 headers: Headers, body: Body, auth: Auth, cookies: dict[text, text],
+                 receive: Receive, timeout: Option[text], follow-redirects: bool,
+                 verify-tls: bool) -> Response
+end RequestInternals
+
+# `auth`, when not `NoAuth`, renders an `Authorization` header that overrides
+# one supplied in `headers`. `query` is appended to `url`'s own query.
+# `cookies` are sent exactly as given and never retained across calls.
+# `follow-redirects` applies uniformly to every method, `Head` included.
+# `Other(name)` is sent verbatim. `timeout` bounds every read and the connect
+# step by inactivity; `None` disables it, and a non-positive or unparseable
+# value raises `TypeError` before any request is sent.
+def request(method: Method, url: url, query: dict[text, text] = {},
+           headers: Headers = headers({}), body: Body = Empty, auth: Auth = NoAuth,
+           cookies: dict[text, text] = {}, receive: Receive = Decode,
+           timeout: Option[text] = ::timeout, follow-redirects: bool = true,
+           verify-tls: bool = true) -> Response =
+  RequestInternals::send(method.render(), method, url, query, headers, body, auth, cookies,
+                        receive, timeout, follow-redirects, verify-tls)
+
+def get(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+        body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+        receive: Receive = Decode, timeout: Option[text] = ::timeout,
+        follow-redirects: bool = true, verify-tls: bool = true) -> Response =
+  request(Get, url, query, headers, body, auth, cookies, receive, timeout,
+          follow-redirects, verify-tls)
+
+def post(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+         body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+         receive: Receive = Decode, timeout: Option[text] = ::timeout,
+         follow-redirects: bool = true, verify-tls: bool = true) -> Response =
+  request(Post, url, query, headers, body, auth, cookies, receive, timeout,
+          follow-redirects, verify-tls)
+
+def put(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+        body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+        receive: Receive = Decode, timeout: Option[text] = ::timeout,
+        follow-redirects: bool = true, verify-tls: bool = true) -> Response =
+  request(Put, url, query, headers, body, auth, cookies, receive, timeout,
+          follow-redirects, verify-tls)
+
+def patch(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+          body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+          receive: Receive = Decode, timeout: Option[text] = ::timeout,
+          follow-redirects: bool = true, verify-tls: bool = true) -> Response =
+  request(Patch, url, query, headers, body, auth, cookies, receive, timeout,
+          follow-redirects, verify-tls)
+
+def delete(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+           body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+           receive: Receive = Decode, timeout: Option[text] = ::timeout,
+           follow-redirects: bool = true, verify-tls: bool = true) -> Response =
+  request(Delete, url, query, headers, body, auth, cookies, receive, timeout,
+          follow-redirects, verify-tls)
+
+def head(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+         body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+         receive: Receive = Decode, timeout: Option[text] = ::timeout,
+         follow-redirects: bool = true, verify-tls: bool = true) -> Response =
+  request(Head, url, query, headers, body, auth, cookies, receive, timeout,
+          follow-redirects, verify-tls)
+
+# Saves the response body to `destination`, overwriting it atomically; a
+# write failure raises `std/fs::FsError`.
+def download(url: url, destination: path, query: dict[text, text] = {},
+            headers: Headers = headers({}), body: Body = Empty, auth: Auth = NoAuth,
+            cookies: dict[text, text] = {}, timeout: Option[text] = ::timeout,
+            follow-redirects: bool = true, verify-tls: bool = true) -> Response =
+  get(url, query, headers, body, auth, cookies, Save(destination), timeout, follow-redirects,
+     verify-tls)
+
+# Wraps `request`'s transport and decode failures as `Err`; `std/fs::FsError`
+# and `TypeError` still propagate. Catch is exact, so every concrete
+# subtype `request` can raise is listed here: `HttpStatusError` is never
+# raised by `request` (only `Response::raise-for-status` raises it), so it
+# is not caught. Each catch widens its concrete subtype to `HttpError`
+# through an annotated `let` before `Err(...)`: a bare `Err(e)` would fix
+# `Result`'s error parameter to that subtype instead of the declared
+# `HttpError`.
+def try-request(method: Method, url: url, query: dict[text, text] = {},
+                headers: Headers = headers({}), body: Body = Empty, auth: Auth = NoAuth,
+                cookies: dict[text, text] = {}, receive: Receive = Decode,
+                timeout: Option[text] = ::timeout, follow-redirects: bool = true,
+                verify-tls: bool = true) -> Result[Response, HttpError] =
+  try
+    Ok(request(method, url, query, headers, body, auth, cookies, receive, timeout,
+              follow-redirects, verify-tls))
+  catch HttpUrlError as e =>
+    let err: HttpError = e
+    Err(err)
+  catch HttpRequestError as e =>
+    let err: HttpError = e
+    Err(err)
+  catch HttpConnectionError as e =>
+    let err: HttpError = e
+    Err(err)
+  catch HttpTimeoutError as e =>
+    let err: HttpError = e
+    Err(err)
+  catch HttpTlsError as e =>
+    let err: HttpError = e
+    Err(err)
+  catch HttpRedirectError as e =>
+    let err: HttpError = e
+    Err(err)
+  catch HttpDecodeError as e =>
+    let err: HttpError = e
+    Err(err)
+
+def try-get(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+            body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+            receive: Receive = Decode, timeout: Option[text] = ::timeout,
+            follow-redirects: bool = true,
+            verify-tls: bool = true) -> Result[Response, HttpError] =
+  try-request(Get, url, query, headers, body, auth, cookies, receive, timeout,
+              follow-redirects, verify-tls)
+
+def try-post(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+             body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+             receive: Receive = Decode, timeout: Option[text] = ::timeout,
+             follow-redirects: bool = true,
+             verify-tls: bool = true) -> Result[Response, HttpError] =
+  try-request(Post, url, query, headers, body, auth, cookies, receive, timeout,
+              follow-redirects, verify-tls)
+
+def try-put(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+            body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+            receive: Receive = Decode, timeout: Option[text] = ::timeout,
+            follow-redirects: bool = true,
+            verify-tls: bool = true) -> Result[Response, HttpError] =
+  try-request(Put, url, query, headers, body, auth, cookies, receive, timeout,
+              follow-redirects, verify-tls)
+
+def try-patch(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+              body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+              receive: Receive = Decode, timeout: Option[text] = ::timeout,
+              follow-redirects: bool = true,
+              verify-tls: bool = true) -> Result[Response, HttpError] =
+  try-request(Patch, url, query, headers, body, auth, cookies, receive, timeout,
+              follow-redirects, verify-tls)
+
+def try-delete(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+               body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+               receive: Receive = Decode, timeout: Option[text] = ::timeout,
+               follow-redirects: bool = true,
+               verify-tls: bool = true) -> Result[Response, HttpError] =
+  try-request(Delete, url, query, headers, body, auth, cookies, receive, timeout,
+              follow-redirects, verify-tls)
+
+def try-head(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+             body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
+             receive: Receive = Decode, timeout: Option[text] = ::timeout,
+             follow-redirects: bool = true,
+             verify-tls: bool = true) -> Result[Response, HttpError] =
+  try-request(Head, url, query, headers, body, auth, cookies, receive, timeout,
+              follow-redirects, verify-tls)

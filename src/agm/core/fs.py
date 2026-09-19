@@ -21,6 +21,12 @@ IdentityStamp = tuple[int, int, int]
 _SETTLE_WINDOW_NS = 2_000_000_000
 
 
+def fs_error_message(operation: str, path: str) -> str:
+    """The standard ``std/fs::FsError`` message for a failed *operation* on *path*."""
+
+    return f"Could not {operation} {path}."
+
+
 def exists(path: Path) -> bool:
     """Return whether *path* exists."""
 

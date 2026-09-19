@@ -4755,7 +4755,7 @@ def test_same_level_visible_methods_are_ambiguous(tmp_path: Path) -> None:
     assert "ambiguous" in str(raised.value).lower()
 
 
-def test_same_module_exception_pair_call_is_ambiguous() -> None:
+def test_same_module_exception_pair_is_rejected_at_declaration() -> None:
     with pytest.raises(AglTypeError) as raised:
         _check(
             "exception Base extends Exception\n"
@@ -4766,7 +4766,122 @@ def test_same_module_exception_pair_call_is_ambiguous() -> None:
             'Derived(message = "error", code = 1).describe()\n'
         )
 
-    assert "ambiguous" in str(raised.value).lower()
+    assert "conflicts" in str(raised.value).lower()
+
+
+def test_same_module_exception_grandparent_pair_is_rejected_at_declaration() -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            "exception Root extends Exception()\n"
+            "exception Mid extends Root()\n"
+            "exception Leaf extends Mid()\n"
+            'def Root::describe(self) -> text = "root"\n'
+            'def Leaf::describe(self) -> text = "leaf"\n'
+            "()"
+        )
+
+    assert "conflicts" in str(raised.value).lower()
+
+
+def test_same_module_member_and_enum_method_pair_is_rejected_at_declaration() -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            "enum Color\n"
+            "  | Red\n"
+            "  | Blue\n"
+            'def Color::label(self) -> text = "color"\n'
+            'def Color::Red::label(self) -> text = "red"\n'
+        )
+
+    assert "conflicts" in str(raised.value).lower()
+
+
+def test_same_module_referenced_record_enum_pair_is_rejected_at_declaration() -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            "record Saved(id: int)\n"
+            'def Saved::describe(self) -> text = "one"\n'
+            "enum Stored = ::Saved | Fresh(value: int)\n"
+            'def Stored::describe(self) -> text = "two"\n'
+            "()"
+        )
+
+    assert "conflicts" in str(raised.value).lower()
+
+
+def test_pair_rejection_reports_the_later_declaration_regardless_of_order() -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            "enum Color\n"
+            "  | Red\n"
+            "  | Blue\n"
+            'def Color::Red::label(self) -> text = "red"\n'
+            'def Color::label(self) -> text = "color"\n'
+        )
+
+    assert raised.value.span is not None
+    assert raised.value.span.start_line == 5
+    assert len(raised.value.related) == 1
+    assert raised.value.related[0][1].start_line == 4
+
+
+def test_cross_module_member_and_enum_method_pair_is_accepted_at_declaration(
+    tmp_path: Path,
+) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "lib": 'record Saved(id: int)\ndef Saved::describe(self) -> text = "one"\n',
+            "store": (
+                "import lib\n"
+                "enum Stored = lib::Saved | Fresh(value: int)\n"
+                'def Stored::describe(self) -> text = "two"\n'
+            ),
+            "entry": "import lib\nimport store\n()\n",
+        },
+    )
+
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == UnitType()
+
+
+def test_enum_method_named_like_a_member_field_is_legal_to_declare() -> None:
+    checked = _check(
+        'enum Shape\n  | Circle(name: text)\ndef Shape::name(self) -> text = "shape"\n()'
+    )
+
+    result = _module_items(checked)[-1]
+    assert checked.node_types[result.node_id] == UnitType()
+
+
+def test_unrelated_owners_with_the_same_method_name_are_not_a_pair() -> None:
+    checked = _check(
+        "record Meter(value: int)\n"
+        "enum Color\n"
+        "  | Red\n"
+        "  | Blue\n"
+        'def Meter::label(self) -> text = "meter"\n'
+        'def Color::label(self) -> text = "color"\n'
+        "()"
+    )
+
+    result = _module_items(checked)[-1]
+    assert checked.node_types[result.node_id] == UnitType()
+
+
+def test_two_enums_each_owning_a_distinct_record_are_not_a_pair() -> None:
+    checked = _check(
+        "record First()\n"
+        "enum A = ::First\n"
+        "record Second()\n"
+        "enum B = ::Second\n"
+        "def A::f(self) -> int = 1\n"
+        "def B::f(self) -> int = 2\n"
+        "()"
+    )
+
+    result = _module_items(checked)[-1]
+    assert checked.node_types[result.node_id] == UnitType()
 
 
 @pytest.mark.parametrize(

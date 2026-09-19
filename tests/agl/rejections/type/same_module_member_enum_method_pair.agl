@@ -1,0 +1,10 @@
+# Color::label and Color::Red::label share a selection level in one module:
+# the later declaration is rejected here, not merely ambiguous at a call site.
+
+enum Color
+  | Red
+  | Blue
+
+def Color::label(self) -> text = "color"
+
+def Color::Red::label(self) -> text = "red"

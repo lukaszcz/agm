@@ -1,0 +1,7 @@
+{
+  "module_roots": ["program_modules/type/exception_chain_method_ambiguous"],
+  "diagnostic": {
+    "line": 13,
+    "message_contains": ["ambiguous"]
+  }
+}

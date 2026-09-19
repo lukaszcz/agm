@@ -1,0 +1,13 @@
+# Problem::label is declared in lib; Detailed::label is declared here, on a
+# descendant declared in a different module. The extends chain is one level,
+# so both are legal to declare, but Detailed's level counts both, making
+# `label` ambiguous on a Detailed-typed receiver.
+import lib::*
+
+exception Detailed extends Problem
+  detail: text
+
+def Detailed::label(self) -> text = "detailed"
+
+program def main() -> unit =
+  print(Detailed(message = "x", code = 1, detail = "y").label())

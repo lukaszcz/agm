@@ -296,7 +296,7 @@ static type `T`:
   chain;
 - enum `T` — only `T`'s own methods; a method declared on one of `T`'s own
   members is not part of this level;
-- builtin receiver — unchanged.
+- builtin receiver — only that builtin type's methods.
 
 Route visibility then decides within the level: exactly one visible method
 wins; two or more are a static ambiguity, listing every declaration; none
@@ -324,11 +324,11 @@ solved by the call's arguments, its expected type, or its result, or the call
 is rejected with a suggestion to annotate or cast the receiver.
 
 Along the member→owning-enum axis and the exception descendant→ancestor axis,
-adding or removing a type annotation or an identity upcast may turn a call
-into a static error or an error into a call, but never changes *which*
-function a given static type resolves to. Widening one enum to an overlapping
-enum is outside this: they remain distinct nominal types, each with its own
-methods, even when one's members are a subset of the other's.
+changing the receiver's static type by an annotation or an identity upcast
+may turn a call into an error or back, but never changes *which* function the
+call selects. Widening one enum to an overlapping enum is outside this: they
+remain distinct nominal types, each with its own methods, even when one's
+members are a subset of the other's.
 
 An enum in another module that references a record adds that enum's methods
 to the record's level wherever they are reachable by route in the using
@@ -338,11 +338,11 @@ intended function by a qualified path, or widening the receiver explicitly
 with `as`.
 
 A module may not declare two same-named methods whose owners share a level —
-a record and one of its counted owning enums, or an exception and one of its
-ancestors; the later declaration is rejected. The same pair is legal across
-modules and becomes an ambiguity only where both routes are visible at a call
-site; repair it with a qualified call, a rename, `hiding` one route, or an
-annotation or `as` that narrows or widens the receiver's static type.
+a record and an enum that declares or references it, or an exception and one
+of its ancestors; the later declaration is rejected. The same pair is legal
+across modules and becomes an ambiguity only where both routes are visible at
+a call site; repair it with a qualified call, a rename, `hiding` one route, or
+an annotation or `as` that narrows or widens the receiver's static type.
 
 A builtin receiver may be named in a method declaration in any module. This
 syntax is available to ordinary, `builtin`, and `extern` definitions:
@@ -449,9 +449,7 @@ program def main() -> unit =
 belongs to `Tree`, `Tree::Node`'s owning enum, so it is also in
 `Tree::Node[E]`'s level: selecting it widens the receiver to `Tree[E]`. `Leaf`
 captures no type parameter, so calling `or-default` on it leaves `T`
-phantom; here the argument's type solves it. A call left with such a
-parameter unsolved by its arguments, expected type, and result is rejected
-with a suggestion to annotate or cast the receiver.
+phantom; here the argument's type solves it.
 
 A method member used without a call is a **bound method**: a function value
 that has captured its receiver and has parameters only for the remaining

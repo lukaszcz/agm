@@ -3088,6 +3088,93 @@ enum Agent
 
 
 # ---------------------------------------------------------------------------
+# Member/enum and exception-chain method selection and pair rejection
+# ---------------------------------------------------------------------------
+
+
+class TestMemberEnumMethodSelectionAcrossEntries:
+    def test_retained_member_of_a_superseded_enum_keeps_its_old_methods(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Color\n  | Red\n  | Blue").ok
+        assert s.eval_entry('def Color::label(self) -> text = "old"').ok
+        assert s.eval_entry("let r = Color::Red").ok
+        assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
+
+        result = s.eval_entry("r.label()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue("old")
+
+    def test_new_enum_member_sees_no_methods_until_one_is_declared(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Color\n  | Red\n  | Blue").ok
+        assert s.eval_entry('def Color::label(self) -> text = "old"').ok
+        assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
+
+        before = s.eval_entry("Color::Green.label()")
+        assert s.eval_entry('def Color::label(self) -> text = "new"').ok
+        after = s.eval_entry("Color::Green.label()")
+
+        assert not before.ok
+        assert after.ok, after.diagnostics
+        assert after.value == TextValue("new")
+
+    def test_later_entry_enum_method_is_callable_on_a_value_bound_earlier(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Color\n  | Red\n  | Blue").ok
+        assert s.eval_entry("let c = Color::Red").ok
+        assert s.eval_entry('def Color::label(self) -> text = "color"').ok
+
+        result = s.eval_entry("c.label()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue("color")
+
+    def test_member_method_then_enum_method_pair_is_rejected_across_entries(self) -> None:
+        s = open_session()
+        assert s.eval_entry("record Saved(id: int)\nenum Stored = ::Saved | Fresh(value: int)").ok
+        assert s.eval_entry('def Saved::describe(self) -> text = "one"').ok
+
+        rejected = s.eval_entry('def Stored::describe(self) -> text = "two"')
+
+        assert not rejected.ok
+        assert "conflicts" in rejected.diagnostics[0].message.lower()
+
+    def test_enum_method_then_member_method_pair_is_rejected_across_entries(self) -> None:
+        s = open_session()
+        assert s.eval_entry("record Saved(id: int)\nenum Stored = ::Saved | Fresh(value: int)").ok
+        assert s.eval_entry('def Stored::describe(self) -> text = "two"').ok
+
+        rejected = s.eval_entry('def Saved::describe(self) -> text = "one"')
+
+        assert not rejected.ok
+        assert "conflicts" in rejected.diagnostics[0].message.lower()
+
+    def test_exception_base_and_descendant_method_pair_is_rejected_across_entries(self) -> None:
+        s = open_session()
+        assert s.eval_entry("exception Base extends Exception()").ok
+        assert s.eval_entry("exception Derived extends Base()").ok
+        assert s.eval_entry('def Base::describe(self) -> text = "base"').ok
+
+        rejected = s.eval_entry('def Derived::describe(self) -> text = "derived"')
+
+        assert not rejected.ok
+        assert "conflicts" in rejected.diagnostics[0].message.lower()
+
+    def test_redeclaring_the_same_method_path_in_a_later_entry_is_accepted(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Color\n  | Red\n  | Blue").ok
+        assert s.eval_entry('def Color::label(self) -> text = "first"').ok
+
+        redeclared = s.eval_entry('def Color::label(self) -> text = "second"')
+        result = s.eval_entry("Color::Red.label()")
+
+        assert redeclared.ok, redeclared.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue("second")
+
+
+# ---------------------------------------------------------------------------
 # Recursive types across entries
 # ---------------------------------------------------------------------------
 

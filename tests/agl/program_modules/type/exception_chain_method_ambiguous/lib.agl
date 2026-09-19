@@ -1,0 +1,4 @@
+exception Problem extends Exception
+  code: int
+
+def Problem::label(self) -> text = "problem"

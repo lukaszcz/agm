@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Literal
+from typing import Literal, assert_never
 
 from agm.agl.modules.ids import ModuleId, spell_declaration
 from agm.agl.scope.symbols import BUILTIN_METHOD_RECEIVER_NAMES, ModuleResolution
@@ -64,10 +64,16 @@ def builtin_method_receiver_for(
 
 @dataclass(frozen=True, slots=True)
 class _MemberDeclaration:
-    """A source member declaration whose name occupies a nominal member namespace."""
+    """A source member declaration whose name occupies a nominal member namespace.
+
+    ``module_id`` names a method's declaring module (the module whose program
+    declares the function, not its owner's — orphan methods exist); absent
+    for a field, which never participates in the same-module pair rule.
+    """
 
     kind: Literal["field", "method"]
     span: SourceSpan | None
+    module_id: ModuleId | None = None
 
 
 @dataclass(slots=True)
@@ -99,8 +105,11 @@ def _index_registered_owner(index: _MemberIndex, type_table: TypeTable, owner_id
     members = index.members.setdefault(owner_id, {})
     for field_name, _field_type in typedef.fields:
         members.setdefault(field_name, []).append(_MemberDeclaration("field", None))
-    for method_name in type_table.declared_methods(owner_id):
-        members.setdefault(method_name, []).append(_MemberDeclaration("method", None))
+    for method_name, methods in type_table.declared_methods(owner_id).items():
+        same_named = members.setdefault(method_name, [])
+        same_named.extend(
+            _MemberDeclaration("method", None, method.module_id) for method in methods
+        )
 
 
 def _member_declarations(
@@ -158,7 +167,7 @@ def _member_declarations(
                 for member in same_named
                 if not (member.kind == "method" and member.span is None)
             ]
-            same_named.append(_MemberDeclaration("method", function.span))
+            same_named.append(_MemberDeclaration("method", function.span, module_id))
     return index
 
 
@@ -174,6 +183,54 @@ def _ancestor_field(
     return None
 
 
+def _level_mates(type_table: TypeTable, owner_id: DeclId) -> tuple[DeclId, ...]:
+    """Return *owner_id*'s method-selection-level mates for the same-module pair rule.
+
+    An exception's mates are its ancestors and descendants; a record's are its
+    counted owning enums; an enum's are the member records it counts for
+    (:meth:`TypeTable.owning_enum_defs_for_selection`, read in reverse).
+    """
+    typedef = type_table.get_by_id(owner_id)
+    assert typedef is not None, "compiler bug: level-mate query for unregistered declaration"
+    match typedef.kind:
+        case "exception":
+            ancestors = tuple(base.decl_node_id for base in type_table.ancestor_defs(owner_id))
+            descendants = tuple(
+                candidate.decl_node_id
+                for candidate in type_table.entries()
+                if candidate.kind == "exception"
+                and type_table.is_exception_ancestor(owner_id, candidate.decl_node_id)
+            )
+            return ancestors + descendants
+        case "record":
+            return tuple(
+                enum_def.decl_node_id
+                for enum_def in type_table.owning_enum_defs_for_selection(owner_id)
+            )
+        case "enum":
+            return tuple(
+                member.decl_id
+                for member in typedef.members
+                if any(
+                    enum_def.decl_node_id == owner_id
+                    for enum_def in type_table.owning_enum_defs_for_selection(member.decl_id)
+                )
+            )
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _related_method(
+    index: _MemberIndex, mates: tuple[DeclId, ...], name: str, module_id: ModuleId
+) -> tuple[DeclId, _MemberDeclaration] | None:
+    """Find a same-named method on one of *mates* declared by the same module."""
+    for mate in mates:
+        for member in index.members_of(mate).get(name, ()):
+            if member.kind == "method" and member.module_id == module_id:
+                return mate, member
+    return None
+
+
 def _raise_collision(
     type_table: TypeTable,
     owner_id: DeclId,
@@ -181,15 +238,26 @@ def _raise_collision(
     declared: _MemberDeclaration,
     conflicting_id: DeclId,
     conflicting: _MemberDeclaration,
+    *,
+    prefer_later: bool = False,
 ) -> None:
-    """Report a method collision, preferring the later same-source declaration."""
+    """Report a member collision, preferring the later same-source declaration.
+
+    A field/method clash on one owner (``owner_id == conflicting_id``) always
+    prefers whichever of the two came later. A method pair between two
+    related owners (``prefer_later``) does too, since either side may be the
+    later declaration. An ancestor field clash never swaps: the method stays
+    ``declared`` regardless of source order, since the field's owner is a
+    different, unrelated type.
+    """
     if (
-        owner_id == conflicting_id
+        (prefer_later or owner_id == conflicting_id)
         and declared.span is not None
         and conflicting.span is not None
         and declared.span.source == conflicting.span.source
         and declared.span.start_offset < conflicting.span.start_offset
     ):
+        owner_id, conflicting_id = conflicting_id, owner_id
         declared, conflicting = conflicting, declared
 
     owner_typedef = type_table.get_by_id(owner_id)
@@ -280,7 +348,16 @@ def validate_builtin_declaration_uniqueness(
 def validate_method_declaration_collisions(
     modules: Mapping[ModuleId, ModuleResolution], type_table: TypeTable
 ) -> None:
-    """Reject method collisions with fields of their owner or its ancestors."""
+    """Reject field collisions and same-module, same-level method pairs.
+
+    A method collides with a field of its owner or an ancestor regardless of
+    module. A method also collides with a same-named, same-module method on a
+    level mate (an exception ancestor/descendant, a record's counted owning
+    enum, or an enum's counted member) — two methods that would tie at one
+    selection level (see :meth:`TypeTable.method_candidates`) if declared by
+    the same module. Cross-module pairs stay legal; they are a call-site
+    ambiguity instead.
+    """
     index = _member_declarations(modules, type_table)
 
     # Order owners deterministically so a program reports one stable collision.
@@ -289,6 +366,9 @@ def validate_method_declaration_collisions(
         ancestors = tuple(base.decl_node_id for base in type_table.ancestor_defs(owner_id))
         for ancestor in ancestors:
             _index_registered_owner(index, type_table, ancestor)
+        mates = _level_mates(type_table, owner_id)
+        for mate in mates:
+            _index_registered_owner(index, type_table, mate)
         for name, same_named_members in index.members[owner_id].items():
             for method in (member for member in same_named_members if member.kind == "method"):
                 field = next(
@@ -299,3 +379,7 @@ def validate_method_declaration_collisions(
                 conflict = _ancestor_field(index, ancestors, name)
                 if conflict is not None:
                     _raise_collision(type_table, owner_id, name, method, *conflict)
+                assert method.module_id is not None, "compiler bug: method has no declaring module"
+                pair = _related_method(index, mates, name, method.module_id)
+                if pair is not None:
+                    _raise_collision(type_table, owner_id, name, method, *pair, prefer_later=True)

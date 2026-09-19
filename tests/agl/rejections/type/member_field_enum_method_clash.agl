@@ -1,0 +1,12 @@
+enum Shape
+  | Circle(name: text, r: int)
+  | Square(name: text, s: int)
+
+def Shape::name(self) -> text =
+  case self of
+    | Circle(name) => name
+    | Square(name) => name
+
+program def main() -> unit =
+  let c = Circle(name = "c", r = 1)
+  print(c.name)

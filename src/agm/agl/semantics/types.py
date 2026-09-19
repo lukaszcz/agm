@@ -570,14 +570,16 @@ class EnumOwnerForm:
 def match_nominal_owner_template(
     template: TypeTemplate, concrete: Type
 ) -> TypeTemplateMatch | None:
-    """Match a nominal owner template while permitting uninferred phantom parameters."""
-    bindings = match_type_template(template.template, concrete, ())
-    if bindings is not None:
-        return bindings
+    """Match a nominal owner template while permitting uninferred phantom parameters.
 
-    # ``match_type_template`` needs declared variables to compare variable
-    # occurrences. Give phantom variables a concrete sentinel, then omit them
-    # from the resulting match; only variables present in the template matter.
+    Every declared parameter occurring in the template is always matched as
+    an inference variable, never by name equality against ``concrete``: a
+    rigid variable in ``concrete`` that happens to share a declared
+    parameter's name (for example a generic caller's own ``T``) must bind
+    that parameter, not be mistaken for the template's own occurrence of it.
+    A declared parameter that does not occur in the template is phantom and
+    stays unbound; if none occur, the two types must match exactly.
+    """
     occurring = free_type_vars(template.template)
     parameters = tuple(parameter for parameter in template.type_params if parameter in occurring)
     if not parameters:

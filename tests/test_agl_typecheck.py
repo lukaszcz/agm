@@ -6905,88 +6905,6 @@ class TestFieldAccess:
         )
         assert "ambiguous" in str(err).lower()
 
-    def test_member_only_method_is_not_visible_on_the_enum_type(self) -> None:
-        err = reject_type(
-            "enum Container[T]\n"
-            "  | full(value: T)\n"
-            "  | empty\n"
-            'def Container::full::label[T](self) -> text = "full"\n'
-            "let c: Container[int] = full(value = 1)\n"
-            "c.label()"
-        )
-        assert "method" in str(err).lower() or "field" in str(err).lower()
-
-    def test_widened_receiver_captures_the_enums_type_parameter(self) -> None:
-        checked = accept_type(
-            "enum Box[T]\n"
-            "  | full(value: T)\n"
-            'def Box::describe[T](self) -> text = "box"\n'
-            "let c = full(value = 1)\n"
-            "c.describe()"
-        )
-        result = checked.resolved.program.body.items[-1]
-        assert checked.node_types[result.node_id] == TextType()
-
-    def test_phantom_enum_parameter_unresolved_by_a_widened_call_is_rejected(self) -> None:
-        err = reject_type(
-            "enum Outcome[T, E]\n"
-            "  | ok(value: T)\n"
-            "  | fail(error: E)\n"
-            "def Outcome::tag[T, E](self) -> int = 1\n"
-            "let x = ok(value = 1)\n"
-            "x.tag()"
-        )
-        assert "infer" in str(err).lower()
-
-    def test_phantom_enum_parameter_solved_by_an_argument(self) -> None:
-        checked = accept_type(
-            "enum Outcome[T, E]\n"
-            "  | ok(value: T)\n"
-            "  | fail(error: E)\n"
-            "def Outcome::same[T, E](self, other: Outcome[T, E]) -> bool = true\n"
-            "let x = ok(value = 1)\n"
-            "let y: Outcome[int, text] = ok(value = 2)\n"
-            "x.same(y)"
-        )
-        result = checked.resolved.program.body.items[-1]
-        assert checked.node_types[result.node_id] == BoolType()
-
-    def test_phantom_enum_parameter_solved_by_the_expected_type(self) -> None:
-        checked = accept_type(
-            "enum Outcome[T, E]\n"
-            "  | ok(value: T)\n"
-            "  | fail(error: E)\n"
-            "def Outcome::widen[T, E](self) -> Outcome[T, E] = self\n"
-            "let x = ok(value = 1)\n"
-            "let y: Outcome[int, text] = x.widen()\n"
-            "y"
-        )
-        result = checked.resolved.program.body.items[-1]
-        result_type = checked.node_types[result.node_id]
-        assert isinstance(result_type, EnumType)
-        assert result_type.name == "Outcome"
-        assert result_type.type_args == (IntType(), TextType())
-
-    def test_field_and_enums_method_are_ambiguous_on_read(self) -> None:
-        err = reject_type(
-            "enum Holder[T]\n"
-            "  | full(value: T)\n"
-            "def Holder::value[T](self) -> int = 1\n"
-            "let h = full(value = 1)\n"
-            "h.value"
-        )
-        assert "ambiguous" in str(err).lower()
-
-    def test_field_and_enums_method_are_ambiguous_on_assignment(self) -> None:
-        err = reject_type(
-            "enum Holder[T]\n"
-            "  | full(value: T)\n"
-            "def Holder::value[T](self) -> int = 1\n"
-            "var h = full(value = 1)\n"
-            "h.value := 2"
-        )
-        assert "ambiguous" in str(err).lower()
-
     def test_widened_bound_method_is_a_projectable_value(self) -> None:
         checked = accept_type(
             "enum Box[T]\n"
@@ -6995,28 +6913,6 @@ class TestFieldAccess:
             "let c = full(value = 1)\n"
             "let f = c.describe\n"
             "f()"
-        )
-        result = checked.resolved.program.body.items[-1]
-        assert checked.node_types[result.node_id] == TextType()
-
-    def test_static_method_is_not_selectable_via_a_member_instance(self) -> None:
-        err = reject_type(
-            "enum Box[T]\n"
-            "  | full(value: T)\n"
-            "def Box::make[T](value: T) -> Box[T] = full(value = value)\n"
-            "let c = full(value = 1)\n"
-            "c.make()"
-        )
-        assert "method" in str(err).lower() or "field" in str(err).lower()
-
-    def test_with_result_still_selects_its_enums_method(self) -> None:
-        checked = accept_type(
-            "enum Box[T]\n"
-            "  | full(value: T)\n"
-            'def Box::describe[T](self) -> text = "box"\n'
-            "let c = full(value = 1)\n"
-            "let d = c with value = 2\n"
-            "d.describe()"
         )
         result = checked.resolved.program.body.items[-1]
         assert checked.node_types[result.node_id] == TextType()
@@ -7045,16 +6941,6 @@ class TestFieldAccess:
         )
         result = checked.resolved.program.body.items[-1]
         assert checked.node_types[result.node_id] == BoolType()
-
-    def test_widened_agent_member_builtin_ask_typechecks(self) -> None:
-        checked = accept_type(
-            'let a = Agent::AgentClaude(model = "sonnet", thinking = "low")\n'
-            'let r: text = a.ask("hi")\n'
-            "r",
-            capabilities=default_capabilities(),
-        )
-        result = checked.resolved.program.body.items[-1]
-        assert checked.node_types[result.node_id] == TextType()
 
 
 # ---------------------------------------------------------------------------

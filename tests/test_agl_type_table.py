@@ -258,6 +258,24 @@ def test_owning_enums_for_selection_returns_every_overlapping_owner_in_registrat
     assert [enum_def.decl_node_id for enum_def, _bindings in owning] == [31, 32]
 
 
+def test_owning_enum_defs_for_selection_takes_a_bare_record_identity() -> None:
+    """The decl-id-level query ``owning_enums_for_selection`` builds bindings on top of."""
+    table = TypeTable()
+    saved = TypeDef(kind="record", name="Saved", module_id=ENTRY_ID, decl_node_id=60)
+    stored = TypeDef(
+        kind="enum",
+        name="Stored",
+        module_id=ENTRY_ID,
+        members=(RecordType("Saved", module_id=ENTRY_ID, decl_id=60),),
+        decl_node_id=61,
+    )
+    table.register(saved)
+    table.register(stored)
+
+    assert [enum_def.decl_node_id for enum_def in table.owning_enum_defs_for_selection(60)] == [61]
+    assert table.owning_enum_defs_for_selection(999) == ()
+
+
 def test_owning_enums_for_selection_skips_a_superseded_enum_for_a_current_record() -> None:
     table = TypeTable()
     point = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=40)

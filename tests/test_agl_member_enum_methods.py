@@ -1,56 +1,49 @@
 """Behavior tests for one-level method selection over enum members and exceptions.
 
-Settled design: `.agent-files/PLAN_inline_infer.md`. A member record's own
-methods and its counted owning enum(s)' methods form one selection level
-(S1); an exception's `extends` chain forms one level (S2); a same-named
-field and visible method at that level are a static ambiguity (S3); a
+A member record's own methods and its counted owning enum(s)' methods form
+one selection level; an exception's `extends` chain forms one level; a
+same-named field and visible method at that level are a static ambiguity; a
 selected enum method widens a member receiver to the enum, solving any
 phantom (uncaptured) enum type parameter from arguments or the expected type,
-or rejecting the call when one is left unresolved (S7 in the plan's §5
-numbering). See ``tests/test_agl_method_selection_invariant.py`` for the
-member<->enum and exception descendant<->ancestor invariant this design
-settles; this file exercises the individual behaviors themselves.
+or rejecting the call when one is left unresolved. See
+``tests/test_agl_method_selection_invariant.py`` for the member<->enum and
+exception descendant<->ancestor invariant this design settles; this file
+exercises the individual behaviors themselves.
 
 Every pair of same-named methods at one selection level is declared across
-different modules: a same-module pair is meant to be rejected at declaration
-(§5.6, a separate, not-yet-implemented task), so call-site ambiguity can only
-be observed today when each declaration is legal on its own.
+different modules, since a same-module pair is rejected at declaration; so
+call-site ambiguity can only be observed when each declaration is legal on
+its own.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope import AglScopeError
-from agm.agl.scope.program import resolve_program
-from agm.agl.syntax.nodes import Block, FuncDef, Item, LetDecl
+from agm.agl.syntax.nodes import Call, LetDecl
 from agm.agl.typecheck import (
     AglTypeError,
     ArrayType,
     CheckedModule,
     CheckedProgram,
+    EnumType,
     FunctionType,
     IntType,
     TextType,
     Type,
-    check_program,
 )
-from tests.agl.ir_harness import make_graph_from_files
+from tests._agl_helpers import (
+    METHOD_SELECTION_CAPS,
+    check_method_selection_program,
+    checked_module_items,
+)
 from tests.agl.module_graph import resolve_and_check_repl_entry
-
-_CAPS = HostCapabilities(
-    supports_shell_exec=True,
-    codec_kinds={
-        "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
-    },
-)
 
 
 def accept_type(source: str) -> CheckedModule:
-    return resolve_and_check_repl_entry(source, _CAPS)
+    return resolve_and_check_repl_entry(source, METHOD_SELECTION_CAPS)
 
 
 def reject_type(source: str) -> AglTypeError | AglScopeError:
@@ -61,31 +54,17 @@ def reject_type(source: str) -> AglTypeError | AglScopeError:
     raise AssertionError(f"expected {source!r} to be rejected")
 
 
-def _check_program(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
-    """Build and typecheck a multi-module graph; returns the ``CheckedProgram``."""
-    graph = make_graph_from_files(tmp_path, modules)
-    return check_program(resolve_program(graph), _CAPS)
-
-
 def reject_program(tmp_path: Path, modules: dict[str, str]) -> AglTypeError | AglScopeError:
     try:
-        _check_program(tmp_path, modules)
+        check_method_selection_program(tmp_path, modules)
     except (AglTypeError, AglScopeError) as exc:
         return exc
     raise AssertionError("expected the program to be rejected")
 
 
-def _module_items(module: CheckedModule) -> tuple[Item, ...]:
-    """Return an entry's test-only inline items, unwrapping the synthetic ``main``."""
-    items = module.resolved.program.body.items
-    if items and isinstance(items[-1], FuncDef) and items[-1].is_synthetic:
-        return items[-1].body.items if isinstance(items[-1].body, Block) else (items[-1].body,)
-    return items
-
-
 def _final_type(checked: CheckedModule) -> Type:
     """The static type of the last top-level item's own expression."""
-    last = _module_items(checked)[-1]
+    last = checked_module_items(checked)[-1]
     node = last.value if isinstance(last, LetDecl) else last
     return checked.node_types[node.node_id]
 
@@ -95,8 +74,18 @@ def _program_final_type(checked: CheckedProgram) -> Type:
     return _final_type(module)
 
 
+def _entry_selection_key(checked: CheckedProgram) -> tuple[object, ...]:
+    """The declaration identity (module, scope path, name) the entry's final call selected."""
+    module = checked.modules[ENTRY_ID]
+    call = checked_module_items(module)[-1]
+    assert isinstance(call, Call), f"expected the entry to end in a call, got {call!r}"
+    selection = module.method_selections.get(call.callee.node_id)
+    assert selection is not None, "expected the final call to select a method, not a field"
+    return selection.declaration_key
+
+
 # ---------------------------------------------------------------------------
-# S1: enum methods callable on nullary members, including a stdlib enum
+# Enum methods are callable on nullary members, including a stdlib enum
 # ---------------------------------------------------------------------------
 
 _COLOR = 'enum Color\n  | Red\n  | Blue\ndef Color::label(self) -> text = "color"\n'
@@ -127,7 +116,7 @@ def test_member_only_method_is_rejected_on_an_enum_typed_receiver() -> None:
 
 
 # ---------------------------------------------------------------------------
-# S5: every form of member access -- bound projection, partial call, leading dot
+# Every form of member access: bound projection, partial call, leading dot
 # ---------------------------------------------------------------------------
 
 
@@ -150,7 +139,7 @@ def test_leading_dot_enum_method_call_inside_map_over_members() -> None:
 
 
 # ---------------------------------------------------------------------------
-# S4: generic widening and phantom-parameter resolution
+# Generic widening and phantom-parameter resolution
 # ---------------------------------------------------------------------------
 
 _TREE = (
@@ -178,7 +167,10 @@ def test_phantom_enum_parameter_is_solved_by_a_method_argument() -> None:
 
 def test_phantom_enum_parameter_is_solved_by_the_expected_result_type() -> None:
     checked = accept_type("let r: Result[int, text] = Ok(1).map(fn(x: int) => x * 2)\nr")
-    assert "Result" in repr(_final_type(checked))
+    result_type = _final_type(checked)
+    assert isinstance(result_type, EnumType)
+    assert result_type.name == "Result"
+    assert result_type.type_args == (IntType(), TextType())
 
 
 def test_phantom_enum_parameter_left_unresolved_is_rejected() -> None:
@@ -186,23 +178,45 @@ def test_phantom_enum_parameter_left_unresolved_is_rejected() -> None:
     assert "infer" in str(err).lower()
 
 
+def test_generic_functions_rigid_type_variable_is_not_mistaken_for_a_phantom() -> None:
+    """A generic caller's own rigid type variable, coincidentally spelled
+
+    like the enum's own declared parameter, must still bind that parameter:
+    it is captured, not phantom, so the payload's real type stays linked to
+    the caller's `T` and cannot be solved independently from an unrelated
+    argument.
+    """
+    err = reject_type(
+        _TREE + "def g[T](n: Tree::Node[T]) -> int = n.or-default(5) + 1\ng(Node(value = 1))"
+    )
+    assert isinstance(err, AglTypeError)
+
+
+def test_generic_functions_rigid_type_variable_widens_normally_for_a_method_with_no_phantom() -> (
+    None
+):
+    checked = accept_type(
+        _TREE + "def f[T](n: Tree::Node[T]) -> text = n.describe()\nf(Node(value = 1))"
+    )
+    assert _final_type(checked) == TextType()
+
+
 def test_result_phantom_error_parameter_left_unresolved_is_rejected() -> None:
     err = reject_type("Ok(1).is-ok()")
     assert "infer" in str(err).lower()
 
 
-def test_option_none_phantom_value_parameter_unresolved_call_is_rejected() -> None:
-    """`None.is-some()` is a static error either way: unresolved `T`, or (as the
+def test_option_none_member_method_is_ambiguous_with_optional() -> None:
+    """`Option::None` is also a member of `std/optional::Optional`, so its
 
-    stdlib currently stands) an ambiguity against `std/optional::Optional`,
-    which also references `Option::None` as one of its own members (S1.5).
-    Either is a legitimate rejection; only the error *class* is pinned.
+    selection level carries both enums' `is-some`, an accepted ambiguity.
     """
-    reject_type("None.is-some()")
+    err = reject_type("None.is-some()")
+    assert "ambiguous" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
-# S3: field vs. method kind clash, on read and on assignment
+# Field vs. method kind clash, on read and on assignment
 # ---------------------------------------------------------------------------
 
 _SHAPE = (
@@ -230,7 +244,7 @@ def test_enum_typed_receiver_has_no_fields_so_the_method_is_selected_cleanly() -
 
 
 # ---------------------------------------------------------------------------
-# S6: static methods are still not selectable with `.`
+# Static methods are still not selectable with `.`
 # ---------------------------------------------------------------------------
 
 
@@ -266,46 +280,8 @@ def test_agent_ask_still_typechecks_on_a_member_through_the_general_path() -> No
 
 
 # ---------------------------------------------------------------------------
-# S2: exception `extends` chains, cross-module pairs
+# Exception `extends` chains, cross-module pairs
 # ---------------------------------------------------------------------------
-
-
-def test_exception_chain_pair_is_ambiguous_on_the_descendant_and_selects_base_on_base(
-    tmp_path: Path,
-) -> None:
-    modules = {
-        "errors": (
-            "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n"
-        ),
-        "base_methods": "import errors::*\ndef Base::describe(self) -> int = self.code\n",
-        "derived_methods": (
-            "import errors::*\ndef Derived::describe(self) -> text = self.message\n"
-        ),
-    }
-    ambiguous = reject_program(
-        tmp_path,
-        {
-            **modules,
-            "entry": (
-                "import errors\nimport base_methods\nimport derived_methods\n"
-                'errors::Derived(message = "bad", code = 1).describe()\n'
-            ),
-        },
-    )
-    assert "ambiguous" in str(ambiguous).lower()
-
-    base_selects = _check_program(
-        tmp_path,
-        {
-            **modules,
-            "entry": (
-                "import errors\nimport base_methods\nimport derived_methods\n"
-                'let base: errors::Base = errors::Derived(message = "bad", code = 1)\n'
-                "base.describe()\n"
-            ),
-        },
-    )
-    assert _program_final_type(base_selects) == IntType()
 
 
 def test_exception_inherited_only_method_is_selected_from_the_descendant(
@@ -317,7 +293,7 @@ def test_exception_inherited_only_method_is_selected_from_the_descendant(
         ),
         "methods": "import errors::*\ndef Base::status(self) -> int = self.code\n",
     }
-    checked = _check_program(
+    checked = check_method_selection_program(
         tmp_path,
         {
             **modules,
@@ -331,7 +307,7 @@ def test_exception_inherited_only_method_is_selected_from_the_descendant(
 
 
 # ---------------------------------------------------------------------------
-# §4 cross-module orphan pair (palette/warm/cool), repaired by `hiding`
+# Cross-module orphan pair (palette/warm/cool), repaired by `hiding`
 # ---------------------------------------------------------------------------
 
 _PALETTE_MODULES = {
@@ -353,7 +329,7 @@ def test_cross_module_orphan_pair_is_ambiguous_at_the_call_site(tmp_path: Path) 
 
 
 def test_hiding_one_orphans_route_repairs_the_ambiguity(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_method_selection_program(
         tmp_path,
         {
             **_PALETTE_MODULES,
@@ -364,10 +340,11 @@ def test_hiding_one_orphans_route_repairs_the_ambiguity(tmp_path: Path) -> None:
         },
     )
     assert _program_final_type(checked) == TextType()
+    assert _entry_selection_key(checked) == (ModuleId.from_path("cool"), ("Color",), "label")
 
 
 # ---------------------------------------------------------------------------
-# §5.5 referenced record with a foreign referencing enum (lib/store)
+# A referenced record with a foreign referencing enum (lib/store)
 # ---------------------------------------------------------------------------
 
 _LIB_STORE_MODULES = {
@@ -393,7 +370,7 @@ def test_referenced_record_method_is_ambiguous_once_the_referencing_enum_is_impo
 
 
 def test_referenced_record_ambiguity_is_repaired_by_a_qualified_call(tmp_path: Path) -> None:
-    checked = _check_program(
+    checked = check_method_selection_program(
         tmp_path,
         {
             **_LIB_STORE_MODULES,
@@ -408,7 +385,7 @@ def test_referenced_record_ambiguity_is_repaired_by_a_qualified_call(tmp_path: P
 def test_referenced_record_ambiguity_is_repaired_by_widening_the_receiver(
     tmp_path: Path,
 ) -> None:
-    checked = _check_program(
+    checked = check_method_selection_program(
         tmp_path,
         {
             **_LIB_STORE_MODULES,
@@ -419,13 +396,19 @@ def test_referenced_record_ambiguity_is_repaired_by_widening_the_receiver(
         },
     )
     assert _program_final_type(checked) == TextType()
+    assert _entry_selection_key(checked) == (
+        ModuleId.from_path("store"),
+        ("Stored",),
+        "describe",
+    )
 
 
 def test_referenced_record_without_importing_the_referencing_enum_selects_its_own_method(
     tmp_path: Path,
 ) -> None:
-    checked = _check_program(
+    checked = check_method_selection_program(
         tmp_path,
         {**_LIB_STORE_MODULES, "entry": "import lib\nlib::Saved(id = 1).describe()\n"},
     )
     assert _program_final_type(checked) == TextType()
+    assert _entry_selection_key(checked) == (ModuleId.from_path("lib"), ("Saved",), "describe")

@@ -38,6 +38,7 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
+    TypeTemplate,
     TypeTemplateMatch,
     TypeVarType,
     UnitType,
@@ -48,6 +49,7 @@ from agm.agl.semantics.types import (
     is_json_shaped,
     is_scalar_json_shaped,
     iter_type,
+    match_nominal_owner_template,
     match_type_template,
     substitute,
 )
@@ -1040,6 +1042,57 @@ class TestTypeTemplateMatch:
 
     def test_unresolved_phantom_parameter_does_not_match(self) -> None:
         assert match_type_template(IntType(), IntType(), ("T",)) is None
+
+
+class TestMatchNominalOwnerTemplate:
+    """``match_nominal_owner_template`` matches a declared parameter as an
+    inference variable whenever it occurs in the template, even when the
+    concrete side's rigid variable happens to share its name."""
+
+    def test_same_named_rigid_variable_in_concrete_binds_the_parameter(self) -> None:
+        module = ModuleId.from_path("library/tree")
+        template = TypeTemplate(
+            RecordType("Node", type_args=(TypeVarType("T"),), module_id=module),
+            type_params=("T",),
+        )
+        concrete = RecordType("Node", type_args=(TypeVarType("T"),), module_id=module)
+
+        match = match_nominal_owner_template(template, concrete)
+
+        assert match == TypeTemplateMatch((("T", TypeVarType("T")),))
+
+    def test_distinct_rigid_variable_in_concrete_also_binds_the_parameter(self) -> None:
+        module = ModuleId.from_path("library/tree")
+        template = TypeTemplate(
+            RecordType("Node", type_args=(TypeVarType("T"),), module_id=module),
+            type_params=("T",),
+        )
+        concrete = RecordType("Node", type_args=(TypeVarType("U"),), module_id=module)
+
+        match = match_nominal_owner_template(template, concrete)
+
+        assert match == TypeTemplateMatch((("T", TypeVarType("U")),))
+
+    def test_phantom_parameter_not_occurring_in_template_stays_unbound(self) -> None:
+        module = ModuleId.from_path("library/tree")
+        template = TypeTemplate(
+            RecordType("Leaf", module_id=module),
+            type_params=("T",),
+        )
+        concrete = RecordType("Leaf", module_id=module)
+
+        match = match_nominal_owner_template(template, concrete)
+
+        assert match == TypeTemplateMatch(())
+
+    def test_no_declared_parameters_requires_exact_equality(self) -> None:
+        module = ModuleId.from_path("library/tree")
+        template = TypeTemplate(RecordType("Leaf", module_id=module))
+
+        assert match_nominal_owner_template(
+            template, RecordType("Leaf", module_id=module)
+        ) == TypeTemplateMatch(())
+        assert match_nominal_owner_template(template, RecordType("Other", module_id=module)) is None
 
 
 # ---------------------------------------------------------------------------

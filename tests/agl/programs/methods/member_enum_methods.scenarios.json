@@ -1,0 +1,59 @@
+{
+  "scenarios": [
+    {
+      "name": "nullary_member_selects_enum_method",
+      "params": {
+        "mode": "nullary",
+        "n": 0
+      },
+      "expect": {
+        "stdout": "color\nGET\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "generic_member_widens_with_captured_argument",
+      "params": {
+        "mode": "generic",
+        "n": 5
+      },
+      "expect": {
+        "stdout": "node 5\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "phantom_parameter_solved_by_call_argument",
+      "params": {
+        "mode": "phantom",
+        "n": 4
+      },
+      "expect": {
+        "stdout": "4\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "referenced_record_gains_owning_enum_method",
+      "params": {
+        "mode": "referenced",
+        "n": 7
+      },
+      "expect": {
+        "stdout": "stored\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "widened_receiver_mutation_seen_through_member_and_bound_method",
+      "params": {
+        "mode": "mutation",
+        "n": 1
+      },
+      "expect": {
+        "stdout": "2\n3\n",
+        "calls": {}
+      }
+    }
+  ]
+}

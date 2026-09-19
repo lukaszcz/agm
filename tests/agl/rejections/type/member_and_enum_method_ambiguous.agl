@@ -1,0 +1,16 @@
+# Shared is referenced by two unrelated enums, each declaring a same-named
+# method. Neither pair shares a level with the other enum, so both
+# declarations are legal, but Shared's own level counts both current owners,
+# so calling `f` on a Shared-typed receiver is ambiguous.
+record Shared(id: int)
+
+enum A = ::Shared | X
+
+enum B = ::Shared | Y
+
+def A::f(self) -> text = "a"
+
+def B::f(self) -> text = "b"
+
+program def main() -> unit =
+  print(Shared(id = 1).f())

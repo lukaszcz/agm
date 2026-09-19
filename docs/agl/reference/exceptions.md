@@ -89,12 +89,14 @@ name wins; two or more are a static ambiguity. A base method and a descendant
 method sharing a name are therefore ambiguous wherever both are visible on
 the descendant-typed receiver, and declaring both in the same module is
 rejected at the descendant's declaration; a qualified call
-(`Problem::label(d)`, `Detailed::label(d)`), a rename, or `hiding` one route
-repairs it. A base-typed receiver's level stops at its own chain, so it never
-sees a descendant's method — the value's runtime type never changes which
-function a given static type resolves to. Like other methods, an exception
-method is selectable where the source module declares it or reaches its
-declaration by a qualified import route; `hiding` can remove that route.
+(`Problem::label(problem)`, `DetailedProblem::label(problem)`), a rename, or
+`hiding` one route repairs it. A base-typed receiver's level stops at its own
+chain, so it never sees a descendant's method: changing the receiver's static
+type by an annotation or an identity upcast may turn a call into an error or
+back, but never changes which function the call selects. Like other methods,
+an exception method is selectable where the source module declares it or
+reaches its declaration by a qualified import route; `hiding` can remove that
+route.
 
 The built-in `Exception` declaration contains no methods. A wildcard `catch _
 as e =>` binds `e` as `Exception`, so it can select only visible methods on

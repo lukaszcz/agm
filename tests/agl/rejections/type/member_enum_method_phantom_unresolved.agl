@@ -1,0 +1,11 @@
+enum Tree[T]
+  | Leaf
+  | Node(value: T)
+
+def Tree::describe[T](self) -> text =
+  case self of
+    | Leaf => "leaf"
+    | Node(value) => "node %{value}"
+
+program def main() -> unit =
+  print(Leaf.describe())

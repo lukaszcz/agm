@@ -561,10 +561,10 @@ class TypeTable:
             for method in self._method_level(self._methods.get(decl_id, {}).get(name, {}))
         )
 
-    def declared_methods(self, owner_id: DeclId) -> Mapping[str, MethodDef]:
-        """Return the direct method chosen for each name declared on *owner_id*."""
+    def declared_methods(self, owner_id: DeclId) -> Mapping[str, tuple[MethodDef, ...]]:
+        """Return every method directly declared for each name on *owner_id*."""
         return {
-            name: self._method_level(methods)[0]
+            name: self._method_level(methods)
             for name, methods in self._methods.get(owner_id, {}).items()
             if methods
         }
@@ -756,24 +756,34 @@ class TypeTable:
             return None
         return match_nominal_owner_template(TypeTemplate(member, enum_def.type_params), record)
 
+    def owning_enum_defs_for_selection(self, record_decl_id: DeclId) -> tuple[TypeDef, ...]:
+        """Return the record identity's counted owning enum defs, registration order.
+
+        Every *current* enum that declares or references the record; a
+        superseded owning enum is skipped unless the record itself is
+        superseded, so a retained member of a superseded enum keeps seeing
+        that enum's methods.
+        """
+        record_def = self._defs.get(record_decl_id)
+        record_is_current = record_def is not None and self.is_current(record_def)
+        owners = self._member_enum_owner_index().get(record_decl_id, ())
+        return tuple(
+            self._defs[owner_id]
+            for owner_id in owners
+            if not (record_is_current and not self.is_current(self._defs[owner_id]))
+        )
+
     def owning_enums_for_selection(
         self, record: RecordType
     ) -> tuple[tuple[TypeDef, Mapping[str, Type]], ...]:
         """Return *record*'s counted owning enums, with their partial bindings.
 
-        A member record's method-selection level includes every *current*
-        enum that declares or references it (registration order); a
-        superseded owning enum is skipped unless *record* itself is
-        superseded, so a retained member of a superseded enum keeps seeing
-        that enum's methods. A captured enum parameter's binding is present;
-        a phantom (uncaptured) parameter is absent.
+        See :meth:`owning_enum_defs_for_selection` for which enums count. A
+        captured enum parameter's binding is present; a phantom (uncaptured)
+        parameter is absent.
         """
-        record_def = self._defs.get(record.decl_id)
-        record_is_current = record_def is not None and self.is_current(record_def)
         result: list[tuple[TypeDef, Mapping[str, Type]]] = []
-        for enum_def in self._enum_defs_owning(record):
-            if record_is_current and not self.is_current(enum_def):
-                continue
+        for enum_def in self.owning_enum_defs_for_selection(record.decl_id):
             member = next(item for item in enum_def.members if item.decl_id == record.decl_id)
             match = self._match_enum_member_template(enum_def, member, record)
             if match is None:

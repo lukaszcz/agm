@@ -308,11 +308,13 @@ class _SelectedMember:
 class _SelectedBuiltinMethod:
     """A host method selected by member access.
 
-    Session and agent methods use receiver-directed host checkers. Other
-    source-declared host methods bind their registered signature before
-    lowering reuses the underlying builtin with the receiver as its value
-    argument. ``receiver_type`` is the selected method's own owner, widened
-    from a member record to its enum when the method is the enum's.
+    ``Session`` methods dispatch by the receiver's nominal id; ``Agent``'s
+    ``ask``/``ask-request`` dispatch by name alone, reaching every member
+    alike. Other source-declared host methods bind their registered
+    signature before lowering reuses the underlying builtin with the
+    receiver as its value argument. ``receiver_type`` is the selected
+    method's own owner, widened to the owning enum when the method is the
+    enum's.
     """
 
     name: str

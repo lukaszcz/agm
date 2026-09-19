@@ -1,0 +1,60 @@
+# A member record's method level is its own methods plus the methods of
+# every current enum that declares or references it. A selected enum method
+# widens the receiver to that enum; a phantom enum parameter the member
+# doesn't capture is solved from the call site, and the widening never
+# copies, so mutation through it is observed on the original value.
+import std/http
+
+enum Color
+  | Red
+  | Blue
+
+def Color::label(self) -> text = "color"
+
+enum Tree[T]
+  | Leaf
+  | Node(value: T)
+
+def Tree::describe[T](self) -> text =
+  case self of
+    | Leaf => "leaf"
+    | Node(value) => "node %{value}"
+
+def Tree::or-default[T](self, fallback: T) -> T =
+  case self of
+    | Leaf => fallback
+    | Node(value) => value
+
+enum Counter
+  | Tally(var n: int)
+  | Off
+
+def Counter::bump(self) -> unit =
+  case self of
+    | Tally(n) => (self as Counter::Tally).n := n + 1
+    | Off => ()
+
+record Saved(id: int)
+
+enum Stored = ::Saved | Fresh(value: int)
+
+def Stored::mark(self) -> text = "stored"
+
+program def main(mode: text, n: int) -> unit =
+  if
+    | mode == "nullary" =>
+        print(Color::Red.label())
+        print(http::Method::Get.render())
+    | mode == "generic" =>
+        print(Node(value = n).describe())
+    | mode == "phantom" =>
+        print(Leaf.or-default(n))
+    | mode == "referenced" =>
+        print(Saved(id = n).mark())
+    | else =>
+        let t = Tally(n = n)
+        t.bump()
+        print(t.n)
+        let b = t.bump
+        b()
+        print(t.n)

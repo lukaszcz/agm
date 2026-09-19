@@ -56,6 +56,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from agm.agl import PipelineDriver
+from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
 from agm.agl.ir.contracts import DecodePlan
@@ -70,6 +71,7 @@ from agm.agl.pipeline import ArgumentPreflight, PreparedProgram, ProgramDiscover
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.engine_config import restamp_engine_setting
 from agm.agl.runtime.types import ProgramDeclInfo
+from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
     TypeDef,
@@ -88,6 +90,7 @@ from agm.agl.semantics.types import (
 from agm.agl.semantics.values import RecordValue, TextValue, Value
 from agm.agl.syntax import (
     AssignStmt,
+    Block,
     BuiltinVarDecl,
     EnumDef,
     ExceptionDef,
@@ -95,6 +98,7 @@ from agm.agl.syntax import (
     FuncDef,
     ImportDecl,
     InfixDecl,
+    Item,
     LetDecl,
     RecordDef,
     ScopeRegion,
@@ -104,6 +108,8 @@ from agm.agl.syntax import (
 )
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.type_schema import derive_schema_and_decode
+from agm.agl.typecheck.env import CheckedModule
+from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.agl.zones import ParamZone
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
@@ -125,6 +131,33 @@ def build_decode_schema(typ: Type, type_table: TypeTable) -> DecodePlan:
 def dummy_span() -> SourceSpan:
     """Return a fixed placeholder span for tests that need one but don't inspect it."""
     return SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+
+
+#: Capability catalog for method-selection tests: shell exec plus every
+#: codec kind a member/enum/exception method-resolution test needs to check.
+METHOD_SELECTION_CAPS = HostCapabilities(
+    supports_shell_exec=True,
+    codec_kinds={
+        "text": frozenset({"text"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
+    },
+)
+
+
+def check_method_selection_program(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
+    """Build and typecheck a multi-module graph with :data:`METHOD_SELECTION_CAPS`."""
+    from tests.agl.ir_harness import make_graph_from_files
+
+    graph = make_graph_from_files(tmp_path, modules)
+    return check_program(resolve_program(graph), METHOD_SELECTION_CAPS)
+
+
+def checked_module_items(module: CheckedModule) -> tuple[Item, ...]:
+    """Return an entry's test-only inline items, unwrapping the synthetic ``main``."""
+    items = module.resolved.program.body.items
+    if items and isinstance(items[-1], FuncDef) and items[-1].is_synthetic:
+        return items[-1].body.items if isinstance(items[-1].body, Block) else (items[-1].body,)
+    return items
 
 
 def file_program(source: str) -> str:

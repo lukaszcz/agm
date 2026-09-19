@@ -51,6 +51,7 @@ class ConstraintRole(StrEnum):
     EXPECTED_RESULT = "expected result"
     LITERAL_ELEMENT = "literal element"
     EXPLICIT_INSTANTIATION = "explicit instantiation"
+    BUILTIN_DEFAULT = "default of"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,13 @@ class ConstraintOrigin:
     role: ConstraintRole
     subject: str
     type_param: str | None = None
+
+
+# Constraint origins that touched a variable, mapped to whether each one was
+# the origin that solved the variable (see `InferenceEngine._bind`) rather than
+# a merely structural variable-variable merge — so the same origin can be a
+# binding for one variable's evidence and a plain touch for another's.
+_Evidence = dict[ConstraintOrigin, bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +125,7 @@ class InferenceEngine:
         self._type_table = type_table
         self._parent: dict[InferenceVarType, InferenceVarType] = {}
         self._solution: dict[InferenceVarType, Type] = {}
-        self._evidence: dict[InferenceVarType, tuple[ConstraintOrigin, ...]] = {}
+        self._evidence: dict[InferenceVarType, _Evidence] = {}
         self._order: dict[InferenceVarType, int] = {}
         self._next_variable = 0
         self._next_origin = 0
@@ -158,7 +166,7 @@ class InferenceEngine:
 
     def unify(self, left: Type, right: Type, origin: ConstraintOrigin) -> None:
         """Unify exactly, except for a direct nominal-widening constraint."""
-        self._unify(left, right, origin, (), allow_member_to_enum=True)
+        self._unify(left, right, origin, {}, allow_member_to_enum=True)
 
     def complete_from_context(
         self, inferred: Type, context: Type, origin: ConstraintOrigin
@@ -224,7 +232,7 @@ class InferenceEngine:
         left: Type,
         right: Type,
         origin: ConstraintOrigin,
-        inherited: tuple[ConstraintOrigin, ...],
+        inherited: _Evidence,
         *,
         allow_member_to_enum: bool = False,
     ) -> None:
@@ -245,8 +253,8 @@ class InferenceEngine:
         # Full-subtree evidence is only consumed by the structural-recursion and
         # mismatch branches below, so it is computed here — after the fast paths
         # that return without it — rather than on every recursive step.
-        evidence = self._merge_origins(
-            inherited, self._origins_in(original_left), self._origins_in(original_right)
+        evidence = self._merge_evidence(
+            inherited, self._evidence_in(original_left), self._evidence_in(original_right)
         )
         if (
             allow_member_to_enum
@@ -312,7 +320,7 @@ class InferenceEngine:
         left: Type,
         right: Type,
         origin: ConstraintOrigin,
-        evidence: tuple[ConstraintOrigin, ...],
+        evidence: _Evidence,
     ) -> None:
         if len(left_args) != len(right_args):
             self._raise_mismatch(left, right, origin, evidence)
@@ -326,10 +334,10 @@ class InferenceEngine:
             self._merge(variable, self._find(typ), origin)
             return
         if self._occurs(variable, typ):
-            evidence = self._merge_origins(self._evidence[variable], self._origins_in(typ))
+            evidence = self._merge_evidence(self._evidence[variable], self._evidence_in(typ))
             self._raise_infinite(variable, typ, origin, evidence)
         self._solution[variable] = typ
-        self._add_evidence(variable, origin)
+        self._add_evidence(variable, origin, binding=True)
 
     def _merge(
         self,
@@ -340,8 +348,8 @@ class InferenceEngine:
         if self._order[first] > self._order[second]:
             first, second = second, first
         self._parent[second] = first
-        self._evidence[first] = self._merge_origins(
-            self._evidence[first], self._evidence[second], (origin,)
+        self._evidence[first] = self._merge_evidence(
+            self._evidence[first], self._evidence[second], {origin: False}
         )
         self._evidence.pop(second)
 
@@ -409,7 +417,7 @@ class InferenceEngine:
 
     def _register_variable(self, variable: InferenceVarType) -> None:
         self._parent[variable] = variable
-        self._evidence[variable] = ()
+        self._evidence[variable] = {}
         self._order[variable] = self._next_variable
         self._next_variable += 1
 
@@ -428,10 +436,10 @@ class InferenceEngine:
             return self._find(typ) == variable
         return any(self._occurs(variable, child) for child in type_children(typ))
 
-    def _origins_in(self, typ: Type) -> tuple[ConstraintOrigin, ...]:
+    def _evidence_in(self, typ: Type) -> _Evidence:
         if isinstance(typ, InferenceVarType):
             return self._evidence[self._find(typ)]
-        return self._merge_origins(*(self._origins_in(child) for child in type_children(typ)))
+        return self._merge_evidence(*(self._evidence_in(child) for child in type_children(typ)))
 
     def _add_evidence_from_type(self, typ: Type, origin: ConstraintOrigin) -> None:
         if isinstance(typ, InferenceVarType):
@@ -439,13 +447,23 @@ class InferenceEngine:
         for child in type_children(typ):
             self._add_evidence_from_type(child, origin)
 
-    def _add_evidence(self, variable: InferenceVarType, origin: ConstraintOrigin) -> None:
+    def _add_evidence(
+        self, variable: InferenceVarType, origin: ConstraintOrigin, *, binding: bool = False
+    ) -> None:
         root = self._find(variable)
-        self._evidence[root] = self._merge_origins(self._evidence[root], (origin,))
+        self._evidence[root] = self._merge_evidence(self._evidence[root], {origin: binding})
 
-    def _merge_origins(self, *groups: tuple[ConstraintOrigin, ...]) -> tuple[ConstraintOrigin, ...]:
-        origins = {origin for group in groups for origin in group}
-        return tuple(sorted(origins, key=self._origin_key))
+    def _merge_evidence(self, *groups: _Evidence) -> _Evidence:
+        """Union evidence maps, keeping an origin a binding if any group marks it so.
+
+        Unordered: callers sort by :meth:`_origin_key` only where order matters
+        (building an error), not on every merge.
+        """
+        merged: _Evidence = {}
+        for group in groups:
+            for origin, binding in group.items():
+                merged[origin] = merged.get(origin, False) or binding
+        return merged
 
     def _origin_key(
         self, origin: ConstraintOrigin
@@ -468,7 +486,7 @@ class InferenceEngine:
         left: Type,
         right: Type,
         origin: ConstraintOrigin,
-        evidence: tuple[ConstraintOrigin, ...],
+        evidence: _Evidence,
     ) -> None:
         self._raise_error(f"Cannot unify {left!r} with {right!r}.", origin, evidence)
 
@@ -477,7 +495,7 @@ class InferenceEngine:
         variable: InferenceVarType,
         typ: Type,
         origin: ConstraintOrigin,
-        evidence: tuple[ConstraintOrigin, ...],
+        evidence: _Evidence,
     ) -> None:
         del variable, typ
         self._raise_error("Cannot infer an infinite type.", origin, evidence)
@@ -486,12 +504,21 @@ class InferenceEngine:
         self,
         message: str,
         origin: ConstraintOrigin,
-        evidence: tuple[ConstraintOrigin, ...],
+        evidence: _Evidence,
     ) -> None:
-        earlier = tuple(item for item in evidence if item != origin)
+        """Cite the earliest evidence, preferring the origin that solved the variable (`_bind`).
+
+        A merely structural variable-variable merge is a weaker witness than the
+        constraint that solved a variable, so the related note favors the
+        latter when both are present in *evidence*.
+        """
+        earlier = sorted(
+            (origin_ for origin_ in evidence if origin_ != origin), key=self._origin_key
+        )
         related: tuple[tuple[str, SourceSpan], ...] = ()
         if earlier:
-            first = earlier[0]
+            bindings = [origin_ for origin_ in earlier if evidence[origin_]]
+            first = bindings[0] if bindings else earlier[0]
             label = first.type_param or first.subject
             related_message = (
                 f"{label} was first constrained by {first.role.value} '{first.subject}'."
@@ -501,7 +528,9 @@ class InferenceEngine:
             message,
             span=origin.span,
             related=related,
-            origins=self._merge_origins(evidence, (origin,)),
+            origins=tuple(
+                sorted(self._merge_evidence(evidence, {origin: False}), key=self._origin_key)
+            ),
         )
 
     def _contains_unresolved_variable(self, typ: Type) -> bool:

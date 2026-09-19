@@ -986,5 +986,7 @@ propagation checks it against the expected enum type, types empty containers,
 and gives agent calls their output contracts. It does not select among
 same-named constructor candidates. A target that depends on sibling constraints
 is resolved with the enclosing expression before its codec and schema are
-chosen. Where no expectation exists, inference is bottom-up, and an untyped
-`ask` defaults to `text`.
+chosen. Where no expectation exists, inference is bottom-up, and an untyped `ask`
+defaults to `text`; the same default applies to a generic type parameter that
+nothing else in the enclosing expression pins (as in `print <| exec "…"`),
+once sibling constraints have settled.

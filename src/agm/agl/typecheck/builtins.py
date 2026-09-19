@@ -27,6 +27,7 @@ from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
     FunctionType,
+    InferenceVarType,
     RecordType,
     TextType,
     Type,
@@ -57,6 +58,7 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     TypeEnvironment,
 )
+from agm.agl.typecheck.inference import InferenceEngine
 from agm.agl.zones import ParamZone
 
 # ---------------------------------------------------------------------------
@@ -154,6 +156,12 @@ class BuiltinCheckCtx(Protocol):
     def _type_is_wire_serializable(self, typ: Type) -> bool: ...
 
     def _register_builtin_obligation(self, obligation: PendingBuiltinObligation) -> None: ...
+
+    def _active_inference_engine(self) -> InferenceEngine: ...
+
+    def _defer_builtin_default(
+        self, variable: InferenceVarType, default: Type, span: SourceSpan, subject: str
+    ) -> None: ...
 
     def _constructor_ref_for(self, node_id: int) -> ConstructorRef | None: ...
 
@@ -599,7 +607,11 @@ class BuiltinCallChecker:
         # Target type: explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
-            explicit if explicit is not None else (expected if expected is not None else TextType())
+            explicit
+            if explicit is not None
+            else self._defaulted_contextual_target(
+                expected, self.default_target(BuiltinKind.ASK), node.span, "ask"
+            )
         )
         self._reject_type_var_target("ask", target_type, node.span)
         self._register_ask_like_obligation(
@@ -820,15 +832,15 @@ class BuiltinCallChecker:
         if not self._ctx._caps.supports_shell_exec:
             raise AglTypeError("The host does not support 'exec' (shell) calls.", span=node.span)
 
-        target_type: Type
         # Explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "exec")
-        if explicit is not None:
-            target_type = explicit
-        elif expected is not None:
-            target_type = expected
-        else:
-            target_type = self.contract_type("ExecResult")
+        target_type: Type = (
+            explicit
+            if explicit is not None
+            else self._defaulted_contextual_target(
+                expected, self.default_target(BuiltinKind.EXEC), node.span, "exec"
+            )
+        )
         self._reject_type_var_target("exec", target_type, node.span)
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():
@@ -1064,6 +1076,29 @@ class BuiltinCallChecker:
         )
         self._ctx._record_explicit_builtin_target(node.node_id, resolved)
         return resolved
+
+    def default_target(self, kind: BuiltinKind) -> Type:
+        """The context-free default target for *kind*: ``text`` for ``ask``/``ask-request``,
+        ``ExecResult`` for ``exec``.
+
+        The single source of truth every direct-call and eta-expanded-value
+        default goes through, so the two forms can never drift apart.
+        """
+        return self.contract_type("ExecResult") if kind is BuiltinKind.EXEC else TextType()
+
+    def _defaulted_contextual_target(
+        self, expected: Type | None, default: Type, span: SourceSpan, subject: str
+    ) -> Type:
+        """Contextual ``ask``/``exec`` target: *default* without context; a bare unsolved
+        variable gets *default* registered as its region-close fallback; otherwise the
+        zonked expected type.
+        """
+        if expected is None:
+            return default
+        zonked = self._ctx._active_inference_engine().zonk(expected)
+        if isinstance(zonked, InferenceVarType):
+            self._ctx._defer_builtin_default(zonked, default, span, subject)
+        return zonked
 
     def _reject_type_var_target(self, name: str, target_type: Type, span: SourceSpan) -> None:
         """A *name* builtin's target type may not contain a type variable.

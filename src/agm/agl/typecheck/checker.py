@@ -1842,8 +1842,16 @@ class _Checker:
             region.engine.unify(
                 variable,
                 default,
-                region.engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=subject),
+                region.engine.origin(span, role=ConstraintRole.BUILTIN_DEFAULT, subject=subject),
             )
+
+    def _defer_builtin_default(
+        self, variable: InferenceVarType, default: Type, span: SourceSpan, subject: str
+    ) -> None:
+        """Register *default* as *variable*'s fallback, applied only if unsolved at region close."""
+        region = self._inference_region
+        assert region is not None
+        region.builtin_defaults.append((variable, default, span, subject))
 
     def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type:
         """Infer/check an expression, finalizing its owning inference region."""
@@ -2156,11 +2164,9 @@ class _Checker:
         if target is None and kind is BuiltinKind.EXEC:
             target = engine.fresh("exec result")
 
-        region = self._inference_region
-        assert region is not None
         if isinstance(target, InferenceVarType):
-            default = TextType() if kind is BuiltinKind.ASK else template.result
-            region.builtin_defaults.append((target, default, span, ref.name))
+            assert kind is not None
+            self._defer_builtin_default(target, self._builtins.default_target(kind), span, ref.name)
 
         if signature.type_params:
             if target is not None:
@@ -2172,7 +2178,9 @@ class _Checker:
                 for type_param in signature.type_params:
                     variable = instantiation.variables[type_param]
                     if kind is BuiltinKind.ASK:
-                        region.builtin_defaults.append((variable, TextType(), span, ref.name))
+                        self._defer_builtin_default(
+                            variable, self._builtins.default_target(kind), span, ref.name
+                        )
                     engine.require_solved(
                         variable,
                         engine.origin(
@@ -5108,10 +5116,9 @@ class _Checker:
             return bound
 
         if required_only and method.is_builtin and method.name in {"ask", "ask-request"}:
-            assert self._inference_region is not None
-            self._inference_region.builtin_defaults.extend(
-                (own_fresh[name], TextType(), span, method.name) for name in own_type_params
-            )
+            default = self._builtins.default_target(BuiltinKind.ASK)
+            for name in own_type_params:
+                self._defer_builtin_default(own_fresh[name], default, span, method.name)
         for name in own_type_params:
             engine.require_solved(
                 own_fresh[name],

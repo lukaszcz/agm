@@ -3004,10 +3004,6 @@ class TestIsBuiltinExceptionRoot:
         )
         assert table.is_builtin_exception_root(700046)
 
-    def test_false_for_user_declaration_with_no_base(self) -> None:
-        table = _exception_hierarchy_table()
-        assert not table.is_builtin_exception_root(700040)
-
     def test_false_for_declaration_with_a_base(self) -> None:
         table = _exception_hierarchy_table()
         assert not table.is_builtin_exception_root(700041)

@@ -9,9 +9,9 @@ exception VeryDetailed extends Detailed
   hint: text
 exception Other extends Exception
   note: text
-exception MyRoot
+exception Plain
   note: text
-exception MineOfMyRoot extends MyRoot
+exception PlainChild extends Plain
   code: int
 
 program def main(mode: text) -> unit =
@@ -47,17 +47,17 @@ program def main(mode: text) -> unit =
             raise inner
         catch Detailed as outer =>
           print "outer caught: %{outer.detail}"
-    | mode == "user-declared-root-catches-own-descendant" =>
+    | mode == "no-extends-catches-own-descendant" =>
         try
-          raise MineOfMyRoot(note = "n", code = 4)
-        catch MyRoot as r =>
+          raise PlainChild(message = "m", note = "n", code = 4)
+        catch Plain as r =>
           print "root caught: %{r.note}"
         catch _ as e =>
           print "fell through: %{e.message}"
-    | mode == "user-declared-root-does-not-catch-unrelated" =>
+    | mode == "no-extends-does-not-catch-unrelated" =>
         try
           raise Other(message = "m", note = "n")
-        catch MyRoot as r =>
+        catch Plain as r =>
           print "root caught: %{r.note}"
         catch _ as e =>
           print "fell through: %{e.message}"

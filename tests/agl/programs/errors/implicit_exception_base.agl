@@ -1,0 +1,38 @@
+# An exception declared without `extends` implicitly extends `Exception`: it is
+# constructible, carries `message`, is caught by `catch _`/`catch Exception`,
+# and converts to and from `Exception`.
+exception Plain
+  note: text
+exception Kid extends Plain
+  code: int
+
+def fail(kind: text) -> unit =
+  if
+    | kind == "plain" => raise Plain(message = "p", note = "n")
+    | kind == "kid" => raise Kid(message = "k", note = "n", code = 7)
+    | else => ()
+
+program def main(mode: text) -> unit =
+  if
+    | mode == "wildcard" =>
+        try
+          fail("kid")
+        catch _ as e =>
+          print "caught: %{e.message}"
+          case e as? Kid of
+            | Some(value) => print "kid: %{value.code}"
+            | None => print "not a kid"
+    | mode == "exception-root" =>
+        try
+          fail("plain")
+        catch Exception as e =>
+          print "root caught: %{e.message}, plain: %{e is Plain}"
+    | mode == "base-catch" =>
+        try
+          fail("kid")
+        catch Plain as p =>
+          print "plain caught: %{p.note}"
+    | mode == "upcast" =>
+        let root = Plain(message = "u", note = "n") as Exception
+        print "upcast: %{root.message}"
+    | else => print "unknown mode"

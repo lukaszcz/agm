@@ -1,0 +1,40 @@
+{
+  "scenarios": [
+    {
+      "name": "wildcard_catches_an_exception_declared_without_extends",
+      "params": {
+        "mode": "wildcard"
+      },
+      "expect": {
+        "stdout": "caught: k\nkid: 7\n"
+      }
+    },
+    {
+      "name": "exception_root_catches_an_exception_declared_without_extends",
+      "params": {
+        "mode": "exception-root"
+      },
+      "expect": {
+        "stdout": "root caught: p, plain: true\n"
+      }
+    },
+    {
+      "name": "handler_for_an_implicitly_based_exception_catches_its_descendant",
+      "params": {
+        "mode": "base-catch"
+      },
+      "expect": {
+        "stdout": "plain caught: n\n"
+      }
+    },
+    {
+      "name": "exception_declared_without_extends_upcasts_to_exception",
+      "params": {
+        "mode": "upcast"
+      },
+      "expect": {
+        "stdout": "upcast: u\n"
+      }
+    }
+  ]
+}

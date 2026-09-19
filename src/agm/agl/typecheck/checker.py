@@ -4277,12 +4277,7 @@ class _Checker:
         """Check a catch clause; also return its resolved type, or ``None`` for `_`."""
         clause_type: ExceptionType | None
         if clause.exc_type is None or clause.exc_type == "_":
-            from agm.agl.semantics.types import EXCEPTION_BASE
-
-            standard = self._env.type_table.standard_builtin_declaration("Exception")
-            selected = EXCEPTION_BASE if standard is None else standard.handle()
-            assert isinstance(selected, ExceptionType)
-            exc_type: ExceptionType = selected
+            exc_type: ExceptionType = self._env.type_table.exception_root()
             clause_type = None
         else:
             # resolve_named_type is used instead of get_type so exception types exposed

@@ -771,15 +771,12 @@ def test_lower_try_catch_of_a_non_root_type_keeps_its_own_nominal() -> None:
     assert handler.nominal == nominal_id_for(prog, "Abort")
 
 
-def test_lower_try_catch_of_a_user_declared_root_keeps_its_own_nominal() -> None:
-    """Golden lowering: a user-declared base-less exception is not the catch-all,
-    so a clause naming it lowers to its own nominal, not None."""
+def test_lower_try_catch_of_exception_declared_without_extends_keeps_its_own_nominal() -> None:
+    """Golden lowering: an exception declared without `extends` is not the
+    catch-all, so a clause naming it lowers to its own nominal, not None."""
     from agm.agl.ir.program import ExecutableProgram
 
-    source = (
-        "exception MyRoot\n  note: text\nexception MyRootChild extends MyRoot()\n"
-        "let r = try\n  1\ncatch MyRoot =>\n  2\nr\n"
-    )
+    source = "exception Plain\n  note: text\nlet r = try\n  1\ncatch Plain =>\n  2\nr\n"
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
     items = inline_main_items(prog)
@@ -788,7 +785,7 @@ def test_lower_try_catch_of_a_user_declared_root_keeps_its_own_nominal() -> None
     assert isinstance(ir_try, IrTry)
     handler = ir_try.handlers[0]
     assert isinstance(handler, IrCatchHandler)
-    assert handler.nominal == nominal_id_for(prog, "MyRoot")
+    assert handler.nominal == nominal_id_for(prog, "Plain")
 
 
 # ---------------------------------------------------------------------------

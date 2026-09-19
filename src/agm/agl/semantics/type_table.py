@@ -68,6 +68,7 @@ from agm.agl.modules.ids import RESERVED_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.external_names import NO_EXTERNAL_NAME, ExternalName
 from agm.agl.semantics.types import (
+    EXCEPTION_BASE,
     HOST_MINTED_PRELUDE_TYPE_IDS,
     HOST_MINTED_PRELUDE_TYPE_NAMES,
     ArrayType,
@@ -591,19 +592,13 @@ class TypeTable:
         return any(ancestor.decl_node_id == ancestor_id for ancestor in self.ancestor_defs(decl_id))
 
     def is_builtin_exception_root(self, decl_id: DeclId) -> bool:
-        """Whether *decl_id* is the built-in ``Exception`` root: reserved or ``builtin``, no base.
+        """Whether *decl_id* is the built-in ``Exception``, reserved or loaded.
 
-        Every other built-in exception extends it, so this is its identity in any
-        graph, whether the reserved fallback or a loaded standard declaration. A
-        user-declared base-less exception is not the root.
+        It is the only exception without a base: an omitted ``extends`` means
+        ``extends Exception``.
         """
         typedef = self._defs.get(decl_id)
-        return (
-            typedef is not None
-            and typedef.kind == "exception"
-            and typedef.base is None
-            and (typedef.module_id.is_reserved or typedef.is_builtin)
-        )
+        return typedef is not None and typedef.kind == "exception" and typedef.base is None
 
     def _invalidate_cache_for(self, decl_id: DeclId) -> None:
         self._record_fields_cache.pop(decl_id, None)
@@ -1069,6 +1064,13 @@ class TypeTable:
         fields when the owning standard-library module is not loaded.
         """
         return self.standard_builtin_declarations().get(name)
+
+    def exception_root(self) -> ExceptionType:
+        """Return the built-in ``Exception``: loaded from the standard library, else reserved."""
+        standard = self.standard_builtin_declaration("Exception")
+        root = EXCEPTION_BASE if standard is None else standard.handle()
+        assert isinstance(root, ExceptionType)
+        return root
 
     def option_handle(self, argument: Type, *, standard: bool = False) -> EnumType:
         """Return the ``Option[argument]`` handle this program's ``Option`` names.

@@ -5773,9 +5773,9 @@ class TestCatchReachability:
         "exception Detailed extends Problem\n"
         "  detail: text\n"
         "exception Unrelated extends Exception()\n"
-        "exception MyRoot\n"
+        "exception Plain\n"
         "  note: text\n"
-        "exception Mine extends MyRoot\n"
+        "exception Mine extends Plain\n"
         "  count: int\n"
     )
 
@@ -5820,15 +5820,17 @@ class TestCatchReachability:
         r = accept_type(source)
         assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
 
-    def test_handler_for_a_user_declared_root_does_not_shadow_the_wildcard(self) -> None:
-        """A user-declared base-less exception is not the catch-all, so a wildcard
-        handler after it is still reachable."""
-        source = self._HIERARCHY + "try 1 catch MyRoot => 2 catch _ => 3"
+    def test_handler_for_exception_declared_without_extends_does_not_shadow_the_wildcard(
+        self,
+    ) -> None:
+        source = self._HIERARCHY + "try 1 catch Plain => 2 catch _ => 3"
         r = accept_type(source)
         assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
 
-    def test_handler_for_a_user_declared_root_does_not_shadow_an_unrelated_handler(self) -> None:
-        source = self._HIERARCHY + "try 1 catch MyRoot => 2 catch Unrelated => 3"
+    def test_handler_for_exception_declared_without_extends_does_not_shadow_a_sibling(
+        self,
+    ) -> None:
+        source = self._HIERARCHY + "try 1 catch Plain => 2 catch Unrelated => 3"
         r = accept_type(source)
         assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
 
@@ -13277,17 +13279,20 @@ class TestExceptionRecursiveTypes:
         )
         assert r.resolved.program is not None
 
-    def test_abstract_exception_root_field_cycle_is_uninhabitable(self) -> None:
-        err = reject_type("exception Root()\nexception Bad extends Root\n  root: Root\n()")
-        assert "uninhabitable" in str(err).lower()
+    def test_exception_declared_without_extends_breaks_a_field_cycle(self) -> None:
+        r = accept_type(
+            "exception Root()\nexception Holder extends Root\n  root: Root\n"
+            'Holder(message = "h", root = Root(message = "r"))'
+        )
+        assert r.resolved.program is not None
 
-    def test_concrete_child_of_abstract_exception_root_is_accepted(self) -> None:
+    def test_child_of_exception_declared_without_extends_inherits_message(self) -> None:
         r = accept_type(
             "exception Root\n"
             "  detail: text\n"
             "exception Good extends Root\n"
             "  code: int\n"
-            'Good(detail = "ok", code = 1)'
+            'Good(message = "m", detail = "ok", code = 1)'
         )
         assert r.resolved.program is not None
 

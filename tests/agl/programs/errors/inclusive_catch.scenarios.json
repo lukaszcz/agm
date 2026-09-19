@@ -37,18 +37,18 @@
       }
     },
     {
-      "name": "user_declared_root_catches_its_own_descendant",
+      "name": "handler_for_exception_declared_without_extends_catches_its_descendant",
       "params": {
-        "mode": "user-declared-root-catches-own-descendant"
+        "mode": "no-extends-catches-own-descendant"
       },
       "expect": {
         "stdout": "root caught: n\n"
       }
     },
     {
-      "name": "user_declared_root_does_not_catch_an_unrelated_exception",
+      "name": "handler_for_exception_declared_without_extends_is_not_a_catch_all",
       "params": {
-        "mode": "user-declared-root-does-not-catch-unrelated"
+        "mode": "no-extends-does-not-catch-unrelated"
       },
       "expect": {
         "stdout": "fell through: m\n"

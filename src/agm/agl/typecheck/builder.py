@@ -788,13 +788,18 @@ class _TypeBuilder:
         (not its shape) is needed here.  Own-vs-inherited field duplication
         and constructor-callability are checked later, once every
         exception's shape is buildable (see :meth:`_finalize_exceptions`).
+        A non-``builtin`` exception without ``extends`` extends the built-in
+        ``Exception``.
         """
         base_type: ExceptionType | None = None
-        if stmt.base is not None:
-            resolved_base = self._env.resolve_named_type(stmt.base, span=stmt.span)
+        # An omitted `extends` means `extends Exception`; only the built-in root
+        # itself has no base.
+        base_name = stmt.base if stmt.base is not None or stmt.is_builtin else "Exception"
+        if base_name is not None:
+            resolved_base = self._env.resolve_named_type(base_name, span=stmt.span)
             if not isinstance(resolved_base, ExceptionType):
                 raise AglTypeError(
-                    f"Exception '{stmt.name}' extends unknown exception '{stmt.base}'.",
+                    f"Exception '{stmt.name}' extends unknown exception '{base_name}'.",
                     span=stmt.span,
                 )
             base_type = resolved_base
@@ -825,7 +830,7 @@ class _TypeBuilder:
             module_id=module_id,
             scope_path=scope_path,
             fields=tuple(fields.items()),
-            abstract=stmt.base is None,
+            abstract=base_type is None,
             base=None if base_type is None else base_type.decl_id,
             field_kinds=tuple(zone for _fname, zone in self._field_zones(stmt.fields)),
             is_builtin=stmt.is_builtin,

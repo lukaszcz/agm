@@ -1,20 +1,54 @@
 # Every HttpError subtype reached through the raising function and through
-# the try- twin, catch's exact-type matching, and a Save write failure.
+# the try- twin, narrowing a caught `HttpError` with `as?`/`is`, inclusive
+# `catch HttpError` handling every subtype through one handler, a sibling
+# mismatch still not caught by a subtype-specific handler, and a Save write
+# failure.
 import std/fs
 import std/http
+import std/http::HttpError
 import std/http::HttpTimeoutError
 import std/path
 import std/text
 
-# `HttpError`'s concrete subtype cannot be downcast from a base-typed
-# binding -- AgL has no exception downcast, only same-type `catch`. Its
-# type name is recovered from the value's own record-form rendering
-# instead, sliced off before the `message` field's free-form text so
-# stdout stays exact.
+# Narrows `e` with `as?` to read each subtype's own fields; `HttpUrlError`,
+# `HttpRequestError`, and `HttpTlsError` carry nothing this prints, so `is`
+# alone identifies them.
 def describe-http-error(e: http::HttpError) -> unit =
-  let rendered = e as text
-  let type-name = rendered.slice(0, rendered.index-of("("))
-  print("url=%{e.url} method=%{e.method.render()} type=%{type-name}")
+  case e as? http::HttpStatusError of
+    | Some(value) =>
+        print("url=%{e.url} method=%{e.method.render()} type=HttpStatusError status=%{value.response.status}")
+    | None =>
+        case e as? http::HttpTimeoutError of
+          | Some(value) =>
+              print("url=%{e.url} method=%{e.method.render()} type=HttpTimeoutError timeout=%{value.timeout}")
+          | None =>
+              case e as? http::HttpConnectionError of
+                | Some(value) =>
+                    print("url=%{e.url} method=%{e.method.render()} type=HttpConnectionError has-cause=%{not value.cause.is-empty()}")
+                | None =>
+                    case e as? http::HttpRedirectError of
+                      | Some(value) =>
+                          print("url=%{e.url} method=%{e.method.render()} type=HttpRedirectError redirects=%{value.redirects}")
+                      | None =>
+                          case e as? http::HttpDecodeError of
+                            | Some(value) =>
+                                print("url=%{e.url} method=%{e.method.render()} type=HttpDecodeError encoding=%{value.encoding}")
+                            | None =>
+                                if
+                                  | e is http::HttpUrlError =>
+                                      print("url=%{e.url} method=%{e.method.render()} type=HttpUrlError")
+                                  | e is http::HttpTlsError =>
+                                      print("url=%{e.url} method=%{e.method.render()} type=HttpTlsError")
+                                  | else =>
+                                      print("url=%{e.url} method=%{e.method.render()} type=HttpRequestError")
+
+# One `get` wrapped in `catch HttpError`, describing whatever subtype fires.
+def get-and-describe(target: text) -> unit =
+  try
+    let _ = http::get(target)
+    ()
+  catch HttpError as e =>
+    describe-http-error(e)
 
 program def main(root: path, scenario: text) -> unit =
   case scenario of
@@ -50,6 +84,26 @@ program def main(root: path, scenario: text) -> unit =
           ()
         catch HttpTimeoutError as e =>
           print("caught timeout: %{e.timeout}")
+    | "catch_http_error_reads_the_status_after_raise_for_status" =>
+        try
+          let _ = http::get("https://x/y").raise-for-status()
+          ()
+        catch HttpError as e =>
+          case e as? http::HttpStatusError of
+            | Some(value) => print("status: %{value.response.status}")
+            | None => print("no status")
+    | "catch_http_error_handles_every_transport_kind" =>
+        get-and-describe("https://x/y")
+        try
+          let _ = http::request(http::Method::Other("BAD METHOD"), "https://x/y")
+          ()
+        catch HttpError as e =>
+          describe-http-error(e)
+        get-and-describe("https://x/y")
+        get-and-describe("https://x/y")
+        get-and-describe("https://x/y")
+        get-and-describe("https://x/y")
+        get-and-describe("https://x/y")
     | "save_to_unwritable_path_raises_fs_error" =>
         let destination = path::join([root, "missing", "out.bin"])
         let _ = http::download("https://x/y", destination)

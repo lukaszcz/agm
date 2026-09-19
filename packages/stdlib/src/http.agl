@@ -212,13 +212,7 @@ def download(url: url, destination: path, query: dict[text, text] = {},
      verify-tls)
 
 # Wraps `request`'s transport and decode failures as `Err`; `std/fs::FsError`
-# and `TypeError` still propagate. Catch is exact, so every concrete
-# subtype `request` can raise is listed here: `HttpStatusError` is never
-# raised by `request` (only `Response::raise-for-status` raises it), so it
-# is not caught. Each catch widens its concrete subtype to `HttpError`
-# through an annotated `let` before `Err(...)`: a bare `Err(e)` would fix
-# `Result`'s error parameter to that subtype instead of the declared
-# `HttpError`.
+# and `TypeError` still propagate.
 def try-request(method: Method, url: url, query: dict[text, text] = {},
                 headers: Headers = headers({}), body: Body = Empty, auth: Auth = NoAuth,
                 cookies: dict[text, text] = {}, receive: Receive = Decode,
@@ -227,27 +221,7 @@ def try-request(method: Method, url: url, query: dict[text, text] = {},
   try
     Ok(request(method, url, query, headers, body, auth, cookies, receive, timeout,
               follow-redirects, verify-tls))
-  catch HttpUrlError as e =>
-    let err: HttpError = e
-    Err(err)
-  catch HttpRequestError as e =>
-    let err: HttpError = e
-    Err(err)
-  catch HttpConnectionError as e =>
-    let err: HttpError = e
-    Err(err)
-  catch HttpTimeoutError as e =>
-    let err: HttpError = e
-    Err(err)
-  catch HttpTlsError as e =>
-    let err: HttpError = e
-    Err(err)
-  catch HttpRedirectError as e =>
-    let err: HttpError = e
-    Err(err)
-  catch HttpDecodeError as e =>
-    let err: HttpError = e
-    Err(err)
+  catch HttpError as e => Err(e)
 
 def try-get(url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
             body: Body = Empty, auth: Auth = NoAuth, cookies: dict[text, text] = {},
@@ -375,8 +349,8 @@ def Client::download(self, url: url, destination: path, query: dict[text, text] 
                      headers: Headers = headers({}), body: Body = Empty) -> Response =
   self.get(url, query, headers, body, Save(destination))
 
-# Forwards to `try-request` so its catch list stays the sole listing of every
-# concrete `HttpError` subtype `request` can raise.
+# Forwards to `try-request`, the sole place `request`'s failures are wrapped
+# as `Err`.
 def Client::try-request(self, method: Method, url: url, query: dict[text, text] = {},
                         headers: Headers = headers({}), body: Body = Empty,
                         receive: Receive = Decode) -> Result[Response, HttpError] =

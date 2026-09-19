@@ -111,11 +111,40 @@
         {"fail": "connection"},
         {"fail": "timeout"},
         {"fail": "tls"},
-        {"fail": "redirect"},
+        {"fail": "redirect", "redirects": 3},
         {"status": 200, "body_hex": "ff"}
       ],
       "expect": {
-        "stdout": "url=https://x/y method=GET type=HttpUrlError\nurl=https://x/y method=BAD METHOD type=HttpRequestError\nurl=https://x/y method=GET type=HttpConnectionError\nurl=https://x/y method=GET type=HttpTimeoutError\nurl=https://x/y method=GET type=HttpTlsError\nurl=https://x/y method=GET type=HttpRedirectError\nurl=https://x/y method=GET type=HttpDecodeError\n"
+        "stdout": "url=https://x/y method=GET type=HttpUrlError\nurl=https://x/y method=BAD METHOD type=HttpRequestError\nurl=https://x/y method=GET type=HttpConnectionError has-cause=true\nurl=https://x/y method=GET type=HttpTimeoutError timeout=30s\nurl=https://x/y method=GET type=HttpTlsError\nurl=https://x/y method=GET type=HttpRedirectError redirects=3\nurl=https://x/y method=GET type=HttpDecodeError encoding=utf-8\n"
+      }
+    },
+    {
+      "name": "catch_http_error_reads_the_status_after_raise_for_status_via_downcast",
+      "params": {
+        "root": "/unused",
+        "scenario": "catch_http_error_reads_the_status_after_raise_for_status"
+      },
+      "http": [{"status": 500, "body": "boom"}],
+      "expect": {
+        "stdout": "status: 500\n"
+      }
+    },
+    {
+      "name": "a_single_catch_http_error_handler_handles_every_transport_kind",
+      "params": {
+        "root": "/unused",
+        "scenario": "catch_http_error_handles_every_transport_kind"
+      },
+      "http": [
+        {"fail": "url"},
+        {"fail": "connection"},
+        {"fail": "timeout"},
+        {"fail": "tls"},
+        {"fail": "redirect", "redirects": 2},
+        {"status": 200, "body_hex": "ff"}
+      ],
+      "expect": {
+        "stdout": "url=https://x/y method=GET type=HttpUrlError\nurl=https://x/y method=BAD METHOD type=HttpRequestError\nurl=https://x/y method=GET type=HttpConnectionError has-cause=true\nurl=https://x/y method=GET type=HttpTimeoutError timeout=30s\nurl=https://x/y method=GET type=HttpTlsError\nurl=https://x/y method=GET type=HttpRedirectError redirects=2\nurl=https://x/y method=GET type=HttpDecodeError encoding=utf-8\n"
       }
     },
     {

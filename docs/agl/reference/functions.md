@@ -287,20 +287,62 @@ visibility. The implicit
 `import std/prelude::*` is an ordinary route, so it also makes the methods its
 receiver-scope re-exports expose available.
 
-Selection starts at the receiver's static type and, for exceptions, walks its
-base chain. The nearest level containing visible methods wins. Two or more
-visible methods at that level are a static ambiguity; hide one route or call
-the intended function by its qualified path. A home-module method and an
-orphan method have equal priority, and `Base::f` and `Derived::f` may both be
-declared in one module. A value held in a `Base` binding selects `Base::f`,
-even when its runtime value is `Derived`.
+Method candidates for a name form **one level**, fixed by the receiver's
+static type `T`:
 
-Fields and methods are distinct member kinds. If a receiver's static type has
-a field and any visible same-named method at its level or an ancestor level,
-the member read is ambiguous. The same rule applies to `receiver.name := value`;
-hide the method to use the field, or call the method by a qualified path. A
-method declaration itself is rejected only when its resolved owner or an
-ancestor already has a field of that name.
+- record `T` — `T`'s own methods plus those of every current enum that
+  declares or references `T` as a member;
+- exception `T` — `T`'s own methods plus every ancestor's in its `extends`
+  chain;
+- enum `T` — only `T`'s own methods; a method declared on one of `T`'s own
+  members is not part of this level;
+- builtin receiver — unchanged.
+
+Route visibility then decides within the level: exactly one visible method
+wins; two or more are a static ambiguity, listing every declaration; none
+visible but candidates exist reports that the method exists but is not
+visible here; no candidates is no member. A home-module method and an orphan
+carry equal weight — neither position in the level nor declaration order
+breaks a tie.
+
+Fields and methods are distinct member kinds. A field of the receiver type
+(its own or an inherited one) and any visible method in its level are
+ambiguous, for a read and for `receiver.name := value` alike; hide the
+method's route to reach the field, or call the method by a qualified path. An
+enum method named like a member field stays legal to declare: it clashes with
+the field only on a member-typed receiver, since an enum-typed receiver has
+no fields and simply selects the method. A method declaration itself is
+rejected only when its resolved owner or an ancestor already has a field of
+that name.
+
+When the selected method belongs to an owning enum `E` rather than to the
+member itself, the receiver **widens** to `E` — an identity upcast, so
+mutation through a `var` field stays visible through the member binding.
+`E`'s type parameters that the member's fields capture come from the
+member's own type arguments; any parameter the member doesn't capture must be
+solved by the call's arguments, its expected type, or its result, or the call
+is rejected with a suggestion to annotate or cast the receiver.
+
+Along the member→owning-enum axis and the exception descendant→ancestor axis,
+adding or removing a type annotation or an identity upcast may turn a call
+into a static error or an error into a call, but never changes *which*
+function a given static type resolves to. Widening one enum to an overlapping
+enum is outside this: they remain distinct nominal types, each with its own
+methods, even when one's members are a subset of the other's.
+
+An enum in another module that references a record adds that enum's methods
+to the record's level wherever they are reachable by route in the using
+module — the same exposure orphan methods already accept. Repair a resulting
+ambiguity or field clash by hiding the contributing route, calling the
+intended function by a qualified path, or widening the receiver explicitly
+with `as`.
+
+A module may not declare two same-named methods whose owners share a level —
+a record and one of its counted owning enums, or an exception and one of its
+ancestors; the later declaration is rejected. The same pair is legal across
+modules and becomes an ambiguity only where both routes are visible at a call
+site; repair it with a qualified call, a rename, `hiding` one route, or an
+annotation or `as` that narrows or widens the receiver's static type.
 
 A builtin receiver may be named in a method declaration in any module. This
 syntax is available to ordinary, `builtin`, and `extern` definitions:
@@ -392,10 +434,24 @@ enum Tree[T]
   | Node(value: T)
 
 def Tree::Node::extract[E](self) -> E = self.value
+
+def Tree::or-default[T](self, fallback: T) -> T =
+  case self of
+    | Leaf => fallback
+    | Node(value) => value
+
+program def main() -> unit =
+  print(Node(value = 1).extract())    # 1: Tree::Node's own method
+  print(Leaf.or-default(4))           # 4: Tree's method, receiver widened to Tree[int]
 ```
 
-`Tree::Node::extract` is a method of `Tree::Node[E]`, not of `Tree[E]`. Methods
-of `Tree` instead require a receiver statically typed as `Tree[E]`.
+`Tree::Node::extract` is a method of `Tree::Node[E]` alone. `Tree::or-default`
+belongs to `Tree`, `Tree::Node`'s owning enum, so it is also in
+`Tree::Node[E]`'s level: selecting it widens the receiver to `Tree[E]`. `Leaf`
+captures no type parameter, so calling `or-default` on it leaves `T`
+phantom; here the argument's type solves it. A call left with such a
+parameter unsolved by its arguments, expected type, and result is rejected
+with a suggestion to annotate or cast the receiver.
 
 A method member used without a call is a **bound method**: a function value
 that has captured its receiver and has parameters only for the remaining

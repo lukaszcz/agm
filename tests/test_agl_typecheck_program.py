@@ -4092,7 +4092,7 @@ def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path:
     # Point's real decl_id, not a hand-written literal's default NO_DECL_ID.
     point_typedef = table.get(shapes_id, "Point")
     assert point_typedef is not None
-    ((method,),) = table.method_candidates(point_typedef.handle(), "radius")
+    (method,) = table.method_candidates(point_typedef.handle(), "radius")
     assert method is not None
     assert method.module_id == shapes_id
     assert method.scope_path == ("Point",)
@@ -4206,15 +4206,11 @@ def test_mutually_recursive_method_headers_are_available_before_body_checking(
     table = checked.modules[ENTRY_ID].type_env.type_table
     counter_typedef = table.get(ENTRY_ID, "Counter")
     assert counter_typedef is not None
-    assert tuple(
-        table.method_candidates(counter_typedef.handle(), "even")[0][0].signature.params
-    ) == (
+    assert tuple(table.method_candidates(counter_typedef.handle(), "even")[0].signature.params) == (
         counter_typedef.handle(),
         IntType(),
     )
-    assert tuple(
-        table.method_candidates(counter_typedef.handle(), "odd")[0][0].signature.params
-    ) == (
+    assert tuple(table.method_candidates(counter_typedef.handle(), "odd")[0].signature.params) == (
         counter_typedef.handle(),
         IntType(),
     )
@@ -4249,8 +4245,8 @@ def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final
     a_typedef = table.get(a_id, "A")
     b_typedef = table.get(b_id, "B")
     assert a_typedef is not None and b_typedef is not None
-    ((a_method,),) = table.method_candidates(a_typedef.handle(), "from-b")
-    ((b_method,),) = table.method_candidates(b_typedef.handle(), "from-a")
+    (a_method,) = table.method_candidates(a_typedef.handle(), "from-b")
+    (b_method,) = table.method_candidates(b_typedef.handle(), "from-a")
     assert a_method is not None and b_method is not None
     assert strip_decl_ids(a_method.signature) == FunctionType(
         params=(RecordType("A", module_id=a_id), IntType()), result=IntType()
@@ -4294,7 +4290,7 @@ def test_unannotated_function_infers_result_through_a_member_call_in_either_sour
     assert checked.function_signatures["use"].result == IntType()
     box_type = checked.type_env.get_type("Box")
     assert box_type is not None
-    ((method,),) = checked.type_env.type_table.method_candidates(box_type, "twice")
+    (method,) = checked.type_env.type_table.method_candidates(box_type, "twice")
     assert method is not None
     assert method.signature.result == IntType()
 
@@ -4314,8 +4310,8 @@ def test_unannotated_methods_are_mutually_recursive_through_member_calls() -> No
     table = checked.type_env.type_table
     counter_type = checked.type_env.get_type("Counter")
     assert counter_type is not None
-    ((even,),) = table.method_candidates(counter_type, "is-even")
-    ((odd,),) = table.method_candidates(counter_type, "is-odd")
+    (even,) = table.method_candidates(counter_type, "is-even")
+    (odd,) = table.method_candidates(counter_type, "is-odd")
     assert even is not None and odd is not None
     assert even.signature.result == BoolType()
     assert odd.signature.result == BoolType()
@@ -4333,7 +4329,7 @@ def test_unannotated_method_infers_result_through_a_forward_referenced_function(
 
     box_type = checked.type_env.get_type("Box")
     assert box_type is not None
-    ((method,),) = checked.type_env.type_table.method_candidates(box_type, "describe")
+    (method,) = checked.type_env.type_table.method_candidates(box_type, "describe")
     assert method is not None
     assert method.signature.result == IntType()
     assert checked.function_signatures["helper"].result == IntType()
@@ -4759,19 +4755,18 @@ def test_same_level_visible_methods_are_ambiguous(tmp_path: Path) -> None:
     assert "ambiguous" in str(raised.value).lower()
 
 
-def test_nearest_exception_method_wins() -> None:
-    checked = _check(
-        "exception Base extends Exception\n"
-        "  code: int\n"
-        'def Base::describe(self) -> text = "base"\n'
-        "exception Derived extends Base()\n"
-        'def Derived::describe(self) -> text = "derived"\n'
-        'Derived(message = "error", code = 1).describe()\n'
-    )
+def test_same_module_exception_pair_call_is_ambiguous() -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            'def Base::describe(self) -> text = "base"\n'
+            "exception Derived extends Base()\n"
+            'def Derived::describe(self) -> text = "derived"\n'
+            'Derived(message = "error", code = 1).describe()\n'
+        )
 
-    result = _module_items(checked)[-1]
-    selection = checked.method_selections[result.callee.node_id]
-    assert selection.scope_path == ("Derived",)
+    assert "ambiguous" in str(raised.value).lower()
 
 
 @pytest.mark.parametrize(
@@ -4890,32 +4885,51 @@ def test_qualified_method_call_repairs_a_same_level_ambiguity(tmp_path: Path) ->
     assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
 
 
-def test_exception_methods_use_nearest_static_level_and_base_dispatch(tmp_path: Path) -> None:
+def test_exception_chain_pair_is_ambiguous_on_derived_receiver_but_not_base(
+    tmp_path: Path,
+) -> None:
+    modules = {
+        "errors": (
+            "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n"
+        ),
+        "base_methods": "import errors::*\ndef Base::describe(self) -> int = self.code\n",
+        "derived_methods": (
+            "import errors::*\ndef Derived::describe(self) -> text = self.message\n"
+        ),
+    }
+
     checked = _check_program(
         tmp_path,
         {
-            "errors": (
-                "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n"
-            ),
-            "base_methods": "import errors::*\ndef Base::describe(self) -> int = self.code\n",
-            "derived_methods": (
-                "import errors::*\ndef Derived::describe(self) -> text = self.message\n"
-            ),
+            **modules,
             "entry": (
                 "import errors\n"
                 "import base_methods\n"
                 "import derived_methods\n"
                 'let derived = errors::Derived(message = "bad", code = 1)\n'
                 "let base: errors::Base = derived\n"
-                "let nearest = derived.describe()\n"
-                "let static = base.describe()\n"
-                "nearest"
+                "base.describe()"
             ),
         },
     )
+    result = _module_items(checked.modules[ENTRY_ID])[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()
 
-    assert _binding_value_type(checked, ENTRY_ID, "nearest") == TextType()
-    assert _binding_value_type(checked, ENTRY_ID, "static") == IntType()
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                **modules,
+                "entry": (
+                    "import errors\n"
+                    "import base_methods\n"
+                    "import derived_methods\n"
+                    'let derived = errors::Derived(message = "bad", code = 1)\n'
+                    "derived.describe()"
+                ),
+            },
+        )
+    assert "ambiguous" in str(raised.value).lower()
 
 
 @pytest.mark.parametrize(

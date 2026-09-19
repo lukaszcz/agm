@@ -381,6 +381,9 @@ library return one.
 `Optional[T]` is the built-in three-way enum formed from `Option[T]`'s shared
 `Some(value)` and `None` members plus `Default`. It is intended for host parameters
 that distinguish an explicit value, explicit absence, and a request to use the host's default.
+Because `Optional` references `Option`'s members, a receiver typed `Option::Some[T]` or
+`Option::None` sees both enums' same-named methods, so `Some(1).map(f)` is ambiguous; give
+the receiver an `Option[T]` (or `Optional[T]`) type first, e.g. `let o: Option[int] = Some(1)`.
 See [Modules](modules.md#standard-library-modules) for the rest of the library.
 
 ### `ExecResult`
@@ -416,8 +419,9 @@ corrective retries after the initial attempt.
 record types `AgentCommand(command)`, `AgentClaude(model, thinking)`,
 `AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)`.
 Like every enum, `Agent` values have equality, rendering, and JSON casts; a
-member record exposes its fields when used at its record type. Its
-standard-library `ask` and `ask-request` members are builtin methods, so
+member record exposes its own fields and, through the member/enum method rule
+([Methods](functions.md#methods)), `Agent`'s own methods. Its standard-library
+`ask` and `ask-request` builtin methods reach a member the same way, so
 `agent.ask(...)` and `agent.ask-request(...)` select that agent for the
 operation. Projecting either member produces a function value that captures
 that agent; see [Agent calls](agent-calls.md) for dispatch behavior.
@@ -634,8 +638,11 @@ Each member is a record type. An inline member may appear in field, parameter,
 return, and generic-argument positions such as `array[Stored::Fresh]`; a
 referenced member retains its own record type and declaration path. Member
 records support record construction, field access, methods, `with`, casts, and
-standalone JSON decoding exactly like other records. `with` applies while a
-value has its member-record type, not after it has widened to the enum. A
+standalone JSON decoding exactly like other records. A member's method level
+also includes the methods of every current enum that declares or references
+it, widening the receiver to that enum when such a method is selected (see
+[Methods](functions.md#methods)). `with` applies while a value has its
+member-record type, not after it has widened to the enum. A
 member value widens to an enum only in a known enum-typed slot, so its inferred
 type remains the member record type. An inline member captures exactly the enum type parameters
 used by its fields, in enum declaration order. Thus `Tree[T]::Leaf` is

@@ -107,7 +107,6 @@ from agm.agl.semantics.types import (
     UnitType,
     contains_inference_var,
     free_type_vars,
-    is_standard_option_enum,
     iter_type,
     reroot_type,
     substitute,
@@ -312,13 +311,13 @@ class _SelectedBuiltinMethod:
     Session and agent methods use receiver-directed host checkers. Other
     source-declared host methods bind their registered signature before
     lowering reuses the underlying builtin with the receiver as its value
-    argument. ``method`` is absent only for an agent enum member whose method
-    is inherited from its builtin enum owner.
+    argument. ``receiver_type`` is the selected method's own owner, widened
+    from a member record to its enum when the method is the enum's.
     """
 
     name: str
     receiver_type: Type
-    method: MethodDef | None = None
+    method: MethodDef
 
 
 @dataclass(frozen=True, slots=True)
@@ -1779,12 +1778,7 @@ class _Checker:
                 span=target.span,
             )
 
-        selected = self._select_member(
-            receiver_type,
-            target.field,
-            target.span,
-            method_receiver=self._option_member_method_receiver(receiver_type, target.field),
-        )
+        selected = self._select_member(receiver_type, target.field, target.span)
         if selected.field_type is None:
             raise AglTypeError(
                 f"Method '{target.field}' of record '{receiver_type.name}' is not assignable.",
@@ -3737,10 +3731,8 @@ class _Checker:
                     checker = self._agent_builtin_method_checkers.get(callee_type.name)
             if checker is not None:
                 return checker(node, expected=expected, receiver_type=callee_type.receiver_type)
-            selected_method = callee_type.method
-            assert selected_method is not None
             callee_type = self._bound_method_type(
-                selected_method,
+                callee_type.method,
                 callee_type.receiver_type,
                 type_args=node.type_args or None,
                 expected=expected,
@@ -5263,7 +5255,6 @@ class _Checker:
         if not isinstance(typ, _SelectedBuiltinMethod):
             return typ
         method = typ.method
-        assert method is not None
         explicit_target: Type | None = None
         own_type_params = method.type_params[method.receiver_type_param_arity :]
         if type_args and len(type_args) == 1 and len(own_type_params) == 1:
@@ -5301,15 +5292,14 @@ class _Checker:
         self._record_node_type(node.node_id, bound)
         return bound
 
-    def _select_member(
-        self,
-        obj_type: Type,
-        name: str,
-        span: SourceSpan,
-        *,
-        method_receiver: Type,
-    ) -> _SelectedMember:
-        """Select a field or visible method, rejecting a field/method kind clash."""
+    def _select_member(self, obj_type: Type, name: str, span: SourceSpan) -> _SelectedMember:
+        """Select a field or visible method, rejecting a field/method kind clash.
+
+        Method candidates are one flat selection level (``method_candidates``):
+        a record's own methods plus its counted owning enums', an exception's
+        own plus its ancestors', an enum's own only. No candidate has priority
+        over another — visibility alone decides selection.
+        """
         fields: Mapping[str, Type] | None = None
         if isinstance(obj_type, ExceptionType):
             fields = self._env.type_table.exception_fields(obj_type)
@@ -5317,47 +5307,40 @@ class _Checker:
             fields = self._env.type_table.record_fields(obj_type)
         field_type = None if fields is None else fields.get(name)
 
-        candidate_levels = self._env.type_table.method_candidates(method_receiver, name)
-        visible_levels = self._visible_method_levels(candidate_levels)
-        visible_methods = tuple(method for level in visible_levels for method in level)
-        if field_type is not None and visible_methods:
-            declarations = ", ".join(_method_declaration_name(method) for method in visible_methods)
+        candidates = self._env.type_table.method_candidates(obj_type, name)
+        visible = self._visible_methods(candidates)
+        if field_type is not None and visible:
+            declarations = ", ".join(_method_declaration_name(method) for method in visible)
             owner = self._field_owner_name(cast(RecordType | ExceptionType, obj_type), name)
             raise AglTypeError(
                 f"Field '{owner}::{name}' and visible method {declarations} are ambiguous.",
                 span=span,
-                related=self._method_declaration_related(visible_methods),
+                related=self._method_declaration_related(visible),
             )
         if field_type is not None:
             return _SelectedMember(field_type=field_type)
 
-        for visible in visible_levels:
-            if len(visible) == 1:
-                return _SelectedMember(method=visible[0])
-            if visible:
-                declarations = ", ".join(_method_declaration_name(method) for method in visible)
-                raise AglTypeError(
-                    f"Member '{name}' of '{obj_type!r}' is ambiguous between {declarations}.",
-                    span=span,
-                    related=self._method_declaration_related(visible),
-                )
-        if any(candidate_levels):
+        if len(visible) == 1:
+            return _SelectedMember(method=visible[0])
+        if visible:
+            declarations = ", ".join(_method_declaration_name(method) for method in visible)
+            raise AglTypeError(
+                f"Member '{name}' of '{obj_type!r}' is ambiguous between {declarations}.",
+                span=span,
+                related=self._method_declaration_related(visible),
+            )
+        if candidates:
             raise AglTypeError(
                 f"Method '{name}' exists for '{obj_type!r}' but is not visible here.", span=span
             )
         raise _no_member(obj_type, name, span)
 
-    def _visible_method_levels(
-        self, candidate_levels: tuple[tuple[MethodDef, ...], ...]
-    ) -> tuple[tuple[MethodDef, ...], ...]:
+    def _visible_methods(self, candidates: tuple[MethodDef, ...]) -> tuple[MethodDef, ...]:
         """Filter method candidates through declarations reachable by this module."""
         return tuple(
-            tuple(
-                method
-                for method in candidates
-                if method.declaration_key in self._resolved.reachable_declarations
-            )
-            for candidates in candidate_levels
+            method
+            for method in candidates
+            if method.declaration_key in self._resolved.reachable_declarations
         )
 
     def _method_declaration_related(
@@ -5390,16 +5373,48 @@ class _Checker:
         assert owner is not None, "compiler bug: field owner is not registered"
         return qualified_decl_name(owner)
 
-    def _option_member_method_receiver(self, obj_type: RecordType, name: str) -> Type:
-        """Return Option's method owner when an Option member has no visible own method."""
-        direct = self._env.type_table.method_candidates(obj_type, name)
-        if any(self._visible_method_levels(direct)):
+    def _widened_method_receiver(self, obj_type: Type, method: MethodDef, span: SourceSpan) -> Type:
+        """Widen a member receiver to its owning enum when the method is the enum's own.
+
+        An identity upcast, not a copy: a captured enum type parameter keeps
+        the member's argument, and an uncaptured (phantom) one becomes a fresh
+        inference variable this region must resolve. Exception receivers and a
+        record's own methods pass through unchanged — exceptions are never
+        generic, and an enum-typed receiver already matches its own methods.
+        """
+        if not isinstance(obj_type, RecordType):
             return obj_type
-        enum_owners = self._env.type_table.enum_owners_for_member(obj_type)
-        option_owners = tuple(owner for owner in enum_owners if is_standard_option_enum(owner))
-        if len(option_owners) == 1:
-            return option_owners[0]
-        return obj_type
+        receiver_template = method.signature.params[0]
+        if not isinstance(receiver_template, EnumType):
+            return obj_type
+        enum_def, bindings = next(
+            (enum_def, bindings)
+            for enum_def, bindings in self._env.type_table.owning_enums_for_selection(obj_type)
+            if enum_def.decl_node_id == receiver_template.decl_id
+        )
+        engine = self._active_inference_engine()
+        args = tuple(
+            bindings[param]
+            if param in bindings
+            else self._fresh_widened_receiver_arg(engine, enum_def.name, param, span)
+            for param in enum_def.type_params
+        )
+        widened = enum_def.handle(args)
+        assert isinstance(widened, EnumType)
+        return widened
+
+    def _fresh_widened_receiver_arg(
+        self, engine: InferenceEngine, enum_name: str, param: str, span: SourceSpan
+    ) -> InferenceVarType:
+        """Allocate a phantom enum type argument that this inference region must resolve."""
+        var = engine.fresh(param)
+        engine.require_solved(
+            var,
+            engine.origin(
+                span, role=ConstraintRole.RECEIVER_WIDENING, subject=enum_name, type_param=param
+            ),
+        )
+        return var
 
     def _check_field_access(
         self,
@@ -5415,29 +5430,7 @@ class _Checker:
             if isinstance(obj_type, TypeVarType):
                 raise _no_type_var_members(obj_type, "fields or methods", node.span)
 
-            method_receiver: Type = obj_type
-            if isinstance(obj_type, RecordType):
-                method_receiver = self._option_member_method_receiver(obj_type, node.field)
-                direct = self._env.type_table.method_candidates(obj_type, node.field)
-                if (
-                    method_receiver is obj_type
-                    and node.field in {"ask", "ask-request"}
-                    and not any(self._visible_method_levels(direct))
-                ):
-                    builtin_agent = self._env.type_table.builtin_declaration("Agent")
-                    if builtin_agent is not None:
-                        method_receiver = next(
-                            (
-                                owner
-                                for owner in self._env.type_table.enum_owners_for_member(obj_type)
-                                if owner.decl_id == builtin_agent.decl_node_id
-                            ),
-                            obj_type,
-                        )
-
-            selected = self._select_member(
-                obj_type, node.field, node.span, method_receiver=method_receiver
-            )
+            selected = self._select_member(obj_type, node.field, node.span)
             if selected.field_type is not None:
                 if type_args is not None:
                     raise AglTypeError(
@@ -5453,13 +5446,14 @@ class _Checker:
 
             method = selected.method
             assert method is not None
+            receiver = self._widened_method_receiver(obj_type, method, node.span)
             self._record_method_selection(node.node_id, method)
             if method.is_builtin:
                 return _SelectedBuiltinMethod(
-                    name=method.name, receiver_type=method_receiver, method=method
+                    name=method.name, receiver_type=receiver, method=method
                 )
             bound = self._bound_method_type(
-                method, method_receiver, type_args=type_args, expected=expected, span=node.span
+                method, receiver, type_args=type_args, expected=expected, span=node.span
             )
             if self._env.is_extern_node_id(method.decl_node_id):
                 self._set_extern_expr_targets(

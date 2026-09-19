@@ -6473,15 +6473,16 @@ class TestFieldAccess:
         err = reject_type("let x = 42\nx.field")
         assert "record" in str(err).lower() or "field" in str(err).lower()
 
-    def test_member_record_does_not_fall_back_to_its_enum_methods(self) -> None:
-        err = reject_type(
+    def test_member_record_selects_its_enums_method(self) -> None:
+        checked = accept_type(
             "enum Signal\n"
             "  | ready\n"
             "def Signal::code(self) -> int = 1\n"
             "let signal = ready()\n"
             "signal.code()"
         )
-        assert "method" in str(err).lower() or "field" in str(err).lower()
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == IntType()
 
     def test_methods_are_members_of_record_enum_and_exception_values(self) -> None:
         checked = accept_type(
@@ -6855,11 +6856,16 @@ class TestFieldAccess:
         assert isinstance(fill_decl.value.callee, FieldAccess)
         assert checked.method_selection_for(fill_decl.value.callee.node_id) is not None
 
-    def test_option_member_selects_its_unambiguous_enum_method(self) -> None:
-        checked = accept_type(
-            'let result = Option::Some(value = "x").map(fn(value: text) => "%{value}!")\nresult'
-        )
+    def test_option_member_method_is_ambiguous_with_optional(self) -> None:
+        # The prelude's Optional references Option's members, so both enums' methods share
+        # the member's level; an Option-typed receiver selects Option's method.
+        err = reject_type('Option::Some(value = "x").map(fn(value: text) => "%{value}!")')
+        assert "ambiguous" in str(err).lower()
 
+        checked = accept_type(
+            'let some: Option[text] = Option::Some(value = "x")\n'
+            'let result = some.map(fn(value: text) => "%{value}!")\nresult'
+        )
         result = checked.resolved.program.body.items[-1]
         result_type = checked.node_types[result.node_id]
         assert isinstance(result_type, EnumType)
@@ -6885,6 +6891,170 @@ class TestFieldAccess:
         assert isinstance(result_type, EnumType)
         assert result_type.name == "Option"
         assert result_type.type_args == (IntType(),)
+
+    def test_member_owned_by_two_enums_is_ambiguous_on_the_shared_name(self) -> None:
+        err = reject_type(
+            "enum First\n"
+            "  | shared(value: int)\n"
+            "enum Second\n"
+            "  | First::shared\n"
+            "def First::describe(self) -> int = 1\n"
+            "def Second::describe(self) -> int = 2\n"
+            "let x = shared(value = 1)\n"
+            "x.describe()"
+        )
+        assert "ambiguous" in str(err).lower()
+
+    def test_member_only_method_is_not_visible_on_the_enum_type(self) -> None:
+        err = reject_type(
+            "enum Container[T]\n"
+            "  | full(value: T)\n"
+            "  | empty\n"
+            'def Container::full::label[T](self) -> text = "full"\n'
+            "let c: Container[int] = full(value = 1)\n"
+            "c.label()"
+        )
+        assert "method" in str(err).lower() or "field" in str(err).lower()
+
+    def test_widened_receiver_captures_the_enums_type_parameter(self) -> None:
+        checked = accept_type(
+            "enum Box[T]\n"
+            "  | full(value: T)\n"
+            'def Box::describe[T](self) -> text = "box"\n'
+            "let c = full(value = 1)\n"
+            "c.describe()"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == TextType()
+
+    def test_phantom_enum_parameter_unresolved_by_a_widened_call_is_rejected(self) -> None:
+        err = reject_type(
+            "enum Outcome[T, E]\n"
+            "  | ok(value: T)\n"
+            "  | fail(error: E)\n"
+            "def Outcome::tag[T, E](self) -> int = 1\n"
+            "let x = ok(value = 1)\n"
+            "x.tag()"
+        )
+        assert "infer" in str(err).lower()
+
+    def test_phantom_enum_parameter_solved_by_an_argument(self) -> None:
+        checked = accept_type(
+            "enum Outcome[T, E]\n"
+            "  | ok(value: T)\n"
+            "  | fail(error: E)\n"
+            "def Outcome::same[T, E](self, other: Outcome[T, E]) -> bool = true\n"
+            "let x = ok(value = 1)\n"
+            "let y: Outcome[int, text] = ok(value = 2)\n"
+            "x.same(y)"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == BoolType()
+
+    def test_phantom_enum_parameter_solved_by_the_expected_type(self) -> None:
+        checked = accept_type(
+            "enum Outcome[T, E]\n"
+            "  | ok(value: T)\n"
+            "  | fail(error: E)\n"
+            "def Outcome::widen[T, E](self) -> Outcome[T, E] = self\n"
+            "let x = ok(value = 1)\n"
+            "let y: Outcome[int, text] = x.widen()\n"
+            "y"
+        )
+        result = checked.resolved.program.body.items[-1]
+        result_type = checked.node_types[result.node_id]
+        assert isinstance(result_type, EnumType)
+        assert result_type.name == "Outcome"
+        assert result_type.type_args == (IntType(), TextType())
+
+    def test_field_and_enums_method_are_ambiguous_on_read(self) -> None:
+        err = reject_type(
+            "enum Holder[T]\n"
+            "  | full(value: T)\n"
+            "def Holder::value[T](self) -> int = 1\n"
+            "let h = full(value = 1)\n"
+            "h.value"
+        )
+        assert "ambiguous" in str(err).lower()
+
+    def test_field_and_enums_method_are_ambiguous_on_assignment(self) -> None:
+        err = reject_type(
+            "enum Holder[T]\n"
+            "  | full(value: T)\n"
+            "def Holder::value[T](self) -> int = 1\n"
+            "var h = full(value = 1)\n"
+            "h.value := 2"
+        )
+        assert "ambiguous" in str(err).lower()
+
+    def test_widened_bound_method_is_a_projectable_value(self) -> None:
+        checked = accept_type(
+            "enum Box[T]\n"
+            "  | full(value: T)\n"
+            'def Box::describe[T](self) -> text = "box"\n'
+            "let c = full(value = 1)\n"
+            "let f = c.describe\n"
+            "f()"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == TextType()
+
+    def test_static_method_is_not_selectable_via_a_member_instance(self) -> None:
+        err = reject_type(
+            "enum Box[T]\n"
+            "  | full(value: T)\n"
+            "def Box::make[T](value: T) -> Box[T] = full(value = value)\n"
+            "let c = full(value = 1)\n"
+            "c.make()"
+        )
+        assert "method" in str(err).lower() or "field" in str(err).lower()
+
+    def test_with_result_still_selects_its_enums_method(self) -> None:
+        checked = accept_type(
+            "enum Box[T]\n"
+            "  | full(value: T)\n"
+            'def Box::describe[T](self) -> text = "box"\n'
+            "let c = full(value = 1)\n"
+            "let d = c with value = 2\n"
+            "d.describe()"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == TextType()
+
+    def test_leading_dot_widened_method_infers_the_receiver_type(self) -> None:
+        checked = accept_type(
+            "enum Box[T]\n"
+            "  | full(value: T)\n"
+            'def Box::describe[T](self) -> text = "box"\n'
+            "let c = full(value = 1)\n"
+            "let f: (Box::full[int]) -> text = .describe()\n"
+            "f(c)"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == TextType()
+
+    def test_partial_application_of_a_widened_method(self) -> None:
+        checked = accept_type(
+            "enum Box[T]\n"
+            "  | full(value: T)\n"
+            "def Box::combine[T](self, other: Box[T]) -> bool = true\n"
+            "let x = full(value = 1)\n"
+            "let y: Box[int] = full(value = 2)\n"
+            "let partial = x.combine(?)\n"
+            "partial(y)"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == BoolType()
+
+    def test_widened_agent_member_builtin_ask_typechecks(self) -> None:
+        checked = accept_type(
+            'let a = Agent::AgentClaude(model = "sonnet", thinking = "low")\n'
+            'let r: text = a.ask("hi")\n'
+            "r",
+            capabilities=default_capabilities(),
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == TextType()
 
 
 # ---------------------------------------------------------------------------
@@ -10752,7 +10922,7 @@ class TestMethodHeaders:
         assert isinstance(outcome_decl, LetDecl)
         outcome_type = checked.type_env.get_binding_type(outcome_decl.node_id)
         assert isinstance(outcome_type, EnumType)
-        ((method,),) = checked.type_env.type_table.method_candidates(outcome_type, "tag")
+        (method,) = checked.type_env.type_table.method_candidates(outcome_type, "tag")
         assert method is not None
         assert method.receiver_type_param_arity == 2
 

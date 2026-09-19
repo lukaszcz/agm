@@ -51,6 +51,7 @@ class ConstraintRole(StrEnum):
     EXPECTED_RESULT = "expected result"
     LITERAL_ELEMENT = "literal element"
     EXPLICIT_INSTANTIATION = "explicit instantiation"
+    RECEIVER_WIDENING = "receiver widening"
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +201,13 @@ class InferenceEngine:
         for requirement in self._requirements:
             if not self.is_solved(requirement.variable):
                 origin = requirement.origin
+                if origin.role is ConstraintRole.RECEIVER_WIDENING:
+                    raise InferenceError(
+                        f"Cannot infer type argument '{origin.type_param}' of '{origin.subject}' "
+                        "for this widened method receiver; annotate the receiver's type or "
+                        "cast it with 'as'.",
+                        span=origin.span,
+                    )
                 if origin.type_param is None:
                     raise InferenceError(
                         f"Cannot infer type of {origin.subject}; add an explicit container "

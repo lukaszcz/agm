@@ -385,12 +385,13 @@ indexing to read their elements or values. `std/prelude` re-exports their
 receiver scopes, so their methods are available wherever the prelude is
 enabled. With `--no-stdlib`, import a route to the method before calling it.
 
-A member record value exposes its own fields and methods. An enum-typed value
-exposes only methods declared by that enum: it has no fields, even when every
-member record defines the same field. A `std/option::Option` member can select
-an `Option` method directly; the call keeps the member value as its receiver.
-Other enum methods require an enum-typed receiver. Use a pattern or member-record
-cast before accessing a member's fields or methods from an enum value.
+A member record value exposes its own fields and methods, plus — as part of
+the same selection level — the methods of every current enum that declares or
+references it; selecting one of those widens the receiver to the enum (see
+[Methods](functions.md#methods)). An enum-typed value exposes only methods
+declared by that enum: it has no fields, even when every member record
+defines the same field. Use a pattern or a member-record cast before
+accessing a member-only field or method from an enum value.
 
 A field assignment `receiver.field := value` requires `field` to be declared
 with `var` on a record or enum-member record. It updates that field in place,

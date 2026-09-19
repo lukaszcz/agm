@@ -96,10 +96,8 @@ def _check(src: str, *, default_stdlib: bool = True) -> CheckedModule:
 
 
 def _selected_method(table: TypeTable, owner: Type, name: str) -> MethodDef | None:
-    """Return the nearest sole candidate for assertions that need its metadata."""
-    return next(
-        (method for level in table.method_candidates(owner, name) for method in level), None
-    )
+    """Return the sole candidate for assertions that need its metadata."""
+    return next(iter(table.method_candidates(owner, name)), None)
 
 
 def test_orphaned_declaration_releases_its_current_name() -> None:
@@ -173,6 +171,128 @@ def test_enum_owners_for_referenced_member_require_its_full_type_template() -> N
     assert not table.record_matches_enum_member(
         enum.handle(), "Missing", RecordType("Box", (IntType(),), decl_id=10)
     )
+
+
+def test_owning_enums_for_selection_includes_an_inline_member_with_its_bindings() -> None:
+    table = TypeTable()
+    outcome = TypeDef(
+        kind="enum",
+        name="Outcome",
+        module_id=ENTRY_ID,
+        type_params=("T", "E"),
+        members=(
+            RecordType("ok", (TypeVarType("T"),), scope_path=("Outcome",), decl_id=101),
+            RecordType("fixed", (IntType(),), scope_path=("Outcome",), decl_id=102),
+        ),
+        decl_node_id=103,
+    )
+    table.register(outcome)
+    members = table.enum_members(outcome.handle((IntType(), TextType())))
+
+    ok_owning = table.owning_enums_for_selection(members[0])
+    fixed_owning = table.owning_enums_for_selection(members[1])
+
+    # A captured parameter (T for "ok") is bound; a phantom one (E, and T for
+    # "fixed") is absent rather than forcing a full-binding requirement.
+    assert [(enum_def.decl_node_id, bindings) for enum_def, bindings in ok_owning] == [
+        (103, {"T": IntType()})
+    ]
+    assert [(enum_def.decl_node_id, bindings) for enum_def, bindings in fixed_owning] == [(103, {})]
+
+
+def test_owning_enums_for_selection_includes_a_referenced_record() -> None:
+    table = TypeTable()
+    box = TypeDef(
+        kind="record",
+        name="Box",
+        module_id=ENTRY_ID,
+        type_params=("T",),
+        fields=(("value", TypeVarType("T")),),
+        decl_node_id=10,
+    )
+    enum = TypeDef(
+        kind="enum",
+        name="E",
+        module_id=ENTRY_ID,
+        members=(RecordType("Box", (IntType(),), module_id=ENTRY_ID, decl_id=10),),
+        decl_node_id=11,
+    )
+    table.register(box)
+    table.register(enum)
+
+    owning = table.owning_enums_for_selection(RecordType("Box", (IntType(),), decl_id=10))
+
+    assert [(enum_def.decl_node_id, bindings) for enum_def, bindings in owning] == [(11, {})]
+    assert table.owning_enums_for_selection(RecordType("Box", (TextType(),), decl_id=10)) == ()
+
+
+def test_owning_enums_for_selection_returns_every_overlapping_owner_in_registration_order() -> None:
+    table = TypeTable()
+    saved = TypeDef(
+        kind="record",
+        name="Saved",
+        module_id=ENTRY_ID,
+        fields=(("id", IntType()),),
+        decl_node_id=30,
+    )
+    first = TypeDef(
+        kind="enum",
+        name="First",
+        module_id=ENTRY_ID,
+        members=(RecordType("Saved", module_id=ENTRY_ID, decl_id=30),),
+        decl_node_id=31,
+    )
+    second = TypeDef(
+        kind="enum",
+        name="Second",
+        module_id=ENTRY_ID,
+        members=(RecordType("Saved", module_id=ENTRY_ID, decl_id=30),),
+        decl_node_id=32,
+    )
+    table.register(saved)
+    table.register(first)
+    table.register(second)
+
+    owning = table.owning_enums_for_selection(RecordType("Saved", module_id=ENTRY_ID, decl_id=30))
+
+    assert [enum_def.decl_node_id for enum_def, _bindings in owning] == [31, 32]
+
+
+def test_owning_enums_for_selection_skips_a_superseded_enum_for_a_current_record() -> None:
+    table = TypeTable()
+    point = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=40)
+    old_color = TypeDef(
+        kind="enum",
+        name="Color",
+        module_id=ENTRY_ID,
+        members=(RecordType("Point", module_id=ENTRY_ID, decl_id=40),),
+        decl_node_id=41,
+    )
+    table.register(point)
+    table.register(old_color)
+    table.register(TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, decl_node_id=42))
+
+    assert table.owning_enums_for_selection(point.handle()) == ()
+
+
+def test_owning_enums_for_selection_keeps_a_superseded_records_superseded_enum() -> None:
+    table = TypeTable()
+    old_point = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=50)
+    old_color = TypeDef(
+        kind="enum",
+        name="Color",
+        module_id=ENTRY_ID,
+        members=(RecordType("Point", module_id=ENTRY_ID, decl_id=50),),
+        decl_node_id=51,
+    )
+    table.register(old_point)
+    table.register(old_color)
+    table.register(TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=52))
+    table.register(TypeDef(kind="enum", name="Color", module_id=ENTRY_ID, decl_node_id=53))
+
+    owning = table.owning_enums_for_selection(old_point.handle())
+
+    assert [enum_def.decl_node_id for enum_def, _bindings in owning] == [51]
 
 
 def test_enum_member_template_requires_the_same_record_declaration() -> None:
@@ -948,7 +1068,7 @@ class TestMethodIndex:
         assert _selected_method(table, point, "shift") == point_shift
         assert _selected_method(table, color, "primary") == color_primary
         assert _selected_method(table, fault, "code") == fault_code
-        assert table.method_candidates(fault, "code") == ((fault_code,),)
+        assert table.method_candidates(fault, "code") == (fault_code,)
         assert point_shift.module_id == _LIB_ID
         assert point_shift.scope_path == ("Models", "Point")
         assert point_shift.name == "shift"
@@ -1131,7 +1251,7 @@ class TestMethodIndex:
 
         target.merge_from(source)
 
-        assert target.method_candidates(fault, "status") == before == ((method,),)
+        assert target.method_candidates(fault, "status") == before == (method,)
         assert _selected_method(target, fault, "status") == method
 
     def test_merge_from_drops_inherited_methods_of_an_overwritten_base_def(self) -> None:
@@ -1230,10 +1350,10 @@ class TestMethodIndex:
         )
         table.register_method(point, method)
 
-        assert table.method_candidates(point, "show") == ((method,),)
+        assert table.method_candidates(point, "show") == (method,)
         assert table.method_candidates(UnitType(), "show") == ()
-        assert table.method_candidates(point, "show") == ((method,),)
-        assert table.method_candidates(TextType(), "show") == ((),)
+        assert table.method_candidates(point, "show") == (method,)
+        assert table.method_candidates(TextType(), "show") == ()
 
     def test_method_candidates_keep_same_name_declarations_from_distinct_keys(self) -> None:
         table = TypeTable()
@@ -1261,7 +1381,7 @@ class TestMethodIndex:
         table.register_method(point, second)
         table.register_method(point, first)
 
-        assert table.method_candidates(point, "show") == ((first, second),)
+        assert table.method_candidates(point, "show") == (first, second)
 
     def test_method_registration_replaces_a_matching_declaration_key(self) -> None:
         table = TypeTable()
@@ -1284,9 +1404,9 @@ class TestMethodIndex:
         table.register_method(point, original)
         table.register_method(point, replacement)
 
-        assert table.method_candidates(point, "show") == ((replacement,),)
+        assert table.method_candidates(point, "show") == (replacement,)
 
-    def test_method_candidates_keep_exception_levels_nearest_first(self) -> None:
+    def test_method_candidates_collapse_the_exception_chain_into_one_level(self) -> None:
         table = TypeTable()
         root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=700102)
         middle = ExceptionType(name="Middle", module_id=ENTRY_ID, decl_id=700103)
@@ -1337,11 +1457,49 @@ class TestMethodIndex:
         table.register_method(middle, middle_method)
         table.register_method(leaf, leaf_method)
 
-        assert table.method_candidates(leaf, "show") == (
-            (leaf_method,),
-            (middle_method,),
-            (root_method,),
+        assert table.method_candidates(leaf, "show") == (leaf_method, middle_method, root_method)
+
+    def test_method_candidates_collapse_a_member_and_its_owning_enums_into_one_level(self) -> None:
+        table = TypeTable()
+        point = RecordType(name="Red", module_id=ENTRY_ID, scope_path=("Color",), decl_id=700110)
+        color = TypeDef(
+            kind="enum",
+            name="Color",
+            module_id=ENTRY_ID,
+            members=(point,),
+            decl_node_id=700111,
         )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Red",
+                module_id=ENTRY_ID,
+                scope_path=("Color",),
+                decl_node_id=700110,
+            )
+        )
+        table.register(color)
+        member_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Color", "Red"),
+            name="label",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+        enum_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Color",),
+            name="label",
+            decl_node_id=2,
+            signature=FunctionType(params=(color.handle(),), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+        table.register_method(point, member_method)
+        table.register_method(color.handle(), enum_method)
+
+        assert table.method_candidates(point, "label") == (member_method, enum_method)
+        assert table.method_candidates(color.handle(), "label") == (enum_method,)
 
     def test_builtin_method_candidates_are_keyed_by_constructor(self) -> None:
         table = TypeTable()
@@ -1363,8 +1521,8 @@ class TestMethodIndex:
         table.register_builtin_method("text", text_method)
         table.register_builtin_method("int", int_method)
 
-        assert table.method_candidates(TextType(), "show") == ((text_method,),)
-        assert table.method_candidates(IntType(), "show") == ((int_method,),)
+        assert table.method_candidates(TextType(), "show") == (text_method,)
+        assert table.method_candidates(IntType(), "show") == (int_method,)
 
     def test_merge_from_unions_method_candidate_maps(self) -> None:
         point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700105)
@@ -1391,7 +1549,7 @@ class TestMethodIndex:
 
         target.merge_from(source)
 
-        assert target.method_candidates(point, "show") == ((source_method, target_method),)
+        assert target.method_candidates(point, "show") == (source_method, target_method)
 
 
 # ---------------------------------------------------------------------------

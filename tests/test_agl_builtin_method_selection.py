@@ -66,12 +66,12 @@ def test_builtin_method_table_selects_by_receiver_constructor(
 
     table.register_builtin_method(constructor, method)
 
-    assert table.method_candidates(receiver, "selected") == ((method,),)
+    assert table.method_candidates(receiver, "selected") == (method,)
     assert table.method_candidates(UnitType(), "selected") == ()
 
     merged = TypeTable()
     merged.merge_from(table)
-    assert merged.method_candidates(receiver, "selected") == ((method,),)
+    assert merged.method_candidates(receiver, "selected") == (method,)
 
 
 def test_prelude_reexports_builtin_receiver_scopes_for_bare_routes() -> None:

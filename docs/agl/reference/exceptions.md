@@ -83,13 +83,18 @@ program def main() -> unit =
   print(problem.detail-label())
 ```
 
-Method selection starts at the receiver's static exception type, then walks
-its base chain. The nearest level with a visible method wins; multiple visible
-methods at that level are ambiguous. A base type and a subtype may therefore
-declare the same method name, and a value held in a base-typed binding selects
-the base method. Like other methods, an exception method is selectable where
-the source module declares it or reaches its declaration by a qualified import
-route; `hiding` can remove that route.
+An exception's method candidates are one level: its own methods plus every
+ancestor's in its `extends` chain. Exactly one visible method with the wanted
+name wins; two or more are a static ambiguity. A base method and a descendant
+method sharing a name are therefore ambiguous wherever both are visible on
+the descendant-typed receiver, and declaring both in the same module is
+rejected at the descendant's declaration; a qualified call
+(`Problem::label(d)`, `Detailed::label(d)`), a rename, or `hiding` one route
+repairs it. A base-typed receiver's level stops at its own chain, so it never
+sees a descendant's method — the value's runtime type never changes which
+function a given static type resolves to. Like other methods, an exception
+method is selectable where the source module declares it or reaches its
+declaration by a qualified import route; `hiding` can remove that route.
 
 The built-in `Exception` declaration contains no methods. A wildcard `catch _
 as e =>` binds `e` as `Exception`, so it can select only visible methods on

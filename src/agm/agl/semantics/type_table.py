@@ -24,8 +24,10 @@ representation shared by records, enums, and exceptions.
 ``TypeTable.exception_fields`` has no ``type_args`` to substitute but instead
 flattens the ``extends`` base chain into one field mapping. The table also
 keeps plain ``MethodDef`` data keyed by nominal owner identity or by a built-in
-receiver constructor. Method candidates retain every declaration sharing an
-owner and name, and expose exception inheritance as nearest-first levels.
+receiver constructor. :meth:`TypeTable.method_candidates` returns every
+declaration sharing an owner and name as one flat selection level: an
+exception's own methods plus its ancestors', and a record's own methods plus
+its counted owning enums' (:meth:`TypeTable.owning_enums_for_selection`).
 
 ``comparable_types``/``_reaches_non_data`` live here rather than in
 ``semantics.types`` because their record/enum/exception arms consult the
@@ -529,21 +531,34 @@ class TypeTable:
             return "bool"
         return None
 
-    def method_candidates(
-        self, owner: NominalOwner | Type, name: str
-    ) -> tuple[tuple[MethodDef, ...], ...]:
-        """Return same-owner candidates for *name*, nearest exception level first."""
+    def method_candidates(self, owner: NominalOwner | Type, name: str) -> tuple[MethodDef, ...]:
+        """Return *owner*'s candidates for *name* as one flat selection level.
+
+        A record's level is its own methods plus those of every counted
+        owning enum (:meth:`owning_enums_for_selection`); an exception's
+        level is its own plus every ancestor's (:meth:`ancestor_defs`,
+        nearest first); an enum's level is its own methods only. Builtin
+        receivers are flat by construction. No candidate has priority over
+        another within the level — selection visibility and ambiguity are a
+        caller concern.
+        """
         constructor = self._builtin_constructor(owner)
         if constructor is not None:
-            return (self._method_level(self._builtin_methods.get(constructor, {}).get(name, {})),)
+            return self._method_level(self._builtin_methods.get(constructor, {}).get(name, {}))
         if not isinstance(owner, (RecordType, EnumType, ExceptionType)):
             return ()
         owner_ids: tuple[DeclId, ...] = (owner.decl_id,)
         if isinstance(owner, ExceptionType):
             owner_ids += tuple(base.decl_node_id for base in self.ancestor_defs(owner.decl_id))
+        elif isinstance(owner, RecordType):
+            owner_ids += tuple(
+                enum_def.decl_node_id
+                for enum_def, _bindings in self.owning_enums_for_selection(owner)
+            )
         return tuple(
-            self._method_level(self._methods.get(decl_id, {}).get(name, {}))
+            method
             for decl_id in owner_ids
+            for method in self._method_level(self._methods.get(decl_id, {}).get(name, {}))
         )
 
     def declared_methods(self, owner_id: DeclId) -> Mapping[str, MethodDef]:
@@ -740,6 +755,31 @@ class TypeTable:
         if member.decl_id != record.decl_id:
             return None
         return match_nominal_owner_template(TypeTemplate(member, enum_def.type_params), record)
+
+    def owning_enums_for_selection(
+        self, record: RecordType
+    ) -> tuple[tuple[TypeDef, Mapping[str, Type]], ...]:
+        """Return *record*'s counted owning enums, with their partial bindings.
+
+        A member record's method-selection level includes every *current*
+        enum that declares or references it (registration order); a
+        superseded owning enum is skipped unless *record* itself is
+        superseded, so a retained member of a superseded enum keeps seeing
+        that enum's methods. A captured enum parameter's binding is present;
+        a phantom (uncaptured) parameter is absent.
+        """
+        record_def = self._defs.get(record.decl_id)
+        record_is_current = record_def is not None and self.is_current(record_def)
+        result: list[tuple[TypeDef, Mapping[str, Type]]] = []
+        for enum_def in self._enum_defs_owning(record):
+            if record_is_current and not self.is_current(enum_def):
+                continue
+            member = next(item for item in enum_def.members if item.decl_id == record.decl_id)
+            match = self._match_enum_member_template(enum_def, member, record)
+            if match is None:
+                continue
+            result.append((enum_def, dict(match.bindings)))
+        return tuple(result)
 
     def records_share_enum_membership(self, records: tuple[RecordType, ...]) -> bool:
         """Return whether *records* belong to one currently nameable enum instantiation.

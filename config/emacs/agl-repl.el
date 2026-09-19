@@ -165,7 +165,8 @@ unstyled unless it carries styling of its own."
 
 The REPL keeps an entry open while its latest line is indented, since a layout
 block accepts one more line however well what precedes it parses.  An indented
-raw-tail payload is the same case, and is closed by the same blank line."
+`$' verbatim block payload is the same case, and is closed by the same blank
+line."
   (let* ((lines (split-string (string-trim-right text) "\n"))
          (last (car (last lines))))
     (and (cdr lines) (string-match-p "\\`[ \t]" last))))

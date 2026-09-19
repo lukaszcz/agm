@@ -22,9 +22,10 @@
 ;;   not in the middle of an identifier scan.
 ;; - Four string-template forms -- `"..."', `'...'', `"""..."""',
 ;;   `'''...''''  -- with `%{expr}' interpolation.
-;; - Raw tails (`exec$'/`ask$', bare or after a `.' projection, with an
-;;   optional byte-adjacent `::[T]' type argument) own a verbatim payload:
-;;   the rest of the line, or a following indented block.
+;; - A `$' verbatim text literal -- `$' at token start owns a payload: the
+;;   rest of the line, or a following indented block.  Inside an identifier
+;;   or an operator-name run (`ask$', `a$b', `<$>') `$' is an ordinary
+;;   constituent, not an opener.
 ;;
 ;; Key bindings: `C-c C-c' runs the file (`agm exec'), `C-c C-k' checks it
 ;; (`agm check'), `C-c C-z' opens the inferior REPL, `C-c C-r' reloads the
@@ -102,11 +103,6 @@ and `resource-dir' win over `ask' and `resource' at the same position,
 and `agl--search-ident-forward' rejects any match that does not end on
 an AgL identifier boundary -- `-' continues a name, so `resource-path'
 and `copy-of' stay unfaced.")
-
-(defconst agl-raw-tail-names
-  '("exec$" "ask$")
-  "Raw-tail opener spellings.  Canonical source:
-`src/agm/raw_tail_catalog.py' (`RAW_TAIL_NAMES').")
 
 (defconst agl-primitive-type-names
   '("unit" "text" "json" "bool" "int" "decimal" "array" "dict")
@@ -224,14 +220,14 @@ them."
 ;; Identifiers are consumed atomically (via `agl--ident-continue-skip'), so
 ;; quotes and `#' inside them are naturally inert -- they are never visited
 ;; as standalone characters by the dispatch loop below.  Multi-line
-;; constructs (triple-quoted templates, raw-tail blocks) are additionally
-;; marked with the internal `agl-multiline' text property so that
-;; `agl--propertize-extend-region' can always resume scanning from a safe
-;; boundary.  A raw-tail payload is further marked with the internal
-;; `agl-raw-tail-payload' text property, distinguishing it from a template
-;; region (both carry the same generic-string-fence `|' syntax, but only a
-;; raw-tail payload uses raw-tail backslash-escape semantics -- see
-;; `agl--escaped-interpolation-open-p').
+;; constructs (triple-quoted templates, `$' verbatim blocks) are
+;; additionally marked with the internal `agl-multiline' text property so
+;; that `agl--propertize-extend-region' can always resume scanning from a
+;; safe boundary.  A `$' verbatim payload is further marked with the
+;; internal `agl-verbatim-payload' text property, distinguishing it from a
+;; template region (both carry the same generic-string-fence `|' syntax,
+;; but only a verbatim payload uses its own backslash-escape semantics --
+;; see `agl--escaped-interpolation-open-p').
 ;; ---------------------------------------------------------------------------
 
 (defun agl--blank-line-p ()
@@ -240,8 +236,8 @@ them."
     (beginning-of-line)
     (looking-at "[ \t]*$")))
 
-(defun agl--propertize-raw-block (opener-indent opener-line-start)
-  "Propertize a raw-tail block payload as a generic string.
+(defun agl--propertize-verbatim-block (opener-indent opener-line-start)
+  "Propertize a `$' verbatim literal block payload as a generic string.
 
 Point must be at the end of the opener's line (only whitespace follows
 the opener on that line).  The payload is every following line more
@@ -272,8 +268,8 @@ opener and never resumes scanning from inside the payload."
       (when has-content
         (put-text-property block-start (1+ block-start)
                             'syntax-table (string-to-syntax "|"))
-        (put-text-property block-start block-end 'agl-raw-tail-payload t)
-        (agl--propertize-raw-interpolation-holes block-start block-end)
+        (put-text-property block-start block-end 'agl-verbatim-payload t)
+        (agl--propertize-verbatim-interpolation-holes block-start block-end)
         (if (and (eq (char-before block-end) ?\n)
                  (> (1- block-end) block-start))
             (progn
@@ -288,8 +284,8 @@ opener and never resumes scanning from inside the payload."
         (put-text-property opener-line-start block-end 'agl-multiline t))
       (goto-char block-end))))
 
-(defun agl--propertize-raw-inline ()
-  "Propertize an inline raw-tail payload as a generic string.
+(defun agl--propertize-verbatim-inline ()
+  "Propertize an inline `$' verbatim literal payload as a generic string.
 
 The payload is the rest of the current line, starting at point."
   (let* ((payload-start (point))
@@ -298,8 +294,8 @@ The payload is the rest of the current line, starting at point."
          (region-end (if has-trailing-newline (1+ line-end) (point-max))))
     (put-text-property payload-start (1+ payload-start)
                         'syntax-table (string-to-syntax "|"))
-    (put-text-property payload-start region-end 'agl-raw-tail-payload t)
-    (agl--propertize-raw-interpolation-holes payload-start region-end)
+    (put-text-property payload-start region-end 'agl-verbatim-payload t)
+    (agl--propertize-verbatim-interpolation-holes payload-start region-end)
     (if (and has-trailing-newline (> (1- region-end) payload-start))
         (progn
           (put-text-property (1- region-end) region-end
@@ -311,12 +307,13 @@ The payload is the rest of the current line, starting at point."
       (agl--propertize-backslashes-as-punctuation (1+ payload-start) region-end))
     (goto-char region-end)))
 
-(defun agl--propertize-raw-interpolation-holes (start end)
-  "Mark completed interpolation bodies in a raw-tail payload.
+(defun agl--propertize-verbatim-interpolation-holes (start end)
+  "Mark completed interpolation bodies in a `$' verbatim literal payload.
 
 START and END delimit a payload already marked with
-`agl-raw-tail-payload'.  Raw tails escape a `%{' whenever its immediately
-preceding character is `\\', so this cannot reuse the template scanner."
+`agl-verbatim-payload'.  A verbatim payload escapes a `%{' whenever its
+immediately preceding character is `\\', so this cannot reuse the
+template scanner."
   (save-excursion
     (goto-char start)
     (while (search-forward "%{" end t)
@@ -334,8 +331,8 @@ preceding character is `\\', so this cannot reuse the template scanner."
 (defun agl--propertize-backslashes-as-punctuation (start end)
   "Give every `\\' character between START and END punctuation syntax.
 
-A raw-tail payload owns its backslashes as ordinary text rather than
-treating them as AgL escape syntax (see
+A `$' verbatim literal payload owns its backslashes as ordinary text
+rather than treating them as AgL escape syntax (see
 `docs/agl/reference/lexical-structure.md'), so a payload ending in `\\'
 must not escape the fence character that closes it."
   (save-excursion
@@ -343,26 +340,21 @@ must not escape the fence character that closes it."
     (while (search-forward "\\" end t)
       (put-text-property (1- (point)) (point) 'syntax-table (string-to-syntax ".")))))
 
-(defun agl--propertize-raw-tail (name-start)
-  "Propertize the raw-tail payload that follows the opener at NAME-START.
+(defun agl--propertize-verbatim (dollar-start)
+  "Propertize the `$' verbatim literal payload opened at DOLLAR-START.
 
-Point is right after a raw-tail opener (`exec$' or `ask$') that
-started at NAME-START.  Skip a byte-adjacent `::[...]' type argument if
-present, then propertize the payload -- the rest of the line, or a
-following more-indented block -- as a generic string."
-  (when (and (eq (char-after) ?:)
-             (eq (char-after (1+ (point))) ?:)
-             (eq (char-after (+ 2 (point))) ?\[))
-    (forward-char 2)
-    (condition-case nil
-        (forward-list 1)
-      (scan-error nil)))
-  (let ((opener-indent (save-excursion (goto-char name-start) (current-indentation)))
-        (opener-line-start (save-excursion (goto-char name-start) (line-beginning-position))))
+Point is at DOLLAR-START, the `$' itself.  Advance past it, then
+propertize the payload -- the rest of the line, or a following
+more-indented block -- as a generic string.  The `$' character itself
+keeps its ordinary syntax, outside the string region, just as an
+ordinary quote character stays outside a template's payload."
+  (goto-char (1+ dollar-start))
+  (let ((opener-indent (save-excursion (goto-char dollar-start) (current-indentation)))
+        (opener-line-start (save-excursion (goto-char dollar-start) (line-beginning-position))))
     (skip-chars-forward " \t")
     (if (or (eolp) (eobp))
-        (agl--propertize-raw-block opener-indent opener-line-start)
-      (agl--propertize-raw-inline))))
+        (agl--propertize-verbatim-block opener-indent opener-line-start)
+      (agl--propertize-verbatim-inline))))
 
 (defun agl--skip-template-hole ()
   "Skip forward over a `%{...}' interpolation hole.
@@ -473,12 +465,11 @@ visited as standalone characters.  See
 `docs/agl/reference/lexical-structure.md' for the lexical rules this
 implements.
 
-A raw-tail opener (`exec$'/`ask$') is only recognized at bracket depth
-zero, per the reference's \"only recognized at bracket depth zero\"
-rule, so a bracket depth counter is threaded through the scan, seeded
-from `(car (syntax-ppss start))' -- safe to call here because
-`syntax-propertize' sets `syntax-propertize--done' to END before
-invoking this function."
+A `$' verbatim literal opener is only recognized at bracket depth zero,
+per the reference's \"is not valid inside brackets\" rule, so a bracket
+depth counter is threaded through the scan, seeded from `(car
+(syntax-ppss start))' -- safe to call here because `syntax-propertize'
+sets `syntax-propertize--done' to END before invoking this function."
   (remove-text-properties start end '(agl-interpolation-code nil))
   (goto-char start)
   (let ((depth (car (syntax-ppss start)))
@@ -486,12 +477,7 @@ invoking this function."
     (while (< (point) end)
       (cond
        ((looking-at agl--ident-start-re)
-        (let ((id-start (point)))
-          (skip-chars-forward agl--ident-continue-skip)
-          (when (and (= depth 0)
-                     (member (buffer-substring-no-properties id-start (point))
-                             agl-raw-tail-names))
-            (agl--propertize-raw-tail id-start))))
+        (skip-chars-forward agl--ident-continue-skip))
        ((looking-at "[0-9]")
         (skip-chars-forward "0-9")
         (when (looking-at "\\.[0-9]")
@@ -502,6 +488,10 @@ invoking this function."
         (goto-char (line-end-position)))
        ((memq (char-after) '(?\" ?\'))
         (agl--propertize-template))
+       ((and (eq (char-after) ?$)
+             (= depth 0)
+             (agl--standalone-token-start-p (point)))
+        (agl--propertize-verbatim (point)))
        ((memq (char-after) '(?\( ?\[ ?\{))
         (setq depth (1+ depth))
         (forward-char 1))
@@ -513,8 +503,8 @@ invoking this function."
 (defun agl--propertize-extend-region (start end)
   "`syntax-propertize-extend-region-functions' entry for `agl-mode'.
 
-If START falls inside a multi-line template or raw-tail block (marked
-with the internal `agl-multiline' text property), move it back to the
+If START falls inside a multi-line template or `$' verbatim block
+(marked with the internal `agl-multiline' text property), move it back to the
 beginning of that construct -- and in any case back to its line's
 beginning -- so `agl-syntax-propertize-function' always resumes
 scanning from a safe boundary, never from the middle of a multi-line
@@ -576,7 +566,7 @@ function only ever adjusts the start of the region."
 ;; plain regexp, so matches respect AgL identifier boundaries instead of
 ;; `\\b'.  Font-lock's default OVERRIDE (nil) never replaces a face
 ;; already assigned by the syntactic (string/comment) pass, so these
-;; rules leave template text and raw-tail payloads string-faced.  Completed
+;; rules leave template text and `$' verbatim payloads string-faced.  Completed
 ;; interpolation bodies are marked by the propertizer and receive the same
 ;; rules again with an override, restoring code faces only there.  The
 ;; interpolation-delimiter and attribute rules also deliberately override:
@@ -604,9 +594,6 @@ The words that get `font-lock-keyword-face' rather than
 
 (defconst agl--contextual-builtin-re (regexp-opt agl-contextual-builtins)
   "Regexp matching one of `agl-contextual-builtins'.")
-
-(defconst agl--raw-tail-name-re (regexp-opt agl-raw-tail-names)
-  "Regexp matching one of `agl-raw-tail-names'.")
 
 (defconst agl--import-export-use-re (regexp-opt '("import" "export" "use"))
   "Regexp matching one of the import/export/use soft keywords.")
@@ -743,10 +730,6 @@ The window is item-start, followed by a `NAME (:: NAME)*' closer path."
 (defun agl--match-contextual-builtin (limit)
   "`font-lock-keywords' MATCHER for `print'/`ask'/`exec', up to LIMIT."
   (agl--search-ident-forward agl--contextual-builtin-re limit))
-
-(defun agl--match-raw-tail-name (limit)
-  "`font-lock-keywords' MATCHER for `exec$'/`ask$', up to LIMIT."
-  (agl--search-ident-forward agl--raw-tail-name-re limit))
 
 (defun agl--match-use-keyword (limit)
   "`font-lock-keywords' MATCHER for item-start `use', up to LIMIT."
@@ -892,6 +875,37 @@ with a digit and its number token ends exactly at POS -- the `+' of
             (and (looking-at-p "[0-9]")
                  (progn (skip-chars-forward "0-9") (= (point) pos)))))))
 
+(defun agl--standalone-token-start-p (pos)
+  "Return non-nil when POS begins a token in its own right, not a continuation.
+
+`agl--operator-token-start-p' alone is not enough: it is built from
+`IDENT_STOP' (`agl--ident-continue-skip'), which also lists `=', `|',
+and `/' as identifier-terminating characters, so it wrongly reports a
+token start right after one of them even when that character is itself
+the start of a longer *operator-name* run continuing through POS --
+`<|$', `=$', `!=$', `|$', and `/$' are each one operator name, `$'
+included, per `_is_operator_name_char' in
+`src/agm/agl/lexer/scanner.py'.  It also cannot tell a quote that
+really closes a string/template (`\"hi\"$', a fresh token right after)
+from one merely swallowed into a longer identifier (`foo\"bar', no
+token boundary at all) -- its scan is characters only, blind to syntax.
+This predicate corrects both: it rejects POS outright while POS itself
+is still inside an unterminated string/template/verbatim payload
+\(covers a `$' -- or an `='/`|'/`/' block-suite introducer, see
+`agl--block-opener-symbol-p' -- appearing as ordinary payload text, not
+code, e.g. `exec $ echo price $'); past that, it rejects POS when the
+character immediately before it continues an operator-name run, and
+independently accepts POS when a string/template region has just
+closed exactly there.  Wrapped in `save-excursion': `syntax-ppss' moves
+point to the position it is asked about, which would otherwise corrupt
+the caller's own scan position -- `agl-syntax-propertize-function''s
+dispatch loop in particular, which this predicate is evaluated from."
+  (save-excursion
+    (and (not (nth 3 (syntax-ppss pos)))
+         (or (and (agl--operator-token-start-p pos)
+                  (not (agl--operator-name-char-p (char-before pos))))
+             (and (> pos (point-min)) (nth 3 (syntax-ppss (1- pos))))))))
+
 (defun agl--operator-run-end (start limit)
   "Return the end of the operator-name run beginning at START, before LIMIT.
 
@@ -956,7 +970,7 @@ The rule this drives faces with OVERRIDE so that the whole `@name' takes
 the attribute face even where an earlier rule already faced the name
 \(`@copy' as a builtin, `@type' as a keyword).  An override also outranks
 the syntactic pass, which must not happen, so a candidate inside a
-string, template, raw-tail payload or comment is rejected here instead.
+string, template, `$' verbatim payload or comment is rejected here instead.
 The test is one character past the `@' for the reason spelled out in
 `agl--decl-head-candidate-rejected-p'; `@name' is always at least two
 characters, so that position is still inside the same region."
@@ -971,10 +985,10 @@ characters, so that position is still inside the same region."
 (defun agl--in-string-or-comment-p (pos)
   "Return non-nil if POS is inside a string/template or comment.
 
-Per `syntax-ppss': `nth 3' flags a string/template (including a
-raw-tail payload, which carries generic-string-fence syntax), `nth 4' a
+Per `syntax-ppss': `nth 3' flags a string/template (including a `$'
+verbatim payload, which carries generic-string-fence syntax), `nth 4' a
 comment.  Used to reject a decl-head candidate that is only text -- a
-commented-out declaration, or one embedded in a template or raw-tail
+commented-out declaration, or one embedded in a template or verbatim
 payload -- from `agl--match-attribute', `agl-imenu-create-index' and
 `agl--toplevel-line-p'."
   (let ((state (syntax-ppss pos)))
@@ -987,7 +1001,7 @@ POS must satisfy `agl--in-string-p'.  The region's end is found with
 `forward-sexp' from the region's syntax-recorded start
 \(`(nth 8 (syntax-ppss POS))'), which handles both quote-character
 strings and generic-string-fence regions (triple-quoted templates,
-raw-tail payloads) uniformly, since both kinds are balanced sexps under
+`$' verbatim payloads) uniformly, since both kinds are balanced sexps under
 `parse-sexp-lookup-properties' (non-nil by default, which is what makes
 the `syntax-table' text properties this file assigns visible to the
 sexp scanner at all).  An unterminated region has no matching close, so
@@ -1008,8 +1022,8 @@ An odd run means POS itself is escaped.  This is *template* escape
 semantics (docs/agl/reference/strings-and-interpolation.md): `\\\\' is
 an escaped backslash, so backslashes pair off and only a leftover,
 unpaired one escapes what follows.  See
-`agl--escaped-interpolation-open-p' for the raw-tail-payload semantics,
-which are different."
+`agl--escaped-interpolation-open-p' for the `$' verbatim payload
+semantics, which are different."
   (let ((count 0) (p pos))
     (while (and (> p (point-min)) (eq (char-before p) ?\\))
       (setq count (1+ count) p (1- p)))
@@ -1018,19 +1032,19 @@ which are different."
 (defun agl--escaped-interpolation-open-p (pos)
   "Return non-nil if the `%{' hole opener at POS is escaped.
 
-Dispatches on whether POS lies in a raw-tail payload (tagged with the
-internal `agl-raw-tail-payload' text property -- see
-`agl--propertize-raw-inline'/`agl--propertize-raw-block') or a template
-\(single-line or triple-quoted), since the two have different backslash
-semantics.  A template pairs backslashes
+Dispatches on whether POS lies in a `$' verbatim payload (tagged with
+the internal `agl-verbatim-payload' text property -- see
+`agl--propertize-verbatim-inline'/`agl--propertize-verbatim-block') or a
+template (single-line or triple-quoted), since the two have different
+backslash semantics.  A template pairs backslashes
 \(`agl--preceding-backslash-parity-odd-p'): `\\\\%{' is an unescaped
-hole.  A raw-tail payload instead \"owns\" its
+hole.  A verbatim payload instead \"owns\" its
 ordinary backslashes (docs/agl/reference/lexical-structure.md's
-raw-tail-forms section), matching the real scanner
+Verbatim literals section), matching the real scanner
 \(`src/agm/agl/lexer/scanner.py'): any single immediately preceding `\\'
 escapes the hole, with no parity counting, so `\\\\%{' is still escaped
 there."
-  (if (get-text-property pos 'agl-raw-tail-payload)
+  (if (get-text-property pos 'agl-verbatim-payload)
       (and (> pos (point-min)) (eq (char-before pos) ?\\))
     (agl--preceding-backslash-parity-odd-p pos)))
 
@@ -1042,7 +1056,7 @@ covers the opening `%{' and group 2 covers the closing `}'; hole
 contents are left with their inherited string face (see
 `agl-interpolation-face').  An escaped `\\%{'
 \(docs/agl/reference/lexical-structure.md, and see
-`agl--escaped-interpolation-open-p' for the raw-tail-payload vs.
+`agl--escaped-interpolation-open-p' for the `$' verbatim payload vs.
 template distinction) is skipped.  The closing-brace scan is bounded by
 the enclosing string region's own end (`agl--string-region-end'), not
 just LIMIT or `point-max': an unbalanced `%{' -- the normal transient
@@ -1203,7 +1217,6 @@ success."
    (list #'agl--match-scope-soft-keyword 'font-lock-keyword-face)
    (list #'agl--match-end-keyword 'font-lock-keyword-face)
    (list #'agl--match-contextual-builtin 'font-lock-builtin-face)
-   (list #'agl--match-raw-tail-name 'font-lock-builtin-face)
    (list (lambda (limit) (agl--search-decl-head "def" limit)) 'font-lock-function-name-face 3)
    (list (lambda (limit) (agl--search-decl-head "record" limit)) 'font-lock-type-face 3)
    (list (lambda (limit) (agl--search-decl-head "enum" limit)) 'font-lock-type-face 3)
@@ -1301,10 +1314,10 @@ Checked one character past KW-START, not at KW-START itself:
 `syntax-ppss' reports the state as of just *before* a position, so the
 state exactly at a region's first character would read as \"not
 inside\" even when that character is itself the region's content --
-concretely, the first character of an inline raw-tail payload doubles
-as that payload's synthetic opening fence (see
-`agl--propertize-raw-inline'), so a decl-head keyword landing exactly
-there (`exec$ def fake()') would otherwise slip through unrejected.
+concretely, the first character of an inline `$' verbatim payload
+doubles as that payload's synthetic opening fence (see
+`agl--propertize-verbatim-inline'), so a decl-head keyword landing
+exactly there (`$ def fake()') would otherwise slip through unrejected.
 Checking one character in is always still inside the same region
 for any keyword this file matches against a decl head (they are all
 longer than one character), and is never inside a *different* region
@@ -1398,7 +1411,7 @@ stack in text order."
   "Return non-nil if point's line is a top-level AgL declaration line.
 
 Such a line begins at column 0 with a non-blank character that starts
-neither a comment nor a string/template/raw-tail-payload region.
+neither a comment nor a string/template/`$'-verbatim-payload region.
 Checked via `agl--in-string-or-comment-p' at the position right after
 that character -- not at its own position, since `syntax-ppss' reports
 the state *before* a character is consumed, so a comment-opening `#'
@@ -1414,7 +1427,7 @@ rejected by the general check."
   "Move point to the beginning of the nearest earlier top-level line.
 
 Skips a candidate beginning-of-line that turns out to be inside a
-string/template, raw-tail payload, or comment (see
+string/template, `$' verbatim payload, or comment (see
 `agl--toplevel-line-p') -- e.g. a continuation line of a multi-line
 string that merely looks top-level.  Return non-nil on success, leaving
 point unmoved on failure."

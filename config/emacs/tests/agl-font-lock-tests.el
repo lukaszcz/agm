@@ -7,7 +7,7 @@
 ;; face, soft-keyword promotion windows (both directions), contextual
 ;; builtins, primitive-type-annotation positions, the absence of
 ;; case-based coloring, identifier-boundary safety, `%{...}' interpolation
-;; delimiters, and that keywords inside templates/raw-tail payloads stay
+;; delimiters, and that keywords inside templates/`$' verbatim payloads stay
 ;; string-faced.  See docs/agl/reference/lexical-structure.md for the
 ;; promotion-window table this approximates.
 
@@ -209,7 +209,7 @@
   (agl-flt--with-buffer "let x = 1\nend\n"
     (should-not (eq (agl-flt--face-of "end\n") 'font-lock-keyword-face))))
 
-;; --- Contextual builtins and raw-tail names ---
+;; --- Contextual builtins ---
 
 (ert-deftest agl-flt-print-is-builtin-face ()
   (agl-flt--with-buffer "print \"hi\"\n"
@@ -223,13 +223,15 @@
   (agl-flt--with-buffer "let r = exec(\"ls\")\n"
     (should (eq (agl-flt--face-of "exec") 'font-lock-builtin-face))))
 
-(ert-deftest agl-flt-exec-dollar-is-builtin-face ()
-  (agl-flt--with-buffer "exec$ ls -la\n"
-    (should (eq (agl-flt--face-of "exec$") 'font-lock-builtin-face))))
+(ert-deftest agl-flt-exec-callee-of-dollar-payload-is-builtin-face ()
+  ;; `$' opens a verbatim literal on the callee's payload argument; the
+  ;; callee name itself keeps its ordinary builtin face.
+  (agl-flt--with-buffer "exec $ ls -la\n"
+    (should (eq (agl-flt--face-of "exec") 'font-lock-builtin-face))))
 
-(ert-deftest agl-flt-ask-dollar-is-builtin-face ()
-  (agl-flt--with-buffer "ask$ Summarize this\n"
-    (should (eq (agl-flt--face-of "ask$") 'font-lock-builtin-face))))
+(ert-deftest agl-flt-ask-callee-of-dollar-payload-is-builtin-face ()
+  (agl-flt--with-buffer "ask $ Summarize this\n"
+    (should (eq (agl-flt--face-of "ask") 'font-lock-builtin-face))))
 
 (ert-deftest agl-flt-render-is-builtin-face ()
   (agl-flt--with-buffer "let s = render(x)\n"
@@ -321,12 +323,12 @@
     (should (eq (agl-flt--face-of "1 as") agl--number-face))
     (should (eq (agl-flt--face-of "as json") 'font-lock-keyword-face))))
 
-(ert-deftest agl-flt-interpolation-delimiters-faced-in-raw-tail-payload ()
-  (agl-flt--with-buffer "ask$ Summarize %{topic} please\n"
+(ert-deftest agl-flt-interpolation-delimiters-faced-in-verbatim-payload ()
+  (agl-flt--with-buffer "ask $ Summarize %{topic} please\n"
     (should (eq (agl-flt--face-of "%{topic}") 'agl-interpolation-face))))
 
-(ert-deftest agl-flt-raw-tail-interpolation-code-is-highlighted ()
-  (agl-flt--with-buffer "ask$ Summarize %{render(topic + 1)} please\n"
+(ert-deftest agl-flt-verbatim-interpolation-code-is-highlighted ()
+  (agl-flt--with-buffer "ask $ Summarize %{render(topic + 1)} please\n"
     (should-not (agl-flt--face-of "topic +"))
     (should (eq (agl-flt--face-of "render") 'font-lock-builtin-face))
     (should (eq (agl-flt--face-of "+") agl--operator-face))
@@ -337,14 +339,20 @@
     (should-not (eq (agl-flt--face-of "%{100}") 'agl-interpolation-face))
     (should (eq (agl-flt--face-of "%{100}") 'font-lock-string-face))))
 
-;; --- Keywords inside templates/raw-tail payloads stay string-faced ---
+(ert-deftest agl-flt-dollar-brace-in-verbatim-payload-is-not-a-hole ()
+  ;; `${...}' is verbatim in a `$' literal -- only `%{...}' interpolates.
+  (agl-flt--with-buffer "exec $ echo ${HOME}\n"
+    (should-not (eq (agl-flt--face-of "${HOME}") 'agl-interpolation-face))
+    (should (eq (agl-flt--face-of "${HOME}") 'font-lock-string-face))))
+
+;; --- Keywords inside templates/`$' verbatim payloads stay string-faced ---
 
 (ert-deftest agl-flt-keyword-inside-template-stays-string-faced ()
   (agl-flt--with-buffer "let a = \"let x = 1\"\n"
     (should (eq (agl-flt--face-of "let x") 'font-lock-string-face))))
 
-(ert-deftest agl-flt-keyword-inside-raw-tail-payload-stays-string-faced ()
-  (agl-flt--with-buffer "exec$ let x = 1\n"
+(ert-deftest agl-flt-keyword-inside-verbatim-payload-stays-string-faced ()
+  (agl-flt--with-buffer "exec $ let x = 1\n"
     (should (eq (agl-flt--face-of "let x") 'font-lock-string-face))))
 
 ;; --- Numbers ---
@@ -532,8 +540,8 @@
     ;; The trailing `?' is part of the same match, not left unfaced.
     (should (eq (agl-flt--face-at (1- (agl-flt--pos-after "as?"))) 'font-lock-keyword-face))))
 
-;; --- Backslash runs before `%{': template parity vs. raw-tail semantics
-;;     ---
+;; --- Backslash runs before `%{': template parity vs. `$' verbatim
+;;     semantics ---
 
 (ert-deftest agl-flt-double-backslash-before-interpolation-is-not-escaped-in-template ()
   (agl-flt--with-buffer "let a = \"cost is \\\\%{100}\"\n"
@@ -546,13 +554,13 @@
     (should-not (eq (agl-flt--face-of "%{100}") 'agl-interpolation-face))
     (should (eq (agl-flt--face-of "%{100}") 'font-lock-string-face))))
 
-(ert-deftest agl-flt-single-backslash-before-interpolation-is-escaped-in-raw-tail ()
-  (agl-flt--with-buffer "exec$ echo \\%{100}\n"
+(ert-deftest agl-flt-single-backslash-before-interpolation-is-escaped-in-verbatim ()
+  (agl-flt--with-buffer "exec $ echo \\%{100}\n"
     (should-not (eq (agl-flt--face-of "%{100}") 'agl-interpolation-face))))
 
-(ert-deftest agl-flt-double-backslash-before-interpolation-is-still-escaped-in-raw-tail ()
-  (agl-flt--with-buffer "exec$ echo \\\\%{100}\n"
-    ;; Unlike a template, a raw-tail payload owns its backslashes: any
+(ert-deftest agl-flt-double-backslash-before-interpolation-is-still-escaped-in-verbatim ()
+  (agl-flt--with-buffer "exec $ echo \\\\%{100}\n"
+    ;; Unlike a template, a `$' verbatim payload owns its backslashes: any
     ;; single immediately preceding `\' escapes the hole, with no parity
     ;; counting, so a run of two is still escaped here.
     (should-not (eq (agl-flt--face-of "%{100}") 'agl-interpolation-face))))
@@ -560,9 +568,9 @@
 ;; --- The interpolation face cannot leak outside its string region ---
 
 (ert-deftest agl-flt-interpolation-face-does-not-leak-past-string-region ()
-  (agl-flt--with-buffer "exec$ echo %{p\nlet c = f(1)}\n"
-    ;; The `%{' on the exec$ line is unbalanced within that line's inline
-    ;; raw-tail payload; the `}' on the next, ordinary code line must not
+  (agl-flt--with-buffer "exec $ echo %{p\nlet c = f(1)}\n"
+    ;; The `%{' on the exec line is unbalanced within that line's inline
+    ;; `$' verbatim payload; the `}' on the next, ordinary code line must not
     ;; be painted with `agl-interpolation-face'.
     (should-not (eq (agl-flt--face-of "}") 'agl-interpolation-face))))
 

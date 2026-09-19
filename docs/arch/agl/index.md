@@ -30,7 +30,7 @@ The lexer and parser are the only Lark-aware code. Every pass from scope onward 
 The firewall is semantic, not an I/O boundary. AgL reuses AGM's lower layers rather than reimplementing them:
 
 - **Agents** come from `agm.agent`: `Agent` values decode into host specs, asks dispatch through the shared runner or the session service, and `runtime/sessions.py` bridges AgL session values to it ([agents.md](../agents.md)).
-- **Primitives** come from `agm.core`: shell `exec` and CLI agent subprocesses use `core.process`, environments `core.env`, files and trace logs `core.fs`/`core.log`, so AgL participates in dry-run for free. `util.graph` and `util.text` supply SCC computation and newline normalization.
+- **Primitives** come from `agm.core`: shell `exec` and CLI agent subprocesses use `core.process`, environments `core.env`, files and trace logs `core.fs`/`core.log`, outbound HTTP `core.http` (the `std/http` companion's transport), so AgL participates in dry-run for free. `util.graph` and `util.text` supply SCC computation and newline normalization.
 - **Configuration** comes from `agm.config`: the engine-key catalog and qualified config tables feed the hosts' seeds ([hosting.md](hosting.md)).
 
 ## Expression-Oriented Design

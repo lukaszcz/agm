@@ -114,6 +114,10 @@ def session() -> requests.Session:
     return runtime.state("mylib/session", requests.Session, close=requests.Session.close)
 ```
 
+A `close` that raises never replaces a run already failing: it is attached as
+a note on that in-flight error, while on an otherwise clean exit it is itself
+raised as the run's error.
+
 ### Trace hook
 
 A companion may emit its own structured trace records with
@@ -134,13 +138,16 @@ direct host call outside evaluation is a silent no-op. Nothing is written when
 tracing is off. A payload value with no JSON representation, including a
 reference cycle, is replaced by a marker rather than failing the call.
 
-The record is `{kind, origin, site, line, col, ...payload}`: `kind` is the
-hook's first argument, `origin` is the extern's own declaring module and never
-changes with the caller, `site` is the module owning the attributed
-`line`/`col` (a different module than `origin` whenever the call is attributed
-across a package boundary), and every payload field sits at the top level
-beside them. A payload key of `ts`, `run_id`, `kind`, `origin`, `site`, `line`,
-or `col` collides with this envelope and raises `ValueError`.
+The record is `{ts, run_id, kind, origin, site, line, col, ...payload}`: `ts`
+and `run_id` identify the record's moment and run like every other trace
+record, `kind` is the hook's first argument, `origin` is the extern's own
+declaring module and never changes with the caller, `site` is the module
+owning the attributed `line`/`col` (a different module than `origin`
+whenever the call is attributed across a package boundary), and every
+payload field sits at the top level beside them. `site`, `line`, and `col`
+are absent when the call has no source location to attribute (a detached or
+host-issued call). A payload key of `ts`, `run_id`, `kind`, `origin`, `site`,
+`line`, or `col` collides with this envelope and raises `ValueError`.
 
 The attributed call site is the nearest one outside the extern's own mount
 (same leading module-path segment: a package name, `std`, or a loose module's

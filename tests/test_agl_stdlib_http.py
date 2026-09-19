@@ -695,15 +695,34 @@ program def main() -> unit =
     assert isinstance(elapsed, int | float) and elapsed >= 0
 
 
+@pytest.mark.parametrize(
+    ("call_expr", "wire_method"),
+    [
+        ('http::try-request(http::Method::Get, "https://x/y")', "GET"),
+        ('http::try-get("https://x/y")', "GET"),
+        ('http::try-post("https://x/y")', "POST"),
+        ('http::try-put("https://x/y")', "PUT"),
+        ('http::try-patch("https://x/y")', "PATCH"),
+        ('http::try-delete("https://x/y")', "DELETE"),
+        ('http::try-head("https://x/y")', "HEAD"),
+    ],
+)
 def test_try_twins_return_ok_on_success_and_err_on_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    call_expr: str,
+    wire_method: str,
 ) -> None:
-    outcomes = [{"fail": "connection"}, {"status": 200, "body": "hi"}]
-    source = """import std/http
+    outcomes = [
+        {"fail": "connection", "expect": {"method": wire_method}},
+        {"status": 200, "body": "hi", "expect": {"method": wire_method}},
+    ]
+    source = f"""import std/http
 program def main() -> unit =
-  let failure = http::try-get("https://x/y")
+  let failure = {call_expr}
   print(failure.is-err())
-  let success = http::try-get("https://x/y")
+  let success = {call_expr}
   print(success.is-ok())
 """
     result, adapter = _run(monkeypatch, tmp_path, outcomes, source)

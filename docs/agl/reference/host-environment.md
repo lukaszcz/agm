@@ -405,7 +405,7 @@ Tracing records only observable boundaries:
 - every `exec` invocation (command, exit code, duration, stdout, stderr, and
   timeout flag);
 - an exception only when it escapes the program uncaught;
-- a companion's own trace records, when its extern declares them ([FFI](ffi.md)).
+- records a companion emits through `runtime.trace` ([FFI](ffi.md#trace-hook)).
 
 Ordinary expression evaluation is not traced. Trace records and exception
 values have no host-generated `trace-id`; a user-declared exception may still

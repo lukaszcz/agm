@@ -143,10 +143,13 @@ Field notes:
   two-element array or `null` for none, `verify`) against the actual request and scripts
   its outcome — `status`,
   `headers` (a mapping, or a list of `[name, value]` pairs to script repeated headers),
-  a `body` (+ optional `charset`) or `body_hex`, or a `fail`/`fail_mid_stream` kind. The
-  harness installs `FakeHttp` in place of `agm.core.http.open_session` and verifies the
-  full script was used, so acceptance tests never touch the network; an absent key means
-  no HTTP call is allowed.
+  a `body` (+ optional `charset`) or `body_hex`, or a `fail`/`fail_mid_stream` kind. `fail`
+  is one of `url`, `connection`, `timeout`, `tls`, `redirect` (with an optional `redirects`
+  count) and raises before a response is built; `fail_mid_stream` is one of `connection`,
+  `timeout`, `tls`, `decode` and raises after the scripted body streams. The harness
+  installs `FakeHttp` in place of `agm.core.http.open_session` and verifies the full script
+  was used, so acceptance tests never touch the network; an absent key means no HTTP call
+  is allowed.
 - `runtime` — optional `PipelineDriver` constructor overrides
   (`default_call_depth_limit`, `default_strict_json`).
 - `filesystem` — optional fixture in a test-created temporary root. It may declare

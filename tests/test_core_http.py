@@ -468,7 +468,9 @@ def test_perform_save_leaves_the_previous_file_on_a_mid_stream_failure(tmp_path:
 
 
 def test_perform_head_request_has_an_empty_body() -> None:
-    session, adapter = fake_session([{"status": 200}])
+    # A server may still send a body on a HEAD response; the transport must
+    # force it empty and never read it, regardless of what was sent.
+    session, adapter = fake_session([{"status": 200, "body": "unexpected"}])
 
     result = http.perform(
         session, http.RequestSpec(method="HEAD", url="https://example.org/x", timeout_seconds=5.0)
@@ -501,7 +503,7 @@ def test_perform_follows_redirects_for_head_with_an_empty_body() -> None:
     session, adapter = fake_session(
         [
             {"status": 302, "headers": {"Location": "https://example.org/final"}},
-            {"status": 200},
+            {"status": 200, "body": "unexpected"},
         ]
     )
 

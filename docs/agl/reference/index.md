@@ -89,7 +89,7 @@ program def main(spec: text) -> unit =
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports, the standard-library module inventory |
 | [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `use` |
 | [Packages](packages.md) | Package module trees and identity, package-qualified paths, import visibility, programs as commands, params and qualified configuration keys, resources and companions |
-| [Python FFI](ffi.md) | `extern def`, the companion Python file, value mapping across the boundary, `ExternError` |
+| [Python FFI](ffi.md) | `extern def`, the companion Python file, value mapping across the boundary, `ExternError`, interpreter-local companion state, the trace hook |
 | [Host environment](host-environment.md) | Agents, program arguments, host defaults, capability checking, tracing |
 | [Grammar](grammar.md) | The collected grammar |
 

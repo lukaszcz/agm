@@ -11,7 +11,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - **CLI layer** — a Typer command tree whose directory structure mirrors the command tree exactly. It parses arguments into typed containers and dispatches to command implementations.
 - **Command layer** — one module per command/command-group; each orchestrates domain logic but holds little of its own.
 - **Domain layer** — project/workspace layout, packages, git integration, sandboxing, tmux, configuration, and agent invocation.
-- **Primitive layer** — process execution, environment handling, filesystem and TOML I/O, and a cross-cutting dry-run facility, plus pure generic utility helpers.
+- **Primitive layer** — process execution, environment handling, filesystem and TOML I/O, outbound HTTP, and a cross-cutting dry-run facility, plus pure generic utility helpers.
 - **AgL subsystem** — a complete language implementation (lexer → parser → AST → scope → typecheck → match compilation → lower → IR eval) plus its host runtime. Its public façade exports the execution stack lazily, so lower domains can use AgL leaves without loading it.
 
 ## Architecture and Design Decisions
@@ -40,7 +40,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - `src/agm/cli.py` defines the Typer app and every command group; `src/agm/cli_dispatch.py` is the fallback for package-registered commands; `src/agm/parser.py` holds help text; `src/agm/completion.py` provides shell completions. `src/agm/command_catalog.py` and `src/agm/raw_tail_catalog.py` are pure data leaves for CLI help and raw-tail parsing.
 - `src/agm/commands/` contains the command implementations, one subtree per command group.
 - `src/agm/cli_support/` holds the typed argument containers and the shared AgL CLI support (engine seeds, program parameters, execution roots and targets).
-- `src/agm/core/` holds the process, environment, filesystem, TOML, logging, and dry-run primitives; `src/agm/util/` holds pure, `agm`-import-free helpers.
+- `src/agm/core/` holds the process, environment, filesystem, TOML, HTTP, logging, and dry-run primitives; `src/agm/util/` holds pure, `agm`-import-free helpers.
 - `src/agm/config/` loads and resolves general and sandbox configuration; `src/agm/stdlib_locator.py` finds the shipped standard library.
 - `src/agm/agent/` implements agent runner invocation and session backends.
 - `src/agm/project/`, `src/agm/vcs/`, `src/agm/tmux/` implement project layout, git integration, and tmux sessions.

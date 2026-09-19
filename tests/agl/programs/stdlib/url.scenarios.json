@@ -43,19 +43,19 @@
       }
     },
     {
-      "name": "caught_url_parse_error_carries_the_raw_input_for_a_missing_scheme",
+      "name": "uncaught_missing_scheme_error_ends_the_run",
       "params": {"mode": 7},
-      "expect": {"stdout": "relative/path\n", "calls": {}}
+      "expect": {"stdout": "", "raises": {"type": "UrlParseError", "fields": {"raw": "relative/path"}}, "calls": {}}
     },
     {
-      "name": "caught_url_parse_error_carries_the_raw_input_for_userinfo",
+      "name": "uncaught_userinfo_error_ends_the_run",
       "params": {"mode": 8},
-      "expect": {"stdout": "https://user:pass@example.org/\n", "calls": {}}
+      "expect": {"stdout": "", "raises": {"type": "UrlParseError", "fields": {"raw": "https://user:pass@example.org/"}}, "calls": {}}
     },
     {
-      "name": "caught_url_parse_error_carries_the_raw_input_for_an_invalid_port",
+      "name": "uncaught_invalid_port_error_ends_the_run",
       "params": {"mode": 9},
-      "expect": {"stdout": "https://example.org:notaport/\n", "calls": {}}
+      "expect": {"stdout": "", "raises": {"type": "UrlParseError", "fields": {"raw": "https://example.org:notaport/"}}, "calls": {}}
     },
     {
       "name": "uncaught_missing_host_error_ends_the_run",

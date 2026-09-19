@@ -274,7 +274,7 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
                 **settings,
             )
             try:
-                text, body_bytes, encoding = _consume(response, spec.receive)
+                text, body_bytes, encoding = _consume(response, spec.receive, spec.method)
             finally:
                 response.close()
     except requests.exceptions.RequestException as exc:
@@ -305,8 +305,17 @@ def _headers_for(spec: RequestSpec) -> dict[str, str]:
     return headers
 
 
-def _consume(response: requests.Response, receive: ReceiveSpec) -> tuple[str, int, str]:
-    """Stream *response*'s body per *receive*; returns (text, byte count, encoding)."""
+def _consume(
+    response: requests.Response, receive: ReceiveSpec, method: str
+) -> tuple[str, int, str]:
+    """Stream *response*'s body per *receive*; returns (text, byte count, encoding).
+
+    A ``HEAD`` response body is never read, regardless of *receive*: a server
+    may still send one, but ``HEAD`` has none by definition, so it is forced
+    empty rather than decoded, dropped, or saved.
+    """
+    if method == "HEAD":
+        return "", 0, ""
     if isinstance(receive, Ignore):
         body_bytes = sum(len(chunk) for chunk in response.iter_content(chunk_size=_CHUNK_SIZE))
         return "", body_bytes, ""

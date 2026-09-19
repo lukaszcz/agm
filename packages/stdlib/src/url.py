@@ -183,14 +183,16 @@ def _quote_component(value: str, safe: str, raw: str) -> str:
 def render(self: object) -> str:
     """Reconstruct canonical URL text from *self*'s components; see ``url.agl``.
 
-    A hand-built record's ``scheme``/``host`` are not otherwise checked, so
-    they are validated here through the same rules ``parse`` applies,
-    raising ``UrlParseError(raw=<the offending field>)`` rather than
+    A hand-built record's ``scheme``/``host``/``port`` are not otherwise
+    checked, so they are validated here through the same rules ``parse``
+    applies, raising ``UrlParseError(raw=<the offending field>)`` rather than
     emitting text that would not itself parse or would parse back to a
     different record.
     """
     if not _LOWERCASE_SCHEME_RE.fullmatch(self.scheme):
         _parse_error(self.scheme, "invalid or non-canonical scheme")
+    if not self.host and self.scheme != "file":
+        _parse_error(self.host, "missing host")
     if self.host:
         try:
             _validate_host(self.host)
@@ -198,6 +200,8 @@ def render(self: object) -> str:
             _parse_error(self.host, str(exc))
     host = f"[{self.host}]" if ":" in self.host else self.host
     if isinstance(self.port, Option.Some):
+        if not 0 <= self.port.value <= 65535:
+            _parse_error(str(self.port.value), "port out of range 0-65535")
         host = f"{host}:{self.port.value}"
     path = self.path
     if path and not path.startswith("/"):

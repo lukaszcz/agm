@@ -9,7 +9,7 @@
         {"status": 200, "body": "", "expect": {"method": "PUT"}},
         {"status": 200, "body": "", "expect": {"method": "PATCH"}},
         {"status": 200, "body": "", "expect": {"method": "DELETE"}},
-        {"status": 200, "body": "", "expect": {"method": "HEAD"}},
+        {"status": 200, "body": "unexpected-head-body", "expect": {"method": "HEAD"}},
         {"status": 200, "body": "", "expect": {"method": "OPTIONS"}},
         {"status": 200, "body": "", "expect": {"method": "PURGE"}}
       ],

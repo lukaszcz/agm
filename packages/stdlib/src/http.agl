@@ -50,6 +50,7 @@ def headers(entries: dict[text, text]) -> Headers =
     normalized.set(HeadersInternals::lower-name(name), value))
   Headers(normalized)
 
+# Raises `KeyError` when `name` is absent.
 def Headers::get(self, name: text) -> text = self.entries.get(HeadersInternals::lower-name(name))
 def Headers::get?(self, name: text) -> Option[text] =
   self.entries.get?(HeadersInternals::lower-name(name))
@@ -65,18 +66,27 @@ def Headers::remove(self, name: text) -> unit =
 def Headers::merged(self, other: Headers) -> Headers = headers(self.entries.merge(other.entries))
 
 enum Auth = NoAuth | Basic(user: text, password: text) | Bearer(token: text)
+# Its content type travels with the payload: `Json` sends
+# `application/json`, `Form` sends `application/x-www-form-urlencoded`.
 enum Body = Empty | Text(content: text, content-type: text) | Json(value: json)
           | Form(fields: dict[text, text])
+# `Decode` accumulates and decodes the body; `Ignore` and `Save` stream it
+# without decoding, leaving `Response.body` as `""` (`status`, `headers`,
+# `url`, `cookies`, and `elapsed` are unaffected).
 enum Receive = Decode | Ignore | Save(path: path)
 
 # `method` is the verb the response answers; every `HttpError` these methods
-# raise needs it alongside `url`. `elapsed` is monotonic seconds for the
-# whole exchange, body transfer included.
+# raise needs it alongside `url`. `url` is the final URL after any redirects
+# were followed; `cookies` are the cookies the final response set. `elapsed`
+# is monotonic seconds for the whole exchange, body transfer included.
+# `body` is `""` under `Ignore`/`Save`, and always for a `Head` response.
 record Response(status: int, headers: Headers, body: text, url: url, method: Method,
                 cookies: dict[text, text], elapsed: decimal)
 
+# `true` for a 2xx status.
 def Response::ok(self) -> bool = self.status >= 200 and self.status < 300
 
+# Returns `self` when `ok()`, else raises `HttpStatusError`.
 def Response::raise-for-status(self) -> Response =
   if self.ok() => self
   else => raise HttpStatusError(
@@ -108,12 +118,17 @@ exception HttpTimeoutError extends HttpError
   timeout: text
 exception HttpTlsError extends HttpError
   cause: text
+# Raised when `follow-redirects` is on and the redirect limit is exceeded.
 exception HttpRedirectError extends HttpError
   redirects: int
+# `Decode` is strict: the body is decoded using the charset the response
+# declares, else UTF-8, never guessed statistically. A body that does not
+# decode as that charset raises this, with `encoding` the charset tried.
 exception HttpDecodeError extends HttpError
   status: int
   headers: Headers
   encoding: text
+# Raised by `Response::raise-for-status` only; `request` never raises it.
 exception HttpStatusError extends HttpError
   response: Response
 
@@ -133,7 +148,10 @@ end RequestInternals
 # `follow-redirects` applies uniformly to every method, `Head` included.
 # `Other(name)` is sent verbatim. `timeout` bounds every read and the connect
 # step by inactivity; `None` disables it, and a non-positive or unparseable
-# value raises `TypeError` before any request is sent.
+# value raises `TypeError` before any request is sent. Traces the exchange as
+# `http_request`/`http_response` records, or `http_failure` on error, with
+# verbatim bodies but `authorization`, `proxy-authorization`, `cookie`, and
+# `set-cookie` header values and every cookie value redacted.
 def request(method: Method, url: url, query: dict[text, text] = {},
            headers: Headers = headers({}), body: Body = Empty, auth: Auth = NoAuth,
            cookies: dict[text, text] = {}, receive: Receive = Decode,

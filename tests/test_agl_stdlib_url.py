@@ -405,6 +405,56 @@ def test_render_keeps_an_existing_percent_escape_intact() -> None:
     assert companion.render(record) == "https://x/%7e"
 
 
+def test_render_rejects_a_hand_built_record_with_an_empty_host_outside_the_file_scheme() -> None:
+    companion, registry = _url_companion()
+    record = _url_record(
+        registry,
+        scheme="https",
+        host="",
+        port=_none_value(registry),
+        path="/",
+        query=[],
+        fragment=_none_value(registry),
+    )
+
+    with pytest.raises(AglException) as exc_info:
+        companion.render(record)
+    assert exc_info.value.value.nominal == _URL_PARSE_ERROR
+
+
+def test_render_accepts_a_hand_built_record_with_an_empty_host_for_the_file_scheme() -> None:
+    companion, registry = _url_companion()
+    record = _url_record(
+        registry,
+        scheme="file",
+        host="",
+        port=_none_value(registry),
+        path="/tmp/x",
+        query=[],
+        fragment=_none_value(registry),
+    )
+
+    assert companion.render(record) == "file:///tmp/x"
+
+
+@pytest.mark.parametrize("port", (-1, 99999))
+def test_render_rejects_a_hand_built_record_with_a_port_out_of_range(port: int) -> None:
+    companion, registry = _url_companion()
+    record = _url_record(
+        registry,
+        scheme="https",
+        host="x",
+        port=_some_value(registry, port),
+        path="/",
+        query=[],
+        fragment=_none_value(registry),
+    )
+
+    with pytest.raises(AglException) as exc_info:
+        companion.render(record)
+    assert exc_info.value.value.nominal == _URL_PARSE_ERROR
+
+
 def test_render_rejects_a_hand_built_record_with_an_invalid_host() -> None:
     companion, registry = _url_companion()
     record = _url_record(

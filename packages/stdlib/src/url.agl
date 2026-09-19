@@ -38,12 +38,13 @@ def parse?(value: url) -> Option[Url] =
 # and `?`) while any existing `%XX` escape is left intact. Round-trips at the
 # record level -- `parse(u.render()) == u` for every `Url` `parse` returns --
 # but the text matches the input only when the input was already canonical.
-# `scheme` and `host` are validated by the same rules `parse` applies (a
-# non-lowercase or otherwise invalid `scheme`, or an invalid `host`, raises
-# `UrlParseError` with `raw` set to that field) since a hand-built record
-# skips the checks parsing would have applied. Also raises `UrlParseError`
-# if `path`, `fragment`, or a `query` entry holds a lone surrogate, which
-# cannot be percent-encoded.
+# `scheme`, `host`, and `port` are validated by the same rules `parse`
+# applies (a non-lowercase or otherwise invalid `scheme`, an empty `host`
+# outside the `file` scheme, an invalid `host`, or a `port` outside
+# 0-65535, raises `UrlParseError` with `raw` set to that field) since a
+# hand-built record skips the checks parsing would have applied. Also raises
+# `UrlParseError` if `path`, `fragment`, or a `query` entry holds a lone
+# surrogate, which cannot be percent-encoded.
 extern def Url::render(self) -> url
 
 # RFC 3986 reference resolution (section 5.2), for any scheme. `base` must

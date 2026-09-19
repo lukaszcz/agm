@@ -49,17 +49,14 @@ program def main(mode: int) -> unit =
           | Some(_) => print("some")
           | None => print("none")
     | 7 =>
-        try
-          let _ = url::parse("relative/path")
-        catch UrlParseError as error => print(error.raw)
+        let _ = url::parse("relative/path")
+        ()
     | 8 =>
-        try
-          let _ = url::parse("https://user:pass@example.org/")
-        catch UrlParseError as error => print(error.raw)
+        let _ = url::parse("https://user:pass@example.org/")
+        ()
     | 9 =>
-        try
-          let _ = url::parse("https://example.org:notaport/")
-        catch UrlParseError as error => print(error.raw)
+        let _ = url::parse("https://example.org:notaport/")
+        ()
     | 10 =>
         let _ = url::parse("https:///path")
         ()

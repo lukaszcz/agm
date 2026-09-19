@@ -161,10 +161,10 @@ class _CompanionRuntime:
         """Emit a companion trace record tagged with the active call's origin and span.
 
         A silent no-op outside an active extern call (detached companion use),
-        and when tracing is off. The origin (the calling module's display
-        path) is computed only once the store is confirmed to be writing, and
-        so is the attributed span and its owning module (``site``) --
-        resolving either walks the active call-site stack.
+        and when tracing is off. The origin (the extern's declaring module's
+        display path) is computed only once the store is confirmed to be
+        writing, and so is the attributed span and its owning module
+        (``site``) -- resolving either walks the active call-site stack.
         """
         active = self._active_call.get()
         if active is not None and active.trace_store.path is not None:

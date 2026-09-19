@@ -1,6 +1,6 @@
 # Core Primitives
 
-Two foundation packages sit beneath everything else and serve both halves of AGM. `core/` holds the OS-facing building blocks — process execution, environment handling, filesystem and TOML/dotenv I/O, logging, lifecycle cleanup, and the dry-run facility; AgL's host runtime runs shell commands and agents, writes files, and emits trace logs through these same primitives. `util/` holds pure, stdlib-only helpers that import nothing from `agm`.
+Two foundation packages sit beneath everything else and serve both halves of AGM. `core/` holds the OS-facing building blocks — process execution, environment handling, filesystem and TOML/dotenv I/O, outbound HTTP, logging, lifecycle cleanup, and the dry-run facility; AgL's host runtime runs shell commands and agents, writes files, makes HTTP requests, and emits trace logs through these same primitives. `util/` holds pure, stdlib-only helpers that import nothing from `agm`.
 
 ## Process Execution
 

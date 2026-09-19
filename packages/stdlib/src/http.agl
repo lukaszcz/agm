@@ -278,3 +278,118 @@ def try-head(url: url, query: dict[text, text] = {}, headers: Headers = headers(
              verify-tls: bool = true) -> Result[Response, HttpError] =
   try-request(Head, url, query, headers, body, auth, cookies, receive, timeout,
               follow-redirects, verify-tls)
+
+# `Client` carries request *policy* -- base url, headers, auth, cookies,
+# timeout, redirects, and TLS verification -- shared across calls. A method's
+# own parameters are request *content*: `query`, `headers` (merged over the
+# client's, call wins), `body`, and `receive`. Change policy for one call with
+# record update, e.g. `(api with timeout = Some("2m")).get(u)`. A relative
+# `url` resolves against `base-url` per RFC 3986 (`std/url::join`): a base
+# path needs a trailing `/` and the target no leading `/` to be kept
+# (`/v1/` + `users` -> `/v1/users`; `/v1` + `users` -> `/users`); an absolute
+# url, or a client with no `base-url`, is used as given. Cookies are data:
+# `Response.cookies` is what the final response set, and persisting them is
+# `client with cookies = response.cookies`.
+record Client(base-url: Option[url], headers: Headers, auth: Auth, cookies: dict[text, text],
+              timeout: Option[text], follow-redirects: bool, verify-tls: bool)
+
+# Captures the module `::timeout` setting now, so a client's `timeout = None`
+# unambiguously means "no timeout" rather than "follow a later module write".
+# Normalises `headers` at construction, so `Client.headers` is
+# case-insensitive from the start.
+def client(base-url: Option[url] = None, headers: Headers = headers({}), auth: Auth = NoAuth,
+          cookies: dict[text, text] = {}, timeout: Option[text] = ::timeout,
+          follow-redirects: bool = true, verify-tls: bool = true) -> Client =
+  Client(base-url, ::headers(headers.entries), auth, cookies, timeout, follow-redirects,
+        verify-tls)
+
+scope ClientInternals
+  def resolve(client: Client, target: url) -> url =
+    case client.base-url of
+      | None => target
+      | Some(value) => url::join(value, target)
+
+  # Threads a client's resolved url, merged headers, and policy fields into
+  # `call` (`::request` or `::try-request`), so `Client::request` and
+  # `Client::try-request` share this one call site.
+  def send[R](client: Client,
+              call: (Method, url, dict[text, text], Headers, Body, Auth, dict[text, text],
+                     Receive, Option[text], bool, bool) -> R,
+              method: Method, target: url, query: dict[text, text], headers: Headers,
+              body: Body, receive: Receive) -> R =
+    call(method, resolve(client, target), query, client.headers.merged(headers), body,
+         client.auth, client.cookies, receive, client.timeout, client.follow-redirects,
+         client.verify-tls)
+end ClientInternals
+
+def Client::request(self, method: Method, url: url, query: dict[text, text] = {},
+                    headers: Headers = headers({}), body: Body = Empty,
+                    receive: Receive = Decode) -> Response =
+  ClientInternals::send(self, ::request, method, url, query, headers, body, receive)
+
+def Client::get(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                body: Body = Empty, receive: Receive = Decode) -> Response =
+  self.request(Get, url, query, headers, body, receive)
+
+def Client::post(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                 body: Body = Empty, receive: Receive = Decode) -> Response =
+  self.request(Post, url, query, headers, body, receive)
+
+def Client::put(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                body: Body = Empty, receive: Receive = Decode) -> Response =
+  self.request(Put, url, query, headers, body, receive)
+
+def Client::patch(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                  body: Body = Empty, receive: Receive = Decode) -> Response =
+  self.request(Patch, url, query, headers, body, receive)
+
+def Client::delete(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                   body: Body = Empty, receive: Receive = Decode) -> Response =
+  self.request(Delete, url, query, headers, body, receive)
+
+def Client::head(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                 body: Body = Empty, receive: Receive = Decode) -> Response =
+  self.request(Head, url, query, headers, body, receive)
+
+# Saves the response body to `destination`, overwriting it atomically; a
+# write failure raises `std/fs::FsError`.
+def Client::download(self, url: url, destination: path, query: dict[text, text] = {},
+                     headers: Headers = headers({}), body: Body = Empty) -> Response =
+  self.get(url, query, headers, body, Save(destination))
+
+# Forwards to `try-request` so its catch list stays the sole listing of every
+# concrete `HttpError` subtype `request` can raise.
+def Client::try-request(self, method: Method, url: url, query: dict[text, text] = {},
+                        headers: Headers = headers({}), body: Body = Empty,
+                        receive: Receive = Decode) -> Result[Response, HttpError] =
+  ClientInternals::send(self, ::try-request, method, url, query, headers, body, receive)
+
+def Client::try-get(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                    body: Body = Empty,
+                    receive: Receive = Decode) -> Result[Response, HttpError] =
+  self.try-request(Get, url, query, headers, body, receive)
+
+def Client::try-post(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                     body: Body = Empty,
+                     receive: Receive = Decode) -> Result[Response, HttpError] =
+  self.try-request(Post, url, query, headers, body, receive)
+
+def Client::try-put(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                    body: Body = Empty,
+                    receive: Receive = Decode) -> Result[Response, HttpError] =
+  self.try-request(Put, url, query, headers, body, receive)
+
+def Client::try-patch(self, url: url, query: dict[text, text] = {},
+                      headers: Headers = headers({}), body: Body = Empty,
+                      receive: Receive = Decode) -> Result[Response, HttpError] =
+  self.try-request(Patch, url, query, headers, body, receive)
+
+def Client::try-delete(self, url: url, query: dict[text, text] = {},
+                       headers: Headers = headers({}), body: Body = Empty,
+                       receive: Receive = Decode) -> Result[Response, HttpError] =
+  self.try-request(Delete, url, query, headers, body, receive)
+
+def Client::try-head(self, url: url, query: dict[text, text] = {}, headers: Headers = headers({}),
+                     body: Body = Empty,
+                     receive: Receive = Decode) -> Result[Response, HttpError] =
+  self.try-request(Head, url, query, headers, body, receive)

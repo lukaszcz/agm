@@ -746,3 +746,303 @@ program def main() -> unit =
     output = capsys.readouterr().out
     assert output.startswith("true\n")
     assert f"{type_name}(" in output
+
+
+# ---------------------------------------------------------------------------
+# Behavior: the data-only ``Client``
+# ---------------------------------------------------------------------------
+
+
+def test_client_type_and_constructor_are_visible_through_the_import() -> None:
+    resolve_and_check_inline_entry(
+        "import std/http\nlet _: http::Client = http::client()\n", HostCapabilities()
+    )
+
+
+def test_client_normalises_headers_at_construction(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A raw ``Headers({...})`` keeps names verbatim; the client normalises on construction."""
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client(headers = http::Headers({"X-A": "1"}))
+  print(api.headers.contains("x-a"))
+"""
+    result, adapter = _run(monkeypatch, tmp_path, [], source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+    assert capsys.readouterr().out == "true\n"
+
+
+def test_client_joins_a_relative_target_onto_its_base_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    outcomes = [{"status": 200, "body": "", "expect": {"url": "https://api.example.org/repos/x"}}]
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client(base-url = Some("https://api.example.org"))
+  let _ = api.get("/repos/x")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+
+
+def test_client_joins_onto_a_base_url_with_a_trailing_slash_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A base path with a trailing ``/`` keeps its full path per RFC 3986 join rules."""
+    outcomes = [
+        {"status": 200, "body": "", "expect": {"url": "https://api.example.org/v1/repos/x"}}
+    ]
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client(base-url = Some("https://api.example.org/v1/"))
+  let _ = api.get("repos/x")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+
+
+def test_client_resolves_a_query_only_reference_against_the_base_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A reference that is only a query keeps the base's path, per RFC 3986 merge rules."""
+    outcomes = [
+        {"status": 200, "body": "", "expect": {"url": "https://api.example.org/v1/?page=2"}}
+    ]
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client(base-url = Some("https://api.example.org/v1/"))
+  let _ = api.get("?page=2")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+
+
+def test_client_uses_an_absolute_target_as_given_over_its_base_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    outcomes = [{"status": 200, "body": "", "expect": {"url": "https://other.example/direct"}}]
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client(base-url = Some("https://api.example.org"))
+  let _ = api.get("https://other.example/direct")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+
+
+def test_client_without_a_base_url_uses_the_target_as_given(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    outcomes = [{"status": 200, "body": "", "expect": {"url": "https://x/y"}}]
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client()
+  let _ = api.get("https://x/y")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+
+
+def test_client_merges_its_headers_with_call_headers_winning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    outcomes = [
+        {
+            "status": 200,
+            "body": "",
+            "expect": {"headers": {"x-common": "call", "x-client-only": "yes"}},
+        }
+    ]
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client(
+    headers = http::headers({"X-Common": "client", "X-Client-Only": "yes"}))
+  let _ = api.get("https://x/y", headers = http::headers({"X-Common": "call"}))
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+
+
+def test_client_policy_fields_apply_to_every_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """auth, cookies, timeout, follow-redirects, and verify-tls all come from the client.
+
+    The target host is a real multi-label domain: a single-label host such as
+    ``x`` defeats ``http.cookiejar``'s domain matching, so no ``cookie`` header
+    would be sent regardless of policy (see ``test_cookies_are_sent_as_given``).
+    """
+    outcomes = [
+        {
+            "status": 302,
+            "headers": {"location": "https://example.org/other"},
+            "body": "",
+            "expect": {
+                "headers": {"authorization": "Bearer tok", "cookie": "a=1"},
+                "timeout": (9.0, 9.0),
+                "verify": False,
+            },
+        }
+    ]
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client(auth = http::Auth::Bearer("tok"), cookies = {"a": "1"},
+    timeout = Some("9s"), follow-redirects = false, verify-tls = false)
+  let r = api.get("https://example.org/y")
+  print(r.status)
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+    # follow-redirects = false means the 302 itself comes back, unfollowed.
+    assert capsys.readouterr().out == "302\n"
+
+
+def test_with_override_changes_client_policy_for_one_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    outcomes = [{"status": 200, "body": "", "expect": {"timeout": (120.0, 120.0)}}]
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client()
+  let _ = (api with timeout = Some("2m")).get("https://x/y")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+
+
+def test_client_captures_the_module_timeout_at_construction(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A later ``http::timeout`` write must not reach a client built before it."""
+    outcomes = [{"status": 200, "body": "", "expect": {"timeout": (5.0, 5.0)}}]
+    source = """import std/http
+program def main() -> unit =
+  http::timeout := Some("5s")
+  let api = http::client()
+  http::timeout := Some("2s")
+  let _ = api.get("https://x/y")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+
+
+def test_client_timeout_none_at_construction_means_no_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``client(timeout = None)`` disables the inactivity bound regardless of the
+    module setting in effect at construction."""
+    outcomes = [{"status": 200, "body": "", "expect": {"timeout": None}}]
+    source = """import std/http
+program def main() -> unit =
+  http::timeout := Some("5s")
+  let api = http::client(timeout = None)
+  let _ = api.get("https://x/y")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+
+
+def test_client_every_verb_and_download_send_their_method(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    outcomes = [
+        {"status": 200, "body": "", "expect": {"method": "GET"}},
+        {"status": 200, "body": "", "expect": {"method": "POST"}},
+        {"status": 200, "body": "", "expect": {"method": "PUT"}},
+        {"status": 200, "body": "", "expect": {"method": "PATCH"}},
+        {"status": 200, "body": "", "expect": {"method": "DELETE"}},
+        {"status": 200, "body": "", "expect": {"method": "HEAD"}},
+        {"status": 200, "body": "", "expect": {"method": "OPTIONS"}},
+        {"status": 200, "body": "", "expect": {"method": "PROPFIND"}},
+        {"status": 200, "body": "payload", "expect": {"method": "GET"}},
+    ]
+    destination = tmp_path / "downloaded.bin"
+    source = f"""import std/http
+program def main() -> unit =
+  let api = http::client()
+  let _ = api.get("https://x/y")
+  let _ = api.post("https://x/y")
+  let _ = api.put("https://x/y")
+  let _ = api.patch("https://x/y")
+  let _ = api.delete("https://x/y")
+  let _ = api.head("https://x/y")
+  let _ = api.request(http::Method::Options, "https://x/y")
+  let _ = api.request(http::Method::Other("PROPFIND"), "https://x/y")
+  let _ = api.download("https://x/y", "{destination}")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+    assert destination.read_text() == "payload"
+
+
+def test_client_try_twins_delegate_to_the_free_try_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    outcomes = [
+        {"fail": "connection", "expect": {"method": "GET"}},
+        {"status": 200, "body": "", "expect": {"method": "GET"}},
+        {"status": 200, "body": "", "expect": {"method": "POST"}},
+        {"status": 200, "body": "", "expect": {"method": "PUT"}},
+        {"status": 200, "body": "", "expect": {"method": "PATCH"}},
+        {"status": 200, "body": "", "expect": {"method": "DELETE"}},
+        {"status": 200, "body": "", "expect": {"method": "HEAD"}},
+        {
+            "status": 200,
+            "body": "",
+            "expect": {
+                "url": "https://api.example.org/v1/widgets",
+                "headers": {
+                    "x-common": "call",
+                    "x-client-only": "yes",
+                    "authorization": "Bearer tok",
+                    "cookie": "a=1",
+                },
+                "timeout": (9.0, 9.0),
+                "verify": False,
+            },
+        },
+    ]
+    source = """import std/http
+program def main() -> unit =
+  let api = http::client()
+  let failure = api.try-request(http::Method::Get, "https://x/y")
+  print(failure.is-err())
+  print(api.try-get("https://x/y").is-ok())
+  print(api.try-post("https://x/y").is-ok())
+  print(api.try-put("https://x/y").is-ok())
+  print(api.try-patch("https://x/y").is-ok())
+  print(api.try-delete("https://x/y").is-ok())
+  print(api.try-head("https://x/y").is-ok())
+  let full = http::client(base-url = Some("https://api.example.org/v1/"),
+    headers = http::headers({"X-Common": "client", "X-Client-Only": "yes"}),
+    auth = http::Auth::Bearer("tok"), cookies = {"a": "1"}, timeout = Some("9s"),
+    follow-redirects = false, verify-tls = false)
+  print(full.try-get("widgets", headers = http::headers({"X-Common": "call"})).is-ok())
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert result.ok, result.error
+    adapter.assert_complete()
+    assert capsys.readouterr().out == "true\n" * 8

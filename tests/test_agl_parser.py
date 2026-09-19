@@ -5010,22 +5010,6 @@ print exec$ true
             exc_info.value.span.end_col,
         ) == expected_span
 
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "let a = (1 + 2\nlet b: text = exec$ echo hi\nprint(b)\n",
-            "let a = [1, 2\nlet b: text = exec$ echo hi\n",
-        ),
-    )
-    def test_unclosed_bracket_is_reported_where_the_expression_breaks(self, source: str) -> None:
-        # A missing closing bracket must not be reported as a misplaced raw tail
-        # on a later line; the diagnostic belongs to the item that cannot continue.
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        span = exc_info.value.span
-        assert span is not None
-        assert (span.start_line, span.start_col) == (2, 1)
-
     def test_arrow_body_raw_tail_is_rejected_over_its_shell_quotes(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse("if true => exec$ echo 'oops")
@@ -5053,17 +5037,6 @@ print exec$ true
         with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
         assert "indent" in str(exc_info.value).lower()
-
-    def test_raw_tail_default_is_rejected_inside_parameter_brackets_at_its_location(self) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse("def f(x: int = exec$ true) -> int = x")
-        assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == (1, 16, 1, 16)
 
     @pytest.mark.parametrize("declaration", ("record", "exception"))
     def test_attributed_field_rejects_a_raw_tail_name(self, declaration: str) -> None:
@@ -5103,18 +5076,6 @@ print exec$ true
         assert "reserved" not in message
         assert "call form" in message and "block form" in message
 
-    def test_raw_tail_in_unsupported_lambda_suite_is_rejected_at_its_location(self) -> None:
-        source = "let f = fn() =>\n  exec$ date"
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == (1, 16, 1, 17)
-
     @pytest.mark.parametrize(
         "source",
         (
@@ -5141,30 +5102,6 @@ print exec$ true
             exc_info.value.span.end_line,
             exc_info.value.span.end_col,
         ) == (2, 5, 2, 5)
-
-    def test_desugaring_assigns_node_ids_in_source_order(self) -> None:
-        raw_call = first(parse("exec$ true"))
-        assert isinstance(raw_call, Call)
-        assert isinstance(raw_call.callee, VarRef)
-        assert isinstance(raw_call.args[0], StringLit)
-        assert raw_call.callee.node_id < raw_call.args[0].node_id < raw_call.node_id
-
-    def test_dotted_raw_tail_member_span_and_node_ids_precede_its_payload(self) -> None:
-        raw_call = first(parse("ag.ask$::[Review] payload"))
-        assert isinstance(raw_call, Call)
-        assert isinstance(raw_call.callee, FieldAccess)
-        assert isinstance(raw_call.args[0], StringLit)
-        member = raw_call.callee
-        assert (
-            member.span.start_line,
-            member.span.start_col,
-            member.span.end_line,
-            member.span.end_col,
-            member.span.start_offset,
-            member.span.end_offset,
-        ) == (1, 1, 1, 8, 0, 7)
-        assert member.obj.node_id < member.node_id < raw_call.type_args[0].node_id
-        assert raw_call.type_args[0].node_id < raw_call.args[0].node_id < raw_call.node_id
 
     def test_juxtaposed_dotted_raw_tail_preserves_postfix_component_spans_and_ids(self) -> None:
         print_call = first(parse("print a.b().c[0].ask$ x"))
@@ -5204,31 +5141,6 @@ print exec$ true
         ]
         assert node_ids == sorted(node_ids)
         assert len(node_ids) == len(set(node_ids))
-
-    def test_interpolated_raw_text_precedes_its_interpolation_node_ids(self) -> None:
-        raw_call = first(parse("exec$ before %{value}"))
-        assert isinstance(raw_call, Call)
-        assert isinstance(raw_call.args[0], Template)
-        text, interpolation = raw_call.args[0].segments
-        assert isinstance(text, TextSegment)
-        assert isinstance(interpolation, InterpSegment)
-        assert text.node_id < interpolation.expr.node_id < interpolation.node_id
-
-    def test_desugared_statement_runs_through_the_pipeline(self) -> None:
-        completed = ProcessCaptureResult(
-            returncode=0,
-            stdout="",
-            stderr="",
-            elapsed=0.0,
-            timed_out=False,
-            spawn_error=None,
-        )
-        from agm.agl import PipelineDriver
-
-        with patch("agm.core.process.run_capture_result", return_value=completed):
-            result = run_inline_command(PipelineDriver(), "exec$ true")
-
-        assert result.ok
 
 
 class TestVerbatimTextLiteral:
@@ -5272,6 +5184,12 @@ class TestVerbatimTextLiteral:
                 'let x = ask "a\\nb"\nx',
                 id="block_form_followed_by_an_item",
             ),
+            pytest.param("1 + 1; $ true", '1 + 1; "true"', id="statement_semicolon"),
+            pytest.param(
+                "def f() = return $ x",
+                'def f() = return "x"',
+                id="return_body",
+            ),
         ),
     )
     def test_matches_the_equivalent_quoted_template(
@@ -5293,9 +5211,22 @@ class TestVerbatimTextLiteral:
             parse_program(source)
         assert exc_info.value.source_span.start_offset == 10
 
-    def test_juxtaposition_chains_through_an_infix_pipe(self) -> None:
-        verbatim_call = items(parse_program("infixr <|\nprint <| ask $ x"))[-1]
-        quoted_call = items(parse_program('infixr <|\nprint <| ask "x"'))[-1]
+    @pytest.mark.parametrize(
+        ("verbatim_source", "quoted_source"),
+        (
+            pytest.param("infixr <|\nprint <| ask $ x", 'infixr <|\nprint <| ask "x"', id="plain"),
+            pytest.param(
+                "infixr <|\nprint <| ag.ask $ Summarize %{subject}",
+                'infixr <|\nprint <| ag.ask("Summarize %{subject}")',
+                id="dotted_member",
+            ),
+        ),
+    )
+    def test_juxtaposition_chains_through_an_infix_pipe(
+        self, verbatim_source: str, quoted_source: str
+    ) -> None:
+        verbatim_call = items(parse_program(verbatim_source))[-1]
+        quoted_call = items(parse_program(quoted_source))[-1]
         assert verbatim_call == quoted_call
         assert isinstance(verbatim_call, Call)
         assert isinstance(verbatim_call.callee, VarRef)
@@ -5308,6 +5239,143 @@ class TestVerbatimTextLiteral:
         body = expr.branches[0].body
         assert isinstance(body, StringLit)
         assert body.value == "a | else => $ b"
+
+    @pytest.mark.parametrize(
+        ("verbatim_source", "call_source"),
+        (
+            pytest.param(
+                "agents[0].ask $ Continue %{subject}",
+                'agents[0].ask("Continue %{subject}")',
+                id="indexed_receiver",
+            ),
+            pytest.param(
+                "make_agent().ask $ Continue %{subject}",
+                'make_agent().ask("Continue %{subject}")',
+                id="call_receiver",
+            ),
+            pytest.param(
+                "fleet.current[0].ask $ Continue %{subject}",
+                'fleet.current[0].ask("Continue %{subject}")',
+                id="chained_dotted_index_receiver",
+            ),
+            pytest.param(
+                "ag.ask::[Review] $ Review %{subject} carefully",
+                'ag.ask::[Review]("Review %{subject} carefully")',
+                id="dotted_typed",
+            ),
+            pytest.param(
+                "ag.ask::[Review] $\n  Review %{subject} carefully",
+                'ag.ask::[Review]("""Review %{subject} carefully""")',
+                id="dotted_typed_block_form",
+            ),
+        ),
+    )
+    def test_dotted_member_matches_the_equivalent_call(
+        self, verbatim_source: str, call_source: str
+    ) -> None:
+        assert first(parse(verbatim_source)) == first(parse(call_source))
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let a = (1 + 2\nlet b: text = $ echo hi\nprint(b)\n",
+            "let a = [1, 2\nlet b: text = $ echo hi\n",
+        ),
+    )
+    def test_unclosed_bracket_is_reported_where_the_expression_breaks(self, source: str) -> None:
+        # A missing closing bracket must not be reported as a misplaced verbatim
+        # literal on a later line; the diagnostic belongs to the item that
+        # cannot continue.
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (2, 1)
+
+    def test_desugaring_assigns_node_ids_in_source_order(self) -> None:
+        call = first(parse("exec $ true"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert isinstance(call.args[0], StringLit)
+        assert call.callee.node_id < call.args[0].node_id < call.node_id
+
+    def test_dotted_typed_member_span_and_node_ids_precede_its_payload(self) -> None:
+        call = first(parse("ag.ask::[Review] $ payload"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, FieldAccess)
+        assert isinstance(call.args[0], StringLit)
+        member = call.callee
+        assert (
+            member.span.start_line,
+            member.span.start_col,
+            member.span.end_line,
+            member.span.end_col,
+            member.span.start_offset,
+            member.span.end_offset,
+        ) == (1, 1, 1, 7, 0, 6)
+        assert member.obj.node_id < member.node_id < call.type_args[0].node_id
+        assert call.type_args[0].node_id < call.args[0].node_id < call.node_id
+
+    def test_postfix_chain_receiver_preserves_component_spans_and_ids(self) -> None:
+        call = first(parse("a.b().c[0].ask $ x"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, FieldAccess)
+        assert isinstance(call.args[0], StringLit)
+        ask = call.callee
+        assert isinstance(ask.obj, IndexAccess)
+        indexed = ask.obj
+        assert isinstance(indexed.obj, FieldAccess)
+        member_c = indexed.obj
+        assert isinstance(member_c.obj, Call)
+        call_b = member_c.obj
+        assert isinstance(call_b.callee, FieldAccess)
+        member_b = call_b.callee
+        assert isinstance(member_b.obj, VarRef)
+        root = member_b.obj
+        assert isinstance(indexed.index, IntLit)
+
+        assert [
+            (node.span.start_offset, node.span.end_offset)
+            for node in (root, member_b, call_b, member_c, indexed.index, indexed, ask)
+        ] == [(0, 1), (0, 3), (0, 5), (0, 7), (8, 9), (0, 10), (0, 14)]
+        node_ids = [
+            root.node_id,
+            member_b.node_id,
+            call_b.node_id,
+            member_c.node_id,
+            indexed.index.node_id,
+            indexed.node_id,
+            ask.node_id,
+            call.args[0].node_id,
+            call.node_id,
+        ]
+        assert node_ids == sorted(node_ids)
+        assert len(node_ids) == len(set(node_ids))
+
+    def test_interpolated_text_precedes_its_interpolation_node_ids(self) -> None:
+        call = first(parse("exec $ before %{value}"))
+        assert isinstance(call, Call)
+        assert isinstance(call.args[0], Template)
+        text, interpolation = call.args[0].segments
+        assert isinstance(text, TextSegment)
+        assert isinstance(interpolation, InterpSegment)
+        assert text.node_id < interpolation.expr.node_id < interpolation.node_id
+
+    def test_desugared_statement_runs_through_the_pipeline(self) -> None:
+        completed = ProcessCaptureResult(
+            returncode=0,
+            stdout="",
+            stderr="",
+            elapsed=0.0,
+            timed_out=False,
+            spawn_error=None,
+        )
+        from agm.agl import PipelineDriver
+
+        with patch("agm.core.process.run_capture_result", return_value=completed):
+            result = run_inline_command(PipelineDriver(), "exec $ true")
+
+        assert result.ok
 
 
 class TestEmptyModule:

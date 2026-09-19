@@ -3332,108 +3332,6 @@ class TestRawTailTypingParity:
         raw_checked, _ = assert_builtin_call_type_parity(raw_source, call_source)
         assert raw_checked.call_sites[0].target_type == _expected_type(raw_checked, expected_type)
 
-    @pytest.mark.parametrize(
-        ("raw_source", "call_source", "expected_type"),
-        (
-            pytest.param(
-                "let result: text = exec$ echo result\nresult",
-                'let result: text = exec("echo result")\nresult',
-                TextType(),
-                id="exec-binder",
-            ),
-            pytest.param(
-                "def build() -> text\n  return exec$ echo result\nbuild()",
-                'def build() -> text\n  return exec("echo result")\nbuild()',
-                TextType(),
-                id="exec-return",
-            ),
-            pytest.param(
-                "def build() -> text = exec$ echo result\nbuild()",
-                'def build() -> text = exec("echo result")\nbuild()',
-                TextType(),
-                id="exec-inline-function",
-            ),
-            pytest.param(
-                "record Review\n  approved: bool\nlet result: Review = ask$ review it\nresult",
-                'record Review\n  approved: bool\nlet result: Review = ask("review it")\nresult',
-                "Review",
-                id="ask-binder",
-            ),
-            pytest.param(
-                (
-                    "record Review\n  approved: bool\ndef build() -> Review\n"
-                    "  return ask$ review it\nbuild()"
-                ),
-                (
-                    "record Review\n  approved: bool\ndef build() -> Review\n"
-                    '  return ask("review it")\nbuild()'
-                ),
-                "Review",
-                id="ask-return",
-            ),
-            pytest.param(
-                "record Review\n  approved: bool\ndef build() -> Review = ask$ review it\nbuild()",
-                (
-                    "record Review\n  approved: bool\ndef build() -> Review = "
-                    'ask("review it")\nbuild()'
-                ),
-                "Review",
-                id="ask-inline-function",
-            ),
-        ),
-    )
-    def test_contextual_target_matches_call_form(
-        self, raw_source: str, call_source: str, expected_type: Type | str
-    ) -> None:
-        raw_checked, _ = assert_builtin_call_type_parity(raw_source, call_source)
-        assert raw_checked.call_sites[0].target_type == _expected_type(raw_checked, expected_type)
-
-    @pytest.mark.parametrize(
-        ("raw_source", "call_source", "expected_type", "structured_exec"),
-        (
-            pytest.param(
-                "let result = exec$ true\nresult",
-                'let result = exec("true")\nresult',
-                "ExecResult",
-                True,
-                id="exec",
-            ),
-            pytest.param(
-                "let result = ask$ summarize\nresult",
-                'let result = ask("summarize")\nresult',
-                TextType(),
-                False,
-                id="ask",
-            ),
-        ),
-    )
-    def test_default_target_matches_call_form(
-        self,
-        raw_source: str,
-        call_source: str,
-        expected_type: Type | str,
-        structured_exec: bool,
-    ) -> None:
-        raw_checked, _ = assert_builtin_call_type_parity(raw_source, call_source)
-        call_site = raw_checked.call_sites[0]
-        assert call_site.target_type == _expected_type(raw_checked, expected_type)
-        assert raw_checked.contract_specs[call_site.node_id].structured_exec is structured_exec
-
-    def test_exec_statement_discard_matches_call_form(self) -> None:
-        raw_checked, _ = assert_builtin_call_type_parity("exec$ true\n()", 'exec("true")\n()')
-        call_site = raw_checked.call_sites[0]
-        assert raw_checked.node_types[call_site.node_id] == UnitType()
-        assert raw_checked.contract_specs[call_site.node_id] == OutputContractSpec(
-            UnitType(), "none", None, structured_exec=False
-        )
-
-    def test_ask_raw_payload_has_no_agent_slot(self) -> None:
-        accept_type("ask$ agent = reviewer", capabilities=no_agent_caps())
-        accept_type(
-            'let reviewer = AgentCommand("reviewer")\nreviewer.ask("prompt")',
-            capabilities=no_agent_caps(),
-        )
-
 
 # ---------------------------------------------------------------------------
 # Verbatim `$` literal target-type parity
@@ -3441,7 +3339,7 @@ class TestRawTailTypingParity:
 
 
 class TestVerbatimLiteralTypingParity:
-    """Explicit type arguments on the callee infer through a `$` juxtaposition argument."""
+    """A `$` juxtaposition argument types exactly like the equivalent quoted call."""
 
     @pytest.mark.parametrize(
         ("verbatim_source", "call_source", "expected_type"),
@@ -3472,6 +3370,110 @@ class TestVerbatimLiteralTypingParity:
         verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
         assert verbatim_checked.call_sites[0].target_type == _expected_type(
             verbatim_checked, expected_type
+        )
+
+    @pytest.mark.parametrize(
+        ("verbatim_source", "call_source", "expected_type"),
+        (
+            pytest.param(
+                "let result: text = exec $ echo result\nresult",
+                'let result: text = exec("echo result")\nresult',
+                TextType(),
+                id="exec-binder",
+            ),
+            pytest.param(
+                "def build() -> text\n  return exec $ echo result\nbuild()",
+                'def build() -> text\n  return exec("echo result")\nbuild()',
+                TextType(),
+                id="exec-return",
+            ),
+            pytest.param(
+                "def build() -> text = exec $ echo result\nbuild()",
+                'def build() -> text = exec("echo result")\nbuild()',
+                TextType(),
+                id="exec-inline-function",
+            ),
+            pytest.param(
+                "record Review\n  approved: bool\nlet result: Review = ask $ review it\nresult",
+                'record Review\n  approved: bool\nlet result: Review = ask("review it")\nresult',
+                "Review",
+                id="ask-binder",
+            ),
+            pytest.param(
+                (
+                    "record Review\n  approved: bool\ndef build() -> Review\n"
+                    "  return ask $ review it\nbuild()"
+                ),
+                (
+                    "record Review\n  approved: bool\ndef build() -> Review\n"
+                    '  return ask("review it")\nbuild()'
+                ),
+                "Review",
+                id="ask-return",
+            ),
+            pytest.param(
+                "record Review\n  approved: bool\ndef build() -> Review = ask $ review it\nbuild()",
+                (
+                    "record Review\n  approved: bool\ndef build() -> Review = "
+                    'ask("review it")\nbuild()'
+                ),
+                "Review",
+                id="ask-inline-function",
+            ),
+        ),
+    )
+    def test_contextual_target_matches_call_form(
+        self, verbatim_source: str, call_source: str, expected_type: Type | str
+    ) -> None:
+        verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
+        assert verbatim_checked.call_sites[0].target_type == _expected_type(
+            verbatim_checked, expected_type
+        )
+
+    @pytest.mark.parametrize(
+        ("verbatim_source", "call_source", "expected_type", "structured_exec"),
+        (
+            pytest.param(
+                "let result = exec $ true\nresult",
+                'let result = exec("true")\nresult',
+                "ExecResult",
+                True,
+                id="exec",
+            ),
+            pytest.param(
+                "let result = ask $ summarize\nresult",
+                'let result = ask("summarize")\nresult',
+                TextType(),
+                False,
+                id="ask",
+            ),
+        ),
+    )
+    def test_default_target_matches_call_form(
+        self,
+        verbatim_source: str,
+        call_source: str,
+        expected_type: Type | str,
+        structured_exec: bool,
+    ) -> None:
+        verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
+        call_site = verbatim_checked.call_sites[0]
+        assert call_site.target_type == _expected_type(verbatim_checked, expected_type)
+        assert verbatim_checked.contract_specs[call_site.node_id].structured_exec is structured_exec
+
+    def test_exec_statement_discard_matches_call_form(self) -> None:
+        verbatim_checked, _ = assert_builtin_call_type_parity("exec $ true\n()", 'exec("true")\n()')
+        call_site = verbatim_checked.call_sites[0]
+        assert verbatim_checked.node_types[call_site.node_id] == UnitType()
+        assert verbatim_checked.contract_specs[call_site.node_id] == OutputContractSpec(
+            UnitType(), "none", None, structured_exec=False
+        )
+
+    def test_ask_payload_has_no_agent_slot(self) -> None:
+        accept_type("ask $ agent = reviewer", capabilities=no_agent_caps())
+        accept_type(
+            'let reviewer = AgentCommand("reviewer")\nreviewer.ask("prompt")',
+            capabilities=no_agent_caps(),
         )
 
 
@@ -6518,8 +6520,8 @@ class TestFieldAccess:
         error = reject_type(source)
         assert "field" in str(error).lower() and "method" in str(error).lower()
 
-    def test_dotted_raw_tail_unknown_member_is_a_member_error(self) -> None:
-        error = reject_type('let value = AgentCommand("worker")\nvalue.exec$ echo hello')
+    def test_unknown_member_juxtaposed_with_text_is_a_member_error(self) -> None:
+        error = reject_type('let value = AgentCommand("worker")\nvalue.bogus $ echo hello')
         assert "field" in str(error).lower() and "method" in str(error).lower()
         assert error.span is not None
         assert (

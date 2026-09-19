@@ -1,3 +1,3 @@
 program def main() -> unit =
   let value = AgentCommand("worker")
-  value.exec$ echo hello
+  value.bogus $ echo hello

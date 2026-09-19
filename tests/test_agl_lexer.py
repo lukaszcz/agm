@@ -967,9 +967,6 @@ class TestRawTailForms:
     def test_block_tab_straddling_the_margin_keeps_relative_indentation(self) -> None:
         assert raw_fragments("ask$\n echo start\n\tnested") == ["echo start\n   nested"]
 
-    def test_block_indentation_tab_is_advised_against(self) -> None:
-        assert lex_tab_warnings("exec$\n\ttext") != []
-
     def test_block_payload_span_ends_at_the_last_payload_line(self) -> None:
         end = next(t for t in tokenize("exec$\n  echo hi\nlet z = 1") if t.type == "RAW_TAIL_END")
         assert (end.line, end.column, end.end_line, end.end_column) == (2, 10, 2, 10)
@@ -993,30 +990,6 @@ class TestRawTailForms:
         span = exc_info.value.span
         assert span is not None
         assert (span.start_line, span.start_col) == (1, 2)
-
-    def test_bracketed_raw_tail_error_wins_over_a_later_lex_error(self) -> None:
-        # A closed bracket encloses the raw tail, so its diagnostic is raised
-        # even though a later unterminated string would otherwise be the failure.
-        with pytest.raises(LexError) as exc_info:
-            tok("[exec$ a] 'oops")
-        span = exc_info.value.span
-        # Anchored at the raw tail (column 2), not at the unterminated string
-        # that starts at column 11.
-        assert span is not None
-        assert (span.start_line, span.start_col) == (1, 2)
-
-    def test_block_followed_by_comment_emits_one_layout_newline(self) -> None:
-        assert tok("exec$\n  echo hi\n# outside\nafter") == [
-            ("RAW_TAIL_NAME", "exec$"),
-            ("RAW_TAIL_START", ""),
-            ("RAW_FRAGMENT", "echo hi"),
-            ("RAW_TAIL_END", ""),
-            ("_NEWLINE", "0"),
-            ("NAME", "after"),
-        ]
-
-    def test_tab_indentation_is_dedented_by_visual_width(self) -> None:
-        assert ("RAW_FRAGMENT", "text") in tok("exec$\n\ttext")
 
     def test_under_indented_block_line_is_rejected_at_its_location(self) -> None:
         with pytest.raises(LexError) as exc_info:
@@ -1079,27 +1052,6 @@ class TestRawTailForms:
         span = exc_info.value.span
         assert span is not None
         assert (span.start_line, span.start_col) == (2, 7)
-
-    def test_raw_tail_after_branch_arrow_scans_its_payload(self) -> None:
-        # The payload is shell/prompt text wherever it appears, so it is never
-        # re-read as code; the parser rejects the position.
-        assert tok("if true => exec$ date | else => 0") == [
-            ("if", "if"),
-            ("true", "true"),
-            ("ARROW", "=>"),
-            ("RAW_TAIL_NAME", "exec$"),
-            ("RAW_TAIL_START", ""),
-            ("RAW_FRAGMENT", "date | else => 0"),
-            ("RAW_TAIL_END", ""),
-        ]
-
-    def test_raw_tail_after_branch_arrow_does_not_lex_shell_quotes(self) -> None:
-        assert ("RAW_FRAGMENT", "echo 'oops") in tok("if true => exec$ echo 'oops")
-
-    def test_raw_tail_on_arrow_suite_line_is_scanned(self) -> None:
-        tokens = tok("if true =>\n  exec$ true")
-        assert ("RAW_TAIL_NAME", "exec$") in tokens
-        assert ("RAW_FRAGMENT", "true") in tokens
 
     @pytest.mark.parametrize(
         "source",
@@ -1447,6 +1399,52 @@ class TestVerbatimLiteral:
     def test_dollar_under_an_unclosed_bracket_is_left_to_the_parser(self) -> None:
         tokens = tok("let a = (1 + $ echo hi\nprint(b)\n")
         assert ("VERBATIM_START", "$") in tokens
+
+    def test_bracketed_dollar_error_wins_over_a_later_lex_error(self) -> None:
+        # A closed bracket encloses the literal, so its diagnostic is raised
+        # even though a later unterminated string would otherwise be the failure.
+        with pytest.raises(LexError) as exc_info:
+            tok("[$ a] 'oops")
+        span = exc_info.value.span
+        # Anchored at the `$` (column 2), not at the unterminated string
+        # that starts at column 7.
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, 2)
+
+    def test_block_indentation_tab_is_advised_against(self) -> None:
+        assert lex_tab_warnings("$\n\ttext") != []
+
+    def test_tab_indentation_is_dedented_by_visual_width(self) -> None:
+        assert ("STRING_FRAGMENT", "text") in tok("$\n\ttext")
+
+    def test_block_followed_by_comment_emits_one_layout_newline(self) -> None:
+        assert tok("$\n  echo hi\n# outside\nafter") == [
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "echo hi"),
+            ("VERBATIM_END", ""),
+            ("_NEWLINE", "0"),
+            ("NAME", "after"),
+        ]
+
+    def test_verbatim_after_branch_arrow_scans_its_payload(self) -> None:
+        # The payload is verbatim text wherever it appears, so it is never
+        # re-read as code; same-line swallowing keeps it inside one branch.
+        assert tok("if true => $ date | else => 0") == [
+            ("if", "if"),
+            ("true", "true"),
+            ("ARROW", "=>"),
+            ("VERBATIM_START", "$"),
+            ("STRING_FRAGMENT", "date | else => 0"),
+            ("VERBATIM_END", ""),
+        ]
+
+    def test_verbatim_after_branch_arrow_does_not_lex_shell_quotes(self) -> None:
+        assert ("STRING_FRAGMENT", "echo 'oops") in tok("if true => $ echo 'oops")
+
+    def test_verbatim_on_arrow_suite_line_is_scanned(self) -> None:
+        tokens = tok("if true =>\n  $ true")
+        assert ("VERBATIM_START", "$") in tokens
+        assert ("STRING_FRAGMENT", "true") in tokens
 
 
 # ---------------------------------------------------------------------------
@@ -3643,8 +3641,8 @@ class TestCommentSpans:
     def test_hash_inside_a_string_is_not_a_comment(self) -> None:
         assert lex_comment_spans('let x = "a # b"\n') == []
 
-    def test_hash_inside_a_raw_tail_is_not_a_comment(self) -> None:
-        assert lex_comment_spans("exec$ echo # not a comment\n") == []
+    def test_hash_inside_a_verbatim_literal_is_not_a_comment(self) -> None:
+        assert lex_comment_spans("$ echo # not a comment\n") == []
 
     def test_spans_from_the_valid_prefix_survive_a_lex_error(self) -> None:
         # A half-typed REPL entry still highlights the comments it already has.

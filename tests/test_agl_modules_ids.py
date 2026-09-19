@@ -152,6 +152,29 @@ class TestStandardLibraryIds:
         assert STD_CONFIG_ID.path_str() == "std/config"
 
 
+class TestSharesMountWith:
+    def test_same_package_modules_share_a_mount(self) -> None:
+        assert ModuleId.from_path("std/http").shares_mount_with(ModuleId.from_path("std/url"))
+
+    def test_different_packages_do_not_share_a_mount(self) -> None:
+        assert not ModuleId.from_path("std/http").shares_mount_with(
+            ModuleId.from_path("lib/tracer")
+        )
+
+    def test_entry_shares_a_mount_with_nothing(self) -> None:
+        assert not ENTRY_ID.shares_mount_with(ENTRY_ID)
+        assert not ENTRY_ID.shares_mount_with(ModuleId.from_path("std/http"))
+
+    def test_reserved_shares_a_mount_with_nothing(self) -> None:
+        assert not RESERVED_ID.shares_mount_with(RESERVED_ID)
+        assert not RESERVED_ID.shares_mount_with(ModuleId.from_path("std/http"))
+
+    def test_is_symmetric(self) -> None:
+        a = ModuleId.from_path("std/http")
+        b = ModuleId.from_path("std/url")
+        assert a.shares_mount_with(b) == b.shares_mount_with(a)
+
+
 class TestSentinelIds:
     def test_sentinel_is_module_id(self) -> None:
         assert isinstance(ENTRY_ID, ModuleId)

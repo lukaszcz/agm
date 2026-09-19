@@ -12,7 +12,12 @@ from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
-from agm.agl.runtime.externs import ExternRegistry, ExternRuntimeState, close_detached_state
+from agm.agl.runtime.externs import (
+    ExternRegistry,
+    ExternRuntimeState,
+    active_call_span,
+    close_detached_state,
+)
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     UNIT_VALUE,
@@ -606,3 +611,8 @@ def test_close_detached_state_closes_state_created_by_a_direct_companion_call(
     close_detached_state()
 
     assert len(companion.closed) == 1
+
+
+def test_active_call_span_is_none_outside_an_active_extern_call() -> None:
+    """No extern call is active outside evaluation, so there is no span to report."""
+    assert active_call_span() is None

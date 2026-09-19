@@ -138,8 +138,10 @@ Field notes:
   The harness rejects an unexpected command and verifies the full script was used,
   so acceptance tests never execute a real shell command.
 - `http` — ordered scripted HTTP exchanges, in `tests/_http_helpers.py`'s `FakeHttp`
-  outcome shape: each object may assert an `expect` (method, url, header subset, body,
-  `timeout`, `verify`) against the actual request and scripts its outcome — `status`,
+  outcome shape: each object may assert an `expect` (method, url, a header subset where
+  a `null` value asserts the header's absence, body, `timeout` as a `[connect, read]`
+  two-element array or `null` for none, `verify`) against the actual request and scripts
+  its outcome — `status`,
   `headers` (a mapping, or a list of `[name, value]` pairs to script repeated headers),
   a `body` (+ optional `charset`) or `body_hex`, or a `fail`/`fail_mid_stream` kind. The
   harness installs `FakeHttp` in place of `agm.core.http.open_session` and verifies the

@@ -117,8 +117,8 @@ def session() -> requests.Session:
 ### Trace hook
 
 A companion may emit its own structured trace records with
-`runtime.trace(kind, payload)`, tagged with the calling module and the call
-site's source location:
+`runtime.trace(kind, payload)`, tagged with the declaring module and an
+attributed call site:
 
 ```python
 from agl import runtime
@@ -134,11 +134,22 @@ direct host call outside evaluation is a silent no-op. Nothing is written when
 tracing is off. A payload value with no JSON representation, including a
 reference cycle, is replaced by a marker rather than failing the call.
 
-The record is `{kind, origin, line, col, ...payload}`: `kind` is the hook's
-first argument, `origin` is the calling module's path, `line`/`col` locate the
-call site, and every payload field sits at the top level beside them. A
-payload key of `ts`, `run_id`, `kind`, `origin`, `line`, or `col` collides with
-this envelope and raises `ValueError`.
+The record is `{kind, origin, site, line, col, ...payload}`: `kind` is the
+hook's first argument, `origin` is the extern's own declaring module and never
+changes with the caller, `site` is the module owning the attributed
+`line`/`col` (a different module than `origin` whenever the call is attributed
+across a package boundary), and every payload field sits at the top level
+beside them. A payload key of `ts`, `run_id`, `kind`, `origin`, `site`, `line`,
+or `col` collides with this envelope and raises `ValueError`.
+
+The attributed call site is the nearest one outside the extern's own mount
+(same leading module-path segment: a package name, `std`, or a loose module's
+top-level directory): a package's own wrapper functions calling its extern
+are an implementation detail, so their internal calls are skipped in favor
+of the call the program author actually wrote. When the whole active call
+chain stays inside that mount (an entry point that is itself part of it),
+the immediate call is reported for lack of an outside one, and `site` is
+that call's own module.
 
 ## Value mapping
 

@@ -31,7 +31,7 @@ _JSON_SCALARS = (str, int, float, bool)
 #: Envelope keys :meth:`TraceStore.companion_record` writes itself; a
 #: companion's own payload may never contribute one, so its shape can never
 #: collide with the envelope it is embedded in.
-RESERVED_ENVELOPE_KEYS = frozenset({"ts", "run_id", "kind", "origin", "line", "col"})
+RESERVED_ENVELOPE_KEYS = frozenset({"ts", "run_id", "kind", "origin", "line", "col", "site"})
 
 
 def _sanitize(value: object, active: frozenset[int]) -> object:
@@ -277,16 +277,21 @@ class TraceStore:
         kind: str,
         payload: "Mapping[str, object]",
         span: "SourceSpan | Location | None" = None,
+        site: str | None = None,
     ) -> None:
         """Emit one record for a companion's own ``runtime.trace(kind, payload)`` call.
 
-        *origin* is the calling companion's AgL module path. *payload* is
-        degraded field by field (see :func:`_sanitize`) rather than raising,
-        since it is the companion's own data, unlike every other record kind.
-        Unlike every sibling method, this has no ``self._path is not None``
-        guard of its own: the sole caller (``_CompanionRuntime.trace``) already
-        checks :attr:`path` first, so it can skip computing *origin* — a
-        display-path rendering — when this store is not writing; :meth:`_emit`
+        *origin* is the calling companion's own AgL module path -- always the
+        package that declares the extern, regardless of who called it.
+        *span*/*site* are the attributed call site: the nearest one outside
+        that package, and the display path of the module owning it (never
+        the companion's own module when they differ). *payload* is degraded
+        field by field (see :func:`_sanitize`) rather than raising, since it
+        is the companion's own data, unlike every other record kind. Unlike
+        every sibling method, this has no ``self._path is not None`` guard of
+        its own: the sole caller (``_CompanionRuntime.trace``) already checks
+        :attr:`path` first, so it can skip computing *origin*/*site* -- a
+        display-path rendering -- when this store is not writing; :meth:`_emit`
         still no-ops on a disabled store regardless.
 
         :raises ValueError: *payload* uses one of :data:`RESERVED_ENVELOPE_KEYS`
@@ -298,6 +303,8 @@ class TraceStore:
             raise ValueError(f"runtime.trace payload uses reserved key(s): {sorted(reserved)}")
         extra = _sanitize_mapping(payload, frozenset({id(payload)}))
         extra["origin"] = origin
+        if site is not None:
+            extra["site"] = site
         self._emit(kind, self._with_span(extra, span))
 
 

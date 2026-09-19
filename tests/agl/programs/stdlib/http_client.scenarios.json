@@ -1,0 +1,95 @@
+{
+  "scenarios": [
+    {
+      "name": "a_relative_target_joins_onto_base_url_and_an_absolute_one_passes_through",
+      "params": {"root": "/unused", "scenario": "relative_joined_absolute_passed_through"},
+      "http": [
+        {"status": 200, "body": "", "expect": {"url": "https://api.example.org/v1/repos/x"}},
+        {"status": 200, "body": "", "expect": {"url": "https://other.example/y"}}
+      ],
+      "expect": {"stdout": "200\n200\n"}
+    },
+    {
+      "name": "a_call_header_overrides_a_shared_name_and_a_client_only_header_survives",
+      "params": {"root": "/unused", "scenario": "header_merge_call_wins_client_only_kept"},
+      "http": [
+        {
+          "status": 200,
+          "body": "",
+          "expect": {"headers": {"x-common": "call", "x-client-only": "yes"}}
+        }
+      ],
+      "expect": {"stdout": "200\n"}
+    },
+    {
+      "name": "client_auth_and_cookies_are_sent_on_every_call",
+      "params": {"root": "/unused", "scenario": "auth_and_cookies_sent_on_every_call"},
+      "http": [
+        {
+          "status": 200,
+          "body": "",
+          "expect": {"headers": {"authorization": "Bearer tok", "cookie": "session=abc"}}
+        },
+        {
+          "status": 200,
+          "body": "",
+          "expect": {"headers": {"authorization": "Bearer tok", "cookie": "session=abc"}}
+        }
+      ],
+      "expect": {"stdout": "200\n200\n"}
+    },
+    {
+      "name": "a_with_override_changes_policy_for_one_call_only",
+      "params": {"root": "/unused", "scenario": "with_overrides_policy_for_one_call_only"},
+      "http": [
+        {
+          "status": 302,
+          "headers": {"location": "https://x/final"},
+          "body": "",
+          "expect": {"url": "https://x/start", "timeout": [5.0, 5.0], "verify": false}
+        },
+        {
+          "status": 302,
+          "headers": {"location": "https://x/final"},
+          "body": "",
+          "expect": {"url": "https://x/start", "timeout": [30.0, 30.0], "verify": true}
+        },
+        {"status": 200, "body": "", "expect": {"url": "https://x/final"}}
+      ],
+      "expect": {"stdout": "302\n200\n"}
+    },
+    {
+      "name": "cookies_persist_across_calls_only_through_an_explicit_record_update",
+      "params": {"root": "/unused", "scenario": "cookie_persistence_via_record_update"},
+      "http": [
+        {"status": 200, "headers": {"set-cookie": "session=new"}, "body": ""},
+        {"status": 200, "body": "", "expect": {"headers": {"cookie": "session=new"}}},
+        {"status": 200, "body": "", "expect": {"headers": {"cookie": null}}}
+      ],
+      "expect": {"stdout": "200\n200\n"}
+    },
+    {
+      "name": "a_module_timeout_seed_is_captured_at_construction_and_survives_a_later_write",
+      "params": {
+        "root": "/unused",
+        "scenario": "module_timeout_seed_captured_survives_a_later_write"
+      },
+      "module_params": {"std/http::timeout": {"$case": "Some", "value": "9s"}},
+      "http": [{"status": 200, "body": "", "expect": {"timeout": [9.0, 9.0]}}],
+      "expect": {"stdout": "200\n"}
+    },
+    {
+      "name": "client_download_saves_the_response_body_to_disk",
+      "params": {"root": "$TEMP_ROOT", "scenario": "download_saves_the_response_body"},
+      "filesystem": {},
+      "http": [{"status": 200, "body": "client-payload"}],
+      "expect": {"stdout": "200\nclient-payload\n"}
+    },
+    {
+      "name": "client_try_get_returns_err_on_a_scripted_transport_failure",
+      "params": {"root": "/unused", "scenario": "try_get_returns_err_on_a_scripted_failure"},
+      "http": [{"fail": "connection"}],
+      "expect": {"stdout": "https://x/y\n"}
+    }
+  ]
+}

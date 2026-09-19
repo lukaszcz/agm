@@ -78,6 +78,17 @@ class ModuleId:
         """
         return self.is_standard_library or self.is_reserved
 
+    def shares_mount_with(self, other: "ModuleId") -> bool:
+        """Return whether this module and *other* are mounted under the same root.
+
+        Same leading path segment: a package's mount name (including
+        ``std``), or a loose module's top-level directory; the entry and
+        reserved sentinels share a mount with nothing, including each other.
+        """
+        if self.is_entry or self.is_reserved or other.is_entry or other.is_reserved:
+            return False
+        return self.segments[:1] == other.segments[:1]
+
     # ------------------------------------------------------------------
     # String representations
     # ------------------------------------------------------------------

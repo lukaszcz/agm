@@ -1,0 +1,51 @@
+# std/http's data-only `Client`: base-url join, header/policy merge, `with`
+# overrides for one call, cookie persistence, the module timeout captured at
+# construction, `download`, and `try-get`, all against a scripted transport
+# (no network).
+import std/fs
+import std/http
+import std/path
+
+program def main(root: path, scenario: text) -> unit =
+  case scenario of
+    | "relative_joined_absolute_passed_through" =>
+        let api = http::client(base-url = Some("https://api.example.org/v1/"))
+        print(api.get("repos/x").status)
+        print(api.get("https://other.example/y").status)
+    | "header_merge_call_wins_client_only_kept" =>
+        let api = http::client(
+          headers = http::headers({"X-Common": "client", "X-Client-Only": "yes"}))
+        print(api.get("https://x/y", headers = http::headers({"X-Common": "call"})).status)
+    | "auth_and_cookies_sent_on_every_call" =>
+        let api = http::client(auth = http::Auth::Bearer("tok"), cookies = {"session": "abc"})
+        print(api.get("https://example.org/a").status)
+        print(api.get("https://example.org/b").status)
+    | "with_overrides_policy_for_one_call_only" =>
+        let api = http::client()
+        let overridden =
+          (api with follow-redirects = false, timeout = Some("5s"), verify-tls = false)
+        print(overridden.get("https://x/start").status)
+        print(api.get("https://x/start").status)
+    | "cookie_persistence_via_record_update" =>
+        let api = http::client()
+        let first = api.get("https://example.org/login")
+        let signed-in = api with cookies = first.cookies
+        print(signed-in.get("https://example.org/profile").status)
+        print(api.get("https://example.org/other").status)
+    | "module_timeout_seed_captured_survives_a_later_write" =>
+        let api = http::client()
+        http::timeout := None
+        print(api.get("https://x/y").status)
+    | "download_saves_the_response_body" =>
+        let api = http::client()
+        let destination = path::join([root, "client-saved.bin"])
+        let saved = api.download("https://x/y", destination)
+        print(saved.status)
+        print(fs::read(destination))
+    | "try_get_returns_err_on_a_scripted_failure" =>
+        let api = http::client()
+        case api.try-get("https://x/y") of
+          | Ok(value) => print(value.status)
+          | Err(error) => print(error.url)
+    | _ =>
+        ()

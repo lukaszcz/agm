@@ -97,6 +97,9 @@ class EffectCtx(Protocol):
     _host_contracts: Mapping[ContractId, OutputContract]
     _extern_registry: ExternRegistry
     _extern_runtime_state: ExternRuntimeState
+    _extern_span_resolver: Callable[
+        [ModuleId, "Location | None"], "tuple[Location | None, ModuleId | None]"
+    ]
 
     def _eval(self, expr: IrExpr) -> Value: ...
 
@@ -154,7 +157,7 @@ class EffectHandlers:
         extern: ExternFunctionBody,
         args: Sequence[Value],
         *,
-        location: Location | None,
+        location: "Location | None",
     ) -> Value:
         """Handle a call to an ``extern def``: resolve and invoke.
 
@@ -166,12 +169,14 @@ class EffectHandlers:
         violation — into ``AglRaise(ExternError)``, mirroring the ``exec``
         model; that failure names the extern as AgL declares it.
 
-        *location* is the call site's source location, when the call has one
-        of its own -- ``None`` for a companion callback that is itself an
-        extern, re-entered from :meth:`IrInterpreter._invoke_crossed_closure`
-        with the enclosing active call's own span instead. It becomes the
-        span for any ``runtime.trace`` record the companion emits; *origin*
-        is *module_id*'s own display path (e.g. ``std/http``).
+        *location* is this call's own site (``None`` for a companion callback
+        with no AgL call site of its own). The attributed (span, site) a
+        ``runtime.trace`` record uses -- a call site outside the extern's own
+        package, or the immediate one when the whole active chain lies inside
+        it (:meth:`IrInterpreter._extern_trace_span`) -- is resolved lazily,
+        via the interpreter's bound resolver, only when a companion actually
+        reads it (a trace record is written, or a crossed callback needs the
+        outer call's span), never unconditionally by this call.
         """
         fn = self._ctx._extern_registry.resolve(module_id, extern.companion_name)
         with self._ctx._extern_call_window():
@@ -186,7 +191,8 @@ class EffectHandlers:
                     state=self._ctx._extern_runtime_state,
                     trace_store=self._ctx._trace,
                     module_id=module_id,
-                    span=location,
+                    location=location,
+                    resolve_span=self._ctx._extern_span_resolver,
                 ),
             )
 

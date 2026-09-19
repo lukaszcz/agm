@@ -486,6 +486,8 @@ class IrInterpreter:
         }
         self._synthetic_main_frame: Frame | None = None
         self._call_depth: int = 0
+        self._current_module: ModuleId = program.entry_module
+        self._call_sites: list[tuple[ModuleId, Location | None]] = []
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._max_call_depth: int = max_call_depth
         self._agent_dispatcher = agent_dispatcher
@@ -510,6 +512,11 @@ class IrInterpreter:
             if (symbol := self._program.param_bindings.get(key)) is not None
         }
         self._host_reconfigurer = host_reconfigurer
+        # Bound once and handed to every extern call's `ActiveCall`, so
+        # resolving a trace span never allocates a per-call closure.
+        self._extern_span_resolver: Callable[
+            [ModuleId, Location | None], tuple[Location | None, ModuleId | None]
+        ] = self._extern_trace_span
 
         defaults: dict[BuiltinVarKey, Value] = {
             builtin_var_key(STD_CONFIG_ID, (), key): value
@@ -836,6 +843,28 @@ class IrInterpreter:
             )
         return val
 
+    def _enter_call(self, module_id: ModuleId, location: Location | None) -> ModuleId:
+        """Push *location* as this call's site and switch to *module_id*.
+
+        Pairs with :meth:`_exit_call`, which callers invoke with this
+        method's return value in a ``finally`` block — plain push/switch, no
+        generator overhead, entered around a callee's default-argument
+        resolution and body evaluation alike, so a default expression sees
+        the same ``_current_module``/``_call_sites`` state its callee's body
+        would (:meth:`_extern_trace_span`). *location* is this call's own
+        site (in the caller's module, or ``None`` for a companion callback
+        with no AgL call site of its own).
+        """
+        self._call_sites.append((self._current_module, location))
+        previous_module = self._current_module
+        self._current_module = module_id
+        return previous_module
+
+    def _exit_call(self, previous_module: ModuleId) -> None:
+        """Undo the matching :meth:`_enter_call`: restore its module, pop its call site."""
+        self._current_module = previous_module
+        self._call_sites.pop()
+
     def _bind_and_invoke(
         self,
         desc: "FunctionDescriptor",
@@ -847,7 +876,8 @@ class IrInterpreter:
     ) -> Value:
         """Build a call frame, push it, evaluate the function body, pop the frame, return result.
 
-        Shared by ``_execute_direct_call`` and ``_execute_indirect_call``.
+        Shared by every call path that has already resolved its arguments and
+        entered *desc*'s call context via :meth:`_enter_call`.
 
         Function parameters are immutable in AgL (they can never be the target of an
         assignment), so they are bound by value — never boxed in a Cell.
@@ -957,11 +987,13 @@ class IrInterpreter:
     def _invoke_crossed_closure(self, closure: IrClosureValue, args: tuple[Value, ...]) -> Value:
         """Re-enter this interpreter to execute an AgL callback from an extern.
 
-        A callback that is itself an ``extern def`` has no AgL call site of
-        its own -- it is invoked directly by the companion holding it, not
-        through an ``IrCall`` node -- so its trace span is the enclosing
-        active call's span (the outer call that handed the companion this
-        closure in the first place), or ``None`` outside any active call.
+        A callback has no AgL call site of its own -- it is invoked directly
+        by the companion holding it, not through an ``IrCall`` node -- so it
+        is attributed to the enclosing active call's own span (the outer call
+        that handed the companion this closure in the first place, ``None``
+        outside any active call). An extern callback resolves that further
+        through :meth:`_extern_trace_span`, exactly like an ordinary extern
+        call, in case the outer span still lies inside its own package.
         """
         desc = self._program.functions[closure.function_id]
         match desc.impl:
@@ -971,9 +1003,43 @@ class IrInterpreter:
                 )
             case IrFunctionBody(body=body):
                 self._check_call_depth()
-                return self._bind_and_invoke(desc, body, closure, list(args))
+                previous_module = self._enter_call(desc.module_id, active_call_span())
+                try:
+                    return self._bind_and_invoke(desc, body, closure, list(args))
+                finally:
+                    self._exit_call(previous_module)
             case other:  # pragma: no cover
                 assert_never(other)
+
+    def _extern_trace_span(
+        self, extern_module: ModuleId, location: Location | None
+    ) -> tuple[Location | None, ModuleId | None]:
+        """Return the (call site, its owning module) an extern call's trace record attributes to.
+
+        A package's own AgL wrappers often call its extern through several
+        layers of plain functions (``std/http``'s ``get`` calling its own
+        ``request`` extern, say): those internal call sites are the
+        package's own implementation, not something a program author wrote,
+        so a trace record naming one would point at the library rather than
+        the call the author made. This walks outward through the active call
+        stack -- innermost call first -- for the nearest site whose module is
+        mounted under a different root than the extern's own
+        (:meth:`ModuleId.shares_mount_with`), and falls back to the immediate
+        site when the whole active chain, down to the program root, stays
+        inside that package.
+
+        The owning module (the second element) is the module the returned
+        span's source location belongs to -- distinct from the extern's own
+        module (``origin``) whenever the span was found by walking outward.
+        It is ``None`` exactly when the span itself is ``None``: there is
+        nothing to attribute in that case.
+        """
+        if not self._current_module.shares_mount_with(extern_module):
+            return location, (self._current_module if location is not None else None)
+        for owner_module, site in reversed(self._call_sites):
+            if not owner_module.shares_mount_with(extern_module):
+                return site, (owner_module if site is not None else None)
+        return location, (self._current_module if location is not None else None)
 
     def _resolve_defaults_and_invoke(
         self,
@@ -983,6 +1049,7 @@ class IrInterpreter:
         arguments: "tuple[object, ...]",
         eval_arg: "Callable[[_ArgT], Value]",
         *,
+        location: Location | None = None,
         retain_frame: bool = False,
     ) -> Value:
         """Resolve each argument against the callee, in one positional pass, then invoke.
@@ -998,19 +1065,30 @@ class IrInterpreter:
         non-``UseDefault`` element of *arguments* is an ``_ArgT``, matching
         *eval_arg*'s own parameter type; the caller's own signature enforces
         that, so the per-element cast below only restates it for the type
-        checker.
+        checker. *location* is this call's own site: a default expression and
+        the callee's body run inside *desc*'s call context (:meth:`_enter_call`),
+        so they see the callee's own module and this call's site on
+        ``_call_sites``; a caller-supplied argument expression evaluates in
+        the caller's own unchanged context, exactly where it is written.
         """
         bound_values: list[Value] = []
         for param, arg in zip(desc.params, arguments, strict=True):
-            val = (
-                self._eval_default_in_frame(param, dict(closure_val.captures))
-                if isinstance(arg, UseDefault)
-                else eval_arg(cast(_ArgT, arg))
-            )
+            if isinstance(arg, UseDefault):
+                previous_module = self._enter_call(desc.module_id, location)
+                try:
+                    val = self._eval_default_in_frame(param, dict(closure_val.captures))
+                finally:
+                    self._exit_call(previous_module)
+            else:
+                val = eval_arg(cast(_ArgT, arg))
             bound_values.append(val)
-        return self._bind_and_invoke(
-            desc, body, closure_val, bound_values, retain_frame=retain_frame
-        )
+        previous_module = self._enter_call(desc.module_id, location)
+        try:
+            return self._bind_and_invoke(
+                desc, body, closure_val, bound_values, retain_frame=retain_frame
+            )
+        finally:
+            self._exit_call(previous_module)
 
     def _execute_direct_call(
         self,
@@ -1048,7 +1126,13 @@ class IrInterpreter:
                 self._check_call_depth()
                 closure_val = self._get_closure_for(fn_id)
                 return self._resolve_defaults_and_invoke(
-                    desc, body, closure_val, arguments, self._eval, retain_frame=retain_frame
+                    desc,
+                    body,
+                    closure_val,
+                    arguments,
+                    self._eval,
+                    location=location,
+                    retain_frame=retain_frame,
                 )
             case other:  # pragma: no cover
                 assert_never(other)
@@ -1104,14 +1188,21 @@ class IrInterpreter:
             case IrFunctionBody(body=body):
                 self._check_call_depth()
 
-                # Evaluate each positional argument in the CALLER frame (no coercion).
+                # Evaluate each positional argument in the CALLER frame (no
+                # coercion); a defaulted trailing one runs inside the
+                # callee's call context instead, like an ordinary default
+                # (see `_resolve_defaults_and_invoke`).
                 bound_values: list[Value] = []
                 for i, param in enumerate(desc.params):
                     if i < len(arguments):
                         val = self._eval(arguments[i])
                     elif param.default is not None:
                         # Defensive: evaluate default in a captures frame.
-                        val = self._eval_default_in_frame(param, dict(callee_val.captures))
+                        previous_module = self._enter_call(desc.module_id, location)
+                        try:
+                            val = self._eval_default_in_frame(param, dict(callee_val.captures))
+                        finally:
+                            self._exit_call(previous_module)
                     else:
                         raise InvalidIrError(
                             f"IrIndirectCall: missing argument for parameter {i!r}"
@@ -1119,7 +1210,11 @@ class IrInterpreter:
                         )
                     bound_values.append(val)
 
-                return self._bind_and_invoke(desc, body, callee_val, bound_values)
+                previous_module = self._enter_call(desc.module_id, location)
+                try:
+                    return self._bind_and_invoke(desc, body, callee_val, bound_values)
+                finally:
+                    self._exit_call(previous_module)
             case other:  # pragma: no cover
                 assert_never(other)
 
@@ -1145,7 +1240,11 @@ class IrInterpreter:
         Reuses :meth:`_resolve_defaults_and_invoke`, the same tail an ordinary
         direct call uses, so the entry point binds exactly like a call to the
         same function descriptor, with an entry-point error span attached to
-        any depth-limit or body error.
+        any depth-limit or body error. The pushed call site uses the program
+        body's own location -- there is no real caller expression -- so a
+        default or an extern call reached only through this entry still has
+        a concrete site to report if the whole chain proves to be inside one
+        other package (:meth:`_extern_trace_span`).
         """
         desc, impl = self._program_entry(symbol)
         location = impl.body.location
@@ -1158,6 +1257,7 @@ class IrInterpreter:
                 closure_val,
                 arguments,
                 lambda value: value,
+                location=location,
                 retain_frame=symbol == self._program.synthetic_main_symbol,
             )
         except AglRaise as exc:
@@ -1212,8 +1312,17 @@ class IrInterpreter:
                         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
                             self._install_function_closures()
                             for mod in self._program.modules.values():
-                                for node in mod.initializers:
-                                    self._eval_and_record_initializer(mod.module_id, node)
+                                # Restored, not left at the last module visited:
+                                # module order is a lowering detail, not a call
+                                # chain, so this is a plain save/restore rather
+                                # than `_enter_call` (no call site to record).
+                                previous_module = self._current_module
+                                self._current_module = mod.module_id
+                                try:
+                                    for node in mod.initializers:
+                                        self._eval_and_record_initializer(mod.module_id, node)
+                                finally:
+                                    self._current_module = previous_module
                             if program_symbol is not None:
                                 try:
                                     self._invoke_program(program_symbol, arguments)

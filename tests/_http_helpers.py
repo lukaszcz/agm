@@ -18,9 +18,10 @@ Each outcome is a mapping, kept JSON-friendly (no Python ``bytes``) so an e2e
      "charset": "utf-8"}
 
 ``expect`` is optional and, when present, is checked against the actual call:
-an exact ``method``, an exact ``url``, a case-insensitive header subset, an
-exact request ``body`` text, the ``timeout`` tuple given to the transport,
-and the ``verify`` flag given to the transport.  An unexpected or
+an exact ``method``, an exact ``url``, a case-insensitive header subset (a
+``None``/``null`` value asserts the header's absence), an exact request
+``body`` text, the ``timeout`` tuple given to the transport (or ``None`` for
+none), and the ``verify`` flag given to the transport.  An unexpected or
 out-of-order request fails the test immediately with a clear message.
 
 A response carries ``status`` (default 200), ``headers`` (a mapping, or a
@@ -172,8 +173,13 @@ def _check_expectation(
             body = body.decode("utf-8")
         assert body == expect["body"], f"expected body {expect['body']!r}, got {body!r}"
     if "timeout" in expect:
-        assert timeout == expect["timeout"], (
-            f"expected timeout {expect['timeout']!r}, got {timeout!r}"
+        # A JSON-authored scenario spells the connect/read tuple as a
+        # two-element array; normalise it back to a tuple before comparing.
+        expected_timeout = expect["timeout"]
+        if isinstance(expected_timeout, list):
+            expected_timeout = tuple(expected_timeout)
+        assert timeout == expected_timeout, (
+            f"expected timeout {expected_timeout!r}, got {timeout!r}"
         )
     if "verify" in expect:
         assert verify == expect["verify"], f"expected verify {expect['verify']!r}, got {verify!r}"

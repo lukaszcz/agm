@@ -103,17 +103,25 @@ class ExternRuntimeState:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class ActiveCall:
-    """One extern call's active companion state, trace destination, module, and span.
+    """One extern call's active companion state, trace destination, module, and site.
 
     Bundled into a single context variable so :meth:`ExternRegistry.invoke`
     activates one object for the call rather than two, and ``runtime.state``
     and ``runtime.trace`` both read it.
+
+    *location* is this call's own site (plain data, not yet resolved).
+    *resolve_span* maps it to the attributed (span, owning module) a trace
+    record uses -- the interpreter's ``_extern_trace_span``, bound once per
+    interpreter and reused across every call, so activating a call never
+    allocates a closure. Called only when a companion actually reads the
+    span (a trace record is written, or a crossed callback needs it).
     """
 
     state: ExternRuntimeState
     trace_store: "TraceStore"
     module_id: ModuleId
-    span: "Location | None" = None
+    location: "Location | None"
+    resolve_span: "Callable[[ModuleId, Location | None], tuple[Location | None, ModuleId | None]]"
 
 
 class _CompanionRuntime:
@@ -154,12 +162,19 @@ class _CompanionRuntime:
 
         A silent no-op outside an active extern call (detached companion use),
         and when tracing is off. The origin (the calling module's display
-        path) is computed only once the store is confirmed to be writing.
+        path) is computed only once the store is confirmed to be writing, and
+        so is the attributed span and its owning module (``site``) --
+        resolving either walks the active call-site stack.
         """
         active = self._active_call.get()
         if active is not None and active.trace_store.path is not None:
+            span, site = active.resolve_span(active.module_id, active.location)
             active.trace_store.companion_record(
-                active.module_id.display(), kind, payload, active.span
+                active.module_id.display(),
+                kind,
+                payload,
+                span,
+                site.display() if site is not None else None,
             )
 
     def active_span(self) -> "Location | None":
@@ -170,7 +185,9 @@ class _CompanionRuntime:
         own, so it inherits the outer call's span instead.
         """
         active = self._active_call.get()
-        return active.span if active is not None else None
+        if active is None:
+            return None
+        return active.resolve_span(active.module_id, active.location)[0]
 
 
 _COMPANION_RUNTIME = _CompanionRuntime()

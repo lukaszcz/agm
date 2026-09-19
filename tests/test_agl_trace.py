@@ -13,16 +13,21 @@ from pathlib import Path
 from typing import Protocol, cast
 
 import pytest
+import semver
 
 import agm.commands.exec as exec_command
 from agm.agl import PipelineDriver
 from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest, AgentResponse
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.externs import ExternRegistry
 from agm.cli_support.args import ExecArgs
-from tests._agl_helpers import agl_roots, run_inline_command, write_file_program
+from agm.packages.manifest import PackageManifest
+from agm.packages.model import PackageInfo
+from tests._agl_helpers import REPO_STDLIB_ROOT, agl_roots, run_inline_command, write_file_program
+from tests._http_helpers import install as install_fake_http
 from tests.agl.ir_harness import write_companion_file, write_module_file
 
 # ---------------------------------------------------------------------------
@@ -1003,6 +1008,21 @@ class TestTraceStoreProperties:
         assert rec["line"] == 5
         assert rec["col"] == 3
 
+    def test_companion_record_omits_site_when_none(self, tmp_path: Path) -> None:
+        """``site=None`` (no attributable call site at all) omits the key."""
+        import json as _json
+
+        from agm.agl.runtime.trace import TraceStore
+
+        p = tmp_path / "t.jsonl"
+        ts = TraceStore(path=p)
+        ts.companion_record("lib/tracer", "probe", {}, span=None, site=None)
+
+        rec = _json.loads(p.read_text(encoding="utf-8").strip())
+        assert rec["origin"] == "lib/tracer"
+        assert "site" not in rec
+        assert "line" not in rec
+
 
 # ---------------------------------------------------------------------------
 # Unparseable output synthesizes a validation error for retry feedback
@@ -1194,6 +1214,7 @@ class TestCompanionTraceHook:
         assert probe_recs
         rec = probe_recs[0]
         assert rec.get("origin") == "<entry>"
+        assert rec.get("site") == "<entry>"
         assert rec.get("value") == 42
         # `emit()` is the call on line 2 of `source`.
         assert rec.get("line") == 2
@@ -1221,6 +1242,9 @@ class TestCompanionTraceHook:
         probe_recs = [r for r in records if r.get("kind") == "probe"]
         assert probe_recs
         assert probe_recs[0]["origin"] == "lib/tracer"
+        # `origin` is the extern's own declaring module; `site` is the
+        # caller's, which here differs from it.
+        assert probe_recs[0]["site"] == "<entry>"
 
     def test_companion_trace_writes_nothing_when_logging_is_off(self, tmp_path: Path) -> None:
         source = "extern def emit() -> unit\nemit()\n()\n"
@@ -1424,3 +1448,319 @@ class TestCompanionTraceHook:
         for kind in kinds:
             assert by_kind[kind]["line"] == 3
             assert by_kind[kind]["col"] == 1
+            assert by_kind[kind]["site"] == "<entry>"
+
+    def test_companion_trace_span_through_a_package_functions_default_argument(
+        self, tmp_path: Path
+    ) -> None:
+        """A default-argument expression evaluates in its own function's
+        module and call-site context, not the caller's: an extern call inside
+        a package function's default is attributed to the caller's own call
+        to that function, not misattributed as an internal library call."""
+        log_path = tmp_path / "trace.jsonl"
+        root = tmp_path / "root"
+        write_module_file(
+            root,
+            "lib/tracer",
+            "extern def emit() -> int\ndef wrap(x: int = emit()) -> int = x\n",
+        )
+        write_companion_file(
+            root,
+            "lib/tracer",
+            "from agl import runtime\n\n"
+            "def emit():\n    runtime.trace('probe', {})\n    return 0\n",
+        )
+        source = "import lib/tracer\nlet _ = lib/tracer::wrap()\n()\n"
+        result = run_inline_command(
+            PipelineDriver(),
+            source,
+            roots=agl_roots(root),
+            default_stdlib=False,
+            log_file=log_path,
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        # `lib/tracer::wrap()` (line 2) is the entry's own call; `wrap`'s
+        # default-argument expression, though it runs inside `lib/tracer`,
+        # must not be attributed to some other internal library site.
+        assert probe_recs[0]["line"] == 2
+        assert probe_recs[0]["col"] == source.splitlines()[1].index("lib/tracer::wrap()") + 1
+        assert probe_recs[0]["origin"] == "lib/tracer"
+        assert probe_recs[0]["site"] == "<entry>"
+
+    def test_companion_trace_span_skips_an_internal_call_within_the_same_package(
+        self, tmp_path: Path
+    ) -> None:
+        """A package's own AgL wrapper calling its extern is an implementation
+        detail: the span is the caller's call to the wrapper, not the
+        wrapper's own internal call to the extern."""
+        log_path = tmp_path / "trace.jsonl"
+        root = tmp_path / "root"
+        write_module_file(
+            root, "lib/tracer", "extern def emit() -> unit\ndef wrap() -> unit = emit()\n"
+        )
+        write_companion_file(
+            root,
+            "lib/tracer",
+            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n",
+        )
+        result = run_inline_command(
+            PipelineDriver(),
+            "import lib/tracer\nlib/tracer::wrap()",
+            roots=agl_roots(root),
+            default_stdlib=False,
+            log_file=log_path,
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        # `lib/tracer::wrap()` (line 2 of the entry) is the call outside
+        # `lib/tracer`'s own package; `wrap`'s internal call to `emit()`,
+        # inside `lib/tracer` itself, must not be reported.
+        assert probe_recs[0]["line"] == 2
+        assert probe_recs[0]["col"] == 1
+        assert probe_recs[0]["origin"] == "lib/tracer"
+        assert probe_recs[0]["site"] == "<entry>"
+
+    def test_companion_trace_span_walks_through_several_layers_of_wrapping(
+        self, tmp_path: Path
+    ) -> None:
+        """The nearest call site outside the package is found however many of
+        the package's own functions the call passes through first."""
+        log_path = tmp_path / "trace.jsonl"
+        root = tmp_path / "root"
+        write_module_file(
+            root,
+            "lib/tracer",
+            "extern def emit() -> unit\n"
+            "def inner() -> unit = emit()\n"
+            "def outer() -> unit = inner()\n",
+        )
+        write_companion_file(
+            root,
+            "lib/tracer",
+            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n",
+        )
+        result = run_inline_command(
+            PipelineDriver(),
+            "import lib/tracer\nlib/tracer::outer()",
+            roots=agl_roots(root),
+            default_stdlib=False,
+            log_file=log_path,
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["line"] == 2
+        assert probe_recs[0]["col"] == 1
+        assert probe_recs[0]["site"] == "<entry>"
+
+    def test_companion_trace_span_falls_back_to_the_immediate_call_when_the_whole_chain_is_internal(
+        self, tmp_path: Path
+    ) -> None:
+        """When even the program entry itself belongs to the extern's own
+        package, there is no outside call site to attribute to: the span
+        falls back to the immediate internal call, same as a single-file
+        entry script calling its own extern directly."""
+        log_path = tmp_path / "trace.jsonl"
+        root = tmp_path / "root"
+        main_path = root / "src" / "main.agl"
+        main_path.parent.mkdir(parents=True)
+        main_path.write_text(
+            "extern def emit() -> unit\n"
+            "def inner() -> unit = emit()\n"
+            "def outer() -> unit = inner()\n"
+            "outer()\n"
+        )
+        main_path.with_suffix(".py").write_text(
+            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n"
+        )
+        package = PackageInfo(root, PackageManifest("pkg", semver.Version.parse("1.0.0")))
+        roots = RootSet(
+            roots=frozenset(), packages=(package,), stdlib_roots=frozenset({REPO_STDLIB_ROOT})
+        )
+        result = run_inline_command(
+            PipelineDriver(),
+            main_path.read_text(),
+            roots=roots,
+            entry_path=main_path,
+            default_stdlib=False,
+            log_file=log_path,
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        assert probe_recs[0]["line"] == 2
+        assert probe_recs[0]["col"] == 23
+        # No call site outside the extern's own mount exists here: `site`
+        # falls back to that same mount, matching `origin`.
+        assert probe_recs[0]["origin"] == "pkg/main"
+        assert probe_recs[0]["site"] == "pkg/main"
+
+    def test_companion_trace_span_through_a_user_lambda_passed_to_a_package_function(
+        self, tmp_path: Path
+    ) -> None:
+        """A lambda the user passes into a package's higher-order function is
+        attributed to its own call site in the user's module, not to the
+        package's internal call that invokes it."""
+        log_path = tmp_path / "trace.jsonl"
+        root = tmp_path / "root"
+        write_module_file(
+            root,
+            "lib/tracer",
+            "extern def emit() -> unit\ndef apply(f: int -> unit) -> unit = f(1)\n",
+        )
+        write_companion_file(
+            root,
+            "lib/tracer",
+            "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n",
+        )
+        source = "import lib/tracer\nlib/tracer::apply(fn(z: int) => lib/tracer::emit())\n"
+        result = run_inline_command(
+            PipelineDriver(),
+            source,
+            roots=agl_roots(root),
+            default_stdlib=False,
+            log_file=log_path,
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        # `lib/tracer::emit()` inside the lambda body (line 2) is the call the
+        # user wrote; `apply`'s own internal `f(1)` call, inside `lib/tracer`
+        # itself, must not be reported.
+        assert probe_recs[0]["line"] == 2
+        assert probe_recs[0]["col"] == source.splitlines()[1].index("lib/tracer::emit()") + 1
+        assert probe_recs[0]["origin"] == "lib/tracer"
+        assert probe_recs[0]["site"] == "<entry>"
+
+    def test_companion_trace_span_through_a_companion_invoked_crossed_closure(
+        self, tmp_path: Path
+    ) -> None:
+        """A companion invoking a crossed AgL closure that itself calls a
+        tracing extern is attributed to the closure's own call site."""
+        log_path = tmp_path / "trace.jsonl"
+        root = tmp_path / "root"
+        write_module_file(root, "lib/tracer", "extern def relay(f: int -> unit) -> unit\n")
+        write_companion_file(
+            root, "lib/tracer", "from agl import runtime\n\ndef relay(f):\n    f(1)\n"
+        )
+        entry_path = root / "entry" / "main.agl"
+        entry_path.parent.mkdir(parents=True)
+        source = (
+            "import lib/tracer\n"
+            "extern def probe(z: int) -> unit\n"
+            "lib/tracer::relay(fn(z: int) => probe(z))\n"
+        )
+        entry_path.write_text(source)
+        entry_path.with_suffix(".py").write_text(
+            "from agl import runtime\n\ndef probe(z):\n    runtime.trace('probe', {'z': z})\n"
+        )
+        result = run_inline_command(
+            PipelineDriver(),
+            source,
+            roots=agl_roots(root),
+            entry_path=entry_path,
+            default_stdlib=False,
+            log_file=log_path,
+        )
+        assert result.ok
+
+        records = _load_jsonl(log_path)
+        probe_recs = [r for r in records if r.get("kind") == "probe"]
+        assert probe_recs
+        # `probe(z)`, the extern call written inside the crossed closure
+        # `lib/tracer::relay` invokes (line 3), not `relay`'s own call to it.
+        assert probe_recs[0]["z"] == 1
+        assert probe_recs[0]["line"] == 3
+        assert probe_recs[0]["col"] == source.splitlines()[2].index("probe(z)") + 1
+        assert probe_recs[0]["origin"] == "<entry>"
+        assert probe_recs[0]["site"] == "<entry>"
+
+
+# ---------------------------------------------------------------------------
+# 14. std/http trace records: span attribution and redaction end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestHttpTraceRecords:
+    """``std/http``'s ``runtime.trace`` records, run through the real pipeline."""
+
+    def test_http_trace_span_is_the_user_call_site_through_client_wrappers(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``Client::get`` reaches the ``request`` extern through several of
+        ``std/http``'s own wrapper layers (``Client::get`` -> ``Client::request``
+        -> ``ClientInternals::send`` -> ``request`` -> ``RequestInternals::send``);
+        the trace span must be the user's own call, not any of those internal
+        calls inside ``std/http`` itself."""
+        log_path = tmp_path / "trace.jsonl"
+        adapter = install_fake_http(
+            monkeypatch,
+            [{"status": 200, "headers": {"set-cookie": "session=topsecret"}, "body": "ok"}],
+        )
+        source = """import std/http
+program def main() -> unit =
+  let api = http::client(auth = http::Auth::Bearer("secret-token"))
+  let _ = api.get("https://x/y")
+  ()
+"""
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=tmp_path / "entry.agl", log_file=log_path
+        )
+        assert result.ok, result.error
+        adapter.assert_complete()
+
+        records = _load_jsonl(log_path)
+        request_recs = [r for r in records if r.get("kind") == "http_request"]
+        response_recs = [r for r in records if r.get("kind") == "http_response"]
+        assert request_recs and response_recs
+
+        # `api.get("https://x/y")` is on line 4 of the source: the user's own
+        # call site, not `Client::get`'s, `request`'s, or any other wrapper's
+        # internal call inside `std/http`.
+        for rec in (*request_recs, *response_recs):
+            assert rec["origin"] == "std/http"
+            assert rec["site"] == "<entry>"
+            assert rec["line"] == 4
+            assert rec["col"] == 11
+
+        assert request_recs[0]["headers"]["authorization"] == "<redacted>"
+        assert response_recs[0]["headers"]["set-cookie"] == "<redacted>"
+
+    def test_http_failure_trace_span_is_the_user_call_site(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A transport failure's ``http_failure`` record gets the same
+        call-site attribution as a completed exchange."""
+        log_path = tmp_path / "trace.jsonl"
+        adapter = install_fake_http(monkeypatch, [{"fail": "connection"}])
+        source = """import std/http
+program def main() -> unit =
+  let _ = http::get("https://x/y")
+  ()
+"""
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=tmp_path / "entry.agl", log_file=log_path
+        )
+        assert not result.ok
+        adapter.assert_complete()
+
+        records = _load_jsonl(log_path)
+        failure_recs = [r for r in records if r.get("kind") == "http_failure"]
+        assert failure_recs
+        assert failure_recs[0]["origin"] == "std/http"
+        assert failure_recs[0]["site"] == "<entry>"
+        assert failure_recs[0]["line"] == 3
+        assert failure_recs[0]["col"] == 11

@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
+from math import isfinite
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,12 +22,11 @@ from agm.agl.runtime.boundary import AglJson
 from agm.agl.runtime.serialize import dumps_exact
 from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, non_data_marker
 from agm.core.log import append_jsonl
+from agm.util.unicode import surrogate_index
 
 if TYPE_CHECKING:
     from agm.agl.ir.ids import Location
     from agm.agl.syntax.spans import SourceSpan
-
-_JSON_SCALARS = (str, int, float, bool)
 
 #: Envelope keys :meth:`TraceStore.companion_record` writes itself; a
 #: companion's own payload may never contribute one, so its shape can never
@@ -46,8 +46,12 @@ def _sanitize(value: object, active: frozenset[int]) -> object:
     (:func:`agm.agl.runtime.serialize.dumps_exact`); an ``AglJson`` value
     (JSON already crossed the boundary) unwraps to its raw JSON.
     """
-    if value is None or isinstance(value, _JSON_SCALARS):
+    if value is None or isinstance(value, (int, bool)):
         return value
+    if isinstance(value, str):
+        return value if surrogate_index(value) is None else non_data_marker("str")
+    if isinstance(value, float):
+        return value if isfinite(value) else non_data_marker("float")
     if isinstance(value, Decimal):
         return dumps_exact(value, indent=None)
     if isinstance(value, AglJson):

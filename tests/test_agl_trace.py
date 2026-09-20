@@ -1323,6 +1323,28 @@ class TestCompanionTraceHook:
         assert probe_recs
         assert probe_recs[0]["bad"] == "<object has no JSON representation>"
 
+    def test_companion_trace_invalid_scalars_degrade_instead_of_raising(
+        self, tmp_path: Path
+    ) -> None:
+        log_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n"
+            "import math\n\n"
+            "def emit():\n"
+            "    runtime.trace('probe', {'text': chr(0xD800), 'number': math.nan})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(), source, entry_path=entry_path, log_file=log_path
+        )
+
+        assert result.ok
+        records = _load_jsonl(log_path)
+        probe_recs = [record for record in records if record.get("kind") == "probe"]
+        assert probe_recs[0]["text"] == "<str has no JSON representation>"
+        assert probe_recs[0]["number"] == "<float has no JSON representation>"
+
     def test_companion_trace_direct_call_outside_evaluation_is_a_silent_noop(
         self, tmp_path: Path
     ) -> None:

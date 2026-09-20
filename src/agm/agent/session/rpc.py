@@ -60,9 +60,13 @@ class _BoundedText:
     """
 
     data: bytes = b""
+    truncated: bool = False
 
     def append(self, chunk: bytes) -> None:
-        self.data = (self.data + chunk)[-_MAX_STDERR_BYTES:]
+        data = self.data + chunk
+        if len(data) > _MAX_STDERR_BYTES:
+            self.truncated = True
+        self.data = data[-_MAX_STDERR_BYTES:]
 
 
 @dataclass(slots=True)
@@ -831,19 +835,19 @@ def _transport_cause(error: BaseException | None) -> AgentTransportFailureCause:
     return "nonzero_exit"
 
 
-def _decode_stderr_tail(data: bytes) -> tuple[str, str | None]:
+def _decode_stderr_tail(data: bytes, *, truncated: bool = False) -> tuple[str, str | None]:
     """Decode a bounded stderr byte tail.
 
-    Drops any leading continuation bytes: cutting the tail to its byte bound
-    can leave an orphaned continuation byte at the front, an artifact of the
-    cut rather than bad data. Returns ``(text, note)``; when the remaining
-    bytes are not valid UTF-8, *text* is ``""`` and *note* names the offset
-    within this tail -- the full stream was never retained, so there is no
-    absolute offset to report.
+    If the tail was truncated, drops leading continuation bytes left orphaned
+    by the cut. Returns ``(text, note)``; when the remaining bytes are not
+    valid UTF-8, *text* is ``""`` and *note* names the offset within this
+    tail -- the full stream was never retained, so there is no absolute offset
+    to report.
     """
     start = 0
-    while start < len(data) and 0x80 <= data[start] <= 0xBF:
-        start += 1
+    if truncated:
+        while start < len(data) and 0x80 <= data[start] <= 0xBF:
+            start += 1
     try:
         return data[start:].decode("utf-8"), None
     except UnicodeDecodeError as exc:
@@ -853,7 +857,7 @@ def _decode_stderr_tail(data: bytes) -> tuple[str, str | None]:
 def _stderr(child: _RpcChild, fallback: str, include_fallback: bool = False) -> str:
     if not child.stderr.data:
         return fallback
-    text, note = _decode_stderr_tail(child.stderr.data)
+    text, note = _decode_stderr_tail(child.stderr.data, truncated=child.stderr.truncated)
     if not text:
         return f"{fallback}; {note}" if note else fallback
     if include_fallback:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import warnings
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -11,10 +12,13 @@ import requests.exceptions
 import urllib3.exceptions
 
 from agm.core import http
-from tests._http_helpers import fake_session
+from tests._http_helpers import FakeHttp, fake_session
 
 
 def test_open_session_honours_environment_proxy_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in tuple(os.environ):
+        if name.lower().endswith("_proxy"):
+            monkeypatch.delenv(name)
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:8080")
     session, adapter = fake_session([{"status": 200, "body": ""}])
 
@@ -53,6 +57,20 @@ def test_perform_sends_method_url_and_headers() -> None:
 
     assert result.status == 200
     assert result.text == "ok"
+    adapter.assert_complete()
+
+
+def test_perform_accepts_a_plain_requests_session() -> None:
+    session = requests.Session()
+    adapter = FakeHttp([{"status": 200, "body": ""}])
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    result = http.perform(
+        session, http.RequestSpec(method="GET", url="https://example.org/x", timeout_seconds=5.0)
+    )
+
+    assert result.status == 200
     adapter.assert_complete()
 
 
@@ -169,6 +187,67 @@ def test_perform_drops_caller_cookies_on_a_cross_host_redirect() -> None:
     adapter.assert_complete()
 
 
+def test_perform_drops_caller_cookies_on_a_subdomain_redirect() -> None:
+    session, adapter = fake_session(
+        [
+            {"status": 302, "headers": {"Location": "https://sub.example.org/final"}},
+            {"status": 200, "body": ""},
+        ]
+    )
+
+    http.perform(
+        session,
+        http.RequestSpec(
+            method="GET",
+            url="https://example.org/start",
+            cookies={"secret": "value"},
+            timeout_seconds=5.0,
+        ),
+    )
+
+    assert adapter.sent[0].headers.get("Cookie") == "secret=value"
+    assert "Cookie" not in adapter.sent[1].headers
+    adapter.assert_complete()
+
+
+def test_perform_never_restores_caller_cookies_after_a_cross_host_redirect() -> None:
+    session, adapter = fake_session(
+        [
+            {"status": 302, "headers": {"Location": "https://other.example/one"}},
+            {"status": 302, "headers": {"Location": "https://other.example/two"}},
+            {"status": 200, "body": ""},
+        ]
+    )
+
+    http.perform(
+        session,
+        http.RequestSpec(
+            method="GET",
+            url="https://example.org/start",
+            cookies={"secret": "value"},
+            timeout_seconds=5.0,
+        ),
+    )
+
+    assert adapter.sent[0].headers.get("Cookie") == "secret=value"
+    assert "Cookie" not in adapter.sent[1].headers
+    assert "Cookie" not in adapter.sent[2].headers
+    adapter.assert_complete()
+
+
+@pytest.mark.parametrize("url", ["http://localhost/start", "http://[::1]/start"])
+def test_perform_sends_cookies_to_local_and_ipv6_hosts(url: str) -> None:
+    session, adapter = fake_session([{"status": 200, "body": ""}])
+
+    http.perform(
+        session,
+        http.RequestSpec(method="GET", url=url, cookies={"a": "1"}, timeout_seconds=5.0),
+    )
+
+    assert adapter.sent[0].headers.get("Cookie") == "a=1"
+    adapter.assert_complete()
+
+
 def test_perform_keeps_caller_cookies_on_a_same_host_redirect() -> None:
     session, adapter = fake_session(
         [
@@ -232,6 +311,45 @@ def test_perform_forwards_a_cookie_set_by_an_intermediate_redirect_hop() -> None
 
     assert adapter.sent[1].headers.get("Cookie") == "session=abc"
     adapter.assert_complete()
+
+
+def test_perform_keeps_caller_and_intermediate_cookies_on_a_same_host_redirect() -> None:
+    session, adapter = fake_session(
+        [
+            {
+                "status": 302,
+                "headers": {
+                    "Location": "https://example.org/final",
+                    "Set-Cookie": "session=abc",
+                },
+            },
+            {"status": 200, "body": ""},
+        ]
+    )
+
+    http.perform(
+        session,
+        http.RequestSpec(
+            method="GET",
+            url="https://example.org/start",
+            cookies={"caller": "value"},
+            timeout_seconds=5.0,
+        ),
+    )
+
+    assert adapter.sent[1].headers.get("Cookie") == "session=abc; caller=value"
+    adapter.assert_complete()
+
+
+def test_redirect_without_a_source_request_is_ignored() -> None:
+    session = http.open_session()
+    assert isinstance(session, http._Session)
+    prepared = requests.Request(method="GET", url="https://example.org/final").prepare()
+    response = requests.Response()
+
+    session.rebuild_auth(prepared, response)
+
+    assert "Cookie" not in prepared.headers
 
 
 def test_perform_strips_the_authorization_header_on_a_cross_host_redirect() -> None:
@@ -786,6 +904,25 @@ def test_perform_names_only_the_header_for_an_invalid_rendered_auth_value() -> N
                 url="https://example.org/x",
                 auth="Bearer secret\n",
                 timeout_seconds=5.0,
+            ),
+        )
+
+    assert excinfo.value.kind == "request"
+    assert "secret" not in excinfo.value.message
+    adapter.assert_complete()
+
+
+@pytest.mark.parametrize("cookies", [{"bad\nname": "value"}, {"session": "secret\r\nvalue"}])
+def test_perform_classifies_an_invalid_cookie_header_as_a_request_failure(
+    cookies: dict[str, str],
+) -> None:
+    session, adapter = fake_session([])
+
+    with pytest.raises(http.TransportError) as excinfo:
+        http.perform(
+            session,
+            http.RequestSpec(
+                method="GET", url="https://example.org/x", cookies=cookies, timeout_seconds=5.0
             ),
         )
 

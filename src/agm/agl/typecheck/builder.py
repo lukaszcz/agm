@@ -792,10 +792,12 @@ class _TypeBuilder:
         ``Exception``.
         """
         base_type: ExceptionType | None = None
-        # An omitted `extends` means `extends Exception`; only the built-in root
-        # itself has no base.
-        base_name = stmt.base if stmt.base is not None or stmt.is_builtin else "Exception"
-        if base_name is not None:
+        # Only the built-in root has no base. An omitted `extends` names the
+        # canonical root directly, rather than a same-named lexical declaration.
+        base_name = stmt.base
+        if base_name is None and not stmt.is_builtin:
+            base_type = self._env.type_table.exception_root()
+        elif base_name is not None:
             resolved_base = self._env.resolve_named_type(base_name, span=stmt.span)
             if not isinstance(resolved_base, ExceptionType):
                 raise AglTypeError(

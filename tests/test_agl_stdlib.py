@@ -391,6 +391,10 @@ def test_exception_base_must_be_exception_type() -> None:
         )
 
 
+def test_implicit_exception_base_bypasses_lexical_shadowing() -> None:
+    _check("scope S\n  record Exception()\n  exception Foo()\nend S\n\n()\n")
+
+
 def test_exception_fields_cannot_duplicate_inherited_fields() -> None:
     with pytest.raises(AglTypeError, match="Duplicate field 'message' in exception 'Bad'"):
         _check("exception Bad extends Exception\n  message: text\n()\n")

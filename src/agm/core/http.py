@@ -12,6 +12,7 @@ import http.cookiejar
 import re
 import time
 import warnings
+import weakref
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -119,16 +120,44 @@ class _NoNetrcAuth(requests.auth.AuthBase):
 class _Session(requests.Session):
     """A session that never re-derives credentials from ``~/.netrc`` on redirect."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._caller_cookies: weakref.WeakKeyDictionary[
+            requests.PreparedRequest, tuple[str, str]
+        ] = weakref.WeakKeyDictionary()
+
+    def track_caller_cookies(self, request: requests.PreparedRequest, cookie_header: str) -> None:
+        """Associate a prepared request with caller cookies limited to its hostname."""
+        host = urlsplit(request.url).hostname
+        if host is not None and cookie_header:
+            self._caller_cookies[request] = (host, cookie_header)
+
     def rebuild_auth(
         self, prepared_request: requests.PreparedRequest, response: requests.Response
     ) -> None:
-        """Strip a leaked ``Authorization`` header across hosts; never consult ``.netrc``."""
+        """Strip caller credentials whenever a redirect changes hostname."""
         headers = prepared_request.headers
-        previous_url = response.request.url if response.request is not None else None
-        if (
-            "Authorization" in headers
-            and previous_url is not None
-            and self.should_strip_auth(previous_url, prepared_request.url)
+        previous_request = response.request
+        if previous_request is None:
+            return
+        previous_url = previous_request.url
+        caller_cookies = self._caller_cookies.get(previous_request)
+        if caller_cookies is not None:
+            host, cookie_header = caller_cookies
+            if urlsplit(prepared_request.url).hostname == host:
+                existing = headers.get("Cookie")
+                headers["Cookie"] = (
+                    f"{existing}; {cookie_header}" if existing is not None else cookie_header
+                )
+                self._caller_cookies[prepared_request] = caller_cookies
+            else:
+                # Redirect construction may rebuild the original header from
+                # its cookie jar; drop caller cookies before this request sends.
+                headers.pop("Cookie", None)
+        elif urlsplit(previous_url).hostname != urlsplit(prepared_request.url).hostname:
+            headers.pop("Cookie", None)
+        if "Authorization" in headers and self.should_strip_auth(
+            previous_url, prepared_request.url
         ):
             del headers["Authorization"]
 
@@ -283,18 +312,17 @@ def _validate_headers(headers: Mapping[str, str]) -> None:
             raise TransportError("request", f"invalid HTTP header: {name!r}")
 
 
-def _cookie_jar_for(spec: RequestSpec) -> requests.cookies.RequestsCookieJar:
-    """Cookies scoped to *spec*'s request host.
+def _cookie_header(cookies: Mapping[str, str]) -> str:
+    """Render caller cookies exactly as the HTTP ``Cookie`` header sends them."""
+    return "; ".join(f"{name}={value}" for name, value in cookies.items())
 
-    ``requests.cookies.create_cookie`` defaults to an unscoped "supercookie"
-    sent to every host; binding the domain here means a cross-host redirect
-    drops these cookies while a same-host redirect keeps them.
-    """
-    host = urlsplit(spec.url).hostname or ""
-    jar = requests.cookies.RequestsCookieJar()
-    for name, value in spec.cookies.items():
-        jar.set_cookie(requests.cookies.create_cookie(name, value, domain=host))
-    return jar
+
+def _validate_cookies(cookies: Mapping[str, str]) -> str:
+    """Reject caller cookies that would make an invalid HTTP ``Cookie`` header."""
+    cookie_header = _cookie_header(cookies)
+    if cookie_header:
+        _validate_headers({"Cookie": cookie_header})
+    return cookie_header
 
 
 def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
@@ -313,6 +341,15 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
     _validate_method(spec.method)
     headers = _headers_for(spec)
     _validate_headers(headers)
+    rendered_cookies = _validate_cookies(spec.cookies)
+    if rendered_cookies:
+        existing_cookies = headers.get("Cookie")
+        headers["Cookie"] = (
+            f"{existing_cookies}; {rendered_cookies}"
+            if existing_cookies is not None
+            else rendered_cookies
+        )
+    caller_cookie_header = headers.get("Cookie", "")
     timeout = None if spec.timeout_seconds is None else (spec.timeout_seconds, spec.timeout_seconds)
     started = time.monotonic()
     try:
@@ -323,10 +360,11 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
             headers=headers,
             data=spec.body,
             auth=spec.auth if isinstance(spec.auth, tuple) else None,
-            cookies=_cookie_jar_for(spec),
         )
         prepared = session.prepare_request(request)
         prepared.method = spec.method
+        if isinstance(session, _Session):
+            session.track_caller_cookies(prepared, caller_cookie_header)
         settings = session.merge_environment_settings(prepared.url, {}, True, spec.verify_tls, None)
         with _insecure_warning_suppressed(spec.verify_tls):
             response = session.send(

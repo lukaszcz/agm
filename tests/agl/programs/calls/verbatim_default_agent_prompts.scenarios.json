@@ -1,0 +1,144 @@
+{
+  "scenarios": [
+    {
+      "name": "inline_text_and_markdown_review_use_default_agent",
+      "params": {
+        "document": "release notes"
+      },
+      "agents": {
+        "ask": [
+          "Concise summary",
+          "{\"approved\": true, \"summary\": \"Looks good\"}",
+          "{\"approved\": false, \"summary\": \"Call-form feedback\"}"
+        ],
+        "reviewer": [
+          "{\"approved\": false, \"summary\": \"Explicit feedback\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Concise summary\nExplicit feedback\ntrue\nfalse\n",
+        "calls": {
+          "ask": 3,
+          "reviewer": 1
+        },
+        "prompts": [
+          {
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 0,
+            "equals": "Summarize release notes in one line."
+          },
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "call": 0,
+            "starts_with": "Explicit review for release notes.",
+            "schema_contains": [
+              "approved",
+              "summary"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 1,
+            "starts_with": "# Review release notes\n- correctness\n- style",
+            "schema_contains": [
+              "approved",
+              "summary"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 2,
+            "starts_with": "Call-form review for release notes.",
+            "schema_contains": [
+              "approved",
+              "summary"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "typed_dollar_and_call_form_parse_failures_stay_on_default_agent",
+      "params": {
+        "document": "migration guide"
+      },
+      "agents": {
+        "ask": [
+          "Guide summary",
+          "not a review",
+          "still not a review"
+        ],
+        "reviewer": [
+          "{\"approved\": true, \"summary\": \"Explicit pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Guide summary\nExplicit pass\ndollar Agent::AgentClaude(model = \"sonnet\", thinking = \"medium\") 1 Review\ncall Agent::AgentClaude(model = \"sonnet\", thinking = \"medium\") 1 Review\n",
+        "calls": {
+          "ask": 3,
+          "reviewer": 1
+        },
+        "prompts": [
+          {
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 0,
+            "equals": "Summarize migration guide in one line."
+          },
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "call": 0,
+            "starts_with": "Explicit review for migration guide."
+          },
+          {
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 1,
+            "starts_with": "# Review migration guide\n- correctness\n- style",
+            "schema_contains": [
+              "approved",
+              "summary"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 2,
+            "starts_with": "Call-form review for migration guide.",
+            "schema_contains": [
+              "approved",
+              "summary"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

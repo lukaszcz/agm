@@ -1,0 +1,2 @@
+program def main() -> unit =
+  print <|$ x

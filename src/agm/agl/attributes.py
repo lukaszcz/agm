@@ -305,8 +305,7 @@ def invalid_external_name(text: str) -> str | None:
     """Describe why *text* cannot be a '@name' argument, or ``None``.
 
     A '@name' is an alternative value-syntax spelling, so it has to be a
-    plain identifier: not a hard keyword, and not a raw-tail name — soft
-    keywords are legal.
+    plain identifier: not a hard keyword — soft keywords are legal.
     """
 
     return None if is_plain_name(text) else "must be a plain identifier"

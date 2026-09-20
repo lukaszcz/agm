@@ -8,5 +8,5 @@ program def main() -> unit =
   let explicit: text = exec("explicit", env = child, cwd = cwd, timeout = timeout)
   print explicit
 
-  let ambient: text = exec$ ambient
+  let ambient: text = exec $ ambient
   print ambient

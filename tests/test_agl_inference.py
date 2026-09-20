@@ -282,14 +282,18 @@ class TestUnification:
             engine.unify(variable, RecordType("Recursive", (variable,)), _origin(engine, 1))
 
     def test_equal_flexible_variables_retain_evidence(self) -> None:
+        """A self-unify doesn't erase prior evidence, but never outranks a real binding."""
         engine = InferenceEngine()
         variable = engine.fresh("T")
-        engine.unify(variable, variable, _origin(engine, 1))
-        engine.unify(variable, IntType(), _origin(engine, 2))
+        touch = _origin(engine, 1)
+        binding = _origin(engine, 2)
+        engine.unify(variable, variable, touch)
+        engine.unify(variable, IntType(), binding)
 
         with pytest.raises(InferenceError) as raised:
             engine.unify(variable, TextType(), _origin(engine, 3))
-        assert raised.value.related[0][1] == _span(1)
+        assert raised.value.related[0][1] == _span(2)
+        assert touch in raised.value.origins
 
     def test_bottom_succeeds_without_solving_a_flexible_variable(self) -> None:
         engine = InferenceEngine()
@@ -635,6 +639,51 @@ class TestFinalizationAndProvenance:
             ("T was first constrained by function argument 'id'.", first.span),
         )
         assert "inference-var" not in str(error)
+
+    def test_conflict_related_note_prefers_a_binding_over_an_earlier_structural_merge(
+        self,
+    ) -> None:
+        """An earlier variable-variable merge never outranks the later concrete binding."""
+        engine = InferenceEngine()
+        variable = engine.fresh("T")
+        other = engine.fresh("U")
+        merge = _origin(engine, 1, subject="merge", type_param="T")
+        binding = _origin(engine, 2, subject="id", type_param="T")
+        engine.unify(variable, other, merge)
+        engine.unify(variable, IntType(), binding)
+
+        with pytest.raises(InferenceError) as raised:
+            engine.unify(variable, TextType(), _origin(engine, 3))
+
+        assert raised.value.related[0][1] == binding.span
+
+    def test_conflict_related_note_falls_back_to_the_earliest_touch_without_a_binding(
+        self,
+    ) -> None:
+        """With no binding evidence at all, the related note cites the earliest touch."""
+        engine = InferenceEngine()
+        x = engine.fresh("T")
+        y = engine.fresh("U")
+        merge = _origin(engine, 1, subject="m", type_param="T")
+        engine.unify(x, y, merge)
+
+        with pytest.raises(InferenceError) as raised:
+            engine.unify(ArrayType(x), TextType(), _origin(engine, 2, subject="o"))
+
+        assert raised.value.related[0][1] == merge.span
+
+    def test_conflict_related_note_cites_the_builtin_default_role(self) -> None:
+        """A conflict against an applied builtin default cites the ``BUILTIN_DEFAULT`` role."""
+        engine = InferenceEngine()
+        variable = engine.fresh("T")
+        default = _origin(engine, 1, role=ConstraintRole.BUILTIN_DEFAULT, subject="exec")
+        engine.unify(variable, TextType(), default)
+
+        with pytest.raises(InferenceError) as raised:
+            engine.unify(variable, IntType(), _origin(engine, 2, subject="x"))
+
+        assert raised.value.related[0][1] == default.span
+        assert raised.value.origins[0].role is ConstraintRole.BUILTIN_DEFAULT
 
     def test_colliding_external_origin_sequences_keep_both_provenance_records(self) -> None:
         engine = InferenceEngine()

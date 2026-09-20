@@ -26,6 +26,7 @@ import decimal
 import importlib.resources
 import logging
 import logging.handlers
+from collections.abc import Callable
 from unittest.mock import patch
 
 import pytest
@@ -162,25 +163,6 @@ def raw_infix_program(*operator_names: str) -> Program:
     for index, name in enumerate(operator_names, start=1):
         source_parts.extend((name, str(index)))
     return parse_program_unresolved(" ".join(source_parts))
-
-
-def assert_raw_tail_name_span(error: AglSyntaxError, source: str) -> None:
-    """Assert that a raw-tail reservation error covers its reserved name."""
-    assert "reserved for raw-tail calls" in str(error)
-    span = error.span
-    assert span is not None
-    name = next(name for name in ("exec$", "ask$") if name in source)
-    offset = source.index(name)
-    line = source.count("\n", 0, offset) + 1
-    col = offset - source.rfind("\n", 0, offset)
-    assert (
-        span.start_line,
-        span.start_col,
-        span.end_line,
-        span.end_col,
-        span.start_offset,
-        span.end_offset,
-    ) == (line, col, line, col + len(name), offset, offset + len(name))
 
 
 def _collect_node_ids(obj: object, result: list[int]) -> None:
@@ -2220,15 +2202,6 @@ class TestTypedCalls:
         assert isinstance(call.type_args[0], IntT)
         assert isinstance(call.args[0], StringLit)
 
-    def test_raw_tail_juxt_call_carries_explicit_type_args(self) -> None:
-        """A raw-tail juxt argument keeps the callee's explicit type args too."""
-        call = first(parse("f::[int] exec$ date"))
-        assert isinstance(call, Call)
-        assert isinstance(call.callee, VarRef)
-        assert call.callee.name == "f"
-        assert isinstance(call.type_args[0], IntT)
-        assert isinstance(call.args[0], Call)
-
     def test_typed_call_accepts_field_access_callee(self) -> None:
         prog = parse("f.g::[T](x)")
         call = first(prog)
@@ -3384,6 +3357,16 @@ class TestReplSeam:
         assert is_incomplete_source(source)
         assert not has_unterminated_triple_quoted_string(f"{source}{quote}")
 
+    @pytest.mark.parametrize("source", ["ask $", "ask $   "])
+    def test_is_incomplete_source_empty_dollar_verbatim_literal(self, source: str) -> None:
+        """A bare `$` header at end of input is incomplete, not a real error."""
+        assert is_incomplete_source(source)
+
+    @pytest.mark.parametrize("source", ["ask $\n  ", "x = $\ny"])
+    def test_is_incomplete_source_real_dollar_verbatim_error(self, source: str) -> None:
+        """A `$` literal with no payload but a following line is a real error."""
+        assert not is_incomplete_source(source)
+
 
 # ---------------------------------------------------------------------------
 # Negative cases (parse errors)
@@ -3447,6 +3430,146 @@ class TestNegativeCases:
             parse_program("let x = if true\n")
         assert "newline" in str(exc_info.value).lower()
         assert "'0'" not in str(exc_info.value)
+
+
+class TestDollarSpacingHint:
+    """`exec$ x` lexes as one NAME; a parse error on that line hints the fix."""
+
+    def test_offending_token_on_the_dollar_suffixed_names_own_line_gets_a_hint(self) -> None:
+        """`ask$ let ...`: `let` cannot open a juxt argument, right after `ask$`."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("ask$ let x = 1")
+        assert "ask $" in str(exc_info.value)
+        assert exc_info.value.source_span.start_offset == 5
+
+    def test_offending_token_later_on_the_dollar_suffixed_names_own_line_gets_a_hint(
+        self,
+    ) -> None:
+        """`ask$ a b`: the failure is at `b`, further along `ask$`'s own line."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("ask$ a b")
+        assert "ask $" in str(exc_info.value)
+
+    def test_hole_syntax_error_on_the_dollar_suffixed_names_own_line_gets_a_hint(self) -> None:
+        """`ask$ What is %{x}?`: `%{}` is not template syntax outside a literal."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("ask$ What is %{x}?")
+        assert "ask $" in str(exc_info.value)
+
+    def test_offending_token_in_a_dollar_suffixed_names_own_block_form_gets_a_hint(self) -> None:
+        """A bare `exec$` header followed by an indented block: still one NAME."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("exec$\n  date\n  date")
+        assert "exec $" in str(exc_info.value)
+
+    def test_offending_token_after_a_pipe_on_the_dollar_suffixed_names_line_gets_a_hint(
+        self,
+    ) -> None:
+        """`exec$ ls | wc`: `|` is not a valid juxt continuation."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("exec$ ls | wc")
+        assert "exec $" in str(exc_info.value)
+
+    def test_offending_token_on_a_later_line_gets_no_hint(self) -> None:
+        """`ask$ hello` parses fine; the real error is on the next line, unrelated to it."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("ask$ hello\nlet a b = 1")
+        assert "$ …" not in str(exc_info.value)
+
+    def test_dollar_suffixed_spelling_inside_a_string_gets_no_hint(self) -> None:
+        """`"ask$"` is a string literal, not a NAME token."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program('print "ask$" let')
+        assert "$ …" not in str(exc_info.value)
+
+    def test_dollar_suffixed_spelling_inside_a_comment_gets_no_hint(self) -> None:
+        """A `# ask$` comment produces no token at all."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let a b = 1  # ask$")
+        assert "$ …" not in str(exc_info.value)
+
+    def test_offending_token_after_a_plain_name_gets_no_hint(self) -> None:
+        """`f a b`: juxt does not chain, but `a` does not end in '$'."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("f a b")
+        assert "$ …" not in str(exc_info.value)
+
+    def test_offending_token_after_a_non_identifier_gets_no_hint(self) -> None:
+        """`1 2 3`: the token before `3` is `2`, not an identifier at all."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("1 2 3")
+        assert "$ …" not in str(exc_info.value)
+
+    def test_layout_token_with_no_preceding_real_token_gets_no_hint(self) -> None:
+        """A layout token's anchor search finds nothing before it: no crash, no hint.
+
+        Not reachable through ``parse_program`` (a stray indent always has
+        something real before it); call the mapping helper directly with a
+        materialized token list that starts after the offending position.
+        """
+        offending = Token("_INDENT", "", start_pos=5, line=2, column=1)
+        far_name = Token("NAME", "ask$", start_pos=10, line=2, column=6)
+        err = syntax_error_from_lark(
+            UnexpectedToken(offending, expected={"NAME"}), tokens=[far_name]
+        )
+        assert "$ …" not in str(err)
+
+    def test_layout_anchor_search_skips_a_materialized_token_with_no_line(self) -> None:
+        """A token missing its own line cannot anchor the layout-token hint search.
+
+        Not reachable through ``parse_program`` (the lexer always sets a real
+        token's line); call the mapping helper directly.
+        """
+        offending = Token("_INDENT", "", start_pos=5, line=2, column=1)
+        lineless = Token("NAME", "ask$", start_pos=0, line=None, column=None)
+        err = syntax_error_from_lark(
+            UnexpectedToken(offending, expected={"NAME"}), tokens=[lineless]
+        )
+        assert "$ …" not in str(err)
+
+
+class TestPipingHint:
+    """Juxtaposition takes one argument; a further `$` literal gets a piping hint."""
+
+    def test_dollar_literal_chained_after_two_names_gets_a_hint(self) -> None:
+        """`print exec $ date`: `print exec` is already a full application."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("program def main() -> unit =\n  print exec $ date\n")
+        assert "pipe" in str(exc_info.value)
+
+    def test_dollar_literal_chained_after_a_name_and_a_juxt_arg_gets_a_hint(self) -> None:
+        """`f x $ y`: `f x` is already a full application."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("program def main() -> unit =\n  f x $ y\n")
+        assert "pipe" in str(exc_info.value)
+
+    def test_dollar_literal_opener_not_preceded_by_two_operands_gets_no_hint(self) -> None:
+        """`let $ = 1`: only `let` (a keyword) precedes the `$` opener."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("program def main() -> unit =\n  let $ = 1\n  print(1)\n")
+        assert "pipe" not in str(exc_info.value)
+
+    def test_offending_token_other_than_dollar_opener_gets_no_piping_hint(self) -> None:
+        """`f x y`: the offending token is a plain NAME, not a `$` opener."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("f x y")
+        assert "pipe" not in str(exc_info.value)
+
+    def test_missing_tokens_gets_no_piping_hint(self) -> None:
+        """No materialized token pass: nothing to inspect, no hint, no crash."""
+        offending = Token("VERBATIM_START", "$", start_pos=5, line=1, column=6)
+        err = syntax_error_from_lark(UnexpectedToken(offending, expected={"NAME"}))
+        assert "pipe" not in str(err)
+
+    def test_dollar_literal_opener_preceded_by_a_non_operand_token_gets_no_hint(self) -> None:
+        """Two tokens precede the `$` opener, but the nearer one is not operand-ending."""
+        name = Token("NAME", "x", start_pos=1, line=1, column=2)
+        op = Token("EQ", "=", start_pos=5, line=1, column=6)
+        offending = Token("VERBATIM_START", "$", start_pos=10, line=1, column=11)
+        err = syntax_error_from_lark(
+            UnexpectedToken(offending, expected={"NAME"}), tokens=[name, op, offending]
+        )
+        assert "pipe" not in str(err)
 
 
 # ---------------------------------------------------------------------------
@@ -3626,6 +3749,34 @@ class TestLarkErrorMapping:
         assert span.start_line == 2
 
     @pytest.mark.parametrize(
+        ("source", "expected_line"),
+        (
+            pytest.param("case x of $ a", 1, id="case_of_verbatim"),
+            pytest.param("if $ a", 1, id="if_verbatim"),
+            pytest.param("let x = $ a %{y}\ncase z of $ b", 2, id="multiline_verbatim"),
+        ),
+    )
+    def test_verbatim_literal_end_of_input_error_points_at_the_end_of_the_source(
+        self, source: str, expected_line: int
+    ) -> None:
+        """A verbatim literal's zero-width closer must not collapse the span to (1, 1).
+
+        Lark's LALR parser borrows the ``$END`` token's position from the last
+        token it consumed; a token with an empty value (the verbatim literal's
+        closer) is falsy, so Lark substitutes a synthetic ``(1, 1, offset 0)``
+        rather than borrowing.  Compare a quoted-string equivalent such as
+        `case x of "a"`, whose closing token has a real spelling and so already
+        borrows a meaningful, non-degenerate position.
+        """
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+
+        span = exc_info.value.source_span
+        assert span.start_line == expected_line
+        assert span.start_offset != 0
+        assert span.start_offset == len(source)
+
+    @pytest.mark.parametrize(
         "source",
         [
             "def g() -> int =\n  let x = [1,\n",
@@ -3665,39 +3816,6 @@ class TestLarkErrorMapping:
         assert span is not None
         assert span.start_line == 1
         assert span.start_col == 1
-
-    def test_empty_raw_tail_names_the_generic_form_without_parser_state(self) -> None:
-        """With no parse stack exposed, the empty-payload message names no spelling."""
-        from lark.exceptions import UnexpectedToken
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        token = Token("RAW_TAIL_END", "", start_pos=5, line=1, column=6)
-        err = syntax_error_from_lark(UnexpectedToken(token, expected={"RAW_FRAGMENT"}))
-        assert "raw-tail form" in str(err)
-        assert "cannot be empty" in str(err)
-
-    def test_empty_raw_tail_falls_back_when_stack_has_no_raw_callee(self) -> None:
-        """A parse stack without a raw-tail name yields the generic name."""
-        import types
-
-        from lark.exceptions import UnexpectedToken
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        token = Token("RAW_TAIL_END", "", start_pos=5, line=1, column=6)
-        exc = UnexpectedToken(token, expected={"RAW_FRAGMENT"})
-        exc.interactive_parser = types.SimpleNamespace(
-            parser_state=types.SimpleNamespace(
-                value_stack=[
-                    types.SimpleNamespace(
-                        data="dotted_raw_head", children=[Token("NAME", "receiver")]
-                    )
-                ]
-            )
-        )
-        err = syntax_error_from_lark(exc)
-        assert "raw-tail form" in str(err)
 
 
 # ---------------------------------------------------------------------------
@@ -4821,298 +4939,168 @@ class TestModifierDecoratorNewline:
         assert it[1].is_builtin is True
 
 
-class TestRawTailCalls:
-    @pytest.mark.parametrize(
-        ("raw_source", "call_source"),
-        (
-            ("exec$ ls -lh", 'exec("ls -lh")'),
-            ("ask$ Summarize %{f}", 'ask("Summarize %{f}")'),
-            ("exec$\n  echo %{file}\n  date", 'exec("""echo %{file}\ndate""")'),
-            ("ask$\n  Review %{file}\n  carefully", 'ask("""Review %{file}\ncarefully""")'),
-            ("exec$::[json] cat result.json", 'exec::[json]("cat result.json")'),
-            ("ask$::[Review] Summarize %{f}", 'ask::[Review]("Summarize %{f}")'),
-            ("exec$ : true", 'exec(": true")'),
-        ),
-    )
-    def test_desugars_to_equivalent_call(self, raw_source: str, call_source: str) -> None:
-        assert first(parse(raw_source)) == first(parse(call_source))
+class TestVerbatimTextLiteral:
+    """`$ ...` builds the same AST as the equivalent quoted template."""
 
     @pytest.mark.parametrize(
-        ("raw_source", "call_source"),
+        ("verbatim_source", "quoted_source"),
         (
-            ("ag.ask$ Summarize %{subject}", 'ag.ask("Summarize %{subject}")'),
-            (
-                "ag.ask$\n  Review %{subject} carefully",
-                'ag.ask("""Review %{subject} carefully""")',
+            pytest.param("$ hello", '"hello"', id="block_item"),
+            pytest.param("let x = $ hello", 'let x = "hello"', id="let_rhs"),
+            pytest.param("var x = $ hello", 'var x = "hello"', id="var_rhs"),
+            pytest.param("var x = 0\nx := $ hello", 'var x = 0\nx := "hello"', id="assign_rhs"),
+            pytest.param("def f() = $ hello", 'def f() = "hello"', id="inline_def_body"),
+            pytest.param("return $ hello", 'return "hello"', id="return_expr"),
+            pytest.param("ask $ hello", 'ask "hello"', id="juxt_ask"),
+            pytest.param("exec $ hello", 'exec "hello"', id="juxt_exec"),
+            pytest.param("r.ask $ hello", 'r.ask "hello"', id="juxt_dotted_ask"),
+            pytest.param("ask::[Review] $ hello", 'ask::[Review] "hello"', id="juxt_typed_ask"),
+            pytest.param("session.ask $ hello", 'session.ask "hello"', id="juxt_session_ask"),
+            pytest.param("infixl ++\na ++ $ b", 'infixl ++\na ++ "b"', id="infix_right_operand"),
+            pytest.param(
+                "if true =>\n  $ a\n| else =>\n  $ b",
+                'if true =>\n  "a"\n| else =>\n  "b"',
+                id="multiline_branch_bodies",
             ),
-            (
-                "ag.ask$::[Review] Summarize %{subject}",
-                'ag.ask::[Review]("Summarize %{subject}")',
+            pytest.param("r with x = $ hello", 'r with x = "hello"', id="with_value"),
+            pytest.param(
+                "let f = fn(x) => $ hello",
+                'let f = fn(x) => "hello"',
+                id="lambda_body",
             ),
-            (
-                "agents[0].ask$ Continue %{subject}",
-                'agents[0].ask("Continue %{subject}")',
+            pytest.param(
+                "case x of\n| $\n  hello\n=> a",
+                'case x of | "hello" => a',
+                id="block_form_literal_pattern",
             ),
-            (
-                "print agents[0].ask$ Continue %{subject}",
-                'print agents[0].ask("Continue %{subject}")',
+            pytest.param("ask $ hi %{x}", 'ask "hi %{x}"', id="interpolated_hole"),
+            pytest.param("ask $\n  a\n  b", 'ask "a\\nb"', id="block_form_juxt_arg"),
+            pytest.param(
+                "let x = ask $\n  a\n  b\nx",
+                'let x = ask "a\\nb"\nx',
+                id="block_form_followed_by_an_item",
             ),
-            (
-                "print make_agent().ask$ Continue %{subject}",
-                'print make_agent().ask("Continue %{subject}")',
-            ),
-            (
-                "print fleet.current[0].ask$ Continue %{subject}",
-                'print fleet.current[0].ask("Continue %{subject}")',
-            ),
-            (
-                "print ag.ask$ Summarize %{subject}",
-                'print ag.ask("Summarize %{subject}")',
-            ),
-            (
-                "print ag.ask$::[Review]\n  Review %{subject} carefully",
-                'print ag.ask::[Review]("""Review %{subject} carefully""")',
+            pytest.param("1 + 1; $ true", '1 + 1; "true"', id="statement_semicolon"),
+            pytest.param(
+                "def f() = return $ x",
+                'def f() = return "x"',
+                id="return_body",
             ),
         ),
     )
-    def test_dotted_raw_tail_desugars_to_equivalent_method_call(
-        self, raw_source: str, call_source: str
+    def test_matches_the_equivalent_quoted_template(
+        self, verbatim_source: str, quoted_source: str
     ) -> None:
-        assert first(parse(raw_source)) == first(parse(call_source))
-
-    def test_is_allowed_at_each_line_final_position(self) -> None:
-        source = """\
-exec$ true
-let a = exec$ true
-var b = exec$ true
-b := exec$ false
-def returned() -> ExecResult
-  return exec$ true
-def inline() -> ExecResult = return exec$ true
-print exec$ true
-(1 + 1) exec$ true
-1 + 1; exec$ true
-"""
-        program = parse(source)
-        assert len(program.body.items) == 10
-        returned = program.body.items[4]
-        inline = program.body.items[5]
-        assert isinstance(returned, FuncDef)
-        assert isinstance(returned.body, Block)
-        assert isinstance(returned.body.items[0], Return)
-        assert isinstance(inline, FuncDef)
-        assert isinstance(inline.body, Return)
-
-    def test_raw_tail_is_allowed_as_an_arrow_suite_item(self) -> None:
-        branch = first(parse("if true =>\n  exec$ true"))
-        assert isinstance(branch, If)
-        assert isinstance(branch.branches[0].body, Block)
-        assert isinstance(branch.branches[0].body.items[0], Call)
-
-    def test_inline_nominal_declaration_does_not_reserve_nested_do_suite_items(self) -> None:
-        function = first(parse("def f() -> unit\n  record R x: int\n  do\n    exec$ true\n  done"))
-        assert isinstance(function, FuncDef)
-        assert isinstance(function.body, Block)
-        loop = function.body.items[-1]
-        assert isinstance(loop, Do)
-        assert isinstance(loop.body, Block)
-        assert isinstance(loop.body.items[0], Call)
-
-    @pytest.mark.parametrize(
-        ("source", "expected_span"),
-        (
-            ("exec$", (1, 6, 1, 6)),
-            ("ask$   ", (1, 8, 1, 8)),
-            ("exec$\n", (2, 1, 2, 1)),
-            ("exec$\nnext", (2, 1, 2, 1)),
-        ),
-    )
-    def test_empty_payload_is_rejected_at_its_location(
-        self, source: str, expected_span: tuple[int, int, int, int]
-    ) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program(source)
-        assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == expected_span
-
-    @pytest.mark.parametrize(
-        ("source", "expected_span"),
-        (
-            ("1 + exec$", (1, 5, 1, 10)),
-            ("1 + exec$ true", (1, 5, 1, 10)),
-            ("1 + ag.ask$ true", (1, 8, 1, 12)),
-            ("1 + print ag.ask$ true", (1, 14, 1, 18)),
-            ("if true => exec$ date | else => 0", (1, 12, 1, 17)),
-            ("case true of true => exec$ date | false => 0", (1, 22, 1, 27)),
-            ("try exec$ date catch _ => 0", (1, 5, 1, 10)),
-            ("if true => return exec$ date | else => 0", (1, 19, 1, 24)),
-            ("case true of true => return exec$ date | false => 0", (1, 29, 1, 34)),
-            ("try return exec$ date catch _ => 0", (1, 12, 1, 17)),
-        ),
-    )
-    def test_non_line_final_position_is_rejected_at_its_location(
-        self, source: str, expected_span: tuple[int, int, int, int]
-    ) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == expected_span
+        verbatim_program = parse_program(verbatim_source)
+        quoted_program = parse_program(quoted_source)
+        assert items(verbatim_program)[-1] == items(quoted_program)[-1]
 
     @pytest.mark.parametrize(
         "source",
         (
-            "let a = (1 + 2\nlet b: text = exec$ echo hi\nprint(b)\n",
-            "let a = [1, 2\nlet b: text = exec$ echo hi\n",
+            pytest.param("print ask $ x", id="verbatim"),
+            pytest.param('print ask "x"', id="quoted"),
+        ),
+    )
+    def test_juxtaposition_does_not_chain(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+        assert exc_info.value.source_span.start_offset == 10
+
+    @pytest.mark.parametrize(
+        ("verbatim_source", "quoted_source"),
+        (
+            pytest.param("infixr <|\nprint <| ask $ x", 'infixr <|\nprint <| ask "x"', id="plain"),
+            pytest.param(
+                "infixr <|\nprint <| ag.ask $ Summarize %{subject}",
+                'infixr <|\nprint <| ag.ask("Summarize %{subject}")',
+                id="dotted_member",
+            ),
+        ),
+    )
+    def test_juxtaposition_chains_through_an_infix_pipe(
+        self, verbatim_source: str, quoted_source: str
+    ) -> None:
+        verbatim_call = items(parse_program(verbatim_source))[-1]
+        quoted_call = items(parse_program(quoted_source))[-1]
+        assert verbatim_call == quoted_call
+        assert isinstance(verbatim_call, Call)
+        assert isinstance(verbatim_call.callee, VarRef)
+        assert verbatim_call.callee.name == "<|"
+
+    def test_same_line_swallowing_yields_a_single_branch(self) -> None:
+        expr = first(parse("if c => $ a | else => $ b"))
+        assert isinstance(expr, If)
+        assert len(expr.branches) == 1
+        body = expr.branches[0].body
+        assert isinstance(body, StringLit)
+        assert body.value == "a | else => $ b"
+
+    @pytest.mark.parametrize(
+        ("verbatim_source", "call_source"),
+        (
+            pytest.param(
+                "agents[0].ask $ Continue %{subject}",
+                'agents[0].ask("Continue %{subject}")',
+                id="indexed_receiver",
+            ),
+            pytest.param(
+                "make_agent().ask $ Continue %{subject}",
+                'make_agent().ask("Continue %{subject}")',
+                id="call_receiver",
+            ),
+            pytest.param(
+                "fleet.current[0].ask $ Continue %{subject}",
+                'fleet.current[0].ask("Continue %{subject}")',
+                id="chained_dotted_index_receiver",
+            ),
+            pytest.param(
+                "ag.ask::[Review] $ Review %{subject} carefully",
+                'ag.ask::[Review]("Review %{subject} carefully")',
+                id="dotted_typed",
+            ),
+            pytest.param(
+                "ag.ask::[Review] $\n  Review %{subject} carefully",
+                'ag.ask::[Review]("""Review %{subject} carefully""")',
+                id="dotted_typed_block_form",
+            ),
+        ),
+    )
+    def test_dotted_member_matches_the_equivalent_call(
+        self, verbatim_source: str, call_source: str
+    ) -> None:
+        assert first(parse(verbatim_source)) == first(parse(call_source))
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let a = (1 + 2\nlet b: text = $ echo hi\nprint(b)\n",
+            "let a = [1, 2\nlet b: text = $ echo hi\n",
         ),
     )
     def test_unclosed_bracket_is_reported_where_the_expression_breaks(self, source: str) -> None:
-        # A missing closing bracket must not be reported as a misplaced raw tail
-        # on a later line; the diagnostic belongs to the item that cannot continue.
+        # A missing closing bracket must not be reported as a misplaced verbatim
+        # literal on a later line; the diagnostic belongs to the item that
+        # cannot continue.
         with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
         span = exc_info.value.span
         assert span is not None
         assert (span.start_line, span.start_col) == (2, 1)
 
-    def test_arrow_body_raw_tail_is_rejected_over_its_shell_quotes(self) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse("if true => exec$ echo 'oops")
-        span = exc_info.value.span
-        assert span is not None
-        assert (span.start_line, span.start_col) == (1, 12)
-
-    def test_empty_payload_names_the_form_after_nested_type_arguments(self) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("let x: array[int] = exec$::[array[int]]\nnext")
-        assert "exec$" in str(exc_info.value)
-
-    def test_empty_dotted_raw_tail_names_its_member(self) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("agent.ask$")
-        assert "ask$" in str(exc_info.value)
-
-    @pytest.mark.parametrize(
-        "source",
-        ("let x = 1\n  exec$ echo hi", "print 1\n  exec$ echo hi"),
-    )
-    def test_stray_indentation_before_a_raw_tail_is_reported_as_indentation(
-        self, source: str
-    ) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        assert "indent" in str(exc_info.value).lower()
-
-    def test_raw_tail_default_is_rejected_inside_parameter_brackets_at_its_location(self) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse("def f(x: int = exec$ true) -> int = x")
-        assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == (1, 16, 1, 16)
-
-    @pytest.mark.parametrize("declaration", ("record", "exception"))
-    def test_attributed_field_rejects_a_raw_tail_name(self, declaration: str) -> None:
-        source = f"{declaration} R\n  x: int\n  @arg-named\n  exec$: int"
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        assert_raw_tail_name_span(exc_info.value, source)
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            pytest.param("let exec$ = 1", id="let_binder"),
-            pytest.param("var exec$ = 1", id="var_binder"),
-            pytest.param("record R\n  exec$: int", id="record_field_name"),
-            pytest.param("enum E\n  | ask$", id="enum_variant_name"),
-            pytest.param("program def exec$\n()", id="legacy_program"),
-            pytest.param("for exec$ in [] do 1 done", id="for_binder"),
-            pytest.param("type exec$ = int", id="type_name"),
-        ),
-    )
-    def test_reserved_raw_name_in_a_name_slot_names_the_spelling(self, source: str) -> None:
-        # A raw-tail spelling used where the grammar expects an identifier (a
-        # binder, a field/variant/program/type name) cannot be a call, so the
-        # diagnostic must say the spelling is reserved rather than suggesting
-        # the call-form / block-form remedies that apply to expression misuse.
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program(source)
-        assert_raw_tail_name_span(exc_info.value, source)
-
-    def test_expression_position_raw_tail_keeps_the_positional_message(self) -> None:
-        # A raw-tail spelling used mid-expression (not in a name slot) is a
-        # genuine misplaced call, so it keeps the positional guidance instead
-        # of the "reserved" wording used for name slots.
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse("let command = 1 + exec$ true")
-        message = str(exc_info.value)
-        assert "reserved" not in message
-        assert "call form" in message and "block form" in message
-
-    def test_raw_tail_in_unsupported_lambda_suite_is_rejected_at_its_location(self) -> None:
-        source = "let f = fn() =>\n  exec$ date"
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == (1, 16, 1, 17)
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "fn(exec$: int) => 1",
-            "type Box[ask$] = int",
-        ),
-    )
-    def test_reserved_raw_parameter_names_are_rejected_inside_brackets(self, source: str) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        assert "brackets" in str(exc_info.value)
-
-    @pytest.mark.parametrize("declaration", ("record", "exception"))
-    def test_inline_field_declaration_does_not_leak_to_next_expression(
-        self, declaration: str
-    ) -> None:
-        source = f"{declaration} R x: int\nfoo(exec$ true)"
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == (2, 5, 2, 5)
-
     def test_desugaring_assigns_node_ids_in_source_order(self) -> None:
-        raw_call = first(parse("exec$ true"))
-        assert isinstance(raw_call, Call)
-        assert isinstance(raw_call.callee, VarRef)
-        assert isinstance(raw_call.args[0], StringLit)
-        assert raw_call.callee.node_id < raw_call.args[0].node_id < raw_call.node_id
+        call = first(parse("exec $ true"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert isinstance(call.args[0], StringLit)
+        assert call.callee.node_id < call.args[0].node_id < call.node_id
 
-    def test_dotted_raw_tail_member_span_and_node_ids_precede_its_payload(self) -> None:
-        raw_call = first(parse("ag.ask$::[Review] payload"))
-        assert isinstance(raw_call, Call)
-        assert isinstance(raw_call.callee, FieldAccess)
-        assert isinstance(raw_call.args[0], StringLit)
-        member = raw_call.callee
+    def test_dotted_typed_member_span_and_node_ids_precede_its_payload(self) -> None:
+        call = first(parse("ag.ask::[Review] $ payload"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, FieldAccess)
+        assert isinstance(call.args[0], StringLit)
+        member = call.callee
         assert (
             member.span.start_line,
             member.span.start_col,
@@ -5120,18 +5108,16 @@ print exec$ true
             member.span.end_col,
             member.span.start_offset,
             member.span.end_offset,
-        ) == (1, 1, 1, 8, 0, 7)
-        assert member.obj.node_id < member.node_id < raw_call.type_args[0].node_id
-        assert raw_call.type_args[0].node_id < raw_call.args[0].node_id < raw_call.node_id
+        ) == (1, 1, 1, 7, 0, 6)
+        assert member.obj.node_id < member.node_id < call.type_args[0].node_id
+        assert call.type_args[0].node_id < call.args[0].node_id < call.node_id
 
-    def test_juxtaposed_dotted_raw_tail_preserves_postfix_component_spans_and_ids(self) -> None:
-        print_call = first(parse("print a.b().c[0].ask$ x"))
-        assert isinstance(print_call, Call)
-        raw_call = print_call.args[0]
-        assert isinstance(raw_call, Call)
-        assert isinstance(raw_call.callee, FieldAccess)
-        assert isinstance(raw_call.args[0], StringLit)
-        ask = raw_call.callee
+    def test_postfix_chain_receiver_preserves_component_spans_and_ids(self) -> None:
+        call = first(parse("a.b().c[0].ask $ x"))
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, FieldAccess)
+        assert isinstance(call.args[0], StringLit)
+        ask = call.callee
         assert isinstance(ask.obj, IndexAccess)
         indexed = ask.obj
         assert isinstance(indexed.obj, FieldAccess)
@@ -5147,7 +5133,7 @@ print exec$ true
         assert [
             (node.span.start_offset, node.span.end_offset)
             for node in (root, member_b, call_b, member_c, indexed.index, indexed, ask)
-        ] == [(6, 7), (6, 9), (6, 11), (6, 13), (14, 15), (6, 16), (6, 21)]
+        ] == [(0, 1), (0, 3), (0, 5), (0, 7), (8, 9), (0, 10), (0, 14)]
         node_ids = [
             root.node_id,
             member_b.node_id,
@@ -5156,18 +5142,17 @@ print exec$ true
             indexed.index.node_id,
             indexed.node_id,
             ask.node_id,
-            raw_call.args[0].node_id,
-            raw_call.node_id,
-            print_call.node_id,
+            call.args[0].node_id,
+            call.node_id,
         ]
         assert node_ids == sorted(node_ids)
         assert len(node_ids) == len(set(node_ids))
 
-    def test_interpolated_raw_text_precedes_its_interpolation_node_ids(self) -> None:
-        raw_call = first(parse("exec$ before %{value}"))
-        assert isinstance(raw_call, Call)
-        assert isinstance(raw_call.args[0], Template)
-        text, interpolation = raw_call.args[0].segments
+    def test_interpolated_text_precedes_its_interpolation_node_ids(self) -> None:
+        call = first(parse("exec $ before %{value}"))
+        assert isinstance(call, Call)
+        assert isinstance(call.args[0], Template)
+        text, interpolation = call.args[0].segments
         assert isinstance(text, TextSegment)
         assert isinstance(interpolation, InterpSegment)
         assert text.node_id < interpolation.expr.node_id < interpolation.node_id
@@ -5184,9 +5169,126 @@ print exec$ true
         from agm.agl import PipelineDriver
 
         with patch("agm.core.process.run_capture_result", return_value=completed):
-            result = run_inline_command(PipelineDriver(), "exec$ true")
+            result = run_inline_command(PipelineDriver(), "exec $ true")
 
         assert result.ok
+
+
+def _check_dollar_let_binding(prog: Program) -> None:
+    let = first(prog)
+    assert isinstance(let, LetDecl)
+    assert let.name == "exec$"
+
+
+def _check_dollar_record_paren_field(prog: Program) -> None:
+    rec = first(prog)
+    assert isinstance(rec, RecordDef)
+    assert [field.name for field in rec.fields] == ["exec$"]
+
+
+def _check_dollar_record_block_field(prog: Program) -> None:
+    rec = first(prog)
+    assert isinstance(rec, RecordDef)
+    assert [field.name for field in rec.fields] == ["exec$"]
+
+
+def _check_dollar_func_param_and_body(prog: Program) -> None:
+    fd = first(prog)
+    assert isinstance(fd, FuncDef)
+    assert [param.name for param in fd.params] == ["exec$"]
+    assert isinstance(fd.body, VarRef)
+    assert fd.body.name == "exec$"
+
+
+def _check_dollar_enum_variant(prog: Program) -> None:
+    en = first(prog)
+    assert isinstance(en, EnumDef)
+    assert [member.name for member in en.members] == ["ask$"]
+
+
+def _check_dollar_type_alias(prog: Program) -> None:
+    alias = first(prog)
+    assert isinstance(alias, TypeAlias)
+    assert alias.name == "exec$"
+
+
+def _check_dollar_for_loop_variable(prog: Program) -> None:
+    loop = first(prog)
+    assert isinstance(loop, Do)
+    assert loop.for_var == "exec$"
+    assert isinstance(loop.for_iter, ArrayLit)
+    assert loop.for_iter.elements == ()
+
+
+def _check_dollar_case_as_binder(prog: Program) -> None:
+    case = first(prog)
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, AsPattern)
+    assert isinstance(pattern.pattern, WildcardPattern)
+    assert pattern.name == "ask$"
+
+
+def _check_dollar_field_access(prog: Program) -> None:
+    fa = first(prog)
+    assert isinstance(fa, FieldAccess)
+    assert isinstance(fa.obj, VarRef)
+    assert fa.obj.name == "target"
+    assert fa.field == "exec$"
+
+
+def _check_dollar_qualified_reference(prog: Program) -> None:
+    ref = first(prog)
+    assert isinstance(ref, VarRef)
+    assert ref.name == "ask$"
+    assert ref.qualifier is not None
+    assert [segment.name for segment in ref.qualifier.segments] == ["m"]
+
+
+class TestDollarSuffixedNamesAreOrdinaryNames:
+    """`exec$`/`ask$` carry no special meaning; they are plain NAME tokens.
+
+    Every AgL surface that binds or references a name accepts them, spelled
+    exactly as written, the same as any other identifier ending in `$`.
+    """
+
+    @pytest.mark.parametrize(
+        ("source", "check"),
+        (
+            pytest.param("let exec$ = 1", _check_dollar_let_binding, id="let_binding"),
+            pytest.param(
+                "record R(exec$: int)", _check_dollar_record_paren_field, id="record_paren_field"
+            ),
+            pytest.param(
+                "record R\n  exec$: int",
+                _check_dollar_record_block_field,
+                id="record_block_field",
+            ),
+            pytest.param(
+                "def f(exec$: int) -> int = exec$",
+                _check_dollar_func_param_and_body,
+                id="func_param_and_body",
+            ),
+            pytest.param("enum E\n  | ask$", _check_dollar_enum_variant, id="enum_variant"),
+            pytest.param("type exec$ = int", _check_dollar_type_alias, id="type_alias"),
+            pytest.param(
+                "for exec$ in [] do 1 done",
+                _check_dollar_for_loop_variable,
+                id="for_loop_variable",
+            ),
+            pytest.param(
+                "case r of | _ as ask$ => ask$",
+                _check_dollar_case_as_binder,
+                id="case_as_binder",
+            ),
+            pytest.param("target.exec$", _check_dollar_field_access, id="field_access"),
+            pytest.param("m::ask$", _check_dollar_qualified_reference, id="qualified_reference"),
+        ),
+    )
+    def test_parses_with_dollar_suffixed_name(
+        self, source: str, check: Callable[[Program], None]
+    ) -> None:
+        check(parse(source))
 
 
 class TestEmptyModule:

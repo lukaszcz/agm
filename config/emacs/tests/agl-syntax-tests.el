@@ -5,7 +5,7 @@
 ;; Tests the context-sensitive `syntax-propertize' layer of `agl-mode':
 ;; identifier atomicity (quotes, '#', and operator characters are
 ;; identifier-continuation characters), the four string-template forms,
-;; comments, raw-tail (`exec$'/`ask$') payloads, and the consequences
+;; comments, `$' verbatim text literal payloads, and the consequences
 ;; (forward-sexp, comment-dwim, syntax-ppss) that fall out of getting the
 ;; syntax-table properties right.  See
 ;; docs/agl/reference/lexical-structure.md for the authoritative rules.
@@ -167,36 +167,101 @@ call never exercises `agl--propertize-extend-region' this way."
   (agl-test--with-buffer "let a = \"unterminated\nlet b = 2\n"
     (should-not (agl-test--in-string-p (agl-test--pos-after "let b = 2")))))
 
-;; --- Raw tails: exec$ and ask$ ---
+;; --- `$' verbatim text literals ---
 
-(ert-deftest agl-syntax-raw-tail-exec-inline-hash-is-payload ()
-  (agl-test--with-buffer "exec$ ls -la # not a comment\nlet x = 1\n"
+(ert-deftest agl-syntax-verbatim-exec-inline-hash-is-payload ()
+  (agl-test--with-buffer "exec $ ls -la # not a comment\nlet x = 1\n"
     (should (agl-test--in-string-p (agl-test--pos-after "ls -la # not a comment")))
     (should-not (agl-test--in-comment-p (agl-test--pos-after "# not a comment")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
 
-(ert-deftest agl-syntax-raw-tail-ask-inline ()
-  (agl-test--with-buffer "ask$ Summarize %{topic} please\nlet y = 2\n"
+(ert-deftest agl-syntax-verbatim-ask-inline ()
+  (agl-test--with-buffer "ask $ Summarize %{topic} please\nlet y = 2\n"
     (should (agl-test--in-string-p (agl-test--pos-after "Summarize")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let y")))))
 
-(ert-deftest agl-syntax-raw-tail-dotted-projection ()
-  (agl-test--with-buffer "receiver.ask$ do the thing\nlet z = 3\n"
+(ert-deftest agl-syntax-verbatim-dotted-projection ()
+  (agl-test--with-buffer "receiver.ask $ do the thing\nlet z = 3\n"
     (should (agl-test--in-string-p (agl-test--pos-after "do the thing")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let z")))))
 
-(ert-deftest agl-syntax-raw-tail-adjacent-type-args-are-not-payload ()
-  (agl-test--with-buffer "ask$::[Review] prompt text\n"
+(ert-deftest agl-syntax-verbatim-type-args-are-on-the-callee ()
+  ;; Type arguments are written on the callee, before the `$', not after it.
+  (agl-test--with-buffer "ask::[Review] $ prompt text\n"
     (should-not (agl-test--in-string-p (agl-test--pos-after "::[Review")))
     (should (agl-test--in-string-p (agl-test--pos-after "prompt text")))))
 
-(ert-deftest agl-syntax-raw-tail-spaced-type-args-is-payload ()
-  (agl-test--with-buffer "ask$ ::[T]\n"
-    (should (agl-test--in-string-p (agl-test--pos-after "::[T]")))))
+(ert-deftest agl-syntax-verbatim-token-start-at-line-start ()
+  ;; A bare `$' opens the literal wherever a new token starts, including
+  ;; with no callee before it at all.
+  (agl-test--with-buffer "$ ls -la\nlet x = 1\n"
+    (should (agl-test--in-string-p (agl-test--pos-after "ls -la")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
 
-(ert-deftest agl-syntax-raw-tail-block-payload ()
+(ert-deftest agl-syntax-verbatim-dollar-inside-identifier-is-not-an-opener ()
+  ;; `ask$ x' is not `ask $ x': `$' continues the identifier `ask$', so this
+  ;; line opens no verbatim literal at all.
+  (agl-test--with-buffer "ask$ x\nlet y = 2\n"
+    (should-not (agl-test--in-string-p (agl-test--pos-after "ask$ x")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let y")))))
+
+(ert-deftest agl-syntax-verbatim-dollar-inside-operator-is-not-an-opener ()
+  ;; `<$>' is a single operator-name token: its `$' does not begin a token.
+  (agl-test--with-buffer "let v = a <$> b\nlet w = 1\n"
+    (should-not (agl-test--in-string-p (agl-test--pos-after "<$> b")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let w")))))
+
+(ert-deftest agl-syntax-verbatim-dollar-continuing-an-operator-run-is-not-an-opener ()
+  ;; `=', `|', and `/' each terminate an identifier scan (they are
+  ;; `IDENT_STOP' members), but a `$' that immediately follows one of them
+  ;; still merges into a single operator name (`<|$', `=$', `!=$', `|$',
+  ;; `/$'), so none of these opens a payload either.
+  (agl-test--with-buffer "print <|$ zz\nlet a = 1\n"
+    (should-not (agl-test--in-string-p (agl-test--pos-after "<|$ zz")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let a"))))
+  (agl-test--with-buffer "x =$ zz\nlet b = 1\n"
+    (should-not (agl-test--in-string-p (agl-test--pos-after "=$ zz")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let b"))))
+  (agl-test--with-buffer "x !=$ zz\nlet c = 1\n"
+    (should-not (agl-test--in-string-p (agl-test--pos-after "!=$ zz")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let c"))))
+  (agl-test--with-buffer "a |$ zz\nlet d = 1\n"
+    (should-not (agl-test--in-string-p (agl-test--pos-after "|$ zz")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let d"))))
+  (agl-test--with-buffer "a /$ zz\nlet e = 1\n"
+    (should-not (agl-test--in-string-p (agl-test--pos-after "/$ zz")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let e")))))
+
+(ert-deftest agl-syntax-verbatim-dollar-with-a-space-before-it-still-opens ()
+  ;; The canonical spelling always separates the `$' from its callee (or, as
+  ;; here, from an operator) with a space, which keeps it a token of its own
+  ;; even when the character right before the space is an operator character.
+  (agl-test--with-buffer "print <| $ zz\nlet a = 1\n"
+    (should (agl-test--in-string-p (agl-test--pos-after "zz")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let a"))))
+  (agl-test--with-buffer "let x = $ y\nlet b = 1\n"
+    (should (agl-test--in-string-p (agl-test--pos-after "y")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let b")))))
+
+(ert-deftest agl-syntax-verbatim-dollar-after-a-closed-string-opens ()
+  ;; A closing quote ends a string/template atomically, so whatever follows
+  ;; it -- `$' included -- begins a fresh token, unlike a quote merely
+  ;; swallowed into a longer identifier (`foo"bar', not a string at all).
+  (agl-test--with-buffer "\"a\"$ zz\nlet x = 1\n"
+    (should (agl-test--in-string-p (agl-test--pos-after "zz")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
+
+(ert-deftest agl-syntax-verbatim-dollar-after-a-bare-number-opens ()
+  ;; A number token ends at its last digit, so a `$' immediately following one
+  ;; still begins a fresh token -- unlike a digit run that is part of a
+  ;; longer identifier (`a1$', one name, `$' included).
+  (agl-test--with-buffer "1$ zz\nlet x = 1\n"
+    (should (agl-test--in-string-p (agl-test--pos-after "zz")))
+    (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
+
+(ert-deftest agl-syntax-verbatim-block-payload ()
   (agl-test--with-buffer
-      (concat "ask$\n"
+      (concat "ask $\n"
               "  Summarize the report.\n"
               "\n"
               "  Mention \"quotes\" and # not-a-comment.\n"
@@ -206,17 +271,17 @@ call never exercises `agl--propertize-extend-region' this way."
     (should-not (agl-test--in-comment-p (agl-test--pos-after "# not-a-comment")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let after")))))
 
-(ert-deftest agl-syntax-raw-tail-block-ends-at-opener-indentation ()
+(ert-deftest agl-syntax-verbatim-block-ends-at-opener-indentation ()
   (agl-test--with-buffer
       (concat "if cond\n"
-              "  ask$\n"
+              "  ask $\n"
               "    Explain this.\n"
               "  let x = 1\n")
     (should (agl-test--in-string-p (agl-test--pos-after "Explain this.")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
 
-(ert-deftest agl-syntax-raw-tail-payload-parens-are-inert ()
-  (agl-test--with-buffer "exec$ echo (unbalanced\nlet x = [1, 2]\n"
+(ert-deftest agl-syntax-verbatim-payload-parens-are-inert ()
+  (agl-test--with-buffer "exec $ echo (unbalanced\nlet x = [1, 2]\n"
     (should (agl-test--in-string-p (agl-test--pos-after "(unbalanced")))
     (goto-char (agl-test--pos-after "let x = "))
     (forward-sexp 1)
@@ -236,14 +301,14 @@ call never exercises `agl--propertize-extend-region' this way."
     (comment-dwim nil)
     (should (looking-back "# " (line-beginning-position)))))
 
-(ert-deftest agl-syntax-raw-block-survives-edit-inside-payload ()
-  "Editing inside a raw-tail block payload must not corrupt its syntax.
+(ert-deftest agl-syntax-verbatim-block-survives-edit-inside-payload ()
+  "Editing inside a `$' verbatim block payload must not corrupt its syntax.
 
 The buggy extend-region only backed up to `agl-multiline''s start
 inside the block, never to the opener line, so the opener was never
 rescanned and the payload was relexed as code."
   (agl-test--with-edited-buffer
-      (concat "ask$\n"
+      (concat "ask $\n"
               "  line one\n"
               "  line two\n"
               "let x = 1\n")
@@ -264,14 +329,14 @@ rescanned and the payload was relexed as code."
     (should (agl-test--in-string-p (agl-test--pos-after "line twoX")))
     (should-not (agl-test--in-string-p (point-max)))))
 
-(ert-deftest agl-syntax-raw-block-survives-chunked-propertize ()
-  "Chunked propertizing must still see the whole raw-tail block as a string.
+(ert-deftest agl-syntax-verbatim-block-survives-chunked-propertize ()
+  "Chunked propertizing must still see the whole `$' verbatim block as a string.
 
 Chunk boundaries (as `jit-lock-mode' produces, bounded by
 `syntax-propertize-chunk-size') land inside the block and inside the
 opener line."
   (agl-test--with-chunked-buffer
-      (concat "ask$\n"
+      (concat "ask $\n"
               "  line one\n"
               "  line two\n"
               "  line three\n"
@@ -296,35 +361,34 @@ opener line."
 ;;
 ;; Each constant documents its own canonical Python source (see the
 ;; docstrings in agl-mode.el: `src/agm/agl/keywords.py',
-;; `src/agm/agl/lexer/tokens.py', `src/agm/raw_tail_catalog.py'). A test
-;; that only asserts these hand-written constants contain hand-written
-;; strings cannot detect drift from those Python sources, so none is
-;; included here.
+;; `src/agm/agl/lexer/tokens.py'). A test that only asserts these
+;; hand-written constants contain hand-written strings cannot detect drift
+;; from those Python sources, so none is included here.
 
-;; --- Raw-tail payload backslashes: owned as text, not escape syntax ---
+;; --- `$' verbatim payload backslashes: owned as text, not escape syntax ---
 
-(ert-deftest agl-syntax-raw-tail-payload-trailing-backslash-does-not-escape-fence ()
-  (agl-test--with-buffer "exec$ echo foo\\\nlet x = 1\n"
+(ert-deftest agl-syntax-verbatim-payload-trailing-backslash-does-not-escape-fence ()
+  (agl-test--with-buffer "exec $ echo foo\\\nlet x = 1\n"
     (should (agl-test--in-string-p (agl-test--pos-after "foo\\")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
 
-(ert-deftest agl-syntax-raw-tail-block-payload-trailing-backslash-does-not-escape-fence ()
+(ert-deftest agl-syntax-verbatim-block-payload-trailing-backslash-does-not-escape-fence ()
   "A payload line ending in `\\' must not escape the block's close fence.
 
 Otherwise the block stays open and swallows the following code."
   (agl-test--with-buffer
-      (concat "ask$\n"
+      (concat "ask $\n"
               "  line one\n"
               "  line two\\\n"
               "let x = 1\n")
     (should (agl-test--in-string-p (agl-test--pos-after "line two\\")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let x")))))
 
-;; --- Raw tails are only recognized at bracket depth zero ---
+;; --- `$' verbatim literals are only recognized at bracket depth zero ---
 
-(ert-deftest agl-syntax-raw-tail-name-inside-call-args-is-not-an-opener ()
-  (agl-test--with-buffer "let y = f(exec$, 1)\nlet z = 2\n"
-    (should-not (agl-test--in-string-p (agl-test--pos-after "exec$")))
+(ert-deftest agl-syntax-verbatim-dollar-inside-call-args-is-not-an-opener ()
+  (agl-test--with-buffer "let y = f($, 1)\nlet z = 2\n"
+    (should-not (agl-test--in-string-p (agl-test--pos-after "$, 1")))
     (goto-char (agl-test--pos-after "let y = f"))
     (forward-sexp 1)
     (should (eq (char-before) ?\)))
@@ -341,28 +405,28 @@ Otherwise the block stays open and swallows the following code."
     (should (agl-test--in-string-p (agl-test--pos-after "cost is")))
     (should-not (agl-test--in-string-p (agl-test--pos-after "let b")))))
 
-;; --- Degenerate raw-tail payload lengths ---
+;; --- Degenerate `$' verbatim payload lengths ---
 
-(ert-deftest agl-syntax-raw-tail-single-char-inline-payload-at-eof-is-string ()
-  (agl-test--with-buffer "exec$ x"
+(ert-deftest agl-syntax-verbatim-single-char-inline-payload-at-eof-is-string ()
+  (agl-test--with-buffer "exec $ x"
     (should (agl-test--in-string-p (point-max)))))
 
-(ert-deftest agl-syntax-raw-tail-inline-payload-at-eof-keeps-last-char-as-content ()
-  (agl-test--with-buffer "exec$ ab"
+(ert-deftest agl-syntax-verbatim-inline-payload-at-eof-keeps-last-char-as-content ()
+  (agl-test--with-buffer "exec $ ab"
     (should (agl-test--in-string-p (agl-test--pos-after "ab")))))
 
-(ert-deftest agl-syntax-raw-tail-block-payload-at-eof-without-newline-is-string ()
-  (agl-test--with-buffer (concat "ask$\n" "  line one\n" "  line two")
+(ert-deftest agl-syntax-verbatim-block-payload-at-eof-without-newline-is-string ()
+  (agl-test--with-buffer (concat "ask $\n" "  line one\n" "  line two")
     (should (agl-test--in-string-p (point-max)))))
 
-(ert-deftest agl-syntax-raw-block-drops-trailing-blank-lines ()
+(ert-deftest agl-syntax-verbatim-block-drops-trailing-blank-lines ()
   ;; The scanner drops the blank lines after a block payload's last content
   ;; line, so they are not part of the verbatim region.
-  (agl-test--with-buffer "exec$\n  a\n\n"
+  (agl-test--with-buffer "exec $\n  a\n\n"
     (should-not (nth 3 (syntax-ppss (1- (point-max)))))))
 
-(ert-deftest agl-syntax-raw-block-keeps-its-content ()
-  (agl-test--with-buffer "exec$\n  a\n  b\nlet after = 1\n"
+(ert-deftest agl-syntax-verbatim-block-keeps-its-content ()
+  (agl-test--with-buffer "exec $\n  a\n  b\nlet after = 1\n"
     (goto-char (point-min))
     (search-forward "  b")
     (should (nth 3 (syntax-ppss (1- (point)))))

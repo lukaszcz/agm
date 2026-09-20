@@ -89,33 +89,60 @@ rules:
     # ordinary AgL and keeps the faces the rules above gave it.
     - preproc: "@[\\p{L}_][^\\]\\[(){}:,.|;/@=\\s]*"
 
-    # Raw-tail payloads. The tail of an `exec$'/`ask$' line is verbatim text,
-    # not AgL, so the whole tail is a region: a keyword or an apostrophe inside
-    # a shell command is content, not code.  Micro paints a region's start
-    # delimiter with the region's own group, so the opener faces as part of the
-    # payload rather than as a builtin -- the tail's verbatim reading is what
+    # `$' verbatim literal payloads. The tail of a `$'-opened line is verbatim
+    # text, not AgL, so the whole tail is a region: a keyword or an apostrophe
+    # inside it is content, not code.  Micro paints a region's start delimiter
+    # with the region's own group, so the opener faces as part of the payload
+    # rather than as an operator -- the payload's verbatim reading is what
     # matters, and unlike the Emacs mode there is no way to split the two.
     # Only the inline form is covered; an indented block payload is beyond what
-    # a regexp-only region can delimit.  The opener must begin a token: `-'
-    # continues an AgL name, so `do-exec$' is one identifier even though `\b'
-    # sees a boundary before its `exec$'.  A region's start delimiter is the
-    # one thing no later rule can repaint, so the boundary is spelled out as
-    # the delimiter that must precede it (any `IDENT_STOP' character, or the
-    # line start) and swallowed into the region -- painting a space or a
-    # bracket with the payload's colour is invisible.
+    # a regexp-only region can delimit.  The `$' must begin a token: it is an
+    # ordinary character inside an identifier or an operator-name run (`ask$',
+    # `a$b', `<$>'), so `\b' alone cannot tell an opener from one of those. A
+    # region's start delimiter is the one thing no later rule can repaint, so
+    # the boundary is spelled out as what must precede the `$' and swallowed
+    # into the region -- painting a space or a bracket with the payload's
+    # colour is invisible.  The character class is a proper subset of
+    # `IDENT_STOP': `=', `|', and `/' are left out on purpose, because each of
+    # them still merges with a following `$' into a single operator name in
+    # the real lexer (`=$', `|$', `/$'), rather than ending its own token
+    # before it.  A quote is included even though it is not an `IDENT_STOP'
+    # character at all: a quote that closes a string ends it atomically, so
+    # whatever follows -- `$' included -- always begins a fresh token there,
+    # and this rule is only ever tried once the string region rules below
+    # have already claimed every quote that opens one, so a quote reaching
+    # this point is always such a closer, never one swallowed into a longer
+    # identifier (`foo"bar$', which never reaches this rule at all).  A
+    # digit run is folded into the pattern the same way, rather than added to
+    # the class, because a bare digit alone is not always a delimiter: `1$'
+    # is a number token followed by a fresh one, but `a1$' is one identifier,
+    # so the digits must still be anchored back to a real delimiter or line
+    # start to tell the two apart.
     - constant.string:
-        start: "(^|[\\]\\[(){}:,.|;/@= \t])(exec|ask)\\$"
+        start: "(^|[\\]\\[(){}:,.;@\"' \t])[0-9]*\\$"
         end: "$"
+        skip: "\\\\."
+        rules:
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
-    # Template strings. AgL strings may contain %{...}; this highlights the
-    # interpolation delimiters without trying to parse nested AgL expressions.
+    # Template strings and `$' payloads contain unescaped `%{...}' holes. A
+    # nested region faces their delimiters without styling literal braces or
+    # escaped hole openers.
     - constant.string:
         start: "\"\"\""
         end: "\"\"\""
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "%\\{|\\}"
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
     - constant.string:
         start: "'''"
@@ -123,7 +150,11 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "%\\{|\\}"
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
     - constant.string:
         start: "\""
@@ -131,7 +162,11 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "%\\{|\\}"
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
     - constant.string:
         start: "'"
@@ -139,7 +174,11 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "%\\{|\\}"
+            - constant.string:
+                start: "%\\{"
+                end: "(\\}|$)"
+                skip: "\\\\."
+                limit-group: special
 
     - comment:
         start: "#"

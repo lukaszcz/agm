@@ -166,8 +166,7 @@ lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let` or `var`, may not be
 declared as functions or function parameters, and may not appear as pattern or catch
 binders — but they remain legal as field and method names, which live in a
-type's own member namespace. The distinct raw-tail spellings
-`exec$` and `ask$` are reserved for their raw forms and cannot be used as names.
+type's own member namespace.
 
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,
 `array`, `dict`, and `unit` are **not** reserved; they are recognized
@@ -300,6 +299,15 @@ Exact reserved operator and punctuation tokens such as `=`, `==`, `!=`, `<`,
 `<=`, `>`, `>=`, `->`, `=>`, `:=`, `::`, `+`, `-`, `*`, `/`, `|`, `.`, `:`,
 and `@` keep their syntactic meaning.
 
+A `$` at the start of a token opens a `$` literal
+([Verbatim literals](#verbatim-literals)) rather than starting an operator
+name, so an operator-name run can never *start* with `$`. Once a run is
+already underway — started by some other operator character — `$` is an
+ordinary operator-name character like any other, so it may appear inside or
+at the end of one: `<$>` and `<|$` are each a single `OP_NAME` token. Inside
+a word-starting identifier `$` is likewise an ordinary continuation
+character (see above), so `a$b` and `ask$` are each a single `NAME` token.
+
 The placeholder spellings `?` and `?<digits>` (for example `?1` and `?12`)
 are also reserved tokens. They are used only as whole call arguments for
 partial application ([Functions](functions.md#partial-application)). The
@@ -368,6 +376,13 @@ disambiguation.
 | `?1` | `PLACEHOLDER_NUM "?1"` | numbered placeholder; no whitespace before the digits |
 | `? 1` | `PLACEHOLDER "?"`, `INT "1"` | not a numbered placeholder |
 | `??` | `OP_NAME "??"` | longer `?`-containing operator names are unaffected |
+| `ask $ x` | `NAME "ask"`, then a `$` literal | space before `$` opens a `$` literal, applied to `ask` |
+| `ask$` | `NAME "ask$"` | one identifier (`$` is a continuation character, not a delimiter) |
+| `a$b` | `NAME "a$b"` | one identifier |
+| `<$>` | `OP_NAME "<$>"` | standalone operator name; `$` mid-run is ordinary |
+| `<|$` | `OP_NAME "<|$"` | standalone operator name; `$` may end a run |
+| `x+$ y` | `NAME "x+$"`, `NAME "y"` | one identifier (`+` and `$` both continuation characters) |
+| `$-rf` | a `$` literal, payload `-rf` | token-start `$` opens a `$` literal, not an identifier |
 
 This mirrors a Lisp-like maximal-munch identifier rule: scan for as long as
 possible until a disallowed character.  Use spaces around operators when you
@@ -388,9 +403,12 @@ operator: `-3` is `-` applied to the literal `3`.
 
 ## Strings and templates
 
-All string literals are **templates**: they may contain `%{expr}` and
-`${NAME}` interpolation. Write `\${` for a literal `${`. Both `"` and `'`
-are valid delimiter characters, giving four forms:
+Every string literal is a **template**: text fragments plus interpolation
+holes. A quoted template supports two kinds of hole, `%{expr}` and `${NAME}`
+(write `\${` for a literal `${`); a `$` verbatim text literal is a third
+template spelling with only the `%{expr}` hole (see
+[Verbatim literals](#verbatim-literals) below). Both `"` and `'` are valid
+quote delimiters, giving four quoted forms:
 
 - `"…"` / `'…'` — single-line.
 - `"""…"""` / `'''…'''` — triple-quoted, multi-line, subject to the dedent rule.
@@ -400,27 +418,58 @@ semantics are covered in [Strings and interpolation](strings-and-interpolation.m
 A `\uXXXX` escape that denotes a surrogate on its own, without an adjacent
 partner escape completing a pair, is a lexical error.
 
-## Raw-tail forms
+## Verbatim literals
 
-`exec$` and `ask$` begin raw-tail calls, either directly or after a `.`
-projection: `receiver.ask$ prompt`. The lexer emits a `RAW_TAIL_NAME`, then
-`RAW_TAIL_START`, one or more `RAW_FRAGMENT` and interpolation-token runs, and
-`RAW_TAIL_END`. Optional type arguments must be byte-adjacent to the raw name:
-`ask$::[T]` and `receiver.ask$::[T]`. In `ask$ ::[T]` or
-`receiver.ask$ ::[T]`, the spaced `::[T]` instead begins the payload. The
-payload is either the rest of that line or a following indented block. In both
-cases it is one template: its text is verbatim except that `%{expr}`
-interpolates and `\%{` is a literal `%{`. Inline payloads discard trailing
-spaces and tabs; block payloads drop the blank lines that trail the last
-content line.
+A `$` at the start of a token opens a **verbatim text literal** (`$`
+literal) — a third template spelling alongside quoted and triple-quoted
+templates — wherever a template may stand (e.g. `receiver.ask $ prompt`).
 
-A raw-tail call requires a nonempty inline payload or a block with at least one
-nonblank line. It is only recognized at bracket depth zero and must occupy a
-line-final expression position. Its payload therefore owns `#`, `;`, quotes,
-parentheses, dollar forms, and ordinary backslashes rather than treating them
-as AgL syntax. The [Grammar](grammar.md#raw-tail-calls) lists the allowed
-positions; [Shell execution](shell-execution.md#raw-tail-exec) and [Agent
-calls](agent-calls.md#raw-tail-ask) describe the two forms.
+### Payload
+
+After `$`, leading horizontal whitespace (spaces and tabs) is discarded.
+What remains on the line decides the form:
+
+- **Inline.** If anything other than a newline remains, the payload is the
+  rest of that line, with trailing horizontal whitespace discarded.
+- **Block.** If nothing but whitespace remains before the newline (or end of
+  input) — nothing else follows `$` on its line — the payload is a following
+  indented block. Scanning stops, ending the block, at the first non-blank
+  line indented at or below the line holding `$` (or at end of input).
+
+  The dedent margin is the indentation of the block's *first non-blank
+  line*. A later non-blank block line indented more than the line holding
+  `$` but less than the margin is a lexical error rather than a normal end
+  of block — in `$\n    one\n  two`, `two` (indent 2) is more indented than
+  the line holding `$` (indent 0) but under the margin `one` set (indent 4),
+  so it is rejected. Every block line is dedented by the margin (indentation
+  beyond the margin is kept) and the lines are joined with `\n`. Leading and
+  interior blank lines are kept as empty lines; blank lines trailing the
+  block's last content line are dropped.
+
+A payload that is empty — nothing but whitespace before the line ends
+(inline), or a block with no non-blank line — is a lexical error.
+
+### Placement
+
+A `$` literal is not valid directly inside brackets — `(`, `[`, `{`, or a
+`%{…}` interpolation hole — so it cannot be a call or constructor argument,
+an array or dict element, or the expression inside a hole; use a quoted
+template in those positions instead.
+
+### Content
+
+The payload reaches the literal's value verbatim: `#`, `;`, quotes,
+parentheses, and every dollar form it contains (`$VAR`, `${NAME}`, `$(cmd)`)
+pass through unchanged, never read as AgL syntax. Only two spellings are
+recognized inside the payload:
+
+- `%{expr}` — an interpolation hole, on the same terms as any other template
+  ([Strings and interpolation](strings-and-interpolation.md)).
+- `\%{` — the one escape sequence, for a literal `%{`. Every other backslash
+  is literal payload text.
+
+[Shell execution](shell-execution.md) and [Agent calls](agent-calls.md) show
+the `$` literal supplying `exec`'s and `ask`'s single argument.
 
 ## Operators and punctuation
 

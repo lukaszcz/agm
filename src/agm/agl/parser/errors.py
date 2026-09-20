@@ -13,19 +13,39 @@ Special cases:
 - The fallback quotes the unexpected token's spelling, so a token that has none
   is named instead: end of input, end of block, and indentation all reach the
   parser as zero-width layout tokens.
+- Every message produced from a Lark exception (not a ``LexError``) gets a
+  uniform final pass: a spacing hint is appended when a NAME token ending in
+  ``$`` appears on the offending token's line before it, e.g. ``exec$ date``
+  lexes as one NAME, not ``exec`` applied to a ``$ date`` verbatim literal;
+  and a piping hint is appended when the offending token is a `$` literal
+  opener immediately preceded by two operand-ending tokens (a further
+  juxtaposed argument, e.g. ``print exec $ date``), since juxtaposition never
+  chains.
 """
 
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
-from agm.agl.diagnostics import AglError
+from agm.agl.diagnostics import AglError, dollar_spacing_hint, piping_hint
+from agm.agl.keywords import KW_FALSE, KW_NULL, KW_TRUE
+from agm.agl.lexer.tokens import (
+    DECIMAL,
+    INT,
+    NAME,
+    RBRACE,
+    RPAR,
+    RSQB,
+    TEMPLATE_END,
+    VERBATIM_END,
+    VERBATIM_START,
+)
 from agm.agl.syntax.spans import SourceSpan
-from agm.raw_tail_catalog import RAW_TAIL_NAMES
 
 if TYPE_CHECKING:
     from lark.exceptions import UnexpectedToken
+    from lark.lexer import Token
 
 # All comparison operator token types (mirrors tokens.py).  Equality is ``==``
 # (``EQ_EQ``); ``=`` (``EQ``) is a binder / named-arg separator, not a comparison.
@@ -68,29 +88,6 @@ _ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
 # like ``empty?`` or the ``as?`` keyword) does not masquerade as a placeholder.
 _PLACEHOLDER_BEFORE_TOKEN_RE = re.compile(r"(?<![^\s(){}\[\]:,.|;/@=])\?[0-9]*\s*$")
 
-# The position rule a misplaced raw-tail form breaks, stated as the criterion
-# the grammar actually enforces: a raw payload owns the rest of its line, so it
-# is admitted only where nothing else may follow on that line.  An inline `=>`
-# body is line-final in appearance only — `| else => …` may still follow it.
-_RAW_TAIL_BAD_POSITION = (
-    "raw-tail forms are only allowed where nothing else can follow on the same "
-    "line; use the call form or an indented block form."
-)
-
-# Terminals that open an expression and can never be a name or a pattern.  A
-# name slot (binder, field, declaration name) and a pattern slot both admit
-# ``NAME``; only an expression slot admits these, which is what separates
-# "this name is reserved" from "this call is in the wrong position".
-_COMPOSITE_EXPRESSION_STARTERS: frozenset[str] = frozenset(
-    {
-        "LBRACE",
-        "LPAR",
-        "LSQB",
-        "MINUS",
-        "NOT",
-    }
-)
-
 # Terminals that end an item.  When one is expected, the parser had a complete
 # item in hand, so an unexpected indent is stray rather than a missing body.
 _ITEM_ENDERS: frozenset[str] = frozenset({"$END", "_DEDENT", "_NEWLINE", "SEMICOLON"})
@@ -105,41 +102,6 @@ _ZERO_WIDTH_TOKEN_NAMES: dict[str, str] = {
     "_DEDENT": "end of block",
     "_INDENT": "indentation",
 }
-
-
-def _expects_identifier(expected: set[str]) -> bool:
-    """Return whether Lark expected a name slot rather than an expression."""
-    return bool({"NAME", "OP_NAME"} & expected) and not bool(
-        _COMPOSITE_EXPRESSION_STARTERS & expected
-    )
-
-
-def _raw_tail_name_on_stack(exc: UnexpectedToken) -> str | None:
-    """Name of the raw-tail form whose payload the parser is reading, if exposed.
-
-    The ``raw_callee`` or ``dotted_raw_head`` subtree carrying the
-    ``RAW_TAIL_NAME`` token is on the parse stack for the whole payload, so the
-    empty-payload diagnostic can name the form the user wrote instead of
-    re-deriving it from the source text.
-    Returns ``None`` when the parser state is unavailable, exactly as
-    :func:`_completed_rule` does.
-    """
-    parser: object = getattr(exc, "interactive_parser", None)
-    state: object = getattr(parser, "parser_state", None)
-    stack: object = getattr(state, "value_stack", None)
-    if not isinstance(stack, list):
-        return None
-    items: list[object] = stack
-    for item in reversed(items):
-        data: object = getattr(item, "data", None)
-        children: object = getattr(item, "children", None)
-        if data not in {"raw_callee", "dotted_raw_head"} or not isinstance(children, list):
-            continue
-        for child in children:
-            name = str(child)
-            if name in RAW_TAIL_NAMES:
-                return name
-    return None
 
 
 # An inline `=>` body is a single item: no binders, no `;` sequence.  Both are
@@ -193,6 +155,22 @@ def _span_from_token(
         end_col=end_col,
         start_offset=token_pos,
         end_offset=end_pos,
+    )
+
+
+def _end_of_source_span(source_text: str) -> SourceSpan:
+    """Span pinpointing the end of *source_text*."""
+    offset = len(source_text)
+    last_newline = source_text.rfind("\n")
+    line = source_text.count("\n") + 1
+    col = offset - last_newline
+    return SourceSpan(
+        start_line=line,
+        start_col=col,
+        end_line=line,
+        end_col=col + 1,
+        start_offset=offset,
+        end_offset=offset + 1,
     )
 
 
@@ -307,11 +285,115 @@ def _is_placeholder_position_error(
     )
 
 
+# Zero-width layout/end token types that carry no line of their own: the
+# spacing hint's anchor line for one of these is borrowed from the last real
+# token before it, the same way Lark borrows $END's reported position.
+_LAYOUT_TOKEN_TYPES: frozenset[str] = frozenset({"_INDENT", "_DEDENT", "_NEWLINE", "$END"})
+
+
+def _dollar_spacing_hint(
+    tokens: Sequence[Token] | None,
+    *,
+    offending_type: str | None,
+    line: int,
+    pos: int,
+) -> str:
+    """Hint suffix when a ``$``-suffixed NAME precedes the error on its anchor line.
+
+    *tokens* is the parse's single materialized token pass (see
+    :func:`~agm.agl.lexer.token_collector`); ``None``/empty when none was
+    captured (a lex error, so no tokens were ever produced). The anchor line
+    is *line* (the offending token's own line), except for a zero-width
+    layout/end token — ``_INDENT``/``_DEDENT``/``_NEWLINE``/``$END`` have no
+    line of their own, so their anchor is the line of the last real token
+    strictly before *pos*. Reports the first ``$``-suffixed NAME on the anchor
+    line before *pos*, delegating the stem check to
+    :func:`~agm.agl.diagnostics.dollar_spacing_hint`.
+    """
+    if not tokens:
+        return ""
+    anchor_line = line
+    if offending_type in _LAYOUT_TOKEN_TYPES:
+        anchor_line = 0
+        for tok in tokens:
+            if tok.type in _LAYOUT_TOKEN_TYPES or tok.start_pos is None or tok.start_pos >= pos:
+                continue
+            if tok.line is not None:
+                anchor_line = tok.line
+        if not anchor_line:
+            return ""
+    for tok in tokens:
+        if tok.type != NAME or tok.line != anchor_line:
+            continue
+        if tok.start_pos is None or tok.start_pos >= pos:
+            continue
+        hint = dollar_spacing_hint(str(tok))
+        if hint:
+            return hint
+    return ""
+
+
+# Token types that can END an operand: a name, a literal, or a closing
+# bracket. Used to recognize a `$` literal opener rejected as a further
+# juxtaposed argument (juxtaposition applies exactly one argument, so a THIRD
+# juxtaposed token — name or `$` literal alike — is always rejected the same
+# way).
+_OPERAND_ENDING_TOKEN_TYPES: frozenset[str] = frozenset(
+    {
+        NAME,
+        INT,
+        DECIMAL,
+        TEMPLATE_END,
+        VERBATIM_END,
+        RPAR,
+        RSQB,
+        RBRACE,
+        KW_TRUE.upper(),
+        KW_FALSE.upper(),
+        KW_NULL.upper(),
+    }
+)
+
+
+def _piping_hint(
+    tokens: Sequence[Token] | None,
+    *,
+    offending_type: str | None,
+    line: int,
+    pos: int,
+) -> str:
+    """Hint suffix when a `$` literal opener is rejected as a further juxtaposed argument.
+
+    Fires only when the offending token is a `$` literal opener (a
+    ``VERBATIM_START``) and the two tokens immediately preceding it on its own
+    line are both operand-ending (see :data:`_OPERAND_ENDING_TOKEN_TYPES`) —
+    the shape of ``f x $ y``, where ``f x`` is already a full juxtaposed
+    application and the `$` literal was meant as a further, piped argument.
+    Delegates the wording to :func:`~agm.agl.diagnostics.piping_hint`.
+    """
+    if offending_type != VERBATIM_START or not tokens:
+        return ""
+    preceding = [
+        tok
+        for tok in tokens
+        if tok.start_pos is not None and tok.start_pos < pos and tok.line == line
+    ]
+    if len(preceding) < 2:
+        return ""
+    if (
+        preceding[-1].type in _OPERAND_ENDING_TOKEN_TYPES
+        and preceding[-2].type in _OPERAND_ENDING_TOKEN_TYPES
+    ):
+        return piping_hint()
+    return ""
+
+
 def syntax_error_from_lark(
     exc: Exception,
     *,
     filename: str = "<agl>",
     source_text: str | None = None,
+    tokens: Sequence[Token] | None = None,
 ) -> AglSyntaxError:
     """Convert a Lark parse exception to ``AglSyntaxError``.
 
@@ -321,22 +403,59 @@ def syntax_error_from_lark(
     - ``lark.exceptions.UnexpectedEOF`` (premature end-of-file)
     - ``agm.agl.lexer.errors.LexError`` (custom lexer error)
     - Generic fallback for any other exception.
+
+    *tokens* is the parse's materialized token pass (see
+    :func:`~agm.agl.lexer.token_collector`); when supplied, every message
+    built from a Lark exception (everything but the ``LexError`` path) gets
+    one uniform final pass appending :func:`_dollar_spacing_hint`.
     """
-    from lark.exceptions import UnexpectedCharacters, UnexpectedEOF, UnexpectedToken
+    from lark.exceptions import UnexpectedToken
 
     from agm.agl.lexer.errors import LexError
 
     if isinstance(exc, LexError):
-        # LexError already carries a SourceSpan.
-        assert exc.span is not None
         return AglSyntaxError(str(exc), span=exc.span)
+
+    error = _lark_error_message(exc, filename=filename, source_text=source_text)
+    offending_type = exc.token.type if isinstance(exc, UnexpectedToken) else None
+    hint = _dollar_spacing_hint(
+        tokens,
+        offending_type=offending_type,
+        line=error.source_span.start_line,
+        pos=error.source_span.start_offset,
+    ) or _piping_hint(
+        tokens,
+        offending_type=offending_type,
+        line=error.source_span.start_line,
+        pos=error.source_span.start_offset,
+    )
+    if not hint:
+        return error
+    return AglSyntaxError(f"{error}{hint}", span=error.source_span)
+
+
+def _lark_error_message(
+    exc: Exception,
+    *,
+    filename: str,
+    source_text: str | None,
+) -> AglSyntaxError:
+    """Build the syntax-error message for a Lark exception, without the spacing hint."""
+    from lark.exceptions import UnexpectedCharacters, UnexpectedEOF, UnexpectedToken
 
     if isinstance(exc, UnexpectedToken):
         tok = exc.token
         line = tok.line if tok.line is not None else 1
         col = tok.column if tok.column is not None else 1
         pos = tok.start_pos if tok.start_pos is not None else 0
-        span = _span_from_token(line, col, pos, tok.end_line, tok.end_column, tok.end_pos)
+        if tok.type == "$END" and tok.end_pos is None and source_text is not None:
+            # Lark borrows $END's position from the last token unless that
+            # token is falsy (zero-width, e.g. VERBATIM_END); its synthetic
+            # (1, 1) fallback has no end_pos.
+            span = _end_of_source_span(source_text)
+            pos = span.start_offset
+        else:
+            span = _span_from_token(line, col, pos, tok.end_line, tok.end_column, tok.end_pos)
         if _is_missing_arrow_after_else(
             source_text=source_text, token_pos=pos, expected=set(exc.expected)
         ):
@@ -351,20 +470,6 @@ def syntax_error_from_lark(
             token_type=tok.type, source_text=source_text, token_pos=pos
         ):
             return _make_placeholder_position_error(span)
-        if tok.type == "RAW_TAIL_NAME":
-            if str(tok) in RAW_TAIL_NAMES and _expects_identifier(set(exc.expected)):
-                return AglSyntaxError(
-                    f"{str(tok)!r} is reserved for raw-tail calls.",
-                    span=span,
-                )
-            return AglSyntaxError(_RAW_TAIL_BAD_POSITION, span=span)
-        if tok.type == "RAW_TAIL_END":
-            name = _raw_tail_name_on_stack(exc) or "raw-tail form"
-            return AglSyntaxError(
-                f"raw-tail payload for {name!r} cannot be empty; use the call form "
-                "or an indented block form.",
-                span=span,
-            )
         # Chained comparison detection: the unexpected token is
         # a comparison operator AND that operator is NOT in the expected set.
         # When the operator IS expected, we are still before the first comparison
@@ -409,7 +514,7 @@ def syntax_error_from_lark(
             )
         if tok.type == "_INDENT" and bool(_ITEM_ENDERS & set(exc.expected)):
             # A complete item was already in hand (its terminators are expected),
-            # so this indentation is stray — never a misplaced raw-tail form,
+            # so this indentation is stray — never a misplaced `$` literal,
             # whose payload the lexer would have consumed on the header line.
             return AglSyntaxError(
                 "Unexpected indentation; this line is more indented than its block.",

@@ -1,0 +1,14 @@
+# `exec$` is an ordinary name, usable as a local binding, a record field,
+# and a named argument, like any other identifier ending in `$`.
+
+record Job
+  exec$: text
+  label: text
+
+def describe(exec$: text, label: text) -> text = "%{label}:%{exec$}"
+
+program def main(label: text) -> unit =
+  let exec$ = "build"
+  let job = Job(exec$ = exec$, label = label)
+  print(describe(exec$ = job.exec$, label = job.label))
+  print(exec$)

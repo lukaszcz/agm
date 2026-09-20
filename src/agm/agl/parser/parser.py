@@ -31,10 +31,10 @@ from lark.exceptions import (
 )
 
 import agm.agl.syntax as syntax
-from agm.agl.lexer import tokenize
-from agm.agl.lexer.errors import LexError
+from agm.agl.lexer import token_collector, tokenize
+from agm.agl.lexer.errors import IncompleteInputError, LexError, UnterminatedTripleQuotedStringError
 from agm.agl.lexer.lexer import build_parser
-from agm.agl.lexer.tokens import RAW_TAIL_END, RAW_TAIL_START
+from agm.agl.lexer.tokens import VERBATIM_END, VERBATIM_START
 from agm.agl.parser.errors import AglSyntaxError, syntax_error_from_lark
 from agm.agl.parser.transform import AstBuilder, resolve_program_infix
 from agm.agl.syntax.spans import SourceId
@@ -81,21 +81,26 @@ def has_unterminated_triple_quoted_string(text: str) -> bool:
     try:
         _PARSER.parse(text)
     except LexError as exc:
-        return str(exc) == "Unterminated triple-quoted string literal"
+        return isinstance(exc, UnterminatedTripleQuotedStringError)
     except LarkError:
         return False
     return False
 
 
-def has_open_raw_tail_block(text: str) -> bool:
-    """Return ``True`` when a raw-tail block payload runs to the end of *text*.
+def has_open_verbatim_block(text: str) -> bool:
+    """Return ``True`` when a `$`-literal block payload is still open.
 
-    An unclosed raw-tail block is not a parse failure — the lexer happily ends
-    the payload at end of input — so :func:`is_incomplete_source` cannot see it.
-    A REPL still needs to keep prompting, which is what this answers.  Only the
-    *last* payload can reach the buffer end, and it is a block (rather than an
-    inline tail that is already complete) exactly when its header line has no
-    text after the raw-tail name.
+    An unclosed block payload is not a parse failure — the lexer happily ends
+    it at end of input — so :func:`is_incomplete_source` cannot see it. A REPL
+    still needs to keep prompting, which is what this answers. Only the *last*
+    payload can reach the buffer end, and it is a block (rather than an inline
+    payload that is already complete) exactly when its header line has no text
+    after the opener.
+
+    A bare `$` header with nothing typed after it yet (e.g. ``ask $``) raises
+    an ``IncompleteInputError`` instead of closing silently;
+    :func:`is_incomplete_source` already reports that as incomplete, so any
+    lex error here is simply not an open block.
     """
     try:
         tokens = list(tokenize(text))
@@ -103,9 +108,9 @@ def has_open_raw_tail_block(text: str) -> bool:
         return False
     payload_starts: list[int] = []
     for token in tokens:
-        if token.type == RAW_TAIL_START:
-            payload_starts.append(token.start_pos if token.start_pos is not None else 0)
-        elif token.type == RAW_TAIL_END and token.end_pos == len(text) and payload_starts:
+        if token.type == VERBATIM_START:
+            payload_starts.append(token.end_pos if token.end_pos is not None else 0)
+        elif token.type == VERBATIM_END and token.end_pos == len(text) and payload_starts:
             line_end = text.find("\n", payload_starts[-1])
             header_tail = text[payload_starts[-1] : len(text) if line_end < 0 else line_end]
             return header_tail.strip() == ""
@@ -124,18 +129,31 @@ def _parse_tree(
     Shared by the program parser and the ``type_expr`` parser so the error
     wrapping (and its ``# pragma: no cover`` fallback) exists in one place.
     Returns the raw Lark tree; the caller transforms it.
+
+    Installs :func:`~agm.agl.lexer.token_collector` around the parse so a
+    Lark-derived error can be diagnosed against the parse's own materialized
+    token pass (e.g. the `$`-spacing hint) without re-lexing *text*.
     """
-    try:
-        return parser.parse(text)
-    except LexError as exc:
-        _reraise_stamped(syntax_error_from_lark(exc, filename=filename, source_text=text), source)
-    except (UnexpectedToken, UnexpectedCharacters, UnexpectedEOF) as exc:
-        _reraise_stamped(syntax_error_from_lark(exc, filename=filename, source_text=text), source)
-    except LarkError as exc:  # pragma: no cover
-        # Any other lark-level error (ParseError, GrammarError, etc.) is a
-        # genuine syntax/parse problem.  Narrowing to LarkError lets internal
-        # bugs (AssertionError and the like) surface instead of being masked.
-        _reraise_stamped(syntax_error_from_lark(exc, filename=filename, source_text=text), source)
+    with token_collector() as tokens:
+        try:
+            return parser.parse(text)
+        except LexError as exc:
+            _reraise_stamped(
+                syntax_error_from_lark(exc, filename=filename, source_text=text), source
+            )
+        except (UnexpectedToken, UnexpectedCharacters, UnexpectedEOF) as exc:
+            _reraise_stamped(
+                syntax_error_from_lark(exc, filename=filename, source_text=text, tokens=tokens),
+                source,
+            )
+        except LarkError as exc:  # pragma: no cover
+            # Any other lark-level error (ParseError, GrammarError, etc.) is a
+            # genuine syntax/parse problem.  Narrowing to LarkError lets internal
+            # bugs (AssertionError and the like) surface instead of being masked.
+            _reraise_stamped(
+                syntax_error_from_lark(exc, filename=filename, source_text=text, tokens=tokens),
+                source,
+            )
 
 
 def _transform_tree(
@@ -247,7 +265,8 @@ def is_incomplete_source(text: str) -> bool:
     - ``UnexpectedToken`` on a real token where an ``_INDENT`` was expected (the
       user hit Enter right after a block-opening ``=>``/header but has not yet
       indented the suite body) → incomplete.
-    - ``LexError`` for an unterminated triple-quoted string → incomplete. Other
+    - ``IncompleteInputError`` (an unterminated triple-quoted string, or an
+      empty `$` verbatim literal running to end of input) → incomplete. Other
       lexical failures remain complete so the REPL submits and the user sees the
       genuine error instead of being trapped in a continuation prompt.
     - Any other failure (``UnexpectedCharacters``, a wrong token mid-line such
@@ -280,7 +299,7 @@ def is_incomplete_source(text: str) -> bool:
         else:
             result = "_INDENT" in exc.expected
     except LexError as exc:
-        result = str(exc) == "Unterminated triple-quoted string literal"
+        result = isinstance(exc, IncompleteInputError)
     except LarkError:
         # Any other parse failure (``UnexpectedCharacters`` and the residual
         # ``LarkError`` family) is a real error the user should see immediately,

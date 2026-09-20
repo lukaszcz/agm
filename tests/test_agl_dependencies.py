@@ -218,7 +218,7 @@ def _agm_imports_of_file(path: Path) -> list[str]:
         ("zones.py", ()),
         ("attributes.py", ("agm.agl.keywords", "agm.agl.zones", "agm.command_catalog")),
         ("artifact_storage.py", ()),
-        ("keywords.py", ("agm.util.ident", "agm.raw_tail_catalog")),
+        ("keywords.py", ("agm.util.ident",)),
     ],
 )
 def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...]) -> None:
@@ -230,8 +230,8 @@ def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...])
     and the plain-name predicate its ``@name`` argument rule shares, all pure
     data leaves, and nothing else; ``artifact_storage`` is the disk envelope
     every disk cache writes through and, like ``zones``, imports nothing
-    under ``agm``; ``keywords`` names only the identifier grammar and
-    raw-tail spelling leaves its plain-name predicate cross-checks.
+    under ``agm``; ``keywords`` names only the identifier grammar leaf its
+    plain-name predicate cross-checks.
     """
     violations = [
         f"{leaf} imports {module}"

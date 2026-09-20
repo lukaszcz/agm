@@ -1,0 +1,13 @@
+program def main() -> unit =
+  # $-literal and call-shaped unit exec calls expose identical ExecError fields.
+  try
+    let raw: text = exec $ raw-failure
+    ()
+  catch ExecError as error =>
+    print "dollar %{error.command} %{error.exit-code} %{error.stdout} %{error.stderr} %{error.timed-out}"
+
+  try
+    let call: text = exec "call-failure"
+    ()
+  catch ExecError as error =>
+    print "call %{error.command} %{error.exit-code} %{error.stdout} %{error.stderr} %{error.timed-out}"

@@ -97,6 +97,12 @@ def test_dict_with_name_key_text_key_and_trailing_comma() -> None:
     assert [entry.value for entry in node.entries] == [IntNode(1, 4, 5), IntNode(2, 12, 13)]
 
 
+def test_dict_with_dollar_suffixed_name_key() -> None:
+    node = read_value("{exec$: 1}")
+    assert isinstance(node, DictNode)
+    assert [entry.key for entry in node.entries] == ["exec$"]
+
+
 def test_empty_dict() -> None:
     assert read_value("{}") == DictNode((), 0, 2)
 
@@ -131,8 +137,8 @@ def test_qualified_ctor() -> None:
     assert len(node.args) == 2
 
 
-@pytest.mark.parametrize("name", ("ask-prompt", "do-it-now?"))
-def test_ctor_names_with_hyphen_and_question_mark(name: str) -> None:
+@pytest.mark.parametrize("name", ("ask-prompt", "do-it-now?", "exec$", "ask$"))
+def test_ctor_names_with_hyphen_question_mark_and_dollar(name: str) -> None:
     node = read_value(name)
     assert node == CtorNode(None, name, None, 0, len(name))
 
@@ -240,7 +246,6 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         '"${HOME}"',
         r'"\q"',
         "if",
-        "exec$",
         "-",
         "-x",
         "[1 2]",
@@ -267,7 +272,6 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         "Circle(if = 1)",
         '"${',
         "{if: 1}",
-        "{exec$: 1}",
         "{true: 1}",
     ),
     ids=(
@@ -277,7 +281,6 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         "env-interpolation-in-text",
         "unknown-escape",
         "keyword-as-ctor",
-        "raw-tail-name-as-ctor",
         "minus-without-digit",
         "minus-followed-by-name",
         "missing-comma-in-array",
@@ -304,7 +307,6 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         "invalid-argument-name",
         "dollar-brace-at-eof-in-text",
         "dict-key-is-keyword",
-        "dict-key-is-raw-tail-name",
         "dict-key-is-true",
     ),
 )

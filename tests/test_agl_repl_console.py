@@ -264,33 +264,52 @@ class TestMultiline:
         assert "first" in output
         assert "second" in output
 
-    def test_raw_tail_block_continues_until_blank_line_then_executes(self) -> None:
-        # A raw-tail header opens an interactive block. Enter after each content
-        # line must keep collecting the payload; the blank continuation line
-        # closes it and runs one shell call.
-        shell = FakeShell([{"command": "echo one\necho two", "stdout": "one\ntwo\n"}])
+    def test_exec_header_block_continues_until_blank_line_then_executes(self) -> None:
+        # A `$`-literal (`exec $`) header opens an interactive block. Enter
+        # after each content line must keep collecting the payload; the blank
+        # continuation line closes it and runs one shell call. The scripted
+        # stdout ("ONE"/"TWO") differs from the typed payload ("echo
+        # one"/"echo two") so the assertion cannot pass merely because the
+        # input line was echoed back.
+        shell = FakeShell([{"command": "echo one\necho two", "stdout": "ONE\nTWO\n"}])
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             output = drive(
-                "exec$\r  echo one\r  echo two\r\r\x04", session=ReplSession(default_stdlib=True)
+                "exec $\r  echo one\r  echo two\r\r\x04",
+                session=ReplSession(default_stdlib=True),
             )
 
         assert ": error:" not in output.lower()
         # Exactly one shell call, carrying the whole payload, whose scripted
         # output comes back through the console as the entry's value.
         shell.assert_complete()
-        assert "one" in output
-        assert "two" in output
+        assert "ONE" in output
+        assert "TWO" in output
 
-    def test_raw_tail_ask_block_continues_and_uses_mocked_default_agent(self) -> None:
-        agent = _CountingAgent("mocked reply")
+    def test_ask_header_block_continues_and_uses_mocked_default_agent(self) -> None:
+        # A `$`-literal (`ask $`) header opens an interactive block that
+        # dispatches to the default agent once closed.
+        agent = _CountingAgent("MOCKED REPLY")
         output = drive(
-            "ask$\r  summarize this\r\r\x04",
+            "ask $\r  summarize this\r\r\x04",
             session=ReplSession(agent_dispatcher=agent, default_stdlib=True),
         )
 
         assert agent.calls == 1
         assert agent.prompts == ["summarize this"]
-        assert "mocked reply" in output
+        assert "MOCKED REPLY" in output
+
+    def test_inline_dollar_verbatim_does_not_continue(self) -> None:
+        # Inline `$ ...` text is already complete on its own line, unlike the
+        # block form: the first Enter submits it rather than opening a
+        # continuation. The scripted stdout differs from the typed payload so
+        # the assertion cannot pass merely because the input line was echoed.
+        shell = FakeShell([{"command": "echo hi", "stdout": "HI\n"}])
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            output = drive("exec $ echo hi\r\x04", session=ReplSession(default_stdlib=True))
+
+        assert ": error:" not in output.lower()
+        shell.assert_complete()
+        assert "HI" in output
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +396,38 @@ class TestLexer:
         fragments = lexer.lex_document(Document('print "hello"'))(0)
         styles = {style for style, _text in fragments}
         assert "class:agl.string" in styles
+
+    def test_half_typed_dollar_verbatim_header_preserves_prefix_highlighting(self) -> None:
+        # `ask $` with nothing typed after the `$` yet is a half-typed entry
+        # (lexing raises IncompleteInputError at the `$`); the prefix before it
+        # must keep its own highlighting rather than the whole line going plain.
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document('let s = "a" ++ ask $'))(0)
+        assert ("class:agl.keyword", "let") in fragments
+        styles = {style for style, _text in fragments}
+        assert "class:agl.string" in styles
+        assert "".join(text for _style, text in fragments) == 'let s = "a" ++ ask $'
+
+    def test_half_typed_dollar_verbatim_header_with_trailing_spaces_is_styled(self) -> None:
+        # Trailing horizontal whitespace after the `$` is still part of the
+        # open literal's styled tail, not swallowed into the unstyled prefix.
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document("let x = ask $   "))(0)
+        assert ("class:agl.keyword", "let") in fragments
+        assert "".join(text for _style, text in fragments) == "let x = ask $   "
+
+    def test_dollar_verbatim_literal_is_styled(self) -> None:
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document("ask $ hello"))(0)
+        styles = {style for style, _text in fragments}
+        assert "class:agl.string" in styles
+        assert "".join(text for _style, text in fragments) == "ask $ hello"
+
+    def test_dollar_verbatim_literal_hole_is_styled_as_code(self) -> None:
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document("ask $ hi %{x}"))(0)
+        assert ("class:agl.name", "x") in fragments
+        assert "".join(text for _style, text in fragments) == "ask $ hi %{x}"
 
     def test_partial_application_placeholders_are_styled_as_operators(self) -> None:
         fragments = AglPromptLexer().lex_document(Document("add(?, ?2)"))(0)
@@ -856,16 +907,6 @@ class TestCompleter:
 
 
 class TestEvalOutput:
-    def test_inline_raw_tail_exec_evaluates_through_the_console(self) -> None:
-        shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
-        with patch("agm.core.process.run_capture_result", side_effect=shell):
-            output = drive("exec$ echo hi\r\x04", session=ReplSession(default_stdlib=True))
-
-        assert ": error:" not in output.lower()
-        # Exactly one shell call, and its scripted output is echoed as the value.
-        shell.assert_complete()
-        assert "hi" in output
-
     def test_binding_echo_shows_name_type_value(self) -> None:
         output = drive("let x = 5\r\x04")
 

@@ -43,12 +43,18 @@ from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import Output
 
 from agm.agl.keywords import KEYWORDS, SOFT_KEYWORDS
-from agm.agl.lexer import lex_comment_spans, tokenize
+from agm.agl.lexer import (
+    IncompleteInputError,
+    UnterminatedTripleQuotedStringError,
+    lex_comment_spans,
+    tokenize,
+)
 from agm.agl.lexer.tokens import (
     MODPATH,
     MODQUAL,
-    RAW_TAIL_NAME,
     SOFT_KEYWORD_TOKENS,
+    VERBATIM_END,
+    VERBATIM_START,
     WILDCARD,
 )
 from agm.agl.repl import meta as meta_mod
@@ -92,7 +98,8 @@ _STRING_TOKENS: frozenset[str] = frozenset(
         "TEMPLATE_END",
         "INTERP_START",
         "INTERP_END",
-        "RAW_FRAGMENT",
+        VERBATIM_START,
+        VERBATIM_END,
     }
 )
 _NUMBER_TOKENS: frozenset[str] = frozenset({"INT", "DECIMAL"})
@@ -135,9 +142,8 @@ _OPERATOR_TOKENS: frozenset[str] = frozenset(
 # so they colour like any other name rather than falling through unstyled.
 _MODULE_PATH_TOKENS: frozenset[str] = frozenset({MODPATH, MODQUAL})
 # Token types that colour as keywords: the reserved words (whose token type is
-# the keyword itself), the soft keywords the lexer promoted, and a raw-tail
-# introducer such as ``exec$``.
-_KEYWORD_TOKENS: frozenset[str] = KEYWORDS | SOFT_KEYWORD_TOKENS | {RAW_TAIL_NAME}
+# the keyword itself) and the soft keywords the lexer promoted.
+_KEYWORD_TOKENS: frozenset[str] = KEYWORDS | SOFT_KEYWORD_TOKENS
 # Layout tokens carry no styleable text and are transparent to look-ahead.
 _LAYOUT_TOKENS: frozenset[str] = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 # Keywords that introduce a type declaration whose following NAME is the type.
@@ -315,8 +321,8 @@ def _styled_spans(
 
     Comments carry no token, so their spans come from the scan's comment side
     channel (:func:`agm.agl.lexer.lex_comment_spans`) rather than from the token
-    stream; a ``#`` inside a string or a raw tail is content, and the scanner is
-    what knows the difference.
+    stream; a ``#`` inside a string or a `$` verbatim literal is content, and
+    the scanner is what knows the difference.
 
     Synthetic zero-width tokens (INDENT/DEDENT/NEWLINE) and unstyled token types
     are skipped.  A lexer error on a half-typed entry yields no spans (plain
@@ -324,11 +330,12 @@ def _styled_spans(
     """
     try:
         tokens = list(tokenize(text))
-    except Exception:
-        open_string_start = _open_string_start(text)
-        if open_string_start is not None:
-            prefix_spans = _styled_spans(text[:open_string_start], type_names, constructor_names)
-            return prefix_spans + [(open_string_start, len(text), "class:agl.string")]
+    except Exception as exc:
+        open_start = _open_verbatim_literal_start(exc)
+        if open_start is None:
+            open_start = _open_string_start(text)
+        if open_start is not None:
+            return _styled_open_tail(text, open_start, type_names, constructor_names)
         return []
 
     forced, local_types, local_constructors = _decl_site_styles(text, tokens)
@@ -358,6 +365,33 @@ def _styled_spans(
             continue
         spans.append((start, end, style))
     return spans
+
+
+def _styled_open_tail(
+    text: str, open_start: int, type_names: frozenset[str], constructor_names: frozenset[str]
+) -> list[tuple[int, int, str]]:
+    """Style *text* as a highlighted prefix plus an unclosed string-like tail.
+
+    Shared by the open-string and open-verbatim-literal fallbacks: everything
+    before *open_start* is styled recursively (it lexes on its own), and the
+    rest of the buffer is one ``class:agl.string`` span.
+    """
+    prefix_spans = _styled_spans(text[:open_start], type_names, constructor_names)
+    return prefix_spans + [(open_start, len(text), "class:agl.string")]
+
+
+def _open_verbatim_literal_start(exc: Exception) -> int | None:
+    """Return the `$` offset of a half-typed verbatim literal header, if *exc* is one.
+
+    An ``IncompleteInputError`` other than an unterminated triple-quoted string
+    fires only for a bare `$` header with no payload typed yet (``ask $``),
+    and its span already starts at the `$` itself.
+    """
+    if not isinstance(exc, IncompleteInputError) or isinstance(
+        exc, UnterminatedTripleQuotedStringError
+    ):
+        return None
+    return exc.span.start_offset
 
 
 def _open_string_start(text: str) -> int | None:

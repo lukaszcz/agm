@@ -166,10 +166,10 @@ def test_session_methods_reject_wrong_arities_and_types(source: str) -> None:
     _reject(source)
 
 
-def test_session_raw_tail_ask_uses_session_ask_typechecking() -> None:
+def test_session_dollar_literal_ask_uses_session_ask_typechecking() -> None:
     checked = _check(
         "let session = Session::default()\n"
-        "let count: int = session.ask$ count the completed tasks\n"
+        "let count: int = session.ask $ count the completed tasks\n"
         "count"
     )
 

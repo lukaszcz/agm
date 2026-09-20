@@ -5,7 +5,7 @@
 ;; Scenario tables for the AgL indentation engine: block opening and
 ;; closing, branch-marker alignment for every marker, scope regions and
 ;; their closers, bracket continuation, TAB cycling, electric re-indent,
-;; and the immunity of raw-tail payloads and multi-line templates.  See the layout rules in
+;; and the immunity of `$' verbatim payloads and multi-line templates.  See the layout rules in
 ;; docs/agl/reference/lexical-structure.md.
 
 ;;; Code:
@@ -113,8 +113,9 @@ level under a deeper body."
   ;; `a->' is a single AgL identifier: `-' and `>' both continue a name.
   (should (= (agl-ind--indent-of "let f = a->\nlet s = 1\n" 2) 0)))
 
-(ert-deftest agl-ind-name-ending-in-a-raw-tail-keyword-does-not-open-a-block ()
-  ;; `do-exec$' is one identifier, not the `exec$' raw-tail opener.
+(ert-deftest agl-ind-name-ending-in-a-dollar-does-not-open-a-block ()
+  ;; `do-exec$' is one identifier, not `do-exec' followed by a `$' opener:
+  ;; `$' continues the name instead of starting a fresh token.
   (should (= (agl-ind--indent-of "let x = do-exec$\nlet s = 1\n" 2) 0)))
 
 ;; --- Continuation of the previous line's level ---
@@ -289,16 +290,41 @@ level under a deeper body."
 
 ;; --- Verbatim regions are never re-indented ---
 
-(ert-deftest agl-ind-raw-tail-payload-is-untouched ()
-  (let ((text "exec$\n    echo one\n      echo two\n"))
+(ert-deftest agl-ind-verbatim-payload-is-untouched ()
+  (let ((text "exec $\n    echo one\n      echo two\n"))
+    (should (equal (agl-ind--reindented text) text))))
+
+(ert-deftest agl-ind-bare-dollar-block-payload-is-untouched ()
+  ;; A `$' opener needs no callee before it at all.
+  (let ((text "$\n    echo one\n      echo two\n"))
     (should (equal (agl-ind--reindented text) text))))
 
 (ert-deftest agl-ind-triple-quoted-template-is-untouched ()
   (let ((text "let doc = \"\"\"\n   ragged\n     lines\n\"\"\"\n"))
     (should (equal (agl-ind--reindented text) text))))
 
-(ert-deftest agl-ind-line-after-raw-tail-block-returns-to-code-level ()
-  (should (= (agl-ind--indent-of "exec$\n    echo one\nlet after = 1\n" 3) 0)))
+(ert-deftest agl-ind-line-after-verbatim-block-returns-to-code-level ()
+  (should (= (agl-ind--indent-of "exec $\n    echo one\nlet after = 1\n" 3) 0)))
+
+(ert-deftest agl-ind-operator-name-dollar-does-not-open-a-block ()
+  ;; `%$' is a single operator-name token ending in `$': its `$' does not
+  ;; begin a token, so it carries no payload and the next line is ordinary
+  ;; code at column zero, not a payload continuation.
+  (should (= (agl-ind--indent-of "let v = a %$\nlet w = 1\n" 2) 0)))
+
+(ert-deftest agl-ind-operator-run-dollar-does-not-open-a-block ()
+  ;; `=', `|', and `/' each terminate an identifier scan but still merge with
+  ;; a following `$' into one operator name (`<|$', `=$', `|$', `/$'), so
+  ;; none of these carries a payload either.
+  (should (= (agl-ind--indent-of "print <|$\nlet w = 1\n" 2) 0))
+  (should (= (agl-ind--indent-of "x =$\nlet w = 1\n" 2) 0))
+  (should (= (agl-ind--indent-of "a |$\nlet w = 1\n" 2) 0))
+  (should (= (agl-ind--indent-of "a /$\nlet w = 1\n" 2) 0)))
+
+(ert-deftest agl-ind-dollar-as-payload-text-does-not-reopen-a-block ()
+  ;; A verbatim payload can itself contain a literal `$' as ordinary text; a
+  ;; trailing one must not be mistaken for a second opener.
+  (should (= (agl-ind--indent-of "exec $ echo price $\nlet after = 1\n" 2) 0)))
 
 ;; --- TAB cycling ---
 

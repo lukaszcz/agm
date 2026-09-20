@@ -43,10 +43,10 @@
 ;; line holding nothing but `builtin', `extern', or `program', which no
 ;; separator ever follows — on the newline that ends it.
 ;;
-;; Raw-tail block payloads and multi-line templates are verbatim text, so
-;; a line inside one is never re-indented, and backward scans treat those
-;; regions as opaque.  Both checks read `syntax-ppss' rather than the
-;; buffer text, since the propertize layer is what marks those regions.
+;; `$' verbatim block payloads and multi-line templates are verbatim text,
+;; so a line inside one is never re-indented, and backward scans treat
+;; those regions as opaque.  Both checks read `syntax-ppss' rather than
+;; the buffer text, since the propertize layer is what marks those regions.
 
 ;;; Code:
 
@@ -55,7 +55,7 @@
 (declare-function agl--ident-boundary-after-p "agl-mode" (pos))
 (declare-function agl--ident-boundary-before-p "agl-mode" (pos))
 (declare-function agl--operator-name-char-p "agl-mode" (char))
-(declare-function agl--operator-token-start-p "agl-mode" (pos))
+(declare-function agl--standalone-token-start-p "agl-mode" (pos))
 
 (defcustom agl-indent-offset 2
   "Number of columns AgL indents a nested block, matching stdlib style."
@@ -111,12 +111,11 @@ As with `agl--block-opener-symbol-re' the spelling must be a whole token:
 `registry', `undo', and `motif' end in these letters without being them,
 which is what `agl--block-opener-keyword-p' checks.")
 
-(defconst agl--raw-tail-opener-re
-  (concat (regexp-opt '("exec$" "ask$")) "\\(?:::\\[[^]]*\\]\\)?[ \t]*$")
-  "Regexp matching a raw-tail opener that carries no inline payload.
+(defconst agl--verbatim-block-opener-re "\\$[ \t]*$"
+  "Regexp matching a `$' verbatim literal opener that carries no inline payload.
 
-The opener spellings end in `$', which is the regexp end-of-line anchor,
-so they are escaped through `regexp-opt' rather than spelled inline.")
+`$' is escaped since it would otherwise be read as the regexp
+end-of-line anchor.")
 
 (defconst agl--declaration-keyword-re
   (regexp-opt '("def" "record" "enum" "exception" "type" "extern"
@@ -227,8 +226,8 @@ end of line when the line carries no comment."
 (defun agl--opaque-line-p ()
   "Return non-nil if the current line lies inside a verbatim region.
 
-A raw-tail block payload and a multi-line template are significant text,
-so a line whose start is already inside one is never re-indented."
+A `$' verbatim block payload and a multi-line template are significant
+text, so a line whose start is already inside one is never re-indented."
   ;; `syntax-ppss' leaves point at its argument, so the scan is wrapped:
   ;; a predicate that silently moved point would corrupt every caller.
   (save-excursion
@@ -241,14 +240,14 @@ so a line whose start is already inside one is never re-indented."
 (defvar agl--crossed-verbatim-region nil
   "Set by `agl--goto-previous-code-line' when it skipped a verbatim region.
 
-A raw-tail block payload IS its opener's block, so a line following the
-payload returns to the opener's own level instead of indenting under it.")
+A `$' verbatim block payload IS its opener's block, so a line following
+the payload returns to the opener's own level instead of indenting under it.")
 
 (defun agl--goto-previous-code-line ()
   "Move to the previous line that participates in layout.
 
 Skips blank and comment-only lines, and skips over verbatim regions so a
-raw-tail payload or template body never acts as the previous line.
+`$' verbatim payload or template body never acts as the previous line.
 Return non-nil when such a line was found."
   (let ((found nil))
     (setq agl--crossed-verbatim-region nil)
@@ -587,13 +586,13 @@ above them is the header guessed from position instead."
 
 CODE is the current line\='s code text taken from buffer position START, so
 a match\='s index in CODE is also its position in the buffer.  The
-introducer must be an operator token of its own: `a->' is one identifier
-whose `->' never lexes apart, and the `=' ending `>=' or `!=' continues
-that operator instead of assigning."
+introducer must be an operator token in its own right
+\(`agl--standalone-token-start-p'): `a->' is one identifier whose `->'
+never lexes apart, the `=' ending `>=' or `!=' continues that operator
+instead of assigning, and a `=' or `:' appearing as ordinary text inside
+a still-open `$' verbatim payload on the same line is not code at all."
   (and (string-match agl--block-opener-symbol-re code)
-       (let ((pos (+ start (match-beginning 0))))
-         (and (agl--operator-token-start-p pos)
-              (not (agl--operator-name-char-p (char-before pos)))))))
+       (agl--standalone-token-start-p (+ start (match-beginning 0)))))
 
 (defun agl--block-opener-keyword-p (code start)
   "Return non-nil when CODE ends with a keyword suite introducer.
@@ -604,14 +603,18 @@ match counts only where it begins a token (`registry' is not `try')."
   (and (string-match agl--block-opener-keyword-re code)
        (agl--ident-boundary-before-p (+ start (match-beginning 0)))))
 
-(defun agl--raw-tail-opener-p (code start)
-  "Return non-nil when CODE is a raw-tail opener carrying no inline payload.
+(defun agl--verbatim-opener-p (code start)
+  "Return non-nil when CODE ends with a `$' verbatim opener carrying no payload.
 
 CODE and START are as in `agl--block-opener-symbol-p'; such an opener owns
-the indented block that follows it.  `do-exec$' is one identifier rather
-than the `exec$' opener, so the same token-boundary check applies."
-  (and (string-match agl--raw-tail-opener-re code)
-       (agl--ident-boundary-before-p (+ start (match-beginning 0)))))
+the indented block that follows it.  The `$' must begin a token in its own
+right (`agl--standalone-token-start-p'): inside an identifier or an
+operator-name run (`ask$', `<$>', `|$') it is an ordinary constituent
+rather than an opener, and a `$' written as ordinary text inside a
+still-open verbatim payload earlier on the same line (`exec $ echo
+price $') is payload content, not a second opener."
+  (and (string-match agl--verbatim-block-opener-re code)
+       (agl--standalone-token-start-p (+ start (match-beginning 0)))))
 
 (defun agl--block-header-p (code start)
   "Return non-nil when CODE is a declaration or compound-statement header.
@@ -642,14 +645,14 @@ whether the spelling it found is a whole AgL token."
     (and (string-match-p "[^ \t]" code)
          (or (agl--block-opener-symbol-p code start)
              (agl--block-opener-keyword-p code start)
-             (agl--raw-tail-opener-p code start)
+             (agl--verbatim-opener-p code start)
              (agl--block-header-p code start)))))
 
 (defun agl--carried-over-indent ()
   "Return the column carried over from the line above the current one.
 
 The previous logical line sets the level: its own when it opens nothing,
-and one `agl-indent-offset\=' deeper when it opens a block.  A raw-tail
+and one `agl-indent-offset\=' deeper when it opens a block.  A `$' verbatim
 payload IS its opener\='s block, so crossing one returns to the opener\='s
 level rather than nesting under it."
   (save-excursion
@@ -748,8 +751,8 @@ above."
   "Indent the current line as AgL code.
 
 With PREVIOUS non-nil (a repeated TAB), cycle to the next candidate
-level instead of re-applying the computed one.  A line inside a raw-tail
-payload or a multi-line template is left untouched: its text is
+level instead of re-applying the computed one.  A line inside a `$'
+verbatim payload or a multi-line template is left untouched: its text is
 verbatim."
   (interactive)
   (unless (agl--opaque-line-p)

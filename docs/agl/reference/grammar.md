@@ -585,51 +585,6 @@ that lands on a named-only field is reinterpreted as the shorthand `name = name`
 
 A `STRING` pattern may not contain interpolation.
 
-## Raw-tail calls
-
-```ebnf
-raw_tail_form   ::= raw_call | dotted_raw_call | raw_juxt
-raw_call        ::= raw_callee type_args? raw_tail
-dotted_raw_call ::= postfix "." raw_callee type_args? raw_tail
-raw_juxt        ::= postfix raw_call
-                  | postfix juxt_atom juxt_suffix* "." raw_callee type_args? raw_tail
-raw_callee      ::= "exec$" | "ask$"
-type_args       ::= "::" "[" type_expr ("," type_expr)* "]"
-raw_tail        ::= inline_raw_tail | block_raw_tail
-```
-
-A raw tail may start a call directly or follow a runtime member projection.
-`receiver.ask$ payload` is equivalent to `receiver.ask(payload)`, including
-normal field-then-method resolution. The optional `type_args` group is
-recognized only when its `::` is immediately adjacent to the raw name:
-`exec$::[T]` and `receiver.ask$::[T]`. Whitespace before the `::` makes it
-payload text instead, so `ask$ ::[T]` and `receiver.ask$ ::[T]` have no type
-arguments.
-
-An inline raw tail is all text from its first non-whitespace character through
-the end of the line, except that trailing spaces and tabs are removed. A block
-raw tail follows the name (and optional type arguments) with a newline and a
-more-indented block; its dedented lines become one newline-joined payload,
-dropping the blank lines that trail its last content line while keeping any
-before and between content lines. A raw call requires a nonempty inline tail or
-a block with at least one nonblank line. Raw text is tokenized as fragments and
-`%{expr}` interpolations, not as ordinary AgL expressions.
-
-A `raw_tail_form` stands in for `expr` only where the grammar guarantees that
-nothing else follows on its line: as an `item`; as a `let_decl`, `var_decl`, or
-`assign_stmt` right-hand side; as an inline `func_body`; as the operand of a
-`return` in those same positions; or, through `raw_juxt`, as the
-single-argument juxtaposition argument of a call whose callee precedes it on
-the line (for example, `print receiver.ask$ prompt`). It is not valid inside
-brackets, branch/catch inline bodies, or another inline expression. Use the
-ordinary call form there.
-
-```agl
-program def main() -> unit =
-  let path = "."
-  let output: text = exec$ printf '%s' %{path}
-```
-
 ## Expressions
 
 ```ebnf
@@ -797,6 +752,7 @@ template      ::= '"' (text_fragment | interpolation)* '"'
                 | "'" (text_fragment | interpolation)* "'"
                 | '"""' (text_fragment | interpolation)* '"""'
                 | "'''" (text_fragment | interpolation)* "'''"
+                | "$" (verbatim_text | interpolation)+  (* to end of line, or an indented block *)
 
 interpolation ::= "%{" expr "}"
 ```
@@ -805,6 +761,17 @@ A `text_fragment` is literal template text between the surrounding quote
 delimiters and any interpolation; its escapes and, for triple-quoted templates,
 dedent are described in [Lexical structure](lexical-structure.md). Newlines are
 not permitted inside `%{…}`.
+
+A `$` template's payload (its `verbatim_text`) is specified in
+[Lexical structure](lexical-structure.md#verbatim-literals); its
+interpolation semantics are in
+[Strings and interpolation](strings-and-interpolation.md#the--literal).
+
+```agl
+program def main() -> unit =
+  let path = "."
+  let output: text = exec $ printf '%s' %{path}
+```
 
 ## Deterministic-parse notes
 

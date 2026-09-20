@@ -1,0 +1,6 @@
+# `${NAME}` stays verbatim; `%{getenv(...)}` reads the environment and raises
+# when the key is missing.
+program def main() -> unit =
+  let reviewer: Agent = AgentCommand("reviewer")
+  let greeting = reviewer.ask $ Say hello to %{getenv("NAME")} (${NAME}).
+  print greeting

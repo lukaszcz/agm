@@ -406,7 +406,7 @@ def test_free_ask_uses_the_default_session_and_snapshots_its_agent() -> None:
         "  let direct = Session::default()\n"
         '  let first: text = ask("one")\n'
         '  std/config::default-agent := AgentCommand("second")\n'
-        "  let second: text = ask$ two\n"
+        "  let second: text = ask $ two\n"
         '  direct.ask("three")\n',
         host,
     )

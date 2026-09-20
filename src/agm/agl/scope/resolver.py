@@ -102,6 +102,7 @@ from agm.agl.scope.symbols import (
     immutable_binder_phrase,
     is_builtin_type_static_owner,
     is_qualified_function_member,
+    undefined_name_message,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
@@ -3300,7 +3301,7 @@ class _Resolver:
         references and are materialized as typed closures during lowering.
         """
         if node.name == "_":
-            raise AglScopeError("'_' is not defined.", span=node.span)
+            raise AglScopeError(undefined_name_message("_"), span=node.span)
         if (
             node.qualifier is not None
             and node.qualifier.anchor is QualifierAnchor.CURRENT_MODULE
@@ -3310,7 +3311,9 @@ class _Resolver:
             if ref is None:
                 raise self._spaced_qualifier_repair(
                     self._spaced_qualifier_at(node.qualifier.span), node.qualifier.span
-                ) or AglScopeError(f"'{node.name}' is not defined in this module.", span=node.span)
+                ) or AglScopeError(
+                    undefined_name_message(node.name, in_module=True), span=node.span
+                )
             self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
             self._record_varref_binding(node, ref)
             return
@@ -3340,7 +3343,7 @@ class _Resolver:
                 self._reject_builtin_value_ref(node, builtin_ref, is_call_target=is_call_target)
                 self._record_varref_binding(node, builtin_ref)
                 return
-            raise AglScopeError(f"'{node.name}' is not defined.", span=node.span)
+            raise AglScopeError(undefined_name_message(node.name), span=node.span)
         # Only a missing or constructor binding can consume regional candidates:
         # any other kind leaves *ref* untouched below and returns from
         # ``_record_varref_binding`` before the candidates are read.
@@ -3364,7 +3367,7 @@ class _Resolver:
                 raise self._spaced_qualifier_repair(
                     self._spaced_qualifier_around(node.span), node.span
                 ) or AglScopeError(
-                    f"'{node.name}' is not defined.",
+                    undefined_name_message(node.name),
                     span=node.span,
                 )
         self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
@@ -3732,7 +3735,7 @@ class _Resolver:
         # so the chain names one segment this module does not declare.
         segment = chain.segments[0]
         missing_error = AglScopeError(
-            f"'{segment.name}' is not defined in this module.", span=segment.span
+            undefined_name_message(segment.name, in_module=True), span=segment.span
         )
         raise (
             self._spaced_qualifier_repair(

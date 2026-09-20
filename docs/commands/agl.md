@@ -560,11 +560,12 @@ call `resource`/`resource-dir`; imported file-backed modules use them normally.
 In both front ends:
 
 - Multiline editing is **AgL-aware**: Enter on an unterminated block (`record`, `enum`, `if`,
-  `case`, `try`, `do`, …) or a line-final raw-tail header (`exec$`, `ask$`) opens a `...>`
-  continuation; a complete entry submits. Enter on a blank continuation line force-submits. The
-  plain front end applies the same completeness test to stdin lines, except that an entry whose
-  latest line is indented stays open until a blank line or end of input, since an indented
-  block parses after every line yet can always take one more.
+  `case`, `try`, `do`, …) or a `$` literal header with nothing after it (`exec $`,
+  `ask $`) opens a `...>` continuation; a complete entry submits.
+  Enter on a blank continuation line force-submits. The plain front end applies the same
+  completeness test to stdin lines, except that an entry whose latest line is indented stays
+  open until a blank line or end of input, since an indented block parses after every line yet
+  can always take one more.
 - Ctrl-C cancels the current entry without exiting. During a live agent call it interrupts the
   call and stops the entry; effects completed before cancellation remain, unreached operations
   do not run.

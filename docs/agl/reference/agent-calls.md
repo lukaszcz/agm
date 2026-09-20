@@ -59,7 +59,9 @@ Configured variants still use a lambda around a direct call.
 or as a function parameter name, but it can be referenced as a function value.
 The value is an eta-expanded `text -> T` callable using the default session;
 its result is fixed by an expected function type or explicit `::[T]`, and
-defaults to `text` when unconstrained:
+defaults to `text` when unconstrained — including when the expectation is
+itself a generic type parameter that nothing else in the enclosing expression
+pins (the default applies only after sibling constraints):
 
 ```agl
 program def main() -> unit =
@@ -84,10 +86,10 @@ Session::ask[T](self, prompt: text, format: text = "",
 It sends the prompt through that live session, so the session's stored agent
 and transport select the backend; it has no `agent` argument. It uses the same
 contextual or explicit `::[T]` target, concrete-target restriction, parse
-options, and output-contract checking as `ask`. `session.ask$` has the same
-raw-tail spelling rules as `reviewer.ask$`. Parse retries remain in this same
-conversation. A reference such as `let query: text -> Review = session.ask`
-captures the live session.
+options, and output-contract checking as `ask`. `session.ask $ prompt` uses
+the same single-argument sugar as `reviewer.ask $ prompt`. Parse retries
+remain in this same conversation. A reference such as
+`let query: text -> Review = session.ask` captures the live session.
 
 ### Single-argument sugar
 
@@ -106,34 +108,32 @@ With named arguments, parentheses are required:
 let r: Review = reviewer.ask("Review %{artifact}")
 ```
 
-## Raw-tail `ask$`
-
-`ask$` writes a prompt directly after the keyword. Inline form consumes the
-rest of its line; block form consumes one dedented, newline-joined prompt.
-It desugars to the same call as `ask(<template>)`, so explicit type arguments
-and target-type inference work exactly as for `ask`. It may also follow an
-`Agent` projection: `reviewer.ask$` desugars to `reviewer.ask(<template>)`.
-Type arguments must touch the raw name (`ask$::[T]` or
-`reviewer.ask$::[T]`); in `ask$ ::[T]`, the spaced `::[T]` is prompt payload:
+A `$` literal
+([Strings and interpolation](strings-and-interpolation.md#the--literal)) may
+supply the same single argument, inline or as a block; explicit type
+arguments — on either the free function or a receiver method — and
+target-type inference work exactly as for a quoted prompt:
 
 ```agl
 record Review
   summary: text
 
 program def main() -> unit =
+  let reviewer: Agent = AgentCommand("reviewer")
   let subject = "the release notes"
-  let summary: text = ask$ Summarize %{subject}.
-  let review: Review = ask$::[Review]
+  let summary: text = ask $ Summarize %{subject}.
+  let review: Review = reviewer.ask::[Review] $
     Review %{subject} and provide a concise summary.
 ```
 
-Raw-tail prompt text is verbatim except for `%{expr}` interpolation and
-trailing spaces and tabs in an inline prompt; `\%{` writes a literal `%{`.
-A raw call needs a nonempty inline prompt or a block with at least one nonblank
-line. A bare `ask$` uses the default session and `reviewer.ask$` opens the
-short-lived session for its receiver. Use `ask(...)` or `reviewer.ask(...)`
-when setting `format`, `strict-json`, or `on-parse-error`; the parenthesized
-forms are also available outside a raw-tail line-final position.
+A bare `ask $ ...` uses the default session and `reviewer.ask $ ...` opens
+the short-lived session for its receiver. Use `ask(...)` or
+`reviewer.ask(...)` when setting `format`, `strict-json`, or
+`on-parse-error`. Read the environment in the prompt with
+`%{getenv("VAR")}` — `${VAR}` reaches the agent verbatim, not as an
+environment hole — and pipe the result when chaining is needed, as in
+`print <| ask $ …`
+([Strings and interpolation](strings-and-interpolation.md#the--literal)).
 
 ## Agents as values
 
@@ -206,7 +206,7 @@ share it:
 ```agl
 let session = Session::open(AgentClaude("sonnet", "medium"), name = "review")
 let first: text = session.ask("Read the artifact.")
-let second: text = session.ask("Now list the risks.")
+let second: text = session.ask $ Now list the risks.
 let branch = session.fork()
 session.close()
 branch.close()

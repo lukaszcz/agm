@@ -247,17 +247,17 @@
     (should (equal agl-repl-tests--sent
                    '("case 1 of\n  | 1 => print(\"one\")\n  | _ => print(\"other\")\n\n")))))
 
-(ert-deftest agl-repl-terminates-a-trailing-raw-tail-block ()
-  ;; An indented raw-tail payload is the same case: its blank line is what
-  ;; tells the REPL reader the payload is complete.
+(ert-deftest agl-repl-terminates-a-trailing-verbatim-block ()
+  ;; An indented `$' verbatim block payload is the same case: its blank line
+  ;; is what tells the REPL reader the payload is complete.
   (agl-repl--with-stubs
-    (dolist (opener '("exec$" "ask$"))
+    (dolist (opener '("exec $" "ask $" "$"))
       (with-temp-buffer
         (agl-mode)
         (insert opener "\n  payload\n")
         (agl-send-buffer)))
     (should (equal agl-repl-tests--sent
-                   '("exec$\n  payload\n\n" "ask$\n  payload\n\n")))))
+                   '("exec $\n  payload\n\n" "ask $\n  payload\n\n" "$\n  payload\n\n")))))
 
 (ert-deftest agl-repl-does-not-terminate-a-closed-region ()
   ;; Sibling statements at column zero are each a complete entry, so the

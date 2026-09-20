@@ -90,6 +90,26 @@ func assertFace(t *testing.T, source, substring, group string) {
 	}
 }
 
+// assertNotFace fails if any rune of substring in source carries group.
+// substring must occur exactly once for the same reason as assertFace.
+func assertNotFace(t *testing.T, source, substring, group string) {
+	t.Helper()
+	first := strings.Index(source, substring)
+	if first < 0 {
+		t.Fatalf("%q does not occur in %q", substring, source)
+	}
+	if strings.Index(source[first+1:], substring) >= 0 {
+		t.Fatalf("%q occurs more than once in %q", substring, source)
+	}
+	all := faces(t, source)
+	start := len([]rune(source[:first]))
+	for i := range []rune(substring) {
+		if all[start+i] == group {
+			t.Errorf("in %q: %q is faced as %q", source, substring, group)
+		}
+	}
+}
+
 // The builtin call names, mirroring BUILTIN_CALL_NAMES in
 // src/agm/agl/scope/symbols.py. Keep this list in step with that one.
 var builtins = []string{
@@ -103,29 +123,72 @@ func TestBuiltinsAreFacedBySpelling(t *testing.T) {
 	}
 }
 
-// A raw-tail opener starts the verbatim payload region below, so it faces with
-// the payload rather than as a builtin call: micro paints a region's start
-// delimiter with the region's own group. Mirrors RAW_TAIL_NAMES in
-// src/agm/raw_tail_catalog.py.
-func TestRawTailOpenersAreFaced(t *testing.T) {
-	assertFace(t, "exec$ ls -la", "exec$", "constant.string")
-	assertFace(t, "ask$ summarise this", "ask$", "constant.string")
-	// The bare builtin spellings, without the `$', are unaffected.
+// A `$' verbatim literal opener starts the payload region below, so it faces
+// with the payload rather than as an operator: micro paints a region's start
+// delimiter with the region's own group.
+func TestVerbatimOpenerIsFaced(t *testing.T) {
+	assertFace(t, "exec $ ls -la", "$", "constant.string")
+	assertFace(t, "ask $ summarise this", "$", "constant.string")
+	// The callee before the opener keeps its own face.
+	assertFace(t, "exec $ ls -la", "exec", "identifier")
+	assertFace(t, "ask $ summarise this", "ask", "identifier")
+	// The bare builtin spellings, without a `$' payload, are unaffected.
 	assertFace(t, "let x = exec(c)", "exec", "identifier")
 	assertFace(t, "let x = ask(p)", "ask", "identifier")
+	// A `$' at the very start of a line is a token start too.
+	assertFace(t, "$ echo hi", "$", "constant.string")
 }
 
-// A raw-tail opener that merely ends a longer name is part of that name, so
-// it must not open the verbatim region: `-' continues an AgL identifier
-// (IDENT_STOP in src/agm/util/ident.py) even though `\b' sees a boundary
-// there. A region's start delimiter cannot be repainted by a later rule, so
-// the boundary has to be in the delimiter itself.
-func TestRawTailOpenerInsideANameStaysCode(t *testing.T) {
-	assertFace(t, "let x = do-exec$ + 1", "do-exec$", "default")
-	assertFace(t, "let x = do-exec$ + 1", "+", "symbol.operator")
-	assertFace(t, "let y = an-ask$ + 1", "an-ask$", "default")
+// A `$' that merely continues a longer identifier or operator-name run must
+// not open the payload region: `$' is an ordinary constituent inside a name
+// (`ask$', `a$b') or an operator run (`<$>'), even though `\b' sees a
+// boundary before some of these. A region's start delimiter cannot be
+// repainted by a later rule, so the boundary has to be in the delimiter
+// itself.
+func TestVerbatimDollarInsideANameOrOperatorStaysCode(t *testing.T) {
+	assertFace(t, "let x = ask$ + 1", "ask$", "default")
+	assertFace(t, "let x = ask$ + 1", "+", "symbol.operator")
+	assertFace(t, "let y = a$b + 1", "a$b", "default")
+	// `<$>' is a single operator-name token, not a payload opener --
+	// TestOperatorNamesFaceAsOneToken covers it.
 	// A spelling inside a string literal is string content, not an opener.
-	assertFace(t, `print("exec$ ls")`, "print", "identifier")
+	assertFace(t, `print("exec $ ls")`, "print", "identifier")
+}
+
+// `=', `|', and `/' each terminate an identifier scan, but a `$' that
+// immediately follows one of them still merges into a single operator name
+// in the real lexer (`<|$', `=$', `!=$', `|$', `/$'), so none of these opens
+// a payload region either: the whole run faces as one operator token.
+func TestVerbatimDollarContinuingAnOperatorRunStaysAnOperator(t *testing.T) {
+	assertFace(t, "print <|$ zz", "<|$", "symbol.operator")
+	assertFace(t, "x =$ zz", "=$", "symbol.operator")
+	assertFace(t, "x !=$ zz", "!=$", "symbol.operator")
+	assertFace(t, "a |$ zz", "|$", "symbol.operator")
+	assertFace(t, "a /$ zz", "/$", "symbol.operator")
+}
+
+// The canonical spelling separates the `$' from an operator with a space,
+// which keeps it a token of its own even when the character right before
+// the space is an operator character.
+func TestVerbatimOpenerAfterASpacedOperatorIsFaced(t *testing.T) {
+	assertFace(t, "print <| $ x", "$", "constant.string")
+	assertFace(t, "let x = $ y", "$", "constant.string")
+}
+
+// A number token ends at its last digit, so a `$' immediately following one
+// still begins a fresh token -- unlike a digit run that is part of a longer
+// identifier (`a1$', one name, `$' included, which must stay plain).
+func TestVerbatimOpenerAfterABareNumberIsFaced(t *testing.T) {
+	assertFace(t, "1$ zz", "1$", "constant.string")
+	assertFace(t, "let x = a1$ + 1", "a1$", "default")
+}
+
+// A closing quote ends a string atomically, so whatever follows it -- `$'
+// included -- begins a fresh token there, unlike a quote merely swallowed
+// into a longer identifier (which the string region rules claim first, so
+// it never reaches this rule at all).
+func TestVerbatimOpenerAfterAClosedStringIsFaced(t *testing.T) {
+	assertFace(t, `"a"$ zz`, "$", "constant.string")
 }
 
 // `-', `?', `!' and `$' continue an AgL name (IDENT_STOP in
@@ -182,6 +245,11 @@ func TestStringsAndComments(t *testing.T) {
 	assertFace(t, `let s = "hi %{name}"`, "%{", "special")
 }
 
+func TestTemplateLiteralBracesAndEscapedHolesStayStrings(t *testing.T) {
+	assertFace(t, `let s = "literal }"`, "}", "constant.string")
+	assertNotFace(t, `let s = "escaped \%{name}"`, "%{", "special")
+}
+
 // A `var' marker declares a mutable record or enum-member field, so the
 // keyword has to face wherever a field is declared -- in a layout body, in an
 // inline field list, and in an enum member's payload.
@@ -232,13 +300,25 @@ func TestDelimiterAfterARefacedNameIsRepainted(t *testing.T) {
 	assertFace(t, "f(resource-dir, x)", ",", "symbol")
 }
 
-// A raw-tail payload is verbatim text, so AgL spellings inside it are not
-// code: the whole tail faces as a string, opener included.
-func TestRawTailPayloadIsVerbatim(t *testing.T) {
-	assertFace(t, "let a = exec$ ls -la | grep record", "exec$ ls -la | grep record", "constant.string")
-	assertFace(t, "let a = ask$ summarise the record", "ask$ summarise the record", "constant.string")
+// A `$' verbatim payload is verbatim text, so AgL spellings inside it are not
+// code: the whole tail faces as a string, `$' included.
+func TestVerbatimPayloadIsVerbatim(t *testing.T) {
+	assertFace(t, "let a = exec $ ls -la | grep record", "$ ls -la | grep record", "constant.string")
+	assertFace(t, "let a = ask $ summarise the record", "$ summarise the record", "constant.string")
 	// The code before the opener is unaffected.
-	assertFace(t, "let a = exec$ ls", "let", "statement")
+	assertFace(t, "let a = exec $ ls", "let", "statement")
+	assertFace(t, "let a = exec $ ls", "exec", "identifier")
+}
+
+// A `%{...}' hole interpolates inside a `$' verbatim payload, matching the
+// template regions, so its delimiters stay visible.  `${...}' does not: only
+// `%{' opens a hole, so a raw `${' stays plain payload text.
+func TestVerbatimPayloadInterpolationHoleIsFaced(t *testing.T) {
+	assertFace(t, "ask $ Summarize %{topic} please", "%{", "special")
+	assertFace(t, "ask $ Summarize %{topic} please", "}", "special")
+	assertFace(t, "exec $ echo ${HOME}", "${", "constant.string")
+	assertNotFace(t, "exec $ echo ${HOME}", "}", "special")
+	assertFace(t, "ask $ escaped \\%{topic}", "%{", "constant.string")
 }
 
 // A declaration attribute is a `@name' prefix, optionally followed by an

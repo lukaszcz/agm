@@ -33,14 +33,14 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable, Iterator
 from dataclasses import dataclass
 
 from lark.lexer import Token
 
 from agm.agl.diagnostics import Diagnostic, SourceSpan
 from agm.agl.keywords import KEYWORDS
-from agm.agl.lexer.errors import LexError
+from agm.agl.lexer.errors import IncompleteInputError, LexError, UnterminatedTripleQuotedStringError
 from agm.agl.lexer.tokens import (
     ARROW,
     ASSIGN,
@@ -72,10 +72,6 @@ from agm.agl.lexer.tokens import (
     PLACEHOLDER,
     PLACEHOLDER_NUM,
     PLUS,
-    RAW_FRAGMENT,
-    RAW_TAIL_END,
-    RAW_TAIL_NAME,
-    RAW_TAIL_START,
     RBRACE,
     RPAR,
     RSQB,
@@ -86,10 +82,11 @@ from agm.agl.lexer.tokens import (
     TEMPLATE_END,
     TEMPLATE_START,
     THIN_ARROW,
+    VERBATIM_END,
+    VERBATIM_START,
 )
 from agm.agl.value_syntax import lexical
 from agm.agl.value_syntax.errors import ValueSyntaxError
-from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
 from agm.util.ident import is_identifier_start
 from agm.util.interp import INTERP_OPEN, INTERP_TRIGGER
 from agm.util.text import normalize_newlines
@@ -110,9 +107,13 @@ from agm.util.unicode import surrogate_index
 
 _TAB_LEN = 4
 
-# Characters that end a verbatim run inside a raw-tail payload: ``%`` may open a
-# hole and ``\`` may escape one.  Everything between them is copied wholesale.
-_RAW_RUN_STOP_RE = re.compile(rf"[\\{re.escape(INTERP_TRIGGER)}]")
+# Characters that end a verbatim run inside a `$` literal's payload: ``%`` may
+# open a hole and ``\`` may escape one.  Everything between them is copied wholesale.
+_PAYLOAD_RUN_STOP_RE = re.compile(rf"[\\{re.escape(INTERP_TRIGGER)}]")
+
+# Raised when a `$` verbatim literal's payload is empty, whether immediately
+# (nothing but spaces before the newline or end of input) or as an empty block.
+_EMPTY_VERBATIM_ERROR = "empty verbatim text literal"
 
 
 # Single-char operator table (must not overlap with maximal-munch multi-char ops).
@@ -206,8 +207,8 @@ class _InterpSeg:
 
 
 @dataclass(frozen=True, slots=True)
-class _RawBlockLine:
-    """One collected raw-tail block line, with its dedented source slice."""
+class _BlockLine:
+    """One collected block-form line of a `$` verbatim literal, dedented source slice."""
 
     start_pos: int
     end_pos: int
@@ -241,20 +242,17 @@ class _Scanner:
         # ``(start, end)`` offsets of every ``#`` comment skipped during this
         # scan, in source order.  Comments carry no token, so this side channel
         # is the only record of where they were; the scanner is their sole
-        # producer, which keeps ``#`` inside a string or a raw tail out.
+        # producer, which keeps ``#`` inside a string or a `$` literal out.
         self._comment_spans: list[tuple[int, int]] = []
         # True once at least one real (non-layout) token has been emitted; used
         # to suppress the leading ``_NEWLINE`` of comment/blank-only prefixes.
         self._emitted_real = False
         self._bracket_depth = 0
-        self._pending_raw_newline: Token | None = None
-        # End of the payload most recently consumed by a raw-tail block, so the
-        # closing token spans the payload rather than the next item's start.
-        self._raw_payload_end: tuple[int, int, int] | None = None
-        # A raw tail seen at nonzero bracket depth.  Held until the scan ends
+        self._pending_block_newline: Token | None = None
+        # A `$` literal seen at nonzero bracket depth.  Held until the scan ends
         # because an unclosed bracket earlier in the file produces the same
-        # depth without the raw tail being bracketed at all.
-        self._deferred_raw_tail_error: LexError | None = None
+        # depth without the payload being bracketed at all.
+        self._deferred_bracket_error: LexError | None = None
 
     @property
     def tab_warnings(self) -> list[Diagnostic]:
@@ -291,7 +289,7 @@ class _Scanner:
         """Record a TAB advisory for the ``\\t`` at *pos* on *line*.
 
         Used where the tab is not at the scan position, such as the indentation
-        a raw-tail block strips ahead of the scanner.
+        a `$`-literal block strips ahead of the scanner.
         """
         col = pos - self._line_start_pos + 1
         self._tab_warnings.append(
@@ -550,7 +548,7 @@ class _Scanner:
         return self._scan_interpolation(name) if name is not None else None
 
     def _scan_interpolation(self, environment_name: str | None = None) -> Iterator[Token]:
-        """Emit one hole, sharing its opener across names, expressions, and raw tails."""
+        """Emit one hole, sharing its opener across names and expressions."""
         start_pos, start_line, start_col = self._pos, self._line, self._col
         opener = Token(
             INTERP_START,
@@ -708,7 +706,9 @@ class _Scanner:
         while True:
             if self._at_end():
                 span = self._span_here()
-                raise LexError("Unterminated triple-quoted string literal", span=span)
+                raise UnterminatedTripleQuotedStringError(
+                    "Unterminated triple-quoted string literal", span=span
+                )
             ch = self._peek()
             if ch == quote and self._peek(1) == quote and self._peek(2) == quote:
                 # End of triple-quoted string; record the closing-quote position.
@@ -791,7 +791,12 @@ class _Scanner:
         )
 
     # ------------------------------------------------------------------
-    # Raw-tail scanning
+    # Verbatim-literal scanning
+    #
+    # A `$` verbatim text literal's inline-or-block payload: trims leading/
+    # trailing horizontal whitespace, collects a same-line payload or an
+    # indented block (dedented, blank lines handled identically), and scans
+    # ``%{expr}`` holes with the ``\%{`` escape.  An empty payload is a lex error.
     # ------------------------------------------------------------------
 
     def _indent_info(self, pos: int) -> tuple[int, int]:
@@ -807,7 +812,7 @@ class _Scanner:
         return width, offset
 
     def _skip_to_line_end(self, line_end: int) -> None:
-        """Consume the rest of a raw payload line already scanned for fragments.
+        """Consume the rest of a payload line already scanned for fragments.
 
         The span is newline-free, so the column advances by its length; this is
         the bulk form of stepping ``_advance(in_string=True)`` over each char.
@@ -815,46 +820,39 @@ class _Scanner:
         self._col += line_end - self._pos
         self._pos = line_end
 
-    def _raw_tail_error(self, message: str, start_pos: int, line: int, col: int) -> LexError:
-        """Build a raw-tail diagnostic anchored at a source location."""
-        return LexError(
+    def _payload_error(
+        self,
+        message: str,
+        start_pos: int,
+        line: int,
+        col: int,
+        *,
+        error_cls: type[LexError] = LexError,
+    ) -> LexError:
+        """Build a verbatim-literal diagnostic anchored at a source location."""
+        return error_cls(
             message,
             span=SourceSpan(line, col, line, col, start_pos, start_pos),
         )
 
-    def _scan_raw_type_args(self) -> Iterator[Token]:
-        """Scan an adjacent ``::[...]`` prefix with ordinary code tokens."""
-        if not self._src.startswith("::[", self._pos):
-            return
-        group_start_pos, group_start_line, group_start_col = self._pos, self._line, self._col
-        depth = 0
-        while True:
-            if self._at_end() or self._peek() == "\n":
-                raise self._raw_tail_error(
-                    "unterminated raw-tail type-argument group",
-                    group_start_pos,
-                    group_start_line,
-                    group_start_col,
-                )
-            if self._peek() in (" ", "\t"):
-                self._advance()
-                continue
-            for token in self._scan_one_code_token():
-                yield token
-                self._track_code_token(token)
-                if token.type == LSQB:
-                    depth += 1
-                elif token.type == RSQB:
-                    depth -= 1
-                    if depth == 0:
-                        return
+    def _defer_bracketed_error(self, message: str, start_pos: int, line: int, col: int) -> None:
+        """Record a `$`-literal bracket-depth diagnostic, keeping only the first.
 
-    def _raw_fragment(self, text: str, start_pos: int, start_line: int, start_col: int) -> Token:
-        """Make a raw fragment token from the current scanner position."""
-        return self._make_token(RAW_FRAGMENT, text, start_pos, start_line, start_col)
+        A `$` literal seen at nonzero bracket depth cannot fail immediately: an
+        unclosed bracket earlier in the file raises the depth just the same,
+        and that is the parser's error to report instead.  The error is held
+        until :meth:`scan` decides which diagnosis applies.
+        """
+        if self._deferred_bracket_error is None:
+            self._deferred_bracket_error = self._payload_error(message, start_pos, line, col)
 
-    def _scan_raw_lines(self, lines: list[_RawBlockLine]) -> Iterator[Token]:
-        """Emit fragments and interpolation holes from dedented block line slices."""
+    def _scan_block_lines(self, lines: list[_BlockLine]) -> Iterator[Token]:
+        """Emit fragments and interpolation holes from dedented block line slices.
+
+        Recognizes only the ``%{expr}`` hole and its ``\\%{`` escape; ``${...}``
+        environment spellings are never desugared here (they reach a `$`
+        literal verbatim).
+        """
         saved_state = (self._pos, self._line, self._col, self._line_start_pos)
         buf: list[str] = []
         frag_start: tuple[int, int, int] | None = None
@@ -869,7 +867,7 @@ class _Scanner:
             if not buf:
                 return None
             assert frag_start is not None
-            token = self._raw_fragment("".join(buf), *frag_start)
+            token = self._make_token(STRING_FRAGMENT, "".join(buf), *frag_start)
             buf.clear()
             frag_start = None
             return token
@@ -905,7 +903,9 @@ class _Scanner:
                         # open a hole or escape it, rather than one char at a
                         # time.  A block line slice never contains a newline, so
                         # the column advances by the run length.
-                        stop = _RAW_RUN_STOP_RE.search(self._src, self._pos + 1, raw_line.end_pos)
+                        stop = _PAYLOAD_RUN_STOP_RE.search(
+                            self._src, self._pos + 1, raw_line.end_pos
+                        )
                         run_end = raw_line.end_pos if stop is None else stop.start()
                         start_fragment()
                         buf.append(self._src[self._pos : run_end])
@@ -922,7 +922,7 @@ class _Scanner:
 
     def _dedented_block_line(
         self, line_start: int, line_end: int, line_no: int, line_col: int, margin: int
-    ) -> _RawBlockLine:
+    ) -> _BlockLine:
         """Strip *margin* visual columns from a block line, keeping the remainder.
 
         A TAB whose expansion straddles the margin is consumed whole, so the
@@ -939,7 +939,7 @@ class _Scanner:
                 consumed_width += 1
             strip_chars += 1
         content_start = line_start + strip_chars
-        return _RawBlockLine(
+        return _BlockLine(
             content_start,
             line_end,
             line_no,
@@ -947,8 +947,8 @@ class _Scanner:
             prefix=" " * (consumed_width - margin),
         )
 
-    def _raw_newline_token(self, pos: int, line: int, col: int, indent: int) -> Token:
-        """Build the layout ``_NEWLINE`` that follows a consumed raw-tail block."""
+    def _block_newline_token(self, pos: int, line: int, col: int, indent: int) -> Token:
+        """Build the layout ``_NEWLINE`` that follows a consumed `$`-literal block."""
         return Token(
             NEWLINE,
             str(indent),
@@ -960,15 +960,25 @@ class _Scanner:
             end_pos=pos + 1,
         )
 
-    def _scan_raw_block(self, parent_indent: int) -> Iterator[Token]:
-        """Consume an indented raw-tail block and emit its single payload."""
-        header_newline = (self._pos, self._line, self._col)
+    def _scan_block(
+        self,
+        parent_indent: int,
+        *,
+        opener: tuple[int, int, int],
+    ) -> Generator[Token, None, tuple[int, int, int]]:
+        """Consume an indented block and emit its single `$`-literal payload.
+
+        Returns the payload's end (offset, line, column), for the caller to
+        position the closing token.  An empty block raises immediately,
+        anchored at *opener* (the `$`).
+        """
         self._advance()  # header newline
         margin: int | None = None
-        lines: list[_RawBlockLine] = []
-        pending_blank_lines: list[_RawBlockLine] = []
+        lines: list[_BlockLine] = []
+        pending_blank_lines: list[_BlockLine] = []
         last_newline: tuple[int, int, int] | None = None
         next_indent = 0
+        payload_end: tuple[int, int, int] | None = None
 
         while not self._at_end():
             line_start, line_no, line_col = self._pos, self._line, self._col
@@ -986,15 +996,14 @@ class _Scanner:
                 # a blank run before the dedent separates the block from the
                 # next item and is not part of the payload.
                 pending_blank_lines.append(
-                    _RawBlockLine(line_end, line_end, line_no, line_col + (line_end - line_start))
+                    _BlockLine(line_end, line_end, line_no, line_col + (line_end - line_start))
                 )
             else:
                 if margin is None:
                     margin = indent
                 elif indent < margin:
-                    raise self._raw_tail_error(
-                        "raw-tail block line is under-indented; "
-                        "align it with the first block line.",
+                    raise self._payload_error(
+                        "block line is under-indented; align it with the first block line.",
                         line_start + indent_chars,
                         line_no,
                         line_col + indent_chars,
@@ -1004,7 +1013,7 @@ class _Scanner:
                 lines.append(
                     self._dedented_block_line(line_start, line_end, line_no, line_col, margin)
                 )
-                self._raw_payload_end = (line_end, line_no, line_col + (line_end - line_start))
+                payload_end = (line_end, line_no, line_col + (line_end - line_start))
 
             self._skip_to_line_end(line_end)
             if self._at_end():
@@ -1013,40 +1022,46 @@ class _Scanner:
             last_newline = (self._pos, self._line, self._col)
             self._advance(in_string=True)
 
-        if margin is None:
-            # No payload; the parser reports the empty raw tail.  The header's
-            # own line break still has to separate it from the next item.
-            self._pending_raw_newline = self._raw_newline_token(*header_newline, next_indent)
-            return
+        if payload_end is None:
+            raise self._payload_error(_EMPTY_VERBATIM_ERROR, *opener)
 
-        yield from self._scan_raw_lines(lines)
+        yield from self._scan_block_lines(lines)
         if last_newline is not None:
-            self._pending_raw_newline = self._raw_newline_token(*last_newline, next_indent)
+            self._pending_block_newline = self._block_newline_token(*last_newline, next_indent)
+        return payload_end
 
-    def _scan_raw_tail(
-        self, start_pos: int, start_line: int, start_col: int, name: str
+    def _scan_payload(
+        self,
+        *,
+        opener: tuple[int, int, int],
     ) -> Iterator[Token]:
-        """Scan the generic inline-or-block payload following a registered name."""
-        yield self._make_token(RAW_TAIL_NAME, name, start_pos, start_line, start_col)
-        yield from self._scan_raw_type_args()
+        """Scan a `$` verbatim literal's inline-or-block payload at the cursor.
 
+        Skips leading horizontal whitespace, dispatches to the block form at
+        end of line, and otherwise scans inline to end of line (trailing
+        whitespace trimmed).  An empty payload — immediately (`$` at EOF or
+        followed only by spaces) or as an empty block — raises a lex error
+        anchored at *opener* (the `$`).  An immediately-empty payload raises
+        :class:`~agm.agl.lexer.errors.IncompleteInputError` rather than a
+        plain :class:`LexError`, since more input (a payload) could still
+        complete the construct.
+        """
         while self._peek() in (" ", "\t"):
             self._advance()
-        payload_start, payload_line, payload_col = self._pos, self._line, self._col
-        yield self._make_token(RAW_TAIL_START, "", payload_start, payload_line, payload_col)
 
         # Where the payload itself ends, which is where the closing token goes:
         # the scanner is by then past the block's terminating line break and the
         # next line's indentation, and past an inline payload's trailing spaces.
         payload_end_state: tuple[int, int, int]
         if self._at_end():
-            payload_end_state = (self._pos, self._line, self._col)
+            raise self._payload_error(
+                _EMPTY_VERBATIM_ERROR,
+                *opener,
+                error_cls=IncompleteInputError,
+            )
         elif self._peek() == "\n":
             parent_indent, _ = self._indent_info(self._line_start_pos)
-            self._raw_payload_end = None
-            yield from self._scan_raw_block(parent_indent)
-            payload_end_state = self._raw_payload_end or (self._pos, self._line, self._col)
-            self._raw_payload_end = None
+            payload_end_state = yield from self._scan_block(parent_indent, opener=opener)
         else:
             line_end = self._src.find("\n", self._pos)
             if line_end == -1:
@@ -1055,13 +1070,13 @@ class _Scanner:
             while payload_end > self._pos and self._src[payload_end - 1] in (" ", "\t"):
                 payload_end -= 1
             payload_end_state = (payload_end, self._line, self._col + (payload_end - self._pos))
-            raw_line = _RawBlockLine(self._pos, payload_end, self._line, self._col)
-            yield from self._scan_raw_lines([raw_line])
+            block_line = _BlockLine(self._pos, payload_end, self._line, self._col)
+            yield from self._scan_block_lines([block_line])
             self._skip_to_line_end(line_end)
 
         end_pos, end_line, end_col = payload_end_state
         yield Token(
-            RAW_TAIL_END,
+            VERBATIM_END,
             "",
             start_pos=end_pos,
             line=end_line,
@@ -1070,9 +1085,30 @@ class _Scanner:
             end_column=end_col,
             end_pos=end_pos,
         )
-        if self._pending_raw_newline is not None:
-            yield self._pending_raw_newline
-            self._pending_raw_newline = None
+        if self._pending_block_newline is not None:
+            yield self._pending_block_newline
+            self._pending_block_newline = None
+
+    def _scan_verbatim(self, start_pos: int, start_line: int, start_col: int) -> Iterator[Token]:
+        """Scan a `$` verbatim text literal at token start.
+
+        Emits ``VERBATIM_START``, the payload, and ``VERBATIM_END``.  Only
+        ``%{expr}`` holes interpolate, and an empty literal is a lex error
+        anchored at the `$` itself.  Inside brackets (including a `%{...}`
+        hole) the error is deferred, so an unclosed bracket still yields the
+        parser's diagnostic.
+        """
+        yield self._make_token(VERBATIM_START, "$", start_pos, start_line, start_col)
+        if self._bracket_depth > 0:
+            self._defer_bracketed_error(
+                "`$` verbatim literals are not allowed inside brackets; use a quoted string.",
+                start_pos,
+                start_line,
+                start_col,
+            )
+            return
+
+        yield from self._scan_payload(opener=(start_pos, start_line, start_col))
 
     # ------------------------------------------------------------------
     # Code token scanning
@@ -1099,28 +1135,7 @@ class _Scanner:
             while self._pos < end:
                 self._advance()
             word = self._src[start_pos : self._pos]
-            if word in KEYWORDS:
-                typ = word
-            else:
-                typ = NAME
-            if typ == NAME and word in RAW_TAIL_BUILTINS:
-                if self._bracket_depth > 0:
-                    # Brackets suppress line breaks, so "to end of line" has no
-                    # meaning here.  The error waits for the end of the scan:
-                    # an unclosed bracket earlier in the file raises the depth
-                    # just the same, and that is the parser's error to report.
-                    if self._deferred_raw_tail_error is None:
-                        self._deferred_raw_tail_error = self._raw_tail_error(
-                            "raw-tail forms are not allowed inside brackets; use the call form "
-                            "or an indented block form.",
-                            start_pos,
-                            start_line,
-                            start_col,
-                        )
-                    yield self._make_token(RAW_TAIL_NAME, word, start_pos, start_line, start_col)
-                    return
-                yield from self._scan_raw_tail(start_pos, start_line, start_col, word)
-                return
+            typ = word if word in KEYWORDS else NAME
             yield self._make_token(typ, word, start_pos, start_line, start_col)
             return
 
@@ -1158,6 +1173,13 @@ class _Scanner:
                 start_line,
                 start_col,
             )
+            return
+
+        # A `$` at token start opens a verbatim text literal; an operator-name
+        # run may still contain or end with `$` (`<$>`, `%$`), it just cannot
+        # start with one.
+        if ch == "$":
+            yield from self._scan_verbatim(start_pos, start_line, start_col)
             return
 
         if _is_operator_name_char(ch):
@@ -1203,7 +1225,7 @@ class _Scanner:
         width as their value.  The layout filter converts these into
         ``_INDENT``/``_DEDENT``/``_NEWLINE`` tokens.
 
-        A raw tail scanned at nonzero bracket depth is diagnosed here rather
+        A `$` literal scanned at nonzero bracket depth is diagnosed here rather
         than where it was seen: only brackets that close somewhere really did
         enclose it, and an unclosed one belongs to the parser's diagnostic.
 
@@ -1223,11 +1245,11 @@ class _Scanner:
         try:
             yield from self._scan_code()
         except LexError:
-            if self._deferred_raw_tail_error is not None:
-                raise self._deferred_raw_tail_error from None
+            if self._deferred_bracket_error is not None:
+                raise self._deferred_bracket_error from None
             raise
-        if self._deferred_raw_tail_error is not None and self._bracket_depth == 0:
-            raise self._deferred_raw_tail_error
+        if self._deferred_bracket_error is not None and self._bracket_depth == 0:
+            raise self._deferred_bracket_error
 
     def _scan_code(self) -> Iterator[Token]:
         """Yield every CODE-mode token, leaving deferred diagnostics to ``scan``."""
@@ -1357,9 +1379,10 @@ def lex_comment_spans(source: str) -> list[tuple[int, int]]:
     """Return the ``(start, end)`` offsets of every ``#`` comment in *source*.
 
     Drives the real lexer scan — the single source of truth for which ``#`` opens
-    a comment and which is ordinary string or raw-tail content — and returns the
-    spans it skipped, in source order.  Offsets index the *normalized* source and
-    are end-exclusive; the span runs from the ``#`` to the end of its line.
+    a comment and which is ordinary string or `$`-literal content — and returns
+    the spans it skipped, in source order.  Offsets index the *normalized*
+    source and are end-exclusive; the span runs from the ``#`` to the end of
+    its line.
 
     A lexical error ends collection rather than propagating, so a half-typed
     entry still reports the comments in the prefix that scanned cleanly.

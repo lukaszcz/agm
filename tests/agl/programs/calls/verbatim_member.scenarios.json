@@ -1,0 +1,48 @@
+{
+  "scenarios": [
+    {
+      "name": "inline_block_typed_and_postfix_dollar_member_calls",
+      "params": {"subject": "the release notes"},
+      "agents": {
+        "annotator": ["Concise summary", "{\"summary\": \"Key change\"}"],
+        "chain": ["Follow-up"]
+      },
+      "expect": {
+        "stdout": "Concise summary\nKey change\nFollow-up\n",
+        "calls": {"annotator": 2, "chain": 1},
+        "prompts": [
+          {"agent": "annotator", "call": 0, "equals": "Summarize the release notes."},
+          {
+            "agent": "annotator",
+            "call": 1,
+            "starts_with": "Review the release notes and identify the key change.",
+            "schema_contains": ["summary"]
+          },
+          {"agent": "chain", "call": 0, "equals": "Continue the release notes."}
+        ]
+      }
+    },
+    {
+      "name": "member_payload_interpolation_changes_per_run",
+      "params": {"subject": "the migration guide"},
+      "agents": {
+        "annotator": ["Brief", "{\"summary\": \"Updated change\"}"],
+        "chain": ["Next"]
+      },
+      "expect": {
+        "stdout": "Brief\nUpdated change\nNext\n",
+        "calls": {"annotator": 2, "chain": 1},
+        "prompts": [
+          {"agent": "annotator", "call": 0, "equals": "Summarize the migration guide."},
+          {
+            "agent": "annotator",
+            "call": 1,
+            "starts_with": "Review the migration guide and identify the key change.",
+            "schema_contains": ["summary"]
+          },
+          {"agent": "chain", "call": 0, "equals": "Continue the migration guide."}
+        ]
+      }
+    }
+  ]
+}

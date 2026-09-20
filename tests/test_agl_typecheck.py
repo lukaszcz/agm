@@ -299,11 +299,11 @@ def _expected_type(checked: CheckedModule, expected: Type | str) -> Type | None:
     return declared.handle() if declared is not None else checked.type_env.get_type(expected)
 
 
-def assert_raw_tail_type_parity(
-    raw_source: str, call_source: str
+def assert_builtin_call_type_parity(
+    source: str, call_source: str
 ) -> tuple[CheckedModule, CheckedModule]:
-    """Check that equivalent raw and call forms select the same builtin behavior."""
-    raw_checked = accept_type(raw_source)
+    """Check that equivalent sugared and call forms select the same builtin behavior."""
+    sugared_checked = accept_type(source)
     call_checked = accept_type(call_source)
 
     def selected_builtin_behavior(checked: CheckedModule) -> tuple[object, ...]:
@@ -319,8 +319,8 @@ def assert_raw_tail_type_parity(
             for site in checked.call_sites
         )
 
-    assert selected_builtin_behavior(raw_checked) == selected_builtin_behavior(call_checked)
-    return raw_checked, call_checked
+    assert selected_builtin_behavior(sugared_checked) == selected_builtin_behavior(call_checked)
+    return sugared_checked, call_checked
 
 
 def mk_span(line: int = 1, col: int = 1) -> SourceSpan:
@@ -3305,22 +3305,30 @@ class TestExec:
 
 
 # ---------------------------------------------------------------------------
-# Raw-tail builtin type parity
+# Verbatim `$` literal target-type parity
 # ---------------------------------------------------------------------------
 
 
-class TestRawTailTypingParity:
+class TestVerbatimLiteralTypingParity:
+    """A `$` juxtaposition argument types exactly like the equivalent quoted call."""
+
     @pytest.mark.parametrize(
-        ("raw_source", "call_source", "expected_type"),
+        ("verbatim_source", "call_source", "expected_type"),
         (
             pytest.param(
-                "let result = exec$::[json] printf-json\nresult",
+                "let result = exec::[json] $ printf-json\nresult",
                 'let result = exec::[json]("printf-json")\nresult',
                 JsonType(),
-                id="exec",
+                id="exec-json",
             ),
             pytest.param(
-                "record Review\n  approved: bool\nlet result = ask$::[Review] review it\nresult",
+                "let result = exec::[text] $ echo hello\nresult",
+                'let result = exec::[text]("echo hello")\nresult',
+                TextType(),
+                id="exec-text",
+            ),
+            pytest.param(
+                "record Review\n  approved: bool\nlet result = ask::[Review] $ review it\nresult",
                 'record Review\n  approved: bool\nlet result = ask::[Review]("review it")\nresult',
                 "Review",
                 id="ask",
@@ -3328,34 +3336,36 @@ class TestRawTailTypingParity:
         ),
     )
     def test_explicit_type_argument_matches_call_form(
-        self, raw_source: str, call_source: str, expected_type: Type | str
+        self, verbatim_source: str, call_source: str, expected_type: Type | str
     ) -> None:
-        raw_checked, _ = assert_raw_tail_type_parity(raw_source, call_source)
-        assert raw_checked.call_sites[0].target_type == _expected_type(raw_checked, expected_type)
+        verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
+        assert verbatim_checked.call_sites[0].target_type == _expected_type(
+            verbatim_checked, expected_type
+        )
 
     @pytest.mark.parametrize(
-        ("raw_source", "call_source", "expected_type"),
+        ("verbatim_source", "call_source", "expected_type"),
         (
             pytest.param(
-                "let result: text = exec$ echo result\nresult",
+                "let result: text = exec $ echo result\nresult",
                 'let result: text = exec("echo result")\nresult',
                 TextType(),
                 id="exec-binder",
             ),
             pytest.param(
-                "def build() -> text\n  return exec$ echo result\nbuild()",
+                "def build() -> text\n  return exec $ echo result\nbuild()",
                 'def build() -> text\n  return exec("echo result")\nbuild()',
                 TextType(),
                 id="exec-return",
             ),
             pytest.param(
-                "def build() -> text = exec$ echo result\nbuild()",
+                "def build() -> text = exec $ echo result\nbuild()",
                 'def build() -> text = exec("echo result")\nbuild()',
                 TextType(),
                 id="exec-inline-function",
             ),
             pytest.param(
-                "record Review\n  approved: bool\nlet result: Review = ask$ review it\nresult",
+                "record Review\n  approved: bool\nlet result: Review = ask $ review it\nresult",
                 'record Review\n  approved: bool\nlet result: Review = ask("review it")\nresult',
                 "Review",
                 id="ask-binder",
@@ -3363,7 +3373,7 @@ class TestRawTailTypingParity:
             pytest.param(
                 (
                     "record Review\n  approved: bool\ndef build() -> Review\n"
-                    "  return ask$ review it\nbuild()"
+                    "  return ask $ review it\nbuild()"
                 ),
                 (
                     "record Review\n  approved: bool\ndef build() -> Review\n"
@@ -3373,7 +3383,7 @@ class TestRawTailTypingParity:
                 id="ask-return",
             ),
             pytest.param(
-                "record Review\n  approved: bool\ndef build() -> Review = ask$ review it\nbuild()",
+                "record Review\n  approved: bool\ndef build() -> Review = ask $ review it\nbuild()",
                 (
                     "record Review\n  approved: bool\ndef build() -> Review = "
                     'ask("review it")\nbuild()'
@@ -3384,23 +3394,25 @@ class TestRawTailTypingParity:
         ),
     )
     def test_contextual_target_matches_call_form(
-        self, raw_source: str, call_source: str, expected_type: Type | str
+        self, verbatim_source: str, call_source: str, expected_type: Type | str
     ) -> None:
-        raw_checked, _ = assert_raw_tail_type_parity(raw_source, call_source)
-        assert raw_checked.call_sites[0].target_type == _expected_type(raw_checked, expected_type)
+        verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
+        assert verbatim_checked.call_sites[0].target_type == _expected_type(
+            verbatim_checked, expected_type
+        )
 
     @pytest.mark.parametrize(
-        ("raw_source", "call_source", "expected_type", "structured_exec"),
+        ("verbatim_source", "call_source", "expected_type", "structured_exec"),
         (
             pytest.param(
-                "let result = exec$ true\nresult",
+                "let result = exec $ true\nresult",
                 'let result = exec("true")\nresult',
                 "ExecResult",
                 True,
                 id="exec",
             ),
             pytest.param(
-                "let result = ask$ summarize\nresult",
+                "let result = ask $ summarize\nresult",
                 'let result = ask("summarize")\nresult',
                 TextType(),
                 False,
@@ -3410,26 +3422,26 @@ class TestRawTailTypingParity:
     )
     def test_default_target_matches_call_form(
         self,
-        raw_source: str,
+        verbatim_source: str,
         call_source: str,
         expected_type: Type | str,
         structured_exec: bool,
     ) -> None:
-        raw_checked, _ = assert_raw_tail_type_parity(raw_source, call_source)
-        call_site = raw_checked.call_sites[0]
-        assert call_site.target_type == _expected_type(raw_checked, expected_type)
-        assert raw_checked.contract_specs[call_site.node_id].structured_exec is structured_exec
+        verbatim_checked, _ = assert_builtin_call_type_parity(verbatim_source, call_source)
+        call_site = verbatim_checked.call_sites[0]
+        assert call_site.target_type == _expected_type(verbatim_checked, expected_type)
+        assert verbatim_checked.contract_specs[call_site.node_id].structured_exec is structured_exec
 
     def test_exec_statement_discard_matches_call_form(self) -> None:
-        raw_checked, _ = assert_raw_tail_type_parity("exec$ true\n()", 'exec("true")\n()')
-        call_site = raw_checked.call_sites[0]
-        assert raw_checked.node_types[call_site.node_id] == UnitType()
-        assert raw_checked.contract_specs[call_site.node_id] == OutputContractSpec(
+        verbatim_checked, _ = assert_builtin_call_type_parity("exec $ true\n()", 'exec("true")\n()')
+        call_site = verbatim_checked.call_sites[0]
+        assert verbatim_checked.node_types[call_site.node_id] == UnitType()
+        assert verbatim_checked.contract_specs[call_site.node_id] == OutputContractSpec(
             UnitType(), "none", None, structured_exec=False
         )
 
-    def test_ask_raw_payload_has_no_agent_slot(self) -> None:
-        accept_type("ask$ agent = reviewer", capabilities=no_agent_caps())
+    def test_ask_payload_has_no_agent_slot(self) -> None:
+        accept_type("ask $ agent = reviewer", capabilities=no_agent_caps())
         accept_type(
             'let reviewer = AgentCommand("reviewer")\nreviewer.ask("prompt")',
             capabilities=no_agent_caps(),
@@ -6473,6 +6485,11 @@ class TestFieldAccess:
         err = reject_type("let x = 42\nx.field")
         assert "record" in str(err).lower() or "field" in str(err).lower()
 
+    def test_dollar_suffixed_member_miss_hints_a_spaced_verbatim_literal(self) -> None:
+        """`a.ask$ "hello"`: `ask$` is one name, not `ask` applied to a literal."""
+        err = reject_type('let worker: Agent = AgentCommand("worker")\nworker.ask$ "hello"')
+        assert "ask $" in str(err)
+
     def test_member_record_selects_its_enums_method(self) -> None:
         checked = accept_type(
             "enum Signal\n"
@@ -6552,8 +6569,8 @@ class TestFieldAccess:
         error = reject_type(source)
         assert "field" in str(error).lower() and "method" in str(error).lower()
 
-    def test_dotted_raw_tail_unknown_member_is_a_member_error(self) -> None:
-        error = reject_type('let value = AgentCommand("worker")\nvalue.exec$ echo hello')
+    def test_unknown_member_juxtaposed_with_text_is_a_member_error(self) -> None:
+        error = reject_type('let value = AgentCommand("worker")\nvalue.bogus $ echo hello')
         assert "field" in str(error).lower() and "method" in str(error).lower()
         assert error.span is not None
         assert (
@@ -14544,3 +14561,132 @@ def test_agent_enum_is_a_json_serializable_program_parameter_type() -> None:
     binding_type = checked.type_env.get_binding_type(program_def.params[0].node_id)
     assert isinstance(binding_type, EnumType)
     assert binding_type.name == "Agent"
+
+
+class TestBuiltinCallInGenericSlot:
+    """A direct ``ask``/``exec`` call sitting in an unresolved generic parameter slot.
+
+    Such a call's own ``expected`` type is the slot's still-open solver
+    variable (no annotation or sibling argument has pinned it yet). A bare
+    unresolved variable gets the call's documented default (``text`` for
+    ``ask``, ``ExecResult`` for ``exec``) registered as a region-close
+    fallback, applied only if nothing else pins the slot first.
+    """
+
+    def test_pipe_into_print_exec(self) -> None:
+        r = accept_type('print <| exec "echo hi"')
+        assert r.call_sites[0].callee == "exec"
+        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+        assert r.contract_specs[r.call_sites[0].node_id].structured_exec is True
+
+    def test_pipe_into_print_ask(self) -> None:
+        r = accept_type('print <| ask "hi"')
+        assert r.call_sites[0].callee == "ask"
+        assert r.call_sites[0].target_type == TextType()
+
+    def test_forward_pipe_exec_into_print(self) -> None:
+        r = accept_type('exec "echo hi" |> print')
+        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+
+    def test_generic_function_argument_exec(self) -> None:
+        r = accept_type('def id[A](x: A) -> A = x\nid(exec "echo hi")')
+        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+
+    def test_generic_function_argument_ask(self) -> None:
+        r = accept_type('def id[A](x: A) -> A = x\nid(ask "hi")')
+        assert r.call_sites[0].target_type == TextType()
+
+    def test_constructor_argument_exec(self) -> None:
+        r = accept_type('Some(exec "echo hi")')
+        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+
+    def test_annotated_binder_through_generic_still_infers_annotation(self) -> None:
+        """A concrete binder annotation still wins over the builtin default (no regression)."""
+        r = accept_type('def id[A](x: A) -> A = x\nlet x: text = id(exec "echo hi")\nx')
+        assert r.call_sites[0].target_type == TextType()
+
+    def test_higher_order_apply_print_exec(self) -> None:
+        src = 'def apply[A, B](f: (A) -> B, x: A) -> B = f(x)\napply(print, exec "echo hi")'
+        r = accept_type(src)
+        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+
+    def test_dollar_verbatim_exec_in_generic_slot(self) -> None:
+        r = accept_type("print <| exec $ echo hi")
+        assert r.call_sites[0].callee == "exec"
+        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+
+    def test_dollar_verbatim_session_ask_in_generic_slot(self) -> None:
+        src = "let s = Session::default()\nprint <| s.ask $ hi"
+        r = accept_type(src)
+        assert r.call_sites[0].callee == "ask"
+        assert r.call_sites[0].target_type == TextType()
+
+    def test_conflicting_defaults_on_shared_generic_slot_is_a_type_error(self) -> None:
+        """ask's text default and exec's ExecResult default can't share one variable.
+
+        The primary error span points at the second (conflicting) call, ``exec
+        "y"``, not at the enclosing ``f(...)`` call.
+        """
+        source = 'def f[A](a: A, b: A) -> unit = ()\nf(ask "x", exec "y")'
+        err = reject_type(source)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert source[err.span.start_offset : err.span.end_offset] == 'exec "y"'
+
+    def test_sibling_argument_overrides_default(self) -> None:
+        """A sibling argument sharing the generic slot pins the type before defaults apply."""
+        r = accept_type('def f[A](a: A, b: A) -> A = a\nf(exec "echo 1", 2)')
+        assert r.call_sites[0].target_type == IntType()
+
+    def test_two_defaults_agreeing_on_a_shared_generic_slot_is_not_a_conflict(self) -> None:
+        """Two ``ask`` calls sharing one generic slot both default to ``text`` — no conflict."""
+        r = accept_type('def f[A](a: A, b: A) -> unit = ()\nf(ask "x", ask "y")')
+        assert r.call_sites[0].target_type == TextType()
+        assert r.call_sites[1].target_type == TextType()
+
+    def test_inferred_return_function_with_local_generic_defaults(self) -> None:
+        """A candidate (inferred-return) body still defaults a generic-slot builtin call."""
+        src = (
+            "def id[A](x: A) -> A = x\n"
+            'def g(n: int) = if n == 0 => id(exec "x") else => g(n - 1)\n'
+            "g(0)"
+        )
+        r = accept_type(src)
+        assert r.call_sites[0].target_type == _expected_type(r, "ExecResult")
+
+    def test_explicit_type_argument_through_generic_slot(self) -> None:
+        """An explicit ``::[T]`` on the builtin call itself overrides the generic default."""
+        r = accept_type('def id[A](x: A) -> A = x\nid(exec::[int] "echo 1")')
+        assert r.call_sites[0].target_type == IntType()
+
+    def test_ask_in_lambda_passed_to_generic_defaults_to_text(self) -> None:
+        r = accept_type('def apply[A](f: () -> A) -> A = f()\napply(fn () => ask "x")')
+        assert r.call_sites[0].target_type == TextType()
+
+    def test_receiver_ask_in_generic_slot_defaults_to_text(self) -> None:
+        r = accept_type('let r = AgentCommand("worker")\nprint <| r.ask("hi")')
+        assert r.call_sites[0].callee == "ask"
+        assert r.call_sites[0].target_type == TextType()
+
+    def test_if_branches_with_conflicting_defaults_in_generic_slot_is_a_type_error(self) -> None:
+        """exec's and ask's defaults can't share the if-expression's single result slot."""
+        err = reject_type(
+            'def id[A](x: A) -> A = x\nlet b = true\nid(if b => exec "a" else => ask "b")'
+        )
+        assert isinstance(err, AglTypeError)
+
+    def test_conflicting_default_note_points_at_the_first_applied_builtin_call(self) -> None:
+        """The related note names the builtin call whose default first fixed the slot.
+
+        Not the unrelated ``print`` value reference the call was piped through.
+        """
+        source = (
+            'def id[A](x: A) -> A = x\nlet b = true\nprint <| id(if b => exec "a" else => ask "b")'
+        )
+        err = reject_type(source)
+        assert isinstance(err, AglTypeError)
+        assert err.span is not None
+        assert source[err.span.start_offset : err.span.end_offset] == 'ask "b"'
+        assert len(err.related) == 1
+        _, related_span = err.related[0]
+        assert source[related_span.start_offset : related_span.end_offset] == 'exec "a"'

@@ -189,6 +189,34 @@ def static_root_message(
     )
 
 
+def dollar_spacing_hint(name: str) -> str | None:
+    """Return a spacing hint for *name* if it looks like a mistyped verbatim literal.
+
+    A ``$`` inside an identifier is an ordinary character, not the verbatim
+    literal opener: ``exec$ date`` lexes as one NAME, not ``exec`` applied to
+    a ``$ date`` template. For a *name* ending in ``$`` with a nonempty stem,
+    returns a clause suggesting the spaced form; ``None`` when *name* does not
+    end in ``$`` or has no stem (a bare ``$`` is never a NAME — it always
+    opens a verbatim literal at the token-start position). Also fires for a
+    legitimately named ``x$`` binding; the hint is harmless there.
+    """
+    if not name.endswith("$") or len(name) < 2:
+        return None
+    stem = name[:-1]
+    return f" Write '{stem} $ …' with a space before the verbatim literal."
+
+
+def piping_hint() -> str:
+    """Return a hint suggesting piping for a `$` literal chained as a further argument.
+
+    Application by juxtaposition (``f x``) takes exactly one argument; a
+    further juxtaposed argument is rejected the same way whether it is a name
+    (``f x y``) or a `$` literal (``f x $ y``). The hint suggests piping the
+    literal in instead, e.g. ``print <| exec $ date``.
+    """
+    return " Juxtaposition never chains; pipe the `$` literal instead, e.g. `print <| exec $ date`."
+
+
 class AglError(Exception):
     """Base class for all fatal AgL pipeline errors.
 

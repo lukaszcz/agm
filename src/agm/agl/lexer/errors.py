@@ -14,5 +14,19 @@ class LexError(AglError):
     a :class:`~agm.agl.diagnostics.Diagnostic` with a precise source location.
     """
 
+    span: SourceSpan
+
     def __init__(self, message: str, *, span: SourceSpan) -> None:
         super().__init__(message, span=span)
+
+
+class IncompleteInputError(LexError):
+    """Lexing ran out of input where more input could still complete the construct.
+
+    A REPL checks for this type to decide whether to keep prompting instead of
+    reporting the error immediately.
+    """
+
+
+class UnterminatedTripleQuotedStringError(IncompleteInputError):
+    """Lexing reached end of input inside an unclosed triple-quoted string."""

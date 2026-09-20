@@ -34,6 +34,7 @@ from lark.lexer import Token
 from lark.tree import Meta
 
 import agm.agl.syntax as syntax
+from agm.agl.diagnostics import dollar_spacing_hint
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
@@ -52,7 +53,6 @@ from agm.agl.syntax.types import (
     UnitT,
     render_type_expr,
 )
-from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
 
 # Types used internally
 _NamedArgList = list[syntax.NamedArg]
@@ -64,13 +64,6 @@ class _RawPlaceholder:
 
     raw_digits: str | None
     span: SourceSpan
-
-
-@dataclass(frozen=True, slots=True)
-class _DottedRawCallee:
-    """A member callee built before its raw-tail type arguments and payload."""
-
-    callee: syntax.FieldAccess
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,15 +238,6 @@ class _JuxtField:
 
     name: str
     span: SourceSpan
-    node_id: int
-
-
-@dataclass(frozen=True, slots=True)
-class _RawJuxtMember:
-    """The suffixes and final raw-tail name of a juxtaposed member receiver."""
-
-    suffixes: tuple[_JuxtSuffix, ...]
-    raw_name: Token
     node_id: int
 
 
@@ -1555,13 +1539,10 @@ class AstBuilder(Transformer):
         return cast(syntax.Expr, inner)
 
     def juxt_call(self, meta: Meta, args: _Args) -> syntax.Call:
-        """Single-arg call sugar shared by ``juxt`` and ``raw_juxt``.
+        """Single-arg call sugar: ``juxt: postfix juxt_arg -> juxt_call``.
 
-        Both ``juxt: postfix juxt_arg`` and ``raw_juxt: postfix raw_call`` alias
-        here: `f x` and `print exec$ date` alike desugar to
-        `Call(callee=f, args=(arg,), named_args=())`, where the second argument
-        is the juxtaposed expression (an ordinary ``juxt_arg`` Expr, or the
-        ``raw_call`` desugared to its builtin Call).
+        `f x` desugars to `Call(callee=f, args=(arg,), named_args=())`, where
+        the second argument is the juxtaposed expression (the ``juxt_arg`` Expr).
 
         A ``::[T]`` suffix on the callee is folded into the call's own type
         arguments, exactly as :meth:`call` folds it for the parenthesized form:
@@ -1571,7 +1552,7 @@ class AstBuilder(Transformer):
         have no form for.
         """
         # args[0] is the callee (postfix result); args[1] is the juxtaposed
-        # expression — a juxt_arg Expr or a raw_call Call.
+        # expression (a juxt_arg Expr).
         callee, type_args = _split_type_apply(cast(syntax.Expr, args[0]))
         arg_expr = cast(syntax.Expr, args[1])
         return syntax.Call(
@@ -3117,14 +3098,15 @@ class AstBuilder(Transformer):
         )
 
     # ------------------------------------------------------------------
-    # template and raw-tail desugaring
+    # template desugaring
     # ------------------------------------------------------------------
 
-    def _build_template(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
-        """Build a template expression from *args*, collapsing a hole-free value to text.
+    def template(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
+        """Build a quoted or `$` verbatim template expression from its segment children.
 
-        Non-segment children (delimiter tokens) are skipped, so quoted and
-        raw-tail payloads can hand their raw argument list straight through.
+        Non-segment children (delimiter tokens) are skipped, so quoted
+        templates and `$` verbatim literals can hand their raw argument list
+        straight through; a hole-free result collapses to plain text.
         """
         nonempty_segments = tuple(
             segment
@@ -3143,140 +3125,10 @@ class AstBuilder(Transformer):
             return syntax.StringLit(value=text, span=span, node_id=nid)
         return syntax.Template(segments=nonempty_segments, span=span, node_id=nid)
 
-    def template(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
-        """Build a quoted template expression from its segment children."""
-        return self._build_template(meta, args)
-
-    def raw_tail(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
-        """Build the raw-tail payload with ordinary template interpolation semantics."""
-        return self._build_template(meta, args)
-
-    def raw_text(self, meta: Meta, args: _Args) -> syntax.TextSegment:
-        """Build raw text before a following interpolation subtree is transformed."""
-        tok = args[0]
-        assert isinstance(tok, Token)
-        return syntax.TextSegment(
-            text=str(tok), span=self._span_from_meta(meta), node_id=self._next_id()
-        )
-
     def type_args(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
-        """Pass an explicit raw-tail type-argument group through to its call."""
+        """Pass an explicit ``::[...]`` type-argument group through to its call."""
         del meta
         return _find_type_args(args)
-
-    def raw_callee(self, meta: Meta, args: _Args) -> syntax.VarRef:
-        """Build the synthetic builtin callee before its raw payload subtree."""
-        name_token = next(
-            arg for arg in args if isinstance(arg, Token) and arg.type == "RAW_TAIL_NAME"
-        )
-        return syntax.VarRef(
-            name=RAW_TAIL_BUILTINS[str(name_token)],
-            span=self._span_from_token(name_token),
-            node_id=self._next_id(),
-        )
-
-    def raw_call(self, meta: Meta, args: _Args) -> syntax.Call:
-        """Desugar a raw-tail form to its registered builtin call."""
-        callee = next(arg for arg in args if isinstance(arg, syntax.VarRef))
-        return self._build_raw_call(meta, args, callee)
-
-    def dotted_raw_head(self, meta: Meta, args: _Args) -> _DottedRawCallee:
-        """Build a direct dotted member callee, spanning through its raw name."""
-        del meta
-        receiver = cast(syntax.Expr, args[0])
-        raw_name = next(
-            arg for arg in args if isinstance(arg, Token) and arg.type == "RAW_TAIL_NAME"
-        )
-        raw_name_span = self._span_from_token(raw_name)
-        return _DottedRawCallee(
-            syntax.FieldAccess(
-                obj=receiver,
-                field=RAW_TAIL_BUILTINS[str(raw_name)],
-                span=_span_covering(receiver.span, raw_name_span),
-                node_id=self._next_id(),
-            )
-        )
-
-    def raw_juxt_terminal(self, meta: Meta, args: _Args) -> _RawJuxtMember:
-        """Capture the raw-tail name terminating a juxtaposed postfix chain."""
-        del meta
-        raw_name = next(
-            arg for arg in args if isinstance(arg, Token) and arg.type == "RAW_TAIL_NAME"
-        )
-        return _RawJuxtMember(suffixes=(), raw_name=raw_name, node_id=self._next_id())
-
-    def raw_juxt_postfix_tail(self, meta: Meta, args: _Args) -> _RawJuxtMember:
-        """Prepend a non-member postfix suffix to a raw-member receiver."""
-        del meta
-        suffix, member = cast(tuple[_JuxtSuffix, _RawJuxtMember], tuple(args))
-        return _RawJuxtMember(
-            suffixes=(suffix, *member.suffixes), raw_name=member.raw_name, node_id=member.node_id
-        )
-
-    def raw_juxt_final_tail(self, meta: Meta, args: _Args) -> _RawJuxtMember:
-        """Pass through the final raw-tail member after its separating dot."""
-        del meta
-        return next(arg for arg in args if isinstance(arg, _RawJuxtMember))
-
-    def raw_juxt_member_field(self, meta: Meta, args: _Args) -> _RawJuxtMember:
-        """Prepend a regular member before the final raw-tail member."""
-        del meta
-        field = next(arg for arg in args if isinstance(arg, _JuxtField))
-        member = next(arg for arg in args if isinstance(arg, _RawJuxtMember))
-        return _RawJuxtMember(
-            suffixes=(
-                _JuxtSuffix("field", field.name, field.span, field.node_id),
-                *member.suffixes,
-            ),
-            raw_name=member.raw_name,
-            node_id=member.node_id,
-        )
-
-    def raw_juxt_dotted_receiver(self, meta: Meta, args: _Args) -> _DottedRawCallee:
-        """Build a postfix receiver and its final raw-tail member projection."""
-        del meta
-        receiver = cast(syntax.Expr, args[0])
-        member = next(arg for arg in args if isinstance(arg, _RawJuxtMember))
-        receiver = self._apply_juxt_suffixes(receiver, member.suffixes)
-        raw_name_span = self._span_from_token(member.raw_name)
-        return _DottedRawCallee(
-            syntax.FieldAccess(
-                obj=receiver,
-                field=RAW_TAIL_BUILTINS[str(member.raw_name)],
-                span=_span_covering(receiver.span, raw_name_span),
-                node_id=member.node_id,
-            )
-        )
-
-    def dotted_raw_call(self, meta: Meta, args: _Args) -> syntax.Call:
-        """Desugar ``receiver.name! payload`` to a member call."""
-        callee = next(arg.callee for arg in args if isinstance(arg, _DottedRawCallee))
-        return self._build_raw_call(meta, args, callee)
-
-    def dotted_raw_juxt(self, meta: Meta, args: _Args) -> syntax.Call:
-        """Desugar ``callee receiver.name! payload`` at a line-final position."""
-        callee = next(cast(syntax.Expr, arg) for arg in args if _is_expr_node(arg))
-        dotted_callee = next(arg.callee for arg in args if isinstance(arg, _DottedRawCallee))
-        raw_call = self._build_raw_call(meta, args, dotted_callee)
-        return syntax.Call(
-            callee=callee,
-            args=(raw_call,),
-            named_args=(),
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def _build_raw_call(self, meta: Meta, args: _Args, callee: syntax.Expr) -> syntax.Call:
-        """Build a call from a raw-tail payload and its already-desugared callee."""
-        payload = next(arg for arg in args if isinstance(arg, (syntax.StringLit, syntax.Template)))
-        return syntax.Call(
-            callee=callee,
-            args=(payload,),
-            named_args=(),
-            type_args=_find_type_args(args),
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
 
     def tmpl_text(self, meta: Meta, args: _Args) -> syntax.TextSegment:
         tok = args[0]
@@ -3376,8 +3228,8 @@ def _find_type_args(args: _Args) -> tuple[TypeExpr, ...]:
 
     A ``type_arg_list`` result is the sole nonempty tuple of TypeExprs the
     grammar produces, so every rule with an optional ``::[...]`` group — applied
-    types, typed calls, ``type_apply``, and raw-tail calls — locates it the same
-    way here rather than re-spelling the predicate inline.
+    types, typed calls, and ``type_apply`` — locates it the same way here
+    rather than re-spelling the predicate inline.
     """
     for a in args:
         if (
@@ -3718,9 +3570,10 @@ def _validate_infix_chains(
                 )
             spec = chain_table.get(operator.name)
             if spec is None:
+                hint = dollar_spacing_hint(operator.name) or ""
                 raise AglSyntaxError(
                     f"Operator '{operator.name}' must be declared with infixl or infixr "
-                    "before use.",
+                    f"before use.{hint}",
                     span=operator.span,
                 )
             priority, assoc, _builtin = spec

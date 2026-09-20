@@ -460,6 +460,26 @@ def test_perform_decodes_the_declared_charset() -> None:
     adapter.assert_complete()
 
 
+def test_perform_ignores_a_parameter_whose_name_only_ends_in_charset() -> None:
+    session, adapter = fake_session(
+        [
+            {
+                "status": 200,
+                "headers": {"Content-Type": "text/plain; xcharset=iso-8859-1"},
+                "body": "café",
+            }
+        ]
+    )
+
+    result = http.perform(
+        session, http.RequestSpec(method="GET", url="https://example.org/x", timeout_seconds=5.0)
+    )
+
+    assert result.text == "café"
+    assert result.encoding == "utf-8"
+    adapter.assert_complete()
+
+
 def test_perform_raises_decode_failure_for_an_undecodable_body() -> None:
     session, adapter = fake_session(
         [
@@ -614,6 +634,23 @@ def test_perform_follows_redirects_to_the_final_url() -> None:
 
     assert result.url == "https://example.org/final"
     assert result.text == "done"
+    adapter.assert_complete()
+
+
+def test_perform_reports_the_method_of_the_final_redirected_request() -> None:
+    session, adapter = fake_session(
+        [
+            {"status": 303, "headers": {"Location": "https://example.org/final"}},
+            {"status": 200, "body": "done", "expect": {"method": "GET"}},
+        ]
+    )
+
+    result = http.perform(
+        session,
+        http.RequestSpec(method="POST", url="https://example.org/start", timeout_seconds=5.0),
+    )
+
+    assert result.method == "GET"
     adapter.assert_complete()
 
 
@@ -860,6 +897,31 @@ def test_perform_classifies_an_invalid_header_as_request() -> None:
     adapter.assert_complete()
 
 
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("X-Snowman-☃", "ok"), ("X-Test", "snowman: ☃")],
+)
+def test_perform_classifies_a_header_the_wire_cannot_encode_as_request(
+    name: str, value: str
+) -> None:
+    session, adapter = fake_session([])
+
+    with pytest.raises(http.TransportError) as excinfo:
+        http.perform(
+            session,
+            http.RequestSpec(
+                method="GET",
+                url="https://example.org/x",
+                headers={name: value},
+                timeout_seconds=5.0,
+            ),
+        )
+
+    assert excinfo.value.kind == "request"
+    assert value not in excinfo.value.message
+    adapter.assert_complete()
+
+
 def test_classify_treats_an_invalid_header_as_a_request_failure_without_its_message() -> None:
     """``_validate_headers`` now catches every header ``requests`` itself would reject, so this
     exercises ``_classify``'s own safety net directly rather than through ``perform``."""
@@ -976,6 +1038,7 @@ def test_perform_emits_no_insecure_warning_when_verify_tls_is_true() -> None:
         ("text/plain", "utf-8"),
         ("text/plain; charset=iso-8859-1", "iso-8859-1"),
         ('text/plain; charset="UTF-16"', "UTF-16"),
+        ("text/plain; xcharset=iso-8859-1", "utf-8"),
     ],
 )
 def test_resolve_charset(content_type: str | None, expected: str) -> None:
@@ -994,6 +1057,8 @@ def test_resolve_charset(content_type: str | None, expected: str) -> None:
         ("unicode_escape", "61"),
         # Historically escaped as an uncaught ``UnicodeError``; now rejected up front.
         ("undefined", "61"),
+        # ``codecs.lookup`` raises ``ValueError`` rather than ``LookupError`` for this label.
+        ("bad\0codec", "61"),
     ],
 )
 def test_perform_rejects_a_charset_outside_the_text_encoding_allowlist(

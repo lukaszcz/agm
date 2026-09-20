@@ -25,6 +25,8 @@ _HEX_PAIR_RE = re.compile(r"[0-9A-Fa-f]{2}")
 _REG_NAME_RE = re.compile(r"(?:[A-Za-z0-9\-._~!$&'()*+,;=]|%[0-9A-Fa-f]{2})+\Z")
 # RFC 6874 ZoneID: 1*( unreserved / pct-encoded ), after its "%25" introducer.
 _ZONE_ID_RE = re.compile(r"(?:[A-Za-z0-9\-._~]|%[0-9A-Fa-f]{2})+\Z")
+# A complete percent-encoded octet, whose hexadecimal case is not host-name case.
+_PERCENT_ENCODED_OCTET_RE = re.compile(r"%[0-9A-Fa-f]{2}")
 
 _UNRESERVED = string.ascii_letters + string.digits + "-._~"
 _SUB_DELIMS = "!$&'()*+,;="
@@ -69,10 +71,14 @@ def _validate_host(host: str) -> None:
         _, sep, zone = host.partition("%")
         if sep and not (zone.startswith("25") and _ZONE_ID_RE.fullmatch(zone[2:])):
             raise ValueError(f"invalid zone id in host {host!r}")
-        return
-    if not _REG_NAME_RE.fullmatch(host):
-        raise ValueError(f"invalid host {host!r}")
-    _require_valid_percent_encoding(host)
+        case_insensitive_part = host.partition("%25")[0]
+    else:
+        if not _REG_NAME_RE.fullmatch(host):
+            raise ValueError(f"invalid host {host!r}")
+        _require_valid_percent_encoding(host)
+        case_insensitive_part = _PERCENT_ENCODED_OCTET_RE.sub("", host)
+    if case_insensitive_part != case_insensitive_part.lower():
+        raise ValueError(f"non-canonical host {host!r}")
 
 
 def _require_valid_percent_encoding(component: str) -> None:

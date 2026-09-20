@@ -353,6 +353,26 @@ program def main() -> unit =
     assert capsys.readouterr().out == '201\nhttps://x/y\nGET\nyes\n{"session": "abc"}\ntrue\n'
 
 
+def test_response_method_reflects_a_redirect_rewrite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    outcomes = [
+        {"status": 303, "headers": {"Location": "https://x/final"}},
+        {"status": 200, "body": "", "expect": {"method": "GET"}},
+    ]
+    source = """import std/http
+program def main() -> unit =
+  let r = http::post("https://x/start")
+  print(r.method.render())
+"""
+
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+
+    assert result.ok, result.error
+    adapter.assert_complete()
+    assert capsys.readouterr().out == "GET\n"
+
+
 def test_module_default_timeout_is_forwarded(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -517,6 +537,26 @@ program def main() -> unit =
     assert "SECRET" not in str(failure_recs[0]["message"])
 
 
+def test_try_request_returns_http_request_error_for_an_unencodable_header(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = """import std/http
+program def main() -> unit =
+  let result = http::try-get("https://x/y", headers = http::headers({"X-Test": "☃"}))
+  print(result)
+"""
+
+    result, adapter = _run(monkeypatch, tmp_path, [], source)
+
+    assert result.ok, result.error
+    adapter.assert_complete()
+    output = capsys.readouterr().out
+    assert output.startswith("Result::Err(")
+    assert "HttpRequestError(" in output
+
+
 def test_decode_failure_raises_http_decode_error_with_fields(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -539,6 +579,31 @@ program def main() -> unit =
     entries = headers["entries"]
     assert isinstance(entries, dict)
     assert entries["content-type"] == "text/plain; charset=ascii"
+    adapter.assert_complete()
+
+
+def test_malformed_charset_label_raises_http_decode_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    outcomes = [
+        {
+            "status": 200,
+            "headers": {"Content-Type": "text/plain; charset=bad\0codec"},
+            "body": "x",
+        }
+    ]
+    source = """import std/http
+program def main() -> unit =
+  let _ = http::get("https://x/y")
+  ()
+"""
+
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "HttpDecodeError"
+    assert result.error.fields["encoding"] == "bad\0codec"
     adapter.assert_complete()
 
 

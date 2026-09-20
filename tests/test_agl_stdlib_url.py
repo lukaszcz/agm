@@ -472,6 +472,38 @@ def test_render_rejects_a_hand_built_record_with_an_invalid_host() -> None:
     assert exc_info.value.value.nominal == _URL_PARSE_ERROR
 
 
+def test_render_rejects_a_hand_built_record_with_a_noncanonical_host_case() -> None:
+    companion, registry = _url_companion()
+    record = _url_record(
+        registry,
+        scheme="https",
+        host="Example.COM",
+        port=_none_value(registry),
+        path="/",
+        query=[],
+        fragment=_none_value(registry),
+    )
+
+    with pytest.raises(AglException) as exc_info:
+        companion.render(record)
+    assert exc_info.value.value.nominal == _URL_PARSE_ERROR
+
+
+def test_render_preserves_case_in_a_hand_built_ipv6_zone_identifier() -> None:
+    companion, registry = _url_companion()
+    record = _url_record(
+        registry,
+        scheme="http",
+        host="fe80::1%25Eth0",
+        port=_none_value(registry),
+        path="/",
+        query=[],
+        fragment=_none_value(registry),
+    )
+
+    assert companion.render(record) == "http://[fe80::1%25Eth0]/"
+
+
 def test_render_rejects_a_hand_built_record_with_a_host_that_looks_like_a_bad_ipv6_literal() -> (
     None
 ):

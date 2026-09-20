@@ -17,7 +17,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 import requests
@@ -30,9 +30,10 @@ from agm.core import fs
 
 TransportErrorKind = Literal["url", "connection", "timeout", "tls", "redirect", "request"]
 
-# A charset value, quoted or not, captured whole (group 0): a named group
-# would type as ``str | Any`` under strict mypy regardless of the pattern.
-_CHARSET_PATTERN = re.compile(r"(?<=charset=)[^;]+", re.IGNORECASE)
+# A complete charset parameter, matched only at a media-type parameter boundary.
+# The value is extracted from group 0 because a captured group would type as
+# ``str | Any`` under strict mypy regardless of the pattern.
+_CHARSET_PATTERN = re.compile(r"(?:^|;)[ \t]*charset[ \t]*=[^;]*", re.IGNORECASE)
 _CHUNK_SIZE = 64 * 1024
 
 # RFC 9110 tchar: the only characters a method token may contain.
@@ -244,6 +245,7 @@ class StreamedResponse:
     text: str
     body_bytes: int
     url: str
+    method: str
     cookies: dict[str, str]
     elapsed: float
     encoding: str
@@ -285,7 +287,7 @@ def resolve_charset(content_type: str | None) -> str:
     if content_type is not None:
         match = _CHARSET_PATTERN.search(content_type)
         if match is not None:
-            return match.group(0).strip().strip("\"'")
+            return match.group(0).partition("=")[2].strip().strip("\"'")
     return "utf-8"
 
 
@@ -308,6 +310,11 @@ def _validate_headers(headers: Mapping[str, str]) -> None:
     credential such as a bearer token or session cookie.
     """
     for name, value in headers.items():
+        try:
+            name.encode("ascii")
+            value.encode("latin-1")
+        except UnicodeEncodeError:
+            raise TransportError("request", f"invalid HTTP header: {name!r}") from None
         if not _HEADER_NAME.fullmatch(name) or not _HEADER_VALUE.fullmatch(value):
             raise TransportError("request", f"invalid HTTP header: {name!r}")
 
@@ -374,7 +381,9 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
                 **settings,
             )
             try:
-                text, body_bytes, encoding = _consume(response, spec.receive, spec.method)
+                final_request = cast(requests.PreparedRequest, response.request)
+                final_method = final_request.method
+                text, body_bytes, encoding = _consume(response, spec.receive, final_method)
             finally:
                 response.close()
     except requests.exceptions.RequestException as exc:
@@ -389,6 +398,7 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
         text=text,
         body_bytes=body_bytes,
         url=response.url,
+        method=final_method,
         cookies=cookies,
         elapsed=elapsed,
         encoding=encoding,
@@ -444,7 +454,7 @@ def _consume(
         if codecs.lookup(encoding).name not in _TEXT_CHARSETS:
             raise LookupError(encoding)
         text = data.decode(encoding)
-    except (LookupError, UnicodeDecodeError) as exc:
+    except (LookupError, UnicodeDecodeError, ValueError) as exc:
         raise DecodeFailure(
             status=response.status_code,
             headers=_response_headers(response),

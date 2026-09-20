@@ -18,6 +18,7 @@ from agm.core.parse import parse_timeout
 
 Option = nominals.std.option.Option
 Headers = nominals.std.http.Headers
+Method = nominals.std.http.Method
 Auth = nominals.std.http.Auth
 Body = nominals.std.http.Body
 Receive = nominals.std.http.Receive
@@ -103,6 +104,19 @@ def _unwrap_receive(receive: object) -> core_http.ReceiveSpec:
     if isinstance(receive, Receive.Save):
         return core_http.Save(path=Path(receive.path))
     return core_http.Decode()
+
+
+def _response_method(method: str) -> object:
+    """Build the ``Method`` value for the verb sent on the final response hop."""
+    return {
+        "GET": Method.Get(),
+        "POST": Method.Post(),
+        "PUT": Method.Put(),
+        "PATCH": Method.Patch(),
+        "DELETE": Method.Delete(),
+        "HEAD": Method.Head(),
+        "OPTIONS": Method.Options(),
+    }.get(method, Method.Other(name=method))
 
 
 def _unwrap_timeout(timeout: object) -> tuple[float | None, str | None]:
@@ -267,7 +281,7 @@ def request(
         headers=Headers(entries=agl_dict(streamed.headers)),
         body=streamed.text,
         url=streamed.url,
-        method=method,
+        method=_response_method(streamed.method),
         cookies=agl_dict(streamed.cookies),
         elapsed=Decimal(str(streamed.elapsed)),
     )

@@ -420,11 +420,12 @@ def _consume(
         body_bytes = sum(len(chunk) for chunk in response.iter_content(chunk_size=_CHUNK_SIZE))
         return "", body_bytes, ""
     if isinstance(receive, Save):
-        sizes: list[int] = []
+        body_bytes = 0
 
         def chunks() -> Iterator[bytes]:
+            nonlocal body_bytes
             for chunk in response.iter_content(chunk_size=_CHUNK_SIZE):
-                sizes.append(len(chunk))
+                body_bytes += len(chunk)
                 yield chunk
 
         try:
@@ -436,7 +437,7 @@ def _consume(
             raise
         except OSError as exc:
             raise SaveFailure(receive.path, exc) from exc
-        return "", sum(sizes), ""
+        return "", body_bytes, ""
     data = response.content
     encoding = resolve_charset(response.headers.get("Content-Type"))
     try:

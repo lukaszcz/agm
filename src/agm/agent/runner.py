@@ -113,46 +113,54 @@ class PromptRunResult:
 class PromptRunFailure(Exception):
     """A failed structured prompt run, independent of any caller's error model."""
 
-    def __init__(self, cause: AgentTransportFailureCause, result: PromptRunResult) -> None:
+    def __init__(
+        self,
+        cause: AgentTransportFailureCause,
+        result: PromptRunResult,
+        message: str,
+        *,
+        detail: str | None,
+    ) -> None:
         self.cause = cause
         self.result = result
-        stdout_note = result.stdout.text_or_note("agent output")[1]
-        stderr_note = result.stderr.text_or_note("stderr")[1]
         # What the cause alone cannot locate: where a stream stopped being
-        # valid UTF-8. Callers that build their own message carry it over. A
-        # timeout is excluded: that stream was cut off by design, so where it
-        # stops decoding says nothing about the failure.
-        self.detail = None if cause == "timeout" else (stdout_note or stderr_note)
-        super().__init__(_prompt_run_failure_message(cause, result, stdout_note, stderr_note))
+        # valid UTF-8. Callers that build their own message carry it over.
+        self.detail = detail
+        super().__init__(message)
 
 
 def prompt_run_result_error(result: PromptRunResult) -> PromptRunFailure | None:
-    """Return the failure represented by *result*, or ``None`` for success."""
+    """Return the failure represented by *result*, or ``None`` for success.
+
+    Each cause words itself here, where what the cause means is known: a
+    protocol failure *is* an undecodable stdout, so that stream's note is the
+    whole message, with no wording to fall back on.
+    """
     if result.spawn_error is not None:
-        return PromptRunFailure("spawn_failure", result)
+        return PromptRunFailure(
+            "spawn_failure",
+            result,
+            f"agent command could not be started: {result.spawn_error}",
+            detail=result.stdout.text_or_note("agent output")[1]
+            or result.stderr.text_or_note("stderr")[1],
+        )
     if result.timed_out:
-        return PromptRunFailure("timeout", result)
+        # Both streams were cut off by design, so where either stops decoding
+        # says nothing about the failure.
+        return PromptRunFailure("timeout", result, "agent command timed out", detail=None)
     if result.returncode not in (None, 0):
-        return PromptRunFailure("nonzero_exit", result)
-    if result.stdout.text_or_note("agent output")[1] is not None:
-        return PromptRunFailure("protocol_failure", result)
+        stderr_note = result.stderr.text_or_note("stderr")[1]
+        message = f"agent command exited with code {result.returncode}"
+        return PromptRunFailure(
+            "nonzero_exit",
+            result,
+            message if stderr_note is None else f"{message}; {stderr_note}",
+            detail=result.stdout.text_or_note("agent output")[1] or stderr_note,
+        )
+    stdout_note = result.stdout.text_or_note("agent output")[1]
+    if stdout_note is not None:
+        return PromptRunFailure("protocol_failure", result, stdout_note, detail=stdout_note)
     return None
-
-
-def _prompt_run_failure_message(
-    cause: AgentTransportFailureCause,
-    result: PromptRunResult,
-    stdout_note: str | None,
-    stderr_note: str | None,
-) -> str:
-    if cause == "spawn_failure":
-        return f"agent command could not be started: {result.spawn_error}"
-    if cause == "timeout":
-        return "agent command timed out"
-    if cause == "protocol_failure":
-        return stdout_note or "agent output is not valid UTF-8"
-    message = f"agent command exited with code {result.returncode}"
-    return message if stderr_note is None else f"{message}; {stderr_note}"
 
 
 def parse_command(command: str, *, kind: str) -> list[str]:

@@ -20,7 +20,7 @@ from agm.agent.prompt import (
 )
 from agm.agent.transport import AgentTransportFailureCause
 from agm.core import dry_run
-from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
+from agm.core.process import CapturedOutput, ProcessCaptureResult, run_capture, run_capture_result
 from agm.util.interp import (
     Hole,
     InterpolationError,
@@ -103,8 +103,8 @@ class PromptRunResult:
     """
 
     returncode: int | None
-    stdout: str
-    stderr: str
+    stdout: CapturedOutput
+    stderr: CapturedOutput
     elapsed: float
     timed_out: bool
     spawn_error: str | None
@@ -116,7 +116,14 @@ class PromptRunFailure(Exception):
     def __init__(self, cause: AgentTransportFailureCause, result: PromptRunResult) -> None:
         self.cause = cause
         self.result = result
-        super().__init__(_prompt_run_failure_message(cause, result))
+        stdout_note = result.stdout.text_or_note("agent output")[1]
+        stderr_note = result.stderr.text_or_note("stderr")[1]
+        # What the cause alone cannot locate: where a stream stopped being
+        # valid UTF-8. Callers that build their own message carry it over. A
+        # timeout is excluded: that stream was cut off by design, so where it
+        # stops decoding says nothing about the failure.
+        self.detail = None if cause == "timeout" else (stdout_note or stderr_note)
+        super().__init__(_prompt_run_failure_message(cause, result, stdout_note, stderr_note))
 
 
 def prompt_run_result_error(result: PromptRunResult) -> PromptRunFailure | None:
@@ -127,15 +134,25 @@ def prompt_run_result_error(result: PromptRunResult) -> PromptRunFailure | None:
         return PromptRunFailure("timeout", result)
     if result.returncode not in (None, 0):
         return PromptRunFailure("nonzero_exit", result)
+    if result.stdout.text_or_note("agent output")[1] is not None:
+        return PromptRunFailure("protocol_failure", result)
     return None
 
 
-def _prompt_run_failure_message(cause: AgentTransportFailureCause, result: PromptRunResult) -> str:
+def _prompt_run_failure_message(
+    cause: AgentTransportFailureCause,
+    result: PromptRunResult,
+    stdout_note: str | None,
+    stderr_note: str | None,
+) -> str:
     if cause == "spawn_failure":
         return f"agent command could not be started: {result.spawn_error}"
     if cause == "timeout":
         return "agent command timed out"
-    return f"agent command exited with code {result.returncode}"
+    if cause == "protocol_failure":
+        return stdout_note or "agent output is not valid UTF-8"
+    message = f"agent command exited with code {result.returncode}"
+    return message if stderr_note is None else f"{message}; {stderr_note}"
 
 
 def parse_command(command: str, *, kind: str) -> list[str]:

@@ -181,6 +181,20 @@
       "expect": {
         "raises": {"type": "FsError", "fields": {"operation": "write"}}
       }
+    },
+    {
+      "name": "a_charset_outside_the_text_encoding_allowlist_is_caught_as_http_decode_error",
+      "params": {"root": "/unused", "scenario": "charset_outside_the_allowlist_raises_http_decode_error"},
+      "http": [
+        {
+          "status": 200,
+          "headers": {"Content-Type": "text/plain; charset=utf-7"},
+          "body_hex": "2b3241412d"
+        }
+      ],
+      "expect": {
+        "stdout": "caught: encoding=utf-7\n"
+      }
     }
   ]
 }

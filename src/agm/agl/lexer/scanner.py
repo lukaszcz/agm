@@ -93,6 +93,7 @@ from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
 from agm.util.ident import is_identifier_start
 from agm.util.interp import INTERP_OPEN, INTERP_TRIGGER
 from agm.util.text import normalize_newlines
+from agm.util.unicode import surrogate_index
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -1205,7 +1206,20 @@ class _Scanner:
         A raw tail scanned at nonzero bracket depth is diagnosed here rather
         than where it was seen: only brackets that close somewhere really did
         enclose it, and an unclosed one belongs to the parser's diagnostic.
+
+        Rejects a raw surrogate character anywhere in the source before
+        scanning a single token: AgL source must be valid Unicode.
         """
+        surrogate_at = surrogate_index(self._src)
+        if surrogate_at is not None:
+            while self._pos < surrogate_at:
+                self._advance()
+            start_line, start_col, start_pos = self._line, self._col, self._pos
+            self._advance()
+            span = SourceSpan(start_line, start_col, self._line, self._col, start_pos, self._pos)
+            raise LexError(
+                f"Invalid character in source: U+{ord(self._src[surrogate_at]):04X}", span=span
+            )
         try:
             yield from self._scan_code()
         except LexError:

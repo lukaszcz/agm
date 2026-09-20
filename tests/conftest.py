@@ -19,6 +19,7 @@ import requests
 from agm.agl.self_validation import self_validation_enabled, set_self_validation_enabled
 from agm.core import dry_run
 from agm.core import http as core_http
+from agm.core.process import CapturedOutput
 from tests import _command_coverage
 from tests._durations import (
     pytest_runtest_protocol,
@@ -348,7 +349,12 @@ class FakeAgentTransport:
     def success(stdout: str = "ok") -> SimpleNamespace:
         """Build a successful transport result carrying *stdout*."""
         return SimpleNamespace(
-            spawn_error=None, timed_out=False, returncode=0, stdout=stdout, stderr="", elapsed=0.0
+            spawn_error=None,
+            timed_out=False,
+            returncode=0,
+            stdout=CapturedOutput(data=stdout.encode(), truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
+            elapsed=0.0,
         )
 
     @staticmethod
@@ -366,8 +372,8 @@ class FakeAgentTransport:
             spawn_error=spawn_error,
             timed_out=timed_out,
             returncode=returncode,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=CapturedOutput(data=stdout.encode(), truncated=timed_out),
+            stderr=CapturedOutput(data=stderr.encode(), truncated=timed_out),
             elapsed=elapsed,
         )
 

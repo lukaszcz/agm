@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from agm.core.process import ProcessCaptureResult
+from agm.core.process import CapturedOutput, ProcessCaptureResult
 
 
 def process_result(
@@ -17,15 +17,25 @@ def process_result(
     returncode: int | None = 0,
     stdout: str = "",
     stderr: str = "",
+    stdout_bytes: bytes | None = None,
+    stderr_bytes: bytes | None = None,
     elapsed: float = 0.01,
     timed_out: bool = False,
     spawn_error: str | None = None,
 ) -> ProcessCaptureResult:
-    """Build a process result with normal-completion defaults."""
+    """Build a process result with normal-completion defaults.
+
+    *stdout_bytes*/*stderr_bytes* override *stdout*/*stderr* with raw bytes,
+    for scenarios that need invalid UTF-8 a JSON fixture cannot hold as text.
+    """
     return ProcessCaptureResult(
         returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
+        stdout=CapturedOutput(
+            data=stdout.encode() if stdout_bytes is None else stdout_bytes, truncated=timed_out
+        ),
+        stderr=CapturedOutput(
+            data=stderr.encode() if stderr_bytes is None else stderr_bytes, truncated=timed_out
+        ),
         elapsed=elapsed,
         timed_out=timed_out,
         spawn_error=spawn_error,
@@ -76,10 +86,14 @@ class FakeShell:
             assert cwd == (None if spec["cwd"] is None else Path(spec["cwd"]))
         if "idle_timeout" in spec:
             assert idle_timeout == spec["idle_timeout"]
+        stdout_hex = spec.get("stdout_hex")
+        stderr_hex = spec.get("stderr_hex")
         return process_result(
             returncode=spec.get("returncode", 0),
             stdout=spec.get("stdout", ""),
             stderr=spec.get("stderr", ""),
+            stdout_bytes=None if stdout_hex is None else bytes.fromhex(stdout_hex),
+            stderr_bytes=None if stderr_hex is None else bytes.fromhex(stderr_hex),
             timed_out=spec.get("timed_out", False),
             spawn_error=spec.get("spawn_error"),
         )

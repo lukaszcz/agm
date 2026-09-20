@@ -544,6 +544,18 @@ class TestDecodeParamValue:
         assert isinstance(value, RecordValue)
         assert value.fields == {"x": IntValue(1)}
 
+    def test_lone_surrogate_raw_value_is_rejected(self) -> None:
+        from agm.util.unicode import LoneSurrogateError
+
+        with pytest.raises(LoneSurrogateError):
+            decode_param_value(_decoder(TextType()), "a" + "\udc00" + "b")
+
+    def test_option_some_lone_surrogate_payload_is_rejected(self) -> None:
+        from agm.util.unicode import LoneSurrogateError
+
+        with pytest.raises(LoneSurrogateError):
+            decode_param_value(_decoder(_option_type(TextType())), OptionSome("a" + "\udc00"))
+
 
 def test_program_parameter_dataclass_carries_all_fields() -> None:
     span = _span(1)

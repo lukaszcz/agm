@@ -115,6 +115,9 @@ Field notes:
   `decimal.Decimal` (AgL has no binary floats).
 - `positional` — an entry program's own positional-only/standard-zone
   arguments, in order.
+- `process_environment` — a `text`-to-`text` mapping seeding the program's
+  `std/env::environ` snapshot, in place of the harness process's real
+  environment.
 - `agents` — response queues selected by the `Agent` value at each call site,
   consumed in call order. A list is a strict queue (a call past its end fails the
   test); the object form allows `repeat_last` for loop-exhaustion scenarios. The key
@@ -135,6 +138,9 @@ Field notes:
 - `shell` — ordered scripted shell calls. Each object names the rendered
   `command` and may set `stdout`, `stderr`, `returncode`, `timed_out`, or
   `spawn_error`; omitted fields describe a successful command with empty output.
+  `stdout_hex`/`stderr_hex` give the stream as hexadecimal bytes instead, for
+  output a JSON fixture cannot hold as text (e.g. invalid UTF-8); they take
+  precedence over `stdout`/`stderr` when both are set.
   The harness rejects an unexpected command and verifies the full script was used,
   so acceptance tests never execute a real shell command.
 - `http` — ordered scripted HTTP exchanges, in `tests/_http_helpers.py`'s `FakeHttp`

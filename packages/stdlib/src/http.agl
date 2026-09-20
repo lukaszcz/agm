@@ -122,8 +122,12 @@ exception HttpTlsError extends HttpError
 exception HttpRedirectError extends HttpError
   redirects: int
 # `Decode` is strict: the body is decoded using the charset the response
-# declares, else UTF-8, never guessed statistically. A body that does not
-# decode as that charset raises this, with `encoding` the charset tried.
+# declares, else UTF-8, never guessed statistically. Only a real text
+# encoding is accepted (UTF-7 and UTF-32 are excluded, along with any
+# Python-only codec); an accepted label decodes with Python's same-name
+# codec (`iso-8859-1` is plain Latin-1, not a Windows-1252 remapping). A
+# body that does not decode as that charset, or whose charset is not
+# accepted, raises this, with `encoding` the charset tried.
 exception HttpDecodeError extends HttpError
   status: int
   headers: Headers

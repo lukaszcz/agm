@@ -25,7 +25,7 @@ from agm.agent.session.cli_adapters import (
 )
 from agm.agent.spec import AGENT_SPECS, AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
-from agm.core.process import ProcessCaptureResult
+from agm.core.process import CapturedOutput, ProcessCaptureResult
 
 
 @dataclass(frozen=True)
@@ -53,8 +53,8 @@ class CaptureTransport:
             outcome = self.outcomes.pop(0)
             return ProcessCaptureResult(
                 returncode=outcome.returncode,
-                stdout=outcome.stdout,
-                stderr=outcome.stderr,
+                stdout=CapturedOutput(data=outcome.stdout.encode(), truncated=outcome.timed_out),
+                stderr=CapturedOutput(data=outcome.stderr.encode(), truncated=outcome.timed_out),
                 elapsed=0.1,
                 timed_out=outcome.timed_out,
                 spawn_error=outcome.spawn_error,
@@ -194,6 +194,31 @@ def test_claude_delivers_compact_literal_and_fork_promptlessly_through_runner(
         "",
     )
     assert isinstance(child, ClaudeCliSessionBackend)
+
+
+def test_claude_fork_session_id_combines_a_surrogate_escape_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A high+low escape pair in the fork's ``session_id`` is one scalar character."""
+    high_escape = "\\" + "ud83d"
+    low_escape = "\\" + "ude00"
+    transport = CaptureTransport(
+        [
+            CaptureOutcome("first"),
+            CaptureOutcome(f'{{"session_id": "id-{high_escape}{low_escape}"}}'),
+            CaptureOutcome("child answer"),
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = ClaudeCliSessionBackend()
+    _open(backend, AgentClaude("m", "t"))
+    backend.ask(SessionAskRequest("first"))
+
+    child = backend.fork()
+    assert child.ask(SessionAskRequest("child")).content == "child answer"
+
+    child_argv = transport.calls[2][0]
+    assert child_argv[child_argv.index("--resume") + 1] == "id-\U0001f600"
 
 
 def test_claude_forks_immediately_after_open_with_independent_child_continuation(
@@ -495,6 +520,31 @@ def test_codex_initial_ask_parses_jsonl_and_resume_returns_plaintext(
     ]
 
 
+def test_codex_reply_combines_a_surrogate_escape_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A high+low escape pair in an event's ``text`` field is one scalar character."""
+    high_escape = "\\" + "ud83d"
+    low_escape = "\\" + "ude00"
+    transport = CaptureTransport(
+        [
+            CaptureOutcome(
+                "\n".join(
+                    (
+                        '{"type":"thread.started","thread_id":"first"}',
+                        '{"type":"item.completed","item":'
+                        f'{{"type":"agent_message","text":"{high_escape}{low_escape}"}}}}',
+                        '{"type":"turn.completed"}',
+                    )
+                )
+            ),
+        ]
+    )
+    transport.install(monkeypatch)
+    backend = CodexCliSessionBackend()
+    _open(backend, AgentCodex("m", "t"))
+
+    assert backend.ask(SessionAskRequest("hello")).content == "\U0001f600"
+
+
 @pytest.mark.parametrize(
     "output",
     [
@@ -508,6 +558,8 @@ def test_codex_initial_ask_parses_jsonl_and_resume_returns_plaintext(
         '{"type":"thread.started","thread_id":"first"}\n{"type":"item.completed","item":[]}',
         '{"type":"thread.started","thread_id":"first"}\n{"type":"item.completed","item":{}}',
         '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}',
+        '{"type":"thread.started","thread_id":"first"}\n{"type":"item.completed","item":'
+        '{"type":"agent_message","text":"\\ud800"}}',
     ],
 )
 def test_codex_rejects_malformed_or_incomplete_jsonl(
@@ -681,9 +733,11 @@ def test_service_maps_cli_lifecycle_transport_failures_to_host_errors(
         ("compact", "not json"),
         ("compact", "[]"),
         ("compact", "{}"),
+        ("compact", '{"is_error": false, "note": "\\ud800"}'),
         ("fork", "not json"),
         ("fork", "[]"),
         ("fork", "{}"),
+        ("fork", '{"session_id": "\\ud800"}'),
     ],
 )
 def test_claude_lifecycle_protocol_errors_are_host_errors(

@@ -98,12 +98,16 @@ nothing by default
 
 ### `text`
 
-An immutable Unicode string. Text indexing (`s[i]`) returns the Unicode code
-point at an integer index; negative indexes count from the end, and an
-out-of-range index raises `IndexError`. Text cannot be changed through indexed
-assignment. Untyped `ask` results default to `text` ([Agent calls](agent-calls.md)).
-The standard library supplies the standard text methods; user modules may also
-declare text methods.
+An immutable sequence of Unicode scalar values: a surrogate code point
+(U+D800-U+DFFF) never appears in a `text` value. Every source of `text` from
+outside the program — literals, parsed values, decoded bytes, host input —
+rejects input that is not valid Unicode rather than admitting one silently.
+Text indexing (`s[i]`) returns the Unicode scalar value at an integer index;
+negative indexes count from the end, and an out-of-range index raises
+`IndexError`. Text cannot be changed through indexed assignment. Untyped `ask`
+results default to `text` ([Agent calls](agent-calls.md)). The standard
+library supplies the standard text methods; user modules may also declare
+text methods.
 
 ### Numbers: `int` and `decimal`
 

@@ -35,6 +35,7 @@ from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stder
 from agm.core.cleanup import preserve_primary_error
 from agm.core.env import clone_env
 from agm.util.interp import InterpolationError
+from agm.util.unicode import loads_json
 
 
 class SessionBackendConstructor(Protocol):
@@ -129,7 +130,9 @@ class _CliPromptBackend:
                     cause=failure.cause,
                     exit_code=failure.result.returncode,
                     stderr_tail=stderr_tail(
-                        failure.result.stderr or failure.result.spawn_error or ""
+                        failure.result.stderr.text_or_note("stderr")[0]
+                        or failure.result.spawn_error
+                        or ""
                     ),
                     elapsed=failure.result.elapsed,
                     call_info=AgentCallInfo(
@@ -138,9 +141,10 @@ class _CliPromptBackend:
                         elapsed=failure.result.elapsed,
                         exit_code=failure.result.returncode,
                     ),
+                    detail=failure.detail,
                 ) from failure
             return SessionAskResponse(
-                content=result.stdout,
+                content=result.stdout.text(),
                 metadata={"elapsed": result.elapsed},
                 call_info=AgentCallInfo(
                     argv=(prepared.argv or []).copy(),
@@ -519,7 +523,7 @@ def _parse_codex_jsonl(output: str) -> tuple[str, str]:
         if not line.strip():
             continue
         try:
-            event = cast(object, json.loads(line))
+            event = loads_json(line)
         except json.JSONDecodeError as exc:
             raise _CodexProtocolError("Codex returned malformed JSONL") from exc
         if not isinstance(event, dict):
@@ -598,7 +602,7 @@ class _CodexTurnFailedError(Exception):
 def _json_object(output: str, *, operation: SessionOperation) -> dict[str, object]:
     """Decode the one JSON object returned by a Claude lifecycle command."""
     try:
-        payload: object = json.loads(output)
+        payload: object = loads_json(output)
     except json.JSONDecodeError as exc:
         raise SessionHostError(
             f"Claude did not return JSON for {operation.value}", operation.value

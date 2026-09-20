@@ -203,23 +203,27 @@ def _drain_process_streams(
     interrupt_cleanup_cmd: list[str] | None,
     cwd: Path | None,
     env: dict[str, str] | None,
-) -> tuple[str, str, bool]:
-    """Drain stdout/stderr reader threads and return ``(stdout, stderr, timed_out)``.
+) -> tuple[bytes, bytes, bool]:
+    """Drain stdout/stderr reader threads and return ``(stdout, stderr, timed_out)`` as raw bytes.
+
+    Captured bytes are decoded once by the caller, never here. A callback stream still
+    gets a per-chunk incremental decoder (lenient, display-only) so it can stream text
+    as it arrives; it is created only when that stream has a callback.
 
     When *idle_timeout* fires the process is killed and ``timed_out=True`` is returned.
     The enclosing process lifetime cleans up exceptions and joins the readers.
     """
-    stream_data: dict[str, list[str]] = {"stdout": [], "stderr": []}
-    callbacks: dict[str, Callable[[str], None] | None] = {
-        "stdout": stdout_callback,
-        "stderr": stderr_callback,
-    }
+    stream_data: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
     timed_out = False
 
-    decoders = {
-        "stdout": codecs.getincrementaldecoder("utf-8")(errors="replace"),
-        "stderr": codecs.getincrementaldecoder("utf-8")(errors="replace"),
+    # A streaming callback is the only consumer of decoded text here, so only
+    # a stream that has one gets a decoder.
+    streamed = {
+        name: callback
+        for name, callback in (("stdout", stdout_callback), ("stderr", stderr_callback))
+        if callback is not None
     }
+    decoders = {name: codecs.getincrementaldecoder("utf-8")(errors="replace") for name in streamed}
     active_readers = len(readers)
     last_chunk_time = time.monotonic()
     while active_readers > 0:
@@ -247,14 +251,13 @@ def _drain_process_streams(
             continue
 
         last_chunk_time = time.monotonic()
-        text = decoders[stream_name].decode(chunk)
-        if not text:
-            continue
         if capture_output:
-            stream_data[stream_name].append(text)
-        callback = callbacks[stream_name]
+            stream_data[stream_name].extend(chunk)
+        callback = streamed.get(stream_name)
         if callback is not None:
-            callback(text)
+            text = decoders[stream_name].decode(chunk)
+            if text:
+                callback(text)
 
     if timed_out or idle_timeout is None:
         process.wait()
@@ -274,18 +277,10 @@ def _drain_process_streams(
 
     for stream_name, decoder in decoders.items():
         text = decoder.decode(b"", final=True)
-        if not text:
-            continue
-        if capture_output:
-            stream_data[stream_name].append(text)
-        callback = callbacks[stream_name]
-        if callback is not None:
-            callback(text)
+        if text:
+            streamed[stream_name](text)
 
-    stdout = "".join(stream_data["stdout"])
-    stderr = "".join(stream_data["stderr"])
-
-    return stdout, stderr, timed_out
+    return bytes(stream_data["stdout"]), bytes(stream_data["stderr"]), timed_out
 
 
 @contextlib.contextmanager
@@ -532,7 +527,7 @@ def run_subprocess(
     ):
         timed_out = False
         if readers:
-            stdout, stderr, timed_out = _drain_process_streams(
+            stdout_bytes, stderr_bytes, timed_out = _drain_process_streams(
                 process,
                 readers,
                 stream_queue,
@@ -545,7 +540,12 @@ def run_subprocess(
                 cwd=cwd,
                 env=env,
             )
-            completed = subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+            completed = subprocess.CompletedProcess(
+                cmd,
+                process.returncode,
+                _decode_lenient(stdout_bytes),
+                _decode_lenient(stderr_bytes),
+            )
         else:
             process.wait()
             completed = subprocess.CompletedProcess(cmd, process.returncode, None, None)
@@ -625,7 +625,53 @@ def run_capture(
             timeout_callback(message)
         raise SystemExit(124)
     rc = result.returncode if result.returncode is not None else 1
-    return rc, result.stdout, result.stderr
+    return rc, _decode_lenient(result.stdout.data), _decode_lenient(result.stderr.data)
+
+
+def _decode_lenient(data: bytes) -> str:
+    """Decode *data* as UTF-8, replacing invalid bytes with U+FFFD."""
+    return data.decode("utf-8", errors="replace")
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedOutput:
+    """One captured stream: raw bytes, decoded only when the text is needed."""
+
+    data: bytes
+    truncated: bool  # the process was killed (idle timeout); see text()
+
+    def text(self) -> str:
+        """Strict UTF-8; raises ``UnicodeDecodeError`` (``.start`` = byte offset).
+
+        A truncated stream drops an incomplete trailing UTF-8 sequence: an
+        idle-timeout kill can cut a multi-byte character in half, and that is
+        not invalid data, just data the process never finished writing. Bytes
+        that are actually invalid, anywhere in the stream, still raise.
+        """
+        if not self.truncated:
+            return self.data.decode("utf-8")
+        # A non-final incremental decode buffers a valid-but-incomplete trailing
+        # sequence instead of raising, and we simply drop it by discarding the
+        # decoder. Bytes that are invalid outright still raise immediately, with
+        # ``.start`` as their absolute offset in ``self.data``.
+        return codecs.getincrementaldecoder("utf-8")().decode(self.data, False)
+
+    def display(self) -> str:
+        """``backslashreplace`` rendering for traces and diagnostics only."""
+        return self.data.decode("utf-8", errors="backslashreplace")
+
+    def text_or_note(self, label: str) -> tuple[str, str | None]:
+        """Decode strictly, or return ``("", note)`` locating the first invalid byte.
+
+        The single rule every caller that must keep going applies to an
+        undecodable stream: the text is dropped rather than escaped -- an
+        escaped rendering would be text the process never wrote -- and *label*
+        names the stream in a note the caller folds into its own error.
+        """
+        try:
+            return self.text(), None
+        except UnicodeDecodeError as exc:
+            return "", f"{label} is not valid UTF-8 at byte {exc.start}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -644,8 +690,8 @@ class ProcessCaptureResult:
     """
 
     returncode: int | None
-    stdout: str
-    stderr: str
+    stdout: CapturedOutput
+    stderr: CapturedOutput
     elapsed: float
     timed_out: bool
     spawn_error: str | None
@@ -699,8 +745,8 @@ def _run_capture_result_impl(
             return (
                 ProcessCaptureResult(
                     returncode=None,
-                    stdout="",
-                    stderr="",
+                    stdout=CapturedOutput(data=b"", truncated=False),
+                    stderr=CapturedOutput(data=b"", truncated=False),
                     elapsed=elapsed,
                     timed_out=False,
                     spawn_error=str(exc),
@@ -719,8 +765,8 @@ def _run_capture_result_impl(
             return (
                 ProcessCaptureResult(
                     returncode=None,
-                    stdout="",
-                    stderr="",
+                    stdout=CapturedOutput(data=b"", truncated=False),
+                    stderr=CapturedOutput(data=b"", truncated=False),
                     elapsed=elapsed,
                     timed_out=False,
                     spawn_error=str(exc),
@@ -728,7 +774,7 @@ def _run_capture_result_impl(
                 exc,
             )
 
-        stdout, stderr, timed_out = _drain_process_streams(
+        stdout_bytes, stderr_bytes, timed_out = _drain_process_streams(
             process,
             readers,
             stream_queue,
@@ -746,8 +792,8 @@ def _run_capture_result_impl(
         return (
             ProcessCaptureResult(
                 returncode=process.returncode,
-                stdout=stdout,
-                stderr=stderr,
+                stdout=CapturedOutput(data=stdout_bytes, truncated=timed_out),
+                stderr=CapturedOutput(data=stderr_bytes, truncated=timed_out),
                 elapsed=elapsed,
                 timed_out=timed_out,
                 spawn_error=None,

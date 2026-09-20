@@ -79,6 +79,7 @@ class SessionAskError(Exception):
         stderr_tail: str,
         elapsed: float,
         call_info: AgentCallInfo | None,
+        detail: str | None = None,
     ) -> None:
         super().__init__(cause)
         self.cause = cause
@@ -86,6 +87,8 @@ class SessionAskError(Exception):
         self.stderr_tail = stderr_tail
         self.elapsed = elapsed
         self.call_info = call_info
+        # What the cause alone cannot say; see ``AgentCallHostError.detail``.
+        self.detail = detail
 
 
 @runtime_checkable
@@ -231,6 +234,7 @@ class AgentDispatcherSessionHost(SessionHost):
                 stderr_tail=error.stderr_tail,
                 elapsed=error.elapsed,
                 call_info=error.call_info,
+                detail=error.detail,
             ) from error
 
     def compact(self, _handle: str, _instructions: str = "") -> None:

@@ -4,7 +4,7 @@ The hand-written lexer handles layout (INDENT/DEDENT), string templates with `%{
 
 Single- and triple-quoted templates share hole recognition and token emission; raw tails reuse the expression-hole scanner. Environment holes scan names with the shared identifier rules and desugar to expression tokens. Triple-quoted dedenting measures indentation across literal/hole segments, assembles retained line slices, and maps only literal boundaries, preserving hole tokens' source positions without per-character position tables.
 
-The lexer's escape, number, identifier, and environment-hole scanning rules live in `agl/value_syntax/lexical.py`, a leaf below the lexer that also backs the value-syntax reader (`agl/value_syntax/reader.py`), so both scan AgL literals identically.
+The lexer's escape, number, identifier, and environment-hole scanning rules live in `agl/value_syntax/lexical.py`, a leaf below the lexer that also backs the value-syntax reader (`agl/value_syntax/reader.py`), so both scan AgL literals identically. A `\uXXXX` escape denotes a scalar value: an adjacent high and low pair combines into one character, as in JSON, and any other surrogate escape is a lexical error, as is a raw surrogate anywhere in the source.
 
 ## Keywords
 

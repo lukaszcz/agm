@@ -1,0 +1,22 @@
+import std/value
+
+record R
+  a: text
+
+program def main(mode: text) -> unit =
+  if mode == "pair" =>
+    let t = "\uD83D\uDE00"
+    print(t.size())
+    print(t)
+    print(t == "😀")
+
+  if mode == "value_pair" =>
+    let r = parse::[R]("R(a = \"\\uD83D\\uDE00\")")
+    print(r.a)
+
+  if mode == "lone_escape" =>
+    let result = try
+      let _ = parse::[R]("R(a = \"\\uD800\")")
+      "not caught"
+    catch ValueParseError => "caught"
+    print(result)

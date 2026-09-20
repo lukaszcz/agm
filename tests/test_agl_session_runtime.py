@@ -828,3 +828,36 @@ def test_default_session_transport_is_owned_by_each_agent_specification() -> Non
     ]
     for agent, expected in defaults:
         assert default_session_transport(agent) == expected
+
+
+def test_production_session_host_carries_the_stream_decode_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The shipped wiring -- a session host, not a bare dispatcher -- keeps the note
+    locating the first invalid byte, which the failure cause alone cannot say."""
+    from agm.agent.session.service import create_agl_session_host
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
+
+    def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout=CapturedOutput(data=b"ok \xff bad", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    host = create_agl_session_host(idle_timeout=None)
+    result = PipelineDriver(session_host=host).run(
+        "program def main() -> unit =\n"
+        '  let answer: text = ask("hello", agent = AgentCommand("runner"))\n'
+        "  print(answer)\n"
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "AgentCallError"
+    assert result.error.fields["cause"] == "protocol_failure"
+    assert "byte 3" in str(result.error.fields["message"])

@@ -1676,6 +1676,21 @@ class TestLenientParsing:
         with pytest.raises(ValueError, match="defs.*RefDecode"):
             codec.parse("{}", schema={}, decode=RefDecode("Node"))
 
+    def test_lone_surrogate_escape_rejected(self) -> None:
+        codec = self._codec()
+        result = _parse_typed(codec, '"\\ud800"', TextType(), strict_json=False)
+        assert result.ok is False
+
+    def test_surrogate_escape_pair_combines(self) -> None:
+        # Built from parts so no tool between here and the file can fold the
+        # adjacent escapes into the astral character they denote.
+        high_escape = "\\" + "ud83d"
+        low_escape = "\\" + "ude00"
+        codec = self._codec()
+        result = _parse_typed(codec, f'"{high_escape}{low_escape}"', TextType(), strict_json=False)
+        assert result.ok is True
+        assert result.value == TextValue("\U0001f600")
+
 
 class TestPublicJsonRecoveryAdapter:
     """The explicit JSON module shares the codec's recovery implementation."""
@@ -1737,6 +1752,21 @@ class TestStrictParsing:
         codec = self._codec()
         result = _parse_typed(codec, '```json\n{"k": 1}\n```', JsonType(), strict_json=True)
         assert result.ok is False
+
+    def test_lone_surrogate_escape_rejected(self) -> None:
+        codec = self._codec()
+        result = _parse_typed(codec, '"\\ud800"', TextType(), strict_json=True)
+        assert result.ok is False
+
+    def test_surrogate_escape_pair_combines(self) -> None:
+        # Built from parts so no tool between here and the file can fold the
+        # adjacent escapes into the astral character they denote.
+        high_escape = "\\" + "ud83d"
+        low_escape = "\\" + "ude00"
+        codec = self._codec()
+        result = _parse_typed(codec, f'"{high_escape}{low_escape}"', TextType(), strict_json=True)
+        assert result.ok is True
+        assert result.value == TextValue("\U0001f600")
 
 
 # ---------------------------------------------------------------------------

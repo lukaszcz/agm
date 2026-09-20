@@ -166,6 +166,31 @@ def test_std_env_uses_a_controlled_process_snapshot_without_mutating_os_environ(
     assert result.bindings["after"] == TextValue("changed")
 
 
+def test_undecodable_process_environment_value_is_a_pre_execution_diagnostic() -> None:
+    """A surrogate anywhere in the process-environment snapshot fails before the
+    program runs, naming the variable, never as a crash once the program reads it."""
+    result = _run(
+        "import std/env::*\n1",
+        process_environment={"LEGACY": "a" + "\udc00" + "b"},
+    )
+
+    assert not result.ok
+    assert result.error is None
+    assert "LEGACY" in result.diagnostics[0].message
+    assert r"\udc00" in result.diagnostics[0].message
+
+
+def test_undecodable_process_environment_name_is_a_pre_execution_diagnostic() -> None:
+    result = _run(
+        "import std/env::*\n1",
+        process_environment={"a" + "\udc00" + "b": "value"},
+    )
+
+    assert not result.ok
+    assert result.error is None
+    assert r"\udc00" in result.diagnostics[0].message
+
+
 def test_std_env_default_is_empty_when_no_process_snapshot_is_supplied() -> None:
     result = _run("import std/env::*\nlet env = environ\nenv")
 
@@ -210,3 +235,20 @@ def test_non_stdlib_library_builtin_var_is_rejected(tmp_path: Path) -> None:
 
     assert not result.ok
     assert result.diagnostics
+
+
+def test_repl_rejects_an_undecodable_environment_snapshot() -> None:
+    """The REPL fails the entry with the same diagnostic the pipeline gives, so a
+    surrogate in the environment never reaches an AgL read as a host crash."""
+    session = ReplSession(
+        stdlib_root=_STDLIB,
+        process_environment={"LEGACY": "a" + "\udc00" + "b"},
+    )
+
+    assert session.open() == ()
+    result = session.eval_entry('import std/env::*\ngetenv("LEGACY")')
+
+    assert not result.ok
+    assert result.error is None
+    assert "LEGACY" in result.diagnostics[0].message
+    assert r"\udc00" in result.diagnostics[0].message

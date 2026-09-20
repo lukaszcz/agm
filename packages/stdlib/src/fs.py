@@ -4,23 +4,24 @@ from __future__ import annotations
 
 import glob as glob_module
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import NoReturn, TypeVar
 
 from agl import AglException, array, nominals
 
 from agm.core import fs
+from agm.util.unicode import LoneSurrogateError, require_scalar_text, visible_text
 
 FsError = nominals.std.fs.FsError
 
 T = TypeVar("T")
 
 
-def _raise_fs_error(path: str, operation: str) -> NoReturn:
+def _raise_fs_error(path: str, operation: str, *, message: str | None = None) -> NoReturn:
     raise AglException(
         FsError(
-            message=fs.fs_error_message(operation, path),
+            message=message if message is not None else fs.fs_error_message(operation, path),
             path=path,
             operation=operation,
         )
@@ -34,6 +35,26 @@ def _run(path: str, operation: str, action: Callable[[], T]) -> T:
         return action()
     except (OSError, UnicodeDecodeError, ValueError):
         _raise_fs_error(path, operation)
+
+
+def _scalar_entries(path: str, operation: str, names: Iterable[str]) -> list[str]:
+    """Return *names* as a list, raising ``FsError`` naming the first undecodable entry.
+
+    Skipping an undecodable entry would silently drop it, so the whole call fails.
+    """
+    entries: list[str] = []
+    for name in names:
+        try:
+            require_scalar_text(name)
+        except LoneSurrogateError:
+            _raise_fs_error(
+                path,
+                operation,
+                message=f"{fs.fs_error_message(operation, path)} "
+                f"Entry '{visible_text(name)}' is not valid Unicode.",
+            )
+        entries.append(name)
+    return entries
 
 
 def read(path: str) -> str:
@@ -68,7 +89,12 @@ def is_dir(path: str) -> bool:
 
 def list(path: str) -> object:
     """Return immediate child paths of *path*."""
-    return _run(path, "list", lambda: array([str(child) for child in fs.iterdir(Path(path))]))
+
+    def do() -> object:
+        children = (str(child) for child in fs.iterdir(Path(path)))
+        return array(_scalar_entries(path, "list", children))
+
+    return _run(path, "list", do)
 
 
 def mkdir(path: str) -> None:
@@ -101,12 +127,17 @@ def move(source: str, destination: str) -> None:
 
 def glob(pattern: str) -> object:
     """Return paths matching a shell-style *pattern*."""
-    return _run(pattern, "glob", lambda: array(glob_module.glob(pattern, recursive=True)))
+    return _run(
+        pattern,
+        "glob",
+        lambda: array(_scalar_entries(pattern, "glob", glob_module.glob(pattern, recursive=True))),
+    )
 
 
 def temp_dir() -> str:
     """Return the host's temporary-file directory."""
-    return tempfile.gettempdir()
+    directory = tempfile.gettempdir()
+    return _run(visible_text(directory), "temp-dir", lambda: require_scalar_text(directory))
 
 
 __all__ = [

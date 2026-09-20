@@ -518,3 +518,22 @@ program = "review_tools/main::review"
 
         with pytest.raises(ManifestError):
             load_manifest(_write_manifest(tmp_path, manifest), commands_complete=False)
+
+
+class TestManifestRejectsLoneSurrogateEscapes:
+    """A manifest value must be valid Unicode; tomlkit's 8-digit ``\\U0000Dxxx``
+    escape can spell the same lone surrogate its 4-digit ``\\uDxxx`` form is
+    already rejected for, so both must fail manifest loading the same way."""
+
+    _MANIFEST = (
+        '[package]\nname = "review_tools"\nversion = "1.2.3"\n'
+        'description = "' + "\\U0000" + 'D800"\n'
+    )
+
+    def test_load_manifest_text_rejects_it(self) -> None:
+        with pytest.raises(ManifestError):
+            load_manifest_text(self._MANIFEST)
+
+    def test_load_manifest_rejects_it(self, tmp_path: Path) -> None:
+        with pytest.raises(ManifestError):
+            load_manifest(_write_manifest(tmp_path, self._MANIFEST))

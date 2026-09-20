@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -100,6 +102,38 @@ def test_process_exit_reaches_the_cli_process_and_finalizes_its_trace(
     assert records[0]["kind"] == "run_start"
     assert records[-1]["kind"] == "run_end"
     assert records[-1]["ok"] is (expected_code == 0)
+
+
+def test_process_cwd_raises_encoding_error_when_the_working_directory_is_not_valid_unicode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(os, "getcwd", lambda: "/tmp/h\udcffome")
+
+    result = PipelineDriver().run(
+        "import std/process\nprogram def main() -> unit =\n  let _ = process::cwd()\n",
+        roots=_roots(),
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "EncodingError"
+    assert result.error.fields["raw"] == "/tmp/h\\udcffome"
+
+
+def test_process_hostname_raises_encoding_error_when_the_hostname_is_not_valid_unicode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(socket, "gethostname", lambda: "h\udcffost")
+
+    result = PipelineDriver().run(
+        "import std/process\nprogram def main() -> unit =\n  let _ = process::hostname()\n",
+        roots=_roots(),
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "EncodingError"
+    assert result.error.fields["raw"] == "h\\udcffost"
 
 
 def test_process_metadata_matches_the_subprocess_identity(

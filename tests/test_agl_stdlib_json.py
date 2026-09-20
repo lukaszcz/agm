@@ -26,6 +26,8 @@ _OPTION_SOME = NominalId(9_400_005)
 
 
 class _JsonCompanion(Protocol):
+    def parse(self, raw: str) -> object: ...
+
     def get(self, value: object, key: str) -> object: ...
 
     def get_option(self, value: object, key: str) -> object: ...
@@ -74,3 +76,24 @@ def test_json_companion_get_handles_object_and_non_object_receivers() -> None:
         assert decode_boundary_value(companion.get_option(AglJson(raw), "missing")) == RecordValue(
             _OPTION_NONE, {}
         )
+
+
+def test_json_companion_parse_rejects_a_lone_surrogate_escape() -> None:
+    companion = _json_companion()
+    raw = '"\\ud800"'
+
+    with pytest.raises(AglException) as exc_info:
+        companion.parse(raw)
+    assert exc_info.value.value.nominal == _JSON_PARSE_ERROR
+    assert exc_info.value.value.fields["raw"] == TextValue(raw)
+
+
+def test_json_companion_parse_combines_a_surrogate_escape_pair() -> None:
+    # Built from parts so no tool between here and the file can fold the
+    # adjacent escapes into the astral character they denote.
+    high_escape = "\\" + "ud83d"
+    low_escape = "\\" + "ude00"
+    companion = _json_companion()
+
+    result = companion.parse(f'"{high_escape}{low_escape}"')
+    assert decode_boundary_value(result) == JsonValue("\U0001f600")

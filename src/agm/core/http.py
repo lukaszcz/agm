@@ -7,6 +7,7 @@ rule the standard library's HTTP companion relies on.
 
 from __future__ import annotations
 
+import codecs
 import http.cookiejar
 import re
 import time
@@ -39,6 +40,67 @@ _METHOD_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 # The same header validity rules ``requests.utils.check_header_validity`` applies.
 _HEADER_NAME = re.compile(r"^[^:\s][^:\r\n]*$")
 _HEADER_VALUE = re.compile(r"^\S[^\r\n]*$|^$")
+
+# Canonical Python codec names for every WHATWG Encoding Standard text encoding,
+# excluding its ``replacement``/``x-user-defined`` pseudo-encodings. A label the
+# standard lists gets Python's own same-named codec where it has one -- so
+# ``iso-8859-1``, ``iso-8859-9`` and ``iso-8859-11`` decode as themselves rather
+# than as the windows-125x the standard maps them to, and ``windows-31j`` and
+# ``cp949`` name the codecs Python resolves those labels to. UTF-7 and UTF-32
+# are excluded: the standard forbids both, and UTF-7 is stateful base64 that
+# Python decodes into lone surrogates. No codec in this set can produce a
+# surrogate, so a decoded body needs no scan for one.
+_TEXT_CHARSETS: frozenset[str] = frozenset(
+    {
+        "utf-8",
+        "utf-16",
+        "utf-16-le",
+        "utf-16-be",
+        "cp866",
+        "iso8859-2",
+        "iso8859-3",
+        "iso8859-4",
+        "iso8859-5",
+        "iso8859-6",
+        "iso8859-7",
+        "iso8859-8",
+        "iso8859-9",
+        "iso8859-11",
+        "iso8859-10",
+        "iso8859-13",
+        "iso8859-14",
+        "iso8859-15",
+        "iso8859-16",
+        "koi8-r",
+        "koi8-u",
+        "mac-roman",
+        "mac-cyrillic",
+        "cp874",
+        "tis-620",
+        "cp1250",
+        "cp1251",
+        "cp1252",
+        "cp1253",
+        "cp1254",
+        "cp1255",
+        "cp1256",
+        "cp1257",
+        "cp1258",
+        "gbk",
+        "gb2312",
+        "gb18030",
+        "big5",
+        "big5hkscs",
+        "euc_jp",
+        "iso2022_jp",
+        "shift_jis",
+        "cp932",
+        "euc_kr",
+        "cp949",
+        "iso8859-1",
+        "ascii",
+    }
+)
 
 
 class _NoNetrcAuth(requests.auth.AuthBase):
@@ -340,6 +402,8 @@ def _consume(
     data = response.content
     encoding = resolve_charset(response.headers.get("Content-Type"))
     try:
+        if codecs.lookup(encoding).name not in _TEXT_CHARSETS:
+            raise LookupError(encoding)
         text = data.decode(encoding)
     except (LookupError, UnicodeDecodeError) as exc:
         raise DecodeFailure(

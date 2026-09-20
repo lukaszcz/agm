@@ -1,6 +1,8 @@
 import std/path::path
 
 extern def exit(code: int = 0) -> unit
+# Raises `EncodingError` if the working directory is not valid Unicode.
 extern def cwd() -> path
 extern def pid() -> int
+# Raises `EncodingError` if the host name is not valid Unicode.
 extern def hostname() -> text

@@ -243,6 +243,22 @@ def test_resource_resolution_rejects_symlinks_that_escape_its_anchor(tmp_path: P
         resolve_resource(anchor, "linked/prompt.md")
 
 
+def test_resolve_resource_rejects_a_target_that_is_not_valid_unicode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A resolved resource path built from a non-UTF-8 module file location is
+    rejected here, before the anchor and existence checks build a message
+    from it."""
+    anchor = tmp_path / "anchor"
+    anchor.mkdir()
+    bad_target = anchor / ("n" + "\udcff" + "m")
+
+    monkeypatch.setattr(Path, "resolve", lambda self: bad_target)
+
+    with pytest.raises(ResourceError, match="not valid Unicode"):
+        resolve_resource(anchor, None)
+
+
 def test_ir_resource_requires_an_absolute_path() -> None:
     source_id = SourceId(0)
     location = Location(source_id, 0, 1, 1, 0)

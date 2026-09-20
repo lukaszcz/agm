@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "adjacent_surrogate_pair_escape_combines_into_one_character",
+      "params": {"mode": "pair"},
+      "expect": {"stdout": "1\n😀\ntrue\n"}
+    },
+    {
+      "name": "value_syntax_parse_combines_a_surrogate_pair_escape",
+      "params": {"mode": "value_pair"},
+      "expect": {"stdout": "😀\n"}
+    },
+    {
+      "name": "value_syntax_parse_rejects_a_lone_surrogate_escape",
+      "params": {"mode": "lone_escape"},
+      "expect": {"stdout": "caught\n"}
+    }
+  ]
+}

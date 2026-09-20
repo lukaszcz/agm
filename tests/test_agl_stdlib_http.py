@@ -542,6 +542,30 @@ program def main() -> unit =
     adapter.assert_complete()
 
 
+def test_decode_failure_rejects_a_charset_outside_the_text_encoding_allowlist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    outcomes = [
+        {
+            "status": 200,
+            "headers": {"Content-Type": "text/plain; charset=utf-7"},
+            # Valid UTF-7 for U+D800, which the allowlist now rejects up front.
+            "body_hex": "2b3241412d",
+        }
+    ]
+    source = """import std/http
+program def main() -> unit =
+  let _ = http::get("https://x/y")
+  ()
+"""
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source)
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "HttpDecodeError"
+    assert result.error.fields["encoding"] == "utf-7"
+    adapter.assert_complete()
+
+
 def test_session_is_created_once_per_run_and_closed_at_the_boundary(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.semantics.exceptions import AglRaise
-from agm.core.process import ProcessCaptureResult
+from agm.core.process import CapturedOutput, ProcessCaptureResult
 from tests._agl_helpers import agl_roots, let_root_capture
 from tests.agl.ir_harness import (
     completed_bindings,
@@ -33,8 +33,8 @@ def _ok(stdout: str, *, returncode: int = 0, stderr: str = "") -> ProcessCapture
     """Successful ProcessCaptureResult."""
     return ProcessCaptureResult(
         returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
+        stdout=CapturedOutput(data=stdout.encode(), truncated=False),
+        stderr=CapturedOutput(data=stderr.encode(), truncated=False),
         elapsed=0.01,
         timed_out=False,
         spawn_error=None,
@@ -50,8 +50,8 @@ def _timed_out(
     """Timed-out ProcessCaptureResult."""
     return ProcessCaptureResult(
         returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
+        stdout=CapturedOutput(data=stdout.encode(), truncated=True),
+        stderr=CapturedOutput(data=stderr.encode(), truncated=True),
         elapsed=0.5,
         timed_out=True,
         spawn_error=None,
@@ -62,8 +62,8 @@ def _spawn_failed(msg: str = "No such file or directory") -> ProcessCaptureResul
     """Spawn-failed ProcessCaptureResult."""
     return ProcessCaptureResult(
         returncode=None,
-        stdout="",
-        stderr="",
+        stdout=CapturedOutput(data=b"", truncated=False),
+        stderr=CapturedOutput(data=b"", truncated=False),
         elapsed=0.0,
         timed_out=False,
         spawn_error=msg,
@@ -74,8 +74,8 @@ def _fail(returncode: int, stdout: str = "", stderr: str = "") -> ProcessCapture
     """Failed (non-zero exit) ProcessCaptureResult."""
     return ProcessCaptureResult(
         returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
+        stdout=CapturedOutput(data=stdout.encode(), truncated=False),
+        stderr=CapturedOutput(data=stderr.encode(), truncated=False),
         elapsed=0.01,
         timed_out=False,
         spawn_error=None,
@@ -426,8 +426,8 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
 
     ok_result = ProcessCaptureResult(
         returncode=0,
-        stdout="invalid\n",
-        stderr="",
+        stdout=CapturedOutput(data=b"invalid\n", truncated=False),
+        stderr=CapturedOutput(data=b"", truncated=False),
         elapsed=0.01,
         timed_out=False,
         spawn_error=None,
@@ -591,3 +591,110 @@ def test_t14_invalid_exec_timeout_raises_type_error_before_shell_execution() -> 
 
     ir_exc = evaluate_ir_raises_with_shell(source, {})
     assert ir_exc.type_name == "TypeError"
+
+
+# ---------------------------------------------------------------------------
+# Strict decoding of invalid UTF-8 process output
+# ---------------------------------------------------------------------------
+
+
+def test_structured_exec_with_undecodable_stdout_raises_exec_error() -> None:
+    """A structured exec() with undecodable stdout raises ExecError naming the offset."""
+    source = 'let r: ExecResult = exec("cmd")\nr'
+    commands = {
+        "cmd": ProcessCaptureResult(
+            returncode=0,
+            stdout=CapturedOutput(data=b"ok \xff bad", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
+            elapsed=0.01,
+            timed_out=False,
+            spawn_error=None,
+        )
+    }
+    ir_exc = evaluate_ir_raises_with_shell(source, commands)
+    assert ir_exc.type_name == "ExecError"
+    assert "stdout is not valid UTF-8 at byte 3" in ir_exc.fields["message"]
+
+
+def test_nonzero_exit_with_undecodable_stderr_gives_empty_field_and_names_the_offset() -> None:
+    """A non-zero exit with undecodable stderr keeps the field empty but names the offset."""
+    source = 'let result: text = exec("cmd")\nresult'
+    commands = {
+        "cmd": ProcessCaptureResult(
+            returncode=1,
+            stdout=CapturedOutput(data=b"", truncated=False),
+            stderr=CapturedOutput(data=b"err \xff", truncated=False),
+            elapsed=0.01,
+            timed_out=False,
+            spawn_error=None,
+        )
+    }
+    ir_exc = evaluate_ir_raises_with_shell(source, commands)
+    assert ir_exc.type_name == "ExecError"
+    assert ir_exc.fields["stderr"] == ""
+    assert "stderr is not valid UTF-8 at byte 4" in ir_exc.fields["message"]
+
+
+def test_parsed_form_undecodable_stdout_raises_without_retrying() -> None:
+    """A decode failure on parsed-form output raises immediately, never via retry."""
+    runs: list[str] = []
+
+    def fake_shell(
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        del idle_timeout, cwd, env, isolate_process_group
+        runs.append(args[2])
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout=CapturedOutput(data=b"\xff", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
+            elapsed=0.01,
+            timed_out=False,
+            spawn_error=None,
+        )
+
+    source = 'let n: int = exec("cmd", on-parse-error = Retry(n = 2))\nn'
+    exc = uncaught_error(run_inline_ir_with_shell(source, fake_shell))
+    assert exc.type_name == "ExecError"
+    assert len(runs) == 1
+
+
+def test_timeout_drops_only_an_incomplete_trailing_utf8_sequence() -> None:
+    """An idle-timeout kill mid-character drops that incomplete tail, not the rest."""
+    source = 'let result: text = exec("sleep 999")\nresult'
+    commands = {
+        "sleep 999": ProcessCaptureResult(
+            returncode=-1,
+            stdout=CapturedOutput(data="café".encode()[:-1], truncated=True),
+            stderr=CapturedOutput(data=b"", truncated=True),
+            elapsed=0.5,
+            timed_out=True,
+            spawn_error=None,
+        )
+    }
+    ir_exc = evaluate_ir_raises_with_shell(source, commands)
+    assert ir_exc.type_name == "ExecError"
+    assert ir_exc.fields["stdout"] == "caf"
+
+
+def test_timeout_with_invalid_bytes_elsewhere_still_raises_a_decode_note() -> None:
+    """A truncated stream still raises on invalid bytes that are not just an incomplete tail."""
+    source = 'let result: text = exec("sleep 999")\nresult'
+    commands = {
+        "sleep 999": ProcessCaptureResult(
+            returncode=-1,
+            stdout=CapturedOutput(data=b"ok \xff", truncated=True),
+            stderr=CapturedOutput(data=b"", truncated=True),
+            elapsed=0.5,
+            timed_out=True,
+            spawn_error=None,
+        )
+    }
+    ir_exc = evaluate_ir_raises_with_shell(source, commands)
+    assert ir_exc.type_name == "ExecError"
+    assert "stdout is not valid UTF-8 at byte 3" in ir_exc.fields["message"]

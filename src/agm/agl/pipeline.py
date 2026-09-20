@@ -557,6 +557,25 @@ class PipelineDriver:
             arguments = ()
 
         # ----------------------------------------------------------------
+        # Process environment intake: the same pre-execution failure channel
+        # as the argument binding above. A name or value that is not valid
+        # Unicode never reaches ``std/env::environ`` or an interpolation
+        # hole; it is reported here, against the first offending variable.
+        # ----------------------------------------------------------------
+        from agm.agl.runtime.arguments import diagnose_process_environment
+
+        environment_diagnostic = diagnose_process_environment(process_environment)
+        if environment_diagnostic is not None:
+            return RunResult(
+                ok=False,
+                diagnostics=[environment_diagnostic],
+                error=None,
+                warnings=list(warnings),
+                bindings={},
+                trace_path=None,
+            )
+
+        # ----------------------------------------------------------------
         # [check_only] --dry-run stop: the full static pipeline, program-argument
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement — no program output, no evaluation

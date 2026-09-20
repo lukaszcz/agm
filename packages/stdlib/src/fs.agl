@@ -9,12 +9,15 @@ extern def read(path: path) -> text
 extern def write(path: path, content: text) -> unit
 extern def append(path: path, content: text) -> unit
 extern def exists(path: path) -> bool
+# Raises `FsError` if any entry's name is not valid Unicode.
 extern def list(path: path) -> array[path]
 extern def mkdir(path: path) -> unit
 extern def remove(path: path) -> unit
 extern def copy(source: path, destination: path) -> unit
 extern def move(source: path, destination: path) -> unit
+# Raises `FsError` if any match's name is not valid Unicode.
 extern def glob(pattern: text) -> array[path]
+# Raises `FsError` if the host's temporary-directory path is not valid Unicode.
 @extern-name("temp_dir")
 extern def temp-dir() -> path
 

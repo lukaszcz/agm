@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from io import StringIO
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import semver
-import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
 from agm.agl.keywords import is_plain_name
 from agm.agl.modules.ids import ModuleId
 from agm.command_catalog import invalid_command_path
-from agm.core.toml import TomlDict, load_toml_file, toml_dict
+from agm.core.toml import TomlDict, load_toml_file, parse_toml_doc, toml_dict
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
 _COMMAND_FIELDS = frozenset({"program", "description", "help"})
@@ -191,7 +189,7 @@ def load_manifest_text(content: str, *, commands_complete: bool = True) -> Packa
     """
 
     try:
-        raw = toml_dict(tomlkit.load(StringIO(content)).unwrap())
+        raw = toml_dict(parse_toml_doc(content).unwrap())
     except TOMLKitError as exc:
         raise ManifestError(f"cannot parse package manifest: {exc}") from exc
     return _parse_manifest(raw, commands_complete=commands_complete)

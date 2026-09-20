@@ -9,8 +9,8 @@ host parameter decoding:
 - :func:`parse_json_strict` — strict ``json.loads`` with ``parse_float=Decimal``
   and ``parse_constant`` that rejects non-standard constants
   (``NaN`` / ``Infinity`` / ``-Infinity``) even when nested inside containers.
-  Also rejects any trailing/leading non-whitespace.  Returns the raw parsed
-  Python object.
+  Also rejects any trailing/leading non-whitespace and a lone surrogate
+  escape.  Returns the raw parsed Python object.
 - :data:`AglValidator` / :func:`validator_for_schema` — the Draft 2020-12
   validator AgL uses everywhere (see :func:`_is_integer_or_integral_decimal`
   for its Decimal-aware ``integer`` check).
@@ -61,6 +61,7 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
+from agm.util.unicode import loads_json
 
 # ---------------------------------------------------------------------------
 # Internal exceptions
@@ -153,6 +154,8 @@ def parse_json_strict(text: str) -> object:
       ``{"x": Infinity}``).  They are not valid JSON.
     - Floating-point numbers are parsed as :class:`decimal.Decimal` (never
       ``float``), preserving exact precision.
+    - A ``\\uD8xx``/``\\uDCxx`` escape that does not combine with an adjacent
+      partner into one scalar character is rejected.
 
     :returns: The parsed Python object (``dict``, ``list``, ``str``, ``int``,
               :class:`decimal.Decimal`, ``bool``, or ``None``).
@@ -169,7 +172,7 @@ def parse_json_strict(text: str) -> object:
         #
         # parse_constant=_reject_constant ensures NaN/Infinity/-Infinity raise
         # StrictJsonParseError even when nested inside containers like [NaN].
-        obj: object = json.loads(stripped, parse_float=Decimal, parse_constant=_reject_constant)
+        obj: object = loads_json(stripped, parse_float=Decimal, parse_constant=_reject_constant)
     except StrictJsonParseError:
         raise
     except ValueError as exc:

@@ -15,6 +15,7 @@ from agm.core.toml import (
     dumps_toml,
     load_toml_doc,
     load_toml_file,
+    parse_toml_doc,
     set_toml_table_value,
     toml_dict,
 )
@@ -166,6 +167,60 @@ class TestDumpsToml:
         result = dumps_toml(doc)
         assert "[section]" in result
         assert "key" in result and "value" in result
+
+
+class TestParseTomlDoc:
+    def test_parses_clean_toml(self) -> None:
+        doc = parse_toml_doc(DEPS_SIMPLE)
+        assert doc.unwrap() == {"deps": {"mylib": "main"}}
+
+    def test_rejects_four_digit_lone_surrogate_escape(self) -> None:
+        """tomlkit already rejects this form; parse_toml_doc must not weaken it."""
+        with pytest.raises(ParseError):
+            parse_toml_doc('a = "' + "\\u" + 'D800"')
+
+    def test_rejects_eight_digit_lone_surrogate_escape(self) -> None:
+        """tomlkit accepts \\U0000D800 on its own; parse_toml_doc closes that gap."""
+        with pytest.raises(ParseError):
+            parse_toml_doc('a = "' + "\\U0000" + 'D800"')
+
+    def test_reports_the_same_position_tomlkit_reports_for_the_four_digit_form(self) -> None:
+        """The 8-digit escape's reported (line, col) matches tomlkit's own report
+        for the 4-digit escape at the same position, including on a later line."""
+        text = 'a = 1\nb = "' + "\\U0000" + 'D800"\n'
+        reference = 'a = 1\nb = "' + "\\u" + 'D800"\n'
+        with pytest.raises(ParseError) as raised:
+            parse_toml_doc(text)
+        with pytest.raises(ParseError) as reference_raised:
+            tomlkit.parse(reference)
+        assert (raised.value.line, raised.value.col) == (
+            reference_raised.value.line,
+            reference_raised.value.col,
+        )
+
+    def test_accepts_eight_digit_non_surrogate_escape(self) -> None:
+        doc = parse_toml_doc('a = "' + "\\U0001" + 'F600"')
+        assert doc.unwrap() == {"a": "\U0001f600"}
+
+    def test_eight_digit_escape_text_without_a_surrogate_result_is_not_flagged(self) -> None:
+        """A backslash-U-0000-D-digit substring that is not itself the escape
+        (e.g. inside an already-decoded value) must not trip the check."""
+        doc = parse_toml_doc('a = "\\\\U0000D800 (escaped backslash, literal text)"')
+        assert doc.unwrap() == {"a": "\\U0000D800 (escaped backslash, literal text)"}
+
+
+class TestLoadTomlFileAndDocRejectEightDigitSurrogateEscape:
+    def test_load_toml_file_rejects_it(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_text('a = "' + "\\U0000" + 'D800"', encoding="utf-8")
+        with pytest.raises(ParseError):
+            load_toml_file(toml_file)
+
+    def test_load_toml_doc_rejects_it(self, tmp_path: Path) -> None:
+        toml_file = tmp_path / "config.toml"
+        toml_file.write_text('a = "' + "\\U0000" + 'D800"', encoding="utf-8")
+        with pytest.raises(ParseError):
+            load_toml_doc(toml_file)
 
 
 class TestHigherLevelConfigLoaderErrors:

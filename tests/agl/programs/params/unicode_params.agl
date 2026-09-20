@@ -1,0 +1,5 @@
+# A program argument and the process environment both reject text that is
+# not valid Unicode, before the program runs.
+
+program def main(name: text) -> unit =
+  print name

@@ -11,6 +11,8 @@ record ExecResult
   stderr: text
   timed-out: bool
 
+# `stdout`/`stderr` is "" for a stream that was captured but is not valid
+# UTF-8; the message names the stream and the offending byte offset.
 builtin
 exception ExecError extends Exception
   command: text

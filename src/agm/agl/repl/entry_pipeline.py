@@ -691,7 +691,7 @@ class EntryPipeline:
                 else Diagnostic(message=str(exc), line=1)
             )
             return self._ctx._fail([diagnostic], warnings)
-        from agm.agl.runtime.arguments import bind_param_values
+        from agm.agl.runtime.arguments import bind_param_values, diagnose_process_environment
 
         pending_raw_param_values = {
             key: value
@@ -705,6 +705,13 @@ class EntryPipeline:
         if param_diagnostics:
             self._ctx._link_image.restore_state(link_snapshot)
             return self._ctx._fail(list(param_diagnostics), warnings)
+        # The session's environment snapshot is a host input like the seeds
+        # above, and fails the entry the same way rather than surfacing at
+        # whichever ``std/env`` read or interpolation hole first encodes it.
+        environment_diagnostic = diagnose_process_environment(self._ctx._process_environment)
+        if environment_diagnostic is not None:
+            self._ctx._link_image.restore_state(link_snapshot)
+            return self._ctx._fail([environment_diagnostic], warnings)
         decoded_param_seeds_by_module: dict[ModuleId, dict[StaticBindingKey, Value]] = {}
         for key, seed in decoded_param_seeds.items():
             decoded_param_seeds_by_module.setdefault(key[0], {})[key] = seed

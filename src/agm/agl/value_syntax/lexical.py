@@ -60,14 +60,55 @@ def is_ascii_digit(ch: str) -> bool:
     return "0" <= ch <= "9"
 
 
+def _read_hex4(source: str, offset: int, pos: int) -> tuple[int, int]:
+    """Read the 4 hex digits of a ``\\uXXXX`` escape at *pos*; return (value, end).
+
+    *offset* is the escape's backslash, used only to anchor the raised span.
+    """
+    digits = ""
+    for _ in range(4):
+        if pos >= len(source):
+            raise ValueSyntaxError("Incomplete \\uXXXX escape", offset, pos)
+        digit = source[pos]
+        pos += 1
+        if digit not in _HEX_DIGITS:
+            raise ValueSyntaxError(f"Invalid hex digit in \\uXXXX escape: {digit!r}", offset, pos)
+        digits += digit
+    return int(digits, 16), pos
+
+
+def _try_low_surrogate(source: str, pos: int) -> tuple[int, int] | None:
+    """Return (value, end) if a low-surrogate ``\\uXXXX`` escape starts at *pos*.
+
+    Returns None for anything else (no ``\\u``, malformed digits, or a code
+    point outside DC00-DFFF), without raising: the caller decides what that
+    means for the escape it is completing.
+    """
+    if not source.startswith("\\u", pos):
+        return None
+    digits = source[pos + 2 : pos + 6]
+    if len(digits) != 4 or any(digit not in _HEX_DIGITS for digit in digits):
+        return None
+    value = int(digits, 16)
+    if not 0xDC00 <= value <= 0xDFFF:
+        return None
+    return value, pos + 6
+
+
 def decode_escape(source: str, offset: int) -> tuple[str, int]:
     """Decode the backslash escape at *offset* in *source*.
 
     *offset* indexes the backslash. Returns (decoded text, offset just past the
     escape): the ``\\${`` template escape (decodes to ``"${"``), the escape
-    table, or ``\\uXXXX``. Raises :class:`ValueSyntaxError` for end-of-input
-    after the backslash, an incomplete or invalid ``\\uXXXX``, or an unknown
-    escape.
+    table, or ``\\uXXXX``. ``\\uXXXX`` denotes a Unicode scalar value; an
+    astral character is written as an adjacent UTF-16 surrogate pair of two
+    ``\\uXXXX`` escapes, as in JSON, and the pair decodes to one character
+    with the offset landing just past both escapes.
+
+    Raises :class:`ValueSyntaxError` for end-of-input after the backslash, an
+    incomplete or invalid ``\\uXXXX``, an unknown escape, or a surrogate
+    escape that is not part of such a pair (a high escape not immediately
+    followed by a low one, or a low escape on its own).
     """
     if source.startswith("${", offset + 1):
         return "${", offset + 3
@@ -79,18 +120,21 @@ def decode_escape(source: str, offset: int) -> tuple[str, int]:
     if ch in ESCAPE_DECODE:
         return ESCAPE_DECODE[ch], pos
     if ch == "u":
-        digits = ""
-        for _ in range(4):
-            if pos >= len(source):
-                raise ValueSyntaxError("Incomplete \\uXXXX escape", offset, pos)
-            digit = source[pos]
-            pos += 1
-            if digit not in _HEX_DIGITS:
+        hi, pos = _read_hex4(source, offset, pos)
+        if 0xDC00 <= hi <= 0xDFFF:
+            raise ValueSyntaxError(f"Lone low surrogate escape: \\u{hi:04x}", offset, pos)
+        if 0xD800 <= hi <= 0xDBFF:
+            pair = _try_low_surrogate(source, pos)
+            if pair is None:
                 raise ValueSyntaxError(
-                    f"Invalid hex digit in \\uXXXX escape: {digit!r}", offset, pos
+                    f"High surrogate escape \\u{hi:04x} must be followed by a low "
+                    "surrogate \\uXXXX escape",
+                    offset,
+                    pos,
                 )
-            digits += digit
-        return chr(int(digits, 16)), pos
+            lo, pos = pair
+            return chr(0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00)), pos
+        return chr(hi), pos
     raise ValueSyntaxError(f"Unknown escape sequence: \\{ch}", offset, pos)
 
 

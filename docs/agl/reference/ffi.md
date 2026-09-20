@@ -185,6 +185,12 @@ AgL boundary value and is rejected. Construct a new AgL container with
 including `None` and scalars, with `agl.json(value)`; this keeps JSON `null`
 and JSON `3` distinct from `unit` and `int`.
 
+Every AgL `text` value is a sequence of Unicode scalar values: a companion
+must return a `str` with no lone surrogate. A companion reading an OS name or
+decoding bytes checks it (for example with `agm.util.unicode`) or decodes
+strictly; this is not checked at the boundary, so a companion that returns an
+invalid `str` produces text that fails wherever the program first encodes it.
+
 A `json` payload crosses without being copied, so the companion carries two
 obligations: the payload must be JSON-shaped — dicts keyed by `str`, lists,
 `str`, `int`, `decimal.Decimal`, `bool`, `None` — and a payload it passed or

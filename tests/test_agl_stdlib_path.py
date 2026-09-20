@@ -10,17 +10,20 @@ from typing import Protocol, cast
 import pytest
 
 from agm.agl.ir.ids import NominalId
+from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.modules.ids import ModuleId
-from agm.agl.runtime.boundary import decode_boundary_value
+from agm.agl.runtime.boundary import AglException, decode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.semantics.values import ArrayValue, RecordValue, TextValue
 from tests._agl_helpers import option_nominal_descriptors
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _PATH_MODULE = ModuleId(("std", "path"))
+_ERRORS_MODULE = ModuleId(("std", "errors"))
 _OPTION = NominalId(9_800_001)
 _OPTION_NONE = NominalId(9_800_002)
 _OPTION_SOME = NominalId(9_800_003)
+_ENCODING_ERROR = NominalId(9_800_004)
 
 
 class _PathCompanion(Protocol):
@@ -62,6 +65,14 @@ def _path_companion() -> _PathCompanion:
     registry.set_nominals(
         {
             **option_nominal_descriptors(_OPTION, _OPTION_NONE, _OPTION_SOME),
+            _ENCODING_ERROR: NominalDescriptor(
+                nominal=_ENCODING_ERROR,
+                module_id=_ERRORS_MODULE,
+                scope_path=(),
+                declared_name="EncodingError",
+                kind=NominalKind.EXCEPTION,
+                fields=("message", "raw"),
+            ),
         },
     )
     module: ModuleType = registry.load_companion(_PATH_MODULE, _STDLIB_ROOT / "src" / "path.py")
@@ -169,3 +180,47 @@ def test_common_prefix_returns_none_when_no_single_prefix_exists() -> None:
     # No paths at all, and absolute mixed with relative, have no common prefix.
     assert decode_boundary_value(companion.common_prefix([])) == none
     assert decode_boundary_value(companion.common_prefix([os.sep + "one", "one"])) == none
+
+
+def test_absolute_raises_encoding_error_when_the_working_directory_is_not_valid_unicode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    companion = _path_companion()
+    monkeypatch.setattr(os, "getcwd", lambda: "/tmp/h\udcffome")
+
+    with pytest.raises(AglException) as exc_info:
+        companion.absolute("x")
+    assert exc_info.value.value.nominal == _ENCODING_ERROR
+    assert exc_info.value.value.fields["raw"] == TextValue("/tmp/h\\udcffome/x")
+
+
+def test_relative_raises_encoding_error_when_the_result_is_not_valid_unicode() -> None:
+    companion = _path_companion()
+
+    with pytest.raises(AglException) as exc_info:
+        companion.relative("/a\udcffb/c", "/x")
+    assert exc_info.value.value.nominal == _ENCODING_ERROR
+
+
+def test_expand_user_raises_encoding_error_when_home_is_not_valid_unicode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    companion = _path_companion()
+    monkeypatch.setenv("HOME", "/tmp/h\udcffome")
+
+    with pytest.raises(AglException) as exc_info:
+        companion.expand_user("~")
+    assert exc_info.value.value.nominal == _ENCODING_ERROR
+    assert exc_info.value.value.fields["raw"] == TextValue("/tmp/h\\udcffome")
+
+
+def test_home_raises_encoding_error_when_the_users_home_directory_is_not_valid_unicode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    companion = _path_companion()
+    monkeypatch.setenv("HOME", "/tmp/h\udcffome")
+
+    with pytest.raises(AglException) as exc_info:
+        companion.home()
+    assert exc_info.value.value.nominal == _ENCODING_ERROR
+    assert exc_info.value.value.fields["raw"] == TextValue("/tmp/h\\udcffome")

@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 from agm.agl.syntax.nodes import Call, StringLit
 from agm.agl.syntax.spans import SourceSpan
 from agm.core.path import is_portable_relative_path
+from agm.util.unicode import surrogate_index, visible_text
 
 
 class ResourceError(ValueError):
@@ -44,6 +45,9 @@ def resolve_resource(anchor: Path | None, relative_path: str | None) -> Path:
         )
     root = anchor.resolve()
     target = root if relative_path is None else (root / PurePosixPath(relative_path)).resolve()
+    target_text = str(target)
+    if surrogate_index(target_text) is not None:
+        raise ResourceError(f"resource target is not valid Unicode: {visible_text(target_text)}")
     if not target.is_relative_to(root):
         raise ResourceError(f"resource target escapes its anchor directory: {relative_path!r}")
     if not target.exists():

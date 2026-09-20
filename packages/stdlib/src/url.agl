@@ -21,11 +21,9 @@ exception UrlParseError extends Exception
 
 # Requires `scheme://` authority syntax; the host may be empty only for
 # `file`. Rejects userinfo (`user@host`, which `Url` has no field for),
-# control characters and spaces, an invalid host or port, a malformed
-# percent-encoding anywhere in the URL, and a `path`/`fragment` holding a
-# lone surrogate (which cannot be canonicalized to percent-encoded form).
-# Query is ordered pairs so repeated keys and their order survive a round
-# trip.
+# control characters and spaces, an invalid host or port, or a malformed
+# percent-encoding anywhere in the URL. Query is ordered pairs so repeated
+# keys and their order survive a round trip.
 extern def parse(value: url) -> Url
 def try-parse(value: url) -> Result[Url, UrlParseError] =
   try Ok(parse(value)) catch UrlParseError as e => Err(e)
@@ -42,9 +40,7 @@ def parse?(value: url) -> Option[Url] =
 # applies (a non-lowercase or otherwise invalid `scheme`, an empty `host`
 # outside the `file` scheme, an invalid `host`, or a `port` outside
 # 0-65535, raises `UrlParseError` with `raw` set to that field) since a
-# hand-built record skips the checks parsing would have applied. Also raises
-# `UrlParseError` if `path`, `fragment`, or a `query` entry holds a lone
-# surrogate, which cannot be percent-encoded.
+# hand-built record skips the checks parsing would have applied.
 extern def Url::render(self) -> url
 
 # RFC 3986 reference resolution (section 5.2), for any scheme. `base` must
@@ -56,21 +52,16 @@ extern def Url::render(self) -> url
 extern def join(base: url, reference: text) -> url
 
 # Percent-encodes every character but `A-Za-z0-9-._~`; space becomes `%20`.
-# Raises `UrlParseError` if `value` holds a lone surrogate, which cannot be
-# percent-encoded.
 extern def encode(value: text) -> text
-# Percent-decodes `value`; raises `UrlParseError` on a malformed `%` escape,
-# invalid UTF-8 after decoding, or `value` holding a lone surrogate.
+# Percent-decodes `value`; raises `UrlParseError` on a malformed `%` escape
+# or invalid UTF-8 after decoding.
 extern def decode(value: text) -> text
 
-# Form-encodes ordered pairs into a query string: space becomes `+`. Raises
-# `UrlParseError` if a key or value holds a lone surrogate, which cannot be
-# percent-encoded.
+# Form-encodes ordered pairs into a query string: space becomes `+`.
 @extern-name("encode_query")
 extern def encode-query(fields: array[Pair[text, text]]) -> text
 # Parses a query string into ordered pairs: `+` and `%20` both decode to a
 # space, a blank value is kept, and a bare key (`?flag`) yields `("flag", "")`.
-# Raises `UrlParseError` on a malformed `%` escape, invalid UTF-8, or a lone
-# surrogate.
+# Raises `UrlParseError` on a malformed `%` escape or invalid UTF-8.
 @extern-name("parse_query")
 extern def parse-query(value: text) -> array[Pair[text, text]]

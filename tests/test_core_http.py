@@ -843,3 +843,113 @@ def test_perform_emits_no_insecure_warning_when_verify_tls_is_true() -> None:
 )
 def test_resolve_charset(content_type: str | None, expected: str) -> None:
     assert http.resolve_charset(content_type) == expected
+
+
+@pytest.mark.parametrize(
+    ("charset", "body_hex"),
+    [
+        # "+2AA-": valid UTF-7 for U+D800. Forbidden by the Encoding Standard,
+        # and Python would otherwise decode it straight into a lone surrogate.
+        ("utf-7", "2b3241412d"),
+        # UTF-32LE "a": forbidden by the Encoding Standard.
+        ("utf-32", "61000000"),
+        # A Python-only codec, never a wire charset.
+        ("unicode_escape", "61"),
+        # Historically escaped as an uncaught ``UnicodeError``; now rejected up front.
+        ("undefined", "61"),
+    ],
+)
+def test_perform_rejects_a_charset_outside_the_text_encoding_allowlist(
+    charset: str, body_hex: str
+) -> None:
+    session, adapter = fake_session(
+        [
+            {
+                "status": 200,
+                "headers": {"Content-Type": f"text/plain; charset={charset}"},
+                "body_hex": body_hex,
+            }
+        ]
+    )
+
+    with pytest.raises(http.DecodeFailure) as excinfo:
+        http.perform(
+            session,
+            http.RequestSpec(method="GET", url="https://example.org/x", timeout_seconds=5.0),
+        )
+
+    assert excinfo.value.encoding == charset
+    adapter.assert_complete()
+
+
+@pytest.mark.parametrize(
+    ("charset", "body_hex", "expected"),
+    [
+        ("iso-8859-1", "63e9", "cé"),
+        ("shift_jis", "82a0", "あ"),
+        ("utf-16", "fffe4100", "A"),
+        # Encoding Standard labels whose Python codec is not the windows-125x
+        # the standard maps them to, nor the label's own spelling.
+        ("iso-8859-9", "e7", "ç"),
+        ("latin5", "fe", "ş"),
+        ("iso-8859-11", "a1", "ก"),
+        ("tis-620", "a1", "ก"),
+        ("windows-31j", "82a0", "あ"),
+        ("cp949", "b0a1", "가"),
+        ("uhc", "b0a1", "가"),
+    ],
+)
+def test_perform_decodes_every_allowlisted_charset_sampled(
+    charset: str, body_hex: str, expected: str
+) -> None:
+    session, adapter = fake_session(
+        [
+            {
+                "status": 200,
+                "headers": {"Content-Type": f"text/plain; charset={charset}"},
+                "body_hex": body_hex,
+            }
+        ]
+    )
+
+    result = http.perform(
+        session, http.RequestSpec(method="GET", url="https://example.org/x", timeout_seconds=5.0)
+    )
+
+    assert result.text == expected
+    assert result.encoding == charset
+    adapter.assert_complete()
+
+
+def test_iso_8859_1_decodes_high_bytes_as_python_latin1_not_windows_1252() -> None:
+    """Byte 0x80 is undefined in windows-1252's C1 remapping but is U+0080 in
+    plain Latin-1: the allowlisted label decodes with Python's same-name codec,
+    never the Encoding Standard's windows-1252 remapping."""
+    session, adapter = fake_session(
+        [
+            {
+                "status": 200,
+                "headers": {"Content-Type": "text/plain; charset=iso-8859-1"},
+                "body_hex": "80",
+            }
+        ]
+    )
+
+    result = http.perform(
+        session, http.RequestSpec(method="GET", url="https://example.org/x", timeout_seconds=5.0)
+    )
+
+    assert result.text == "\u0080"
+
+
+def test_no_allowlisted_charset_can_decode_to_a_surrogate() -> None:
+    """A cheap sample, not an exhaustive sweep: every single byte, plus a spread
+    of two-byte sequences, decoded leniently under every allowlisted codec.
+    """
+    samples = [bytes([b]) for b in range(256)]
+    lead_bytes = (0x00, 0x41, 0x80, 0xA0, 0xC0, 0xE0, 0xFF)
+    samples += [bytes((a, b)) for a in lead_bytes for b in range(256)]
+    for name in http._TEXT_CHARSETS:
+        for sample in samples:
+            decoded = sample.decode(name, errors="ignore")
+            assert not any(0xD800 <= ord(ch) <= 0xDFFF for ch in decoded), (name, sample)

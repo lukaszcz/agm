@@ -1,0 +1,30 @@
+# Undecodable exec output: strict UTF-8 decoding per form, the ""-field
+# rule for an undecodable stream, and no on-parse-error retry for a decode
+# failure (invalid bytes are not a content mismatch, unlike a parse failure).
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        try
+          let res: ExecResult = exec "cat output"
+          print res.stdout
+        catch ExecError as e =>
+          print "caught structured"
+    | 2 =>
+        try
+          let data: dict[text, int] = exec("cat output", on-parse-error = Retry(n = 1))
+          print data
+        catch ExecError as e =>
+          print "caught parsed"
+    | 3 =>
+        exec "cat output"
+        print "unit ok"
+    | 4 =>
+        try
+          let out: text = exec "cat output"
+          print out
+        catch ExecError as e =>
+          print "exit %{e.exit-code} stderr [%{e.stderr}]"
+    | _ =>
+        let out: text = exec "cat output"
+        print out

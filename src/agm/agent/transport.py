@@ -45,6 +45,7 @@ class AgentTransportError(Exception):
         stderr_tail: str,
         elapsed: float,
         call_info: AgentCallInfo,
+        detail: str | None = None,
     ) -> None:
         super().__init__(cause)
         self.cause = cause
@@ -52,3 +53,6 @@ class AgentTransportError(Exception):
         self.stderr_tail = stderr_tail
         self.elapsed = elapsed
         self.call_info = call_info
+        # Where a stream stopped being valid UTF-8, which the cause alone
+        # cannot locate. Carried to whichever host error model reports it.
+        self.detail = detail

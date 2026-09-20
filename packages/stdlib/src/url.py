@@ -25,9 +25,6 @@ _HEX_PAIR_RE = re.compile(r"[0-9A-Fa-f]{2}")
 _REG_NAME_RE = re.compile(r"(?:[A-Za-z0-9\-._~!$&'()*+,;=]|%[0-9A-Fa-f]{2})+\Z")
 # RFC 6874 ZoneID: 1*( unreserved / pct-encoded ), after its "%25" introducer.
 _ZONE_ID_RE = re.compile(r"(?:[A-Za-z0-9\-._~]|%[0-9A-Fa-f]{2})+\Z")
-# A lone (unpaired) UTF-16 surrogate code point: legal in an AgL `text` value
-# but not a valid Unicode scalar value, so it cannot be encoded to UTF-8.
-_LONE_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
 _UNRESERVED = string.ascii_letters + string.digits + "-._~"
 _SUB_DELIMS = "!$&'()*+,;="
@@ -47,21 +44,6 @@ def _parse_error(raw: str, reason: str) -> NoReturn:
 
 def _pairs(values: object) -> list[tuple[str, str]]:
     return [(pair.first, pair.second) for pair in values]
-
-
-def _urlencode_or_raise(pairs: list[tuple[str, str]]) -> str:
-    """Form-encode *pairs*, converting an unencodable lone surrogate into ``UrlParseError``.
-
-    Shared by ``render`` and ``encode_query``: a key or value holding a lone
-    surrogate has no UTF-8 bytes to encode as a ``%XX``/``+`` escape (see
-    :func:`_quote_component`), so ``urlencode``'s ``UnicodeEncodeError``
-    becomes ``UrlParseError(raw=<pairs concatenated>)``.
-    """
-    try:
-        return urlencode(pairs)
-    except UnicodeEncodeError:
-        raw = "".join(key + val for key, val in pairs)
-        _parse_error(raw, "contains a lone surrogate, which cannot be percent-encoded")
 
 
 def _validate_host(host: str) -> None:
@@ -143,24 +125,18 @@ def parse(value: str) -> object:
         scheme=parts.scheme,
         host=host,
         port=option_some(port) if port is not None else option_none(),
-        path=_quote_component(parts.path, _PATH_SAFE, value),
+        path=_quote_component(parts.path, _PATH_SAFE),
         query=array([Pair(first=key, second=val) for key, val in query_pairs]),
         fragment=(
-            option_some(_quote_component(parts.fragment, _FRAGMENT_SAFE, value))
+            option_some(_quote_component(parts.fragment, _FRAGMENT_SAFE))
             if "#" in value
             else option_none()
         ),
     )
 
 
-def _quote_component(value: str, safe: str, raw: str) -> str:
-    """Percent-encode *value* outside *safe*, keeping any existing ``%XX`` escape intact.
-
-    *raw* is the text reported as ``UrlParseError.raw`` when *value* holds a
-    lone surrogate, which cannot be encoded to UTF-8 bytes for a ``%XX``
-    escape: AgL `text` permits one (via a `\\uXXXX` literal escape or a
-    decoded JSON string), so this can happen with otherwise well-formed input.
-    """
+def _quote_component(value: str, safe: str) -> str:
+    """Percent-encode *value* outside *safe*, keeping any existing ``%XX`` escape intact."""
     pieces: list[str] = []
     index, length = 0, len(value)
     while index < length:
@@ -172,10 +148,7 @@ def _quote_component(value: str, safe: str, raw: str) -> str:
             pieces.append(char)
             index += 1
         else:
-            try:
-                pieces.append(quote(char, safe=""))
-            except UnicodeEncodeError:
-                _parse_error(raw, "contains a lone surrogate, which cannot be percent-encoded")
+            pieces.append(quote(char, safe=""))
             index += 1
     return "".join(pieces)
 
@@ -206,13 +179,13 @@ def render(self: object) -> str:
     path = self.path
     if path and not path.startswith("/"):
         path = "/" + path
-    rendered = f"{self.scheme}://{host}{_quote_component(path, _PATH_SAFE, self.path)}"
-    query = _urlencode_or_raise(_pairs(self.query))
+    rendered = f"{self.scheme}://{host}{_quote_component(path, _PATH_SAFE)}"
+    query = urlencode(_pairs(self.query))
     if query:
         rendered += f"?{query}"
     if isinstance(self.fragment, Option.Some):
         fragment = self.fragment.value
-        rendered += f"#{_quote_component(fragment, _FRAGMENT_SAFE, fragment)}"
+        rendered += f"#{_quote_component(fragment, _FRAGMENT_SAFE)}"
     return rendered
 
 
@@ -347,30 +320,15 @@ def join(base: str, reference: str) -> str:
 
 
 def encode(value: str) -> str:
-    """Percent-encode every reserved character in *value*.
-
-    Raises ``UrlParseError(raw=value)`` when *value* holds a lone surrogate
-    (possible via a ``\\uXXXX`` literal escape or a decoded JSON string),
-    which cannot be encoded to UTF-8 bytes for a ``%XX`` escape.
-    """
-    try:
-        return quote(value, safe="")
-    except UnicodeEncodeError:
-        _parse_error(value, "contains a lone surrogate, which cannot be percent-encoded")
+    """Percent-encode every reserved character in *value*."""
+    return quote(value, safe="")
 
 
 def decode(value: str) -> str:
     """Percent-decode *value*.
 
-    Raises ``UrlParseError(raw=value)`` on a malformed escape, invalid UTF-8,
-    or *value* holding a lone surrogate outside any escape. A well-formed
-    ``%XX`` escape can never decode to a lone surrogate (it is not valid
-    UTF-8), so only an already-embedded surrogate character triggers this;
-    left alone it would pass through unchanged, which this module's other
-    functions never do for a lone surrogate.
+    Raises ``UrlParseError(raw=value)`` on a malformed escape or invalid UTF-8.
     """
-    if _LONE_SURROGATE_RE.search(value):
-        _parse_error(value, "contains a lone surrogate")
     try:
         _require_valid_percent_encoding(value)
     except ValueError:
@@ -379,22 +337,16 @@ def decode(value: str) -> str:
 
 
 def encode_query(fields: object) -> str:
-    """Render ordered *fields* as a form-encoded query string.
-
-    Raises ``UrlParseError(raw=<fields concatenated>)`` when a key or value
-    holds a lone surrogate; see :func:`_urlencode_or_raise`.
-    """
-    return _urlencode_or_raise(_pairs(fields))
+    """Render ordered *fields* as a form-encoded query string."""
+    return urlencode(_pairs(fields))
 
 
 def parse_query(value: str) -> object:
     """Parse a query string into ordered pairs.
 
-    Raises ``UrlParseError(raw=value)`` on a malformed escape, invalid UTF-8,
-    or *value* holding a lone surrogate outside any escape; see :func:`decode`.
+    Raises ``UrlParseError(raw=value)`` on a malformed escape or invalid UTF-8;
+    see :func:`decode`.
     """
-    if _LONE_SURROGATE_RE.search(value):
-        _parse_error(value, "contains a lone surrogate")
     try:
         pairs = _decode_pairs(value)
     except ValueError:

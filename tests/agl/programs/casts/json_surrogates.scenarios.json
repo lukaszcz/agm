@@ -1,0 +1,110 @@
+{
+  "scenarios": [
+    {
+      "name": "lone_escape_raises_json_parse_error",
+      "params": {
+        "mode": 1,
+        "raw": "\"\\ud800\""
+      },
+      "expect": {
+        "stdout": "parse error\nResult::Err(error = JsonParseError(message = \"JSON parse error: lone surrogate escape: line 1 column 2 (char 1)\", raw = \"\\\"\\\\ud800\\\"\"))\n"
+      }
+    },
+    {
+      "name": "surrogate_pair_combines_into_one_character",
+      "params": {
+        "mode": 1,
+        "raw": "\"\\ud83d\\ude00\""
+      },
+      "expect": {
+        "stdout": "\"😀\"\nResult::Ok(value = \"😀\")\n"
+      }
+    },
+    {
+      "name": "lone_escape_in_cast_raises_cast_error",
+      "params": {
+        "mode": 2,
+        "raw": "{\"text\": \"\\ud800\"}"
+      },
+      "expect": {
+        "stdout": "cast error: text -> Msg\n"
+      }
+    },
+    {
+      "name": "surrogate_pair_in_cast_combines",
+      "params": {
+        "mode": 2,
+        "raw": "{\"text\": \"\\ud83d\\ude00\"}"
+      },
+      "expect": {
+        "stdout": "😀\n"
+      }
+    },
+    {
+      "name": "retry_exhausted_raises_agent_parse_error",
+      "params": {
+        "mode": 3
+      },
+      "agents": {
+        "builder": [
+          "{\"text\": \"\\ud800\"}",
+          "{\"text\": \"\\ud800\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "agent parse error after 2 attempts\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    },
+    {
+      "name": "retry_recovers_after_lone_escape",
+      "params": {
+        "mode": 3
+      },
+      "agents": {
+        "builder": [
+          "{\"text\": \"\\ud800\"}",
+          "{\"text\": \"\\ud83d\\ude00\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "😀\n",
+        "calls": {
+          "builder": 2
+        }
+      }
+    },
+    {
+      "name": "unparseable_exec_output_raises_exec_error",
+      "params": {
+        "mode": 4
+      },
+      "shell": [
+        {
+          "command": "produce-message",
+          "stdout": "{\"text\": \"\\ud800\"}"
+        }
+      ],
+      "expect": {
+        "stdout": "exec error: exit 0\n"
+      }
+    },
+    {
+      "name": "exec_output_with_surrogate_pair_combines",
+      "params": {
+        "mode": 4
+      },
+      "shell": [
+        {
+          "command": "produce-message",
+          "stdout": "{\"text\": \"\\ud83d\\ude00\"}"
+        }
+      ],
+      "expect": {
+        "stdout": "😀\n"
+      }
+    }
+  ]
+}

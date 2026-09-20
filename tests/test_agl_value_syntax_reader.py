@@ -71,6 +71,12 @@ def test_reads_text_escapes() -> None:
     assert node.value == "café \n ${x}"
 
 
+def test_reads_surrogate_pair_escape_combines_into_one_character() -> None:
+    node = read_value('"\\uD83D\\uDE00"')
+    assert isinstance(node, TextNode)
+    assert node.value == "\U0001f600"
+
+
 def test_array_with_trailing_comma_and_nesting() -> None:
     node = read_value("[1, [2, 3], 4,]")
     assert isinstance(node, ArrayNode)
@@ -248,6 +254,11 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         '"\\',
         '"\\u12',
         r'"\uXXXX"',
+        '"\\uD800x"',
+        '"\\uDC00x"',
+        '"\\uDC00\\uD800"',
+        '"\\uD800%{1}"',
+        '"\\uD800"',
         "@",
         "{1: 2}",
         "{a 1}",
@@ -280,6 +291,11 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         "backslash-at-eof-in-text",
         "incomplete-unicode-in-text",
         "invalid-hex-digit-in-text",
+        "lone-high-surrogate-escape",
+        "lone-low-surrogate-escape",
+        "reversed-surrogate-pair-escape",
+        "high-surrogate-before-hole",
+        "high-surrogate-at-end-of-literal",
         "unexpected-character",
         "dict-key-not-a-name",
         "dict-missing-colon",
@@ -302,6 +318,14 @@ def test_unknown_escape_error_offsets_span_the_escape() -> None:
         read_value(r'"\q"')
     error = exc_info.value
     assert (error.start, error.end) == (1, 3)
+
+
+def test_lone_surrogate_escape_error_offsets_span_only_that_escape() -> None:
+    source = '"\\uD800x"'
+    with pytest.raises(ValueSyntaxError) as exc_info:
+        read_value(source)
+    error = exc_info.value
+    assert source[error.start : error.end] == "\\uD800"
 
 
 def test_trailing_garbage_error_offsets_point_past_the_value() -> None:

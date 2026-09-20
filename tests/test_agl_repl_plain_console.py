@@ -393,3 +393,14 @@ class TestPlainNoStyling:
             'record R\n  x: int\nlet r = R(x = 1)\n:help\nlet bad = \n"unicode: héllo"\n'
         )
         assert "\x1b" not in output
+
+
+def test_undecodable_stdin_bytes_are_a_lexer_diagnostic_not_a_host_crash() -> None:
+    """A byte the input encoding rejects reaches the lexer as a character it
+    rejects with a span, the same way it does from a file or ``-c``."""
+    stdin = io.TextIOWrapper(io.BytesIO(b'print("a\xffb")\n'), encoding="utf-8")
+    stdout = io.StringIO()
+
+    run_plain_console(ReplSession(), stdin=stdin, stdout=stdout)
+
+    assert "Invalid character in source" in stdout.getvalue()

@@ -202,6 +202,18 @@ def test_an_extern_error_names_the_extern_as_declared(tmp_path: Path) -> None:
     assert exc.fields["function"] == "fail-it!"
 
 
+def test_extern_error_message_escapes_a_surrogate_from_a_companion_exception(
+    tmp_path: Path,
+) -> None:
+    """A companion exception's text can carry OS data (a bad path, a foreign
+    name) that is not valid Unicode; the ``ExternError`` message must still
+    print rather than crash the host at the next encoding sink."""
+    source = "extern def fail() -> int\nlet _ = fail()\n()\n"
+    companion = "import os\ndef fail(): raise ValueError(os.fsdecode(b'\\xff'))\n"
+    exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
+    assert exc.fields["message"] == "\\udcff"
+
+
 def test_extern_defaults_work_for_direct_calls(tmp_path: Path) -> None:
     source = "extern def increment(value: int = 2) -> int\nlet direct = increment()\n()\n"
     result, _ = evaluate_ir_with_externs(

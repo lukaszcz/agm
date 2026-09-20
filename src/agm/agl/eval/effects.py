@@ -79,6 +79,7 @@ from agm.agl.semantics.values import (
     Value,
 )
 from agm.core.parse import parse_timeout
+from agm.core.process import CapturedOutput
 
 # ---------------------------------------------------------------------------
 # Narrow context Protocol
@@ -110,6 +111,19 @@ class EffectCtx(Protocol):
     def _parse_host_output(
         self, raw: str, contract_id: ContractId, *, effective_strict: bool
     ) -> ParseResult: ...
+
+
+def _decode_exec_streams(stdout: CapturedOutput, stderr: CapturedOutput) -> tuple[str, str, str]:
+    """Decode both streams for an ``ExecError``'s fields; return them and a note.
+
+    An undecodable stream's field is ``""`` -- an escaped rendering would be
+    text the process never printed -- and the note, empty when both decode,
+    names each failing stream and its first invalid byte.
+    """
+    stdout_text, stdout_note = stdout.text_or_note("stdout")
+    stderr_text, stderr_note = stderr.text_or_note("stderr")
+    notes = [note for note in (stdout_note, stderr_note) if note is not None]
+    return stdout_text.rstrip("\n"), stderr_text.rstrip("\n"), "; ".join(notes)
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +238,7 @@ class EffectHandlers:
                     "message": TextValue(
                         f"Agent {agent_label!r} failed: {error.cause}"
                         + (f" (exit {error.exit_code})" if error.exit_code is not None else "")
+                        + (f": {error.detail}" if error.detail else "")
                     ),
                     "agent": agent,
                     "cause": TextValue(error.cause),
@@ -511,6 +526,7 @@ class EffectHandlers:
                     stderr_tail=error.stderr_tail,
                     elapsed=error.elapsed,
                     call_info=error.call_info,
+                    detail=error.detail,
                 ),
             )
         except SessionHostError as error:
@@ -833,6 +849,32 @@ class EffectHandlers:
             stderr=detail,
         )
 
+    def _decode_exec_stdout(self, cmd: str, exit_code: int, stdout: CapturedOutput) -> str:
+        """Decode stdout strictly; raise ``ExecError`` immediately on failure.
+
+        Never retried by ``on-parse-error``: invalid bytes are not a content
+        mismatch, and re-running a side-effecting command repeats the same
+        deterministic failure.
+        """
+        text, note = stdout.text_or_note("stdout")
+        if note is not None:
+            self._raise_exec_error(note, command=cmd, exit_code=exit_code, stdout="", stderr="")
+        return text.rstrip("\n")
+
+    def _raise_nonzero_exit_error(
+        self, cmd: str, returncode: int, stdout: CapturedOutput, stderr: CapturedOutput
+    ) -> NoReturn:
+        """Raise ``ExecError`` for a non-zero exit, decoding both streams for its fields."""
+        stdout_text, stderr_text, note = _decode_exec_streams(stdout, stderr)
+        message = f"Shell command exited with code {returncode}: {cmd!r}"
+        self._raise_exec_error(
+            message if not note else f"{message}; {note}",
+            command=cmd,
+            exit_code=returncode,
+            stdout=stdout_text,
+            stderr=stderr_text,
+        )
+
     def _run_exec_shell(
         self,
         cmd: str,
@@ -840,12 +882,14 @@ class EffectHandlers:
         cwd: Path | None,
         timeout: float | None,
         location: Location,
-    ) -> tuple[str, str, int | None]:
+    ) -> tuple[CapturedOutput, CapturedOutput, int | None]:
         """Run *cmd* via the shell; raise ``ExecError`` on spawn failure or timeout.
 
         Returns ``(stdout, stderr, returncode)`` — a non-zero exit code is NOT
         raised here so that the structured-exec path can treat it as data.
-        Mirrors legacy ``_run_shell_capture`` (without the trace event).
+        Streams are returned undecoded: each caller decodes exactly the streams
+        it turns into an AgL value. Mirrors legacy ``_run_shell_capture``
+        (without the trace event).
         """
         from agm.core.process import run_capture_result
 
@@ -862,7 +906,7 @@ class EffectHandlers:
                 command=cmd,
                 exit_code=-1,
                 duration=result.elapsed,
-                stdout=result.stdout,
+                stdout=result.stdout.display(),
                 stderr=spawn_error,
                 timed_out=False,
                 span=location,
@@ -880,25 +924,27 @@ class EffectHandlers:
                 command=cmd,
                 exit_code=exit_code,
                 duration=result.elapsed,
-                stdout=result.stdout,
-                stderr=result.stderr,
+                stdout=result.stdout.display(),
+                stderr=result.stderr.display(),
                 timed_out=True,
                 span=location,
             )
+            stdout_text, stderr_text, note = _decode_exec_streams(result.stdout, result.stderr)
+            message = f"Shell command timed out (idle timeout exceeded): {cmd!r}"
             self._raise_exec_error(
-                f"Shell command timed out (idle timeout exceeded): {cmd!r}",
+                message if not note else f"{message}; {note}",
                 command=cmd,
                 exit_code=exit_code,
-                stdout=result.stdout.rstrip("\n"),
-                stderr=result.stderr.rstrip("\n"),
+                stdout=stdout_text,
+                stderr=stderr_text,
                 timed_out=True,
             )
         self._ctx._trace.exec_command(
             command=cmd,
             exit_code=result.returncode if result.returncode is not None else 0,
             duration=result.elapsed,
-            stdout=result.stdout,
-            stderr=result.stderr,
+            stdout=result.stdout.display(),
+            stderr=result.stderr.display(),
             timed_out=False,
             span=location,
         )
@@ -956,33 +1002,37 @@ class EffectHandlers:
         # 3. Structured exec: return ExecResult regardless of exit code
         if contract.structured_exec:
             actual_exit_code = returncode if returncode is not None else 0
+            stdout_text, stderr_text, note = _decode_exec_streams(stdout, stderr)
+            if note:
+                self._raise_exec_error(
+                    note,
+                    command=cmd,
+                    exit_code=actual_exit_code,
+                    stdout=stdout_text,
+                    stderr=stderr_text,
+                )
             exec_result = nominals.resolve("ExecResult")
             return RecordValue(
                 nominal=exec_result.nominal,
                 fields={
-                    "stdout": TextValue(stdout.rstrip("\n")),
+                    "stdout": TextValue(stdout_text),
                     "exit-code": IntValue(actual_exit_code),
-                    "stderr": TextValue(stderr.rstrip("\n")),
+                    "stderr": TextValue(stderr_text),
                     "timed-out": BoolValue(False),
                 },
             )
 
         # 4. Non-zero exit raises ExecError (for text/typed execs)
         if returncode is not None and returncode != 0:
-            self._raise_exec_error(
-                f"Shell command exited with code {returncode}: {cmd!r}",
-                command=cmd,
-                exit_code=returncode,
-                stdout=stdout.rstrip("\n"),
-                stderr=stderr.rstrip("\n"),
-            )
+            self._raise_nonzero_exit_error(cmd, returncode, stdout, stderr)
 
         # 5. Unit contract: successful output is deliberately discarded.
         if contract.is_unit:
             return UNIT_VALUE
 
         # 6. Text codec: return stdout directly
-        captured = stdout.rstrip("\n")
+        exit_code = returncode if returncode is not None else 0
+        captured = self._decode_exec_stdout(cmd, exit_code, stdout)
         if contract.codec_name == "text":
             return TextValue(captured)
 
@@ -999,21 +1049,8 @@ class EffectHandlers:
                 # Re-run shell on retry (raises on spawn error / timeout / non-zero exit)
                 stdout2, stderr2, rc2 = self._run_exec_shell(cmd, env, cwd, timeout, _node.location)
                 if rc2 is not None and rc2 != 0:
-                    raise AglRaise(
-                        _make_exc_value(
-                            "ExecError",
-                            f"Shell command exited with code {rc2}: {cmd!r}",
-                            nominals=nominals,
-                            fields={
-                                "command": TextValue(cmd),
-                                "exit-code": IntValue(rc2),
-                                "stdout": TextValue(stdout2.rstrip("\n")),
-                                "stderr": TextValue(stderr2.rstrip("\n")),
-                                "timed-out": BoolValue(False),
-                            },
-                        )
-                    )
-                last_raw = stdout2.rstrip("\n")
+                    self._raise_nonzero_exit_error(cmd, rc2, stdout2, stderr2)
+                last_raw = self._decode_exec_stdout(cmd, rc2 if rc2 is not None else 0, stdout2)
 
             result = self._ctx._parse_host_output(
                 last_raw or "", contract_id, effective_strict=effective_strict

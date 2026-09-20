@@ -1,0 +1,80 @@
+{
+  "scenarios": [
+    {
+      "name": "structured_form_undecodable_stdout_raises_caught",
+      "params": {
+        "mode": 1
+      },
+      "shell": [
+        {
+          "command": "cat output",
+          "stdout_hex": "e9"
+        }
+      ],
+      "expect": {
+        "stdout": "caught structured\n"
+      }
+    },
+    {
+      "name": "parsed_form_undecodable_stdout_is_not_retried",
+      "params": {
+        "mode": 2
+      },
+      "shell": [
+        {
+          "command": "cat output",
+          "stdout_hex": "e9"
+        }
+      ],
+      "expect": {
+        "stdout": "caught parsed\n"
+      }
+    },
+    {
+      "name": "unit_form_undecodable_stdout_succeeds",
+      "params": {
+        "mode": 3
+      },
+      "shell": [
+        {
+          "command": "cat output",
+          "stdout_hex": "e9"
+        }
+      ],
+      "expect": {
+        "stdout": "unit ok\n"
+      }
+    },
+    {
+      "name": "nonzero_exit_undecodable_stderr_keeps_exit_code",
+      "params": {
+        "mode": 4
+      },
+      "shell": [
+        {
+          "command": "cat output",
+          "returncode": 1,
+          "stderr_hex": "e9"
+        }
+      ],
+      "expect": {
+        "stdout": "exit 1 stderr []\n"
+      }
+    },
+    {
+      "name": "valid_utf8_multibyte_boundary_decodes",
+      "params": {
+        "mode": 5
+      },
+      "shell": [
+        {
+          "command": "cat output",
+          "stdout_hex": "68c3a96c6c6f0a"
+        }
+      ],
+      "expect": {
+        "stdout": "héllo\n"
+      }
+    }
+  ]
+}

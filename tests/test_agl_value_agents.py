@@ -133,6 +133,38 @@ def test_agent_transport_failures_become_typed_errors(
     assert run.error.fields["agent"] == {"$case": "AgentCommand", "command": "runner"}
 
 
+def test_undecodable_agent_stdout_becomes_a_protocol_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An otherwise-successful run whose stdout is not valid UTF-8 is a protocol failure."""
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
+
+    def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout=CapturedOutput(data=b"ok \xff bad", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+
+    run = run_inline_command(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer',
+    )
+
+    assert not run.ok
+    assert run.error is not None
+    assert run.error.type_name == "AgentCallError"
+    assert run.error.fields["cause"] == "protocol_failure"
+    # The message locates the first invalid byte, which the cause alone cannot.
+    assert "byte 3" in str(run.error.fields["message"])
+
+
 def test_caught_agent_call_error_keeps_static_agent_encoding_when_raised_later(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
@@ -343,7 +375,7 @@ def test_composed_prompt_orders_format_instructions_before_retry_feedback(
 def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
     """The full value-driven dispatch path sends codex's prompt as stdin, not ``@<path>``."""
     from agm.agl.runtime.request import AgentRequest
-    from agm.core.process import ProcessCaptureResult
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
 
     captured: dict[str, object] = {}
 
@@ -352,8 +384,8 @@ def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.Monk
         captured["stdin_text"] = kwargs.get("stdin_text")
         return ProcessCaptureResult(
             returncode=0,
-            stdout="ok",
-            stderr="",
+            stdout=CapturedOutput(data=b"ok", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
@@ -378,7 +410,7 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Runner mutations neither reach the host nor leak into a later agent call."""
-    from agm.core.process import ProcessCaptureResult
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
 
     variable = "AGL_AGENT_HOST_ENV"
     monkeypatch.setenv(variable, "original")
@@ -393,8 +425,8 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
         env[variable] = "changed-by-runner"
         return ProcessCaptureResult(
             returncode=0,
-            stdout="ok",
-            stderr="",
+            stdout=CapturedOutput(data=b"ok", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,

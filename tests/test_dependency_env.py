@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from tomlkit.exceptions import ParseError
 
 import agm.core.fs as fs_mod
 import agm.project.dependency_env as dep_env_module
@@ -241,6 +242,14 @@ class TestSetTomlDepsValue:
         result1 = _set_toml_deps_value(content, "mylib", "main")
         result2 = _set_toml_deps_value(result1, "mylib", "main")
         assert result1 == result2
+
+    def test_rejects_existing_content_with_a_lone_surrogate_escape(self) -> None:
+        """Existing content is parsed through parse_toml_doc, which closes the
+        8-digit \\U0000Dxxx spelling of a lone surrogate that plain tomlkit.parse
+        accepts."""
+        content = '[deps]\nexisting = "' + "\\U0000" + 'D800"\n'
+        with pytest.raises(ParseError):
+            _set_toml_deps_value(content, "mylib", "main")
 
 
 # ---------------------------------------------------------------------------
@@ -1528,6 +1537,11 @@ class TestSetTomlProjectName:
         lines = result.splitlines()
         assert any("alpha" in ln for ln in lines)
         assert any('name = "beta"' in ln for ln in lines)
+
+    def test_rejects_existing_content_with_a_lone_surrogate_escape(self) -> None:
+        content = '[project]\nname = "' + "\\U0000" + 'D800"\n'
+        with pytest.raises(ParseError):
+            dep_env_module._set_toml_project_name(content, "new")
 
 
 class TestEnsureProjectNameInConfig:

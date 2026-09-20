@@ -5,7 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path, PurePath
 
-from agl import array, option_none, option_some
+from agl import array, nominals, option_none, option_some
+
+from agm.agl.runtime.host_text import scalar_host_text
+
+EncodingError = nominals.std.errors.EncodingError
 
 
 def join(parts: list[str]) -> str:
@@ -46,7 +50,7 @@ def with_name(path: str, name: str) -> str:
 
 def absolute(path: str) -> str:
     """Return an absolute lexical form of *path*."""
-    return os.path.abspath(path)
+    return scalar_host_text(os.path.abspath(path), EncodingError)
 
 
 def normalize(path: str) -> str:
@@ -56,7 +60,7 @@ def normalize(path: str) -> str:
 
 def relative(path: str, base: str) -> str:
     """Return the lexical path from *base* to *path*."""
-    return os.path.relpath(path, base)
+    return scalar_host_text(os.path.relpath(path, base), EncodingError)
 
 
 def is_absolute(path: str) -> bool:
@@ -76,7 +80,7 @@ def parts(path: str) -> object:
 
 def expand_user(path: str) -> str:
     """Expand a leading ``~`` in *path* to the current user's home directory."""
-    return os.path.expanduser(path)
+    return scalar_host_text(os.path.expanduser(path), EncodingError)
 
 
 def common_prefix(paths: list[str]) -> object:
@@ -92,7 +96,7 @@ def common_prefix(paths: list[str]) -> object:
 
 def home() -> str:
     """Return the current user's home directory."""
-    return str(Path.home())
+    return scalar_host_text(str(Path.home()), EncodingError)
 
 
 __all__ = [

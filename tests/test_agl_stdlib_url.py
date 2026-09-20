@@ -623,88 +623,9 @@ def test_encode_and_decode_round_trip_reserved_characters() -> None:
     assert companion.decode(encoded) == raw
 
 
-def test_encode_raises_a_url_parse_error_on_a_lone_surrogate() -> None:
-    """A lone surrogate is a real, if unusual, ``text`` value in AgL: a
-    ``\\uXXXX`` literal escape or a decoded JSON string can produce one with
-    no validation upstream. Percent-encoding it needs its UTF-8 bytes, which
-    Python's ``quote`` cannot produce, so the resulting ``UnicodeEncodeError``
-    is turned into the same exception malformed input already raises."""
-    companion, _ = _url_companion()
-    value = "a\ud800b"
-
-    with pytest.raises(AglException) as exc_info:
-        companion.encode(value)
-    assert exc_info.value.value.nominal == _URL_PARSE_ERROR
-    assert exc_info.value.value.fields["raw"] == TextValue(value)
-
-
-def test_parse_raises_a_url_parse_error_when_the_path_holds_a_lone_surrogate() -> None:
-    companion, _ = _url_companion()
-    value = "https://example.org/a\ud800b"
-
-    assert _parse_error_raw(companion, value) == value
-
-
-def test_render_raises_a_url_parse_error_when_the_path_holds_a_lone_surrogate() -> None:
-    companion, registry = _url_companion()
-    record = _url_record(
-        registry,
-        scheme="https",
-        host="x",
-        port=_none_value(registry),
-        path="/a\ud800b",
-        query=[],
-        fragment=_none_value(registry),
-    )
-
-    with pytest.raises(AglException) as exc_info:
-        companion.render(record)
-    assert exc_info.value.value.nominal == _URL_PARSE_ERROR
-
-
-def test_render_raises_a_url_parse_error_when_a_query_value_holds_a_lone_surrogate() -> None:
-    companion, registry = _url_companion()
-    record = _url_record(
-        registry,
-        scheme="https",
-        host="x",
-        port=_none_value(registry),
-        path="/",
-        query=[_pair_value(registry, "a", "b\ud800c")],
-        fragment=_none_value(registry),
-    )
-
-    with pytest.raises(AglException) as exc_info:
-        companion.render(record)
-    assert exc_info.value.value.nominal == _URL_PARSE_ERROR
-
-
-def test_encode_query_raises_a_url_parse_error_on_a_lone_surrogate() -> None:
-    companion, registry = _url_companion()
-    fields = [_pair_value(registry, "a", "b\ud800c")]
-
-    with pytest.raises(AglException) as exc_info:
-        companion.encode_query(fields)
-    assert exc_info.value.value.nominal == _URL_PARSE_ERROR
-
-
 @pytest.mark.parametrize("value", ("%zz", "%", "a%F", "%c3%28"))
 def test_decode_raises_on_a_malformed_escape_or_invalid_utf8(value: str) -> None:
     companion, _ = _url_companion()
-
-    with pytest.raises(AglException) as exc_info:
-        companion.decode(value)
-    assert exc_info.value.value.nominal == _URL_PARSE_ERROR
-    assert exc_info.value.value.fields["raw"] == TextValue(value)
-
-
-def test_decode_raises_a_url_parse_error_on_a_lone_surrogate() -> None:
-    """A lone surrogate embedded outside any ``%XX`` escape passes through
-    ``unquote`` unchanged (percent-decoding a well-formed escape can never
-    produce one), so it needs its own explicit check to avoid a silent
-    pass-through of text that the rest of this module always rejects."""
-    companion, _ = _url_companion()
-    value = "a\ud800b"
 
     with pytest.raises(AglException) as exc_info:
         companion.decode(value)
@@ -748,18 +669,6 @@ def test_parse_query_ignores_an_empty_segment_between_ampersands() -> None:
 @pytest.mark.parametrize("value", ("%zz", "a=%c3%28"))
 def test_parse_query_raises_on_a_malformed_escape_or_invalid_utf8(value: str) -> None:
     companion, _ = _url_companion()
-
-    with pytest.raises(AglException) as exc_info:
-        companion.parse_query(value)
-    assert exc_info.value.value.nominal == _URL_PARSE_ERROR
-    assert exc_info.value.value.fields["raw"] == TextValue(value)
-
-
-def test_parse_query_raises_a_url_parse_error_on_a_lone_surrogate() -> None:
-    """See :func:`test_decode_raises_a_url_parse_error_on_a_lone_surrogate`:
-    ``parse_qsl`` likewise passes an unescaped lone surrogate through unchanged."""
-    companion, _ = _url_companion()
-    value = "a=b\ud800c"
 
     with pytest.raises(AglException) as exc_info:
         companion.parse_query(value)

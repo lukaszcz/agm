@@ -141,7 +141,7 @@ def test_stdin_delivered_run_sends_prompt_as_stdin_and_appends_no_target(
         prepare_rendered_prompt_run,
         run_prepared_prompt_result,
     )
-    from agm.core.process import ProcessCaptureResult
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
 
     captured: dict[str, object] = {}
 
@@ -150,8 +150,8 @@ def test_stdin_delivered_run_sends_prompt_as_stdin_and_appends_no_target(
         captured["stdin_text"] = kwargs.get("stdin_text")
         return ProcessCaptureResult(
             returncode=0,
-            stdout="ok",
-            stderr="",
+            stdout=CapturedOutput(data=b"ok", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
@@ -195,7 +195,7 @@ def test_stdin_delivered_prompt_does_not_read_the_prompt_back_off_disk(
         prepare_rendered_prompt_run,
         run_prepared_prompt_result,
     )
-    from agm.core.process import ProcessCaptureResult
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
 
     captured: dict[str, object] = {}
 
@@ -203,8 +203,8 @@ def test_stdin_delivered_prompt_does_not_read_the_prompt_back_off_disk(
         captured["stdin_text"] = kwargs.get("stdin_text")
         return ProcessCaptureResult(
             returncode=0,
-            stdout="ok",
-            stderr="",
+            stdout=CapturedOutput(data=b"ok", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
@@ -246,7 +246,7 @@ def test_file_delivered_run_is_unchanged_by_the_stdin_delivery_mode(
         prepare_rendered_prompt_run,
         run_prepared_prompt_result,
     )
-    from agm.core.process import ProcessCaptureResult
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
 
     captured: dict[str, object] = {}
 
@@ -255,8 +255,8 @@ def test_file_delivered_run_is_unchanged_by_the_stdin_delivery_mode(
         captured["stdin_text"] = kwargs.get("stdin_text")
         return ProcessCaptureResult(
             returncode=0,
-            stdout="ok",
-            stderr="",
+            stdout=CapturedOutput(data=b"ok", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
@@ -344,12 +344,12 @@ def test_prepared_runner_maps_process_capture_result(
     monkeypatch: pytest.MonkeyPatch, spawn_error: str | None, timed_out: bool
 ) -> None:
     from agm.agent.runner import PreparedPromptRun, run_prepared_prompt_result
-    from agm.core.process import ProcessCaptureResult
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
 
     capture = ProcessCaptureResult(
         returncode=None,
-        stdout="out",
-        stderr="err",
+        stdout=CapturedOutput(data=b"out", truncated=timed_out),
+        stderr=CapturedOutput(data=b"err", truncated=timed_out),
         elapsed=1.0,
         timed_out=timed_out,
         spawn_error=spawn_error,
@@ -409,14 +409,21 @@ def test_prepared_result_closes_stdin_for_no_prompt_delivery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from agm.agent.runner import PreparedPromptRun, run_prepared_prompt_result
-    from agm.core.process import ProcessCaptureResult
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
 
     captured: dict[str, object] = {}
 
     def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
         captured["argv"] = argv
         captured["stdin_text"] = kwargs.get("stdin_text")
-        return ProcessCaptureResult(0, "", "", 0.0, False, None)
+        return ProcessCaptureResult(
+            0,
+            CapturedOutput(data=b"", truncated=False),
+            CapturedOutput(data=b"", truncated=False),
+            0.0,
+            False,
+            None,
+        )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
     prepared = PreparedPromptRun(

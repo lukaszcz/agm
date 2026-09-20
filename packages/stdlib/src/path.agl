@@ -13,9 +13,12 @@ extern def extension(path: path) -> Option[text]
 extern def with-extension(path: path, extension: text) -> path
 @extern-name("with_name")
 extern def with-name(path: path, name: text) -> path
+# Raises `EncodingError` if the resolved path is not valid Unicode.
 extern def absolute(path: path) -> path
 extern def normalize(path: path) -> path
+# Raises `EncodingError` if the resolved path is not valid Unicode.
 extern def relative(path: path, base: path) -> path
+# Raises `EncodingError` if `HOME` (or the passwd entry) is not valid Unicode.
 @extern-name("expand_user")
 extern def expand-user(path: path) -> path
 @extern-name("is_absolute")
@@ -25,4 +28,5 @@ extern def is-under(path: path, base: path) -> bool
 extern def parts(path: path) -> array[text]
 @extern-name("common_prefix")
 extern def common-prefix(paths: array[path]) -> Option[path]
+# Raises `EncodingError` if `HOME` (or the passwd entry) is not valid Unicode.
 extern def home() -> path

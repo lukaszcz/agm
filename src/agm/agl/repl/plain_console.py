@@ -14,6 +14,7 @@ when ``agm repl`` should use this front end instead of the rich console.
 
 from __future__ import annotations
 
+import io
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, TextIO
 
@@ -103,6 +104,19 @@ class PlainReader:
             prompt = CONTINUATION
 
 
+def _read_undecodable_bytes_as_surrogates(stdin: TextIO) -> None:
+    """Make *stdin* yield surrogates for bytes its encoding cannot decode.
+
+    A byte the input encoding rejects is not a reason to abort the session with
+    a host traceback: it is a character the lexer rejects, with a span, exactly
+    as it does for the same byte in a source file or ``-c``. The full console's
+    input layer already decodes this way; a stream with no decoder of its own
+    (a test's in-memory buffer) has nothing to change.
+    """
+    if isinstance(stdin, io.TextIOWrapper):
+        stdin.reconfigure(errors="surrogateescape")
+
+
 def run_plain_console(
     session: "ReplSession",
     *,
@@ -124,6 +138,7 @@ def run_plain_console(
     a pipe. *theme* / *echo_unit* only affect what a setting change persists via
     *on_setting_save*, since plain output carries no colour to swap.
     """
+    _read_undecodable_bytes_as_surrogates(stdin)
     reader = PlainReader(stdin=stdin, stdout=stdout)
 
     def writer(text: str) -> None:

@@ -31,6 +31,7 @@ from agm.agl.semantics.arguments import (
     BindParam,
     bind_arguments,
 )
+from agm.util.unicode import require_scalar_text, surrogate_index, visible_text
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -53,7 +54,34 @@ __all__ = [
     "bind_param_values",
     "decode_param_value",
     "default_program_arguments",
+    "diagnose_process_environment",
 ]
+
+
+def diagnose_process_environment(
+    environment: "Mapping[str, str] | None",
+) -> Diagnostic | None:
+    """Return a diagnostic for the first environment entry that is not valid Unicode.
+
+    The host decodes the process environment with ``surrogateescape``, so a
+    name or value can carry a surrogate that AgL ``text`` must never hold. It
+    is reported here, before execution, rather than at whichever interpolation
+    hole or ``std/env`` read first encodes it. Both the value and the name are
+    rendered with :func:`visible_text`, so building the diagnostic cannot fail
+    in turn.
+    """
+    if environment is None:
+        return None
+    for name, value in environment.items():
+        if surrogate_index(name) is not None or surrogate_index(value) is not None:
+            return Diagnostic(
+                message=(
+                    f"environment variable {visible_text(name)} is not "
+                    f"valid UTF-8: '{visible_text(value)}'"
+                ),
+                line=1,
+            )
+    return None
 
 
 def _missing_required_message(name: str) -> str:
@@ -181,7 +209,8 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     JSON shape. Every other value crosses the canonical JSON boundary (strict
     parse, JSON-Schema validation, then the typeless ``decode_value`` walk).
 
-    :raises ValueError: on a type/shape mismatch or schema-validation failure.
+    :raises ValueError: on a type/shape mismatch, schema-validation failure, or a raw
+        string that is not valid Unicode (:class:`~agm.util.unicode.LoneSurrogateError`).
     """
     from agm.agl.runtime.convert import (
         _clean_validation_message,
@@ -216,13 +245,17 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
         inner = raw.value
         field_schema = option_some_field_schema(decoder.decode, defs)
         inner_obj = (
-            host_text_to_json(inner, field_schema, defs, agent_command_fallback=True)
+            host_text_to_json(
+                require_scalar_text(inner), field_schema, defs, agent_command_fallback=True
+            )
             if isinstance(inner, str)
             else native_to_json(inner)
         )
         obj: object = {"$case": option_some_json_name(decoder.decode, defs), "value": inner_obj}
     elif isinstance(raw, str):
-        obj = host_text_to_json(raw, decoder.decode, defs, agent_command_fallback=True)
+        obj = host_text_to_json(
+            require_scalar_text(raw), decoder.decode, defs, agent_command_fallback=True
+        )
     else:
         obj = native_to_json(raw)
     validation_errors = list(validator_for_schema(decoder.json_schema).iter_errors(obj))

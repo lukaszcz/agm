@@ -197,6 +197,69 @@ class TestValueSyntaxOnHostSurfaces:
         out = capsys.readouterr().out
         assert out.splitlines()[0] == "ratio 1.5"
 
+
+def _named_text_program(tmp_path: Path) -> Path:
+    agl_file = tmp_path / "prog.agl"
+    write_file_program(agl_file, "program def main(name: text) -> unit =\n  print name\n")
+    return agl_file
+
+
+def _positional_text_program(tmp_path: Path) -> Path:
+    agl_file = tmp_path / "prog.agl"
+    write_file_program(agl_file, "program def main(@arg-pos name: text) -> unit =\n  print name\n")
+    return agl_file
+
+
+def _opt_env_text_program(tmp_path: Path) -> Path:
+    agl_file = tmp_path / "prog.agl"
+    write_file_program(
+        agl_file,
+        'program def main(\n  @opt-env("NAME")\n  name: text,\n) -> unit =\n  print name\n',
+    )
+    return agl_file
+
+
+class TestHostTextRejectsLoneSurrogates:
+    """A raw host string is checked for a lone surrogate before being read as
+    program-argument text: the same pre-execution host-error channel a
+    type/shape mismatch uses, naming the offending parameter."""
+
+    def test_cli_flag_value_is_rejected(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = _named_text_program(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(
+                _exec_args_no_log(agl_file, argument_tokens=["--name", "a" + "\udc00" + "b"])
+            )
+
+        assert exc_info.value.code == 1
+        assert "name" in capsys.readouterr().err
+
+    def test_positional_value_is_rejected(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = _positional_text_program(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["a" + "\udc00" + "b"]))
+
+        assert exc_info.value.code == 1
+        assert "name" in capsys.readouterr().err
+
+    def test_opt_env_value_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = _opt_env_text_program(tmp_path)
+        monkeypatch.setenv("NAME", "a" + "\udc80" + "b")
+
+        with pytest.raises(SystemExit) as exc_info:
+            exec_command.run(_exec_args_no_log(agl_file))
+
+        assert exc_info.value.code == 1
+        assert "name" in capsys.readouterr().err
+
     def test_option_json_toml_string_stays_literal_json_data(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

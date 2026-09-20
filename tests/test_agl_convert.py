@@ -180,6 +180,17 @@ class TestParseJsonStrict:
         finally:
             sys.set_int_max_str_digits(previous_limit)
 
+    def test_rejects_lone_surrogate_escape(self) -> None:
+        with pytest.raises(StrictJsonParseError):
+            parse_json_strict('"\\ud800"')
+
+    def test_combines_surrogate_escape_pair(self) -> None:
+        # Built from parts so no tool between here and the file can fold the
+        # adjacent escapes into the astral character they denote.
+        high_escape = "\\" + "ud83d"
+        low_escape = "\\" + "ude00"
+        assert parse_json_strict(f'"{high_escape}{low_escape}"') == "\U0001f600"
+
 
 # ---------------------------------------------------------------------------
 # 2. parse_json_strict — NaN/Infinity nested inside containers

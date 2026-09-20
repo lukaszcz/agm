@@ -4,9 +4,10 @@
 
 ## Source text
 
-AgL source is Unicode text. Line endings are normalized before scanning:
-every `\r\n` and every lone `\r` is treated as a single `\n`. Source
-locations (lines and columns) are 1-based.
+AgL source is Unicode text: a surrogate code point (U+D800-U+DFFF) anywhere
+in the source is a lexical error. Line endings are normalized before
+scanning: every `\r\n` and every lone `\r` is treated as a single `\n`.
+Source locations (lines and columns) are 1-based.
 
 ## Comments
 
@@ -396,6 +397,8 @@ are valid delimiter characters, giving four forms:
 
 Escape sequences, triple-quoted dedent normalization, and interpolation
 semantics are covered in [Strings and interpolation](strings-and-interpolation.md).
+A `\uXXXX` escape that denotes a surrogate on its own, without an adjacent
+partner escape completing a pair, is a lexical error.
 
 ## Raw-tail forms
 

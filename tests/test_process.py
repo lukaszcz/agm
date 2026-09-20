@@ -13,7 +13,13 @@ from typing import Any
 import pytest
 
 import agm.core.process as process_mod
-from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result, run_foreground
+from agm.core.process import (
+    CapturedOutput,
+    ProcessCaptureResult,
+    run_capture,
+    run_capture_result,
+    run_foreground,
+)
 
 
 @pytest.mark.parametrize("boundary", ["spawn", "unmask", "reader", "reader-failure"])
@@ -191,8 +197,8 @@ class TestProcessCaptureResultDataclass:
     def test_is_frozen(self) -> None:
         result = ProcessCaptureResult(
             returncode=0,
-            stdout="",
-            stderr="",
+            stdout=CapturedOutput(data=b"", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
@@ -203,15 +209,15 @@ class TestProcessCaptureResultDataclass:
     def test_all_fields_accessible(self) -> None:
         result = ProcessCaptureResult(
             returncode=42,
-            stdout="out",
-            stderr="err",
+            stdout=CapturedOutput(data=b"out", truncated=False),
+            stderr=CapturedOutput(data=b"err", truncated=False),
             elapsed=1.5,
             timed_out=True,
             spawn_error="No such file",
         )
         assert result.returncode == 42
-        assert result.stdout == "out"
-        assert result.stderr == "err"
+        assert result.stdout.text() == "out"
+        assert result.stderr.text() == "err"
         assert result.elapsed == 1.5
         assert result.timed_out is True
         assert result.spawn_error == "No such file"
@@ -219,8 +225,8 @@ class TestProcessCaptureResultDataclass:
     def test_spawn_error_none_by_default(self) -> None:
         result = ProcessCaptureResult(
             returncode=0,
-            stdout="",
-            stderr="",
+            stdout=CapturedOutput(data=b"", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.0,
             timed_out=False,
             spawn_error=None,
@@ -234,8 +240,8 @@ class TestRunCaptureResultZeroExit:
     def test_zero_exit_empty_output(self) -> None:
         result = run_capture_result([sys.executable, "-c", "pass"])
         assert result.returncode == 0
-        assert result.stdout == ""
-        assert result.stderr == ""
+        assert result.stdout.text() == ""
+        assert result.stderr.text() == ""
         assert result.elapsed > 0
         assert result.timed_out is False
         assert result.spawn_error is None
@@ -257,20 +263,20 @@ class TestRunCaptureResultSeparateStreams:
             ]
         )
         assert result.returncode == 0
-        assert result.stdout == "hello\n"
-        assert result.stderr == "world\n"
+        assert result.stdout.text() == "hello\n"
+        assert result.stderr.text() == "world\n"
 
     def test_stdout_only(self) -> None:
         result = run_capture_result([sys.executable, "-c", "print('only-out')"])
-        assert result.stdout == "only-out\n"
-        assert result.stderr == ""
+        assert result.stdout.text() == "only-out\n"
+        assert result.stderr.text() == ""
 
     def test_stderr_only(self) -> None:
         result = run_capture_result(
             [sys.executable, "-c", "import sys; print('only-err', file=sys.stderr)"]
         )
-        assert result.stdout == ""
-        assert result.stderr == "only-err\n"
+        assert result.stdout.text() == ""
+        assert result.stderr.text() == "only-err\n"
 
 
 class TestRunCaptureResultNonzeroExit:
@@ -297,7 +303,7 @@ class TestRunCaptureResultStdin:
             stdin_text="hello from stdin",
         )
         assert result.returncode == 0
-        assert "hello from stdin" in result.stdout
+        assert "hello from stdin" in result.stdout.text()
 
 
 class TestRunCaptureResultSpawnError:
@@ -319,8 +325,8 @@ class TestRunCaptureResultSpawnError:
 
     def test_spawn_error_streams_empty(self) -> None:
         result = run_capture_result(["/nonexistent/binary/that/does/not/exist"])
-        assert result.stdout == ""
-        assert result.stderr == ""
+        assert result.stdout.text() == ""
+        assert result.stderr.text() == ""
 
 
 class TestRunCaptureResultEmbeddedNullByte:
@@ -349,8 +355,8 @@ class TestRunCaptureResultEmbeddedNullByte:
 
     def test_null_byte_arg_streams_empty(self) -> None:
         result = run_capture_result(["sh", "-c", "echo \x00bad"])
-        assert result.stdout == ""
-        assert result.stderr == ""
+        assert result.stdout.text() == ""
+        assert result.stderr.text() == ""
 
 
 class TestRunCaptureIdleTimeout:
@@ -425,7 +431,7 @@ class TestRunCaptureResultIdleTimeout:
         )
         assert result.returncode == 0
         assert result.timed_out is False
-        assert "chunk 0" in result.stdout
+        assert "chunk 0" in result.stdout.text()
 
     def test_idle_timeout_remains_active_after_output_streams_close(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -476,7 +482,7 @@ class TestRunCaptureResultCwdEnv:
             cwd=tmp_path,
         )
         assert result.returncode == 0
-        assert str(tmp_path) in result.stdout
+        assert str(tmp_path) in result.stdout.text()
 
     def test_env_is_forwarded(self) -> None:
         custom_env = os.environ.copy()
@@ -490,7 +496,7 @@ class TestRunCaptureResultCwdEnv:
             env=custom_env,
         )
         assert result.returncode == 0
-        assert result.stdout.strip() == "magic42"
+        assert result.stdout.text().strip() == "magic42"
 
 
 # ---------------------------------------------------------------------------
@@ -529,8 +535,8 @@ class TestRunCaptureResultEnoexec:
         """When ENOEXEC fires, no output was produced."""
         script = self._make_enoexec_script(tmp_path)
         result = run_capture_result([str(script)])
-        assert result.stdout == ""
-        assert result.stderr == ""
+        assert result.stdout.text() == ""
+        assert result.stderr.text() == ""
 
 
 class TestRunCaptureEnoexecReraise:
@@ -609,7 +615,7 @@ class TestRunCaptureResultLargeStdin:
         payload = "line\n" * 50_000  # ~350KB
         result = run_capture_result(["cat"], stdin_text=payload)
         assert result.returncode == 0
-        assert result.stdout == payload
+        assert result.stdout.text() == payload
 
 
 # ---------------------------------------------------------------------------

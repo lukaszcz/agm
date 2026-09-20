@@ -9,7 +9,7 @@ import tomlkit
 
 import agm.vcs.git as git_helpers
 from agm.core.fs import exists, is_dir, is_file, iterdir, mkdir, read_text, rglob, write_text
-from agm.core.toml import load_toml_file, set_toml_table_value, toml_dict
+from agm.core.toml import load_toml_file, parse_toml_doc, set_toml_table_value, toml_dict
 from agm.project.dependency_checkout import find_main_dep_repo
 from agm.project.layout import (
     current_workspace,
@@ -95,7 +95,7 @@ def load_dependency_toml_env(
 def _set_toml_deps_value(content: str, dep_name: str, dep_branch: str) -> str:
     """Set *dep_name* = *dep_branch* in ``[deps]``, preserving formatting and comments."""
 
-    doc = tomlkit.parse(content) if content.strip() else tomlkit.document()
+    doc = parse_toml_doc(content) if content.strip() else tomlkit.document()
     set_toml_table_value(doc, "deps", dep_name, dep_branch)
     return tomlkit.dumps(doc)
 
@@ -103,7 +103,7 @@ def _set_toml_deps_value(content: str, dep_name: str, dep_branch: str) -> str:
 def _set_toml_project_name(content: str, name: str) -> str:
     """Set ``name`` in ``[project]``, preserving formatting and comments."""
 
-    doc = tomlkit.parse(content) if content.strip() else tomlkit.document()
+    doc = parse_toml_doc(content) if content.strip() else tomlkit.document()
     set_toml_table_value(doc, "project", "name", name)
     return tomlkit.dumps(doc)
 

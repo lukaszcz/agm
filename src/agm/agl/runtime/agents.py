@@ -68,12 +68,13 @@ def _run_request(
         raise AgentCallHostError(
             cause=failure.cause,
             exit_code=result.returncode,
-            stderr_tail=stderr_tail(result.stderr),
+            stderr_tail=stderr_tail(result.stderr.text_or_note("stderr")[0]),
             elapsed=result.elapsed,
             call_info=call_info,
+            detail=failure.detail,
         )
     return AgentResponse(
-        content=result.stdout,
+        content=result.stdout.text(),
         metadata={"elapsed": result.elapsed},
         call_info=call_info,
     )

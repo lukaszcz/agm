@@ -215,6 +215,7 @@ class AglSessionHost:
             stderr_tail=error.stderr_tail,
             elapsed=error.elapsed,
             call_info=error.call_info,
+            detail=error.detail,
         ) from error
 
     @staticmethod

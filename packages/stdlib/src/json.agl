@@ -2,6 +2,9 @@ import std/option::Option
 import std/result::Result
 import std/errors::{JsonParseError, KeyError}
 
+# A `\uD8xx`/`\uDCxx` escape that does not combine with an adjacent partner
+# into one scalar character is a parse error; a combining pair is one
+# character, as elsewhere in AgL.
 extern def parse(value: text) -> json
 def try-parse(value: text) -> Result[json, JsonParseError] =
   try Ok(parse(value)) catch JsonParseError as e => Err(e)

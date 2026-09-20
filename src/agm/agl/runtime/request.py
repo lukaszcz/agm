@@ -65,6 +65,7 @@ class AgentCallHostError(Exception):
         stderr_tail: str,
         elapsed: float,
         call_info: AgentCallInfo | None = None,
+        detail: str | None = None,
     ) -> None:
         super().__init__(cause)
         self.cause = cause
@@ -72,6 +73,9 @@ class AgentCallHostError(Exception):
         self.stderr_tail = stderr_tail
         self.elapsed = elapsed
         self.call_info = call_info
+        # What the cause alone cannot say, such as where a stream stopped
+        # being valid UTF-8; carried into the AgL exception's message.
+        self.detail = detail
 
 
 @dataclass(slots=True)

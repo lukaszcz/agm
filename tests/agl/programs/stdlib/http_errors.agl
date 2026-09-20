@@ -1,10 +1,11 @@
 # Every HttpError subtype reached through the raising function and through
 # the try- twin, narrowing a caught `HttpError` with `as?`/`is`, inclusive
 # `catch HttpError` handling every subtype through one handler, a sibling
-# mismatch still not caught by a subtype-specific handler, and a Save write
-# failure.
+# mismatch still not caught by a subtype-specific handler, a Save write
+# failure, and a charset outside the text-encoding allowlist.
 import std/fs
 import std/http
+import std/http::HttpDecodeError
 import std/http::HttpError
 import std/http::HttpTimeoutError
 import std/path
@@ -108,5 +109,11 @@ program def main(root: path, scenario: text) -> unit =
         let destination = path::join([root, "missing", "out.bin"])
         let _ = http::download("https://x/y", destination)
         ()
+    | "charset_outside_the_allowlist_raises_http_decode_error" =>
+        try
+          let _ = http::get("https://x/y")
+          ()
+        catch HttpDecodeError as e =>
+          print("caught: encoding=%{e.encoding}")
     | _ =>
         ()

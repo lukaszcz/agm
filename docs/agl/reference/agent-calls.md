@@ -562,8 +562,12 @@ explicit-agent, and explicit-session forms.
 ## Transport and session failures
 
 A failed `ask` transport — for example a process spawn failure, nonzero exit,
-idle timeout, or a failed Pi RPC prompt — raises **`AgentCallError`**. It is
-catchable and is never retried by `on-parse-error`. **`SessionError`** instead
+idle timeout, output that is not valid UTF-8, or a failed Pi RPC prompt —
+raises **`AgentCallError`**. Undecodable output surfaces as
+`cause = "protocol_failure"`, with the message giving the byte offset of the
+first invalid byte; the stderr tail in `metadata` is `""` if it is itself
+undecodable. It is catchable and is never retried by `on-parse-error`, with
+no opt-out: agent CLIs are specified to emit UTF-8. **`SessionError`** instead
 reports a session lifecycle, capability, or non-ask backend failure: opening or
 using a closed session, an unsupported operation or transport, and failed
 compaction/fork/reset/name/stats operations. `SessionError.operation` names the

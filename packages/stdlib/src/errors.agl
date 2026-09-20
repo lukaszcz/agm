@@ -72,3 +72,8 @@ exception ValueParseError extends Exception
   source-type: text
   target-type: text
   raw: text
+
+# Host text (an OS path, name, or variable) was not valid Unicode; `raw` shows it with
+# undecodable bytes escaped.
+exception EncodingError extends Exception
+  raw: text

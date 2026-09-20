@@ -300,6 +300,22 @@ called on `Err`. It carries only the inherited `message` field.
 `std/fs` raises `FsError` for a failed filesystem operation. In addition to
 `message`, it carries `path: text` and `operation: text`.
 
+`fs::list` and `fs::glob` also raise it when a directory entry or match is not
+valid Unicode, and `fs::temp-dir` when the host's temporary directory is;
+`path` is then the directory or pattern that was asked for, and the message
+names the offending entry with its undecodable bytes escaped. The whole call
+fails rather than the entry being skipped.
+
+### `EncodingError`
+
+`std/path` (`absolute`, `relative`, `expand-user`, `home`) and `std/process`
+(`cwd`, `hostname`) raise `EncodingError` when the host returns text that is
+not valid Unicode.
+
+```text
+raw: text   # the host text, with its undecodable bytes escaped
+```
+
 ## Built-in exception catalog
 
 Field lists below are in addition to the base `message`.
@@ -314,6 +330,10 @@ agent: Agent      # the selected backend
 cause: text       # "spawn_failure" | "nonzero_exit" | "timeout" | "interpolation_failure" | "protocol_failure" | "invalid_agent"
 metadata: json    # host details: exit code, stderr tail, elapsed seconds
 ```
+
+`cause = "protocol_failure"` also covers agent output that is not valid
+UTF-8; the message gives the byte offset of the first invalid byte, and an
+undecodable stderr tail in `metadata` is `""`.
 
 ### `AgentParseError`
 
@@ -333,18 +353,23 @@ metadata: json
 
 ### `ExecError`
 
-A shell command failed to run, exited nonzero, or timed out in the **parsed
-or unit form** of `exec` ([Shell execution](shell-execution.md)). The
-structured form raises it on spawn failure or timeout, but represents a
-nonzero exit as `ExecResult` data.
+A shell command failed to run, exited nonzero, timed out, or produced output
+that is not valid UTF-8, in the **parsed or unit form** of `exec` ([Shell
+execution](shell-execution.md)). The structured form raises it on spawn
+failure, timeout, or undecodable output, but represents a nonzero exit as
+`ExecResult` data.
 
 ```text
 command: text     # the rendered command
 exit-code: int    # -1 for spawn failure or timeout without an exit status
-stdout: text
-stderr: text
+stdout: text      # "" if stdout was captured but is not valid UTF-8
+stderr: text      # "" if stderr was captured but is not valid UTF-8
 timed-out: bool
 ```
+
+An undecodable stream's field is always `""`; the message names the stream
+and the byte offset of the first invalid byte. A decode failure in the
+parsed form is never retried by `on-parse-error`.
 
 ### `SessionError`
 
@@ -486,7 +511,8 @@ raw: text           # text representation of the value that failed to convert
 
 `CastError` is raised by `as` casts that are fallible (see
 [Types](types.md#casts-and-convertibility)). The `as?` form never raises —
-it yields `Option[T]`, with `None` where `as` would raise.
+it yields `Option[T]`, with `None` where `as` would raise. A cast from text
+reads JSON, so a lone surrogate escape in the source text fails the cast.
 
 ### `ValueParseError`
 
@@ -499,6 +525,10 @@ target-type: text   # name of the target type, e.g. "int"
 raw: text           # the input text that failed to parse
 ```
 
+A lone surrogate escape, in either JSON or value syntax, is one such
+malformed input; an adjacent high and low escape pair denotes one character
+and parses.
+
 `std/value::try-parse` never raises: it returns `Result::Err` with a
 `ValueParseError` instead. `ValueParseError` is a distinct exception from
 `CastError` — a `catch CastError` clause does not catch it.
@@ -506,7 +536,9 @@ raw: text           # the input text that failed to parse
 ### `JsonParseError`
 
 A `std/json` parsing function received text that is not a well-formed JSON
-document.
+document, including a document holding a lone `\uD800`-`\uDFFF` escape. An
+adjacent high and low escape pair is not lone: it denotes one character and
+parses.
 
 ```text
 raw: text   # the input text that failed to parse
@@ -580,9 +612,9 @@ how equality and tracing treat one.
 | ------ | --------- |
 | Out-of-range array/text index access, array indexed assignment, or an absent `array::index-of`/`text::index-of` search | `IndexError` |
 | Missing dictionary key access or assignment | `KeyError` |
-| Agent transport failure | `AgentCallError` |
+| Agent transport failure, including agent output that is not valid UTF-8 | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |
-| Failing shell command (parsed or unit form) | `ExecError` |
+| Failing shell command (parsed or unit form), or shell output that is not valid UTF-8 (any form) | `ExecError` |
 | Timed-out shell command (any exec form) | `ExecError` |
 | Spawn failure (either exec form) | `ExecError` |
 | Session open/default failure; unsupported transport or lifecycle capability; closed or unknown session; or failed `compact`, `reset`, `fork`, `stats`, `set-name`, or `close` | `SessionError` (`operation` identifies the failed host operation) |
@@ -596,7 +628,10 @@ how equality and tracing treat one.
 | Engine-setting write the host rejects (unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `std/value::parse` — input is neither strict JSON nor an AgL value-syntax literal, or does not conform to the target type | `ValueParseError` |
-| `std/json` parsing — input is not well-formed JSON | `JsonParseError` |
+| `std/json` parsing — input is not well-formed JSON, including a lone surrogate escape | `JsonParseError` |
+| `std/fs` directory entry, match, or temporary directory that is not valid Unicode | `FsError` |
+| `std/path` or `std/process` host text that is not valid Unicode | `EncodingError` |
+| `std/http` response whose declared charset is outside the supported text encodings, or whose body does not decode under it | `HttpDecodeError` |
 | `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
 | `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |
 | `std/regex` pattern compilation — Python `re` rejects the pattern | `RegexError` |

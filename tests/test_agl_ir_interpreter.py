@@ -2492,12 +2492,12 @@ class TestIrExec:
         """IrExec with a non-TextValue command renders via render_value."""
         import unittest.mock
 
-        from agm.core.process import ProcessCaptureResult
+        from agm.core.process import CapturedOutput, ProcessCaptureResult
 
         fake_result = ProcessCaptureResult(
             returncode=0,
-            stdout="hello\n",
-            stderr="",
+            stdout=CapturedOutput(data=b"hello\n", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.01,
             timed_out=False,
             spawn_error=None,
@@ -2585,7 +2585,7 @@ class TestIrExec:
         import unittest.mock
 
         from agm.agl.semantics.exceptions import AglRaise
-        from agm.core.process import ProcessCaptureResult
+        from agm.core.process import CapturedOutput, ProcessCaptureResult
 
         call_count = [0]
 
@@ -2603,8 +2603,8 @@ class TestIrExec:
                 # First call: succeeds but returns invalid JSON (triggers retry)
                 return ProcessCaptureResult(
                     returncode=0,
-                    stdout="not_valid_json\n",
-                    stderr="",
+                    stdout=CapturedOutput(data=b"not_valid_json\n", truncated=False),
+                    stderr=CapturedOutput(data=b"", truncated=False),
                     elapsed=0.01,
                     timed_out=False,
                     spawn_error=None,
@@ -2612,8 +2612,8 @@ class TestIrExec:
             # Second call: spawn error
             return ProcessCaptureResult(
                 returncode=None,
-                stdout="",
-                stderr="",
+                stdout=CapturedOutput(data=b"", truncated=False),
+                stderr=CapturedOutput(data=b"", truncated=False),
                 elapsed=0.0,
                 timed_out=False,
                 spawn_error="No such file or directory",
@@ -2703,12 +2703,12 @@ class TestIrExec:
 
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
-        from agm.core.process import ProcessCaptureResult
+        from agm.core.process import CapturedOutput, ProcessCaptureResult
 
         fake_result = ProcessCaptureResult(
             returncode=None,
-            stdout="",
-            stderr="",
+            stdout=CapturedOutput(data=b"", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.0,
             timed_out=False,
             spawn_error="No such file or directory",
@@ -2765,7 +2765,7 @@ class TestIrExec:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
-        from agm.core.process import ProcessCaptureResult
+        from agm.core.process import CapturedOutput, ProcessCaptureResult
         from tests._agl_helpers import build_decode_schema
 
         call_count = [0]
@@ -2783,8 +2783,8 @@ class TestIrExec:
             if call_count[0] == 1:
                 return ProcessCaptureResult(
                     returncode=0,
-                    stdout="not_valid_json\n",
-                    stderr="",
+                    stdout=CapturedOutput(data=b"not_valid_json\n", truncated=False),
+                    stderr=CapturedOutput(data=b"", truncated=False),
                     elapsed=0.01,
                     timed_out=False,
                     spawn_error=None,
@@ -2792,8 +2792,8 @@ class TestIrExec:
             # Second call: timeout
             return ProcessCaptureResult(
                 returncode=-1,
-                stdout="",
-                stderr="",
+                stdout=CapturedOutput(data=b"", truncated=True),
+                stderr=CapturedOutput(data=b"", truncated=True),
                 elapsed=5.0,
                 timed_out=True,
                 spawn_error=None,
@@ -2848,7 +2848,7 @@ class TestIrExec:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
-        from agm.core.process import ProcessCaptureResult
+        from agm.core.process import CapturedOutput, ProcessCaptureResult
         from tests._agl_helpers import build_decode_schema
 
         call_count = [0]
@@ -2866,8 +2866,8 @@ class TestIrExec:
             if call_count[0] == 1:
                 return ProcessCaptureResult(
                     returncode=0,
-                    stdout="not_valid_json\n",
-                    stderr="",
+                    stdout=CapturedOutput(data=b"not_valid_json\n", truncated=False),
+                    stderr=CapturedOutput(data=b"", truncated=False),
                     elapsed=0.01,
                     timed_out=False,
                     spawn_error=None,
@@ -2875,8 +2875,8 @@ class TestIrExec:
             # Second call: non-zero exit
             return ProcessCaptureResult(
                 returncode=2,
-                stdout="",
-                stderr="error",
+                stdout=CapturedOutput(data=b"", truncated=False),
+                stderr=CapturedOutput(data=b"error", truncated=False),
                 elapsed=0.01,
                 timed_out=False,
                 spawn_error=None,
@@ -2928,7 +2928,7 @@ class TestIrExec:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.type_table import create_seeded_type_table
         from agm.agl.semantics.types import IntType
-        from agm.core.process import ProcessCaptureResult
+        from agm.core.process import CapturedOutput, ProcessCaptureResult
         from tests._agl_helpers import build_decode_schema
 
         # JSON parse of a string where int is expected yields structured errors
@@ -2944,8 +2944,8 @@ class TestIrExec:
             # Returns a valid JSON string (not int), so schema validation fails with errors
             return ProcessCaptureResult(
                 returncode=0,
-                stdout='"not_a_number"\n',
-                stderr="",
+                stdout=CapturedOutput(data=b'"not_a_number"\n', truncated=False),
+                stderr=CapturedOutput(data=b"", truncated=False),
                 elapsed=0.01,
                 timed_out=False,
                 spawn_error=None,

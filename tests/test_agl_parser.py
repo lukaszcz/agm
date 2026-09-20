@@ -128,7 +128,7 @@ from agm.agl.syntax.types import (
     UnitT,
 )
 from agm.agl.syntax.visitor import walk
-from agm.core.process import ProcessCaptureResult
+from agm.core.process import CapturedOutput, ProcessCaptureResult
 from tests._agl_helpers import run_inline_command
 
 # ---------------------------------------------------------------------------
@@ -5175,8 +5175,8 @@ print exec$ true
     def test_desugared_statement_runs_through_the_pipeline(self) -> None:
         completed = ProcessCaptureResult(
             returncode=0,
-            stdout="",
-            stderr="",
+            stdout=CapturedOutput(data=b"", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
             elapsed=0.0,
             timed_out=False,
             spawn_error=None,

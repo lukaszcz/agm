@@ -3,6 +3,12 @@
 import os
 import socket
 
+from agl import nominals
+
+from agm.agl.runtime.host_text import scalar_host_text
+
+EncodingError = nominals.std.errors.EncodingError
+
 _MIN_EXIT_CODE = 0
 _MAX_EXIT_CODE = 255
 
@@ -16,7 +22,7 @@ def exit(code: int = 0) -> None:
 
 def cwd() -> str:
     """Return the current working directory."""
-    return os.getcwd()
+    return scalar_host_text(os.getcwd(), EncodingError)
 
 
 def pid() -> int:
@@ -26,7 +32,7 @@ def pid() -> int:
 
 def hostname() -> str:
     """Return this host's name."""
-    return socket.gethostname()
+    return scalar_host_text(socket.gethostname(), EncodingError)
 
 
 __all__ = ["cwd", "exit", "hostname", "pid"]

@@ -53,6 +53,7 @@ from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, Text
 from agm.core import fs
 from agm.core.cleanup import run_cleanup_steps
 from agm.util.scoping import ScopedVar
+from agm.util.unicode import visible_text
 
 if TYPE_CHECKING:
     from agm.agl.ir.ids import Location
@@ -726,7 +727,7 @@ class ExternRegistry:
                 raise cyclic_value_raise(nominals=nominals) from exc
             except Exception as exc:
                 try:
-                    message = str(exc) or type(exc).__name__
+                    message = visible_text(str(exc)) or type(exc).__name__
                 except AglCyclicValue as cyclic_exc:
                     raise cyclic_value_raise(nominals=nominals) from cyclic_exc
                 raise _extern_error(

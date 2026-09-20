@@ -1,0 +1,50 @@
+{
+  "scenarios": [
+    {
+      "name": "clean_text_param_runs",
+      "params": {
+        "name": "hello"
+      },
+      "expect": {
+        "stdout": "hello\n"
+      }
+    },
+    {
+      "name": "lone_surrogate_param_is_a_host_error",
+      "params": {
+        "name": "a\udc00b"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["name"]
+        }
+      }
+    },
+    {
+      "name": "undecodable_process_environment_value_is_a_host_error",
+      "params": {
+        "name": "hello"
+      },
+      "process_environment": {
+        "LEGACY": "a\udc00b"
+      },
+      "expect": {
+        "host_error": {
+          "message_contains": ["LEGACY"]
+        }
+      }
+    },
+    {
+      "name": "clean_environment_runs",
+      "params": {
+        "name": "hello"
+      },
+      "process_environment": {
+        "CLEAN": "ok"
+      },
+      "expect": {
+        "stdout": "hello\n"
+      }
+    }
+  ]
+}

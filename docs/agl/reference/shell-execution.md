@@ -212,6 +212,32 @@ invalid for a `unit` target.
    is bound at the call's target type. In the **structured form**, stdout
    and stderr are returned as-is.
 4. Every execution is traced: command, exit code, duration, stdout, stderr.
+5. Output is decoded as strict UTF-8. Only the streams a given form and
+   outcome actually turn into an AgL value are decoded — see below.
+
+## Output decoding
+
+| Form / outcome | Streams decoded | On undecodable bytes |
+|-----------------|------------------|-----------------------|
+| Structured, any exit | stdout and stderr | raises `ExecError`; a decodable stream keeps its text, the undecodable one is `""` |
+| Parsed or text, exit 0 | stdout | raises `ExecError` immediately — never an `on-parse-error` retry, since the bytes did not fail to parse; they cannot be text at all |
+| Parsed/text/unit, nonzero exit | stdout and stderr, for the `ExecError` fields | the nonzero-exit `ExecError` is raised as usual; each undecodable field is `""` |
+| Unit, exit 0 | none — stdout is discarded | no error |
+| Timeout (any form) | stdout and stderr, both truncated | the timeout `ExecError` is raised; an incomplete **trailing** UTF-8 sequence is dropped rather than treated as invalid (`timed-out = true` already marks the output incomplete); an invalid byte elsewhere still fails |
+| Spawn failure | none | unchanged |
+
+An undecodable stream's field in `ExecError` is always `""`; the message
+names the stream and the byte offset of the first invalid byte, for example
+`stderr is not valid UTF-8 at byte 17`. There is deliberately no decoding
+parameter and no `bytes` type — convert on the shell side, where the need is
+explicit at the call site:
+
+<!-- agl-check: fragment -->
+```agl
+exec "cmd | iconv -f latin1 -t utf-8"
+exec "cmd | base64"
+exec "ls --quoting-style=escape"
+```
 
 ## Named parameters
 
@@ -233,8 +259,8 @@ traced separately. If every attempt fails to parse, `ExecError` is raised.
 
 ## Exceptions
 
-`ExecError` covers a failing, timed-out, or unparseable shell command in the
-parsed or unit form:
+`ExecError` covers a failing, timed-out, undecodable, or unparseable shell
+command in the parsed or unit form:
 
 ```agl
 program def main() -> unit =
@@ -245,7 +271,8 @@ program def main() -> unit =
 ```
 
 In the structured form, `ExecError` is raised for a spawn failure (the shell
-itself cannot be launched) or timeout. A nonzero exit instead surfaces in
-`exit-code`.
+itself cannot be launched), timeout, or undecodable output. A nonzero exit
+instead surfaces in `exit-code`.
 
-See [Exceptions](exceptions.md) for the full field lists.
+See [Exceptions](exceptions.md) for the full field lists, including the
+undecodable-stream rule.

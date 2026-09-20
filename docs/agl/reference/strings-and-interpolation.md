@@ -36,6 +36,32 @@ prelude is.
 
 Use `\${` to write a literal `${` in a string template.
 
+## Escapes
+
+| Escape | Decodes to |
+| ------ | ---------- |
+| `\"` | `"` |
+| `\'` | `'` |
+| `\\` | `\` |
+| `\/` | `/` |
+| `\b` | backspace |
+| `\f` | form feed |
+| `\n` | newline |
+| `\r` | carriage return |
+| `\t` | tab |
+| `\%` | `%` |
+| `\${` | `${` |
+| `\uXXXX` | the Unicode scalar value `U+XXXX` |
+
+`\uXXXX` denotes a Unicode scalar value from its 4 hex digits. An astral
+character (outside the Basic Multilingual Plane) is written as an adjacent
+pair of `\uXXXX` escapes — a UTF-16 high surrogate (`\uD800`-`\uDBFF`)
+immediately followed by a low surrogate (`\uDC00`-`\uDFFF`), as in JSON —
+which decodes to the one character the pair encodes. Any other surrogate
+escape (a high surrogate not immediately followed by a matching low one, or a
+low surrogate on its own) is a lexical error, since a `text` value can never
+hold a surrogate code point on its own ([Types](types.md#text)).
+
 ## Runtime interpolation
 
 A template can also be interpolated at runtime, against a dictionary of names

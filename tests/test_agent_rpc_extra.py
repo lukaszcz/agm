@@ -95,6 +95,12 @@ def _reap_child_after_send(monkeypatch: pytest.MonkeyPatch) -> None:
         {"raw": '{"type":"message_update"}'},
         {"raw": '{"type":"response","id":"$id","command":"prompt","success":true,"x":NaN}'},
         {"raw": '{"type":"response","id":"$id","id":"again","command":"prompt","success":true}'},
+        {
+            "raw": (
+                '{"type":"message_update","assistantMessageEvent":'
+                '{"type":"text_delta","delta":"\\ud800"}}'
+            )
+        },
     ],
 )
 def test_malformed_protocol_records_kill_the_session(
@@ -249,7 +255,7 @@ def test_protocol_error_is_retained_alongside_stderr(
     backend = open_backend()
     child = backend._child
     assert child is not None
-    child.stderr.append("Pi diagnostic")
+    child.stderr.append(b"Pi diagnostic")
     with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("hello"))
     assert "Pi diagnostic" in raised.value.stderr_tail
@@ -269,10 +275,32 @@ def test_bounded_records_output_and_stderr(tmp_path: Path, monkeypatch: pytest.M
         stdin: io.BufferedWriter | None = None
 
     child = _child(Unwritable())
-    child.stderr.append("x" * (rpc._MAX_STDERR_CHARS + 1))
-    assert len(child.stderr.value) == rpc._MAX_STDERR_CHARS
+    child.stderr.append(b"x" * (rpc._MAX_STDERR_BYTES + 1))
+    assert len(child.stderr.data) == rpc._MAX_STDERR_BYTES
     with pytest.raises(BrokenPipeError):
         rpc._write_command(child, {"type": "prompt"})
+
+
+def test_stderr_reassembles_a_multibyte_character_split_across_chunks() -> None:
+    """Bytes stay undecoded until read: a character split across two reader
+    chunks must not turn into two replacement characters."""
+    child = _child(object())
+    child.stderr.append("café".encode()[:-1])  # split inside the trailing "é"
+    child.stderr.append("café".encode()[-1:])
+    assert rpc._stderr(child, "fallback") == "café"
+
+
+def test_stderr_drops_an_orphaned_leading_continuation_byte() -> None:
+    """Cutting the bounded tail to its byte bound can strand a continuation
+    byte at the front; that artifact of the cut is dropped, not decoded."""
+    orphan = "café".encode()[-1:]  # a continuation byte of "é", alone
+    assert rpc._decode_stderr_tail(orphan + b"next") == ("next", None)
+
+
+def test_stderr_undecodable_tail_gives_empty_text_and_an_offset_note() -> None:
+    child = _child(object())
+    child.stderr.append(b"\xff\xfe")
+    assert rpc._stderr(child, "fallback") == "fallback; stderr is not valid UTF-8 at byte 0"
 
 
 def test_terminate_closes_stdin() -> None:

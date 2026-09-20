@@ -43,6 +43,7 @@ from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import TextValue, Value
 from agm.agl.type_schema import build_format_instructions, derive_schema_and_decode
+from agm.util.unicode import loads_json
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
@@ -602,7 +603,7 @@ def _parse_json_core(
     """
     if strict:
         try:
-            parsed_obj: object = json.loads(raw, parse_float=Decimal)
+            parsed_obj: object = loads_json(raw, parse_float=Decimal)
         except json.JSONDecodeError as exc:
             return ParseResult.failure(f"Strict JSON parse failed: {exc}")
         return _validate_and_decode_core(raw.strip(), parsed_obj, schema_dict, decode_schema, defs)
@@ -618,7 +619,7 @@ def _parse_json_core(
             f"Could not extract a JSON value from the agent response: {raw!r}"
         )
     try:
-        parsed_obj = json.loads(json_text, parse_float=Decimal)
+        parsed_obj = loads_json(json_text, parse_float=Decimal)
     except json.JSONDecodeError as exc:
         return ParseResult.failure(f"JSON parse failed after repair attempt: {exc}")
     return _validate_and_decode_core(json_text, parsed_obj, schema_dict, decode_schema, defs)

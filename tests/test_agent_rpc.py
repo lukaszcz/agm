@@ -321,6 +321,35 @@ def test_spawn_prompt_and_lifecycle_protocol(
     backend.close()
 
 
+def test_prompt_reply_combines_a_surrogate_escape_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A high+low escape pair in the JSONL event text is one scalar character.
+
+    json.dumps escapes an astral character as an adjacent ``\\uD83D\\uDE00``
+    pair (ensure_ascii, the stub's default); ``_next_event`` must accept the
+    combined result rather than treat it as a lone surrogate.
+    """
+    RpcStub(
+        tmp_path,
+        monkeypatch,
+        {
+            "prompt": [
+                {"id": "$id", "type": "response", "command": "prompt", "success": True},
+                {
+                    "type": "message_update",
+                    "assistantMessageEvent": {"type": "text_delta", "delta": "\U0001f600"},
+                },
+                {"type": "agent_settled"},
+            ]
+        },
+    )
+    backend = open_backend()
+
+    assert backend.ask(SessionAskRequest("hello")).content == "\U0001f600"
+    backend.close()
+
+
 @pytest.mark.parametrize("method", ["confirm", "select", "input", "editor"])
 def test_prompt_cancels_extension_ui_dialog_requests(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
@@ -575,7 +604,7 @@ def test_process_death_retains_stderr_diagnostics(
     backend = open_backend()
     child = backend._child
     assert child is not None
-    child.stderr.append("useful diagnostic")
+    child.stderr.append(b"useful diagnostic")
     with pytest.raises(SessionAskError) as raised:
         backend.ask(SessionAskRequest("hello"))
     assert raised.value.stderr_tail == "useful diagnostic"

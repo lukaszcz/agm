@@ -112,6 +112,18 @@ that parses as strict JSON is read as JSON; any other token is read as one
 object, then an `Agent` member constructor call, and otherwise falls back to
 a verbatim command — see [host Agent syntax](../../commands/agl.md#host-agent-syntax).
 
+A CLI token, an `@opt-env` variable's value, and a qualified config-table
+string ([Config-file schema](#config-file-schema) below) must all be valid
+Unicode. A value holding a surrogate code point is a **host invocation
+error** naming the parameter, before any statement executes.
+
+The process environment a host exposes through `std/env::environ` is
+likewise required to be valid Unicode in both variable names and values: a
+host that finds one it cannot decode fails before the program runs, naming
+the variable, rather than letting the failure surface later at a print or
+`exec` call. Unset or fix the offending variable, or exclude it with
+`env -u NAME agm exec …`.
+
 ### Value syntax
 
 A `text`-to-structured-type cast (`as`/`as?`, [Types](types.md#strict-parsing-in-text-and-json-casts))
@@ -336,6 +348,10 @@ spelling of the same address, so it applies however the program is run — as
 the command, by installed reference, or by file path — and setting one leaf
 through two spellings in the same config layer is an error, exactly as two
 module suffixes are.
+
+A config-table string value must be valid Unicode, the same requirement a
+CLI token or `@opt-env` variable is held to above; a value holding a
+surrogate code point is a host invocation error.
 
 ### Positional effect
 

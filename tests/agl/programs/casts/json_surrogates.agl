@@ -1,0 +1,35 @@
+# Surrogate escapes in JSON: a lone `\uD8xx`/`\uDCxx` escape is a parse
+# error; a combining high+low pair is one scalar character. Exercises the
+# JSON intake shared by `json::parse`, `as` casts, `ask`, and `exec`.
+import std/json
+
+record Msg
+  text: text
+
+program def main(mode: int, raw: text = "") -> unit =
+  case mode of
+    | 1 =>
+        try
+          print(json::parse(raw))
+        catch JsonParseError as e =>
+          print "parse error"
+        print(json::try-parse(raw))
+    | 2 =>
+        try
+          let m = raw as Msg
+          print m.text
+        catch CastError as e =>
+          print "cast error: %{e.source-type} -> %{e.target-type}"
+    | 3 =>
+        let builder: Agent = AgentCommand("builder")
+        try
+          let m: Msg = builder.ask("Build the message.", on-parse-error = Retry(n = 1))
+          print m.text
+        catch AgentParseError as e =>
+          print "agent parse error after %{e.attempts} attempts"
+    | _ =>
+        try
+          let m: Msg = exec "produce-message"
+          print m.text
+        catch ExecError as e =>
+          print "exec error: exit %{e.exit-code}"

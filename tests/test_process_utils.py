@@ -17,6 +17,7 @@ import pytest
 
 from agm.core import dry_run
 from agm.core.process import (
+    CapturedOutput,
     _read_pipe_chunks,
     _run_cleanup_command,
     _wait_for_process_group_exit,
@@ -1522,6 +1523,91 @@ class TestRunCaptureSpawnError:
         """run_capture_result reports spawn_error for a nonexistent binary."""
         result = run_capture_result(["/nonexistent/binary/that/does/not/exist"])
         assert result.spawn_error is not None
+
+
+class TestCapturedOutput:
+    """CapturedOutput: raw bytes, decoded strictly only when text() is called."""
+
+    def test_text_decodes_clean_utf8(self) -> None:
+        out = CapturedOutput(data="héllo".encode(), truncated=False)
+        assert out.text() == "héllo"
+
+    def test_text_raises_on_invalid_bytes_with_byte_offset(self) -> None:
+        out = CapturedOutput(data=b"ab\xffcd", truncated=False)
+        with pytest.raises(UnicodeDecodeError) as exc_info:
+            out.text()
+        assert exc_info.value.start == 2
+
+    def test_text_drops_incomplete_trailing_sequence_when_truncated(self) -> None:
+        # 0xc3 starts a 2-byte sequence that never got its continuation byte.
+        out = CapturedOutput(data=b"ok\xc3", truncated=True)
+        assert out.text() == "ok"
+
+    def test_text_still_raises_on_invalid_bytes_when_truncated(self) -> None:
+        out = CapturedOutput(data=b"ok\xff", truncated=True)
+        with pytest.raises(UnicodeDecodeError):
+            out.text()
+
+    def test_text_does_not_drop_incomplete_tail_when_not_truncated(self) -> None:
+        out = CapturedOutput(data=b"ok\xc3", truncated=False)
+        with pytest.raises(UnicodeDecodeError):
+            out.text()
+
+    def test_display_uses_backslashreplace(self) -> None:
+        out = CapturedOutput(data=b"ok\xff", truncated=False)
+        assert out.display() == "ok\\xff"
+
+
+class TestRunCaptureResultCapturedBytes:
+    """run_capture_result returns CapturedOutput streams, decoded only on demand."""
+
+    def test_stdout_and_stderr_are_captured_output(self) -> None:
+        result = run_capture_result(
+            [sys.executable, "-c", "import sys; print('out'); print('err', file=sys.stderr)"]
+        )
+        assert isinstance(result.stdout, CapturedOutput)
+        assert isinstance(result.stderr, CapturedOutput)
+        assert result.stdout.data == b"out\n"
+        assert result.stderr.data == b"err\n"
+        assert result.stdout.text() == "out\n"
+
+    def test_multi_byte_char_split_across_chunks_decodes_correctly(self) -> None:
+        script = (
+            "import sys, time\n"
+            'sys.stdout.buffer.write(b"\\xc3")\n'
+            "sys.stdout.buffer.flush()\n"
+            "time.sleep(0.1)\n"
+            'sys.stdout.buffer.write(b"\\xa9")\n'
+            "sys.stdout.buffer.flush()\n"
+        )
+        result = run_capture_result([sys.executable, "-c", script])
+        assert result.stdout.data == "é".encode()
+        assert result.stdout.text() == "é"
+
+    def test_invalid_bytes_raise_with_byte_offset(self) -> None:
+        script = "import sys; sys.stdout.buffer.write(b'ab\\xffcd'); sys.stdout.flush()"
+        result = run_capture_result([sys.executable, "-c", script])
+        with pytest.raises(UnicodeDecodeError) as exc_info:
+            result.stdout.text()
+        assert exc_info.value.start == 2
+
+    def test_truncated_stream_drops_only_incomplete_trailing_sequence(self) -> None:
+        script = (
+            "import sys, time\n"
+            "print('initial')\n"
+            "sys.stdout.flush()\n"
+            'sys.stdout.buffer.write(b"\\xc3")\n'
+            "sys.stdout.buffer.flush()\n"
+            "time.sleep(60)\n"
+        )
+        result = run_capture_result(
+            [sys.executable, "-c", script],
+            idle_timeout=0.3,
+            isolate_process_group=True,
+        )
+        assert result.timed_out is True
+        assert result.stdout.truncated is True
+        assert result.stdout.text() == "initial\n"
 
 
 class TestDrainLoopTimeoutSentinel:

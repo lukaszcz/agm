@@ -623,6 +623,48 @@ class TestSimpleTemplates:
         assert r"\q" in msg
         assert "'q'" not in msg
 
+    def test_high_low_surrogate_pair_combines_in_double_quoted_string(self) -> None:
+        result = tok('"\\uD83D\\uDE00"')
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert frags == ["\U0001f600"]
+
+    def test_lone_high_surrogate_escape_is_lex_error(self) -> None:
+        with pytest.raises(LexError):
+            tok('"\\uD800x"')
+
+    def test_lone_low_surrogate_escape_is_lex_error(self) -> None:
+        with pytest.raises(LexError):
+            tok('"\\uDC00x"')
+
+    def test_reversed_low_high_surrogate_pair_is_lex_error(self) -> None:
+        with pytest.raises(LexError):
+            tok('"\\uDC00\\uD800"')
+
+    def test_high_surrogate_before_interpolation_hole_is_lex_error(self) -> None:
+        with pytest.raises(LexError):
+            tok('"\\uD800%{1}"')
+
+    def test_high_surrogate_at_end_of_literal_is_lex_error(self) -> None:
+        with pytest.raises(LexError):
+            tok('"\\uD800"')
+
+    def test_high_surrogate_followed_by_non_surrogate_escape_is_lex_error(self) -> None:
+        # The second escape decodes fine but is not a low surrogate.
+        with pytest.raises(LexError):
+            tok('"\\uD800\\u0041"')
+
+    def test_high_surrogate_followed_by_malformed_escape_is_lex_error(self) -> None:
+        with pytest.raises(LexError):
+            tok('"\\uD800\\uZZZZ"')
+
+    def test_lone_surrogate_escape_span_covers_only_that_escape(self) -> None:
+        source = '"\\uD800x"'
+        with pytest.raises(LexError) as exc_info:
+            tok(source)
+        span = exc_info.value.span
+        assert span is not None
+        assert source[span.start_offset : span.end_offset] == "\\uD800"
+
     def test_nested_braces_inside_interpolation(self) -> None:
         # nested { } inside %{ } should not prematurely close the interpolation
         result = tok('"%{foo}"')
@@ -703,6 +745,11 @@ class TestTripleQuotedStrings:
         frags = [(t, v) for t, v in result if t == "STRING_FRAGMENT"]
         assert len(frags) == 1
         assert frags[0][1] == "hello"
+
+    def test_high_low_surrogate_pair_combines_in_triple_quoted_string(self) -> None:
+        result = tok('"""\\uD83D\\uDE00"""')
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert frags == ["\U0001f600"]
 
     def test_triple_quoted_leading_newline_stripped(self) -> None:
         source = '"""\nhello\n"""'
@@ -825,6 +872,11 @@ class TestSingleQuotedStrings:
         result = tok(r'"\""')
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
         assert frags == ['"']
+
+    def test_high_low_surrogate_pair_combines_in_single_quoted_string(self) -> None:
+        result = tok("'\\uD83D\\uDE00'")
+        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
+        assert frags == ["\U0001f600"]
 
     def test_unterminated_single_quoted_string(self) -> None:
         source = "'hello"
@@ -3348,3 +3400,35 @@ class TestCommentSpans:
     def test_spans_from_the_valid_prefix_survive_a_lex_error(self) -> None:
         # A half-typed REPL entry still highlights the comments it already has.
         assert self.comments("let x = 1  # note\nlet y = \u200bbad\n") == ["# note"]
+
+
+# ---------------------------------------------------------------------------
+# Raw surrogate characters in source
+# ---------------------------------------------------------------------------
+
+
+class TestRawSurrogateInSource:
+    """AgL source must be valid Unicode; a raw surrogate is always a lex error.
+
+    A lone surrogate code point cannot come from a file (files are read as
+    strict UTF-8) but can reach the lexer from `-c` source or the REPL, whose
+    inputs are decoded with surrogateescape.  Built with ``chr`` rather than a
+    literal character in this source file.
+    """
+
+    def test_raw_surrogate_character_in_source_is_lex_error(self) -> None:
+        with pytest.raises(LexError):
+            tok("let a = 1\n" + chr(0xD800))
+
+    def test_raw_surrogate_character_span_covers_the_character(self) -> None:
+        source = "let a = 1\n" + chr(0xD800)
+        with pytest.raises(LexError) as exc_info:
+            tok(source)
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col, span.end_line, span.end_col) == (2, 1, 2, 2)
+        assert source[span.start_offset : span.end_offset] == chr(0xD800)
+
+    def test_raw_surrogate_character_inside_a_string_literal_is_lex_error(self) -> None:
+        with pytest.raises(LexError):
+            tok('"a' + chr(0xD800) + 'b"')

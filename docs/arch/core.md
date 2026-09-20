@@ -4,7 +4,7 @@ Two foundation packages sit beneath everything else and serve both halves of AGM
 
 ## Process Execution
 
-Foreground and captured subprocess work goes through one process module. It distinguishes terminal-inheriting from captured runs, offers require-success variants, and manages process groups so an interruption tears down descendants. Startup defers Python termination handlers until it owns the child and its reader threads, so early interrupts run the same cleanup as interrupts while waiting without changing the child’s signal mask. A caller may register a cleanup command for a resource it owns but does not contain (`agm run` registers the stop of its transient systemd scope); while one is registered, SIGTERM and SIGHUP are delivered as `KeyboardInterrupt` so the cleanup runs before the group is killed. The persistent Pi RPC session in `agent/session/rpc.py` is the one deliberate exception that owns its own streaming process, because that process must outlive a single capture call.
+Foreground and captured subprocess work goes through one process module. It distinguishes terminal-inheriting from captured runs, offers require-success variants, and manages process groups so an interruption tears down descendants. Startup defers Python termination handlers until it owns the child and its reader threads, so early interrupts run the same cleanup as interrupts while waiting without changing the child’s signal mask. A caller may register a cleanup command for a resource it owns but does not contain (`agm run` registers the stop of its transient systemd scope); while one is registered, SIGTERM and SIGHUP are delivered as `KeyboardInterrupt` so the cleanup runs before the group is killed. The persistent Pi RPC session in `agent/session/rpc.py` is the one deliberate exception that owns its own streaming process, because that process must outlive a single capture call. A captured run holds each stream as raw bytes and decodes once, after exit: the AgL-facing capture decodes strictly, so output that is not valid UTF-8 becomes a typed error rather than replacement characters inside a program's text, while the terminal-facing and AGM-internal captures decode leniently, since their text is displayed or parsed from ASCII plumbing formats and must keep flowing while the process runs.
 
 ## Environment Handling
 
@@ -12,11 +12,11 @@ The environment module clones the ambient environment, resolves variable referen
 
 ## Filesystem, TOML, and Dotenv I/O
 
-Filesystem mutations and TOML/dotenv reads and writes are wrapped so they participate in dry-run and share one interface. TOML uses round-trip parsing so updating one key preserves the rest of a file; dotenv helpers parse complete assignments and publish updates atomically; tree copies preserve links instead of dereferencing them. Atomic writes go through one chunked byte-writer (temporary sibling, then replace) shared by text writes and any other streamed destination, such as an HTTP download.
+Filesystem mutations and TOML/dotenv reads and writes are wrapped so they participate in dry-run and share one interface. TOML uses round-trip parsing so updating one key preserves the rest of a file, through the single parse entry every config layer, manifest, and dependency file shares; dotenv helpers parse complete assignments and publish updates atomically; tree copies preserve links instead of dereferencing them. Atomic writes go through one chunked byte-writer (temporary sibling, then replace) shared by text writes and any other streamed destination, such as an HTTP download.
 
 ## HTTP Transport
 
-One module wraps `requests` for outbound HTTP: it opens a pooled session, builds and streams a request through it, classifies transport failures (URL, connection, timeout, TLS, redirect, and unsendable requests) into a small typed error independent of `requests`' own exception shape, and applies a strict declared-charset-else-UTF-8 decoding rule. The session never persists cookies or consults `~/.netrc`, and caller-supplied cookies are bound to the request's host so they never leak to a cross-host redirect target. A response saved to disk streams through the same atomic temp-and-replace helper filesystem writes use. It owns the only import of `requests` besides the package fetcher, so higher layers never see `requests` types directly.
+One module wraps `requests` for outbound HTTP: it opens a pooled session, builds and streams a request through it, classifies transport failures (URL, connection, timeout, TLS, redirect, and unsendable requests) into a small typed error independent of `requests`' own exception shape, and applies a strict declared-charset-else-UTF-8 decoding rule over an allowlist of real wire text encodings, so a Python-internal or surrogate-producing codec is rejected before any byte is decoded. The session never persists cookies or consults `~/.netrc`, and caller-supplied cookies are bound to the request's host so they never leak to a cross-host redirect target. A response saved to disk streams through the same atomic temp-and-replace helper filesystem writes use. It owns the only import of `requests` besides the package fetcher, so higher layers never see `requests` types directly.
 
 ## Dry Run and Cleanup
 
@@ -24,14 +24,14 @@ Dry-run is a global mode set from `--dry-run`. Because the process and filesyste
 
 ## Generic Utilities
 
-`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; a `ContextVar` scoping guard; and an overlap-safe raise of the process-global recursion limit, used by the AgL interpreter, whose runs may overlap on threads.
+`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the scalar-text rules every point where text enters AgL applies, so a surrogate is rejected at its source rather than at the sink that would encode it; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; a `ContextVar` scoping guard; and an overlap-safe raise of the process-global recursion limit, used by the AgL interpreter, whose runs may overlap on threads.
 
 ## Code Entry Points
 
 - `src/agm/core/process.py` — foreground/capture execution, success requirements, process-group termination, cleanup-command registration.
 - `src/agm/core/env.py` — environment cloning/resolution, env-file sourcing, installation prefix.
 - `src/agm/core/fs.py` — dry-run-aware filesystem operations; `src/agm/core/path.py` — path resolution, display, and the safe-relative-path predicate shared by archives, `RECORD` files, and AgL resources.
-- `src/agm/core/toml.py`, `src/agm/core/dotenv.py` — round-trip TOML and dotenv helpers.
+- `src/agm/core/toml.py` — the single entry for reading a TOML document from outside, and `src/agm/core/dotenv.py` — round-trip TOML and dotenv helpers.
 - `src/agm/core/cleanup.py` — primary-error-preserving cleanup; `src/agm/core/dry_run.py` — global dry-run state; `src/agm/core/log.py` — logging and JSONL append.
 - `src/agm/core/http.py` — the `requests`-backed HTTP transport seam: session, request/response streaming, failure classification, charset decoding.
-- `src/agm/util/graph.py`, `text.py`, `ident.py`, `interp.py`, `scoping.py`, `recursion.py` — the pure helpers.
+- `src/agm/util/graph.py`, `text.py`, `unicode.py`, `ident.py`, `interp.py`, `scoping.py`, `recursion.py` — the pure helpers.

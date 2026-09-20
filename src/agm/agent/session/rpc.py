@@ -29,6 +29,7 @@ from agm.agent.session.protocol import (
 from agm.agent.spec import AgentPi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.process import kill_process_group
+from agm.util.unicode import loads_json
 
 _RpcOperation = Literal[
     "prompt",
@@ -41,7 +42,7 @@ _RpcOperation = Literal[
 ]
 
 _MAX_STDOUT_CHUNKS = 64
-_MAX_STDERR_CHARS = 16_384
+_MAX_STDERR_BYTES = 16_384
 _MAX_JSONL_RECORD_BYTES = 1_048_576
 _MAX_PROMPT_CHARS = 4_194_304
 _CONTEXT_PERCENT_UNAVAILABLE = Decimal("0")
@@ -50,12 +51,18 @@ _T = TypeVar("_T")
 
 @dataclass(slots=True)
 class _BoundedText:
-    """Keep only the diagnostic tail produced by one child stream."""
+    """Keep only the diagnostic byte tail produced by one child stream.
 
-    value: str = ""
+    Bytes stay undecoded until an error needs them (:func:`_stderr`):
+    decoding each incoming chunk on its own, as it arrives, would turn a
+    multi-byte character split across two chunks into two replacement
+    characters instead of the one character it actually is.
+    """
 
-    def append(self, text: str) -> None:
-        self.value = (self.value + text)[-_MAX_STDERR_CHARS:]
+    data: bytes = b""
+
+    def append(self, chunk: bytes) -> None:
+        self.data = (self.data + chunk)[-_MAX_STDERR_BYTES:]
 
 
 @dataclass(slots=True)
@@ -224,7 +231,7 @@ class PiRpcSessionBackend:
                 ),
                 _start_reader(
                     process.stderr,
-                    lambda chunk: child.stderr.append(chunk.decode("utf-8", errors="replace")),
+                    child.stderr.append,
                     lambda: None,
                     child.stopped,
                 ),
@@ -395,14 +402,12 @@ class PiRpcSessionBackend:
     def _next_event(self, child: _RpcChild) -> dict[str, object]:
         line = self._next_line(child)
         try:
-            decoded: object = cast(
-                object,
-                json.loads(
-                    line,
-                    parse_constant=_reject_nonfinite_json,
-                    parse_float=_parse_json_float,
-                    object_pairs_hook=_json_object,
-                ),
+            # object_pairs_hook rejects a duplicate key.
+            decoded: object = loads_json(
+                line,
+                parse_constant=_reject_nonfinite_json,
+                parse_float=_parse_json_float,
+                object_pairs_hook=_json_object,
             )
         except (json.JSONDecodeError, ValueError, InvalidOperation) as exc:
             raise _RpcProtocolError("Pi RPC returned malformed JSONL") from exc
@@ -826,9 +831,31 @@ def _transport_cause(error: BaseException | None) -> AgentTransportFailureCause:
     return "nonzero_exit"
 
 
+def _decode_stderr_tail(data: bytes) -> tuple[str, str | None]:
+    """Decode a bounded stderr byte tail.
+
+    Drops any leading continuation bytes: cutting the tail to its byte bound
+    can leave an orphaned continuation byte at the front, an artifact of the
+    cut rather than bad data. Returns ``(text, note)``; when the remaining
+    bytes are not valid UTF-8, *text* is ``""`` and *note* names the offset
+    within this tail -- the full stream was never retained, so there is no
+    absolute offset to report.
+    """
+    start = 0
+    while start < len(data) and 0x80 <= data[start] <= 0xBF:
+        start += 1
+    try:
+        return data[start:].decode("utf-8"), None
+    except UnicodeDecodeError as exc:
+        return "", f"stderr is not valid UTF-8 at byte {exc.start}"
+
+
 def _stderr(child: _RpcChild, fallback: str, include_fallback: bool = False) -> str:
-    if not child.stderr.value:
+    if not child.stderr.data:
         return fallback
+    text, note = _decode_stderr_tail(child.stderr.data)
+    if not text:
+        return f"{fallback}; {note}" if note else fallback
     if include_fallback:
-        return f"{child.stderr.value}\n{fallback}"
-    return child.stderr.value
+        return f"{text}\n{fallback}"
+    return text

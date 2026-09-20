@@ -18,7 +18,7 @@ One Python class is synthesized per nominal identity, once, carrying its own des
 
 ## Callables and Exceptions
 
-An AgL closure crosses as a callable proxy that is valid only on its owning interpreter thread while an extern call is active; the evaluator supplies the execution hook, the boundary owns conversion and the call window. A bare Python callable has no AgL representation. An AgL raise inside a callback crosses companion frames in the `AglException` carrier and resumes as the same exception if it escapes; a companion may use the carrier to initiate a typed AgL raise. Other Python `Exception`s become catchable `ExternError`; `BaseException`s such as the `SystemExit` from `std/process::exit` propagate. The declared extern signature is a companion obligation, not a runtime check.
+An AgL closure crosses as a callable proxy that is valid only on its owning interpreter thread while an extern call is active; the evaluator supplies the execution hook, the boundary owns conversion and the call window. A bare Python callable has no AgL representation. An AgL raise inside a callback crosses companion frames in the `AglException` carrier and resumes as the same exception if it escapes; a companion may use the carrier to initiate a typed AgL raise. Other Python `Exception`s become catchable `ExternError`; `BaseException`s such as the `SystemExit` from `std/process::exit` propagate. The declared extern signature is a companion obligation, not a runtime check, and so is returning text that is valid Unicode: nothing checks a companion's return value, so a companion that reads OS names or decodes bytes checks or decodes strictly itself.
 
 ## Code Entry Points
 

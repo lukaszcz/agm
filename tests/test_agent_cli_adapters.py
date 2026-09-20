@@ -16,7 +16,7 @@ from agm.agent.session import (
 )
 from agm.agent.session.cli_adapters import AgentCommandSessionBackend
 from agm.agent.spec import AgentCommand
-from agm.core.process import ProcessCaptureResult
+from agm.core.process import CapturedOutput, ProcessCaptureResult
 from agm.util.interp import InterpolationError
 
 
@@ -27,8 +27,8 @@ def _open(backend: AgentCommandSessionBackend, command: str, *, name: str = "") 
 def _capture_result() -> ProcessCaptureResult:
     return ProcessCaptureResult(
         returncode=0,
-        stdout="answer",
-        stderr="",
+        stdout=CapturedOutput(data=b"answer", truncated=False),
+        stderr=CapturedOutput(data=b"", truncated=False),
         elapsed=0.1,
         timed_out=False,
         spawn_error=None,
@@ -209,8 +209,8 @@ def test_ask_preserves_failed_process_diagnostics(
     def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
         return ProcessCaptureResult(
             returncode=returncode,
-            stdout="partial answer",
-            stderr=stderr,
+            stdout=CapturedOutput(data=b"partial answer", truncated=False),
+            stderr=CapturedOutput(data=stderr.encode(), truncated=False),
             elapsed=0.1,
             timed_out=timed_out,
             spawn_error=spawn_error,
@@ -240,8 +240,8 @@ def test_ask_preserves_failed_process_diagnostics_when_cleanup_fails(
     def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
         return ProcessCaptureResult(
             returncode=2,
-            stdout="partial answer",
-            stderr="runner failure",
+            stdout=CapturedOutput(data=b"partial answer", truncated=False),
+            stderr=CapturedOutput(data=b"runner failure", truncated=False),
             elapsed=0.1,
             timed_out=False,
             spawn_error=None,
@@ -261,6 +261,55 @@ def test_ask_preserves_failed_process_diagnostics_when_cleanup_fails(
     assert raised.value.cause == "nonzero_exit"
     assert raised.value.exit_code == 2
     assert raised.value.stderr_tail == "runner failure"
+
+
+def test_ask_reports_protocol_failure_for_undecodable_stdout_on_an_otherwise_successful_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid UTF-8 in an exit-0 process's stdout is a protocol failure, not a success."""
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout=CapturedOutput(data=b"ok \xff bad", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    backend = AgentCommandSessionBackend()
+    _open(backend, "runner --session %{SESSION_ID}")
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest(prompt="question"))
+
+    assert raised.value.cause == "protocol_failure"
+
+
+def test_ask_undecodable_stderr_tail_gives_empty_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stderr tail that is not valid UTF-8 reports as empty, not garbled text."""
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        return ProcessCaptureResult(
+            returncode=1,
+            stdout=CapturedOutput(data=b"", truncated=False),
+            stderr=CapturedOutput(data=b"\xff bad", truncated=False),
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    backend = AgentCommandSessionBackend()
+    _open(backend, "runner --session %{SESSION_ID}")
+
+    with pytest.raises(SessionAskError) as raised:
+        backend.ask(SessionAskRequest(prompt="question"))
+
+    assert raised.value.cause == "nonzero_exit"
+    assert raised.value.stderr_tail == ""
 
 
 def test_ask_preserves_an_interpolation_failure_when_cleanup_fails(

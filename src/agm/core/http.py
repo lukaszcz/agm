@@ -349,12 +349,14 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
     headers = _headers_for(spec)
     _validate_headers(headers)
     rendered_cookies = _validate_cookies(spec.cookies)
+    existing_cookies = "; ".join(
+        headers.pop(name) for name in tuple(headers) if name.lower() == "cookie"
+    )
+    if existing_cookies:
+        headers["Cookie"] = existing_cookies
     if rendered_cookies:
-        existing_cookies = headers.get("Cookie")
         headers["Cookie"] = (
-            f"{existing_cookies}; {rendered_cookies}"
-            if existing_cookies is not None
-            else rendered_cookies
+            f"{existing_cookies}; {rendered_cookies}" if existing_cookies else rendered_cookies
         )
     caller_cookie_header = headers.get("Cookie", "")
     timeout = None if spec.timeout_seconds is None else (spec.timeout_seconds, spec.timeout_seconds)

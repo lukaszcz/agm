@@ -271,6 +271,36 @@ def test_perform_keeps_caller_cookies_on_a_same_host_redirect() -> None:
     adapter.assert_complete()
 
 
+@pytest.mark.parametrize(
+    ("cookies", "expected_cookie"),
+    [({}, "header=value"), ({"caller": "value"}, "header=value; caller=value")],
+)
+def test_perform_merges_lowercase_cookie_headers_and_keeps_them_on_same_host_redirect(
+    cookies: dict[str, str], expected_cookie: str
+) -> None:
+    session, adapter = fake_session(
+        [
+            {"status": 302, "headers": {"Location": "https://example.org/final"}},
+            {"status": 200, "body": ""},
+        ]
+    )
+
+    http.perform(
+        session,
+        http.RequestSpec(
+            method="GET",
+            url="https://example.org/start",
+            headers={"cookie": "header=value"},
+            cookies=cookies,
+            timeout_seconds=5.0,
+        ),
+    )
+
+    assert adapter.sent[0].headers.get("Cookie") == expected_cookie
+    assert adapter.sent[1].headers.get("Cookie") == expected_cookie
+    adapter.assert_complete()
+
+
 def test_perform_never_retains_a_cookie_across_calls() -> None:
     session, adapter = fake_session(
         [

@@ -6,6 +6,7 @@ import base64
 import time
 from decimal import Decimal
 from pathlib import Path
+from threading import TIMEOUT_MAX
 from urllib.parse import urlencode
 
 from agl import AglException, nominals, runtime
@@ -123,7 +124,7 @@ def _unwrap_timeout(timeout: object) -> tuple[float | None, str | None]:
     """Return (inactivity seconds, the given text) from a ``timeout: Option[text]`` argument.
 
     An unparseable duration raises ``TypeError``, exactly as ``exec`` does; so
-    does a non-positive one, before any transport call is attempted.
+    does a non-positive or unrepresentable one, before any transport call is attempted.
     """
     if isinstance(timeout, Option.Some):
         text = timeout.value
@@ -131,8 +132,10 @@ def _unwrap_timeout(timeout: object) -> tuple[float | None, str | None]:
             seconds = parse_timeout(text)
         except ValueError as exc:
             raise AglException(TypeError(message=f"invalid timeout: {exc}")) from exc
-        if seconds <= 0:
-            raise AglException(TypeError(message=f"invalid timeout: {text!r} is not positive"))
+        if not 0 < seconds <= TIMEOUT_MAX:
+            raise AglException(
+                TypeError(message=f"invalid timeout: {text!r} is not positive and representable")
+            )
         return seconds, text
     return None, None
 

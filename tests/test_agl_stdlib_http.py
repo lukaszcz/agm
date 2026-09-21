@@ -426,8 +426,8 @@ program def main() -> unit =
     assert result.error.type_name == "TypeError"
 
 
-@pytest.mark.parametrize("timeout_text", ["0", "0s", "0.0"])
-def test_non_positive_timeout_raises_type_error_before_any_transport_call(
+@pytest.mark.parametrize("timeout_text", ["0", "0s", "0.0", "9" * 11, "9" * 400])
+def test_unusable_timeout_raises_type_error_before_any_transport_call(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, timeout_text: str
 ) -> None:
     source = f"""import std/http

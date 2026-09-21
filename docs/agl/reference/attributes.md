@@ -60,8 +60,6 @@ the attribute does not admit are static errors.
 | `@name("…")` | AgL identifier | field, enum member, or record declaration | Alternative external name; default JSON name. |
 | `@json-name("…")` | non-empty text, not `"$case"` | same | Overrides the JSON name only. |
 | `@command("…")` | command path | `program def` | Registers the program as that package command. |
-| `@description("…")` | prose | `program def` | The registered command's one-line description. |
-| `@help("…")` | prose | `program def` | Further prose the registered command's help shows. |
 | `@config(key = value, ...)` | one or more keyed entries | `program def` | States the values module parameters and engine settings take when this program is selected. |
 
 ## Zone attributes
@@ -80,8 +78,11 @@ standard. Zone semantics: [Functions](functions.md#parameters),
 ## `@doc`
 
 One text literal of prose. It never changes a declaration's meaning. A host
-shows a `program def`'s `@doc` as the program's description and each host-facing
-parameter's `@doc` as that parameter's help ([Host environment](host-environment.md#help)).
+shows a `program def`'s `@doc` as the program's description — wherever the
+program runs, including as the prose of the command it registers — and each
+host-facing parameter's `@doc` as that parameter's help
+([Host environment](host-environment.md#help)). Where a host has room for one
+line only, such as a listing of commands, it shows the opening paragraph.
 An inline enum member's `@doc`, or a referenced member record's own `@doc`, is
 the `description` of that member's `oneOf` alternative in a
 [derived JSON Schema](agent-calls.md#derived-json-schema).
@@ -134,28 +135,23 @@ record Job
   shape: Shape
 ```
 
-## Command attributes
+## `@command`
 
 `@command` registers a `program def` as a command of the package that owns its
 module ([Packages](packages.md#commands)). Its argument is a command path:
 space-separated words naming the command a reader invokes, so
 `@command("devel review")` is invoked as `devel review`. A path whose first
 word is one of the host's own commands, or any word of which looks like an
-option, is a static error.
+option, is a static error. It appears at most once, and on a `program def`
+alone.
 
-`@description` and `@help` are the registered command's prose. They describe
-the registration, not the program, so each is a static error without
-`@command` beside it; a program's own prose is `@doc`, which describes it
-wherever it runs.
-
-Each of the three appears at most once on a declaration, and all three are
-legal on a `program def` alone.
+A command is a way to refer to a program, so the registration carries no prose
+of its own: the program's `@doc` describes it wherever it runs, the listing of
+its command included.
 
 ```agl
 @command("devel review")
-@description("Review changes")
-@help("This program reviews changes")
-@doc("Change review")
+@doc("Review the working tree and report findings by severity.")
 program def main(@arg-pos subject: text) -> unit =
   print "reviewing %{subject}"
 ```

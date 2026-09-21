@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.attributes import ProgramCommandSpec, ProgramOptionSpec
+from agm.agl.attributes import ProgramOptionSpec, ProgramRegistration
 from agm.agl.parser.parser import parse_program_seeded
-from agm.agl.scope import AglScopeError, ModuleResolution, recognize_program_command
+from agm.agl.scope import AglScopeError, ModuleResolution, recognize_program_registration
 from agm.agl.scope.attributes import recognize_attributes
 from agm.agl.syntax.nodes import (
     Attribute,
@@ -529,40 +529,27 @@ class TestDocumentationTexts:
 
 
 class TestCommandRegistrations:
-    """``@command``/``@description``/``@help``, keyed by the program they register."""
+    """``@command``, keyed by the program it registers, carrying that program's ``@doc``."""
 
-    def test_every_command_attribute_reaches_the_registration(self) -> None:
-        resolution = resolve_entry(
-            '@command("devel review")\n'
-            '@description("Review changes")\n'
-            '@help("This program reviews changes")\n'
-            '@doc("Change review")\n'
-            "program def main() -> unit = ()\n"
-        )
+    def test_the_registered_path_reaches_the_fact_table(self) -> None:
+        resolution = resolve_entry('@command("devel review")\nprogram def main() -> unit = ()\n')
 
         program = _program(resolution, "main")
-        assert resolution.attributes.command_registrations[program.node_id] == ProgramCommandSpec(
-            path="devel review",
-            description="Review changes",
-            help="This program reviews changes",
-        )
+        assert resolution.attributes.command_registrations[program.node_id] == "devel review"
 
-    def test_documentation_stays_separate_from_the_registration(self) -> None:
+    def test_a_registered_program_documents_itself_like_any_other(self) -> None:
         resolution = resolve_entry(
             '@command("audit")\n@doc("Change review")\nprogram def main() -> unit = ()\n'
         )
 
         program = _program(resolution, "main")
         assert resolution.attributes.docs[program.node_id] == "Change review"
-        assert resolution.attributes.command_registrations[program.node_id].description is None
+        assert resolution.attributes.command_registrations[program.node_id] == "audit"
 
-    def test_a_command_without_prose_carries_only_its_path(self) -> None:
-        resolution = resolve_entry('@command("audit")\nprogram def main() -> unit = ()\n')
+    def test_documentation_alone_registers_no_command(self) -> None:
+        resolution = resolve_entry('@doc("Change review")\nprogram def main() -> unit = ()\n')
 
-        program = _program(resolution, "main")
-        assert resolution.attributes.command_registrations[program.node_id] == ProgramCommandSpec(
-            path="audit"
-        )
+        assert resolution.attributes.command_registrations == {}
 
     def test_an_unregistered_program_has_no_entry(self) -> None:
         resolution = resolve_entry("program def main() -> unit = ()\n")
@@ -581,8 +568,7 @@ class TestCommandRegistrations:
         )
 
         program = _program(resolution, "run")
-        registration = resolution.attributes.command_registrations[program.node_id]
-        assert registration.path == "devel review"
+        assert resolution.attributes.command_registrations[program.node_id] == "devel review"
 
     @pytest.mark.parametrize("path", ("", "   ", "devel  review", "devel\treview"))
     def test_a_path_that_is_not_space_separated_words_is_rejected(self, path: str) -> None:
@@ -593,11 +579,6 @@ class TestCommandRegistrations:
         with pytest.raises(AglScopeError, match="reserved"):
             resolve_entry('@command("exec review")\nprogram def main() -> unit = ()\n')
 
-    @pytest.mark.parametrize("attribute", ("description", "help"))
-    def test_prose_without_a_command_is_rejected(self, attribute: str) -> None:
-        with pytest.raises(AglScopeError, match="command"):
-            resolve_entry(f'@{attribute}("text")\nprogram def main() -> unit = ()\n')
-
     def test_an_ordinary_function_admits_no_command_attribute(self) -> None:
         with pytest.raises(AglScopeError, match="command"):
             resolve_entry(
@@ -606,7 +587,7 @@ class TestCommandRegistrations:
 
 
 class TestParseOnlyCommandRecognition:
-    """``recognize_program_command`` validates a declaration header alone.
+    """``recognize_program_registration`` validates a declaration header alone.
 
     Package command discovery (``agm.packages.source_commands``) calls it on
     a parsed-but-unresolved program, so it must raise the exact diagnostics
@@ -624,34 +605,29 @@ class TestParseOnlyCommandRecognition:
 
     def test_recognizes_a_full_registration_without_resolving_the_program(self) -> None:
         function = self._program(
-            '@command("devel review")\n'
-            '@description("Review changes")\n'
-            '@help("This program reviews changes")\n'
-            "program def main() -> unit = ()\n"
+            '@command("devel review")\n@doc("Review changes")\nprogram def main() -> unit = ()\n'
         )
 
-        assert recognize_program_command(function) == ProgramCommandSpec(
-            path="devel review",
-            description="Review changes",
-            help="This program reviews changes",
+        assert recognize_program_registration(function) == ProgramRegistration(
+            doc="Review changes",
+            command="devel review",
         )
 
-    def test_returns_none_for_an_unregistered_program(self) -> None:
+    def test_recognizes_the_documentation_of_an_unregistered_program(self) -> None:
+        function = self._program('@doc("Review changes")\nprogram def main() -> unit = ()\n')
+
+        assert recognize_program_registration(function) == ProgramRegistration(doc="Review changes")
+
+    def test_a_bare_program_registers_nothing_and_documents_nothing(self) -> None:
         function = self._program("program def main() -> unit = ()\n")
 
-        assert recognize_program_command(function) is None
+        assert recognize_program_registration(function) == ProgramRegistration()
 
     def test_rejects_a_malformed_path_like_full_scope_resolution(self) -> None:
         function = self._program('@command(" bad")\nprogram def main() -> unit = ()\n')
 
         with pytest.raises(AglScopeError, match="Command path"):
-            recognize_program_command(function)
-
-    def test_rejects_prose_without_command_like_full_scope_resolution(self) -> None:
-        function = self._program('@description("text")\nprogram def main() -> unit = ()\n')
-
-        with pytest.raises(AglScopeError, match="command"):
-            recognize_program_command(function)
+            recognize_program_registration(function)
 
     def test_a_program_carrying_config_is_still_recognized(self) -> None:
         function = self._program(
@@ -659,7 +635,7 @@ class TestParseOnlyCommandRecognition:
             "program def main() -> unit = ()\n"
         )
 
-        assert recognize_program_command(function) == ProgramCommandSpec(path="audit")
+        assert recognize_program_registration(function) == ProgramRegistration(command="audit")
 
 
 class TestProgramConfigRecognition:

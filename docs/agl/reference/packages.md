@@ -86,21 +86,21 @@ or left to inference. It remains an ordinary callable function inside the
 package.
 
 A program registers itself as a command by carrying
-[`@command`](attributes.md#command-attributes), whose argument is the command
-path a reader invokes; `@description` and `@help` supply that command's prose.
-A package's commands are therefore declared where its programs are, and the
-manifest need name only the commands no program claims.
+[`@command`](attributes.md#command), whose argument is the command path a
+reader invokes; the program's `@doc` is that command's prose. A package's
+commands are therefore declared where its programs are, and the manifest need
+name only the commands no program claims.
 
 ```agl
 @command("dev review")
-@description("Review changes")
+@doc("Review changes")
 program def main() -> unit =
   print("review loop")
 ```
 
 Declaring one command path in both places — a manifest `[commands]` entry and a
-program's `@command` — is an error whenever the two declarations differ; each
-path has one declaration.
+program's `@command` — is an error whenever the two name different programs;
+each path has one declaration.
 
 A registered command runs its program exactly as a directly executed program
 does: the selected `program def`'s own value parameters and every `@param`
@@ -111,10 +111,8 @@ configuration leaves, and completion, just as under `agm exec`. The same
 both parameter kinds, so their flags, one-letter spellings, environment
 fallbacks, and `@doc` prose appear on the registered command. Its help shows
 the signature's options first, then a `Parameters of MODULE` section for each
-closure module with visible module parameters. A command the manifest registers
-takes its description and `help` prose from that entry, and a program's own
-registration takes them from `@description` and `@help`; either appears
-alongside the program's `@doc`. Command groups and aliases are defined in the
+closure module with visible module parameters. Its prose is the program's
+`@doc`, however the command was registered. Command groups and aliases are defined in the
 [package manifest](../../commands/pkg.md#commands), and either may name a
 command a program registers.
 

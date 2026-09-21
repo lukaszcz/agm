@@ -20,12 +20,9 @@ version = "1.0.0"
 "devel releases" = {}
 "devel releases inspect" = { program = "tools/main::main" }
 [commands.devel]
-description = "Development tasks"
-help = "Choose a development workflow."
+doc = "Choose a development workflow."
 [commands.devel.review]
 program = "tools/main::main"
-description = "Review changes"
-help = "Inspect changes before publishing."
 [aliases]
 dev = "devel"
 rev = "devel review"
@@ -66,14 +63,14 @@ def test_group_help_lists_descendants(command_package: Path, path: str, help_for
         assert "review" in result.output
         assert "releases" in result.output
         assert "Choose a development workflow." in result.output
-        assert "Review changes" in result.output
 
 
 @pytest.mark.parametrize("path", ["devel review", "dev review", "rev"])
-def test_leaf_help_uses_manifest_help(command_package: Path, path: str) -> None:
+def test_leaf_help_documents_the_program_behind_the_command(
+    command_package: Path, path: str
+) -> None:
     result = CliRunner().invoke(get_command(app), [*path.split(), "--help"])
     assert result.exit_code == 0
-    assert "Inspect changes before publishing." in result.output
     assert "--subject" in result.output
     assert "Review the selected subject." in result.output
     assert "Subject to inspect." in result.output
@@ -100,7 +97,7 @@ def test_alias_config_applies_to_every_invocation(
         '[aliases]\n"bad  path" = "devel review"',
         '[aliases]\ndevel = "devel review"',
         '[aliases]\ndev = "rev"\nrev = "dev"',
-        '[commands.lonely]\nhelp = "No children"',
+        "[commands.lonely]",
     ],
 )
 def test_invalid_aliases_and_empty_groups_are_rejected(extra: str) -> None:
@@ -149,6 +146,7 @@ def test_group_help_remains_available_when_source_is_missing(command_package: Pa
     assert "nested check" in result.output
     assert "review" in result.output
     assert "Choose a development workflow." in result.output
+    assert "Review the selected subject." in result.output
 
 
 @pytest.mark.parametrize("prefix, expected", [("--h", ["--help"]), ("--x", [])])

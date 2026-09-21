@@ -16,7 +16,7 @@ from agm.command_catalog import invalid_command_path
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
-_COMMAND_FIELDS = frozenset({"program", "description", "help"})
+_COMMAND_FIELDS = frozenset({"program", "doc"})
 
 
 class ManifestError(ValueError):
@@ -35,11 +35,19 @@ class DependencySpec:
 
 @dataclass(frozen=True, slots=True)
 class CommandSpec:
-    """One manifest command registration."""
+    """One manifest command registration.
+
+    ``doc`` is the command's prose. A command naming a program takes it from
+    that program's ``@doc`` every time the package's source is read, and an
+    installed manifest carries the result so a host lists the command without
+    compiling anything (see
+    :func:`agm.packages.source_commands.package_with_source_commands`). A
+    command group, which names no program, carries only what the manifest
+    states.
+    """
 
     program: str | None = None
-    description: str | None = None
-    help: str | None = None
+    doc: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,8 +341,7 @@ def _collect_commands(raw: TomlDict, *, prefix: str, commands: dict[str, Command
                 raise ManifestError(f"command {path!r} is defined more than once")
             commands[path] = CommandSpec(
                 program=_optional_str(metadata, "program", f"command {path!r}"),
-                description=_optional_str(metadata, "description", f"command {path!r}"),
-                help=_optional_str(metadata, "help", f"command {path!r}"),
+                doc=_optional_str(metadata, "doc", f"command {path!r}"),
             )
         _collect_commands(children, prefix=path, commands=commands)
 

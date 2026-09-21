@@ -602,26 +602,30 @@ def test_registered_command_help_omits_program_arguments_on_a_reservation_collis
     assert "help TEXT" not in text
 
 
-def test_registered_command_help_includes_manifest_description_and_program_doc() -> None:
-    """A command description introduces the program's own ``@doc``."""
+def test_registered_command_help_shows_the_program_documentation() -> None:
+    """A command's prose is the ``@doc`` of the program behind it."""
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         '@doc("Program prose.")\nprogram def main() -> unit = ()'
     )
 
-    described = registered_help(
-        "tools lint",
-        CommandRegistration("tools", "tools/lint::main", "Manifest prose."),
-        program=program,
-    )
-    undescribed = registered_help(
+    text = registered_help(
         "tools lint", CommandRegistration("tools", "tools/lint::main"), program=program
     )
 
-    assert "Manifest prose." in described
-    assert "Program prose." in described
-    assert "Program prose." in undescribed
+    assert "Program prose." in text
+
+
+def test_registered_command_help_falls_back_to_the_indexed_documentation() -> None:
+    """An unreadable program still documents its command from the cached ``@doc``."""
+    text = registered_help(
+        "tools lint",
+        CommandRegistration("tools", "tools/lint::main", "Indexed prose."),
+        program=None,
+    )
+
+    assert "Indexed prose." in text
 
 
 def test_registered_command_help_omits_a_hidden_parameter() -> None:
@@ -699,7 +703,7 @@ def test_registered_command_program_option_error_renders_shared_usage_help(
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
         '[commands]\n"tools greet" = { program = "tools/greet::main", '
-        'description = "Greet someone" }\n',
+        'doc = "Greet someone" }\n',
         encoding="utf-8",
     )
     module.write_text(
@@ -747,7 +751,7 @@ def test_registered_command_help_flag_bundled_into_a_short_group_renders_help(
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
         '[commands]\n"tools greet" = { program = "tools/greet::main", '
-        'description = "Greet someone" }\n',
+        'doc = "Greet someone" }\n',
         encoding="utf-8",
     )
     module.write_text(
@@ -1017,7 +1021,7 @@ name = "tools"
 version = "1.0.0"
 
 [commands]
-"tools lint" = { program = "tools/lint::main", description = "Lint package inputs" }
+"tools lint" = { program = "tools/lint::main", doc = "Lint package inputs" }
 """,
         encoding="utf-8",
     )
@@ -1220,7 +1224,7 @@ def test_installed_package_dispatches_its_own_source_declared_command(
     )
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
         '@command("tools review")\n'
-        '@description("Review changes")\n'
+        '@doc("Review changes")\n'
         "program def main(level: text) -> unit = print level\n",
         encoding="utf-8",
     )
@@ -1246,7 +1250,7 @@ def test_editable_package_dispatches_its_own_source_declared_command(
     )
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
         '@command("tools review")\n'
-        '@description("Review changes")\n'
+        '@doc("Review changes")\n'
         "program def main(level: text) -> unit = print level\n",
         encoding="utf-8",
     )
@@ -1564,7 +1568,7 @@ def test_registered_command_argument_error_renders_shared_usage_help(
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
         '[commands]\n"tools lint" = { program = "tools/lint::main", '
-        'description = "Lint package inputs" }\n',
+        'doc = "Lint package inputs" }\n',
         encoding="utf-8",
     )
     module.write_text(

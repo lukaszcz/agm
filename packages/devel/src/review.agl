@@ -89,6 +89,7 @@ def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent,
 
 let default-aspects = "correctness, maintainability, efficency, adherence to relevant AGENTS.md files"
 
+@doc("Review changes")
 program def review-main(
   scope: text,
   aspects: text = default-aspects,
@@ -98,6 +99,7 @@ program def review-main(
   let sep = if extra-aspects == "" => "" else => ", "
   print <| agent.review(scope, aspects ++ sep ++ extra-aspects)
 
+@doc("Revise")
 program def revise-main(
   file: path,
   agent: Agent = config::default-agent)
@@ -109,6 +111,7 @@ program def revise-main(
     | None =>
       print <| agent.revise-review-text(txt)
 
+@doc("Refine")
 program def refine-main(
   scope: text,
   aspects: text = default-aspects,

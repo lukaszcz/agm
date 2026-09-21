@@ -1,11 +1,9 @@
-# A `program def` names the package command it registers as, and the prose that
-# command carries, with `@command`, `@description` and `@help`. The registration
-# describes the program to a package host; running the program is unaffected,
-# and `@doc` keeps describing the program itself wherever it runs.
+# A `program def` names the package command it registers as with `@command`.
+# The registration describes the program to a package host; running the program
+# is unaffected. `@doc` describes the program wherever it runs, and is the prose
+# its registered command carries too.
 
 @command("devel review")
-@description("Review changes")
-@help("This program reviews changes")
 @doc("Change review")
 program def main(@arg-pos subject: text, strict: bool = false) -> unit =
   print "reviewing %{subject}"

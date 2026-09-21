@@ -655,7 +655,7 @@ class TestPackageCheckCommand:
         (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (root / "package.toml").write_text(
             '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
-            '[commands.devel]\ndescription = "Development workflows"\n',
+            '[commands.devel]\ndoc = "Development workflows"\n',
             encoding="utf-8",
         )
         (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
@@ -672,7 +672,7 @@ class TestPackageCheckCommand:
         (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (root / "package.toml").write_text(
             '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
-            '[commands.devel]\ndescription = "Development workflows"\n\n'
+            '[commands.devel]\ndoc = "Development workflows"\n\n'
             '[aliases]\nrev = "devel review"\n',
             encoding="utf-8",
         )
@@ -696,7 +696,7 @@ class TestPackageCheckCommand:
         (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (root / "package.toml").write_text(
             '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
-            '[commands.devel]\ndescription = "Development workflows"\n',
+            '[commands.devel]\ndoc = "Development workflows"\n',
             encoding="utf-8",
         )
         (root / MODULE_TREE_DIRNAME / "main.agl").write_text(

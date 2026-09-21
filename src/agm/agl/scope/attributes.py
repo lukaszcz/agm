@@ -31,12 +31,9 @@ from dataclasses import dataclass
 from agm.agl.attributes import (
     BUILTIN_ATTRIBUTES,
     COMMAND_ATTRIBUTE,
-    COMMAND_PROSE_ATTRIBUTES,
     CONFIG_ATTRIBUTE,
-    DESCRIPTION_ATTRIBUTE,
     DOC_ATTRIBUTE,
     EXTERN_NAME_ATTRIBUTE,
-    HELP_ATTRIBUTE,
     JSON_NAME_ATTRIBUTE,
     NAME_ADDRESSED_OPTION_ATTRIBUTES,
     NAME_ATTRIBUTE,
@@ -50,8 +47,8 @@ from agm.agl.attributes import (
     AttributeArguments,
     AttributeSpec,
     AttributeTarget,
-    ProgramCommandSpec,
     ProgramOptionSpec,
+    ProgramRegistration,
     invalid_external_name,
     invalid_json_name,
     invalid_program_command_path,
@@ -81,7 +78,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.visitor import walk
 from agm.agl.zones import ParamZone
 
-__all__ = ["AttributeFacts", "recognize_attributes", "recognize_program_command"]
+__all__ = ["AttributeFacts", "recognize_attributes", "recognize_program_registration"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,8 +156,8 @@ def _function_target(node: FuncDef) -> AttributeTarget:
     return AttributeTarget.FUNCTION
 
 
-def recognize_program_command(node: FuncDef) -> ProgramCommandSpec | None:
-    """Return the package command a ``program def`` registers, or ``None``.
+def recognize_program_registration(node: FuncDef) -> ProgramRegistration:
+    """Return what a ``program def``'s attribute prefix says about hosting it.
 
     Validates *node*'s attribute prefix against the catalog exactly as the
     scope walk does — this is the one place both share, so a parse-only
@@ -169,7 +166,9 @@ def recognize_program_command(node: FuncDef) -> ProgramCommandSpec | None:
     passing a ``program def``; this function trusts that and does not check it.
     """
     recognized = _validate_attribute_prefix(node.attributes, AttributeTarget.PROGRAM)
-    return _program_command_spec(node, recognized)
+    return ProgramRegistration(
+        doc=recognized.text_of(DOC_ATTRIBUTE), command=_program_command_path(recognized)
+    )
 
 
 def recognize_attributes(
@@ -214,7 +213,7 @@ class _Recognizer:
         self.extern_names: dict[int, str] = {}
         self.program_options: dict[int, ProgramOptionSpec] = {}
         self.params: dict[int, ProgramOptionSpec] = {}
-        self.command_registrations: dict[int, ProgramCommandSpec] = {}
+        self.command_registrations: dict[int, str] = {}
         self.docs: dict[int, str] = {}
         self.external_names: dict[int, ExternalName] = {}
         self.program_configs: dict[int, tuple[AttributeKeyedArg, ...]] = {}
@@ -394,10 +393,10 @@ class _Recognizer:
     # ------------------------------------------------------------------
 
     def _command_registration(self, node: FuncDef, recognized: _Recognized) -> None:
-        """Record the package command one ``program def`` registers itself as."""
-        spec = _program_command_spec(node, recognized)
-        if spec is not None:
-            self.command_registrations[node.node_id] = spec
+        """Record the package command path one ``program def`` registers itself as."""
+        path = _program_command_path(recognized)
+        if path is not None:
+            self.command_registrations[node.node_id] = path
 
     # ------------------------------------------------------------------
     # Fact builder: program config entries
@@ -546,40 +545,22 @@ def _option_spec(name: str, recognized: _Recognized) -> ProgramOptionSpec:
     )
 
 
-def _program_command_spec(node: FuncDef, recognized: _Recognized) -> ProgramCommandSpec | None:
-    """Return the package command *node* registers via its attribute prefix, or ``None``.
+def _program_command_path(recognized: _Recognized) -> str | None:
+    """Return the package command path an attribute prefix registers, or ``None``.
 
-    Only a program carrying ``@command`` registers anything, so the prose
-    attributes — which describe a registration rather than a program — are
-    rejected without it rather than silently dropped. The path is held to
-    the rule a package manifest's command paths answer to, since both
-    register into the same command tree; whether the path reaches a CLI at
-    all is a package fact, so a program outside a package is simply never
-    asked for its registration.
+    The path is held to the rule a package manifest's command paths answer
+    to, since both register into the same command tree; whether the path
+    reaches a CLI at all is a package fact, so a program outside a package is
+    simply never asked for its registration.
     """
     command = recognized.nodes.get(COMMAND_ATTRIBUTE)
     if command is None:
-        for name in COMMAND_PROSE_ATTRIBUTES:
-            attribute = recognized.nodes.get(name)
-            if attribute is not None:
-                raise AglScopeError(
-                    f"Attribute '@{name}' describes a command registration, so program "
-                    f"{node.name!r} needs a '@{COMMAND_ATTRIBUTE}' attribute beside it.",
-                    span=attribute.span,
-                )
         return None
     path = recognized.texts[COMMAND_ATTRIBUTE]
     invalid = invalid_program_command_path(path)
     if invalid is not None:
-        raise AglScopeError(
-            f"Command path {path!r} {invalid}.",
-            span=command.span,
-        )
-    return ProgramCommandSpec(
-        path=path,
-        description=recognized.text_of(DESCRIPTION_ATTRIBUTE),
-        help=recognized.text_of(HELP_ATTRIBUTE),
-    )
+        raise AglScopeError(f"Command path {path!r} {invalid}.", span=command.span)
+    return path
 
 
 def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:

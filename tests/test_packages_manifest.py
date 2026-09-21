@@ -72,7 +72,7 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
             == "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
         assert manifest.commands["review-loop"].program == "review_tools/review::main"
-        assert manifest.commands["review-loop lint"].description == "Lint review configurations"
+        assert manifest.commands["review-loop lint"].doc == "Lint review configurations"
 
     @pytest.mark.parametrize("name", ("review_tools", "review-tools", "Review2", "_internal"))
     def test_accepts_module_segment_package_names(self, tmp_path: Path, name: str) -> None:
@@ -317,7 +317,7 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         nested = load_manifest_text(
             package
             + """[commands.devel]
-description = "Development workflows"
+doc = "Development workflows"
 
 [commands.devel.review]
 program = "review_tools/main::review"
@@ -329,7 +329,7 @@ program = "review_tools/main::lint"
         space_separated = load_manifest_text(
             package
             + """[commands.devel]
-description = "Development workflows"
+doc = "Development workflows"
 
 [commands."devel review"]
 program = "review_tools/main::review"
@@ -373,7 +373,7 @@ program = "review_tools/main::review"
         "commands",
         (
             "[commands]\nrun = 'review_tools/main::main'\n",
-            "[commands]\nrun = { description = 'missing program' }\n",
+            "[commands]\nrun = { doc = 'missing program' }\n",
             "[commands]\nrun = { program = 'review_tools/main::main', extra = 'invalid' }\n",
         ),
     )
@@ -440,7 +440,7 @@ program = "review_tools/main::review"
 
     _LONELY_GROUP = (
         '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n'
+        '[commands.devel]\ndoc = "Development workflows"\n'
     )
     _ALIAS_TO_UNKNOWN = (
         '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n[aliases]\nrev = "devel review"\n'

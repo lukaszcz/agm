@@ -13,5 +13,5 @@ judge = { version = "0.1", path = "../judge" }
 tools = { version = "1.1", url = "https://example.test/tools.agmpkg", hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
 
 [commands]
-review-loop = { program = "review_tools/review::main", description = "Run the review loop" }
-"review-loop lint" = { program = "review_tools/lint::main", description = "Lint review configurations" }
+review-loop = { program = "review_tools/review::main", doc = "Run the review loop" }
+"review-loop lint" = { program = "review_tools/lint::main", doc = "Lint review configurations" }

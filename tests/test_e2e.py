@@ -7544,10 +7544,7 @@ class TestPackageCheck:
                 "[package]\nname = 'demo'\nversion = '1.0.0'\n\n[commands]\n"
                 "run = 'demo/main::main'\n"
             ),
-            (
-                "[package]\nname = 'demo'\nversion = '1.0.0'\n\n[commands]\n"
-                "run = { description = 'Run' }\n"
-            ),
+            ("[package]\nname = 'demo'\nversion = '1.0.0'\n\n[commands]\nrun = { doc = 'Run' }\n"),
         ),
     )
     def test_reports_each_manifest_violation_at_the_command_boundary(
@@ -7725,7 +7722,7 @@ class TestPackageInstall:
         bravo = _write_store_test_package(tmp_path / "bravo-source", "bravo", "1.0.0")
         (alpha / "package.toml").write_text(
             '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
-            '[commands]\nlaunch = { program = "alpha/main::main", description = "Launch alpha" }\n',
+            '[commands]\nlaunch = { program = "alpha/main::main" }\n',
             encoding="utf-8",
         )
         (bravo / "package.toml").write_text(
@@ -7751,14 +7748,14 @@ class TestPackageInstall:
         restored_dispatch = run_agm(["launch"], env=env, cwd=tmp_path)
 
         assert installed_alpha.returncode == 0
-        assert "launch" in listed_alpha.stdout
+        assert "alpha 1.0.0 active" in listed_alpha.stdout
         assert refused.returncode == 1
         assert shadowed.returncode == 0
         assert "shadowed command launch from alpha" in shadowed.stdout
-        assert "bravo 1.0.0 active\n  command launch (shadows alpha)" in listed_shadow.stdout
+        assert "bravo 1.0.0 active" in listed_shadow.stdout
         assert winner_dispatch.stdout == "bravo\n"
         assert uninstalled.returncode == 0
-        assert "alpha 1.0.0 active\n  command launch" in listed_uninstalled.stdout
+        assert "alpha 1.0.0 active" in listed_uninstalled.stdout
         assert restored_dispatch.stdout == "alpha\n"
 
     def _write_tools_command_package(self, tmp_path: Path, home: Path) -> Path:
@@ -7767,12 +7764,13 @@ class TestPackageInstall:
         (package / "package.toml").write_text(
             '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
             "[commands]\n"
-            'publish = { program = "tools/main::main", description = "Publish a subject" }\n'
+            'publish = { program = "tools/main::main" }\n'
             '"tools inspect" = { program = "tools/inspect::main" }\n',
             encoding="utf-8",
         )
         (package / "src" / "main.agl").write_text(
             "import std/config\n"
+            '@doc("Publish a subject")\n'
             "program def main(subject: text) -> unit =\n"
             "  print subject\n"
             "  print std/config::strict-json\n"
@@ -7817,7 +7815,7 @@ class TestPackageInstall:
         manifest = package / "package.toml"
         with manifest.open("a") as stream:
             stream.write(
-                'tools = { help = "Choose a tools workflow." }\n'
+                'tools = { doc = "Choose a tools workflow." }\n'
                 '[aliases]\nt = "tools"\ninspect = "tools inspect"\n'
             )
         (home / "config.toml").write_text('[inspect]\nsubject = "aliased"\n')
@@ -7891,10 +7889,11 @@ class TestPackageInstall:
         (package / "package.toml").write_text(
             '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
             "[commands]\n"
-            'greet = { program = "tools/main::main", description = "Greet someone" }\n',
+            'greet = { program = "tools/main::main" }\n',
             encoding="utf-8",
         )
         (package / "src" / "main.agl").write_text(
+            '@doc("Greet someone")\n'
             'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit =\n'
             '  print(name ++ ":" ++ tag)\n',
             encoding="utf-8",

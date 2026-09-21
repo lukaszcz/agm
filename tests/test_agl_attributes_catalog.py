@@ -24,7 +24,7 @@ from agm.agl.attributes import (
 
 ZONE_ATTRIBUTES = ("arg-pos", "arg-std", "arg-named")
 OPTION_ATTRIBUTES = ("opt-short", "opt-name", "opt-env", "opt-metavar", "opt-hidden")
-COMMAND_ATTRIBUTES = ("command", "description", "help")
+COMMAND_ATTRIBUTE = "command"
 
 
 class TestCatalogContents:
@@ -32,7 +32,7 @@ class TestCatalogContents:
         assert set(BUILTIN_ATTRIBUTES) == {
             *ZONE_ATTRIBUTES,
             *OPTION_ATTRIBUTES,
-            *COMMAND_ATTRIBUTES,
+            COMMAND_ATTRIBUTE,
             "extern-name",
             PARAM_ATTRIBUTE,
             CONFIG_ATTRIBUTE,
@@ -136,16 +136,16 @@ class TestConfigAttribute:
         assert spec.conflicts == ()
 
 
-class TestCommandAttributes:
-    """The attributes registering a program as a package command."""
+class TestCommandAttribute:
+    """The attribute registering a program as a package command."""
 
-    @pytest.mark.parametrize("name", COMMAND_ATTRIBUTES)
-    def test_command_attributes_sit_on_programs_only(self, name: str) -> None:
-        assert BUILTIN_ATTRIBUTES[name].targets == frozenset({AttributeTarget.PROGRAM})
+    def test_the_command_attribute_sits_on_programs_only(self) -> None:
+        spec = BUILTIN_ATTRIBUTES[COMMAND_ATTRIBUTE]
+        assert spec.targets == frozenset({AttributeTarget.PROGRAM})
 
-    @pytest.mark.parametrize("name", COMMAND_ATTRIBUTES)
-    def test_command_attributes_take_one_text(self, name: str) -> None:
-        assert BUILTIN_ATTRIBUTES[name].arguments is AttributeArguments.ONE_TEXT
+    def test_the_command_attribute_takes_one_text(self) -> None:
+        spec = BUILTIN_ATTRIBUTES[COMMAND_ATTRIBUTE]
+        assert spec.arguments is AttributeArguments.ONE_TEXT
 
 
 class TestDocAttribute:

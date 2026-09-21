@@ -27,13 +27,14 @@ Replace the starter program in `review-tools/src/main.agl` (any module under `re
 works) and register it in `review-tools/package.toml`:
 
 ```agl
+@doc("Review a change")
 program def review(target: text, strict: bool = false) -> unit =
   print("reviewing %{target}")
 ```
 
 ```toml
 [commands]
-pr-review = { program = "review-tools/main::review", description = "Review a change" }
+pr-review = { program = "review-tools/main::review" }
 ```
 
 ```sh
@@ -97,7 +98,7 @@ remote = { version = "2.0.0", url = "https://example.test/remote.agmpkg", hash =
 
 ```toml
 [commands]
-pr-review = { program = "review-tools/main::review", description = "Review a change" }
+pr-review = { program = "review-tools/main::review" }
 
 [commands.pr-review.batch] # multi-level command: agm pr-review batch
 program = "review-tools/main::batch"
@@ -110,24 +111,21 @@ program = "review-tools/main::batch"
   program `review` in module `review-tools/main`, file `review-tools/src/main.agl`. Must belong to
   this package, take no type parameters, return unit; its signature arguments and closure module
   parameters become the command's host surface.
-- `description` is an optional short summary shown in command listings.
-- `help` is optional longer guidance (TOML multiline strings work). Command help combines the
-  description, the program's source `@doc`, and this help, omitting identical blocks. It then
-  shows signature options followed by one section for each closure module with visible module
+- `doc` is the command's prose. A command naming a program never states it: that program's source
+  `@doc` supplies it, and an installed manifest records the result. Command help shows it, then
+  signature options followed by one section for each closure module with visible module
   parameters. Parameter `@doc` attributes describe their options.
-- Omit `program` for a command group (must have descendant commands). Undeclared parent groups
-  work automatically, with generated help listing their descendants. Listings use each command's
-  description, help, or source `@doc`, falling back to a generated summary when none is available.
+- Omit `program` for a command group (must have descendant commands), whose only prose is its own
+  `doc` (TOML multiline strings work). Undeclared parent groups work automatically, with generated
+  help listing their descendants. A listing shows the opening paragraph of each command's `doc`,
+  falling back to a generated summary when there is none.
 
 ```toml
 [commands.devel]
-description = "Development workflows"
-help = "Choose review to inspect changes before publishing."
+doc = "Development workflows"
 
 [commands.devel.review]
 program = "review-tools/main::review"
-description = "Review changes"
-help = "Run this workflow before opening a pull request."
 
 [aliases]
 dev = "devel"
@@ -139,16 +137,15 @@ subcommand listing. Leaf commands generate usage and option help from their prog
 closure module parameters, so authored help is optional.
 
 A program may register its own command instead, via
-[`@command`](../agl/reference/attributes.md#command-attributes), `@description`, and `@help`
-attributes on the `program def`
+[`@command`](../agl/reference/attributes.md#command) on the `program def`
 ([Programs and commands](../agl/reference/packages.md#programs-and-commands)). The following
 replaces the `[commands.devel.review]` entry above; the manifest needs entries only for commands
-no program claims. Declaring one path in both places is an error whenever the two declarations
-differ, as is two programs claiming the same path.
+no program claims. Declaring one path in both places is an error whenever the two name different
+programs, as is two programs claiming the same path.
 
 ```agl
 @command("devel review")
-@description("Review changes")
+@doc("Review changes")
 program def review(target: text) -> unit =
   print "reviewing %{target}"
 ```
@@ -250,10 +247,11 @@ dispatch.
 the recorded files (plus cache and VCS residue). An editable package is only deactivated. Command
 ownership displaced by the removed package is restored.
 
-**`list`** shows every stored version as `active` or `installed`, active editable packages, and
-each package's commands, annotating commands that shadow another package.
+**`list`** shows every stored version as `active` or `installed`, and every active editable
+package.
 
-**`info`** shows metadata, command registrations, and whether each direct dependency is active,
+**`info`** shows metadata, command registrations with their prose, and whether each direct
+dependency is active,
 unsatisfied, or missing, including the inferred `std` upper bound.
 
 ## Version pins

@@ -239,7 +239,10 @@ def test_parse_rejects_control_characters_and_spaces(value: str) -> None:
     assert _parse_error_raw(companion, value) == value
 
 
-@pytest.mark.parametrize("value", ("https://[::1/a", "https://[zz]/", "https://[127.0.0.1]/"))
+@pytest.mark.parametrize(
+    "value",
+    ("https://[::1/a", "https://[zz]/", "https://[127.0.0.1]/", "http://[v1.foo]/"),
+)
 def test_parse_rejects_a_malformed_bracketed_host(value: str) -> None:
     companion, _ = _url_companion()
     assert _parse_error_raw(companion, value) == value

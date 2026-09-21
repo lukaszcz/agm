@@ -1609,6 +1609,26 @@ class TestRunCaptureResultCapturedBytes:
         assert result.stdout.truncated is True
         assert result.stdout.text() == "initial\n"
 
+    def test_completed_stream_remains_untruncated_after_an_idle_timeout(self) -> None:
+        script = (
+            "import os, sys, time\n"
+            'sys.stdout.buffer.write(b"\\xc3")\n'
+            "sys.stdout.buffer.flush()\n"
+            "os.close(sys.stdout.fileno())\n"
+            "time.sleep(60)\n"
+        )
+        result = run_capture_result(
+            [sys.executable, "-c", script],
+            idle_timeout=0.3,
+            isolate_process_group=True,
+        )
+
+        assert result.timed_out is True
+        assert result.stdout.truncated is False
+        assert result.stderr.truncated is True
+        with pytest.raises(UnicodeDecodeError):
+            result.stdout.text()
+
 
 class TestDrainLoopTimeoutSentinel:
     """Sentinel drain loop after idle timeout fires."""

@@ -203,8 +203,8 @@ def _drain_process_streams(
     interrupt_cleanup_cmd: list[str] | None,
     cwd: Path | None,
     env: dict[str, str] | None,
-) -> tuple[bytes, bytes, bool]:
-    """Drain stdout/stderr reader threads and return ``(stdout, stderr, timed_out)`` as raw bytes.
+) -> tuple[bytes, bytes, bool, frozenset[str]]:
+    """Drain streams and return raw bytes, timeout state, and streams that reached EOF.
 
     Captured bytes are decoded once by the caller, never here. A callback stream still
     gets a per-chunk incremental decoder (lenient, display-only) so it can stream text
@@ -214,6 +214,7 @@ def _drain_process_streams(
     The enclosing process lifetime cleans up exceptions and joins the readers.
     """
     stream_data: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
+    completed_streams: set[str] = set()
     timed_out = False
 
     # A streaming callback is the only consumer of decoded text here, so only
@@ -230,9 +231,7 @@ def _drain_process_streams(
         try:
             if idle_timeout is not None:
                 remaining = idle_timeout - (time.monotonic() - last_chunk_time)
-                if remaining <= 0:
-                    raise queue.Empty
-                stream_name, chunk = stream_queue.get(timeout=remaining)
+                stream_name, chunk = stream_queue.get(timeout=max(0.0, remaining))
             else:
                 stream_name, chunk = stream_queue.get()
         except queue.Empty:
@@ -248,6 +247,7 @@ def _drain_process_streams(
             break
         if chunk is None:
             active_readers -= 1
+            completed_streams.add(stream_name)
             continue
 
         last_chunk_time = time.monotonic()
@@ -280,7 +280,12 @@ def _drain_process_streams(
         if text:
             streamed[stream_name](text)
 
-    return bytes(stream_data["stdout"]), bytes(stream_data["stderr"]), timed_out
+    return (
+        bytes(stream_data["stdout"]),
+        bytes(stream_data["stderr"]),
+        timed_out,
+        frozenset(completed_streams),
+    )
 
 
 @contextlib.contextmanager
@@ -527,7 +532,7 @@ def run_subprocess(
     ):
         timed_out = False
         if readers:
-            stdout_bytes, stderr_bytes, timed_out = _drain_process_streams(
+            stdout_bytes, stderr_bytes, timed_out, _ = _drain_process_streams(
                 process,
                 readers,
                 stream_queue,
@@ -638,7 +643,7 @@ class CapturedOutput:
     """One captured stream: raw bytes, decoded only when the text is needed."""
 
     data: bytes
-    truncated: bool  # the process was killed (idle timeout); see text()
+    truncated: bool  # capture ended before this stream reached EOF; see text()
 
     def text(self) -> str:
         """Strict UTF-8; raises ``UnicodeDecodeError`` (``.start`` = byte offset).
@@ -774,7 +779,7 @@ def _run_capture_result_impl(
                 exc,
             )
 
-        stdout_bytes, stderr_bytes, timed_out = _drain_process_streams(
+        stdout_bytes, stderr_bytes, timed_out, completed_streams = _drain_process_streams(
             process,
             readers,
             stream_queue,
@@ -792,8 +797,12 @@ def _run_capture_result_impl(
         return (
             ProcessCaptureResult(
                 returncode=process.returncode,
-                stdout=CapturedOutput(data=stdout_bytes, truncated=timed_out),
-                stderr=CapturedOutput(data=stderr_bytes, truncated=timed_out),
+                stdout=CapturedOutput(
+                    data=stdout_bytes, truncated=timed_out and "stdout" not in completed_streams
+                ),
+                stderr=CapturedOutput(
+                    data=stderr_bytes, truncated=timed_out and "stderr" not in completed_streams
+                ),
                 elapsed=elapsed,
                 timed_out=timed_out,
                 spawn_error=None,

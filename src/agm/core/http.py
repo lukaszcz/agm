@@ -30,10 +30,6 @@ from agm.core import fs
 
 TransportErrorKind = Literal["url", "connection", "timeout", "tls", "redirect", "request"]
 
-# A complete charset parameter, matched only at a media-type parameter boundary.
-# The value is extracted from group 0 because a captured group would type as
-# ``str | Any`` under strict mypy regardless of the pattern.
-_CHARSET_PATTERN = re.compile(r"(?:^|;)[ \t]*charset[ \t]*=[^;]*", re.IGNORECASE)
 _CHUNK_SIZE = 64 * 1024
 
 # RFC 9110 tchar: the only characters a method token may contain.
@@ -285,9 +281,24 @@ def resolve_charset(content_type: str | None) -> str:
     Never guesses statistically: an unlabelled body is always read as UTF-8.
     """
     if content_type is not None:
-        match = _CHARSET_PATTERN.search(content_type)
-        if match is not None:
-            return match.group(0).partition("=")[2].strip().strip("\"'")
+        start = 0
+        quoted = False
+        escaped = False
+        for index, char in enumerate(f"{content_type};"):
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+            elif char == '"':
+                quoted = True
+            elif char == ";":
+                name, separator, value = content_type[start:index].partition("=")
+                if separator and name.strip().casefold() == "charset":
+                    return value.strip().strip("\"'")
+                start = index + 1
     return "utf-8"
 
 

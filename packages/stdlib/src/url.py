@@ -120,6 +120,8 @@ def parse(value: str) -> object:
         _parse_error(value, "missing host")
     try:
         if host:
+            if parts.netloc.startswith("[") and ":" not in host:
+                raise ValueError(f"unsupported bracketed host {host!r}")
             _validate_host(host)
         _require_valid_percent_encoding(parts.path)
         query_pairs = _decode_pairs(parts.query)

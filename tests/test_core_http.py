@@ -490,6 +490,33 @@ def test_perform_decodes_the_declared_charset() -> None:
     adapter.assert_complete()
 
 
+@pytest.mark.parametrize(
+    "content_type",
+    (
+        'text/plain; note="x;charset=ascii"; charset=utf-8',
+        'text/plain; note="x\\";charset=ascii"; charset=utf-8',
+    ),
+)
+def test_perform_ignores_charset_text_inside_a_quoted_parameter(content_type: str) -> None:
+    session, adapter = fake_session(
+        [
+            {
+                "status": 200,
+                "headers": {"Content-Type": content_type},
+                "body": "café",
+            }
+        ]
+    )
+
+    result = http.perform(
+        session, http.RequestSpec(method="GET", url="https://example.org/x", timeout_seconds=5.0)
+    )
+
+    assert result.text == "café"
+    assert result.encoding == "utf-8"
+    adapter.assert_complete()
+
+
 def test_perform_ignores_a_parameter_whose_name_only_ends_in_charset() -> None:
     session, adapter = fake_session(
         [

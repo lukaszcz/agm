@@ -55,6 +55,7 @@ from agm.agl.attributes import (
 )
 from agm.agl.scope.symbols import AglScopeError, AttributeFacts
 from agm.agl.semantics.external_names import ExternalName
+from agm.agl.syntax.module_constants import FoldFailure, ModuleConstants
 from agm.agl.syntax.nodes import (
     Attribute,
     AttributeKeyedArg,
@@ -62,12 +63,12 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     FuncDef,
+    Item,
     Lambda,
     LetDecl,
     Param,
     Program,
     RecordDef,
-    StringLit,
     TypeAlias,
     VarDecl,
     VariantDef,
@@ -156,16 +157,25 @@ def _function_target(node: FuncDef) -> AttributeTarget:
     return AttributeTarget.FUNCTION
 
 
-def recognize_program_registration(node: FuncDef) -> ProgramRegistration:
+def recognize_program_registration(
+    node: FuncDef, constants: ModuleConstants
+) -> ProgramRegistration:
     """Return what a ``program def``'s attribute prefix says about hosting it.
 
     Validates *node*'s attribute prefix against the catalog exactly as the
     scope walk does — this is the one place both share, so a parse-only
     caller (package command discovery) and the full scope pass raise the
-    same diagnostics for the same source. The caller is responsible for
+    same diagnostics for the same source. *constants* folds the module's own
+    constants into any attribute argument that interpolates or names one, and
+    is likewise the one the scope walk uses. The caller is responsible for
     passing a ``program def``; this function trusts that and does not check it.
     """
-    recognized = _validate_attribute_prefix(node.attributes, AttributeTarget.PROGRAM)
+    recognized = _validate_attribute_prefix(
+        node.attributes,
+        AttributeTarget.PROGRAM,
+        constants,
+        constants.static_scope_path_of(node.node_id) or (),
+    )
     return ProgramRegistration(
         doc=recognized.text_of(DOC_ATTRIBUTE), command=_program_command_path(recognized)
     )
@@ -185,7 +195,7 @@ def recognize_attributes(
         for item in static_items(program.body.items)
         if isinstance(item, (LetDecl, VarDecl))
     )
-    recognizer = _Recognizer(declares_receiver, static_binding_ids)
+    recognizer = _Recognizer(declares_receiver, static_binding_ids, ModuleConstants(program))
     walk(program, recognizer.visit)
     return AttributeFacts(
         param_zones=recognizer.param_zones,
@@ -206,9 +216,12 @@ class _Recognizer:
         self,
         declares_receiver: Callable[[FuncDef], bool],
         static_binding_ids: frozenset[int],
+        constants: ModuleConstants,
     ) -> None:
         self._declares_receiver = declares_receiver
         self._static_binding_ids = static_binding_ids
+        self._constants = constants
+        self._scope_path: tuple[str, ...] = ()
         self.param_zones: dict[int, ParamZone] = {}
         self.extern_names: dict[int, str] = {}
         self.program_options: dict[int, ProgramOptionSpec] = {}
@@ -220,7 +233,16 @@ class _Recognizer:
         self._companion_owners: dict[str, str] = {}
 
     def visit(self, node: object) -> None:
-        """Recognize the attributes of *node*, if it is a defining declaration."""
+        """Recognize the attributes of *node*, if it is a defining declaration.
+
+        A static item sets the scope path its own attributes — and those of
+        its parameters or fields — resolve a constant reference from; a
+        declaration nested in a body keeps the enclosing item's path.
+        """
+        if isinstance(node, Item):
+            declared_scope = self._constants.static_scope_path_of(node.node_id)
+            if declared_scope is not None:
+                self._scope_path = declared_scope
         if isinstance(node, FuncDef):
             recognized = self._check(node.attributes, _function_target(node), node.node_id)
             if node.is_extern:
@@ -279,7 +301,9 @@ class _Recognizer:
                     span=param.span,
                 )
             target = AttributeTarget.PARAM_BINDING
-        recognized = _validate_attribute_prefix(attributes, target)
+        recognized = _validate_attribute_prefix(
+            attributes, target, self._constants, self._scope_path
+        )
         documentation = recognized.text_of(DOC_ATTRIBUTE)
         if documentation is not None:
             self.docs[node_id] = documentation
@@ -489,7 +513,10 @@ class _Recognizer:
 
 
 def _validate_attribute_prefix(
-    attributes: tuple[Attribute, ...], target: AttributeTarget
+    attributes: tuple[Attribute, ...],
+    target: AttributeTarget,
+    constants: ModuleConstants,
+    scope_path: tuple[str, ...],
 ) -> _Recognized:
     """Validate one declaration's whole attribute prefix against the catalog.
 
@@ -525,7 +552,7 @@ def _validate_attribute_prefix(
                     f"Attribute '@{attribute.name}' conflicts with '@{other}'.",
                     span=attribute.span,
                 )
-        text = _check_arguments(attribute, spec)
+        text = _check_arguments(attribute, spec, constants, scope_path)
         if text is not None:
             texts[attribute.name] = text
         nodes[attribute.name] = attribute
@@ -563,14 +590,22 @@ def _program_command_path(recognized: _Recognized) -> str | None:
     return path
 
 
-def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:
-    """Reject arguments a built-in attribute's literal schema does not admit.
+def _check_arguments(
+    attribute: Attribute,
+    spec: AttributeSpec,
+    constants: ModuleConstants,
+    scope_path: tuple[str, ...],
+) -> str | None:
+    """Reject arguments a built-in attribute's constant schema does not admit.
 
     Returns the text an attribute taking one argument carries, and ``None``
-    for an attribute whose schema takes none or keyed entries. A schema
-    narrowing that text to a spelling a host has to form
-    (``AttributeSpec.pattern``) is enforced here too, so a fact builder
-    downstream reads an argument already known to be well shaped.
+    for an attribute whose schema takes none or keyed entries. The argument is
+    a constant text expression: a literal, a template whose holes name the
+    module's own constants, or a reference to one, folded here so everything
+    downstream reads plain text. A schema narrowing that text to a spelling a
+    host has to form (``AttributeSpec.pattern``) is enforced on the folded
+    text, so a fact builder downstream reads an argument already known to be
+    well shaped.
     """
     if spec.arguments is AttributeArguments.KEYED_ENTRIES:
         if attribute.args:
@@ -598,18 +633,18 @@ def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:
             f"Attribute '@{attribute.name}' takes exactly one text argument.",
             span=attribute.span,
         )
-    argument = attribute.args[0]
-    if not isinstance(argument, StringLit):
+    folded = constants.fold_text(attribute.args[0], scope_path=scope_path)
+    if isinstance(folded, FoldFailure):
         raise AglScopeError(
-            f"Attribute '@{attribute.name}' requires a plain text literal argument.",
+            f"Attribute '@{attribute.name}' requires a constant text argument: {folded.message}.",
+            span=folded.span,
+        )
+    if spec.pattern is not None and spec.pattern.fullmatch(folded) is None:
+        raise AglScopeError(
+            f"Attribute '@{attribute.name}' {spec.expected} {folded!r}.",
             span=attribute.span,
         )
-    if spec.pattern is not None and spec.pattern.fullmatch(argument.value) is None:
-        raise AglScopeError(
-            f"Attribute '@{attribute.name}' {spec.expected} {argument.value!r}.",
-            span=attribute.span,
-        )
-    return argument.value
+    return folded
 
 
 def _zone_attribute(recognized: _Recognized) -> ParamZone | None:

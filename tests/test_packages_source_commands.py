@@ -313,3 +313,61 @@ def test_discovery_and_validation_parse_each_module_once(
 
     module = str((package.root / MODULE_TREE_DIRNAME / "main.agl").resolve())
     assert counts[module] == 1
+
+
+class TestConstantsFoldedIntoRegistrations:
+    """A registration's text is folded from the module's own constants.
+
+    Discovery still reads the AST alone, so an editable package's command
+    table carries the same prose a compiled run would show.
+    """
+
+    def test_a_command_path_and_prose_interpolate_module_constants(self, tmp_path: Path) -> None:
+        package = _package(tmp_path)
+        _write(
+            package,
+            "review.agl",
+            'let group = "tools"\n'
+            "let rounds = 3\n"
+            '@command("%{group} review")\n'
+            '@doc("Review changes in %{rounds} rounds.")\n'
+            "program def main() -> unit = ()\n",
+        )
+
+        merged = package_with_source_commands(package)
+
+        assert merged.manifest.commands == {
+            "tools review": CommandSpec(
+                program="tools/review::main", doc="Review changes in 3 rounds."
+            )
+        }
+
+    def test_prose_may_name_a_constant_declared_later_in_the_module(self, tmp_path: Path) -> None:
+        package = _package(tmp_path)
+        _write(
+            package,
+            "review.agl",
+            '@command("tools review")\n'
+            "@doc(prose)\n"
+            "program def main() -> unit = ()\n"
+            '\nlet prose = "Review the working tree."\n',
+        )
+
+        merged = package_with_source_commands(package)
+
+        assert merged.manifest.commands["tools review"].doc == "Review the working tree."
+
+    def test_prose_naming_another_module_is_rejected(self, tmp_path: Path) -> None:
+        package = _package(tmp_path)
+        _write(package, "shared.agl", 'let prose = "Shared."\n')
+        _write(
+            package,
+            "review.agl",
+            "import shared\n"
+            '@command("tools review")\n'
+            "@doc(shared::prose)\n"
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError, match="constant"):
+            package_with_source_commands(package)

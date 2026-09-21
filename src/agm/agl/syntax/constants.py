@@ -1,11 +1,12 @@
 """Syntax-level detection of AgL constant expressions.
 
 A constant expression is built only from literal syntax, container literals,
-unary operators over constants, constructor applications, and designated root
-builtin calls. This is a pure predicate over the AST — it depends only on
-:mod:`agm.agl.syntax.nodes` — leaving type checking responsible for deciding
-which references are constructors and for validating the expression's declared
-type.
+templates over constants, unary operators over constants, constructor
+applications, designated root builtin calls, and references to the declaring
+module's own constants. This is a pure predicate over the AST — it depends
+only on :mod:`agm.agl.syntax.nodes` — leaving type checking responsible for
+deciding which references are constructors or module constants and for
+validating the expression's declared type.
 """
 
 from __future__ import annotations
@@ -19,9 +20,11 @@ from agm.agl.syntax.nodes import (
     DecimalLit,
     DictLit,
     Expr,
+    InterpSegment,
     IntLit,
     NullLit,
     StringLit,
+    Template,
     TypeApply,
     UnaryNeg,
     UnaryNot,
@@ -37,42 +40,69 @@ def is_constant_expression(
     *,
     is_constructor: Callable[[int], bool],
     is_constant_builtin: Callable[[int], bool] = lambda _node_id: False,
+    is_module_constant: Callable[[int], bool] = lambda _node_id: False,
 ) -> bool:
-    """Whether *expr* contains only literal construction.
+    """Whether *expr* contains only constant construction.
 
     A unary operator over a constant operand is itself constant, so a negative
-    number reads as the literal it looks like.
+    number reads as the literal it looks like. A template is constant when
+    every hole is — an environment hole is an ordinary call, so it is not —
+    and a reference is constant when it names a constant of its own module.
 
-    ``is_constructor`` and ``is_constant_builtin`` are supplied by the checked
-    frontend artifact, keeping this syntax-level predicate independent of scope
-    and typecheck internals. A constant builtin must be called through a
-    :class:`VarRef`; a type-directed member call cannot prove builtin provenance.
+    ``is_constructor``, ``is_constant_builtin`` and ``is_module_constant`` are
+    supplied by the checked frontend artifact, keeping this syntax-level
+    predicate independent of scope and typecheck internals. A constant builtin
+    must be called through a :class:`VarRef`; a type-directed member call
+    cannot prove builtin provenance.
     """
     if isinstance(expr, (BoolLit, DecimalLit, IntLit, NullLit, StringLit, UnitLit)):
         return True
     if isinstance(expr, ArrayLit):
         return all(
             is_constant_expression(
-                element, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
+                element,
+                is_constructor=is_constructor,
+                is_constant_builtin=is_constant_builtin,
+                is_module_constant=is_module_constant,
             )
             for element in expr.elements
         )
     if isinstance(expr, DictLit):
         return all(
             is_constant_expression(
-                entry.value, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
+                entry.value,
+                is_constructor=is_constructor,
+                is_constant_builtin=is_constant_builtin,
+                is_module_constant=is_module_constant,
             )
             for entry in expr.entries
         )
     if isinstance(expr, (UnaryNeg, UnaryNot)):
         return is_constant_expression(
-            expr.operand, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
+            expr.operand,
+            is_constructor=is_constructor,
+            is_constant_builtin=is_constant_builtin,
+            is_module_constant=is_module_constant,
+        )
+    if isinstance(expr, Template):
+        return all(
+            is_constant_expression(
+                segment.expr,
+                is_constructor=is_constructor,
+                is_constant_builtin=is_constant_builtin,
+                is_module_constant=is_module_constant,
+            )
+            for segment in expr.segments
+            if isinstance(segment, InterpSegment)
         )
     if isinstance(expr, VarRef):
-        return is_constructor(expr.node_id)
+        return is_constructor(expr.node_id) or is_module_constant(expr.node_id)
     if isinstance(expr, TypeApply):
         return is_constant_expression(
-            expr.expr, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
+            expr.expr,
+            is_constructor=is_constructor,
+            is_constant_builtin=is_constant_builtin,
+            is_module_constant=is_module_constant,
         )
     if isinstance(expr, Call):
         # Builtin provenance is attached to calls speculatively for member
@@ -80,11 +110,17 @@ def is_constant_expression(
         is_root_builtin = isinstance(expr.callee, VarRef) and is_constant_builtin(expr.node_id)
         return is_root_builtin or (
             is_constant_expression(
-                expr.callee, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
+                expr.callee,
+                is_constructor=is_constructor,
+                is_constant_builtin=is_constant_builtin,
+                is_module_constant=is_module_constant,
             )
             and all(
                 is_constant_expression(
-                    argument, is_constructor=is_constructor, is_constant_builtin=is_constant_builtin
+                    argument,
+                    is_constructor=is_constructor,
+                    is_constant_builtin=is_constant_builtin,
+                    is_module_constant=is_module_constant,
                 )
                 for argument in expr.args
             )
@@ -93,6 +129,7 @@ def is_constant_expression(
                     argument.value,
                     is_constructor=is_constructor,
                     is_constant_builtin=is_constant_builtin,
+                    is_module_constant=is_module_constant,
                 )
                 for argument in expr.named_args
             )

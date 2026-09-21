@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import decimal
 import json
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -169,6 +169,7 @@ from agm.agl.modules.ids import (
     ModuleId,
     spell_scope_path,
 )
+from agm.agl.scope.bindings import ModuleBindingReferences
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BinderKind,
@@ -263,6 +264,7 @@ from agm.agl.syntax.nodes import (
     VarRef,
     pattern_binder_candidates,
     scoped_public_name,
+    static_binding_node_id,
     static_items,
 )
 from agm.agl.syntax.resources import ResourceError, resolve_resource, resource_path
@@ -277,6 +279,7 @@ from agm.agl.typecheck.env import (
     OutputContractSpec,
     PartialCallSpec,
 )
+from agm.util.graph import toposort
 from agm.util.text import normalize_newlines
 
 __all__ = ["InitializerOrigin", "_LinkState", "builtin_nominals_from_declarations"]
@@ -522,6 +525,8 @@ class _Lowerer:
         # there is owned by that function: it lives in a per-invocation call
         # frame, not in the module frame.
         self._current_function: FunctionId | None = None
+        self._references: ModuleBindingReferences | None = None
+        self._substituting_constants = False
 
     @contextmanager
     def _return_context(self, expected: Type) -> Iterator[None]:
@@ -531,6 +536,22 @@ class _Lowerer:
             yield
         finally:
             self._return_expected_stack.pop()
+
+    @contextmanager
+    def substituted_constants(self) -> Iterator[None]:
+        """Lower an expression a host evaluates before any initializer runs.
+
+        A ``builtin var`` default and a ``@config`` value are evaluated against
+        an empty frame, so a reference to one of this module's constants has no
+        slot to load; the referenced binding's own declared initializer is
+        lowered in its place instead.
+        """
+        previous = self._substituting_constants
+        self._substituting_constants = True
+        try:
+            yield
+        finally:
+            self._substituting_constants = previous
 
     @contextmanager
     def _function_body(self, fn_id: FunctionId) -> Iterator[None]:
@@ -1315,6 +1336,9 @@ class _Lowerer:
                     )
                 if ref.kind is BinderKind.function_binding and ref.is_builtin:
                     return self._lower_builtin_value(ref, nid, span)
+                declaration = self._binding_references.declarations.get(ref.decl_node_id)
+                if self._substituting_constants and declaration is not None:
+                    return self.lower_expr(declaration.value)
                 sym = self._sym_for_decl(ref.decl_node_id)
                 return IrLoad(location=self._loc(span), symbol=sym)
 
@@ -3997,6 +4021,7 @@ class _Lowerer:
         function_origins: list[InitializerOrigin] = []
         other_initializers: list[IrExpr] = []
         other_origins: list[InitializerOrigin] = []
+        other_items: list[Item] = []
         for source_index, member in enumerate(static_items(body.items)):
             is_function = isinstance(member, FuncDef) and not member.is_builtin
             ir = self.lower_item(member, top_level=top_level)
@@ -4009,7 +4034,56 @@ class _Lowerer:
             else:
                 other_initializers.append(ir)
                 other_origins.append(origin)
+                other_items.append(member)
 
-        initializers = tuple((*function_initializers, *other_initializers))
-        self._link.initializer_origins[self._module_id] = tuple((*function_origins, *other_origins))
+        order = self._initializer_order(other_items)
+        initializers = tuple(
+            (*function_initializers, *(other_initializers[index] for index in order))
+        )
+        self._link.initializer_origins[self._module_id] = tuple(
+            (*function_origins, *(other_origins[index] for index in order))
+        )
         return initializers
+
+    def _initializer_order(self, items: Sequence[Item]) -> list[int]:
+        """Order non-function initializers so a binding precedes every reader of it.
+
+        A module constant may name another constant of its own module in either
+        source direction, so a binding initializer runs once the bindings it
+        reads have. Constant initializers have no effects to reorder; anything
+        else (an engine-setting write, a statement) keeps its position relative
+        to its own kind through an edge onto the previous such item. Ties break
+        on source position, so an independent item never moves.
+
+        The graph is acyclic: a module whose root bindings may name each other
+        has already had a cycle among them rejected as non-constant, and
+        elsewhere a name must be declared before it is read.
+        """
+        positions = {
+            static_binding_node_id(item): index
+            for index, item in enumerate(items)
+            if isinstance(item, (LetDecl, VarDecl))
+        }
+        deps: dict[int, set[int]] = {}
+        previous_statement: int | None = None
+        for index, item in enumerate(items):
+            depends: set[int] = set()
+            if isinstance(item, (LetDecl, VarDecl)):
+                depends = {
+                    positions[decl_node_id]
+                    for decl_node_id in self._binding_references.dependencies(item.value)
+                    if decl_node_id in positions
+                }
+            else:
+                if previous_statement is not None:
+                    depends.add(previous_statement)
+                previous_statement = index
+            deps[index] = depends
+        return toposort(range(len(items)), deps, key=lambda index: index)
+
+    @property
+    def _binding_references(self) -> ModuleBindingReferences:
+        """This module's static bindings, resolved lazily for initializer ordering."""
+        if self._references is None:
+            self._references = ModuleBindingReferences(self._checked.resolved, self._module_id)
+        return self._references

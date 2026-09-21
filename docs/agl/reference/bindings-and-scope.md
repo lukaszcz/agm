@@ -270,6 +270,37 @@ program def main() -> unit =
   let f: int -> text = classify     # explicit function type annotation
   ```
 
+## Constant expressions
+
+Several positions accept only a **constant expression**: a root `let`/`var`
+initializer in a module with a [static
+root](modules.md#library-modules-and-cycles), a `builtin var` default, an
+[attribute argument](attributes.md#constant-arguments), and a
+[`@config`](attributes.md#config) value. A constant expression is one of:
+
+- a literal, a literal container, or a constructor application;
+- a [`resource`/`resource-dir`](expressions.md#resource-and-resource-dir) call;
+- a unary operator over a constant expression (`-1`, `not true`);
+- a [template](strings-and-interpolation.md) whose holes are all constant
+  expressions;
+- a reference to a constant `let` or `var` declared at the root, or in a named
+  scope region, of the **same module**.
+
+Other reads, calls other than constructors and resource lookups, binary
+operators, and `${NAME}` environment interpolation are not constant.
+
+A constant reference resolves by the ordinary [scope
+rules](scopes.md#names-and-visibility) and may name a binding declared further
+down the file; a binding defined in terms of itself, directly or through
+another binding, is a static error.
+
+A binding a host can override — a [module
+parameter](attributes.md#module-parameters) or an [engine
+setting](host-environment.md#engine-settings) — is a constant too. Reading one
+at run time yields the value the host settled on, while a position the host
+evaluates before any binding initializes, such as a `builtin var` default or a
+`@config` value, uses the declared initializer.
+
 ## `builtin var` — host-backed bindings
 
 ```ebnf
@@ -278,13 +309,10 @@ builtin_var_def ::= "builtin" NEWLINE? "var" name ":" type_expr ["=" expr]
 
 A `builtin var` declares a body-less, host-backed, **mutable** binding with a
 mandatory type and an optional declared default. Its initializer must be a
-**constant expression** of the declared type: literals, literal containers,
-constructor applications, a [`resource`/`resource-dir`](expressions.md#resource-and-resource-dir)
-call, and a unary operator over any of those (`-1`, `not true`) are allowed;
-other reads, calls other than constructors and resource lookups, and binary
-operators are not. The `builtin` marker may be on the same line as `var` or on
-the line directly above it. A declaration may appear only at the root, or in a
-named scope region, of a module whose path identity lies under `std`, which it
+[constant expression](#constant-expressions) of the declared type. The
+`builtin` marker may be on the same line as `var` or on the line directly
+above it. A declaration may appear only at the root, or in a named scope
+region, of a module whose path identity lies under `std`, which it
 keeps whether it is the entry program or one of its imports; a declaration in
 any other module is a static error regardless of scoping. A binding's host
 identity is its defining module, scope path, and name, so equal names in

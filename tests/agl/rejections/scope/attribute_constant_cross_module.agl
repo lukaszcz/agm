@@ -1,0 +1,4 @@
+import std/config
+
+@doc("strict: %{config::strict-json}")
+program def main() -> unit = ()

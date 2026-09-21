@@ -1,0 +1,8 @@
+# An annotated binding is typed from its annotation rather than its
+# initializer, but its initializer must still be constant -- so a cycle among
+# annotated bindings is rejected too.
+let opening: text = "[%{closing}]"
+let closing: text = "(%{opening})"
+
+program def main() -> unit =
+  print opening

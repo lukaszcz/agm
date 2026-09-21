@@ -36,11 +36,53 @@ enum Shape
   | Empty
 ```
 
-Every built-in attribute but `@config` takes literal constants only,
-positionally: either nothing or one text literal. `@config` instead takes one
-or more `key = value` entries; see [`@config`](#config) below. An unknown
-name, a misplaced, repeated, or conflicting attribute, and an argument list
-the attribute does not admit are static errors.
+Every built-in attribute but `@config` takes one constant text expression
+positionally, or nothing at all; see [Constant arguments](#constant-arguments)
+below. `@config` instead takes one or more `key = value` entries; see
+[`@config`](#config). An unknown name, a misplaced, repeated, or conflicting
+attribute, and an argument list the attribute does not admit are static
+errors.
+
+## Constant arguments
+
+An attribute's text argument is a literal, a template whose holes name
+constants, or a reference to a constant — anything the compiler can reduce to
+text before the program runs:
+
+```agl
+let aspects = "correctness, efficiency"
+let rounds = 3
+
+@doc("Review %{aspects} over %{rounds} rounds.")
+@command(default-command)
+program def review(scope: text) -> unit = print "%{scope}: %{aspects}"
+
+let default-command = "devel review"
+```
+
+A name in such an argument, in a hole or on its own, is a constant of the
+**declaring module**: one reached from the attribute's own scope region
+outward to the module root, or under an explicit scope path. A name reached
+only through another module is a static error, as is one that no constant of
+this module declares. Order does not matter — a constant denotes its value, so
+an argument may name one declared further down the file — while a constant
+defined in terms of itself is a static error.
+
+A hole renders a `text`, `int`, `decimal`, or `bool` constant exactly as
+interpolation renders it at runtime. An array, dict, constructor, `unit`, or
+`null` constant has no compile-time text and cannot fill a hole, though it
+remains an ordinary constant elsewhere. The whole argument must be text: a
+number folds inside a hole, not as the argument itself.
+
+Folding happens first, so an attribute that narrows its text to a particular
+spelling — `@name`, `@json-name`, `@command`, `@extern-name`, and the `@opt-*`
+attributes — checks the folded result.
+
+A binding a host can override — a [module parameter](#module-parameters) or an
+[engine setting](host-environment.md#engine-settings) — may be named too, and
+folds to the value its declaration writes. Attribute text is fixed when the
+program is compiled, so it states the declared default, while a reference to
+that same binding in an expression reads whatever value the host bound.
 
 ## Catalog
 
@@ -77,12 +119,13 @@ standard. Zone semantics: [Functions](functions.md#parameters),
 
 ## `@doc`
 
-One text literal of prose. It never changes a declaration's meaning. A host
-shows a `program def`'s `@doc` as the program's description — wherever the
-program runs, including as the prose of the command it registers — and each
-host-facing parameter's `@doc` as that parameter's help
-([Host environment](host-environment.md#help)). Where a host has room for one
-line only, such as a listing of commands, it shows the opening paragraph.
+One [constant text expression](#constant-arguments) of prose. It never changes
+a declaration's meaning. A host shows a `program def`'s `@doc` as the
+program's description — wherever the program runs, including as the prose of
+the command it registers — and each host-facing parameter's `@doc` as that
+parameter's help ([Host environment](host-environment.md#help)). Where a host
+has room for one line only, such as a listing of commands, it shows the
+opening paragraph.
 An inline enum member's `@doc`, or a referenced member record's own `@doc`, is
 the `description` of that member's `oneOf` alternative in a
 [derived JSON Schema](agent-calls.md#derived-json-schema).
@@ -219,7 +262,7 @@ that only a signature parameter binds, since a `program def`'s own parameter
 scope is not where a `@config` key resolves. Two entries addressing the same
 target, by any two spellings, are a static error.
 
-Each `value` is a [constant expression](bindings-and-scope.md#builtin-var--host-backed-bindings),
+Each `value` is a [constant expression](bindings-and-scope.md#constant-expressions),
 checked against the target's declared type — the module parameter's own
 type, or the engine setting's type.
 

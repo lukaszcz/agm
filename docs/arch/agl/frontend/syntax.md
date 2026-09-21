@@ -4,7 +4,11 @@ The hand-written lexer handles layout (INDENT/DEDENT), string templates with `%{
 
 Single- and triple-quoted templates share hole recognition and token emission. Environment holes scan names with the shared identifier rules and desugar to expression tokens. Triple-quoted dedenting measures indentation across literal/hole segments, assembles retained line slices, and maps only literal boundaries, preserving hole tokens' source positions without per-character position tables. A `$` literal (to end of line, or an indented block) opens and closes with its own delimiter tokens, but shares the same fragment and hole tokens, hole scanner, and `template` grammar rule as a quoted template.
 
-The lexer's escape, number, identifier, and environment-hole scanning rules live in `agl/value_syntax/lexical.py`, a leaf below the lexer that also backs the value-syntax reader (`agl/value_syntax/reader.py`), so both scan AgL literals identically.
+The lexer's escape, number, identifier, and environment-hole scanning rules live in `agl/value_syntax/lexical.py`, a leaf below the lexer that also backs the value-syntax reader (`agl/value_syntax/reader.py`), so both scan AgL literals identically. The same leaf spells values back as literals (`quote_text`, `scalar_text`), so runtime rendering and compile-time constant folding cannot diverge.
+
+## Constant Folding
+
+`syntax/constants.py` is the syntactic constant-expression predicate. `syntax/module_constants.py` folds a module's own constants to text from its AST alone: it indexes every static `let`/`var` by declaration path, resolves a reference by the language's own same-module rule (enclosing scope region outward, `::` from the root), and folds templates whose holes name scalars. It depends on no resolver, which is what lets both the scope pass and the parse-only package command scan (`packages/source_commands.py`) fold one attribute argument the same way — and is why a reference reaches the declaring module only.
 
 ## Keywords
 
@@ -33,6 +37,6 @@ An inline-source host (`agm exec -c`, the REPL) parses statement-oriented source
 
 - `src/agm/agl/keywords.py`, `src/agm/agl/lexer/` — keyword inventories and indentation-aware lexing; `lexer/operators.py` is the shared operator-position inventory, `lexer/layout.py` the INDENT/DEDENT and continuation filter.
 - `src/agm/agl/grammar/agl.lark`, `src/agm/agl/parser/` — grammar, parsing, AST construction, inline-source wrapping.
-- `src/agm/agl/syntax/` — AST nodes, spans, advisories, the constant-expression predicate, and resource-call classification.
+- `src/agm/agl/syntax/` — AST nodes, spans, advisories, the constant-expression predicate, module-constant folding, and resource-call classification.
 - `src/agm/agl/attributes.py` — the built-in attribute catalog: targets, argument shapes, repetition, and conflicts.
-- Tests: `tests/test_agl_lexer.py`, `test_agl_parser.py`, `test_agl_ast.py`, `test_agl_wrap.py`.
+- Tests: `tests/test_agl_lexer.py`, `test_agl_parser.py`, `test_agl_ast.py`, `test_agl_wrap.py`, `test_agl_module_constants.py`.

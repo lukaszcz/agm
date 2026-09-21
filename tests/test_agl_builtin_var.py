@@ -188,9 +188,26 @@ class TestBuiltinVarDefaults:
         assert not result.ok
         assert result.diagnostics
 
+    def test_default_may_name_this_modules_own_constant(self, tmp_path: Path) -> None:
+        result = _run_with_std_config(
+            "import std/config::*\nlet value = std/config::default-agent\nvalue",
+            'let declared-command = "from-%{suffix}"\n'
+            'let suffix = "a-constant"\n'
+            "builtin var default-agent: Agent = AgentCommand(declared-command)",
+            tmp_path,
+        )
+
+        assert result.ok, f"expected success but got: {result.error!r}"
+        value = result.bindings["value"]
+        assert isinstance(value, RecordValue)
+        assert value.fields["command"] == TextValue("from-a-constant")
+
     def test_initializer_must_be_constant(self, tmp_path: Path) -> None:
-        declaration_source = 'builtin var default-agent: Agent = AgentCommand("not %{"constant"}")'
-        (declaration,) = parse_program(declaration_source).body.items
+        declaration_source = (
+            'def command-name() -> text = "computed"\n'
+            "builtin var default-agent: Agent = AgentCommand(command-name())"
+        )
+        (_, declaration) = parse_program(declaration_source).body.items
         assert isinstance(declaration, BuiltinVarDecl)
         assert isinstance(declaration.default, Call)
 

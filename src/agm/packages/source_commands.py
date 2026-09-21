@@ -26,6 +26,7 @@ from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_parsed_module
 from agm.agl.scope import recognize_program_registration
+from agm.agl.syntax.module_constants import ModuleConstants
 from agm.agl.syntax.nodes import FuncDef, Program, static_function_items
 from agm.packages.discipline import DisciplineError, package_module_files
 from agm.packages.manifest import CommandSpec, ManifestError, validate_command_set
@@ -120,9 +121,10 @@ def _source_commands(package: PackageInfo) -> tuple[dict[str, CommandSpec], dict
 def _module_programs(module_id: ModuleId, path: Path) -> Iterator[tuple[str, ProgramRegistration]]:
     """Yield ``(program reference, registration)`` for one module's programs."""
     program = _parse_module(module_id, path)
+    constants = ModuleConstants(program)
     try:
         registrations = [
-            (function, recognize_program_registration(function))
+            (function, recognize_program_registration(function, constants))
             for function in static_function_items(program.body.items)
             if function.is_program
         ]

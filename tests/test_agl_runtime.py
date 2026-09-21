@@ -1163,35 +1163,6 @@ class TestRenderValue:
         assert render_value(BoolValue(False), _NO_DESCRIPTORS) == "false"
 
     # ------------------------------------------------------------------
-    # _scalar_text unit tests (unchanged helper — keep working)
-    # ------------------------------------------------------------------
-
-    def test_scalar_text_int(self) -> None:
-        """_scalar_text(IntValue) renders as plain decimal digits."""
-        from agm.agl.runtime.render import _scalar_text
-        from agm.agl.semantics.values import IntValue
-
-        assert _scalar_text(IntValue(42)) == "42"
-
-    def test_scalar_text_decimal(self) -> None:
-        """_scalar_text(DecimalValue) drops trailing zeros, no sci notation."""
-        from decimal import Decimal
-
-        from agm.agl.runtime.render import _scalar_text
-        from agm.agl.semantics.values import DecimalValue
-
-        assert _scalar_text(DecimalValue(Decimal("1.50"))) == "1.5"
-        assert _scalar_text(DecimalValue(Decimal("100"))) == "100"
-
-    def test_scalar_text_bool(self) -> None:
-        """_scalar_text(BoolValue) renders as 'true'/'false'."""
-        from agm.agl.runtime.render import _scalar_text
-        from agm.agl.semantics.values import BoolValue
-
-        assert _scalar_text(BoolValue(True)) == "true"
-        assert _scalar_text(BoolValue(False)) == "false"
-
-    # ------------------------------------------------------------------
     # unit / agent / closure (non-data, unchanged)
     # ------------------------------------------------------------------
 

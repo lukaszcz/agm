@@ -1,0 +1,41 @@
+{
+  "scenarios": [
+    {
+      "name": "member_prose_folds_a_template_into_the_derived_schema",
+      "params": {"subject": "the diff"},
+      "agents": {
+        "reviewer": ["{\"$case\": \"Problem\", \"detail\": \"missing test\"}"]
+      },
+      "expect": {
+        "stdout": "missing test\n",
+        "calls": {"reviewer": 1},
+        "prompts": [
+          {
+            "agent": "reviewer",
+            "call": 0,
+            "starts_with": "Review the diff",
+            "schema_contains": [
+              "A problem worth reporting. Severities: blocker, major, minor.",
+              "Nothing to report.",
+              "settled"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "a_folded_name_alias_still_decodes_its_member",
+      "params": {"subject": "the release"},
+      "agents": {
+        "reviewer": ["{\"$case\": \"settled\"}"]
+      },
+      "expect": {
+        "stdout": "Nothing to report.\n",
+        "calls": {"reviewer": 1},
+        "prompts": [
+          {"agent": "reviewer", "call": 0, "starts_with": "Review the release"}
+        ]
+      }
+    }
+  ]
+}

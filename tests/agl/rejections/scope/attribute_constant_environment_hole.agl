@@ -1,0 +1,2 @@
+@doc("home: ${HOME}")
+program def main() -> unit = ()

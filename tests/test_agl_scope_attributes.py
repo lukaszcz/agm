@@ -19,6 +19,7 @@ from agm.agl.attributes import ProgramOptionSpec, ProgramRegistration
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.scope import AglScopeError, ModuleResolution, recognize_program_registration
 from agm.agl.scope.attributes import recognize_attributes
+from agm.agl.syntax.module_constants import ModuleConstants
 from agm.agl.syntax.nodes import (
     Attribute,
     BuiltinVarDecl,
@@ -596,46 +597,52 @@ class TestParseOnlyCommandRecognition:
     """
 
     @staticmethod
-    def _program(source: str, name: str = "main") -> FuncDef:
+    def _program(source: str, name: str = "main") -> tuple[FuncDef, ModuleConstants]:
         program, _next_id = parse_program_seeded(source, start_id=0, resolve_infix=False)
         (function,) = (
             item for item in static_function_items(program.body.items) if item.name == name
         )
-        return function
+        return function, ModuleConstants(program)
 
     def test_recognizes_a_full_registration_without_resolving_the_program(self) -> None:
-        function = self._program(
+        function, constants = self._program(
             '@command("devel review")\n@doc("Review changes")\nprogram def main() -> unit = ()\n'
         )
 
-        assert recognize_program_registration(function) == ProgramRegistration(
+        assert recognize_program_registration(function, constants) == ProgramRegistration(
             doc="Review changes",
             command="devel review",
         )
 
     def test_recognizes_the_documentation_of_an_unregistered_program(self) -> None:
-        function = self._program('@doc("Review changes")\nprogram def main() -> unit = ()\n')
+        function, constants = self._program(
+            '@doc("Review changes")\nprogram def main() -> unit = ()\n'
+        )
 
-        assert recognize_program_registration(function) == ProgramRegistration(doc="Review changes")
+        assert recognize_program_registration(function, constants) == ProgramRegistration(
+            doc="Review changes"
+        )
 
     def test_a_bare_program_registers_nothing_and_documents_nothing(self) -> None:
-        function = self._program("program def main() -> unit = ()\n")
+        function, constants = self._program("program def main() -> unit = ()\n")
 
-        assert recognize_program_registration(function) == ProgramRegistration()
+        assert recognize_program_registration(function, constants) == ProgramRegistration()
 
     def test_rejects_a_malformed_path_like_full_scope_resolution(self) -> None:
-        function = self._program('@command(" bad")\nprogram def main() -> unit = ()\n')
+        function, constants = self._program('@command(" bad")\nprogram def main() -> unit = ()\n')
 
         with pytest.raises(AglScopeError, match="Command path"):
-            recognize_program_registration(function)
+            recognize_program_registration(function, constants)
 
     def test_a_program_carrying_config_is_still_recognized(self) -> None:
-        function = self._program(
+        function, constants = self._program(
             'import std/config\n\n@command("audit")\n@config(config::log = true)\n'
             "program def main() -> unit = ()\n"
         )
 
-        assert recognize_program_registration(function) == ProgramRegistration(command="audit")
+        assert recognize_program_registration(function, constants) == ProgramRegistration(
+            command="audit"
+        )
 
 
 class TestProgramConfigRecognition:

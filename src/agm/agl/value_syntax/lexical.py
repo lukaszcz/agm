@@ -1,11 +1,16 @@
 """AgL literal lexical rules: text escapes, numbers, and environment holes.
 
 Pure functions over ``(source, offset)`` shared by the frontend scanner and the
-value-syntax reader, so both scan literals identically.
+value-syntax reader, so both scan literals identically. The reverse direction
+lives here too: :func:`quote_text` and :func:`scalar_text` spell a value back
+as the literal it came from, so every producer of AgL surface text — value
+rendering, template interpolation, compile-time constant folding — agrees on
+one spelling.
 """
 
 from __future__ import annotations
 
+import decimal
 from collections.abc import Mapping
 from typing import Final
 
@@ -53,6 +58,19 @@ def quote_text(value: str) -> str:
             out.append(character)
     out.append('"')
     return "".join(out)
+
+
+def scalar_text(value: int | decimal.Decimal | bool) -> str:
+    """Return an int, decimal, or bool as its plain (unquoted) AgL spelling.
+
+    A decimal drops trailing zeros without falling back to scientific
+    notation, which AgL surface syntax does not spell.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, decimal.Decimal):
+        return format(value.normalize(), "f")
+    return str(value)
 
 
 def is_ascii_digit(ch: str) -> bool:
@@ -146,6 +164,7 @@ __all__ = [
     "environment_hole_name",
     "is_ascii_digit",
     "quote_text",
+    "scalar_text",
     "scan_name",
     "scan_number",
 ]

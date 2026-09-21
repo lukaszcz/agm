@@ -1,0 +1,17 @@
+{
+  "scenarios": [
+    {
+      "name": "forward_constant_references_fold_and_config_supplies_the_parameter",
+      "expect": {
+        "stdout": "Review 2 files, precise: true for review crew\nReview 2 files, precise: true for review crew!\nreview done\n"
+      }
+    },
+    {
+      "name": "a_host_parameter_seed_outranks_the_config_entry_every_reader_sees",
+      "module_params": {"<entry>::audience": "the owner"},
+      "expect": {
+        "stdout": "Review 2 files, precise: true for the owner\nReview 2 files, precise: true for the owner!\nreview done\n"
+      }
+    }
+  ]
+}

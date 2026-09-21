@@ -1,0 +1,21 @@
+# An attribute argument is a constant text expression: a literal, a template
+# whose holes name the module's own constants, or a bare reference to one.
+# Folding happens before the attribute's own spelling rule is applied, and a
+# reference may point at a constant declared later in the module.
+let severities = "blocker, major, minor"
+let limit = 3
+let precise = true
+
+enum Verdict
+  | @doc("A problem worth reporting. Severities: %{severities}.") Problem(detail: text)
+  | @doc(clean-prose) @name(clean-alias) Clean
+
+let clean-prose = "Nothing to report."
+let clean-alias = "settled"
+
+@doc("Review up to %{limit} items; precise: %{precise}.")
+program def main(subject: text) -> unit =
+  let verdict: Verdict = AgentCommand("reviewer").ask "Review %{subject}"
+  case verdict of
+    | Problem(detail) => print detail
+    | Clean => print clean-prose

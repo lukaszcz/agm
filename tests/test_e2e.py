@@ -7770,7 +7770,8 @@ class TestPackageInstall:
         )
         (package / "src" / "main.agl").write_text(
             "import std/config\n"
-            '@doc("Publish a subject")\n'
+            'let noun = "subject"\n'
+            '@doc("Publish a %{noun}")\n'
             "program def main(subject: text) -> unit =\n"
             "  print subject\n"
             "  print std/config::strict-json\n"

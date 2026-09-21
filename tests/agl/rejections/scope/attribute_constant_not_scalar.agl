@@ -1,0 +1,4 @@
+let aspects = ["correctness", "efficiency"]
+
+@doc("aspects: %{aspects}")
+program def main() -> unit = print aspects

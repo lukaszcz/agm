@@ -1,0 +1,2 @@
+@doc("aspects: %{aspects}")
+program def main() -> unit = ()

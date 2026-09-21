@@ -1,0 +1,7 @@
+let alias = "not an identifier"
+
+record Point
+  @name(alias) x: int
+  y: int
+
+program def main() -> unit = print Point(x = 1, y = 2)

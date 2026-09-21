@@ -1,0 +1,3 @@
+{
+  "diagnostic": {"line": 4, "message_contains": ["defined in terms of itself"]}
+}

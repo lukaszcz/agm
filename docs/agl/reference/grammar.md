@@ -231,7 +231,7 @@ own and take no attribute.
 [Lexical structure](lexical-structure.md#attributes) gives the placements an
 attribute may take.
 
-Every built-in attribute but `@config` takes literal constants only,
+Every built-in attribute but `@config` takes one constant text expression
 positionally. `@config` instead takes one or more keyed entries, each an
 `attr_key` — a bare or `::`-qualified reference, resolved like any other
 reference — paired with a constant value. The catalog, per-attribute

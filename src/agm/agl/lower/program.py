@@ -487,25 +487,26 @@ def lower_program(
         initializers = lowerer.lower_initializers(body, top_level=True)
         executable_module = ExecutableModule(module_id=mid, initializers=initializers)
         executable_modules[mid] = executable_module
-        defaults: dict[BuiltinVarKey | str, IrExpr] = {
-            builtin_var_key(
-                mid, (segment.name for segment in item.scope_path), item.name
-            ): lowerer.lower_expr(item.default)
-            for item in static_items(body.items)
-            if isinstance(item, BuiltinVarDecl) and item.default is not None
-        }
-        builtin_setting_defaults.update(defaults)
-        module_program_configs: dict[SymbolId, tuple[tuple[StaticBindingKey, IrExpr], ...]] = {
-            link.fn_node_to_sym[item.node_id]: tuple(
-                (
-                    cm.program_config_targets[entry.key.node_id],
-                    lowerer.lower_coerced(entry.value, cm.node_types[entry.key.node_id]),
+        with lowerer.substituted_constants():
+            defaults: dict[BuiltinVarKey | str, IrExpr] = {
+                builtin_var_key(
+                    mid, (segment.name for segment in item.scope_path), item.name
+                ): lowerer.lower_expr(item.default)
+                for item in static_items(body.items)
+                if isinstance(item, BuiltinVarDecl) and item.default is not None
+            }
+            module_program_configs: dict[SymbolId, tuple[tuple[StaticBindingKey, IrExpr], ...]] = {
+                link.fn_node_to_sym[item.node_id]: tuple(
+                    (
+                        cm.program_config_targets[entry.key.node_id],
+                        lowerer.lower_coerced(entry.value, cm.node_types[entry.key.node_id]),
+                    )
+                    for entry in raw_entries
                 )
-                for entry in raw_entries
-            )
-            for _mid, _cm, item in program_funcdefs({mid: cm})
-            if (raw_entries := cm.resolved.attributes.program_configs.get(item.node_id, ()))
-        }
+                for _mid, _cm, item in program_funcdefs({mid: cm})
+                if (raw_entries := cm.resolved.attributes.program_configs.get(item.node_id, ()))
+            }
+        builtin_setting_defaults.update(defaults)
         program_configs.update(module_program_configs)
         if key is not None:
             seed = cm.resolved.program.node_id << 32

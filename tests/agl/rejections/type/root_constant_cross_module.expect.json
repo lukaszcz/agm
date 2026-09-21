@@ -1,0 +1,4 @@
+{
+  "module_roots": ["program_modules/type/root_constant_cross_module"],
+  "diagnostic": {"line": 5, "message_contains": ["constant"]}
+}

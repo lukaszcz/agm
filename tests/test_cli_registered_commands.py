@@ -163,6 +163,39 @@ def test_registered_command_dispatches_trailing_arguments(
     assert calls == [("tools/lint::main", ["--level", "strict"], "tools", "tools lint")]
 
 
+def test_a_stored_manifest_field_this_build_does_not_know_still_dispatches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One unreadable field in one installed package must not disable the CLI."""
+    import agm.commands.exec_program as exec_program
+
+    home = tmp_path / "home"
+    write_installed_package(
+        home,
+        "tools",
+        source="program def main() -> unit = ()\n",
+        commands={"tools run": "tools/main::main"},
+    )
+    manifest = home / ".agm" / "packages" / "tools" / "1.0.0" / "package.toml"
+    manifest.write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands]\n"tools run" = { program = "tools/main::main", summary = "Run" }\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        exec_program,
+        "run_registered",
+        lambda program, argument_tokens, **_kwargs: calls.append(program),
+    )
+
+    result = invoke(CliRunner(), ["tools", "run"])
+
+    assert result.exit_code == 0
+    assert calls == ["tools/main::main"]
+
+
 def test_plain_registered_command_does_not_discover_during_outer_parsing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

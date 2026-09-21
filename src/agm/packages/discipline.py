@@ -24,7 +24,11 @@ from agm.core import fs
 from agm.packages.distribution import MANIFEST_NAME, distribution_files
 from agm.packages.errors import DisciplineError as DisciplineError
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from agm.packages.manifest import PackageManifest, distribution_manifest
+from agm.packages.manifest import (
+    PackageManifest,
+    describe_unknown_fields,
+    distribution_manifest,
+)
 from agm.packages.model import PackageInfo, is_std_package_name
 from agm.stdlib_locator import shipped_stdlib_root
 from agm.util.ident import is_identifier
@@ -60,6 +64,7 @@ def validate_package(
     this package's distribution reuses it.
     """
 
+    _validate_manifest_schema(package.manifest)
     modules = validate_package_structure(package)
     resolution = _resolve_package_modules(
         package, modules, dependency_packages=tuple(dependency_packages)
@@ -153,6 +158,19 @@ def validate_distribution_view(
         resolution.resolutions,
         exists=lambda relative: _archive_resource_exists(relative, paths),
     )
+
+
+def _validate_manifest_schema(manifest: PackageManifest) -> None:
+    """Reject manifest keys the schema does not define.
+
+    Loading tolerates them so that a store AGM itself baked stays readable
+    across builds; a package presented for validation — checked, installed, or
+    packaged — is held to the schema here, where a typo is still the author's
+    to fix and refusing it strands nothing.
+    """
+
+    if manifest.unknown_fields:
+        raise DisciplineError(describe_unknown_fields(manifest.unknown_fields))
 
 
 def validate_package_structure(package: PackageInfo) -> dict[ModuleId, Path]:

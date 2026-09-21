@@ -382,6 +382,30 @@ def test_info_command_reads_manifest_metadata_and_current_dependency_status(
     assert raised.value.code == 1
 
 
+def test_a_stored_manifest_field_this_build_does_not_know_keeps_the_package_usable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A package another AGM installed stays listable and inspectable.
+
+    Its baked manifest is AGM's own artifact, rewritten whole by the next
+    install; a field this build has no meaning for must not strand the store.
+    """
+    home = _context(tmp_path).home
+    install_directory(_command_package(tmp_path, "alpha"), home=home)
+    stored = home / ".agm" / "packages" / "alpha" / "1.0.0" / "package.toml"
+    stored.write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\nrelease-channel = "beta"\n\n'
+        '[commands]\nlaunch = { program = "alpha/main::main", doc = "Launch", summary = "x" }\n',
+        encoding="utf-8",
+    )
+
+    list_command.run(PkgListArgs())
+    assert capsys.readouterr().out.splitlines() == ["alpha 1.0.0 active"]
+
+    info_command.run(PkgInfoArgs("alpha"))
+    assert "alpha 1.0.0" in capsys.readouterr().out
+
+
 def test_list_reports_every_stored_version_and_each_editable_package(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

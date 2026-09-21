@@ -61,6 +61,8 @@ import only their own tree, packages declared in `[dependencies]`, and `std`.
 ## Manifest
 
 `package.toml` supports `[package]` (required), `[dependencies]`, `[commands]`, and `[aliases]`.
+`pkg check`, `pkg create`, and `pkg install` reject a key the schema does not define, so a
+misspelled field is an error rather than silently ignored.
 
 ### `[package]`
 

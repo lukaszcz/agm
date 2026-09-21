@@ -16,7 +16,7 @@ Read @docs/arch/index.md to understand AGM implementation architecture.
 
 **IMPORTANT**: Update docs/arch/**/*.md whenever AGM implementation architecture changes – always keep these files up-to-date with the codebase.
 
-The primary purpose of architecture docs in docs/arch/**/*.md is to provide agents with a quick but comprehensive overview of the system's architecture and the codebase. Treat the docs as an onboarding guide. When updating, do not add brittle implementation details, but do include info on where to find relevant codebase references. Be *radically* succinct and precise, but never omit essential *high-level* architectural descriptions. Remove redundant prose, implementation details, and duplicated information. Architecture docs provide architectural overview *only* - implementation mechanisms should be explained in comments and docstrings instead. Match the existing writing style and succinctness level.
+The primary purpose of architecture docs in docs/arch/**/*.md is to provide agents with a quick but comprehensive overview of the system's architecture and the codebase. Treat the docs as an onboarding guide. When updating, do not add brittle implementation details, but do include info on where to find relevant codebase references. Be *radically* concise and precise - convey essential *high-level* architectural information without extra prose. Remove redundant prose, implementation details, and duplicated information. Architecture docs provide architectural overview *only* - implementation mechanisms should be explained in comments and docstrings instead. Match the existing writing style and succinctness level.
 
 ## Build, Test, and Development Commands
 
@@ -73,4 +73,4 @@ Run the CLI locally with `uv run agm ...` when iterating on a command.
 - Do NOT create new worktrees - edit the current worktree directly.
 - Do NOT try to circumvent static analysis tools. Adapt the code to pass `just check` properly - do not ignore checks or suppress rules. If you absolutely need to bypass a static analysis tool, ALWAYS ask the user for approval and explain why this is necessary.
 - Be concise and precise in your responses, comments, docs, and explanations.
-- When finished, verify with `just check`.
+- When finished, verify with `just check` and commit.

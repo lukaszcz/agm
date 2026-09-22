@@ -293,15 +293,15 @@ def test_stderr_reassembles_a_multibyte_character_split_across_chunks() -> None:
 def test_stderr_drops_an_orphaned_leading_continuation_byte() -> None:
     """Cutting the bounded tail to its byte bound can strand a continuation
     byte at the front; that artifact of the cut is dropped, not decoded."""
-    orphan = "café".encode()[-1:]  # a continuation byte of "é", alone
-    assert rpc._decode_stderr_tail(orphan + b"next", truncated=True) == ("next", None)
+    child = _child(object())
+    child.stderr.append(b"a" + "é".encode() + b"n" * (rpc._MAX_STDERR_BYTES - 1))
+    assert rpc._stderr(child, "fallback") == "n" * (rpc._MAX_STDERR_BYTES - 1)
 
 
 def test_stderr_rejects_an_untruncated_leading_continuation_byte() -> None:
-    assert rpc._decode_stderr_tail(b"\x80diagnostic") == (
-        "",
-        "stderr is not valid UTF-8 at byte 0",
-    )
+    child = _child(object())
+    child.stderr.append("é".encode()[-1:] + b"diagnostic")
+    assert rpc._stderr(child, "fallback") == "fallback; stderr is not valid UTF-8 at byte 0"
 
 
 def test_stderr_undecodable_tail_gives_empty_text_and_an_offset_note() -> None:

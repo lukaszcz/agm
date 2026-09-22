@@ -28,7 +28,7 @@ from agm.agent.session.protocol import (
 )
 from agm.agent.spec import AgentPi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
-from agm.core.process import kill_process_group
+from agm.core.process import CapturedOutput, kill_process_group
 from agm.util.unicode import loads_json
 
 _RpcOperation = Literal[
@@ -67,6 +67,10 @@ class _BoundedText:
         if len(data) > _MAX_STDERR_BYTES:
             self.truncated = True
         self.data = data[-_MAX_STDERR_BYTES:]
+
+    def captured(self) -> CapturedOutput:
+        """The retained tail as a capture: its head, never its tail, was cut."""
+        return CapturedOutput(data=self.data, truncated=False, head_truncated=self.truncated)
 
 
 @dataclass(slots=True)
@@ -835,29 +839,8 @@ def _transport_cause(error: BaseException | None) -> AgentTransportFailureCause:
     return "nonzero_exit"
 
 
-def _decode_stderr_tail(data: bytes, *, truncated: bool = False) -> tuple[str, str | None]:
-    """Decode a bounded stderr byte tail.
-
-    If the tail was truncated, drops leading continuation bytes left orphaned
-    by the cut. Returns ``(text, note)``; when the remaining bytes are not
-    valid UTF-8, *text* is ``""`` and *note* names the offset within this
-    tail -- the full stream was never retained, so there is no absolute offset
-    to report.
-    """
-    start = 0
-    if truncated:
-        while start < len(data) and 0x80 <= data[start] <= 0xBF:
-            start += 1
-    try:
-        return data[start:].decode("utf-8"), None
-    except UnicodeDecodeError as exc:
-        return "", f"stderr is not valid UTF-8 at byte {exc.start}"
-
-
 def _stderr(child: _RpcChild, fallback: str, include_fallback: bool = False) -> str:
-    if not child.stderr.data:
-        return fallback
-    text, note = _decode_stderr_tail(child.stderr.data, truncated=child.stderr.truncated)
+    text, note = child.stderr.captured().text_or_note("stderr")
     if not text:
         return f"{fallback}; {note}" if note else fallback
     if include_fallback:

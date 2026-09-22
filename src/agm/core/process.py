@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from types import FrameType
@@ -640,26 +640,42 @@ def _decode_lenient(data: bytes) -> str:
 
 @dataclass(frozen=True, slots=True)
 class CapturedOutput:
-    """One captured stream: raw bytes, decoded only when the text is needed."""
+    """One captured stream: raw bytes, decoded once, only when the text is needed."""
 
     data: bytes
     truncated: bool  # capture ended before this stream reached EOF; see text()
+    head_truncated: bool = False  # earlier bytes of this stream were dropped; see text()
+    _text: str | None = field(default=None, init=False, compare=False, repr=False)
 
     def text(self) -> str:
         """Strict UTF-8; raises ``UnicodeDecodeError`` (``.start`` = byte offset).
 
-        A truncated stream drops an incomplete trailing UTF-8 sequence: an
-        idle-timeout kill can cut a multi-byte character in half, and that is
-        not invalid data, just data the process never finished writing. Bytes
-        that are actually invalid, anywhere in the stream, still raise.
+        A cut stream drops what the cut orphaned, at either end: an incomplete
+        trailing sequence (an idle-timeout kill can halve a character the
+        process never finished writing) and, when earlier bytes were dropped,
+        the leading continuation bytes whose lead byte went with them. Bytes
+        that are actually invalid still raise, at their offset within the
+        retained bytes.
         """
+        cached = self._text
+        if cached is None:
+            cached = self._decode()
+            object.__setattr__(self, "_text", cached)
+        return cached
+
+    def _decode(self) -> str:
+        data = self.data
+        if self.head_truncated:
+            start = 0
+            while start < len(data) and 0x80 <= data[start] <= 0xBF:
+                start += 1
+            data = data[start:]
         if not self.truncated:
-            return self.data.decode("utf-8")
+            return data.decode("utf-8")
         # A non-final incremental decode buffers a valid-but-incomplete trailing
         # sequence instead of raising, and we simply drop it by discarding the
-        # decoder. Bytes that are invalid outright still raise immediately, with
-        # ``.start`` as their absolute offset in ``self.data``.
-        return codecs.getincrementaldecoder("utf-8")().decode(self.data, False)
+        # decoder. Bytes that are invalid outright still raise immediately.
+        return codecs.getincrementaldecoder("utf-8")().decode(data, False)
 
     def display(self) -> str:
         """``backslashreplace`` rendering for traces and diagnostics only."""

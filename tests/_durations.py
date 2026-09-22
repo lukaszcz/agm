@@ -12,7 +12,9 @@ What a test actually costs is CPU time, and ``os.times`` reports it for the
 worker process *and* for the subprocesses it reaped -- which matters here,
 because a large part of the suite drives ``git``, fake runner scripts and
 real ``agm`` invocations.  That number is stable whether the test runs alone
-or alongside twenty others, so it can be enforced.
+or alongside twenty others, so it can be enforced.  A process the worker did
+not reap itself charges its cost here explicitly, so how an invocation was
+launched never changes what it is measured to cost.
 
 Set ``AGM_TEST_MAX_CPU_SECONDS`` to a budget and the session fails, listing
 every test that overran it.  Leave it unset (the default) and the accounting
@@ -39,11 +41,27 @@ _WORKEROUTPUT_KEY = "agm_test_cpu_seconds"
 # nodeid -> CPU seconds, for the tests this process ran.
 _costs: dict[str, float] = {}
 
+# CPU seconds burned on this worker's behalf by processes it did not reap
+# itself, and so cannot see in ``os.times``.
+_external: float = 0.0
+
+
+def charge_external_cpu_seconds(seconds: float) -> None:
+    """Charge the running test with CPU burned by a process another parent reaped.
+
+    The preforking launcher in :mod:`tests._agm_zygote` has the zygote reap the
+    ``agm`` children, which takes their cost out of this worker's ``os.times``.
+    Reporting it here keeps a test's measured cost the same whichever way its
+    invocations were launched.
+    """
+    global _external
+    _external += seconds
+
 
 def cpu_seconds() -> float:
-    """Total CPU seconds burned by this process and every child it reaped."""
+    """Total CPU seconds burned by this process and on its behalf."""
     times = os.times()
-    return times.user + times.system + times.children_user + times.children_system
+    return times.user + times.system + times.children_user + times.children_system + _external
 
 
 def _float_env(name: str) -> float | None:

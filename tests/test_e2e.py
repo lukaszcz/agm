@@ -36,6 +36,7 @@ import pytest
 
 from agm.packages.record import write_record
 from agm.project.workspace_shell import _sanitize_session_key
+from tests import _agm_zygote
 from tests._agl_helpers import write_file_program
 from tests._command_coverage import record_invocation
 from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
@@ -394,6 +395,10 @@ def _runner_records(log: Path) -> list[dict[str, str]]:
 # invoke ``"bin"`` directly, so AGM resolves this temporary install prefix.
 _AGM_INSTALL: dict[str, Path] = {}
 
+# The preforking launcher this worker's invocations go through, or ``None``
+# when ``AGM_TEST_NO_ZYGOTE`` asked for a cold process per invocation.
+_AGM_LAUNCHER: _agm_zygote.Zygote | None = None
+
 # The developer's pristine PATH captured at module import (before any test
 # fixture mutates ``os.environ``).  ``_agm_env`` uses this to distinguish
 # test-prepended directories (tmp dirs not in the original PATH) from the
@@ -410,7 +415,9 @@ _ORIGINAL_PATH: str = os.environ.get("PATH", "")
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _agm_install(tmp_path_factory: pytest.TempPathFactory, isolated_compiler_cache: None) -> None:
+def _agm_install(
+    tmp_path_factory: pytest.TempPathFactory, isolated_compiler_cache: None
+) -> Iterator[None]:
     """Stage a checkout CLI using the interpreter already running the tests.
 
     The temporary prefix preserves executable-based config discovery. Python's
@@ -418,7 +425,14 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory, isolated_compiler_cac
     source path selects this checkout, while dependencies come from the test
     environment. No second Python installation, build backend or cached wheels
     are required.
+
+    The staged entry point is what a command is *named* by, and a test that
+    spawns it by hand still starts a cold interpreter. Invocations made through
+    :func:`run_agm` go to the session's zygote instead — see
+    :mod:`tests._agm_zygote` — which runs them from a process that has already
+    imported AGM.
     """
+    global _AGM_LAUNCHER
     repo_root = Path(__file__).resolve().parents[1]
     prefix = tmp_path_factory.mktemp("agm-install")
     bin_dir = prefix / "bin"
@@ -482,6 +496,20 @@ def _agm_install(tmp_path_factory: pytest.TempPathFactory, isolated_compiler_cac
         check=False,
     )
 
+    if os.environ.get(_agm_zygote.DISABLE_ENV):
+        yield
+        return
+    # The socket lives in its own short directory: a Unix socket path is capped
+    # at about a hundred bytes, well under what a nested tmp_path can reach.
+    _AGM_LAUNCHER = _agm_zygote.start(
+        tmp_path_factory.mktemp("agm-zygote") / "s", repo_root / "src"
+    )
+    try:
+        yield
+    finally:
+        _AGM_LAUNCHER.close()
+        _AGM_LAUNCHER = None
+
 
 def _agm_argv(args: list[str]) -> list[str]:
     """Build an argv list invoking the staged checkout CLI."""
@@ -537,26 +565,38 @@ def run_agm(
     input: str | None = None,
     executable: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run an ``agm`` CLI command as a subprocess via the checkout entry point.
+    """Run an ``agm`` CLI command as a separate process, named by the checkout entry point.
 
     Pass *executable* — see :func:`_install_agm_at_prefix` — to invoke that same
     binary through another prefix's entry point, which is what selects the
     install prefix AGM resolves for itself.
+
+    The process comes from the session's preforking launcher when there is one
+    (:mod:`tests._agm_zygote`), which only changes where it was started from;
+    everything the command can observe, its own argv included, is the same.
 
     Every invocation is recorded for the e2e command-coverage gate (see
     :mod:`tests._command_coverage`), which is why this must stay the single way
     e2e tests reach the binary.
     """
     record_invocation(args)
-    return subprocess.run(
-        _agm_argv(args) if executable is None else [str(executable), *args],
-        capture_output=True,
-        text=True,
-        env=_agm_env(env),
-        cwd=cwd,
-        check=check,
-        input=input,
-    )
+    argv = _agm_argv(args) if executable is None else [str(executable), *args]
+    full_env = _agm_env(env)
+    if _AGM_LAUNCHER is None:
+        return subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            env=full_env,
+            cwd=cwd,
+            check=check,
+            input=input,
+        )
+    working_dir = str(cwd) if cwd is not None else os.getcwd()
+    completed = _AGM_LAUNCHER.run(argv, full_env, working_dir, input)
+    if check:
+        completed.check_returncode()
+    return completed
 
 
 def _install_agm_at_prefix(prefix: Path) -> Path:

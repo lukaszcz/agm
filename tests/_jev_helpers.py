@@ -16,7 +16,8 @@ decoded JSON request body; ``url`` the exact URL; ``headers`` a
 case-insensitive subset (a ``None`` value asserts absence); ``timeout`` the
 seconds every phase of the request's timeout carries (``None`` for none).
 A response carries ``status`` (default 200), ``json`` (the body; omitted for
-an empty one), and ``headers``, such as a request id or ``retry-after``.
+an empty one) or ``content`` (raw JSON body text), and ``headers``, such as a
+request id or ``retry-after``.
 ``fail: "connection" | "timeout"`` instead raises ``httpx2.ConnectError`` or
 ``httpx2.ReadTimeout``. An unexpected or mismatched request fails the test
 immediately through ``pytest.fail``, whose ``BaseException`` escapes the SDK's
@@ -79,6 +80,9 @@ class JevTransport(httpx2.MockTransport):
             raise httpx2.ReadTimeout("scripted timeout", request=request)
         headers = dict(outcome.get("headers", {}))
         status = int(outcome.get("status", 200))
+        if "content" in outcome:
+            headers["content-type"] = "application/json"
+            return httpx2.Response(status, headers=headers, content=outcome["content"])
         if "json" not in outcome:
             return httpx2.Response(status, headers=headers)
         return httpx2.Response(status, headers=headers, json=outcome["json"])

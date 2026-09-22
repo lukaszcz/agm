@@ -24,8 +24,9 @@
 # to that request only. A `None` setting is not passed to the SDK, so its own
 # environment variables and defaults apply.
 #
-# A `timeout` is a plain number (seconds) or a number suffixed with `s`, `m`,
-# or `h`; text that is not a duration raises `std/errors::TypeError` when a
+# A `timeout` is a positive plain number (seconds) or a positive number
+# suffixed with `s`, `m`, or `h`; text that is not a duration, a zero
+# duration, or one too large to wait for raises `std/errors::TypeError` when a
 # request uses it.
 #
 # Traces `jev_request` (model, state, questions), `jev_response` (model,
@@ -100,7 +101,7 @@ exception JevServerError extends JevApiError()
 # The request reached no response.
 exception JevConnectionError extends JevError(cause: text)
 # `timeout` is the timeout the SDK reported for the request, as duration
-# text in the `timeout` form above (such as `"10s"`).
+# text in the `timeout` form above (such as `"10.0s"`).
 exception JevTimeoutError extends JevError(timeout: text)
 # A success response whose body is structurally invalid at `field-path`.
 exception JevResponseError extends JevError(field-path: text)

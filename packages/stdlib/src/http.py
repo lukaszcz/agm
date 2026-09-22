@@ -6,7 +6,6 @@ import base64
 import time
 from decimal import Decimal
 from pathlib import Path
-from threading import TIMEOUT_MAX
 from urllib.parse import urlencode
 
 from agl import AglException, nominals, runtime
@@ -15,7 +14,7 @@ from agl import dict as agl_dict
 from agm.agl.runtime.serialize import dumps_exact
 from agm.core import http as core_http
 from agm.core.fs import fs_error_message
-from agm.core.parse import parse_timeout
+from agm.core.parse import parse_positive_timeout
 
 Option = nominals.std.option.Option
 Headers = nominals.std.http.Headers
@@ -129,14 +128,9 @@ def _unwrap_timeout(timeout: object) -> tuple[float | None, str | None]:
     if isinstance(timeout, Option.Some):
         text = timeout.value
         try:
-            seconds = parse_timeout(text)
+            return parse_positive_timeout(text), text
         except ValueError as exc:
             raise AglException(TypeError(message=f"invalid timeout: {exc}")) from exc
-        if not 0 < seconds <= TIMEOUT_MAX:
-            raise AglException(
-                TypeError(message=f"invalid timeout: {text!r} is not positive and representable")
-            )
-        return seconds, text
     return None, None
 
 

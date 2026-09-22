@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from collections.abc import Generator
 from pathlib import Path
@@ -172,10 +173,9 @@ def test_run_allocates_pty_only_for_enabled_interactive_runs(
         )
     )
 
-    expected = (
-        [sys.executable, "-m", "agm.sandbox.pty", "--", "echo", "hi"] if wrapped else ["echo", "hi"]
-    )
-    assert captured["command"] == expected
+    expected_prefix = [sys.executable, "-m", "agm.sandbox.pty", "--"] if wrapped else []
+    assert captured["command"] == ["echo", "hi"]
+    assert captured["process_prefix"] == expected_prefix
 
 
 def test_run_patches_sandbox_when_project_is_discovered(
@@ -708,6 +708,52 @@ class TestRunDryRun:
         out = capsys.readouterr().out
         assert "dry-run: sandbox configuration" in out
         assert "srt --settings '<dry-run-settings>' -- echo hi" in out
+
+    def test_dry_run_pty_keeps_the_alias_target_as_the_sandboxed_identity(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A terminal relay must not stand in for the alias target nor enter the sandbox."""
+
+        self._enable_dry_run()
+        agm_home = tmp_path / "agm-home"
+        (agm_home / "sandbox").mkdir(parents=True)
+        (agm_home / "sandbox" / "claude.json").write_text("{}", encoding="utf-8")
+        env = {"HOME": str(tmp_path / "home"), "PATH": "/bin", "AGM_HOME": str(agm_home)}
+        (tmp_path / "home").mkdir()
+        monkeypatch.setattr(run_command.Path, "cwd", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr(os, "environ", env)
+        monkeypatch.setattr(run_command.os, "isatty", lambda _fd: True)
+        monkeypatch.setattr(
+            run_command,
+            "load_run_config",
+            lambda **_: _make_run_config(aliases={"myagent": "claude"}),
+        )
+        monkeypatch.setattr(run_command.srt.shutil, "which", lambda *a, **kw: "/bin/srt")
+
+        run_command.run(
+            RunArgs(
+                run_command=["myagent", "--some-arg"],
+                no_sandbox=False,
+                no_patch=False,
+                memory=None,
+                swap=None,
+                no_memory_limit=True,
+                no_swap_limit=True,
+                settings_file=None,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "agm-home/sandbox/claude.json" in out
+        assert Path(sys.executable).name + ".json" not in out
+        assert (
+            f"{shlex.quote(sys.executable)} -m agm.sandbox.pty "
+            "-- srt --settings '<dry-run-settings>' "
+            "-- claude --some-arg"
+        ) in out
 
     def test_dry_run_with_proj_dir_env(
         self,

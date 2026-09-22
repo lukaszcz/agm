@@ -4,7 +4,7 @@
 
 ## Sandbox Runtime
 
-Isolation is delegated to SRT, the external sandbox-runtime tool; AGM implements none itself. `agm run` resolves a merged settings file, invokes SRT with it, and passes the target command through. Interactive commands run through AGM's PTY relay by default, giving applications a controlling terminal inside SRT's detached session; redirected commands remain unwrapped. The sandbox and PTY can each be bypassed explicitly.
+Isolation is delegated to SRT, the external sandbox-runtime tool; AGM implements none itself. `agm run` resolves a merged settings file, invokes SRT with it, and passes the target command through. Interactive commands run through AGM's PTY relay by default: the relay wraps the sandbox from outside, so applications get a controlling terminal despite SRT's detached session; redirected commands remain unwrapped. The sandbox and PTY can each be bypassed explicitly.
 
 ## Settings Resolution
 

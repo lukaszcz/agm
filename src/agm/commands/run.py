@@ -88,13 +88,12 @@ def _resource_limit_run_context(
     )
 
 
-def _run_with_optional_resource_limits(
+def _run_in_foreground(
     *,
     subprocess_args: list[str],
     cwd: Path,
     env: dict[str, str],
-    memory_limit: str | None,
-    swap_limit: str | None,
+    interrupt_cleanup_cmd: list[str] | None,
 ) -> NoReturn:
     """Run *subprocess_args* in the foreground and exit with its status.
 
@@ -102,10 +101,6 @@ def _run_with_optional_resource_limits(
     interrupt exits 130.
     """
 
-    process_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
-        env, memory_limit, swap_limit
-    )
-    subprocess_args = [*process_prefix, *subprocess_args]
     try:
         raise SystemExit(
             run_foreground(
@@ -160,17 +155,16 @@ def run(args: RunArgs) -> None:
     if command_alias is not None:
         alias_parts = shlex.split(command_alias)
         effective_run_command = [*alias_parts, *effective_run_command[1:]]
-    if allocate_pty:
-        effective_run_command = [
-            sys.executable,
-            "-m",
-            "agm.sandbox.pty",
-            "--",
-            *effective_run_command,
-        ]
-    process_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
+    # The alias target names the program, so it must be read before any prefix.
+    alias_command_name = effective_run_command[0] if command_alias is not None else None
+    limit_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
         resolved_env, effective_memory_limit, effective_swap_limit
     )
+    # The relay runs outermost: it owns the real terminal, stays outside the
+    # sandbox and outside the resource-limited scope, and its pseudo-terminal
+    # session still carries signals down to the whole command tree.
+    pty_prefix = [sys.executable, "-m", "agm.sandbox.pty", "--"] if allocate_pty else []
+    process_prefix = [*pty_prefix, *limit_prefix]
     if dry_run.enabled():
         dry_run.print_configuration("run")
         dry_run.print_detail("cwd", str(current))
@@ -197,7 +191,7 @@ def run(args: RunArgs) -> None:
                 home=context.home,
                 proj_dir=context.proj_dir,
                 command_name=run_command[0],
-                alias_command_name=effective_run_command[0] if command_alias is not None else None,
+                alias_command_name=alias_command_name,
                 settings_file=run_args.settings_file,
                 patch_proj_dir=patch_proj_dir,
                 process_prefix=process_prefix,
@@ -208,12 +202,11 @@ def run(args: RunArgs) -> None:
         return
 
     if run_args.no_sandbox:
-        _run_with_optional_resource_limits(
-            subprocess_args=list(effective_run_command),
+        _run_in_foreground(
+            subprocess_args=[*process_prefix, *effective_run_command],
             cwd=current,
             env=resolved_env,
-            memory_limit=effective_memory_limit,
-            swap_limit=effective_swap_limit,
+            interrupt_cleanup_cmd=interrupt_cleanup_cmd,
         )
 
     srt.run_sandboxed(
@@ -223,7 +216,7 @@ def run(args: RunArgs) -> None:
         home=context.home,
         proj_dir=context.proj_dir,
         command_name=run_command[0],
-        alias_command_name=effective_run_command[0] if command_alias is not None else None,
+        alias_command_name=alias_command_name,
         settings_file=run_args.settings_file,
         patch_proj_dir=patch_proj_dir,
         process_prefix=process_prefix,

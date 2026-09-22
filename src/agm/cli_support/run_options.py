@@ -33,14 +33,15 @@ def _exclusive_flag_groups() -> tuple[tuple[str, ...], ...]:
         for spec in ENGINE_KEYS:
             if spec.register != register:
                 continue
-            group.extend(projected[spec.name].flags)
-            if not spec.enables_register:
-                group.extend(projected[spec.name].negative_flags)
+            option = projected[spec.name]
+            group.append(option.flag)
+            if not spec.enables_register and option.negative_flag is not None:
+                group.append(option.negative_flag)
         groups.append(tuple(group))
     groups.extend(
-        (*option.flags, *option.negative_flags)
+        (option.flag, option.negative_flag)
         for option in projected.values()
-        if option.negative_flags
+        if option.negative_flag is not None
     )
     return tuple(groups)
 

@@ -2434,9 +2434,9 @@ class TestExecEngineFlagExclusivity:
         groups = _exclusive_flag_groups()
         for spec in ENGINE_KEYS:
             option = project_option(spec.name, ENGINE_KEY_TYPES[spec.name])
-            if not option.negative_flags:
+            if option.negative_flag is None:
                 continue
-            both = {*option.flags, *option.negative_flags}
+            both = {option.flag, option.negative_flag}
             assert any(both <= set(group) for group in groups), spec.name
 
     def test_register_members_exclude_the_registers_switch(self) -> None:

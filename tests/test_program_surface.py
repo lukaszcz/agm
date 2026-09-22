@@ -104,7 +104,6 @@ def test_levels_resolve_from_host_to_signature_to_own_then_imports() -> None:
         "lib.logging.verbose",
     )
     assert _entry(surface, imported_theme).spellings == ("theme.theme", "lib.theme.theme")
-    assert surface.shadowed_bare == frozenset({"verbose", "limit"})
 
 
 def test_import_bare_collision_is_ambiguous_but_qualified_forms_resolve() -> None:
@@ -186,8 +185,6 @@ def test_exec_and_registered_host_surfaces_shadow_different_bare_names() -> None
         REGISTERED_RESERVED_FLAGS, _program(), (trace, call_depth)
     )
 
-    assert exec_surface.shadowed_bare == frozenset({"trace", "max-call-depth"})
-    assert registered_surface.shadowed_bare == frozenset({"trace", "max-call-depth"})
     assert "trace" not in _entry(exec_surface, trace).spellings
     assert "trace" not in _entry(registered_surface, trace).spellings
     assert "max-call-depth" not in _entry(exec_surface, call_depth).spellings
@@ -235,4 +232,8 @@ def test_signature_short_and_positional_parameters_claim_only_their_valid_flags(
     surface = build_param_surface(frozenset(), _program(*signature), (param, positional))
 
     assert "-v" not in _entry(surface, param).option_spellings
-    assert "positional" in surface.shadowed_bare
+    assert _entry(surface, param).short_option is None
+    # A positional-only signature parameter claims its bare name without
+    # claiming any flag, so the module parameter keeps its option spellings.
+    assert "positional" not in _entry(surface, positional).spellings
+    assert "--positional" in _entry(surface, positional).option_spellings

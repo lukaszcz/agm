@@ -140,12 +140,14 @@ class TraceStore:
         return extra
 
     def run_start(self) -> None:
-        if self._path is not None:
-            self._emit("run_start", {})
+        if self._path is None:
+            return
+        self._emit("run_start", {})
 
     def run_end(self, *, ok: bool) -> None:
-        if self._path is not None:
-            self._emit("run_end", {"ok": ok})
+        if self._path is None:
+            return
+        self._emit("run_end", {"ok": ok})
 
     def agent_request(
         self,
@@ -160,23 +162,24 @@ class TraceStore:
         json_schema: object | None,
         span: "SourceSpan | Location | None" = None,
     ) -> None:
-        if self._path is not None:
-            self._emit(
-                "agent_request",
-                self._with_span(
-                    {
-                        "agent": agent,
-                        "attempt": attempt,
-                        "max_attempts": max_attempts,
-                        "prompt": prompt,
-                        "target_type": target_type,
-                        "codec": codec,
-                        "strict_json": strict_json,
-                        "json_schema": json_schema,
-                    },
-                    span,
-                ),
-            )
+        if self._path is None:
+            return
+        self._emit(
+            "agent_request",
+            self._with_span(
+                {
+                    "agent": agent,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "prompt": prompt,
+                    "target_type": target_type,
+                    "codec": codec,
+                    "strict_json": strict_json,
+                    "json_schema": json_schema,
+                },
+                span,
+            ),
+        )
 
     def agent_response(
         self,
@@ -216,23 +219,25 @@ class TraceStore:
         error_summary: str,
         span: "SourceSpan | Location | None" = None,
     ) -> None:
-        if self._path is not None:
-            self._emit(
-                "parse_result",
-                self._with_span(
-                    {
-                        "ok": ok,
-                        "raw": raw,
-                        "normalized_raw": normalized_raw,
-                        "error_summary": error_summary,
-                    },
-                    span,
-                ),
-            )
+        if self._path is None:
+            return
+        self._emit(
+            "parse_result",
+            self._with_span(
+                {
+                    "ok": ok,
+                    "raw": raw,
+                    "normalized_raw": normalized_raw,
+                    "error_summary": error_summary,
+                },
+                span,
+            ),
+        )
 
     def print_stmt(self, *, rendered: str, span: "SourceSpan | Location | None" = None) -> None:
-        if self._path is not None:
-            self._emit("print", self._with_span({"rendered": rendered}, span))
+        if self._path is None:
+            return
+        self._emit("print", self._with_span({"rendered": rendered}, span))
 
     def exec_command(
         self,
@@ -245,21 +250,22 @@ class TraceStore:
         timed_out: bool,
         span: "SourceSpan | Location | None" = None,
     ) -> None:
-        if self._path is not None:
-            self._emit(
-                "exec_command",
-                self._with_span(
-                    {
-                        "command": command,
-                        "exit_code": exit_code,
-                        "duration": duration,
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "timed_out": timed_out,
-                    },
-                    span,
-                ),
-            )
+        if self._path is None:
+            return
+        self._emit(
+            "exec_command",
+            self._with_span(
+                {
+                    "command": command,
+                    "exit_code": exit_code,
+                    "duration": duration,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "timed_out": timed_out,
+                },
+                span,
+            ),
+        )
 
     def exception(
         self,
@@ -269,11 +275,12 @@ class TraceStore:
         span: "SourceSpan | Location | None" = None,
     ) -> None:
         """Record an uncaught AgL exception that escapes the program."""
-        if self._path is not None:
-            self._emit(
-                "exception",
-                self._with_span({"type_name": type_name, "message": message}, span),
-            )
+        if self._path is None:
+            return
+        self._emit(
+            "exception",
+            self._with_span({"type_name": type_name, "message": message}, span),
+        )
 
     def companion_record(
         self,
@@ -292,8 +299,8 @@ class TraceStore:
         the companion's own module when they differ). *payload* is degraded
         field by field (see :func:`_sanitize`) rather than raising, since it
         is the companion's own data, unlike every other record kind. Unlike
-        every sibling method, this has no ``self._path is not None`` guard of
-        its own: the sole caller (``_CompanionRuntime.trace``) already checks
+        every sibling method, this has no ``self._path`` guard of its own:
+        the sole caller (``_CompanionRuntime.trace``) already checks
         :attr:`path` first, so it can skip computing *origin*/*site* -- a
         display-path rendering -- when this store is not writing; :meth:`_emit`
         still no-ops on a disabled store regardless.

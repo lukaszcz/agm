@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from agm.agl.matchcompile import CachedModuleSites
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
     from agm.agl.scope.program import ResolvedModule
-    from agm.agl.typecheck.env import CheckedModule, CheckedModuleImage
+    from agm.agl.typecheck.env import CheckedModule, CheckedModuleImage, EnvironmentFacts
 
 # One entry per module per distinct set of sources a process compiles against.
 # A standard library is a few dozen modules and a project rarely many more, so
@@ -75,8 +75,12 @@ class _ArtifactStore[V]:
     and :func:`retain_checked_modules`, whose disk form is a data-only image).
     """
 
-    def __init__(self, *, capacity: int = _CAPACITY, kind: str = "") -> None:
+    def __init__(self, *, capacity: int = _CAPACITY, kind: str = "", persist: bool = True) -> None:
         self.kind = kind
+        # Whether this store also reads and writes the disk cache. A store of
+        # artifacts cheap to rebuild from ones already persisted keeps to
+        # memory: a disk round trip would cost more than it saves.
+        self.persist = persist
         self._capacity = capacity
         self._entries: OrderedDict[_Key, _Entry[V]] = OrderedDict()
         self._lock = threading.Lock()
@@ -122,6 +126,10 @@ _RESOLVED: _ArtifactStore["ResolvedModule"] = _ArtifactStore(kind="scope")
 # the full object (see retained_checked_modules / retain_checked_modules).
 _CHECKED: _ArtifactStore["CheckedModule | CheckedModuleImage"] = _ArtifactStore(kind="checked")
 _SITES: _ArtifactStore["CachedModuleSites"] = _ArtifactStore(kind="matches")
+# Header preparation replays onto an environment the current compilation built,
+# so its facts are only worth keeping while the objects they name are still
+# live in this process -- memory only.
+_HEADERS: _ArtifactStore["EnvironmentFacts"] = _ArtifactStore(kind="headers", persist=False)
 
 
 _LOWERED: _ArtifactStore["LoweredModule"] = _ArtifactStore()
@@ -246,6 +254,32 @@ def retain_checked_modules(
     )
 
 
+def retained_module_headers(
+    retainable: RetainedSources, capabilities: HostCapabilities
+) -> dict[ModuleId, EnvironmentFacts]:
+    """Return the prepared module headers retained for these sources.
+
+    A module's headers — its resolved declaration bodies and function header
+    registrations — are a function of the module, its import/export closure,
+    and the capabilities it was prepared under, the same three inputs its
+    checked artifact is keyed on. Replaying them onto a freshly prepared
+    environment reproduces what preparing them again would have written,
+    without resolving a single type expression twice.
+    """
+    from agm.agl.typecheck.env import EnvironmentFacts
+
+    return _served(_HEADERS, retainable, (capability_signature(capabilities),), EnvironmentFacts)
+
+
+def retain_module_headers(
+    retainable: RetainedSources,
+    capabilities: HostCapabilities,
+    headers: Mapping[ModuleId, EnvironmentFacts],
+) -> None:
+    """Retain a compilation's prepared module headers for the next one."""
+    _retain(_HEADERS, retainable, (capability_signature(capabilities),), headers)
+
+
 def retained_match_sites(
     retainable: RetainedSources, capabilities: HostCapabilities
 ) -> dict[ModuleId, CachedModuleSites]:
@@ -291,21 +325,22 @@ def _served[V](
     ``artifact_entry``), never the fields inside an admitted object: the
     cache directory is the user's own disposable store, not untrusted input.
     """
-    for group in _groups(retainable):
-        sources = retainable[group[0]]
-        if all(store.get((mid, *discriminator), retainable[mid]) is not None for mid in group):
-            continue
-        payload = artifact_serialization.load(
-            _disk_key(sources, discriminator),
-            store.kind,
-            _anchors(store.kind, sources, discriminator, retainable),
-        )
-        if isinstance(payload, dict):
-            artifacts = cast(dict[object, object], payload)
-            for mid in group:
-                artifact = artifacts.get(mid)
-                if isinstance(artifact, expected):
-                    store.put((mid, *discriminator), retainable[mid], artifact)
+    if store.persist:
+        for group in _groups(retainable):
+            sources = retainable[group[0]]
+            if all(store.get((mid, *discriminator), retainable[mid]) is not None for mid in group):
+                continue
+            payload = artifact_serialization.load(
+                _disk_key(sources, discriminator),
+                store.kind,
+                _anchors(store.kind, sources, discriminator, retainable),
+            )
+            if isinstance(payload, dict):
+                artifacts = cast(dict[object, object], payload)
+                for mid in group:
+                    artifact = artifacts.get(mid)
+                    if isinstance(artifact, expected):
+                        store.put((mid, *discriminator), retainable[mid], artifact)
     served: dict[ModuleId, V] = {}
     for module_id, sources in retainable.items():
         artifact = store.get((module_id, *discriminator), sources)
@@ -339,7 +374,7 @@ def _retain[V](
         changed = any(store.get((mid, *discriminator), sources) is None for mid in members)
         for mid, artifact in members.items():
             store.put((mid, *discriminator), sources, artifact)
-        if changed:
+        if changed and store.persist:
             artifact_serialization.save(
                 _disk_key(sources, discriminator),
                 store.kind,
@@ -429,6 +464,7 @@ def clear_retained_artifacts() -> None:
     """
     _RESOLVED.clear()
     _CHECKED.clear()
+    _HEADERS.clear()
     _SITES.clear()
     _FINGERPRINTS.clear()
     _LOWERED.clear()

@@ -66,7 +66,7 @@ Algorithm
    :class:`~agm.agl.typecheck.env.TypeEnvironment`. This pass alone publishes
    checked node types, calls, contracts, bindings, and warnings. Each module's
    environment starts its own-facts journal
-   (:meth:`~agm.agl.typecheck.env.TypeEnvironment.begin_own_facts`)
+   (:meth:`~agm.agl.typecheck.env.TypeEnvironment.begin_facts`)
    immediately before this recheck, once phases 1-4 are done mutating it, so
    the journal records exactly this recheck's mutations
    (:class:`~agm.agl.typecheck.env.CheckedModuleImage`). Consequently, an
@@ -86,9 +86,12 @@ from pathlib import Path
 from typing import Generic, Mapping, TypeVar, cast
 
 from agm.agl.artifact_cache import (
+    RetainedSources,
     module_fingerprints,
     retain_checked_modules,
+    retain_module_headers,
     retained_checked_modules,
+    retained_module_headers,
     retained_module_sources,
 )
 from agm.agl.capabilities import HostCapabilities
@@ -145,6 +148,7 @@ from agm.agl.typecheck.env import (
     CheckedModuleImage,
     ConstructorSignature,
     DeclaredHeaderSeed,
+    EnvironmentFacts,
     FunctionSignature,
     GenericAliasDef,
     GenericTypeDef,
@@ -1227,6 +1231,55 @@ def _prepare_module_environment(
     return env
 
 
+def _prepare_headers(
+    resolved: ResolvedProgram,
+    capabilities: HostCapabilities,
+    module_envs: Mapping[ModuleId, TypeEnvironment],
+    ordered_mids: tuple[ModuleId, ...],
+    retainable: RetainedSources | None,
+) -> None:
+    """Phase 3's header pass: build every module's types and function headers.
+
+    Preparing one module's headers resolves every declaration body and every
+    declared function header the module owns, then writes the results into its
+    own environment and its methods into the program's shared type table. All
+    of it is a function of the module, its import/export closure, and the
+    capabilities -- exactly what *retainable* keys on -- so a retainable
+    module journals its writes and a later compilation replays that journal
+    instead of resolving the same declarations again. The entry module, which
+    has no stable identity across programs, is never retainable and is always
+    prepared from source.
+
+    The shared table's *declarations* are deliberately not journaled: Phase 1
+    resolved and registered every one of them before this pass runs, and what
+    this pass registers is that same content again. The parity test over a
+    replayed preparation compares the whole table, so a Phase 1 that stopped
+    registering a declaration would fail there rather than silently leave a
+    memo-served compilation short of one.
+    """
+    retained = retained_module_headers(retainable, capabilities) if retainable is not None else {}
+    prepared: dict[ModuleId, EnvironmentFacts] = {}
+    for mid in ordered_mids:
+        env = module_envs[mid]
+        facts = retained.get(mid)
+        if facts is not None:
+            env.replay(facts)
+            continue
+        journaled = retainable is not None and mid in retainable
+        if journaled:
+            env.begin_facts()
+        prepare_module_headers(
+            resolved.modules[mid].resolved,
+            capabilities,
+            env=env,
+            module_id=mid,
+        )
+        if journaled:
+            prepared[mid] = env.end_facts()
+    if retainable is not None and prepared:
+        retain_module_headers(retainable, capabilities, prepared)
+
+
 @dataclass(frozen=True, slots=True)
 class _PreparedProgram:
     """Per-module environments and whole-program tables ready for Phase 4.
@@ -1253,18 +1306,25 @@ def _prepare_program(
     capabilities: HostCapabilities,
     entry_seed_env: TypeEnvironment | None = None,
     cached_checked_modules: Mapping[ModuleId, CheckedModule | CheckedModuleImage] | None = None,
+    retainable: RetainedSources | None = None,
 ) -> _PreparedProgram:
     """Run Phases 1-3 of :func:`check_program`: prepare, but do not check, every module.
 
     *cached_checked_modules* supplies checked non-entry modules whose bodies
     are immutable and can be reused; each is still prepared here like every
-    other module (``prepare_module_headers`` runs for it too, plus an extra
-    cached method-header registration pass), because the environments this
-    returns serve fresh modules and cached ones alike. Only the *cache-free*
-    call (no *cached_checked_modules*) reproduces exactly what a fresh,
-    cache-free compilation would build for every environment -- the seam a
-    test uses to obtain one for
+    other module (a cached module adds an extra method-header registration
+    pass on top), because the environments this returns serve fresh modules
+    and cached ones alike. Only the *cache-free* call (no
+    *cached_checked_modules*, no *retainable*) reproduces exactly what a
+    fresh, cache-free compilation would build for every environment -- the
+    seam a test uses to obtain one for
     :meth:`~agm.agl.typecheck.env.CheckedModuleImage.rehydrate`.
+
+    *retainable* names, per module, everything its artifacts could have been
+    derived from, and enables the header memo: Phase 3's header preparation
+    is journaled per module and replayed on a later compilation instead of
+    re-resolving every declaration body and function header. Omitted, every
+    module's headers are prepared from source.
     """
     cached_checked_modules = cached_checked_modules or {}
 
@@ -1341,13 +1401,7 @@ def _prepare_program(
     program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
     declaration_spans = _declaration_spans(resolved)
 
-    for mid in ordered_mids:
-        prepare_module_headers(
-            resolved.modules[mid].resolved,
-            capabilities,
-            env=module_envs[mid],
-            module_id=mid,
-        )
+    _prepare_headers(resolved, capabilities, module_envs, ordered_mids, retainable)
 
     # Static let/var bindings and builtin vars need each module's headers
     # finalized (record/enum/exception bodies, constructor arities) so that a
@@ -1537,6 +1591,11 @@ def check_program(
         capabilities,
         entry_seed_env=entry_seed_env,
         cached_checked_modules=cached_checked_modules,
+        # A REPL compilation seeds the shared type table from its session
+        # environment, so its modules' headers are not a function of the
+        # loaded modules alone -- the same condition that keeps its checked
+        # modules out of the artifact cache below.
+        retainable=retainable if entry_seed_env is None else None,
     )
     module_envs = prepared.module_envs
     program_type_table = prepared.program_type_table
@@ -1569,7 +1628,7 @@ def check_program(
             continue
         rmod = resolved.modules[mid]
         env = module_envs[mid]
-        env.begin_own_facts()
+        env.begin_facts()
         cp = _check_prepared_module(
             rmod.resolved,
             capabilities,

@@ -525,19 +525,39 @@ _ENTRY_SRC = (
 )
 
 
+def _method_registry_content(registry: object) -> list[tuple[str, ...]]:
+    """Flatten a ``TypeTable`` method registry into an order-free comparable form."""
+    assert isinstance(registry, dict)
+    return sorted(
+        (repr(owner), name, repr(declaration_key), repr(method))
+        for owner, names in registry.items()
+        for name, candidates in names.items()
+        for declaration_key, method in candidates.items()
+    )
+
+
 def _normalize_env_value(value: object) -> object:
     """Make a ``TypeEnvironment`` attribute value comparable across two preparations.
 
     A ``TypeTable`` has no ``__eq__`` (identity equality), yet the two
     preparations under comparison legitimately build distinct instances with
-    the same content, so it is compared by its sorted entry reprs instead.
-    Bound methods/functions stored as attribute values are never meaningfully
-    comparable across instances, so they are treated as always equal.
+    the same content, so it is compared by content instead: its declaration
+    entries, the name index that decides which of them a name path resolves
+    to, and its method registries -- declaration data of their own, reachable
+    through no whole-table accessor. Bound methods/functions stored as
+    attribute values are never meaningfully comparable across instances, so
+    they are treated as always equal.
     """
     from agm.agl.semantics.type_table import TypeTable
 
     if isinstance(value, TypeTable):
-        return ("TypeTable", sorted(repr(entry) for entry in value.entries()))
+        return (
+            "TypeTable",
+            sorted(repr(entry) for entry in value.entries()),
+            sorted(repr(item) for item in vars(value)["_name_index"].items()),
+            _method_registry_content(vars(value)["_methods"]),
+            _method_registry_content(vars(value)["_builtin_methods"]),
+        )
     if callable(value) and not isinstance(value, type):
         return "<callable>"
     return value
@@ -852,3 +872,74 @@ def test_custom_response_formats_do_not_leak_between_hosts(
 
     assert run_inline_command(extended, source).ok
     assert capsys.readouterr().out == "answer\n"
+
+
+_HEADER_LIB_SRC = (
+    "type Count = int\n"
+    "record Box(value: Count)\n"
+    "record Pair[A, B](first: A, second: B)\n"
+    "enum Shape\n"
+    "  | circle(radius: int)\n"
+    "  | square(side: int)\n"
+    "exception Broken(reason: text)\n"
+    "def Box::doubled(self) -> int = self.value * 2\n"
+    "def Shape::sides(self) -> int = case self of | circle => 0 | square => 4\n"
+    "def int::tripled(self) -> int = self * 3\n"
+    "def widen(n: Count) -> int = n\n"
+)
+_HEADER_ENTRY_SRC = (
+    "import lib_headers::*\n"
+    "Box(value = 1).doubled() + circle(radius = 2).sides() + 5.tripled() + widen(1)\n"
+)
+
+
+def test_replayed_module_headers_reproduce_a_from_source_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Serving a module's headers from the memo must leave every environment
+    exactly as preparing them from source would.
+
+    Header preparation resolves each declaration's body and each declared
+    function header, writing name-keyed types, generic templates, alias
+    targets and frozen templates, constructor signatures and field kinds, and
+    function signatures -- and, into the program-wide shared table,
+    declaration identities and method headers. The memo replays a journal of
+    those writes instead, so this drives a library declaring one of each and
+    compares the WHOLE of every prepared ``TypeEnvironment`` (the entry
+    module, which is never memoized, included) against a preparation that
+    never consulted the memo. A spy on the lookup rules out a vacuous pass in
+    which the second preparation silently re-prepared everything from source.
+    """
+    graph = make_inline_graph_from_files(
+        tmp_path,
+        {"entry": _HEADER_ENTRY_SRC, "lib_headers": _HEADER_LIB_SRC},
+        default_stdlib=False,
+    )
+    caps = base_caps()
+    resolved = resolve_program(graph)
+    retainable = artifact_cache.retained_module_sources(resolved.graph)
+    lib_id = next(mid for mid in resolved.modules if mid.path_str() == "lib_headers")
+
+    from_source = _prepare_program(resolved, caps)
+    _prepare_program(resolved, caps, retainable=retainable)
+
+    served: list[dict[ModuleId, EnvironmentFacts]] = []
+    lookup = artifact_cache.retained_module_headers
+    monkeypatch.setattr(
+        "agm.agl.typecheck.program.retained_module_headers",
+        lambda *args: served.append(lookup(*args)) or served[-1],
+    )
+    replayed = _prepare_program(resolved, caps, retainable=retainable)
+
+    assert served == [{lib_id: served[0][lib_id]}], "the library's headers were not served"
+    assert served[0][lib_id].entries, "an empty journal would make the comparison vacuous"
+
+    diffs = [
+        f"{mid.path_str()}.{name}"
+        for mid, source_env in from_source.module_envs.items()
+        for name, value in vars(source_env).items()
+        if name not in {"_import_env", "_scope_nodes"}
+        and _normalize_env_value(value)
+        != _normalize_env_value(vars(replayed.module_envs[mid]).get(name, "<missing>"))
+    ]
+    assert not diffs, f"replayed vs from-source header preparation diverged: {diffs}"

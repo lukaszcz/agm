@@ -437,7 +437,7 @@ class TestJournalNeverStartsOutsideProgramChecking:
 
         ``seed_from`` requires a sealed source; a real session env is sealed
         by the ``check_program`` run that produced it. Sealing it directly
-        here (skipping ``begin_own_facts``) is the minimal environment that
+        here (skipping ``begin_facts``) is the minimal environment that
         satisfies that precondition without itself having journaled.
         """
         seed_env = TypeEnvironment()

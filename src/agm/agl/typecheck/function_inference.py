@@ -878,10 +878,10 @@ def register_method_header(
         is_builtin=node.is_builtin,
     )
     if receiver.builtin_constructor is not None:
-        env.type_table.register_builtin_method(receiver.builtin_constructor, method)
+        env.register_method_def(receiver.builtin_constructor, method)
     else:
         assert isinstance(receiver.owner, (RecordType, EnumType, ExceptionType))
-        env.type_table.register_method(receiver.owner, method)
+        env.register_method_def(receiver.owner, method)
 
 
 def resolve_function_header(

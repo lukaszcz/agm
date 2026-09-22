@@ -1,12 +1,13 @@
 """Tests for ``TypeEnvironment``'s own-facts journal: recording and replay.
 
-Covers ``begin_own_facts``/``own_facts``/``seal``/``replay`` and each of the
-nine journaled mutators' typed fact. ``TestFactScenarios`` parametrizes one
-scenario per mutator: record a fact, replay it onto a freshly prepared
-environment, and check the queries that mutator's fact drives agree with the
-source and differ from an environment that was never replayed. One test
-drives a real module through the pipeline's module path to confirm
-``check_program`` never starts a journal there.
+Covers ``begin_facts``/``end_facts``/``own_facts``/``seal``/``replay`` and
+each journaled mutator's typed fact. ``TestFactScenarios`` parametrizes one
+scenario per mutator: set up whatever state the mutator acts on, record one
+fact, replay it onto an identically set-up environment, and check the queries
+that mutator's fact drives agree with the source and differ from an
+environment that was never replayed. One test drives a real module through
+the pipeline's module path to confirm ``check_program`` never starts a
+journal there.
 """
 
 from __future__ import annotations
@@ -19,8 +20,10 @@ import pytest
 
 from agm.agl import artifact_serialization
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.semantics.type_table import MethodDef
 from agm.agl.semantics.types import (
     EnumType,
+    FunctionType,
     IntType,
     RecordType,
     TextType,
@@ -60,6 +63,25 @@ _BOX2_CTOR_SIG = ConstructorSignature(
     type_params=(),
 )
 _FIELD_KINDS = (("value", ParamZone.STANDARD),)
+_METHOD_OWNER = RecordType(name="Box3", decl_id=909)
+_OWNED_METHOD = MethodDef(
+    module_id=ENTRY_ID,
+    scope_path=(),
+    name="doubled",
+    decl_node_id=910,
+    signature=FunctionType(params=(), result=IntType()),
+    receiver_type_param_arity=0,
+    type_params=(),
+)
+_BUILTIN_METHOD = MethodDef(
+    module_id=ENTRY_ID,
+    scope_path=(),
+    name="tripled",
+    decl_node_id=911,
+    signature=FunctionType(params=(), result=IntType()),
+    receiver_type_param_arity=0,
+    type_params=(),
+)
 
 
 def _record_set_binding_type(env: TypeEnvironment) -> None:
@@ -146,13 +168,63 @@ def _query_register_constructor_field_kinds(env: TypeEnvironment) -> object:
     )
 
 
+def _setup_unregister_name(env: TypeEnvironment) -> None:
+    env.register_generic_type("Retired", _WIDGET_GENERIC_DEF)
+
+
+def _record_unregister_name(env: TypeEnvironment) -> None:
+    env.unregister_name("Retired")
+
+
+def _query_unregister_name(env: TypeEnvironment) -> object:
+    return env.all_generic_types()
+
+
+def _setup_freeze_alias(env: TypeEnvironment) -> None:
+    env.register_alias("Frozen", _ALIAS_TARGET, type_params=())
+
+
+def _record_freeze_alias(env: TypeEnvironment) -> None:
+    env.freeze_alias("Frozen", TextType())
+
+
+def _query_freeze_alias(env: TypeEnvironment) -> object:
+    return env.source_type_template_qname(ENTRY_ID, "Frozen")
+
+
+def _record_register_method_def(env: TypeEnvironment) -> None:
+    env.register_method_def(_METHOD_OWNER, _OWNED_METHOD)
+
+
+def _query_register_method_def(env: TypeEnvironment) -> object:
+    return env.type_table.method_candidates(_METHOD_OWNER, "doubled")
+
+
+def _record_register_builtin_method_def(env: TypeEnvironment) -> None:
+    env.register_method_def("int", _BUILTIN_METHOD)
+
+
+def _query_register_builtin_method_def(env: TypeEnvironment) -> object:
+    return env.type_table.method_candidates(IntType(), "tripled")
+
+
+def _no_setup(env: TypeEnvironment) -> None:
+    """Most mutators act on an empty environment and need no prior state."""
+
+
 @dataclasses.dataclass(frozen=True)
 class _Scenario:
-    """One mutator's record call plus the query that observes its fact."""
+    """One mutator's record call plus the query that observes its fact.
+
+    ``setup`` runs before the journal opens, for a mutator whose effect is
+    only visible against state it did not record itself (a name it retires, an
+    alias whose resolved template it replaces).
+    """
 
     label: str
     record: Callable[[TypeEnvironment], None]
     query: Callable[[TypeEnvironment], object]
+    setup: Callable[[TypeEnvironment], None] = _no_setup
 
 
 _SCENARIOS: tuple[_Scenario, ...] = (
@@ -183,9 +255,29 @@ _SCENARIOS: tuple[_Scenario, ...] = (
         _record_register_constructor_field_kinds,
         _query_register_constructor_field_kinds,
     ),
+    _Scenario(
+        "unregister_name",
+        _record_unregister_name,
+        _query_unregister_name,
+        setup=_setup_unregister_name,
+    ),
+    _Scenario("freeze_alias", _record_freeze_alias, _query_freeze_alias, setup=_setup_freeze_alias),
+    _Scenario("register_method_def", _record_register_method_def, _query_register_method_def),
+    _Scenario(
+        "register_method_def_builtin",
+        _record_register_builtin_method_def,
+        _query_register_builtin_method_def,
+    ),
 )
 
 _SCENARIO_IDS = [scenario.label for scenario in _SCENARIOS]
+
+
+def _prepared(scenario: _Scenario) -> TypeEnvironment:
+    """A fresh environment carrying whatever state this scenario acts on."""
+    env = TypeEnvironment()
+    scenario.setup(env)
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -198,34 +290,34 @@ class TestFactScenarios:
     def test_replay_reproduces_source_and_differs_from_a_never_replayed_environment(
         self, scenario: _Scenario
     ) -> None:
-        source = TypeEnvironment()
-        source.begin_own_facts()
+        source = _prepared(scenario)
+        source.begin_facts()
         scenario.record(source)
         facts = source.own_facts()
 
-        target = TypeEnvironment()
+        target = _prepared(scenario)
         with target.type_scope(("Elsewhere",)):
             target.replay(facts)
 
-        fresh = TypeEnvironment()
+        fresh = _prepared(scenario)
 
         assert scenario.query(target) == scenario.query(source)
         assert scenario.query(target) != scenario.query(fresh)
 
     @pytest.mark.parametrize("scenario", _SCENARIOS, ids=_SCENARIO_IDS)
     def test_replay_is_idempotent(self, scenario: _Scenario) -> None:
-        source = TypeEnvironment()
-        source.begin_own_facts()
+        source = _prepared(scenario)
+        source.begin_facts()
         scenario.record(source)
         facts = source.own_facts()
         expected = scenario.query(source)
 
-        replayed_twice = TypeEnvironment()
+        replayed_twice = _prepared(scenario)
         replayed_twice.replay(facts)
         replayed_twice.replay(facts)
         assert scenario.query(replayed_twice) == expected
 
-        already_holding = TypeEnvironment()
+        already_holding = _prepared(scenario)
         scenario.record(already_holding)
         already_holding.replay(facts)
         assert scenario.query(already_holding) == expected
@@ -240,7 +332,7 @@ class TestConstructorFieldKindsModuleId:
     def test_replay_records_the_resolved_module_id_for_cross_module_lookup(self) -> None:
         lib_id = ModuleId(("lib",))
         source = TypeEnvironment(module_id=lib_id)
-        source.begin_own_facts()
+        source.begin_facts()
         source.register_constructor_field_kinds("Widget", _FIELD_KINDS, scope_path=("Scoped",))
         facts = source.own_facts()
 
@@ -260,10 +352,10 @@ class TestConstructorFieldKindsModuleId:
 
 
 class TestJournalLifecycle:
-    def test_mutations_are_recorded_only_from_begin_own_facts_onward_in_order(self) -> None:
+    def test_mutations_are_recorded_only_from_begin_facts_onward_in_order(self) -> None:
         env = TypeEnvironment()
         env.register_type("Foo", RecordType(name="Foo"))
-        env.begin_own_facts()
+        env.begin_facts()
         assert env.own_facts().entries == ()
 
         env.register_type("Foo", RecordType(name="Foo"))
@@ -274,26 +366,46 @@ class TestJournalLifecycle:
             BindingTypeFact(node_id=801, typ=IntType()),
         )
 
-    def test_own_facts_before_begin_own_facts_raises(self) -> None:
+    def test_end_facts_closes_one_window_and_leaves_the_next_free_to_open(self) -> None:
+        """Header preparation and the body check journal the same environment in
+        turn, so what the first window took must not reach the second's facts."""
+        env = TypeEnvironment()
+        env.begin_facts()
+        env.register_type("Header", RecordType(name="Header"))
+        header_facts = env.end_facts()
+
+        env.begin_facts()
+        env.set_binding_type(804, IntType())
+        env.seal()
+
+        assert header_facts.entries == (TypeFact(name="Header", typ=RecordType(name="Header")),)
+        assert env.own_facts().entries == (BindingTypeFact(node_id=804, typ=IntType()),)
+
+    def test_end_facts_before_begin_facts_raises(self) -> None:
+        env = TypeEnvironment()
+        with pytest.raises(AssertionError):
+            env.end_facts()
+
+    def test_own_facts_before_begin_facts_raises(self) -> None:
         env = TypeEnvironment()
         with pytest.raises(AssertionError):
             env.own_facts()
 
-    def test_begin_own_facts_twice_raises(self) -> None:
+    def test_begin_facts_twice_raises(self) -> None:
         env = TypeEnvironment()
-        env.begin_own_facts()
+        env.begin_facts()
         with pytest.raises(AssertionError):
-            env.begin_own_facts()
+            env.begin_facts()
 
-    def test_begin_own_facts_on_a_sealed_environment_raises(self) -> None:
+    def test_begin_facts_on_a_sealed_environment_raises(self) -> None:
         env = TypeEnvironment()
         env.seal()
         with pytest.raises(AssertionError):
-            env.begin_own_facts()
+            env.begin_facts()
 
     def test_own_facts_is_stable_after_seal(self) -> None:
         env = TypeEnvironment()
-        env.begin_own_facts()
+        env.begin_facts()
         env.register_type("Foo", RecordType(name="Foo"))
         env.seal()
         facts = env.own_facts()
@@ -311,7 +423,7 @@ class TestJournalLifecycle:
             )
         )
 
-        env.begin_own_facts()
+        env.begin_facts()
         env.replay(facts)
         env.seal()
 
@@ -389,7 +501,9 @@ class TestAliasReplaySkip:
 class TestArtifactSerialization:
     def test_environment_facts_round_trip_through_artifact_serialization(self) -> None:
         source = TypeEnvironment()
-        source.begin_own_facts()
+        for scenario in _SCENARIOS:
+            scenario.setup(source)
+        source.begin_facts()
         for scenario in _SCENARIOS:
             scenario.record(source)
         facts = source.own_facts()

@@ -58,6 +58,7 @@ from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     DeclKey,
     MethodDef,
+    NominalOwner,
     TypeDef,
     TypeTable,
     create_seeded_type_table,
@@ -704,7 +705,7 @@ class PublishedModuleSurface(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# EnvironmentFacts — TypeEnvironment's own-facts journal
+# EnvironmentFacts — TypeEnvironment's mutation journal
 # ---------------------------------------------------------------------------
 
 
@@ -825,6 +826,39 @@ class ConstructorFieldKindsFact:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class UnregisteredNameFact:
+    """Journaled :meth:`TypeEnvironment.unregister_name` call."""
+
+    name: str
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.unregister_name(self.name)
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenAliasFact:
+    """Journaled :meth:`TypeEnvironment.freeze_alias` call."""
+
+    name: str
+    template: Type
+    type_params: tuple[str, ...]
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.freeze_alias(self.name, self.template, type_params=self.type_params)
+
+
+@dataclass(frozen=True, slots=True)
+class MethodHeaderFact:
+    """Journaled :meth:`TypeEnvironment.register_method_def` call."""
+
+    receiver: NominalOwner | str
+    method: MethodDef
+
+    def apply(self, env: TypeEnvironment) -> None:
+        env.register_method_def(self.receiver, self.method)
+
+
 EnvironmentFact = (
     BindingTypeFact
     | FunctionSignatureFact
@@ -835,16 +869,24 @@ EnvironmentFact = (
     | AliasFact
     | ConstructorSignatureFact
     | ConstructorFieldKindsFact
+    | UnregisteredNameFact
+    | FrozenAliasFact
+    | MethodHeaderFact
 )
 
 
 @dataclass(frozen=True, slots=True)
 class EnvironmentFacts:
-    """Ordered journal of a ``TypeEnvironment``'s own-facts mutator calls.
+    """Ordered journal of a ``TypeEnvironment``'s journaled mutator calls.
 
     Data only, so it serializes under the artifact allow-list.
     :meth:`TypeEnvironment.replay` applies each entry in order to reproduce
     the recorded mutations on another environment.
+
+    Two windows record one: a module's header preparation
+    (:mod:`agm.agl.typecheck.program`) and its authoritative body check,
+    whose snapshot :meth:`TypeEnvironment.own_facts` publishes as part of a
+    :class:`CheckedModuleImage`.
     """
 
     entries: tuple[EnvironmentFact, ...] = ()
@@ -903,7 +945,7 @@ class CheckedModuleImage:
         equals ``environment_facts`` and a later :meth:`CheckedModule.image`
         of the rehydrated module is complete.
         """
-        env.begin_own_facts()
+        env.begin_facts()
         env.replay(self.environment_facts)
         env.seal()
         return CheckedModule(
@@ -1116,13 +1158,13 @@ class TypeEnvironment:
         # full path; this frame only maps a bare source spelling to that path.
         self._type_scope: tuple[str, ...] = ()
         self._sealed = False
-        # Own-facts journal, active from begin_own_facts() until seal() snapshots it
-        # into _own_facts. unregister_name, freeze_alias, restore_*,
-        # remove_binding_types and seed_from never run in that window; not journaled.
+        # Mutation journal, active from begin_facts() until end_facts() takes it
+        # or seal() snapshots it into _own_facts. restore_*, remove_binding_types
+        # and seed_from never run in either window; not journaled.
         # ``_resolve_name_type`` does write ``_resolved_aliases`` directly (a memo
         # re-derivable from ``_alias_targets``) on a query path, but every declared
-        # alias is frozen during program preparation, so that write is unreachable
-        # once the journal window opens.
+        # alias is frozen during header preparation, so that write is unreachable
+        # once the body-check window opens.
         self._journal: list[EnvironmentFact] | None = None
         self._own_facts: EnvironmentFacts | None = None
         # Memo for the own-type-name enumeration, which rebuilds a whole-namespace
@@ -1187,6 +1229,21 @@ class TypeEnvironment:
         """The shared ``TypeTable`` populated alongside ``_types`` (dual-write)."""
         return self._type_table
 
+    # --- Shared type-table registration ---
+
+    def register_method_def(self, receiver: NominalOwner | str, method: MethodDef) -> None:
+        """Publish a resolved method header in the shared table, journaled.
+
+        A built-in receiver is named by its type constructor, a nominal one by
+        its handle.
+        """
+        self._assert_mutable()
+        if isinstance(receiver, str):
+            self._type_table.register_builtin_method(receiver, method)
+        else:
+            self._type_table.register_method(receiver, method)
+        self._record_fact(MethodHeaderFact(receiver=receiver, method=method))
+
     @property
     def is_sealed(self) -> bool:
         """Whether this environment has been validated and frozen for seeding."""
@@ -1211,20 +1268,33 @@ class TypeEnvironment:
             self._journal = None
         self._sealed = True
 
-    # --- Own-facts journal ---
+    # --- Mutation journal ---
 
-    def begin_own_facts(self) -> None:
-        """Start recording this environment's own mutator calls into a journal."""
+    def begin_facts(self) -> None:
+        """Start recording this environment's mutator calls into a journal."""
         self._assert_mutable()
         if self._journal is not None:
-            raise AssertionError("own-facts journal already active")
+            raise AssertionError("fact journal already active")
         self._journal = []
+
+    def end_facts(self) -> EnvironmentFacts:
+        """Close the active journal and return what it recorded.
+
+        The header-preparation window's counterpart to :meth:`seal`, which
+        closes the body-check window instead. Leaves the environment mutable
+        and ready for a later window.
+        """
+        if self._journal is None:
+            raise AssertionError("fact journal was never started")
+        facts = EnvironmentFacts(tuple(self._journal))
+        self._journal = None
+        return facts
 
     def own_facts(self) -> EnvironmentFacts:
         """Return this environment's own-facts journal.
 
         The sealed snapshot once :meth:`seal` has run, else the active
-        journal. Raises if :meth:`begin_own_facts` was never called: such an
+        journal. Raises if :meth:`begin_facts` was never called: such an
         environment (module path, REPL seed) never journaled anything and has
         no own facts to persist.
         """
@@ -1463,6 +1533,7 @@ class TypeEnvironment:
         self._resolved_aliases.pop(name, None)
         self._generic_types.pop(name, None)
         self._alias_type_params.pop(name, None)
+        self._record_fact(UnregisteredNameFact(name=name))
 
     def register_alias(
         self, name: str, target_expr: TypeExpr, *, type_params: tuple[str, ...] = ()
@@ -1482,6 +1553,7 @@ class TypeEnvironment:
         """Preserve an alias's resolved template under its declaring identities."""
         self._assert_mutable()
         self._resolved_aliases[name] = GenericAliasDef(type_params=type_params, template=template)
+        self._record_fact(FrozenAliasFact(name=name, template=template, type_params=type_params))
 
     # --- Generic type registry ---
 

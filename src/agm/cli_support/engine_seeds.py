@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, cast
 
 from agm.agl.runtime.engine_config import convert_config_value, raw_option_str
 from agm.config.engine_keys import (
@@ -34,8 +34,6 @@ if TYPE_CHECKING:
     from agm.config.general import ExecConfig
 
 __all__ = ["EngineSeedTiers", "build_host_engine_seeds"]
-
-_T = TypeVar("_T")
 
 
 def _configured_value(

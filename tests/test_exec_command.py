@@ -2678,6 +2678,7 @@ class TestExecTimeoutAndLogFileFlags:
         from agm.agl.ir.ids import SymbolId
         from agm.agl.ir.nodes import UseDefault
         from agm.agl.ir.program import ExecutableProgram
+        from agm.agl.ir.static_keys import StaticBindingKey
         from agm.agl.matchcompile import MatchCompiledProgram
         from agm.agl.pipeline import PipelineDriver as RealRuntime
         from agm.agl.pipeline import PreparedProgram, RunResult
@@ -2698,6 +2699,7 @@ class TestExecTimeoutAndLogFileFlags:
                 host_settings_policy: HostSettingsPolicy | None = None,
                 builtin_host_settings: Mapping[str, Value] | None = None,
                 process_environment: Mapping[str, str] | None = None,
+                param_seeds: Mapping[StaticBindingKey, Value] | None = None,
                 program_symbol: SymbolId | None = None,
                 arguments: "tuple[Value | UseDefault, ...]" = (),
             ) -> RunResult:
@@ -2711,6 +2713,7 @@ class TestExecTimeoutAndLogFileFlags:
                     executable=executable,
                     host_settings_policy=host_settings_policy,
                     builtin_host_settings=builtin_host_settings,
+                    param_seeds=param_seeds,
                     process_environment=process_environment,
                     program_symbol=program_symbol,
                     arguments=arguments,

@@ -59,7 +59,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn, TypedDict, TypeVar, assert_never
+from typing import TYPE_CHECKING, NoReturn, assert_never
 
 from agm.agent.session import create_agl_session_host
 from agm.agl import PipelineDriver
@@ -84,11 +84,7 @@ from agm.cli_support.exec_target import (
     PackageProgramReference,
     resolve_installed_reference,
 )
-from agm.cli_support.param_config import (
-    ParamValueTiers,
-    _report_undeclared_config_keys,
-    resolve_param_values,
-)
+from agm.cli_support.param_config import ParamValueTiers, resolve_param_values
 from agm.cli_support.program_discovery import (
     ProgramDiscoveryArtifacts,
     discover_program_artifacts_for_target,
@@ -126,11 +122,10 @@ from agm.packages.manifest import command_paths_for_program
 from agm.packages.model import owning_package
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
     from agm.agl.ir.nodes import UseDefault
     from agm.agl.ir.program import ExecutableProgram
-    from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.pipeline import ArgumentPreflight
     from agm.agl.runtime.types import ParamBindingInfo
     from agm.agl.semantics.values import Value
@@ -159,12 +154,6 @@ class RegisteredProgramUsageError(Exception):
         self.message = message
         self.program = program
         self.command = command
-
-
-class _PreparedRunOverrides(TypedDict, total=False):
-    """Optional typed seed channel passed to the prepared execution."""
-
-    param_seeds: "Mapping[StaticBindingKey, Value]"
 
 
 def _bind_host_inputs(
@@ -218,7 +207,7 @@ def _bind_host_inputs(
     )
     argument_keys = tuple(key for _info, _projected, key in argument_options)
     try:
-        param_tiers, route_reports = resolve_param_values(
+        param_tiers = resolve_param_values(
             config,
             program,
             parsed_tail.params,
@@ -243,7 +232,6 @@ def _bind_host_inputs(
             if key in configured_arguments and info.name not in cli_supplied_names:
                 program_named[info.name] = native_raw_value(projected, configured_arguments[key])
 
-    _report_undeclared_config_keys(config, route_reports)
     return ProgramArguments(
         positional=parsed_tail.arguments.positional, named=program_named
     ), param_tiers
@@ -285,14 +273,6 @@ def _registered_command_paths(
         return ()
     reference = "::".join(("/".join(module_segments), *program_path))
     return command_paths_for_program(package.manifest, reference)
-
-
-_T = TypeVar("_T")
-
-
-def _first(*values: _T | None) -> _T | None:
-    """Return the first non-None value, or None if all are None."""
-    return next((v for v in values if v is not None), None)
 
 
 def _option_text(value: "Value | None") -> str | None:
@@ -370,8 +350,9 @@ def registered_program_declaration(
             module_paths=None,
             no_stdlib=False,
             context=context,
+            resolved_target=target,
         )
-        if artifacts is None or artifacts.entry_path != target.entry_path:
+        if artifacts is None:
             return None
         if artifact_sink is not None:
             artifact_sink.append(artifacts)
@@ -502,9 +483,8 @@ def run(
 
     # Resolve max call depth: CLI > config.  ``None`` (nothing set at
     # any layer) lets the driver apply its canonical default.
-    resolved_call_depth_limit = _first(
-        args.max_call_depth,
-        config.max_call_depth,
+    resolved_call_depth_limit = (
+        config.max_call_depth if args.max_call_depth is None else args.max_call_depth
     )
 
     # Seed only settings explicitly controlled by CLI/config. Runtime fallbacks
@@ -734,9 +714,6 @@ def run(
     # boundary: a failed result is a primary program failure, just like an
     # exception, and must not be replaced by a secondary close failure.
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
-        run_kwargs: _PreparedRunOverrides = {}
-        if argument_preflight is not None and argument_preflight.param_seeds:
-            run_kwargs["param_seeds"] = argument_preflight.param_seeds
         result = runtime.run_prepared(
             prepared,
             check_only=dry_run.enabled(),
@@ -748,7 +725,7 @@ def run(
             process_environment=process_environment,
             program_symbol=program_symbol,
             arguments=arguments_bound,
-            **run_kwargs,
+            param_seeds=None if argument_preflight is None else argument_preflight.param_seeds,
         )
 
         for diag in result.warnings:

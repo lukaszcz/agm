@@ -197,6 +197,18 @@ def test_backup_file_preserves_differing_existing_backups(tmp_path: Path) -> Non
     assert (tmp_path / "config.toml.bak.bak.bak").read_text(encoding="utf-8") == "older\n"
 
 
+def test_backup_file_preserves_a_same_size_existing_backup(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    backup = tmp_path / "config.toml.bak"
+    path.write_text("current\n", encoding="utf-8")
+    backup.write_text("earlier\n", encoding="utf-8")
+
+    fs.backup_file(path)
+
+    assert backup.read_text(encoding="utf-8") == "current\n"
+    assert (tmp_path / "config.toml.bak.bak").read_text(encoding="utf-8") == "earlier\n"
+
+
 def test_backup_file_keeps_an_identical_existing_backup(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     backup = tmp_path / "config.toml.bak"

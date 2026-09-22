@@ -24,6 +24,7 @@ from unittest.mock import patch
 
 import pytest
 from lark.lexer import Token
+from prompt_toolkit.application.current import create_app_session, get_app_session
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory, InMemoryHistory
@@ -351,6 +352,17 @@ class TestLexer:
 
     def test_info_command_uses_the_highlighted_writer(self) -> None:
         output = drive("let count = 1\r:info count\r\x04")
+
+        assert "count is a binding" in output
+        assert "let count" in output
+
+    def test_info_output_survives_a_warmed_global_output(self) -> None:
+        # Left to itself prompt_toolkit resolves a process-global output that
+        # caches the stream it first saw, so an earlier console user in the
+        # same process could send :info to the real terminal instead of here.
+        with create_app_session():
+            get_app_session().output  # warm the cache against the real stdout
+            output = drive("let count = 1\r:info count\r\x04")
 
         assert "count is a binding" in output
         assert "let count" in output

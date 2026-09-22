@@ -469,8 +469,10 @@ _HELP_TEXTS: dict[str, str] = {
         agm pkg uninstall NAME
         agm pkg list
         agm pkg info NAME
+        agm pkg sync
 
-        Initialize, validate, create, install, inspect, and remove AgL packages. Archives and
+        Initialize, validate, create, install, inspect, and remove AgL packages, and sync the
+        active packages' [python] requirements into AGM's interpreter environment. Archives and
         directory installs are copied into AGM's versioned store; editable installs mount their
         live source directory.
 
@@ -1006,7 +1008,8 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         agm pkg check [DIR]
 
         Validate the package manifest, module-tree discipline, and registered program references
-        in DIR. DIR defaults to the current directory.
+        in DIR. DIR defaults to the current directory. Each unsatisfied [python] requirement is
+        reported and fails the check; nothing is installed (see agm pkg sync).
     """),
     ("pkg", "create"): textwrap.dedent("""\
         agm pkg create [DIR] [-o FILE]
@@ -1043,6 +1046,13 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         requirement status for an active package. Each [python] requirement is reported as
         installed VERSION, installed VERSION (unsatisfied), missing, or not applicable (marker
         false) in AGM's interpreter environment.
+    """),
+    ("pkg", "sync"): textwrap.dedent("""\
+        agm pkg sync
+
+        When a [python] requirement of the active packages is unsatisfied, install all of their
+        [python] requirements jointly into AGM's interpreter environment (uv, else pip) and list
+        the ones that were unsatisfied. Nothing is ever uninstalled.
     """),
     ("tmux", "open"): textwrap.dedent("""\
         agm tmux open [-d|--detach] [-n|--num-panes PANES] [SESSION]

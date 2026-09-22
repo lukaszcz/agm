@@ -8,7 +8,7 @@ import textwrap
 from agm.cli_support.args import PkgInfoArgs
 from agm.config.context import current_config_context
 from agm.core.env import help_width
-from agm.core.pyenv import RequirementState, requirement_status
+from agm.core.pyenv import requirement_status
 from agm.packages.activation import (
     PackageActivationError,
     active_package_version,
@@ -88,12 +88,4 @@ def run(args: PkgInfoArgs) -> None:
                 status = f"{kind} {active_versions[name]}"
         print(f"requires {name} {requirement}: {status}")
     for spec in manifest.python_dependencies:
-        python_status = requirement_status(spec)
-        match python_status.state:
-            case RequirementState.INSTALLED:
-                status = f"installed {python_status.version}"
-            case RequirementState.UNSATISFIED:
-                status = f"installed {python_status.version} (unsatisfied)"
-            case _:
-                status = python_status.state.value
-        print(f"requires python package {spec}: {status}")
+        print(f"requires python package {spec}: {requirement_status(spec).describe()}")

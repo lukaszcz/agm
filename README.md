@@ -30,7 +30,8 @@ prompts, and sandbox templates into the selected AGM home (`$AGM_HOME`, or
 `std` package at `<AGM-home>/packages/std/<version>/` and installs the AgL editor
 support: the Micro syntax file into `$HOME/.config/micro/syntax/`, and — when an
 `emacs` binary is available — the AgL Emacs mode (skipped with a notice
-otherwise):
+otherwise). It ends by running the installed `agm pkg sync`, restoring the active
+packages' Python requirements into the reinstalled environment:
 
 ```bash
 just install
@@ -133,6 +134,7 @@ agm pkg install --editable path/to/package
 agm pkg list
 agm pkg info package-name
 agm pkg uninstall package-name
+agm pkg sync
 ```
 
 `pkg init` writes a manifest and a starter module into a new or existing directory, so the result

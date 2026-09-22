@@ -51,6 +51,11 @@ class PkgListArgs:
 
 
 @dataclass(slots=True)
+class PkgSyncArgs:
+    pass
+
+
+@dataclass(slots=True)
 class PkgInfoArgs:
     name: str
 

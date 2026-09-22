@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agm.cli_support.args import PkgCheckArgs
 from agm.config.context import current_config_context
+from agm.core.pyenv import requirement_status
 from agm.packages.dependencies import DependencyError, validate_dependencies
 from agm.packages.discipline import (
     DisciplineError,
@@ -19,7 +20,7 @@ from agm.packages.source_commands import package_with_source_commands
 
 
 def run(args: PkgCheckArgs) -> None:
-    """Validate the manifest and package discipline at the selected directory."""
+    """Validate the package at the selected directory and its Python requirements' status."""
 
     root = Path.cwd() if args.directory is None else Path(args.directory)
     try:
@@ -32,3 +33,11 @@ def run(args: PkgCheckArgs) -> None:
     except (DependencyError, DisciplineError, ManifestError) as exc:
         print(f"pkg check: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+    unsatisfied = False
+    for spec in package.manifest.python_dependencies:
+        status = requirement_status(spec)
+        if not status.satisfied:
+            unsatisfied = True
+            print(f"pkg check: python requirement {spec}: {status.describe()}", file=sys.stderr)
+    if unsatisfied:
+        raise SystemExit(1)

@@ -17,7 +17,7 @@ import pytest
 import requests
 
 from agm.agl.self_validation import self_validation_enabled, set_self_validation_enabled
-from agm.core import dry_run
+from agm.core import dry_run, process
 from agm.core import http as core_http
 from agm.core.process import CapturedOutput
 from tests import _command_coverage
@@ -28,6 +28,7 @@ from tests._durations import (
 )
 from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
 from tests._http_helpers import FakeHttp
+from tests._package_helpers import PythonInstaller
 
 # Re-exported so pytest picks the per-test cost accounting up as conftest hooks.
 # Registering the module with ``-p`` instead would break every invocation that
@@ -356,6 +357,15 @@ def refuse_real_http_requests(monkeypatch: pytest.MonkeyPatch) -> None:
         return session
 
     monkeypatch.setattr(core_http, "open_session", refused_session)
+
+
+@pytest.fixture()
+def python_installer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> PythonInstaller:
+    """Replace the Python installer with a recorder for AGM home ``tmp_path / "home"``."""
+    recorder = PythonInstaller(home=tmp_path / "home")
+    monkeypatch.setattr(process, "run_foreground", recorder.run_foreground)
+    monkeypatch.setattr("agm.core.pyenv.shutil.which", lambda _name: "/opt/tools/uv")
+    return recorder
 
 
 @pytest.fixture()

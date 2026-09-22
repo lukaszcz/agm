@@ -13,6 +13,7 @@ source.
 | `agm pkg uninstall NAME` | Remove an active package |
 | `agm pkg list` | List installed versions and active editable packages |
 | `agm pkg info NAME` | Show an active package's metadata and dependency status |
+| `agm pkg sync` | Install the active packages' unsatisfied Python requirements |
 
 `DIR` defaults to the current directory. Every command honors the global `--dry-run` flag.
 
@@ -114,6 +115,9 @@ as a requirement's — one referring to `extra`, `extras`, or `dependency_groups
 values incomparably (such as `os_name ~= "posix"`) — are manifest errors. A distribution may be
 listed more than once, for example with markers selecting per-environment variants.
 Requirements are stored verbatim, as declared, and are part of the package's content hash.
+[`install`](#commands) and [`sync`](#commands) install unsatisfied requirements into that
+environment (`just install` ends with `agm pkg sync`); [`check`](#commands) and
+[`info`](#commands) only report them.
 
 ### `[commands]`
 
@@ -244,7 +248,9 @@ exists; refuses a directory that already holds a manifest.
 literal `resource` targets, import visibility, and dependency satisfiability without modifying
 anything — the same diagnostics `install` reports. The `std` floor is checked against the running
 AGM; other dependencies resolve from the store, then a `path`; a `url` counts as satisfiable and
-is not fetched.
+is not fetched. Each `[python]` requirement AGM's interpreter environment does not satisfy is
+reported with its status (as `info` shows it) and fails the check; `check` never installs it —
+`sync` does, once the package is active.
 
 **`create`** runs the same validation on the *distribution*, after merging the module tree's
 `@command` registrations into the manifest, then writes a deterministic archive beside `DIR` (or
@@ -282,6 +288,13 @@ dependency is active, unsatisfied, or missing, including the inferred `std` uppe
 `requires python package SPEC: STATUS`, each `[python]` requirement's status in AGM's interpreter
 environment: `installed VERSION`, `installed VERSION (unsatisfied)`, `missing`, or
 `not applicable` (its marker does not hold).
+
+**`sync`** repairs AGM's interpreter environment, for example after an AGM upgrade replaced it:
+when some `[python]` requirement of an active package (store or editable) is unsatisfied, the
+union of every active package's requirements is installed exactly as `install` does, and each
+previously unsatisfied requirement is listed; otherwise it reports that all are satisfied and runs
+no installer. An installer failure exits non-zero. `--dry-run` prints the installer command
+instead of running it. `just install` ends by running the freshly installed `agm pkg sync`.
 
 ## Version pins
 

@@ -85,6 +85,15 @@ class RequirementStatus:
     def satisfied(self) -> bool:
         return self.state in (RequirementState.INSTALLED, RequirementState.NOT_APPLICABLE)
 
+    def describe(self) -> str:
+        """Human-readable status, naming the installed version when there is one."""
+
+        state: str = self.state.value
+        if self.version is None:
+            return state
+        suffix = " (unsatisfied)" if self.state is RequirementState.UNSATISFIED else ""
+        return f"installed {self.version}{suffix}"
+
 
 def requirement_status(spec: str) -> RequirementStatus:
     """Status of a manifest's PEP 508 *spec* in the running interpreter's environment.

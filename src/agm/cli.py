@@ -33,6 +33,7 @@ from agm.cli_support.args import (
     PkgInitArgs,
     PkgInstallArgs,
     PkgListArgs,
+    PkgSyncArgs,
     PkgUninstallArgs,
     RefineArgs,
     ReplArgs,
@@ -1554,6 +1555,18 @@ def pkg_info(
     pkg_info_command.run(
         PkgInfoArgs(name=_require_value(name, command_path=["pkg", "info"], name="name"))
     )
+
+
+@pkg_app.command(name="sync")
+def pkg_sync(
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    import agm.commands.pkg.sync as pkg_sync_command
+
+    pkg_sync_command.run(PkgSyncArgs())
 
 
 @sync_app.callback(invoke_without_command=True)

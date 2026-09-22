@@ -15,18 +15,28 @@ otherwise valid archive.
 
 ``install_directory`` and ``install_archive`` install a package and return only
 its ``PackageInfo``.
+
+``write_python_package`` writes a package source declaring ``[python]``
+requirements; ``PythonInstaller`` records installer runs in place of the real
+installer (see the ``python_installer`` fixture).
 """
 
 from __future__ import annotations
 
 import zipfile
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import semver
 
 import agm.packages.archive as package_archive
-from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
+from agm.packages.activation import (
+    ActivationIndex,
+    ActivePackage,
+    load_activation_index,
+    write_activation_index,
+)
 from agm.packages.install import install_archive_with_plan, install_directory_with_plan
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.model import PackageInfo
@@ -132,3 +142,41 @@ def install_archive(
 ) -> PackageInfo:
     """Install a package archive and return the installed package."""
     return install_archive_with_plan(archive, home=home, env=env, shadow=shadow).package
+
+
+def write_python_package(root: Path, name: str, *specs: str) -> Path:
+    """Write a one-module package source at *root* requiring the PEP 508 *specs*."""
+    (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+    listed = ", ".join(f'"{spec}"' for spec in specs)
+    python = f"\n[python]\ndependencies = [{listed}]\n" if specs else ""
+    (root / "package.toml").write_text(
+        f'[package]\nname = "{name}"\nversion = "1.0.0"\n{python}', encoding="utf-8"
+    )
+    (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "program def main() -> unit = ()\n", encoding="utf-8"
+    )
+    return root
+
+
+@dataclass
+class PythonInstaller:
+    """Records installer runs under AGM home *home*; each run returns *returncode*."""
+
+    home: Path
+    returncode: int = 0
+    interrupt: bool = False
+    runs: list[list[str]] = field(default_factory=list)
+    active_during_run: list[set[str]] = field(default_factory=list)
+
+    @property
+    def specs(self) -> list[list[str]]:
+        """Requirements of each run, after ``uv pip install --python <interpreter>``."""
+        return [run[5:] for run in self.runs]
+
+    def run_foreground(self, cmd: list[str], **_kwargs: object) -> int:
+        """Stand-in for ``process.run_foreground``; never installs anything."""
+        self.runs.append(cmd)
+        self.active_during_run.append(set(load_activation_index(home=self.home, env={}).packages))
+        if self.interrupt:
+            raise KeyboardInterrupt
+        return self.returncode

@@ -123,6 +123,35 @@ def _package_operation_lock(*, home: Path, env: Mapping[str, str] | None) -> Ite
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+def sync_active_python_dependencies(
+    *, home: Path, env: Mapping[str, str] | None = None
+) -> tuple[str, ...]:
+    """Sync AGM's interpreter environment to every active package's Python requirements.
+
+    Returns the requirements that were unsatisfied, hence installed (or, in
+    dry-run, reported). Raises :class:`PackageInstallError`.
+    """
+
+    with _package_operation_lock(home=home, env=env):
+        try:
+            packages = resolve_indexed_packages(
+                load_activation_index(home=home, env=env),
+                home=home,
+                env=env,
+                fallback_to_manifest_commands=True,
+            )
+        except PackageActivationError as exc:
+            raise PackageInstallError(f"cannot load package activation: {exc}") from exc
+        return _sync_python_requirements(packages)
+
+
+def _sync_python_requirements(packages: tuple[PackageInfo, ...]) -> tuple[str, ...]:
+    try:
+        return sync_python_dependencies(python_dependencies(packages))
+    except RequirementInstallError as exc:
+        raise PackageInstallError(f"cannot install Python requirements: {exc}") from exc
+
+
 def _validate_managed_stdlib_install(
     manifest: PackageManifest, *, source: Path | None, editable: bool
 ) -> None:
@@ -1016,13 +1045,11 @@ def _commit_install_activation(
             else ()
         )
         # Reconciling never changes the selection, so the resolved set is reconciled's.
-        sync_python_dependencies(python_dependencies(_transaction_resolved_packages(state)))
+        _sync_python_requirements(_transaction_resolved_packages(state))
         _publish_activation(reconciled, home=state.home, env=state.env)
         return command_shadows
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot write package activation: {exc}") from exc
-    except RequirementInstallError as exc:
-        raise PackageInstallError(f"cannot install Python requirements: {exc}") from exc
 
 
 def _commit_activation(

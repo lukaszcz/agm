@@ -606,6 +606,7 @@ def test_complete_help_path_suggests_subcommands() -> None:
         "init",
         "install",
         "list",
+        "sync",
         "uninstall",
     ]
     assert completion.complete_help_path(_make_ctx(help_command=[]), "o") == ["open"]

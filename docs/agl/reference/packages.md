@@ -185,6 +185,10 @@ dependencies = ["typesafe-sdk>=0.7,<1"]
 
 Companions run in AGM's own interpreter, so the requirements are checked
 against its environment (see [`agm pkg`](../../commands/pkg.md#python)).
+[`agm pkg install`](../../commands/pkg.md#commands) and
+[`agm pkg sync`](../../commands/pkg.md#commands) install unsatisfied
+requirements (`just install` ends with `agm pkg sync`), and
+[`agm pkg check`](../../commands/pkg.md#commands) reports them.
 
 ## Diagnostics
 

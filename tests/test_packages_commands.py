@@ -7,13 +7,18 @@ from pathlib import Path
 
 import pytest
 import semver
+from click.testing import CliRunner, Result
+from typer.main import get_command
 
+import agm.cli as cli
+import agm.commands.pkg.check as check_command
 import agm.commands.pkg.create as create_command
 import agm.commands.pkg.info as info_command
 import agm.commands.pkg.install as install_command
 import agm.commands.pkg.list as list_command
 import agm.commands.pkg.uninstall as uninstall_command
 from agm.cli_support.args import (
+    PkgCheckArgs,
     PkgCreateArgs,
     PkgInfoArgs,
     PkgInstallArgs,
@@ -35,10 +40,12 @@ from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
 from agm.version import AGM_VERSION
 from tests._package_helpers import (
+    PythonInstaller,
     install_archive,
     install_directory,
     older_incompatible_std_requirement,
     std_compatibility_bound,
+    write_python_package,
 )
 
 _PARAM_SURFACE_PACKAGE = Path(__file__).parent / "agl" / "packages" / "param_surface"
@@ -275,15 +282,16 @@ def test_info_command_uses_live_editable_dependency_versions(
 def test_info_command_reports_whether_python_requirements_hold(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    alpha = _package(tmp_path, "alpha")
-    (alpha.root / "package.toml").write_text(
-        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[python]\ndependencies = [\n'
-        "  'packaging>=1', 'pytest<1', 'agm-test-absent-distribution>=1',\n"
-        "  \"agm-test-inapplicable; python_version < '3'\",\n]\n",
-        encoding="utf-8",
+    alpha = write_python_package(
+        tmp_path / "alpha",
+        "alpha",
+        "packaging>=1",
+        "pytest<1",
+        "agm-test-absent-distribution>=1",
+        "agm-test-inapplicable; python_version < '3'",
     )
     write_activation_index(
-        ActivationIndex({"alpha": ActivePackage(alpha.manifest.version, editable=alpha.root)}),
+        ActivationIndex({"alpha": ActivePackage(semver.Version(1), editable=alpha)}),
         home=_context(tmp_path).home,
     )
 
@@ -456,3 +464,95 @@ def test_list_reports_every_stored_version_and_each_editable_package(
     _write_command_manifest(bravo, "bravo", version="1.1.0", commands=("bravo updated",))
     list_command.run(PkgListArgs())
     assert "bravo 1.1.0 editable" in capsys.readouterr().out
+
+
+def _invoke(argv: list[str]) -> Result:
+    return CliRunner().invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
+
+
+def test_sync_command_installs_unsatisfied_active_requirements(
+    tmp_path: Path, python_installer: PythonInstaller
+) -> None:
+    home = _context(tmp_path).home
+    alpha = write_python_package(
+        tmp_path / "alpha", "alpha", "packaging>=1", "agm-test-absent-alpha>=1"
+    )
+    install_directory(alpha, home=home, env={}, editable=True)
+    python_installer.runs.clear()
+
+    result = _invoke(["pkg", "sync"])
+
+    assert result.exit_code == 0
+    assert python_installer.specs == [["packaging>=1", "agm-test-absent-alpha>=1"]]
+    assert "agm-test-absent-alpha>=1" in result.stdout
+    assert "packaging>=1" not in result.stdout
+
+
+def test_sync_command_with_satisfied_requirements_installs_nothing(
+    tmp_path: Path, python_installer: PythonInstaller
+) -> None:
+    alpha = write_python_package(tmp_path / "alpha", "alpha", "packaging>=1")
+    install_directory(alpha, home=_context(tmp_path).home, env={}, editable=True)
+
+    result = _invoke(["pkg", "sync"])
+
+    assert result.exit_code == 0
+    assert result.stdout
+    assert python_installer.runs == []
+
+
+def test_dry_run_sync_command_reports_without_installing(
+    tmp_path: Path, python_installer: PythonInstaller
+) -> None:
+    alpha = write_python_package(tmp_path / "alpha", "alpha", "agm-test-absent-alpha>=1")
+    install_directory(alpha, home=_context(tmp_path).home, env={}, editable=True)
+    python_installer.runs.clear()
+
+    result = _invoke(["pkg", "sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "dry-run:" in result.stdout
+    assert "agm-test-absent-alpha>=1" in result.stdout
+    assert python_installer.runs == []
+
+
+def test_sync_command_fails_when_the_installer_fails(
+    tmp_path: Path, python_installer: PythonInstaller
+) -> None:
+    alpha = write_python_package(tmp_path / "alpha", "alpha", "agm-test-absent-alpha>=1")
+    install_directory(alpha, home=_context(tmp_path).home, env={}, editable=True)
+    python_installer.returncode = 1
+
+    result = _invoke(["pkg", "sync"])
+
+    assert result.exit_code == 1
+    assert result.stderr
+    assert python_installer.specs[-1] == ["agm-test-absent-alpha>=1"]
+
+
+def test_check_command_reports_unsatisfied_python_requirements(
+    tmp_path: Path, python_installer: PythonInstaller, capsys: pytest.CaptureFixture[str]
+) -> None:
+    alpha = write_python_package(
+        tmp_path / "alpha", "alpha", "packaging>=1", "agm-test-absent-alpha>=1", "packaging<1"
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        check_command.run(PkgCheckArgs(directory=str(alpha)))
+
+    err = capsys.readouterr().err
+    assert exc_info.value.code == 1
+    assert "agm-test-absent-alpha>=1" in err
+    assert "packaging<1" in err
+    assert "packaging>=1" not in err
+    assert python_installer.runs == []
+
+
+def test_check_command_passes_satisfied_python_requirements(
+    tmp_path: Path, python_installer: PythonInstaller
+) -> None:
+    alpha = write_python_package(tmp_path / "alpha", "alpha", "packaging>=1")
+
+    check_command.run(PkgCheckArgs(directory=str(alpha)))
+
+    assert python_installer.runs == []

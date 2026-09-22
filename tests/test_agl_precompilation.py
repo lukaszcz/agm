@@ -21,7 +21,6 @@ from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
 from tests._agl_helpers import run_inline_command
-from tests.agl.ir_harness import label_crossing_contracts
 
 
 def _run(root: Path, source: str, *, dry_run: bool = False) -> subprocess.CompletedProcess[str]:
@@ -313,21 +312,28 @@ def test_precompiled_extern_target_contracts_round_trip(
     tmp_path: Path,
     compile_again: Callable[[str], RunResult],
     capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A reloaded library still leads its type-directed extern calls with their contracts."""
-    label_crossing_contracts(monkeypatch)
+    """A reloaded library still delivers its type-directed extern calls' ``TypeContract``s."""
     (tmp_path / "library.agl").write_text(
         "builtin def print[T](value: T) -> unit\n"
         "extern def query[T](question: text, context: text) -> T\n"
+        "record Pair(left: text, right: text)\n"
         'def direct(question: text) -> text = query(question, "d")\n'
         "def by-reference() -> (text, text) -> text = query\n"
         'def by-partial() -> (text) -> text = query::[text]("p", ?)\n'
+        'def paired() -> Pair = query("l", "r")\n'
     )
-    (tmp_path / "library.py").write_text("def query(*args):\n    return ' '.join(args)\n")
+    (tmp_path / "library.py").write_text(
+        "import agl\n"
+        "def query(contract, question, context):\n"
+        "    assert isinstance(contract, agl.TypeContract)\n"
+        "    if contract.kind == 'record':\n"
+        "        return contract.nominal(left=question, right=context)\n"
+        "    return f'{contract.label} {question} {context}'\n"
+    )
     source = (
         'import library::*\nprint(direct("q"))\nprint(by-reference()("r", "c"))\n'
-        'print(by-partial()("c"))'
+        'print(by-partial()("c"))\nprint(paired())'
     )
     outputs: list[str] = []
     artifacts: dict[Path, int] = {}
@@ -341,10 +347,12 @@ def test_precompiled_extern_target_contracts_round_trip(
     assert {path: path.stat().st_mtime_ns for path in artifacts} == artifacts
     first, second = outputs
     assert first == second
-    lines = first.splitlines()
-    assert [line.split()[1:] for line in lines] == [["q", "d"], ["r", "c"], ["p", "c"]]
-    assert len({line.split()[0] for line in lines}) == 3
-    assert all(line.startswith("contract-") for line in lines)
+    assert first.splitlines() == [
+        "text q d",
+        "text r c",
+        "text p c",
+        'Pair(left = "l", right = "r")',
+    ]
 
 
 def test_precompiled_extern_type_trees_round_trip(

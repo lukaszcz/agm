@@ -10,12 +10,10 @@ import unittest.mock
 from collections.abc import Callable
 from pathlib import Path
 
-import pytest
-
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBlock, IrConstUnit, IrExpr
-from agm.agl.ir.program import ExecutableProgram, IrFunctionBody, ValueDescriptors
+from agm.agl.ir.program import ExecutableProgram, IrFunctionBody
 from agm.agl.lexer import spaced_qualifier_collector
 from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram, compile_program_matches
@@ -25,13 +23,11 @@ from agm.agl.modules.loader import ModuleGraph, build_repl_graph, parse_entry_mo
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program_seeded
 from agm.agl.pipeline import PipelineDriver, RunError, RunResult
-from agm.agl.runtime import externs
 from agm.agl.runtime.agents import AgentFn
-from agm.agl.runtime.boundary import encode_boundary_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ScopeNode
-from agm.agl.semantics.values import ContractValue, Value
+from agm.agl.semantics.values import Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
@@ -343,17 +339,6 @@ def write_companion_file(root: Path, module_path: str, source: str = "") -> Path
     py_path.parent.mkdir(parents=True, exist_ok=True)
     py_path.write_text(source)
     return py_path
-
-
-def label_crossing_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Encode each ``ContractValue`` crossing into an extern as ``contract-<id>`` text."""
-
-    def encode(value: Value, descriptors: ValueDescriptors) -> object:
-        if isinstance(value, ContractValue):
-            return f"contract-{value.contract_id.value}"
-        return encode_boundary_value(value, descriptors)
-
-    monkeypatch.setattr(externs, "encode_boundary_value", encode)
 
 
 def age_file(path: Path, *, seconds: int = 3600) -> None:

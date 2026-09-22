@@ -8,7 +8,7 @@ declaration order: a call and a declared partial application at the ``Call``
 node, a reference and a member partial application at the ``VarRef`` or
 ``FieldAccess`` naming the extern. Lowering turns each occurrence's contracts
 into leading ``IrContract`` operands of the extern call, which evaluate to
-opaque ``ContractValue``s delivered to the companion.
+opaque ``ContractValue``s the companion receives as ``agl.TypeContract``s.
 """
 
 from __future__ import annotations
@@ -61,7 +61,6 @@ from agm.agl.typecheck.env import OutputContractSpec
 from tests.agl.ir_harness import (
     base_caps,
     evaluate_ir_with_externs,
-    label_crossing_contracts,
     lower_extern_program,
     make_graph_from_files,
     write_companion_file,
@@ -822,23 +821,23 @@ class TestTargetLowering:
 
 
 # ---------------------------------------------------------------------------
-# Runtime: contracts reach the companion as opaque leading arguments
+# Runtime: contracts reach the companion as leading ``agl.TypeContract`` arguments
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def labelled_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
-    label_crossing_contracts(monkeypatch)
-
-
+#: Shows each contract as ``contract:<label>#<object id>`` and a receiver as ``self``.
 _ECHO = (
-    "def query(*args):\n    return ' '.join(args)\n"
-    "def rate(*args):\n    return ' '.join(a if isinstance(a, str) else 'self' for a in args)\n"
-    "convert = rate\n"
+    "import agl\n"
+    "def _show(arg):\n"
+    "    if isinstance(arg, str):\n        return arg\n"
+    "    if isinstance(arg, agl.TypeContract):\n"
+    "        return f'contract:{arg.label}#{id(arg)}'\n"
+    "    return 'self'\n"
+    "def query(*args):\n    return ' '.join(map(_show, args))\n"
+    "rate = convert = query\n"
 )
 
 
-@pytest.mark.usefixtures("labelled_contracts")
 class TestContractDelivery:
     def _run(self, source: str, tmp_path: Path) -> dict[str, str]:
         bindings, _output = evaluate_ir_with_externs(source, _ECHO, tmp_path)
@@ -849,13 +848,13 @@ class TestContractDelivery:
     def test_call_passes_contract_first(self, tmp_path: Path) -> None:
         bindings = self._run(_QUERY + 'let answer: text = query("q")\nanswer', tmp_path)
         contract, question = bindings["answer"].split()
-        assert contract.startswith("contract-")
+        assert contract.startswith("contract:text#")
         assert question == "q"
 
     def test_method_call_passes_contract_before_receiver(self, tmp_path: Path) -> None:
         bindings = self._run(_BOX + 'let rated: text = box.rate("q")\nrated', tmp_path)
         contract, receiver, question = bindings["rated"].split()
-        assert contract.startswith("contract-")
+        assert contract.startswith("contract:text#")
         assert (receiver, question) == ("self", "q")
 
     def test_occurrences_deliver_distinct_contracts(self, tmp_path: Path) -> None:
@@ -880,7 +879,7 @@ class TestContractDelivery:
             tmp_path,
         )
         assert bindings["a"].split()[1:] == ["q", "c"]
-        assert bindings["a"].startswith("contract-")
+        assert bindings["a"].startswith("contract:text#")
 
 
 def test_contract_value_is_not_data() -> None:

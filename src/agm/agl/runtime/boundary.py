@@ -18,6 +18,7 @@ from agm.agl.semantics.values import (
     UNIT_VALUE,
     ArrayValue,
     BoolValue,
+    ContractValue,
     DecimalValue,
     DictValue,
     ExceptionValue,
@@ -104,6 +105,21 @@ _ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextva
 def active_function_encoder(encoder: "_FunctionEncoder") -> ScopedVar["_FunctionEncoder | None"]:
     """Publish *encoder* as the ambient closure encoder for a call's extent."""
     return ScopedVar(_ACTIVE_FUNCTION_ENCODER, encoder)
+
+
+_ContractEncoder = Callable[[ContractValue], object] | None
+
+# The target-contract encoder for the extent of one type-directed extern call,
+# published like the closure encoder: resolving a contract needs the program's
+# contract table and the registry's classes, neither of which this module holds.
+_ACTIVE_CONTRACT_ENCODER: contextvars.ContextVar["_ContractEncoder"] = contextvars.ContextVar(
+    "agl_active_contract_encoder", default=None
+)
+
+
+def active_contract_encoder(encoder: "_ContractEncoder") -> ScopedVar["_ContractEncoder | None"]:
+    """Publish *encoder* as the ambient target-contract encoder for a call's extent."""
+    return ScopedVar(_ACTIVE_CONTRACT_ENCODER, encoder)
 
 
 #: Empty descriptor view used when a nominal view is built outside any active
@@ -760,6 +776,11 @@ def _encode_boundary_value(
                 "on the interpreter's own thread"
             )
         return encoder(value)
+    if isinstance(value, ContractValue):
+        contract_encoder = _ACTIVE_CONTRACT_ENCODER.get()
+        if contract_encoder is None:
+            raise BoundaryViolation("a target contract crosses only into its extern call")
+        return contract_encoder(value)
     if isinstance(value, (RecordValue, ExceptionValue)):
         encoded = memo.get(id(value))
         if encoded is not None:

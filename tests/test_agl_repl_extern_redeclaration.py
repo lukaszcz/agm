@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agm.agl.repl import ReplSession
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -28,26 +27,10 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
+from tests._agl_helpers import repl_session_with_root
 
 _IDENTITY_LIB_AGL = "extern def identity[T](x: T) -> T\n"
 _IDENTITY_LIB_PY = "def identity(x):\n    return x\n"
-
-
-def _make_session_with_root(root: Path) -> ReplSession:
-    """Build a session whose only module search root is *root*."""
-    from agm.agl.modules.roots import assemble_roots
-
-    roots = assemble_roots(
-        invocation_root=root,
-        stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
-        lib_root=None,
-        configured=[],
-        cli=[],
-        cwd=root,
-    )
-    session = ReplSession()
-    session._roots = roots
-    return session
 
 
 def _write_extern_lib(root: Path, name: str, agl: str, py: str) -> None:
@@ -76,7 +59,7 @@ class TestCapturedClassSurvivesRedeclaration:
                 "    return box_cls(value=v).value\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
         assert s.eval_entry("import capture_default_arg::*").ok
 
@@ -99,7 +82,7 @@ class TestCapturedClassSurvivesRedeclaration:
                 "    return CAPTURED(value=v).value\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
         assert s.eval_entry("import capture_global::*").ok
 
@@ -124,7 +107,7 @@ class TestCapturedClassSurvivesRedeclaration:
                 "make_and_read = _make_factory(Box)\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
         assert s.eval_entry("import capture_closure::*").ok
 
@@ -147,7 +130,7 @@ class TestCapturedClassSurvivesRedeclaration:
                 "    return box.detail\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("exception Problem extends Exception\n  detail: text").ok
         assert s.eval_entry("import capture_exception::*").ok
 
@@ -173,7 +156,7 @@ class TestCapturedClassSurvivesRedeclaration:
                 "    return ','.join(names)\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Gone").ok
         assert s.eval_entry("import capture_enum::*").ok
         before = s.eval_entry("variant_report()")
@@ -206,7 +189,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
             "extern def visible() -> bool\n",
             ("from agl import R, nominals\ndef visible():\n    return R is nominals.entry.E.R\n"),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         declaration = "scope E\n  record R(value: int)\nend E\n\nenum E = ::E::R"
         assert s.eval_entry(declaration).ok
         assert s.eval_entry("enum E = ::E::R").ok
@@ -231,7 +214,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
                 "    return ','.join(fields)\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
 
@@ -263,7 +246,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
                 "    return ','.join(fields)\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
         failed = s.eval_entry(
@@ -290,7 +273,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
                 "    return ','.join(names)\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Gone").ok
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Other").ok
 
@@ -318,7 +301,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
                 "    )\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("record Kept\n  value: int").ok
         failed = s.eval_entry(
             'let stop: int = raise Abort(message = "stop")\nrecord Ghost\n  value: int'
@@ -341,7 +324,7 @@ class TestFreshImportSeesTheCurrentDeclaration:
 class TestBoundaryRoundTripAcrossRedeclaration:
     def test_record_values_round_trip_for_both_old_and_new_identities(self, tmp_path: Path) -> None:
         _write_extern_lib(tmp_path, "identity_lib", _IDENTITY_LIB_AGL, _IDENTITY_LIB_PY)
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
         assert s.eval_entry("let old = Box(value = 1)").ok
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
@@ -360,7 +343,7 @@ class TestBoundaryRoundTripAcrossRedeclaration:
 
     def test_enum_values_round_trip_for_both_old_and_new_identities(self, tmp_path: Path) -> None:
         _write_extern_lib(tmp_path, "identity_lib", _IDENTITY_LIB_AGL, _IDENTITY_LIB_PY)
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Gone").ok
         assert s.eval_entry("let old = Choice::Gone").ok
         assert s.eval_entry("enum Choice\n  | Some(value: int)\n  | Other").ok
@@ -385,7 +368,7 @@ class TestBoundaryRoundTripAcrossRedeclaration:
         self, tmp_path: Path
     ) -> None:
         _write_extern_lib(tmp_path, "identity_lib", _IDENTITY_LIB_AGL, _IDENTITY_LIB_PY)
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("exception Problem extends Exception\n  detail: text").ok
         assert s.eval_entry('let old = Problem(message = "old", detail = "x")').ok
         assert s.eval_entry("exception Problem extends Exception\n  detail: text\n  code: int").ok
@@ -421,7 +404,7 @@ class TestLiveViewsUnaffectedByNominalRedeclaration:
             "extern def touch(xs: array[int]) -> unit\n",
             "def touch(xs):\n    xs.append(99)\n",
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
         assert s.eval_entry("record Box\n  value: int").ok
         assert s.eval_entry("import touch_array::*").ok
         assert s.eval_entry("record Box\n  value: int\n  extra: int").ok
@@ -463,7 +446,7 @@ class TestRejectedCompanionImportReleasesNoStaleIdentity:
                 "    return ','.join(fields)\n"
             ),
         )
-        s = _make_session_with_root(tmp_path)
+        s = repl_session_with_root(tmp_path)
 
         rejected = s.eval_entry("import broken_companion::*\nrecord R\n  a: int")
         assert not rejected.ok

@@ -84,6 +84,17 @@ def test_dotenv_interpolation_defaults_to_ambient_environment(
     assert load_dotenv_file(dotenv) == {"RESULT": "/ambient/child"}
 
 
+def test_dotenv_interpolation_prefers_the_given_environment_over_the_ambient_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit environment is the only one a dotenv reference resolves against."""
+    monkeypatch.setenv("AGM_TEST_BASE", "/ambient")
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("RESULT=${AGM_TEST_BASE}/child\n")
+
+    assert load_dotenv_file(dotenv, {"AGM_TEST_BASE": "/given"}) == {"RESULT": "/given/child"}
+
+
 def test_agm_installation_prefix_uses_running_executable_location(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -157,7 +157,10 @@ def load_dotenv_file(path: Path, env: Mapping[str, str] | None = None) -> dict[s
 
     resolved_env = clone_env(env)
     values: dict[str, str] = {}
-    for key, value in DotEnv(path, encoding="utf-8", interpolate=False).parse():
+    # ``parse`` yields each assignment verbatim; the references in it are then
+    # resolved here against *env* and the assignments already read, rather than
+    # against the ambient process environment.
+    for key, value in DotEnv(path, encoding="utf-8").parse():
         resolved = (
             ""
             if value is None

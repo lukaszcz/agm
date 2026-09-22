@@ -7,11 +7,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import semver
+from packaging.requirements import InvalidRequirement, Requirement
 from tomlkit.exceptions import TOMLKitError
 
 from agm.agl.keywords import is_plain_name
 from agm.agl.modules.ids import ModuleId
 from agm.command_catalog import invalid_command_path
+from agm.core.pyenv import marker_value
 from agm.core.toml import TomlDict, load_toml_file, parse_toml_doc, toml_dict
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
@@ -79,6 +81,7 @@ class PackageManifest:
     dependencies: dict[str, DependencySpec] = field(default_factory=dict)
     commands: dict[str, CommandSpec] = field(default_factory=dict)
     aliases: dict[str, str] = field(default_factory=dict)
+    python_dependencies: tuple[str, ...] = ()
     unknown_fields: tuple[UnknownField, ...] = ()
 
 
@@ -222,7 +225,9 @@ def load_manifest_text(content: str, *, commands_complete: bool = True) -> Packa
 
 
 def _parse_manifest(raw: TomlDict, *, commands_complete: bool = True) -> PackageManifest:
-    unknown = _unknown_keys(raw, {"package", "dependencies", "commands", "aliases"}, "manifest")
+    unknown = _unknown_keys(
+        raw, {"package", "dependencies", "commands", "aliases", "python"}, "manifest"
+    )
     package = _required_table(raw, "package")
     unknown += _unknown_keys(
         package,
@@ -244,6 +249,7 @@ def _parse_manifest(raw: TomlDict, *, commands_complete: bool = True) -> Package
         dependencies=_dependencies(_optional_table(raw, "dependencies"), unknown),
         commands=_commands(_optional_table(raw, "commands"), unknown),
         aliases=alias_map,
+        python_dependencies=_python_dependencies(_optional_table(raw, "python"), unknown),
         unknown_fields=tuple(unknown),
     )
     if commands_complete:
@@ -304,6 +310,27 @@ def _dependency_table(name: str, raw: TomlDict, unknown: list[UnknownField]) -> 
     if content_hash is not None and parse_sha256(content_hash) is None:
         raise ManifestError(f"URL dependency {name!r} hash must be a SHA-256 digest")
     return DependencySpec(version, path=path, url=url, hash=content_hash)
+
+
+def _python_dependencies(raw: TomlDict, unknown: list[UnknownField]) -> tuple[str, ...]:
+    """Validate ``[python] dependencies`` as PEP 508 requirements; keep them verbatim.
+
+    A marker must evaluate as a requirement's: no ``extra``, ``extras``, or
+    ``dependency_groups``, and no incomparable comparison.
+    """
+    unknown += _unknown_keys(raw, {"dependencies"}, "python")
+    specs = _optional_str_list(raw, "dependencies", "python")
+    for spec in specs:
+        try:
+            requirement = Requirement(spec)
+        except InvalidRequirement as exc:
+            raise ManifestError(f"python dependency is not a PEP 508 requirement: {exc}") from exc
+        if requirement.url is not None:
+            raise ManifestError(f"python dependency {spec!r} must not be a direct URL reference")
+        marker = requirement.marker
+        if marker is not None and marker_value(marker, context="requirement") is None:
+            raise ManifestError(f"python dependency {spec!r} has a marker it cannot evaluate")
+    return specs
 
 
 def parse_sha256(value: str) -> str | None:

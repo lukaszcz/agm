@@ -60,7 +60,8 @@ import only their own tree, packages declared in `[dependencies]`, and `std`.
 
 ## Manifest
 
-`package.toml` supports `[package]` (required), `[dependencies]`, `[commands]`, and `[aliases]`.
+`package.toml` supports `[package]` (required), `[dependencies]`, `[python]`, `[commands]`, and
+`[aliases]`.
 `pkg check`, `pkg create`, and `pkg install` reject a key the schema does not define, so a
 misspelled field is an error rather than silently ignored.
 
@@ -95,6 +96,24 @@ remote = { version = "2.0.0", url = "https://example.test/remote.agmpkg", hash =
 - `std` is an AGM compatibility contract: the running AGM must be at least the declared version
   and in the same release line (same minor for `0.x`, same major from `1.x`).
 - Only direct dependencies are importable; a dependency's own dependencies are not.
+
+### `[python]`
+
+```toml
+[python]
+dependencies = ["typesafe-sdk>=0.7,<1", "tomli; python_version < '3.11'"]
+```
+
+`dependencies` lists the third-party Python distributions the package's
+[companions](../agl/reference/ffi.md) import, as [PEP 508](https://peps.python.org/pep-0508/)
+requirements. Companions run in AGM's own interpreter, so requirements are checked against its
+environment: one whose marker does not apply is always satisfied, and a requested extra holds when
+every requirement the installed distribution declares for that extra is itself satisfied.
+An invalid requirement, a direct URL reference (`name @ url`), and a marker that does not evaluate
+as a requirement's — one referring to `extra`, `extras`, or `dependency_groups`, or comparing
+values incomparably (such as `os_name ~= "posix"`) — are manifest errors. A distribution may be
+listed more than once, for example with markers selecting per-environment variants.
+Requirements are stored verbatim, as declared, and are part of the package's content hash.
 
 ### `[commands]`
 
@@ -243,18 +262,26 @@ resolve from the store first, then a declared `path` (installed alongside), then
 and hash-verified; never in `--dry-run`). Versions are kept side by side, one per identity (build
 metadata included, as above). `--editable` activates the source directory in place: no copy, no
 `RECORD`, edits visible immediately, and its command table is re-derived from source on each
-dispatch.
+dispatch. Before activation is published, if AGM's interpreter environment does not satisfy some
+`[python]` requirement of a package in the new selection, the union of every selected package's
+requirements is installed into it with `uv pip install --python <interpreter>`
+(`<interpreter> -m pip install` when `uv` is not on `PATH`). The installer resolves them jointly:
+already satisfied distributions are left alone, and conflicting requirements across packages fail
+the install rather than downgrading one. An installer failure or interruption fails the install and
+leaves the store as it was. `--dry-run` prints the installer command instead of running it.
 
 **`uninstall`** verifies the `RECORD`, validates the remaining selection, deactivates, and removes
 the recorded files (plus cache and VCS residue). An editable package is only deactivated. Command
-ownership displaced by the removed package is restored.
+ownership displaced by the removed package is restored. Python distributions are never removed.
 
 **`list`** shows every stored version as `active` or `installed`, and every active editable
 package.
 
-**`info`** shows metadata, command registrations with their prose, and whether each direct
-dependency is active,
-unsatisfied, or missing, including the inferred `std` upper bound.
+**`info`** shows metadata, command registrations with their prose, whether each direct
+dependency is active, unsatisfied, or missing, including the inferred `std` upper bound, and, as
+`requires python package SPEC: STATUS`, each `[python]` requirement's status in AGM's interpreter
+environment: `installed VERSION`, `installed VERSION (unsatisfied)`, `missing`, or
+`not applicable` (its marker does not hold).
 
 ## Version pins
 

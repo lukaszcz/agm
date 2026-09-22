@@ -7754,6 +7754,32 @@ class TestPackageInstall:
         assert missing_import.returncode == 1
         assert unknown.returncode == 1
 
+    def test_info_reports_python_requirements_and_whether_they_hold(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        header = '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[python]\n'
+        (package / "package.toml").write_text(
+            header + "dependencies = ['packaging>=1', 'agm-e2e-absent; python_version < \"3\"']\n",
+            encoding="utf-8",
+        )
+
+        run_agm(["pkg", "install", "--editable", str(package)], env=env, cwd=tmp_path)
+        held = run_agm(["pkg", "info", "alpha"], env=env, cwd=tmp_path)
+        (package / "package.toml").write_text(
+            header + 'dependencies = ["packaging>=1", "agm-e2e-absent>=1"]\n', encoding="utf-8"
+        )
+        missing = run_agm(["pkg", "info", "alpha"], env=env, cwd=tmp_path)
+
+        held_lines = held.stdout.splitlines()
+        assert "installed" in next(line for line in held_lines if "packaging>=1" in line)
+        assert "not applicable" in next(line for line in held_lines if "agm-e2e-absent" in line)
+        assert "unsatisfied" not in held.stdout
+        assert "missing" in next(
+            line for line in missing.stdout.splitlines() if "agm-e2e-absent>=1" in line
+        )
+
     def test_registered_commands_restore_the_remaining_active_owner(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

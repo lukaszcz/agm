@@ -9,6 +9,9 @@ import pytest
 import semver
 
 from agm.agl.keywords import KEYWORDS
+from agm.packages.archive import extract_archive, write_archive
+from agm.packages.distribution import normalized_manifest
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.manifest import (
     CommandSpec,
     ManifestError,
@@ -572,3 +575,115 @@ class TestManifestRejectsLoneSurrogateEscapes:
     def test_load_manifest_rejects_it(self, tmp_path: Path) -> None:
         with pytest.raises(ManifestError):
             load_manifest(_write_manifest(tmp_path, self._MANIFEST))
+
+
+class TestPythonDependencies:
+    """The ``[python] dependencies`` table: PEP 508 requirements a package's companions import."""
+
+    _HEADER = '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+
+    def _package(self, root: Path, dependencies: str) -> Path:
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        (root / "package.toml").write_text(
+            self._HEADER + f"[python]\ndependencies = {dependencies}\n", encoding="utf-8"
+        )
+        return root
+
+    def test_parses_requirements_verbatim_in_declared_order(self) -> None:
+        manifest = load_manifest_text(
+            self._HEADER + "[python]\n"
+            "dependencies = ['typesafe-sdk >= 0.7, < 1', \"legacy ; python_version < '3'\"]\n"
+        )
+
+        assert manifest.python_dependencies == (
+            "typesafe-sdk >= 0.7, < 1",
+            "legacy ; python_version < '3'",
+        )
+
+    def test_absent_table_declares_nothing(self) -> None:
+        assert load_manifest_text(self._HEADER).python_dependencies == ()
+
+    @pytest.mark.parametrize(
+        "table",
+        (
+            "[python]\ndependencies = 'requests'\n",
+            "[python]\ndependencies = ['']\n",
+            "[python]\ndependencies = [1]\n",
+            "[python]\ndependencies = ['not a requirement!']\n",
+            "[python]\ndependencies = ['requests >= one']\n",
+            "[python]\ndependencies = ['requests @ https://example.test/requests.whl']\n",
+            "[python]\ndependencies = [\"rich; extra == 'cli'\"]\n",
+            "[python]\ndependencies = [\"rich; python_version > '3' and 'cli' == extra\"]\n",
+            "[python]\ndependencies = [\"rich; 'cli' in extras\"]\n",
+            "[python]\ndependencies = [\"rich; 'dev' in dependency_groups\"]\n",
+            "[python]\ndependencies = [\"rich; os_name ~= 'posix'\"]\n",
+            "[python]\ndependencies = [\"rich; python_version < '3' and 'cli' in extras\"]\n",
+        ),
+    )
+    def test_rejects_malformed_requirements(self, table: str) -> None:
+        with pytest.raises(ManifestError):
+            load_manifest_text(self._HEADER + table)
+
+    def test_rejects_a_non_table_python_entry(self) -> None:
+        with pytest.raises(ManifestError):
+            load_manifest_text("python = 'requests'\n" + self._HEADER)
+
+    def test_records_unknown_python_fields(self) -> None:
+        manifest = load_manifest_text(self._HEADER + "[python]\nindex = 'https://example.test'\n")
+
+        assert manifest.unknown_fields == (UnknownField("python", "index"),)
+        assert manifest.python_dependencies == ()
+
+    def test_normalized_manifest_round_trips_requirements(self) -> None:
+        manifest = load_manifest_text(
+            self._HEADER + "[python]\ndependencies = ['b>=1', 'a[extra]<2']\n"
+        )
+
+        rendered = normalized_manifest(manifest).decode()
+
+        assert load_manifest_text(rendered) == manifest
+        assert normalized_manifest(load_manifest_text(rendered)).decode() == rendered
+
+    def test_requirements_change_the_distribution_hash(self, tmp_path: Path) -> None:
+        plain = self._package(tmp_path / "plain", "[]")
+        required = self._package(tmp_path / "required", "['requests>=2']")
+
+        plain_hash = write_archive(plain, tmp_path / "plain.agmpkg").package_hash
+        required_hash = write_archive(required, tmp_path / "required.agmpkg").package_hash
+
+        assert plain_hash != required_hash
+
+    def test_archive_round_trips_requirements(self, tmp_path: Path) -> None:
+        root = self._package(tmp_path / "review_tools", "['requests >= 2', 'rich']")
+        archive = tmp_path / "review_tools.agmpkg"
+        write_archive(root, archive)
+
+        extracted = extract_archive(archive, tmp_path / "extracted")
+
+        assert extracted.manifest.python_dependencies == ("requests >= 2", "rich")
+
+    def test_archive_round_trips_a_backslash_in_a_marker_value(self, tmp_path: Path) -> None:
+        spec = 'demo; platform_release == "a\\\\b"'
+        root = self._package(tmp_path / "review_tools", f"['{spec}']")
+        archive = tmp_path / "review_tools.agmpkg"
+        write_archive(root, archive)
+
+        extracted = extract_archive(archive, tmp_path / "extracted")
+
+        assert extracted.manifest.python_dependencies == (spec,)
+
+    def test_marker_values_merely_spelling_extra_are_accepted(self) -> None:
+        spec = "rich; platform_release == 'extra'"
+        manifest = load_manifest_text(self._HEADER + f'[python]\ndependencies = ["{spec}"]\n')
+
+        assert manifest.python_dependencies == (spec,)
+
+    def test_accepts_per_environment_variants_of_one_distribution(self) -> None:
+        specs = ("tomli>=2; python_version < '3.11'", "Tomli<2; python_version < '3'")
+        rendered = ", ".join(f'"{spec}"' for spec in specs)
+        manifest = load_manifest_text(self._HEADER + f"[python]\ndependencies = [{rendered}]\n")
+
+        assert manifest.python_dependencies == specs

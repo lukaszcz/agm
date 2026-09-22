@@ -1,6 +1,6 @@
 # Core Primitives
 
-Two foundation packages sit beneath everything else and serve both halves of AGM. `core/` holds the OS-facing building blocks — process execution, environment handling, filesystem and TOML/dotenv I/O, outbound HTTP, logging, lifecycle cleanup, and the dry-run facility; AgL's host runtime runs shell commands and agents, writes files, makes HTTP requests, and emits trace logs through these same primitives. `util/` holds pure, stdlib-only helpers that import nothing from `agm`.
+Two foundation packages sit beneath everything else and serve both halves of AGM. `core/` holds the OS-facing building blocks — process execution, environment handling, the interpreter's Python requirements, filesystem and TOML/dotenv I/O, outbound HTTP, logging, lifecycle cleanup, and the dry-run facility; AgL's host runtime runs shell commands and agents, writes files, makes HTTP requests, and emits trace logs through these same primitives. `util/` holds pure, stdlib-only helpers that import nothing from `agm`.
 
 ## Process Execution
 
@@ -18,6 +18,10 @@ Filesystem mutations and TOML/dotenv reads and writes are wrapped so they partic
 
 One module wraps `requests` for outbound HTTP: it opens a pooled session, builds and streams a request through it, classifies transport failures (URL, connection, timeout, TLS, redirect, and unsendable requests) into a small typed error independent of `requests`' own exception shape, and applies a strict declared-charset-else-UTF-8 decoding rule over an allowlist of real wire text encodings, so a Python-internal or surrogate-producing codec is rejected before any byte is decoded. The session never persists cookies or consults `~/.netrc`, and caller-supplied cookies are bound to the request's host so they never leak to a cross-host redirect target. A response saved to disk streams through the same atomic temp-and-replace helper filesystem writes use. It owns the only import of `requests` besides the package fetcher, so higher layers never see `requests` types directly.
 
+## Python Environment
+
+Package companions run in AGM's own interpreter, so one module classifies PEP 508 requirements against that interpreter's installed distributions (installed, unsatisfied, missing, or not applicable) and installs requirements into it — through `uv` when on `PATH`, else `pip` — via the dry-run-aware process primitives.
+
 ## Dry Run and Cleanup
 
 Dry-run is a global mode set from `--dry-run`. Because the process and filesystem primitives consult it, every command inherits dry-run support without implementing it. The cleanup helper releases resources without masking an exception already in flight; the AgL interpreter and the `exec`/`repl` hosts use it when closing agent sessions.
@@ -33,5 +37,6 @@ Dry-run is a global mode set from `--dry-run`. Because the process and filesyste
 - `src/agm/core/fs.py` — dry-run-aware filesystem operations; `src/agm/core/path.py` — path resolution, display, and the safe-relative-path predicate shared by archives, `RECORD` files, and AgL resources.
 - `src/agm/core/toml.py` — the single entry for reading a TOML document from outside, and `src/agm/core/dotenv.py` — round-trip TOML and dotenv helpers.
 - `src/agm/core/cleanup.py` — primary-error-preserving cleanup; `src/agm/core/dry_run.py` — global dry-run state; `src/agm/core/log.py` — logging and JSONL append.
+- `src/agm/core/pyenv.py` — requirement satisfaction and installation for AGM's interpreter environment.
 - `src/agm/core/http.py` — the `requests`-backed HTTP transport seam: session, request/response streaming, failure classification, charset decoding.
 - `src/agm/util/graph.py`, `text.py`, `unicode.py`, `ident.py`, `interp.py`, `scoping.py`, `recursion.py` — the pure helpers.

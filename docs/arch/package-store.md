@@ -8,7 +8,7 @@ A package source directory is stored and shipped as its *distribution*: the norm
 
 ## Install and Uninstall
 
-Installation resolves the dependency closure, stages the distribution beside its final store path, checks the staging tree against the source resolution it was copied from, then publishes with an atomic rename, so a partially written tree is never reachable. Command-shadow diagnostics are finalized while the store lock is held; any diagnostic or activation failure rolls the new tree back. Dry runs perform the same validation without persisting. Store and index changes are serialized by a store lock.
+Installation resolves the dependency closure, stages the distribution beside its final store path, checks the staging tree against the source resolution it was copied from, then publishes with an atomic rename, so a partially written tree is never reachable. Command-shadow diagnostics are finalized, and the new selection's Python requirements synced into AGM's interpreter, while the store lock is held and before activation is published; any failure or interruption rolls the new tree back. The activation index is the source of truth for the union of those requirements: when any is unsatisfied, the whole union goes to the installer so it resolves them jointly. Uninstall never removes Python distributions. Dry runs perform the same validation without persisting. Store and index changes are serialized by a store lock.
 
 Every installed tree carries a SHA-256 `RECORD` listing the files the install created; uninstall removes exactly those (plus cache and VCS residue) and fails loudly on anything else. Removal renames the tree to a hidden tombstone first, so an interrupted cleanup is retryable. `RECORD` is unsigned and lives inside the tree it describes, so it is only ever checked against an anchor outside that tree: an archive's own record on read, or the source hash when installing over an existing tree. Nothing re-hashes a package to read, activate, or execute it.
 
@@ -24,6 +24,7 @@ The standard library ships as a managed store package whose version must exactly
 - `src/agm/packages/record.py`, `archive.py` — integrity records and portable archives.
 - `src/agm/packages/distribution.py` — the one distribution view of a source tree.
 - `src/agm/packages/activation.py`, `install.py`, `fetch.py` — active selections, lifecycle operations, downloads.
+- `src/agm/packages/python_deps.py` — the active selection's Python-requirement union and its sync through `src/agm/core/pyenv.py`.
 - `src/agm/packages/stdlib.py` — anchor-aware `std` root selection; `src/agm/stdlib_locator.py` — the shipped fallback tree.
 - `src/agm/commands/pkg/` — `install`, `uninstall`, `list`, `info`, `create`, `check`.
-- `tests/test_packages_store.py`, `test_packages_install.py`, `test_packages_archive.py`, `test_packages_record.py`, `test_packages_distribution.py`.
+- `tests/test_packages_store.py`, `test_packages_install.py`, `test_packages_archive.py`, `test_packages_record.py`, `test_packages_distribution.py`, `test_packages_python_deps.py`.

@@ -1020,7 +1020,10 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         Install a package directory or .agmpkg archive into AGM's versioned store and activate its
         version. --editable mounts a directory SRC directly. Conflicting registered commands refuse
         installation unless --shadow replaces the existing registration. URL dependencies are
-        fetched with their declared SHA-256 hash before install.
+        fetched with their declared SHA-256 hash before install. When a [python] requirement of the
+        active packages is unsatisfied, all of their [python] requirements are installed jointly
+        into AGM's interpreter environment (uv, else pip) before activation; a failed Python
+        install, including a conflict between packages, fails the package install.
     """),
     ("pkg", "uninstall"): textwrap.dedent("""\
         agm pkg uninstall NAME
@@ -1036,8 +1039,10 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("pkg", "info"): textwrap.dedent("""\
         agm pkg info NAME
 
-        Show design metadata, command registrations, and direct dependency status for an active
-        package.
+        Show design metadata, command registrations, direct dependency status, and Python
+        requirement status for an active package. Each [python] requirement is reported as
+        installed VERSION, installed VERSION (unsatisfied), missing, or not applicable (marker
+        false) in AGM's interpreter environment.
     """),
     ("tmux", "open"): textwrap.dedent("""\
         agm tmux open [-d|--detach] [-n|--num-panes PANES] [SESSION]

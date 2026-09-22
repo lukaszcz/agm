@@ -175,7 +175,16 @@ program def main() -> unit =
 
 An [`extern def`](ffi.md) companion is the `.py` sibling of its module inside
 the module tree and is included with the package; there is no separate
-declaration for it.
+declaration for it. The third-party Python distributions a companion imports
+are declared as PEP 508 requirements in the manifest:
+
+```toml
+[python]
+dependencies = ["typesafe-sdk>=0.7,<1"]
+```
+
+Companions run in AGM's own interpreter, so the requirements are checked
+against its environment (see [`agm pkg`](../../commands/pkg.md#python)).
 
 ## Diagnostics
 

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import semver
 
 from agm.core import dry_run, fs
+from agm.core.pyenv import RequirementInstallError
 from agm.packages.activation import (
     ActivationIndex,
     ActivePackage,
@@ -61,6 +62,7 @@ from agm.packages.model import (
     is_std_package_name,
     unmet_std_requirement,
 )
+from agm.packages.python_deps import python_dependencies, sync_python_dependencies
 from agm.packages.record import (
     RECORD_NAME,
     RecordEntry,
@@ -186,14 +188,14 @@ def _install_with_plan(
     env: Mapping[str, str] | None,
     shadow: bool,
 ) -> PackageInstallPlan:
-    """Run one locked install transaction, rolling back trees it created on failure."""
+    """Run one locked install transaction, rolling back trees it created on any failure."""
 
     with _package_operation_lock(home=home, env=env):
         state = _InstallState(home=home, env=env, index=_load_install_index(home=home, env=env))
         try:
             package = install(state)
             command_shadows = _commit_install_activation(state, package, report_shadows=shadow)
-        except PackageInstallError:
+        except BaseException:
             _rollback_created_trees(state)
             raise
         return PackageInstallPlan(package, command_shadows)
@@ -987,7 +989,7 @@ def _next_registration_order(state: _InstallState) -> int:
 def _commit_install_activation(
     state: _InstallState, package: PackageInfo, *, report_shadows: bool
 ) -> tuple[CommandShadow, ...]:
-    """Compute install diagnostics from one locked plan, then publish that plan."""
+    """Compute install diagnostics from one locked plan, sync Python requirements, publish it."""
 
     # A real install has already published its trees, so activation is
     # (re)validated straight from the store; only a dry run stands its
@@ -1013,10 +1015,14 @@ def _commit_install_activation(
             if report_shadows
             else ()
         )
+        # Reconciling never changes the selection, so the resolved set is reconciled's.
+        sync_python_dependencies(python_dependencies(_transaction_resolved_packages(state)))
         _publish_activation(reconciled, home=state.home, env=state.env)
         return command_shadows
     except PackageActivationError as exc:
         raise PackageInstallError(f"cannot write package activation: {exc}") from exc
+    except RequirementInstallError as exc:
+        raise PackageInstallError(f"cannot install Python requirements: {exc}") from exc
 
 
 def _commit_activation(

@@ -848,6 +848,20 @@ def run_capture_result(
     return result
 
 
+def run_foreground_unless_dry_run(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Run a command inheriting stdio, or print it and return 0 in dry-run mode."""
+
+    if dry_run.enabled():
+        dry_run.print_command(cmd, cwd=cwd)
+        return 0
+    return run_foreground(cmd, cwd=cwd, env=env)
+
+
 def require_success(
     cmd: list[str],
     *,
@@ -856,10 +870,7 @@ def require_success(
 ) -> None:
     """Run a command in the foreground and exit if it fails."""
 
-    if dry_run.enabled():
-        dry_run.print_command(cmd, cwd=cwd)
-        return
-    returncode = run_foreground(cmd, cwd=cwd, env=env)
+    returncode = run_foreground_unless_dry_run(cmd, cwd=cwd, env=env)
     if returncode != 0:
         raise SystemExit(returncode)
 

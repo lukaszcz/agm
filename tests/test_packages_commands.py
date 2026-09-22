@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import metadata
 from pathlib import Path
 
 import pytest
@@ -269,6 +270,36 @@ def test_info_command_uses_live_editable_dependency_versions(
     info_command.run(PkgInfoArgs("alpha"))
 
     assert "requires bravo >= 1.0.0: editable 1.0.0" in capsys.readouterr().out
+
+
+def test_info_command_reports_whether_python_requirements_hold(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    alpha = _package(tmp_path, "alpha")
+    (alpha.root / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[python]\ndependencies = [\n'
+        "  'packaging>=1', 'pytest<1', 'agm-test-absent-distribution>=1',\n"
+        "  \"agm-test-inapplicable; python_version < '3'\",\n]\n",
+        encoding="utf-8",
+    )
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(alpha.manifest.version, editable=alpha.root)}),
+        home=_context(tmp_path).home,
+    )
+
+    info_command.run(PkgInfoArgs("alpha"))
+
+    lines = capsys.readouterr().out.splitlines()
+
+    def line(spec: str) -> str:
+        return next(line for line in lines if spec in line)
+
+    assert metadata.version("packaging") in line("packaging>=1")
+    assert "unsatisfied" not in line("packaging>=1")
+    assert metadata.version("pytest") in line("pytest<1")
+    assert "unsatisfied" in line("pytest<1")
+    assert "missing" in line("agm-test-absent-distribution>=1")
+    assert "not applicable" in line("agm-test-inapplicable")
 
 
 def test_info_command_rejects_immutable_store_escapes_and_identity_mismatches(

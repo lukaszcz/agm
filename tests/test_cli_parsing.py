@@ -2424,6 +2424,31 @@ class TestExecEngineFlagExclusivity:
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
+    def test_every_negatable_engine_key_excludes_its_own_negative(self) -> None:
+        """The rule is derived from the projection, so a new key brings its own."""
+        from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
+        from agm.cli_support.program_options import project_option
+        from agm.cli_support.run_options import _exclusive_flag_groups
+        from agm.config.engine_keys import ENGINE_KEYS
+
+        groups = _exclusive_flag_groups()
+        for spec in ENGINE_KEYS:
+            option = project_option(spec.name, ENGINE_KEY_TYPES[spec.name])
+            if not option.negative_flags:
+                continue
+            both = {*option.flags, *option.negative_flags}
+            assert any(both <= set(group) for group in groups), spec.name
+
+    def test_register_members_exclude_the_registers_switch(self) -> None:
+        """Keys sharing a register name one destination, so only one may be given."""
+        from agm.cli_support.run_options import _exclusive_flag_groups
+        from agm.config.engine_keys import TRACE_ENGINE_KEYS
+
+        flags = {f"--{name}" for name in TRACE_ENGINE_KEYS}
+        assert any(
+            flags <= set(group) and "--no-trace" in group for group in _exclusive_flag_groups()
+        )
+
 
 class TestReplStdlibOption:
     def test_no_stdlib_passed_to_repl_args(

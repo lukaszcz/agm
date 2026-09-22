@@ -13,7 +13,14 @@ from agm.agl.runtime.engine_config import (
 from agm.agl.runtime.option import option_text
 from agm.agl.semantics.values import BoolValue
 from agm.cli_support.engine_seeds import build_host_engine_seeds
-from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, TRACE_ENGINE_KEYS
+from agm.config.engine_keys import (
+    ENGINE_KEY_NAMES,
+    ENGINE_KEYS,
+    ENGINE_REGISTERS,
+    TRACE_ENGINE_KEYS,
+    TRACE_REGISTER,
+    trace_write_implies_enabled,
+)
 from agm.config.general import ExecConfig, exec_config_from_merged
 from tests._agl_helpers import agent_value
 
@@ -264,6 +271,34 @@ def test_configured_numeric_timeout_is_seeded_from_its_raw_spelling() -> None:
 def test_trace_engine_keys_are_declared_engine_keys() -> None:
     """The trace register pair remains a projection of the engine-key catalog."""
     assert TRACE_ENGINE_KEYS <= ENGINE_KEY_NAMES
+
+
+def test_every_register_is_named_after_its_own_switch_key() -> None:
+    """A register's on/off switch is the key whose name it carries."""
+    assert ENGINE_REGISTERS
+    for register in ENGINE_REGISTERS:
+        switches = [spec for spec in ENGINE_KEYS if spec.name == register]
+        assert len(switches) == 1
+        assert switches[0].register == register
+        assert not switches[0].enables_register
+
+
+def test_a_some_write_implies_enabled_exactly_for_the_declared_keys() -> None:
+    """The runtime implication follows the catalog's ``enables_register`` mark."""
+    for spec in ENGINE_KEYS:
+        assert trace_write_implies_enabled(spec.name, True) is (
+            spec.enables_register and spec.register == TRACE_REGISTER
+        )
+        assert trace_write_implies_enabled(spec.name, False) is False
+
+
+def test_path_valued_engine_keys_carry_a_text_option() -> None:
+    """A path-valued key is an ``Option[text]``, so a cleared path stays expressible."""
+    from agm.config.engine_keys import EngineKeyKind
+
+    paths = [spec for spec in ENGINE_KEYS if spec.is_path]
+    assert paths
+    assert all(spec.kind is EngineKeyKind.OPTION_TEXT for spec in paths)
 
 
 def test_engine_defaults_cover_exactly_the_catalog_keys_with_defaults() -> None:

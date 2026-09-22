@@ -80,7 +80,16 @@ from agm.agl.ir import (
     UseDefault,
     VariantDescriptor,
 )
-from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    ScalarDecode,
+    ScalarKind,
+    TypeNode,
+    TypeNodeField,
+    TypeNodeKind,
+    TypeNodeRef,
+    TypeTree,
+)
 from agm.agl.ir.ids import ContractId
 from agm.agl.ir.nodes import IrContract, IrExpr
 from agm.agl.ir.static_keys import StaticBindingKey
@@ -2149,6 +2158,7 @@ class TestExternTargetOperands:
         *initializers: IrExpr,
         target_count: int = 1,
         default: IrExpr | None = None,
+        type_tree: TypeTree | None = None,
     ) -> ExecutableProgram:
         extern = FunctionDescriptor(
             function_id=FN0,
@@ -2172,6 +2182,7 @@ class TestExternTargetOperands:
             target_type_label="int",
             structured_exec=False,
             format_instructions="",
+            type_tree=type_tree,
         )
         return replace(prog, contracts={self._CID: request})
 
@@ -2242,6 +2253,38 @@ class TestExternTargetOperands:
 
     def test_loading_an_ordinary_extern_closure_passes(self) -> None:
         validate_ir(self._program(IrLoad(location=LOC, symbol=SYM0), target_count=0))
+
+    @staticmethod
+    def _tree(root: TypeNode | TypeNodeRef, nominal: NominalId | None = None) -> TypeTree:
+        """A recursive record tree: *root* over a def whose field refers back to it."""
+        body = TypeNode(
+            TypeNodeKind.RECORD,
+            "Node",
+            "{}",
+            nominal=nominal,
+            fields=(TypeNodeField("next", "next", None, TypeNodeRef("Node")),),
+        )
+        return TypeTree(root=root, defs=(("Node", body),))
+
+    def _validate_tree(self, tree: TypeTree) -> None:
+        validate_ir(self._program(type_tree=tree))
+
+    def test_type_tree_passes(self) -> None:
+        items = TypeNode(TypeNodeKind.ARRAY, "array[Node]", "{}", items=TypeNodeRef("Node"))
+        self._validate_tree(self._tree(TypeNode(TypeNodeKind.DICT, "d", "{}", values=items)))
+
+    def test_type_tree_unknown_reference_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="Missing"):
+            self._validate_tree(self._tree(TypeNodeRef("Missing")))
+
+    def test_type_tree_duplicate_definition_raises(self) -> None:
+        tree = self._tree(TypeNodeRef("Node"))
+        with pytest.raises(InvalidIrError, match="Node"):
+            self._validate_tree(replace(tree, defs=tree.defs * 2))
+
+    def test_type_tree_unregistered_nominal_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="nominal"):
+            self._validate_tree(self._tree(TypeNodeRef("Node"), NominalId(value=9999)))
 
 
 # ===========================================================================

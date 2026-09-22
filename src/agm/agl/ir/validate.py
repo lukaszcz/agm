@@ -33,7 +33,8 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        type parameters). A direct call to an extern leads with one
        ``IrContract`` per target parameter, registered in ``program.contracts``;
        ``IrContract`` appears nowhere else, and no ``IrLoad`` reads the function
-       symbol of an extern with target parameters.
+       symbol of an extern with target parameters. A contract's type tree
+       references only its own definitions and registered nominals.
     8. Every non-engine module-qualified ``IrBuiltinLoad``/``IrBuiltinStore``
        and declared builtin-default key identifies a loaded host-backed binding
        declaration, including its scope path. Canonical root ``std/config``
@@ -88,7 +89,10 @@ from agm.agl.ir.contracts import (
     RefEncode,
     ScalarDecode,
     ScalarEncode,
+    TypeNodeRef,
     TypeParameterEncode,
+    TypeTree,
+    TypeTreeEntry,
     forwarded_encode_key,
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
@@ -437,6 +441,16 @@ def _check_recipe_consistency(
         )
 
 
+def _unique_defs[D](defs: "tuple[tuple[str, D], ...]", owner: str) -> dict[str, D]:
+    """Return *defs* as a mapping, rejecting a duplicate key of *owner*'s definitions."""
+    defs_map: dict[str, D] = {}
+    for key, entry in defs:
+        if key in defs_map:
+            raise InvalidIrError(f"{owner} has duplicate $defs key {key!r}")
+        defs_map[key] = entry
+    return defs_map
+
+
 def _check_decode_nominals(
     decode: DecodeSchema, defs: "tuple[tuple[str, DecodeSchema], ...]", ctx: _Context
 ) -> None:
@@ -449,12 +463,7 @@ def _check_decode_nominals(
     normal self- or mutually-recursive decode body terminates while malformed
     ref-only cycles are rejected.
     """
-    visited: set[str] = set()
-    for key, _entry in defs:
-        if key in visited:
-            raise InvalidIrError(f"DecodeSchema has duplicate $defs key {key!r}")
-        visited.add(key)
-    defs_map = dict(defs)
+    defs_map = _unique_defs(defs, "DecodeSchema")
     _walk_decode_schema(decode, defs_map, ctx)
     for key, entry in defs:
         _walk_decode_schema(entry, defs_map, ctx)
@@ -1702,6 +1711,25 @@ def _validate_contract_request(
         raise InvalidIrError(f"ContractRequest {cid!r} has defs but decode is None")
     if req.decode is not None:
         _check_decode_nominals(req.decode, req.defs, ctx)
+    if req.type_tree is not None:
+        _check_type_tree(req.type_tree, ctx)
+
+
+def _check_type_tree(tree: TypeTree, ctx: _Context) -> None:
+    """Deep tier: definition keys are unique, references name one, and nominals are registered."""
+    defs = _unique_defs(tree.defs, "TypeTree")
+    pending: list[TypeTreeEntry] = [tree.root, *defs.values()]
+    while pending:
+        entry = pending.pop()
+        if isinstance(entry, TypeNodeRef):
+            if entry.key not in defs:
+                raise InvalidIrError(f"TypeTree TypeNodeRef references unknown key {entry.key!r}")
+            continue
+        if entry.nominal is not None:
+            _check_nominal_in_table(entry.nominal, ctx)
+        pending.extend(field.node for field in entry.fields)
+        pending.extend(member for _tag, member in entry.members)
+        pending.extend(child for child in (entry.items, entry.values) if child is not None)
 
 
 # ---------------------------------------------------------------------------

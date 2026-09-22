@@ -41,6 +41,8 @@ from agm.agl.ir.contracts import (
     ContractPayload,
     ContractRequest,
     ConversionFailureMode,
+    DecodePlan,
+    TypeTree,
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -273,6 +275,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
     build_format_instructions,
     derive_schema_and_decode,
+    derive_schema_decode_and_tree,
 )
 from agm.agl.typecheck.env import (
     CheckedModule,
@@ -284,6 +287,16 @@ from agm.util.graph import toposort
 from agm.util.text import normalize_newlines
 
 __all__ = ["InitializerOrigin", "_LinkState", "builtin_nominals_from_declarations"]
+
+
+def _json_payload(schema: dict[str, object], decode_plan: DecodePlan) -> ContractPayload:
+    """Build the JSON codec payload of a derived *schema* and *decode_plan*."""
+    return ContractPayload(
+        json_schema=json.dumps(schema),
+        decode=decode_plan.root,
+        format_instructions=build_format_instructions(schema),
+        defs=decode_plan.defs,
+    )
 
 
 def _contract_has_schema(
@@ -673,26 +686,22 @@ class _Lowerer:
         """Derive the codec payload of *spec* from its target type."""
         if spec.codec_name != "json":
             return ContractPayload(json_schema=None, decode=None, format_instructions="")
-        schema_dict, decode_plan = derive_schema_and_decode(spec.target_type, self._type_table)
-        return ContractPayload(
-            json_schema=json.dumps(schema_dict),
-            decode=decode_plan.root,
-            format_instructions=build_format_instructions(schema_dict),
-            defs=decode_plan.defs,
-        )
+        return _json_payload(*derive_schema_and_decode(spec.target_type, self._type_table))
 
     def _contract_request_for_spec(
         self,
         spec: OutputContractSpec,
         *,
         structured_exec: bool,
-        materialized: ContractPayload | None,
+        payload: ContractPayload | None,
+        type_tree: TypeTree | None = None,
     ) -> ContractRequest:
         """Build the typeless contract request for one checked output contract spec.
 
-        *materialized* is a host-materialized payload replacing the derived one.
+        *payload* replaces the one derived from *spec* when given.
         """
-        payload = materialized if materialized is not None else self._derived_contract_payload(spec)
+        if payload is None:
+            payload = self._derived_contract_payload(spec)
         return ContractRequest(
             codec_name=spec.codec_name,
             strict_json=spec.strict_json,
@@ -705,6 +714,19 @@ class _Lowerer:
             target_type_kind=spec.target_type.kind,
             target_type=spec.target_type,
             defs=payload.defs,
+            type_tree=type_tree,
+        )
+
+    def _target_contract_request(self, spec: OutputContractSpec) -> ContractRequest:
+        """Build a type-directed extern's contract request, carrying its target's type tree."""
+        schema_dict, decode_plan, tree = derive_schema_decode_and_tree(
+            spec.target_type, self._type_table
+        )
+        return self._contract_request_for_spec(
+            spec,
+            structured_exec=False,
+            payload=_json_payload(schema_dict, decode_plan),
+            type_tree=tree,
         )
 
     def _target_contracts(self, node_id: int, span: SourceSpan) -> tuple[IrContract, ...]:
@@ -712,9 +734,7 @@ class _Lowerer:
         return tuple(
             IrContract(
                 location=self._loc(span),
-                contract_id=self._alloc_contract(
-                    self._contract_request_for_spec(spec, structured_exec=False, materialized=None)
-                ),
+                contract_id=self._alloc_contract(self._target_contract_request(spec)),
             )
             for spec in self._checked.target_contract_specs.get(node_id, ())
         )
@@ -3689,7 +3709,7 @@ class _Lowerer:
             contract_req = self._contract_request_for_spec(
                 spec,
                 structured_exec=structured_exec,
-                materialized=self._contract_payloads.get(node_id),
+                payload=self._contract_payloads.get(node_id),
             )
         contract_id = self._alloc_contract(contract_req)
 
@@ -3789,7 +3809,7 @@ class _Lowerer:
         contract_req = self._contract_request_for_spec(
             spec,
             structured_exec=spec.structured_exec,
-            materialized=self._contract_payloads.get(node_id),
+            payload=self._contract_payloads.get(node_id),
         )
         return IrExec(
             location=self._loc(span),

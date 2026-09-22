@@ -207,6 +207,9 @@ class TypeDef:
     ``doc``        — the declaration's recognized ``@doc`` prose, when present.
                    It is presentation metadata rather than part of the type's
                    semantic shape, so it is excluded from equality/hashing.
+    ``field_docs`` — ``(field_name, doc)`` pairs for the OWN fields carrying
+                   ``@doc``, in declaration order; excluded from
+                   equality/hashing like ``doc``.
     """
 
     kind: TypeDefKind
@@ -226,6 +229,7 @@ class TypeDef:
     external_name: ExternalName = NO_EXTERNAL_NAME
     field_external_names: tuple[tuple[str, ExternalName], ...] = ()
     doc: str | None = field(default=None, compare=False)
+    field_docs: tuple[tuple[str, str], ...] = field(default=(), compare=False)
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
         """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
@@ -1077,9 +1081,13 @@ class TypeTable:
         """Return the ``@name``/``@json-name`` spellings of record *handle*'s declaration."""
         return self._require_record_def(handle, caller="external_name").external_name
 
-    def record_doc(self, handle: RecordType) -> str | None:
-        """Return a record/member declaration's recognized ``@doc`` prose."""
-        return self._require_record_def(handle, caller="record_doc").doc
+    def declaration_doc(self, handle: RecordType | EnumType) -> str | None:
+        """Return a record, member, or enum declaration's recognized ``@doc`` prose."""
+        return self._defs[handle.decl_id].doc
+
+    def field_docs(self, handle: RecordType) -> Mapping[str, str]:
+        """Return the ``@doc`` prose of record *handle*'s documented fields."""
+        return dict(self._require_record_def(handle, caller="field_docs").field_docs)
 
     def json_fields(self, handle: RecordType | ExceptionType) -> tuple[tuple[str, str, Type], ...]:
         """Return every field of *handle* as ``(declared_name, json_name, field_type)``.

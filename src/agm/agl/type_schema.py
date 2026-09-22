@@ -19,6 +19,10 @@ The decode plan (a :class:`~agm.agl.ir.contracts.DecodeSchema` root plus its
 ``$defs`` table) is used by the IR evaluator to reconstruct typed ``Value``
 objects from validated JSON without holding checker ``Type`` references.
 
+:func:`derive_schema_decode_and_tree` also describes a type-directed extern's
+target as a typeless :class:`~agm.agl.ir.contracts.TypeTree` from the same
+recursion plan, keyed and ordered like the decode plan's ``$defs``.
+
 Derivation rules:
 - ``text``    → ``{"type": "string"}``
 - ``int``     → ``{"type": "integer"}``
@@ -90,7 +94,13 @@ from agm.agl.ir.contracts import (
     ScalarDecode,
     ScalarEncode,
     ScalarKind,
+    TypeNode,
+    TypeNodeField,
+    TypeNodeKind,
+    TypeNodeRef,
     TypeParameterEncode,
+    TypeTree,
+    TypeTreeEntry,
     VariantDecode,
     VariantEncode,
 )
@@ -208,32 +218,65 @@ def derive_schema_and_decode(
         wire-serialised), or if *typ* has no finite JSON schema (see
         ``TypeTable.has_finite_schema``).
     """
+    plan = _wire_plan(typ, type_table)
+    return _emit_schema_with_plan(typ, type_table, plan), _build_decode_plan(typ, type_table, plan)
+
+
+def derive_schema_decode_and_tree(
+    typ: Type, type_table: TypeTable
+) -> tuple[dict[str, object], DecodePlan, TypeTree]:
+    """Derive *typ*'s JSON Schema, decode plan, and ``TypeTree`` from one shared recursion plan.
+
+    See :func:`derive_schema_and_decode`; the tree's ``defs`` are keyed and
+    ordered like the decode plan's.
+    """
+    plan = _wire_plan(typ, type_table)
+    return (
+        _emit_schema_with_plan(typ, type_table, plan),
+        _build_decode_plan(typ, type_table, plan),
+        _build_type_tree(typ, type_table, plan),
+    )
+
+
+def _wire_plan(typ: Type, type_table: TypeTable) -> _SchemaPlan:
+    """Build *typ*'s recursion plan, rejecting a type with no JSON Schema up front."""
     if isinstance(typ, ExceptionType):
         raise TypeError(
             f"ExceptionType {typ.name!r} has no JSON Schema; exceptions are not "
             "wire-serialised by the JSON codec."
         )
     _require_finite_schema(typ, type_table, "derive a JSON Schema/decode plan")
-    plan = _plan_schema(typ, type_table)
-    return _emit_schema_with_plan(typ, type_table, plan), _build_decode_plan(typ, type_table, plan)
+    return _plan_schema(typ, type_table)
 
 
 def _emit(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
     """Emit *typ*'s schema, ``$ref``-ing it out if it is itself a recursive instantiation."""
-    schema_type = type_table.canonical_schema_type(typ)
-    if isinstance(schema_type, (RecordType, EnumType)) and schema_type in plan.hoisted:
-        return {"$ref": f"#/$defs/{plan.keys[schema_type]}"}
-    return _emit_body(schema_type, type_table, plan)
+    return _emit_planned(
+        typ,
+        type_table,
+        plan,
+        plan.schemas,
+        lambda body_type: _emit_body(body_type, type_table, plan),
+        lambda key: {"$ref": f"#/$defs/{key}"},
+    )
 
 
 def _emit_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
-    """Emit *typ*'s own schema body, never ``$ref``-ing *typ* itself.
+    """Emit *typ*'s own schema body once per plan, never ``$ref``-ing *typ* itself.
 
     Used both for an ordinary (non-recursive) type and for a recursive
     instantiation's own ``"$defs"`` entry — nested fields still route through
     :func:`_emit`, so a recursive instantiation's OWN fields are ``$ref``'d
     exactly like any other occurrence.
     """
+    body = plan.bodies.get(typ)
+    if body is None:
+        body = plan.bodies[typ] = _derive_body(typ, type_table, plan)
+    return body
+
+
+def _derive_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
+    """Derive *typ*'s own schema body; see :func:`_emit_body`."""
     if isinstance(typ, TextType):
         return {"type": "string"}
     if isinstance(typ, IntType):
@@ -294,26 +337,39 @@ def _enum_schema(typ: EnumType, type_table: TypeTable, plan: _SchemaPlan) -> dic
     names. A documented member carries its ``@doc`` prose as the alternative's
     ``description`` annotation.
     """
-    variant_schemas: list[object] = []
-    for variant_name, member in type_table.enum_member_names(typ).items():
-        required: list[str] = ["$case"]
-        properties: dict[str, object] = {
-            "$case": {"const": _member_tag(member, variant_name, type_table)},
-        }
-        for _field_name, json_name, field_type in type_table.json_fields(member):
-            properties[json_name] = _emit(field_type, type_table, plan)
-            required.append(json_name)
-        variant_schema: dict[str, object] = {
-            "type": "object",
-            "additionalProperties": False,
-            "required": required,
-            "properties": properties,
-        }
-        doc = type_table.record_doc(member)
-        if doc is not None:
-            variant_schema["description"] = doc
-        variant_schemas.append(variant_schema)
-    return {"oneOf": variant_schemas}
+    return {
+        "oneOf": [
+            _variant_schema(member, variant_name, type_table, plan)
+            for variant_name, member in type_table.enum_member_names(typ).items()
+        ]
+    }
+
+
+def _variant_schema(
+    member: RecordType, variant_name: str, type_table: TypeTable, plan: _SchemaPlan
+) -> dict[str, object]:
+    """Emit one enum member's ``oneOf`` alternative once per plan."""
+    cached = plan.variants.get(member)
+    if cached is not None:
+        return cached
+    required: list[str] = ["$case"]
+    properties: dict[str, object] = {
+        "$case": {"const": _member_tag(member, variant_name, type_table)},
+    }
+    for _field_name, json_name, field_type in type_table.json_fields(member):
+        properties[json_name] = _emit(field_type, type_table, plan)
+        required.append(json_name)
+    variant_schema: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": required,
+        "properties": properties,
+    }
+    doc = type_table.declaration_doc(member)
+    if doc is not None:
+        variant_schema["description"] = doc
+    plan.variants[member] = variant_schema
+    return variant_schema
 
 
 # ---------------------------------------------------------------------------
@@ -337,12 +393,17 @@ class _SchemaPlan:
     instantiations in first-encounter (breadth-first) order, the order ``$defs``
     entries are built in and the order key collisions are resolved in.
     ``keys`` — each hoisted instantiation's ``$defs`` key (see
-    :func:`_assign_defs_keys`).
+    :func:`_assign_defs_keys`).  ``schemas``/``bodies``/``variants`` memoize
+    the JSON Schema fragments emitted under this plan: each canonical type's
+    occurrence and own body, and each enum member's alternative.
     """
 
     hoisted: frozenset[Instantiation]
     order: tuple[Instantiation, ...]
     keys: dict[Instantiation, str] = field(default_factory=dict)
+    schemas: dict[Type, dict[str, object]] = field(default_factory=dict)
+    bodies: dict[Type, dict[str, object]] = field(default_factory=dict)
+    variants: dict[RecordType, dict[str, object]] = field(default_factory=dict)
 
 
 def _plan_schema(typ: Type, type_table: TypeTable) -> _SchemaPlan:
@@ -554,20 +615,36 @@ def _build_decode_plan(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") ->
     return DecodePlan(root=root, defs=defs)
 
 
-def _emit_decode(
-    typ: Type, type_table: TypeTable, plan: "_SchemaPlan", memo: dict[Type, DecodeSchema]
-) -> DecodeSchema:
-    """Emit *typ*'s decode schema, ``RefDecode``-ing it out if it is a recursive instantiation."""
+def _emit_planned[S](
+    typ: Type,
+    type_table: TypeTable,
+    plan: "_SchemaPlan",
+    memo: dict[Type, S],
+    body: "Callable[[Type], S]",
+    ref: "Callable[[str], S]",
+) -> S:
+    """Emit *typ* once per plan: a *ref* to its ``$defs`` key when hoisted, else its *body*."""
     schema_type = type_table.canonical_schema_type(typ)
     cached = memo.get(schema_type)
     if cached is not None:
         return cached
-    if isinstance(schema_type, (RecordType, EnumType)) and schema_type in plan.hoisted:
-        emitted: DecodeSchema = RefDecode(plan.keys[schema_type])
-    else:
-        emitted = _emit_decode_body(schema_type, type_table, plan, memo)
+    emitted = ref(plan.keys[schema_type]) if schema_type in plan.hoisted else body(schema_type)
     memo[schema_type] = emitted
     return emitted
+
+
+def _emit_decode(
+    typ: Type, type_table: TypeTable, plan: "_SchemaPlan", memo: dict[Type, DecodeSchema]
+) -> DecodeSchema:
+    """Emit *typ*'s decode schema, ``RefDecode``-ing it out if it is a recursive instantiation."""
+    return _emit_planned(
+        typ,
+        type_table,
+        plan,
+        memo,
+        lambda body_type: _emit_decode_body(body_type, type_table, plan, memo),
+        RefDecode,
+    )
 
 
 def _emit_decode_body(
@@ -631,6 +708,120 @@ def _emit_decode_body(
     # decodable from JSON and are rejected by the checker before lowering.
     raise AssertionError(  # pragma: no cover
         f"undecodable type {typ!r}"
+    )
+
+
+def _build_type_tree(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> TypeTree:
+    """Build *typ*'s ``TypeTree`` (root + ``defs``) from an already-built plan."""
+    memo: dict[Type, TypeTreeEntry] = {}
+    return TypeTree(
+        root=_emit_tree(typ, type_table, plan, memo),
+        defs=tuple(
+            (plan.keys[handle], _emit_tree_body(handle, type_table, plan, memo))
+            for handle in plan.order
+        ),
+    )
+
+
+_SCALAR_NODE_KINDS: dict[type[Type], TypeNodeKind] = {
+    TextType: TypeNodeKind.TEXT,
+    IntType: TypeNodeKind.INT,
+    DecimalType: TypeNodeKind.DECIMAL,
+    BoolType: TypeNodeKind.BOOL,
+    JsonType: TypeNodeKind.JSON,
+}
+
+
+def _emit_tree(
+    typ: Type, type_table: TypeTable, plan: _SchemaPlan, memo: dict[Type, TypeTreeEntry]
+) -> TypeTreeEntry:
+    """Emit *typ*'s tree entry, ``TypeNodeRef``-ing it out if it is hoisted."""
+    return _emit_planned(
+        typ,
+        type_table,
+        plan,
+        memo,
+        lambda body_type: _emit_tree_body(body_type, type_table, plan, memo),
+        TypeNodeRef,
+    )
+
+
+def _emit_tree_body(
+    typ: Type, type_table: TypeTable, plan: _SchemaPlan, memo: dict[Type, TypeTreeEntry]
+) -> TypeNode:
+    """Emit *typ*'s own tree node, never ``TypeNodeRef``-ing *typ* itself."""
+    schema = json.dumps(_emit_body(typ, type_table, plan))
+    label = repr(typ)
+    if isinstance(typ, ArrayType):
+        return TypeNode(
+            TypeNodeKind.ARRAY, label, schema, items=_emit_tree(typ.elem, type_table, plan, memo)
+        )
+    if isinstance(typ, DictType):
+        return TypeNode(
+            TypeNodeKind.DICT, label, schema, values=_emit_tree(typ.value, type_table, plan, memo)
+        )
+    if isinstance(typ, RecordType):
+        return _nominal_tree_node(
+            TypeNodeKind.RECORD,
+            typ,
+            schema,
+            type_table,
+            fields=_emit_tree_fields(typ, type_table, plan, memo),
+        )
+    if isinstance(typ, EnumType):
+        return _nominal_tree_node(
+            TypeNodeKind.ENUM,
+            typ,
+            schema,
+            type_table,
+            members=tuple(
+                (
+                    _member_tag(member, name, type_table),
+                    _nominal_tree_node(
+                        TypeNodeKind.MEMBER,
+                        member,
+                        json.dumps(_variant_schema(member, name, type_table, plan)),
+                        type_table,
+                        fields=_emit_tree_fields(member, type_table, plan, memo),
+                    ),
+                )
+                for name, member in type_table.enum_member_names(typ).items()
+            ),
+        )
+    # Every non-scalar data type is handled above; the schema emitter has
+    # already rejected every non-data type.
+    return TypeNode(_SCALAR_NODE_KINDS[type(typ)], label, schema)
+
+
+def _nominal_tree_node(
+    kind: TypeNodeKind,
+    handle: RecordType | EnumType,
+    schema: str,
+    type_table: TypeTable,
+    *,
+    fields: tuple[TypeNodeField, ...] = (),
+    members: tuple[tuple[str, TypeNode], ...] = (),
+) -> TypeNode:
+    """Build a record, enum, or member node carrying its declaration's doc and identity."""
+    return TypeNode(
+        kind,
+        repr(handle),
+        schema,
+        doc=type_table.declaration_doc(handle),
+        nominal=NominalId(handle.decl_id),
+        fields=fields,
+        members=members,
+    )
+
+
+def _emit_tree_fields(
+    handle: RecordType, type_table: TypeTable, plan: _SchemaPlan, memo: dict[Type, TypeTreeEntry]
+) -> tuple[TypeNodeField, ...]:
+    """Build one record/member's field entries, JSON-keyed and documented."""
+    docs = type_table.field_docs(handle)
+    return tuple(
+        TypeNodeField(name, json_name, docs.get(name), _emit_tree(ftype, type_table, plan, memo))
+        for name, json_name, ftype in type_table.json_fields(handle)
     )
 
 
@@ -762,19 +953,14 @@ def _emit_encode(
     typ: Type, type_table: TypeTable, plan: _SchemaPlan, memo: dict[Type, EncodeSchema]
 ) -> EncodeSchema:
     """Emit *typ*'s encoder, referencing recursive bodies through ``defs``."""
-    schema_type = type_table.canonical_schema_type(typ)
-    cached = memo.get(schema_type)
-    if cached is not None:
-        return cached
-    if (
-        isinstance(schema_type, (RecordType, EnumType, ExceptionType))
-        and schema_type in plan.hoisted
-    ):
-        emitted: EncodeSchema = RefEncode(plan.keys[schema_type])
-    else:
-        emitted = _emit_encode_body(schema_type, type_table, plan, memo)
-    memo[schema_type] = emitted
-    return emitted
+    return _emit_planned(
+        typ,
+        type_table,
+        plan,
+        memo,
+        lambda body_type: _emit_encode_body(body_type, type_table, plan, memo),
+        RefEncode,
+    )
 
 
 def _emit_encode_body(

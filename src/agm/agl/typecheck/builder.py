@@ -135,6 +135,11 @@ def _mutable_field_names(fields: Sequence[Param]) -> frozenset[str]:
     return frozenset(field.name for field in fields if field.mutable)
 
 
+def _field_facts[V](fields: Sequence[Param], facts: Mapping[int, V]) -> tuple[tuple[str, V], ...]:
+    """Return ``(field_name, fact)`` for each of *fields* with an entry in *facts*, in order."""
+    return tuple((fd.name, facts[fd.node_id]) for fd in fields if fd.node_id in facts)
+
+
 def _bare_name(name: str) -> str:
     """Strip the scope prefix off a joined declaration name.
 
@@ -630,6 +635,7 @@ class _TypeBuilder:
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
             external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
             field_external_names=self._field_external_names(stmt.fields),
+            field_docs=self._field_docs(stmt.fields),
             doc=self._attributes.docs.get(stmt.node_id),
         )
         self._resolved_defs[stmt.name] = typedef
@@ -728,6 +734,7 @@ class _TypeBuilder:
                 is_inline_enum_member=True,
                 external_name=self._attributes.external_names.get(vd.node_id, NO_EXTERNAL_NAME),
                 field_external_names=self._field_external_names(vd.fields),
+                field_docs=self._field_docs(vd.fields),
                 doc=self._attributes.docs.get(vd.node_id),
             )
             member_defs.append(member_def)
@@ -838,6 +845,7 @@ class _TypeBuilder:
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
             field_external_names=self._field_external_names(stmt.fields),
+            field_docs=self._field_docs(stmt.fields),
             doc=self._attributes.docs.get(stmt.node_id),
         )
         self._resolved_defs[stmt.name] = typedef
@@ -911,11 +919,11 @@ class _TypeBuilder:
         self, fields: Sequence[Param]
     ) -> tuple[tuple[str, ExternalName], ...]:
         """Return the OWN ``@name``/``@json-name`` pairs of *fields*, in declaration order."""
-        return tuple(
-            (fd.name, self._attributes.external_names[fd.node_id])
-            for fd in fields
-            if fd.node_id in self._attributes.external_names
-        )
+        return _field_facts(fields, self._attributes.external_names)
+
+    def _field_docs(self, fields: Sequence[Param]) -> tuple[tuple[str, str], ...]:
+        """Return the OWN ``@doc`` pairs of *fields*, in declaration order."""
+        return _field_facts(fields, self._attributes.docs)
 
     def _check_field_external_names(
         self,
@@ -1044,6 +1052,7 @@ class _TypeBuilder:
             decl_node_id=template.decl_id,
             external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
             field_external_names=self._field_external_names(stmt.fields),
+            field_docs=self._field_docs(stmt.fields),
             doc=self._attributes.docs.get(stmt.node_id),
         )
         self._resolved_defs[stmt.name] = typedef

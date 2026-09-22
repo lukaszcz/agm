@@ -13,12 +13,14 @@ opaque ``ContractValue``s delivered to the companion.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 
 import pytest
 
+from agm.agl.ir.contracts import TypeNode, TypeNodeKind, TypeNodeRef, TypeTree, TypeTreeEntry
 from agm.agl.ir.ids import ContractId, FunctionId
 from agm.agl.ir.nodes import (
     IrConstInt,
@@ -884,3 +886,227 @@ class TestContractDelivery:
 def test_contract_value_is_not_data() -> None:
     with pytest.raises(AglNonDataValue):
         value_to_json_obj(ContractValue(ContractId(0)))
+
+
+# ---------------------------------------------------------------------------
+# Contract type trees: the typeless target description of each occurrence
+# ---------------------------------------------------------------------------
+
+_DOCUMENTED_TEAM = (
+    '@doc("The owning team.")\n'
+    "enum Team\n"
+    '  | @doc("Invoices and refunds.") @json-name("billing") Billing\n'
+    "  | Technical\n"
+)
+
+
+def _tree(program: ExecutableProgram, name: str = "query") -> TypeTree:
+    """Return the type tree of the single target contract of extern *name*'s single call."""
+    (call,) = _extern_calls(program, name)
+    operand = call.arguments[0]
+    assert isinstance(operand, IrContract)
+    tree = program.contracts[operand.contract_id].type_tree
+    assert tree is not None
+    return tree
+
+
+def _body(tree: TypeTree, entry: TypeTreeEntry) -> TypeNode:
+    """Resolve *entry* against *tree*'s definitions."""
+    if isinstance(entry, TypeNodeRef):
+        return dict(tree.defs)[entry.key]
+    return entry
+
+
+def _schema(node: TypeNode) -> object:
+    return json.loads(node.schema)
+
+
+def _display(program: ExecutableProgram, node: TypeNode) -> str:
+    assert node.nominal is not None
+    return program.nominals[node.nominal].display_name
+
+
+class TestContractTypeTree:
+    @pytest.mark.parametrize(
+        ("target", "kind", "schema"),
+        [
+            ("int", TypeNodeKind.INT, {"type": "integer"}),
+            ("text", TypeNodeKind.TEXT, {"type": "string"}),
+            ("decimal", TypeNodeKind.DECIMAL, {"type": "number"}),
+            ("bool", TypeNodeKind.BOOL, {"type": "boolean"}),
+            ("json", TypeNodeKind.JSON, {}),
+        ],
+    )
+    def test_scalar(self, tmp_path: Path, target: str, kind: TypeNodeKind, schema: object) -> None:
+        tree = _tree(_lower(_QUERY + f'let answer: {target} = query("q")\n0', tmp_path))
+        assert tree.defs == ()
+        assert isinstance(tree.root, TypeNode)
+        assert (tree.root.kind, tree.root.label, _schema(tree.root)) == (kind, target, schema)
+        assert (tree.root.doc, tree.root.nominal) == (None, None)
+        assert (tree.root.fields, tree.root.members) == ((), ())
+        assert (tree.root.items, tree.root.values) == (None, None)
+
+    def test_fieldless_enum_carries_docs_and_json_tags(self, tmp_path: Path) -> None:
+        program = _lower(_QUERY + _DOCUMENTED_TEAM + 'let team: Team = query("q")\n0', tmp_path)
+        root = _tree(program).root
+        assert isinstance(root, TypeNode)
+        assert (root.kind, root.label, root.doc) == (TypeNodeKind.ENUM, "Team", "The owning team.")
+        assert _display(program, root) == "Team"
+        schema = _schema(root)
+        assert isinstance(schema, dict)
+        assert [variant["properties"]["$case"] for variant in schema["oneOf"]] == [
+            {"const": "billing"},
+            {"const": "Technical"},
+        ]
+        assert [tag for tag, _member in root.members] == ["billing", "Technical"]
+        (_, billing), (_, technical) = root.members
+        assert (billing.kind, billing.doc) == (TypeNodeKind.MEMBER, "Invoices and refunds.")
+        assert (technical.kind, technical.doc) == (TypeNodeKind.MEMBER, None)
+        assert [_display(program, member) for member in (billing, technical)] == [
+            "Team::Billing",
+            "Team::Technical",
+        ]
+        assert _schema(billing) == schema["oneOf"][0]
+        assert billing.fields == technical.fields == ()
+
+    def test_record_fields_keep_order_names_tags_and_docs(self, tmp_path: Path) -> None:
+        program = _lower(
+            _QUERY + _DOCUMENTED_TEAM + '@doc("A triaged message.")\n'
+            "record Triage\n"
+            '  @doc("Is it urgent?") urgent: bool\n'
+            '  @doc("Who handles it?") @json-name("owner") team: Team\n'
+            "  notes: array[text]\n"
+            'let triage: Triage = query("q")\n0',
+            tmp_path,
+        )
+        root = _tree(program).root
+        assert isinstance(root, TypeNode)
+        assert (root.kind, root.label, root.doc) == (
+            TypeNodeKind.RECORD,
+            "Triage",
+            "A triaged message.",
+        )
+        assert _display(program, root) == "Triage"
+        assert [(f.json_name, f.name, f.doc) for f in root.fields] == [
+            ("urgent", "urgent", "Is it urgent?"),
+            ("owner", "team", "Who handles it?"),
+            ("notes", "notes", None),
+        ]
+        urgent, team, notes = (field.node for field in root.fields)
+        assert isinstance(urgent, TypeNode) and urgent.kind is TypeNodeKind.BOOL
+        assert isinstance(team, TypeNode) and team.doc == "The owning team."
+        assert [tag for tag, _member in team.members] == ["billing", "Technical"]
+        assert isinstance(notes, TypeNode) and notes.kind is TypeNodeKind.ARRAY
+        assert isinstance(notes.items, TypeNode) and notes.items.kind is TypeNodeKind.TEXT
+        schema = _schema(root)
+        assert isinstance(schema, dict)
+        assert list(schema["properties"]) == ["urgent", "owner", "notes"]
+
+    def test_generic_record_of_enum(self, tmp_path: Path) -> None:
+        program = _lower(
+            _QUERY + _DOCUMENTED_TEAM + "record Choice[C](choice: C, confidence: decimal)\n"
+            'let chosen = query::[Choice[Team]]("q")\n0',
+            tmp_path,
+        )
+        tree = _tree(program)
+        root = _body(tree, tree.root)
+        assert (root.kind, root.label) == (TypeNodeKind.RECORD, "Choice[Team]")
+        choice, confidence = root.fields
+        team = _body(tree, choice.node)
+        assert (team.kind, team.label) == (TypeNodeKind.ENUM, "Team")
+        assert [tag for tag, _member in team.members] == ["billing", "Technical"]
+        assert isinstance(confidence.node, TypeNode)
+        assert confidence.node.kind is TypeNodeKind.DECIMAL
+
+    def test_array_and_dict_of_optional_enum(self, tmp_path: Path) -> None:
+        program = _lower(
+            _QUERY
+            + _DOCUMENTED_TEAM
+            + 'let picks: dict[text, array[Option[Team]]] = query("q")\n0',
+            tmp_path,
+        )
+        tree = _tree(program)
+        root = tree.root
+        assert isinstance(root, TypeNode) and root.kind is TypeNodeKind.DICT
+        assert _schema(root) == {
+            "type": "object",
+            "additionalProperties": _schema_of(root.values),
+        }
+        array = root.values
+        assert isinstance(array, TypeNode) and array.kind is TypeNodeKind.ARRAY
+        option = array.items
+        assert isinstance(option, TypeNode)
+        assert option.kind is TypeNodeKind.ENUM
+        assert option.label.endswith("Option[Team]")
+        (none_tag, none), (some_tag, some) = option.members
+        assert (none_tag, none.fields, some_tag) == ("None", (), "Some")
+        (value,) = some.fields
+        assert _body(tree, value.node).doc == "The owning team."
+
+    def test_recursive_target_refers_to_its_definition(self, tmp_path: Path) -> None:
+        program = _lower(
+            _QUERY + "enum Tree\n  | Leaf(value: int)\n  | Node(left: Tree, right: Tree)\n"
+            'let tree: array[Tree] = query("q")\n0',
+            tmp_path,
+        )
+        request_tree = _tree(program)
+        root = request_tree.root
+        assert isinstance(root, TypeNode) and root.kind is TypeNodeKind.ARRAY
+        assert root.items == TypeNodeRef("Tree")
+        assert [key for key, _node in request_tree.defs] == ["Tree"]
+        tree = _body(request_tree, root.items)
+        assert (tree.kind, tree.label) == (TypeNodeKind.ENUM, "Tree")
+        (_, _leaf), (_, node) = tree.members
+        assert [field.node for field in node.fields] == [TypeNodeRef("Tree")] * 2
+        assert _schema(root) == {"type": "array", "items": {"$ref": "#/$defs/Tree"}}
+
+    def test_only_type_directed_contracts_carry_a_tree(self, tmp_path: Path) -> None:
+        program = _lower(
+            _QUERY + 'let answer: int = query("q")\n'
+            'let agent = AgentCommand("worker")\n'
+            'def later() -> int = ask("How many?", agent = agent)\n0',
+            tmp_path,
+        )
+        (call,) = _extern_calls(program, "query")
+        operand = call.arguments[0]
+        assert isinstance(operand, IrContract)
+        (ask_id,) = set(program.contracts) - {operand.contract_id}
+        assert program.contracts[operand.contract_id].type_tree is not None
+        assert program.contracts[ask_id].type_tree is None
+
+    def test_inline_member_fields_carry_docs(self, tmp_path: Path) -> None:
+        program = _lower(
+            _QUERY + "enum Shape\n"
+            '  | Circle(@doc("The radius.") radius: decimal, label: text)\n'
+            "  | Dot\n"
+            'let shape: Shape = query("q")\n0',
+            tmp_path,
+        )
+        root = _tree(program).root
+        assert isinstance(root, TypeNode)
+        (_, circle), (_, dot) = root.members
+        assert [(f.name, f.doc) for f in circle.fields] == [
+            ("radius", "The radius."),
+            ("label", None),
+        ]
+        assert dot.fields == ()
+
+    def test_generic_record_field_docs_survive_substitution(self, tmp_path: Path) -> None:
+        program = _lower(
+            _QUERY + "record Wrap[T]\n"
+            '  @doc("The wrapped value.") value: T\n'
+            "  count: int\n"
+            'let wrapped: Wrap[int] = query("q")\n0',
+            tmp_path,
+        )
+        root = _tree(program).root
+        assert isinstance(root, TypeNode)
+        assert (root.kind, root.label) == (TypeNodeKind.RECORD, "Wrap[int]")
+        value, count = root.fields
+        assert (value.name, value.doc, count.doc) == ("value", "The wrapped value.", None)
+        assert isinstance(value.node, TypeNode) and value.node.kind is TypeNodeKind.INT
+
+
+def _schema_of(entry: TypeTreeEntry | None) -> object:
+    assert isinstance(entry, TypeNode)
+    return _schema(entry)

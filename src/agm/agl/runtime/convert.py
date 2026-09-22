@@ -11,9 +11,9 @@ host parameter decoding:
   (``NaN`` / ``Infinity`` / ``-Infinity``) even when nested inside containers.
   Also rejects any trailing/leading non-whitespace and a lone surrogate
   escape.  Returns the raw parsed Python object.
-- :data:`AglValidator` / :func:`validator_for_schema` — the Draft 2020-12
-  validator AgL uses everywhere (see :func:`_is_integer_or_integral_decimal`
-  for its Decimal-aware ``integer`` check).
+- :func:`agl_validator_class` / :func:`validator_for_schema` — the Draft
+  2020-12 validator AgL uses everywhere, with a Decimal-aware ``integer``
+  check.
 - :func:`_clean_validation_message` — strip Python ``Decimal(...)`` reprs from
   jsonschema error messages before surfacing them to users.
 - :func:`decode_value` / :func:`_decode_scalar` — the typeless
@@ -32,12 +32,7 @@ import re
 from collections.abc import Mapping
 from decimal import Decimal
 from types import MappingProxyType
-from typing import assert_never
-
-from jsonschema import Draft202012Validator, TypeChecker
-from jsonschema import ValidationError as JsonschemaValidationError
-from jsonschema.protocols import Validator
-from jsonschema.validators import extend
+from typing import TYPE_CHECKING, assert_never
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
@@ -63,6 +58,11 @@ from agm.agl.semantics.values import (
 )
 from agm.util.unicode import loads_json
 
+if TYPE_CHECKING:
+    from jsonschema import TypeChecker
+    from jsonschema import ValidationError as JsonschemaValidationError
+    from jsonschema.protocols import Validator
+
 # ---------------------------------------------------------------------------
 # Internal exceptions
 # ---------------------------------------------------------------------------
@@ -85,37 +85,51 @@ class StrictJsonParseError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# AglValidator — Draft 2020-12 with a Decimal-aware "integer" type check
+# The AgL validator — Draft 2020-12 with a Decimal-aware "integer" type check
 # ---------------------------------------------------------------------------
 
 
-def _is_integer_or_integral_decimal(checker: TypeChecker, instance: object) -> bool:
-    """Accept the default JSON-Schema ``integer`` instances, plus an integral ``Decimal``.
+_VALIDATOR_CLASS: type[Validator] | None = None
 
-    A wire number written with a fraction or exponent parses as ``Decimal``
-    (``parse_float=Decimal``); an ``int`` target accepts it when integral, as
-    ``decimal as int`` would (``_decode_scalar`` then narrows it). Everything
-    else uses the base Draft 2020-12 check; ``bool`` is never accepted.
+
+def agl_validator_class() -> type[Validator]:
+    """Return the Draft 2020-12 validator class every AgL schema check uses.
+
+    Built on first use, so a run that validates nothing never imports
+    ``jsonschema``: it and its dependencies cost more to import than every
+    other third-party package the runtime loads put together.
+
+    Its ``integer`` check also accepts an integral ``Decimal``: a wire number
+    written with a fraction or exponent parses as ``Decimal``
+    (``parse_float=Decimal``), and an ``int`` target accepts it when integral,
+    as ``decimal as int`` would (:func:`_decode_scalar` then narrows it).
+    Everything else uses the base Draft 2020-12 check; ``bool`` is never
+    accepted.
     """
-    if isinstance(instance, Decimal):
-        return instance == instance.to_integral_value()
-    return Draft202012Validator.TYPE_CHECKER.is_type(instance, "integer")
+    global _VALIDATOR_CLASS
+    if _VALIDATOR_CLASS is None:
+        from jsonschema import Draft202012Validator
+        from jsonschema.validators import extend
 
+        base = Draft202012Validator.TYPE_CHECKER
 
-#: The Draft 2020-12 validator class used for every AgL JSON-Schema check;
-#: see :func:`_is_integer_or_integral_decimal` for its ``integer`` check.
-AglValidator = extend(
-    Draft202012Validator,
-    type_checker=Draft202012Validator.TYPE_CHECKER.redefine(
-        "integer", _is_integer_or_integral_decimal
-    ),
-)
+        def is_integer_or_integral_decimal(checker: TypeChecker, instance: object) -> bool:
+            if isinstance(instance, Decimal):
+                return instance == instance.to_integral_value()
+            return base.is_type(instance, "integer")
+
+        _VALIDATOR_CLASS = extend(
+            Draft202012Validator,
+            type_checker=base.redefine("integer", is_integer_or_integral_decimal),
+        )
+    return _VALIDATOR_CLASS
+
 
 _VALIDATOR_CACHE: dict[str, Validator] = {}
 
 
 def validator_for_schema(json_schema: str) -> Validator:
-    """Compile (and cache) an :data:`AglValidator` from its canonical JSON string.
+    """Compile (and cache) an AgL validator from its canonical JSON string.
 
     Shared by the cast path (``conversions``) and host param decoding
     (``params``) so identical schemas are compiled once.
@@ -123,7 +137,7 @@ def validator_for_schema(json_schema: str) -> Validator:
     validator = _VALIDATOR_CACHE.get(json_schema)
     if validator is None:
         schema_obj: object = json.loads(json_schema)
-        validator = AglValidator(schema_obj)
+        validator = agl_validator_class()(schema_obj)
         _VALIDATOR_CACHE[json_schema] = validator
     return validator
 

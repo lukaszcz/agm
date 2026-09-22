@@ -6,7 +6,8 @@ Covers:
    empty, malformed.
 3. validator_for_schema: the AgL Draft 2020-12 validator accepts an integral
    Decimal as ``integer`` (including through ``$ref``/``$defs``), rejects a
-   non-integral Decimal and bool, and caches by schema string.
+   non-integral Decimal and bool, caches by schema string, and loads
+   ``jsonschema`` only when something is validated.
 4. _clean_validation_message: Decimal repr is stripped from jsonschema messages.
 5. decode_value / _decode_scalar: all ScalarKind branches, array/dict/record/enum
    happy-path and every ValueError branch for 100% coverage.
@@ -15,6 +16,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from decimal import Decimal
 
@@ -258,6 +260,27 @@ class TestAglValidator:
         assert validator_for_schema('{"type": "integer"}') is validator_for_schema(
             '{"type": "integer"}'
         )
+
+    def test_loading_the_runtime_does_not_load_jsonschema(self) -> None:
+        """A run that validates nothing must not pay for ``jsonschema``.
+
+        It and its dependencies are the runtime's most expensive third-party
+        import, and every ``agm`` invocation that touches AgL pays module
+        import afresh in its own process.
+        """
+        script = (
+            "import sys\n"
+            "import agm.agl.runtime.codec\n"
+            "import agm.agl.runtime.convert as convert\n"
+            "assert 'jsonschema' not in sys.modules, sorted(sys.modules)\n"
+            'assert list(convert.validator_for_schema(\'{"type": "integer"}\')'
+            ".iter_errors(1)) == []\n"
+            "assert 'jsonschema' in sys.modules\n"
+        )
+
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+
+        assert result.returncode == 0, result.stderr
 
 
 # ---------------------------------------------------------------------------

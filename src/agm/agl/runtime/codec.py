@@ -21,7 +21,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol
 
 import json_repair
-from jsonschema import ValidationError as JsonschemaValidationError
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
@@ -34,8 +33,8 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.runtime.convert import (
     _EMPTY_DEFS,
-    AglValidator,
     _clean_validation_message,
+    agl_validator_class,
     decode_value,
 )
 from agm.agl.runtime.request import ValidationError
@@ -46,6 +45,8 @@ from agm.agl.type_schema import build_format_instructions, derive_schema_and_dec
 from agm.util.unicode import loads_json
 
 if TYPE_CHECKING:
+    from jsonschema import ValidationError as JsonschemaValidationError
+
     from agm.agl.runtime.contract import OutputContract
 
 DecodeDefsInput = Mapping[str, DecodeSchema] | tuple[tuple[str, DecodeSchema], ...]
@@ -485,6 +486,8 @@ def _make_validation_error(
     error: object, decode_schema: DecodeSchema, defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS
 ) -> ValidationError:
     """Map a jsonschema error into a structured :class:`ValidationError`."""
+    from jsonschema import ValidationError as JsonschemaValidationError
+
     if not isinstance(error, JsonschemaValidationError):
         return ValidationError(category="wrong_type", message=str(error), path="$", field=None)
 
@@ -633,7 +636,7 @@ def _validate_and_decode_core(
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
 ) -> ParseResult:
     """Validate *parsed_obj* against *schema_dict*, then decode to typed ``Value``."""
-    validator = AglValidator(schema_dict)
+    validator = agl_validator_class()(schema_dict)
     raw_errors: list[JsonschemaValidationError] = list(validator.iter_errors(parsed_obj))
     if raw_errors:
         errors_sorted = sorted(raw_errors, key=_path_sort_key)

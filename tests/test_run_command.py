@@ -13,7 +13,7 @@ import pytest
 
 from agm.cli_support.args import RunArgs
 from agm.commands import run as run_command
-from agm.config.general import RunConfig
+from agm.config.general import CommandSetting, RunConfig
 
 
 def _make_run_config(
@@ -29,13 +29,10 @@ def _make_run_config(
     """Build a :class:`RunConfig` with everything the caller did not name empty."""
 
     return RunConfig(
-        aliases=aliases or {},
-        default_memory_limit=memory_limit,
-        command_memory_limits=command_memory_limits or {},
-        default_swap_limit=swap_limit,
-        command_swap_limits=command_swap_limits or {},
-        default_pty=pty,
-        command_ptys=command_ptys or {},
+        alias=CommandSetting(default=None, overrides=aliases or {}),
+        memory=CommandSetting(default=memory_limit, overrides=command_memory_limits or {}),
+        swap=CommandSetting(default=swap_limit, overrides=command_swap_limits or {}),
+        pty=CommandSetting(default=pty, overrides=command_ptys or {}),
     )
 
 

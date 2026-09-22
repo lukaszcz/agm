@@ -487,7 +487,7 @@ def complete_run_command(ctx: click.Context, incomplete: str) -> list[str]:
     if run_config is not None:
         candidates.update(
             command_name
-            for command_name in run_config.aliases
+            for command_name in run_config.alias.overrides
             if command_name.startswith(incomplete)
         )
     return sorted(candidates)

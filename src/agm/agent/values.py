@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
+from agm.agent.spec import AgentClaude, AgentCodex, AgentPi, AgentSpec, payload_items
 
 __all__ = ["agent_spec_shape", "parse_agent_shorthand"]
 
@@ -45,15 +45,4 @@ def parse_agent_shorthand(text: str) -> AgentSpec | None:
 
 def agent_spec_shape(spec: AgentSpec) -> dict[str, object]:
     """Return the canonical external tagged-object shape for *spec*."""
-    if isinstance(spec, AgentCommand):
-        return {"$case": "AgentCommand", "command": spec.command}
-    if isinstance(spec, AgentClaude):
-        return {"$case": "AgentClaude", "model": spec.model, "thinking": spec.thinking}
-    if isinstance(spec, AgentCodex):
-        return {"$case": "AgentCodex", "model": spec.model, "thinking": spec.thinking}
-    return {
-        "$case": "AgentPi",
-        "provider": spec.provider,
-        "model": spec.model,
-        "thinking": spec.thinking,
-    }
+    return {"$case": type(spec).__name__, **payload_items(spec)}

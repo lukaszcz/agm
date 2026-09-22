@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import os
-from dataclasses import fields
 from typing import get_type_hints
 
 import pytest
 
-from agm.agent.spec import AGENT_SPECS, AgentClaude, AgentCodex, AgentCommand, AgentPi
+from agm.agent.spec import (
+    AGENT_SPECS,
+    AgentClaude,
+    AgentCodex,
+    AgentCommand,
+    AgentPi,
+    payload_fields,
+)
 from agm.agl import PipelineDriver
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.runtime.agents import agent_value as encode_agent_value
@@ -33,11 +39,9 @@ def test_host_specs_match_declared_agent_variants() -> None:
 
     assert set(AGENT_SPECS) == set(declared)
     for variant, spec_cls in AGENT_SPECS.items():
-        spec_fields = fields(spec_cls)
-        assert tuple(field.name for field in spec_fields) == spec_cls.PAYLOAD_FIELDS
-        assert spec_cls.PAYLOAD_FIELDS == declared[variant]
+        assert payload_fields(spec_cls) == declared[variant]
         hints = get_type_hints(spec_cls)
-        assert all(hints[field.name] is str for field in spec_fields)
+        assert all(hints[name] is str for name in payload_fields(spec_cls))
     assert all(
         isinstance(field_type, TextType)
         for payload in _agent_member_fields().values()

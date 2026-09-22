@@ -74,6 +74,7 @@ __all__ = [
     "IrConstText",
     "IrResource",
     "IrConstUnit",
+    "IrContract",
     "IrContains",
     "IrContinue",
     "IrConvert",
@@ -948,7 +949,10 @@ class IrCapture:
 
 @dataclass(frozen=True, slots=True)
 class UseDefault:
-    """Sentinel in IrDirectCall.arguments: use the param default for this arg."""
+    """Sentinel in IrDirectCall.arguments: use the param default for this arg.
+
+    ``param_index`` indexes the declared parameters, excluding leading ``IrContract`` operands.
+    """
 
     param_index: int
 
@@ -972,7 +976,10 @@ class IrMakeClosure:
 
 @dataclass(frozen=True, slots=True)
 class IrDirectCall:
-    """IR direct call to a named user function."""
+    """IR direct call to a named user function or extern.
+
+    A type-directed extern's call leads with one ``IrContract`` per target parameter.
+    """
 
     location: Location
     function_id: FunctionId
@@ -1070,6 +1077,18 @@ class IrSessionOpen:
     agent: "IrExpr"
     transport: "IrExpr | None"
     name: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrContract:
+    """IR operand: one target contract of a type-directed extern occurrence.
+
+    Leads the extern's call operands, one per target parameter in declaration
+    order; evaluates to an opaque ``ContractValue``.
+    """
+
+    location: Location
+    contract_id: ContractId
 
 
 @dataclass(frozen=True, slots=True)
@@ -1242,6 +1261,7 @@ IrExpr = (
     | IrMakeClosure
     | IrDirectCall
     | IrIndirectCall
+    | IrContract
     | IrPrint
     | IrRenderValue
     | IrCopyValue

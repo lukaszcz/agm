@@ -70,6 +70,7 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrContinue,
+    IrContract,
     IrConvert,
     IrCopyValue,
     IrDirectCall,
@@ -165,6 +166,7 @@ from agm.agl.semantics.values import (
     BoolValue,
     Cell,
     ConstructorValue,
+    ContractValue,
     DecimalValue,
     DictValue,
     ExceptionValue,
@@ -1112,8 +1114,10 @@ class IrInterpreter:
         desc = self._program.functions[fn_id]
         match desc.impl:
             case ExternFunctionBody() as extern:
-                extern_bound_values: list[Value] = []
-                for param, arg in zip(desc.params, arguments, strict=True):
+                # Leading target contracts precede the declared parameters' arguments.
+                contracts = arguments[: extern.target_count]
+                extern_bound_values = [self._eval(cast(IrExpr, arg)) for arg in contracts]
+                for param, arg in zip(desc.params, arguments[extern.target_count :], strict=True):
                     val = (
                         self._eval_extern_default(param)
                         if isinstance(arg, UseDefault)
@@ -1930,6 +1934,9 @@ class IrInterpreter:
                     if exc.span is None:
                         exc.span = node.location
                     raise
+
+            case IrContract(contract_id=contract_id):
+                return ContractValue(contract_id)
 
             case IrPrint(value=val_expr):
                 rendered = self._render_or_raise(self._eval(val_expr))

@@ -226,12 +226,19 @@ class ExternFunctionBody:
                           ``runtime.externs.ExternRegistry`` resolves it in the owning
                           module's companion, then the boundary walkers pass encoded
                           arguments positionally.
+    ``target_count``    — number of target type parameters; every direct call leads
+                          with that many ``IrContract`` operands before the declared
+                          parameters' arguments, and the companion receives them first.
+                          Its value occurrences always eta-expand around a direct call,
+                          so its raw closure is bound but never loaded or called
+                          indirectly (the deep validator rejects such an ``IrLoad``).
     The boundary dispatches on runtime values, so an extern retains no type
     schema after lowering.
     """
 
     name: str
     companion_name: str
+    target_count: int = 0
 
 
 FunctionImpl = IrFunctionBody | ExternFunctionBody

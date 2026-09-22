@@ -6,16 +6,31 @@ partial application) resolves it from explicit type arguments or the expected
 type and records one strict JSON contract spec per target parameter, in
 declaration order: a call and a declared partial application at the ``Call``
 node, a reference and a member partial application at the ``VarRef`` or
-``FieldAccess`` naming the extern.
+``FieldAccess`` naming the extern. Lowering turns each occurrence's contracts
+into leading ``IrContract`` operands of the extern call, which evaluate to
+opaque ``ContractValue``s delivered to the companion.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 
 import pytest
 
+from agm.agl.ir.ids import ContractId, FunctionId
+from agm.agl.ir.nodes import (
+    IrConstInt,
+    IrConstText,
+    IrContract,
+    IrDirectCall,
+    IrLoad,
+    UseDefault,
+)
+from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.parser import parse_program
+from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.types import (
     ArrayType,
@@ -27,6 +42,7 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
 )
+from agm.agl.semantics.values import ContractValue, TextValue
 from agm.agl.syntax.nodes import (
     Block,
     Call,
@@ -42,6 +58,8 @@ from agm.agl.typecheck import AglTypeError, CheckedModule, FunctionSignature, ch
 from agm.agl.typecheck.env import OutputContractSpec
 from tests.agl.ir_harness import (
     base_caps,
+    evaluate_ir_with_externs,
+    label_crossing_contracts,
     lower_extern_program,
     make_graph_from_files,
     write_companion_file,
@@ -579,3 +597,290 @@ class TestInventory:
         assert [
             (entry.codec_name, entry.target_type_label, entry.has_schema) for entry in entries
         ] == [("extern", "int", False)]
+
+
+# ---------------------------------------------------------------------------
+# Lowering: contracts become leading extern-call operands
+# ---------------------------------------------------------------------------
+
+_COMPANION = (
+    "def query(*args):\n    return args[0]\n"
+    "def pick(*args):\n    return args[0]\n"
+    "def classify(*args):\n    return args[0]\n"
+    "def convert(*args):\n    return args[0]\n"
+    "def rate(*args):\n    return args[0]\n"
+    "def same(*args):\n    return args[0]\n"
+    "def grade(*args):\n    return args[0]\n"
+    "def tally(*args):\n    return args[0]\n"
+)
+_CLASSIFY = "extern def classify[T](question: text, context: text) -> T\n"
+_BOX = (
+    "record Box(value: int)\n"
+    "extern def Box::convert[T](self) -> T\n"
+    "extern def Box::rate[T](self, question: text) -> T\n"
+    "let box = Box(value = 1)\n"
+)
+
+
+def _ir_nodes(node: object) -> Iterator[object]:
+    """Yield *node* and every IR node reachable through its dataclass fields."""
+    yield node
+    children: tuple[object, ...]
+    if isinstance(node, tuple):
+        children = node
+    elif is_dataclass(node) and not isinstance(node, type):
+        children = tuple(getattr(node, field.name) for field in fields(node))
+    else:
+        return
+    for child in children:
+        yield from _ir_nodes(child)
+
+
+def _program_nodes(program: ExecutableProgram) -> Iterator[object]:
+    for module in program.modules.values():
+        yield from _ir_nodes(module.initializers)
+    for function in program.functions.values():
+        yield from _ir_nodes(function.impl)
+
+
+def _extern_id(program: ExecutableProgram, name: str) -> FunctionId:
+    (function_id,) = (
+        function_id
+        for function_id, function in program.functions.items()
+        if isinstance(function.impl, ExternFunctionBody) and function.impl.name == name
+    )
+    return function_id
+
+
+def _extern_body(program: ExecutableProgram, function_id: FunctionId) -> ExternFunctionBody:
+    impl = program.functions[function_id].impl
+    assert isinstance(impl, ExternFunctionBody)
+    return impl
+
+
+def _extern_calls(program: ExecutableProgram, name: str) -> list[IrDirectCall]:
+    """Return every direct call to extern *name*, in no particular order."""
+    function_id = _extern_id(program, name)
+    return [
+        node
+        for node in _program_nodes(program)
+        if isinstance(node, IrDirectCall) and node.function_id == function_id
+    ]
+
+
+def _leading_contracts(program: ExecutableProgram, call: IrDirectCall) -> list[str]:
+    """Return the target labels of *call*'s leading contracts, checking each is registered."""
+    count = _extern_body(program, call.function_id).target_count
+    assert not any(isinstance(operand, IrContract) for operand in call.arguments[count:])
+    labels: list[str] = []
+    for operand in call.arguments[:count]:
+        assert isinstance(operand, IrContract)
+        request = program.contracts[operand.contract_id]
+        assert (request.codec_name, request.strict_json, request.structured_exec) == (
+            "json",
+            True,
+            False,
+        )
+        labels.append(request.target_type_label)
+    return labels
+
+
+def _contract_ids(program: ExecutableProgram) -> list[ContractId]:
+    return [node.contract_id for node in _program_nodes(program) if isinstance(node, IrContract)]
+
+
+def _lower(source: str, tmp_path: Path) -> ExecutableProgram:
+    return lower_extern_program(source, _COMPANION, tmp_path)
+
+
+class TestTargetLowering:
+    def test_target_count_follows_the_target_parameters(self, tmp_path: Path) -> None:
+        program = _lower(
+            _QUERY + "extern def pick[A, B](question: text) -> int\n"
+            "extern def same[T](value: T) -> T\n0",
+            tmp_path,
+        )
+        counts = {
+            name: _extern_body(program, _extern_id(program, name)).target_count
+            for name in ("query", "pick", "same")
+        }
+        assert counts == {"query": 1, "pick": 2, "same": 0}
+
+    def test_direct_call(self, tmp_path: Path) -> None:
+        program = _lower(_QUERY + 'let answer: int = query("q")\nanswer', tmp_path)
+        (call,) = _extern_calls(program, "query")
+        assert _leading_contracts(program, call) == ["int"]
+        assert len(call.arguments) == 2
+
+    def test_contracts_keep_declaration_order(self, tmp_path: Path) -> None:
+        program = _lower(
+            "extern def pick[A, B](question: text) -> int\n"
+            'let picked = pick::[text, bool]("q")\npicked',
+            tmp_path,
+        )
+        (call,) = _extern_calls(program, "pick")
+        assert _leading_contracts(program, call) == ["text", "bool"]
+
+    def test_each_occurrence_registers_its_own_contract(self, tmp_path: Path) -> None:
+        program = _lower(_QUERY + 'let a: int = query("q")\nlet b: text = query("q")\nb', tmp_path)
+        calls = _extern_calls(program, "query")
+        assert sorted(label for call in calls for label in _leading_contracts(program, call)) == [
+            "int",
+            "text",
+        ]
+        ids = _contract_ids(program)
+        assert len(ids) == len(set(ids)) == 2
+
+    def test_omitted_argument_keeps_its_declared_default_slot(self, tmp_path: Path) -> None:
+        program = _lower(
+            "extern def query[T](question: text, retries: int = 1) -> T\n"
+            'let answer: int = query("q")\nanswer',
+            tmp_path,
+        )
+        (call,) = _extern_calls(program, "query")
+        assert _leading_contracts(program, call) == ["int"]
+        assert call.arguments[2] == UseDefault(param_index=1)
+
+    def test_method_call(self, tmp_path: Path) -> None:
+        program = _lower(_BOX + "let converted: text = box.convert()\nconverted", tmp_path)
+        (call,) = _extern_calls(program, "convert")
+        assert _leading_contracts(program, call) == ["text"]
+        assert len(call.arguments) == 2
+
+    def test_method_default_follows_the_leading_contract(self, tmp_path: Path) -> None:
+        program = _lower(
+            _BOX + "extern def Box::grade[T](self, question: text, retries: int = 1) -> T\n"
+            'let graded: int = box.grade("q")\ngraded',
+            tmp_path,
+        )
+        (call,) = _extern_calls(program, "grade")
+        assert _leading_contracts(program, call) == ["int"]
+        assert len(call.arguments) == 4
+        assert call.arguments[3] == UseDefault(param_index=2)
+
+    def test_named_arguments_follow_the_leading_contract(self, tmp_path: Path) -> None:
+        program = _lower(
+            "extern def tally[T](question: text, n: int) -> T\n"
+            'let counted: int = tally(n = 3, question = "q")\ncounted',
+            tmp_path,
+        )
+        (call,) = _extern_calls(program, "tally")
+        assert _leading_contracts(program, call) == ["int"]
+        question, n = call.arguments[1:]
+        assert isinstance(question, IrConstText) and question.value == "q"
+        assert isinstance(n, IrConstInt) and n.value == 3
+
+    def test_reference_eta_expands(self, tmp_path: Path) -> None:
+        program = _lower(
+            _QUERY + 'let ask-int = query::[int]\nask-int("q") + ask-int("r")', tmp_path
+        )
+        (call,) = _extern_calls(program, "query")
+        assert _leading_contracts(program, call) == ["int"]
+        assert isinstance(call.arguments[1], IrLoad)
+        assert len(_contract_ids(program)) == 1
+
+    def test_qualified_method_reference(self, tmp_path: Path) -> None:
+        program = _lower(
+            _BOX + "let convert-box: (Box) -> bool = Box::convert\nconvert-box(box)", tmp_path
+        )
+        (call,) = _extern_calls(program, "convert")
+        assert _leading_contracts(program, call) == ["bool"]
+        assert isinstance(call.arguments[1], IrLoad)
+
+    def test_bound_method_reference(self, tmp_path: Path) -> None:
+        program = _lower(_BOX + "let converted = box.convert::[text]\nconverted()", tmp_path)
+        (call,) = _extern_calls(program, "convert")
+        assert _leading_contracts(program, call) == ["text"]
+        assert len(call.arguments) == 2
+
+    def test_declared_partial_application(self, tmp_path: Path) -> None:
+        program = _lower(
+            _CLASSIFY + 'let classify-q = classify::[int]("q", ?)\nclassify-q("c")', tmp_path
+        )
+        (call,) = _extern_calls(program, "classify")
+        assert _leading_contracts(program, call) == ["int"]
+        assert len(call.arguments) == 3
+        assert len(_contract_ids(program)) == 1
+
+    def test_member_partial_application(self, tmp_path: Path) -> None:
+        program = _lower(_BOX + 'let rate-box = box.rate::[int](?)\nrate-box("q")', tmp_path)
+        (call,) = _extern_calls(program, "rate")
+        assert _leading_contracts(program, call) == ["int"]
+        assert len(call.arguments) == 3
+
+    def test_ordinary_extern_lowers_without_contracts(self, tmp_path: Path) -> None:
+        program = _lower(
+            "extern def same[T](value: T) -> T\nlet one = same(1)\n"
+            "let f: (int) -> int = same\nf(one)",
+            tmp_path,
+        )
+        (call,) = _extern_calls(program, "same")
+        assert len(call.arguments) == 1
+        assert _contract_ids(program) == []
+
+
+# ---------------------------------------------------------------------------
+# Runtime: contracts reach the companion as opaque leading arguments
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def labelled_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
+    label_crossing_contracts(monkeypatch)
+
+
+_ECHO = (
+    "def query(*args):\n    return ' '.join(args)\n"
+    "def rate(*args):\n    return ' '.join(a if isinstance(a, str) else 'self' for a in args)\n"
+    "convert = rate\n"
+)
+
+
+@pytest.mark.usefixtures("labelled_contracts")
+class TestContractDelivery:
+    def _run(self, source: str, tmp_path: Path) -> dict[str, str]:
+        bindings, _output = evaluate_ir_with_externs(source, _ECHO, tmp_path)
+        return {
+            name: value.value for name, value in bindings.items() if isinstance(value, TextValue)
+        }
+
+    def test_call_passes_contract_first(self, tmp_path: Path) -> None:
+        bindings = self._run(_QUERY + 'let answer: text = query("q")\nanswer', tmp_path)
+        contract, question = bindings["answer"].split()
+        assert contract.startswith("contract-")
+        assert question == "q"
+
+    def test_method_call_passes_contract_before_receiver(self, tmp_path: Path) -> None:
+        bindings = self._run(_BOX + 'let rated: text = box.rate("q")\nrated', tmp_path)
+        contract, receiver, question = bindings["rated"].split()
+        assert contract.startswith("contract-")
+        assert (receiver, question) == ("self", "q")
+
+    def test_occurrences_deliver_distinct_contracts(self, tmp_path: Path) -> None:
+        bindings = self._run(
+            _QUERY + 'let a: text = query("q")\nlet b: text = query("q")\nb', tmp_path
+        )
+        assert bindings["a"] != bindings["b"]
+
+    def test_reference_delivers_one_contract_per_occurrence(self, tmp_path: Path) -> None:
+        bindings = self._run(
+            _QUERY + "let ask-text = query::[text]\n"
+            'let a = ask-text("q")\nlet b = ask-text("q")\nb',
+            tmp_path,
+        )
+        assert bindings["a"] == bindings["b"]
+        assert bindings["a"].endswith(" q")
+
+    def test_partial_application_delivers_captured_contract(self, tmp_path: Path) -> None:
+        bindings = self._run(
+            "extern def query[T](question: text, context: text) -> T\n"
+            'let ask-q = query::[text]("q", ?)\nlet a = ask-q("c")\na',
+            tmp_path,
+        )
+        assert bindings["a"].split()[1:] == ["q", "c"]
+        assert bindings["a"].startswith("contract-")
+
+
+def test_contract_value_is_not_data() -> None:
+    with pytest.raises(AglNonDataValue):
+        value_to_json_obj(ContractValue(ContractId(0)))

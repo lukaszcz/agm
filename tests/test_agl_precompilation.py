@@ -17,6 +17,7 @@ from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
 from tests._agl_helpers import run_inline_command
+from tests.agl.ir_harness import label_crossing_contracts
 
 
 def _run(root: Path, source: str, *, dry_run: bool = False) -> subprocess.CompletedProcess[str]:
@@ -302,6 +303,44 @@ def test_precompiled_externs_use_current_companion_code(
         result = compile_again("import library::*\nprint(current())")
         assert result.ok, result.diagnostics
         assert capsys.readouterr().out == f"{value}\n"
+
+
+def test_precompiled_extern_target_contracts_round_trip(
+    tmp_path: Path,
+    compile_again: Callable[[str], RunResult],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reloaded library still leads its type-directed extern calls with their contracts."""
+    label_crossing_contracts(monkeypatch)
+    (tmp_path / "library.agl").write_text(
+        "builtin def print[T](value: T) -> unit\n"
+        "extern def query[T](question: text, context: text) -> T\n"
+        'def direct(question: text) -> text = query(question, "d")\n'
+        "def by-reference() -> (text, text) -> text = query\n"
+        'def by-partial() -> (text) -> text = query::[text]("p", ?)\n'
+    )
+    (tmp_path / "library.py").write_text("def query(*args):\n    return ' '.join(args)\n")
+    source = (
+        'import library::*\nprint(direct("q"))\nprint(by-reference()("r", "c"))\n'
+        'print(by-partial()("c"))'
+    )
+    outputs: list[str] = []
+    artifacts: dict[Path, int] = {}
+    for _ in range(2):
+        result = compile_again(source)
+        assert result.ok, result.diagnostics
+        outputs.append(capsys.readouterr().out)
+        if not artifacts:
+            artifacts = {path: path.stat().st_mtime_ns for path in tmp_path.rglob("*.ir")}
+    assert artifacts
+    assert {path: path.stat().st_mtime_ns for path in artifacts} == artifacts
+    first, second = outputs
+    assert first == second
+    lines = first.splitlines()
+    assert [line.split()[1:] for line in lines] == [["q", "d"], ["r", "c"], ["p", "c"]]
+    assert len({line.split()[0] for line in lines}) == 3
+    assert all(line.startswith("contract-") for line in lines)
 
 
 def test_cached_ir_tracks_resource_symlink_targets(

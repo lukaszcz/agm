@@ -41,7 +41,6 @@ from agm.agl.ir.contracts import (
     ContractPayload,
     ContractRequest,
     ConversionFailureMode,
-    DecodeSchema,
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -70,6 +69,7 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrContinue,
+    IrContract,
     IrConvert,
     IrCopyValue,
     IrDirectCall,
@@ -669,26 +669,54 @@ class _Lowerer:
         self._link.contracts[cid] = request
         return cid
 
-    def _contract_payload_for_spec(
-        self, node_id: int, spec: OutputContractSpec
-    ) -> tuple[str | None, str, DecodeSchema | None, tuple[tuple[str, DecodeSchema], ...]]:
-        """Return JSON schema, instructions, decode root, and defs for a contract spec."""
-        materialized = self._contract_payloads.get(node_id)
-        if materialized is not None:
-            return (
-                materialized.json_schema,
-                materialized.format_instructions,
-                materialized.decode,
-                materialized.defs,
-            )
+    def _derived_contract_payload(self, spec: OutputContractSpec) -> ContractPayload:
+        """Derive the codec payload of *spec* from its target type."""
         if spec.codec_name != "json":
-            return None, "", None, ()
+            return ContractPayload(json_schema=None, decode=None, format_instructions="")
         schema_dict, decode_plan = derive_schema_and_decode(spec.target_type, self._type_table)
-        return (
-            json.dumps(schema_dict),
-            build_format_instructions(schema_dict),
-            decode_plan.root,
-            decode_plan.defs,
+        return ContractPayload(
+            json_schema=json.dumps(schema_dict),
+            decode=decode_plan.root,
+            format_instructions=build_format_instructions(schema_dict),
+            defs=decode_plan.defs,
+        )
+
+    def _contract_request_for_spec(
+        self,
+        spec: OutputContractSpec,
+        *,
+        structured_exec: bool,
+        materialized: ContractPayload | None,
+    ) -> ContractRequest:
+        """Build the typeless contract request for one checked output contract spec.
+
+        *materialized* is a host-materialized payload replacing the derived one.
+        """
+        payload = materialized if materialized is not None else self._derived_contract_payload(spec)
+        return ContractRequest(
+            codec_name=spec.codec_name,
+            strict_json=spec.strict_json,
+            json_schema=payload.json_schema,
+            decode=payload.decode,
+            target_type_label=repr(spec.target_type),
+            structured_exec=structured_exec,
+            format_instructions=payload.format_instructions,
+            is_unit=isinstance(spec.target_type, UnitType),
+            target_type_kind=spec.target_type.kind,
+            target_type=spec.target_type,
+            defs=payload.defs,
+        )
+
+    def _target_contracts(self, node_id: int, span: SourceSpan) -> tuple[IrContract, ...]:
+        """Register and lower an extern occurrence's target contracts; empty for any other."""
+        return tuple(
+            IrContract(
+                location=self._loc(span),
+                contract_id=self._alloc_contract(
+                    self._contract_request_for_spec(spec, structured_exec=False, materialized=None)
+                ),
+            )
+            for spec in self._checked.target_contract_specs.get(node_id, ())
         )
 
     def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
@@ -1056,6 +1084,8 @@ class _Lowerer:
         ir_params, _sig, _param_decl_ids, param_labels, result_label = self._lower_declared_params(
             funcdef, fn_id
         )
+        signature = self._checked.type_env.get_function_signature_by_node_id(funcdef.node_id)
+        assert signature is not None
 
         desc = FunctionDescriptor(
             function_id=fn_id,
@@ -1065,6 +1095,7 @@ class _Lowerer:
             impl=ExternFunctionBody(
                 name=funcdef.name,
                 companion_name=self._checked.resolved.attributes.extern_names[funcdef.node_id],
+                target_count=len(signature.target_params),
             ),
             param_labels=param_labels,
             result_label=result_label,
@@ -1330,6 +1361,8 @@ class _Lowerer:
                     )
                 if ref.kind is BinderKind.function_binding and ref.is_builtin:
                     return self._lower_builtin_value(ref, nid, span)
+                if nid in self._checked.target_contract_specs:
+                    return self._lower_extern_target_value(ref, nid, span)
                 declaration = self._binding_references.declarations.get(ref.decl_node_id)
                 if self._substituting_constants and declaration is not None:
                     return self.lower_expr(declaration.value)
@@ -2297,6 +2330,24 @@ class _Lowerer:
 
         return self._make_partial_closure(function_type, span, (), build_body)
 
+    def _lower_extern_target_value(
+        self, ref: BindingRef, node_id: int, span: SourceSpan
+    ) -> IrMakeClosure:
+        """Eta-expand a type-directed extern reference around its occurrence's contracts."""
+        function_type = self._node_type(node_id)
+        assert isinstance(function_type, FunctionType)
+        loc = self._loc(span)
+
+        def build_body(param_symbols: tuple[SymbolId, ...]) -> IrExpr:
+            return self._lower_direct_call_with_args(
+                function_id=self._link.fn_node_to_id[ref.decl_node_id],
+                span=span,
+                arguments=tuple(IrLoad(location=loc, symbol=symbol) for symbol in param_symbols),
+                occurrence=node_id,
+            )
+
+        return self._make_partial_closure(function_type, span, (), build_body)
+
     def _lower_resolved_resource(self, path: str | None, span: SourceSpan) -> IrResource:
         """Resolve, record, and lower a resource relative to this module."""
         try:
@@ -2757,11 +2808,13 @@ class _Lowerer:
         function_id: FunctionId,
         span: SourceSpan,
         arguments: tuple[IrExpr | UseDefault, ...],
+        occurrence: int,
     ) -> IrDirectCall:
+        """Build a direct call led by the target contracts recorded at node *occurrence*."""
         return IrDirectCall(
             location=self._loc(span),
             function_id=function_id,
-            arguments=arguments,
+            arguments=(*self._target_contracts(occurrence, span), *arguments),
         )
 
     def _lower_direct_call(
@@ -2791,6 +2844,7 @@ class _Lowerer:
             function_id=fn_id,
             span=span,
             arguments=tuple(ir_args),
+            occurrence=result_node_id,
         )
 
     def _method_function_id(self, method: MethodDef) -> FunctionId:
@@ -2828,6 +2882,7 @@ class _Lowerer:
             function_id=self._method_function_id(method),
             span=span,
             arguments=tuple(ir_args),
+            occurrence=call_node.node_id,
         )
 
     def _lower_indirect_call_with_args(
@@ -3017,6 +3072,7 @@ class _Lowerer:
             function_id=fn_id,
             span=span,
             arguments=arguments,
+            occurrence=call_node.node_id,
         )
 
     def _partial_value_body(
@@ -3137,6 +3193,7 @@ class _Lowerer:
                 function_id=self._method_function_id(method),
                 span=node.span,
                 arguments=(receiver, *operands),
+                occurrence=node.node_id,
             )
 
         closure = self._make_partial_closure(bound_type, node.span, (receiver_capture,), build_body)
@@ -3629,21 +3686,10 @@ class _Lowerer:
                 target_type_kind="unit",
             )
         else:
-            json_schema_str, fmt_instr, decode_schema, decode_defs = (
-                self._contract_payload_for_spec(node_id, spec)
-            )
-            contract_req = ContractRequest(
-                codec_name=spec.codec_name,
-                strict_json=spec.strict_json,
-                json_schema=json_schema_str,
-                decode=decode_schema,
-                target_type_label=repr(spec.target_type),
+            contract_req = self._contract_request_for_spec(
+                spec,
                 structured_exec=structured_exec,
-                format_instructions=fmt_instr,
-                is_unit=False,
-                target_type_kind=spec.target_type.kind,
-                target_type=spec.target_type,
-                defs=decode_defs,
+                materialized=self._contract_payloads.get(node_id),
             )
         contract_id = self._alloc_contract(contract_req)
 
@@ -3740,21 +3786,10 @@ class _Lowerer:
         """Build an exec operation from already-lowered direct or closure operands."""
         spec = self._checked.contract_specs.get(node_id)
         assert spec is not None, "exec always has a contract spec after checking"
-        json_schema_str, fmt_instr, decode_schema, decode_defs = self._contract_payload_for_spec(
-            node_id, spec
-        )
-        contract_req = ContractRequest(
-            codec_name=spec.codec_name,
-            strict_json=spec.strict_json,
-            json_schema=json_schema_str,
-            decode=decode_schema,
-            target_type_label=repr(spec.target_type),
+        contract_req = self._contract_request_for_spec(
+            spec,
             structured_exec=spec.structured_exec,
-            format_instructions=fmt_instr,
-            is_unit=isinstance(spec.target_type, UnitType),
-            target_type_kind=spec.target_type.kind,
-            target_type=spec.target_type,
-            defs=decode_defs,
+            materialized=self._contract_payloads.get(node_id),
         )
         return IrExec(
             location=self._loc(span),

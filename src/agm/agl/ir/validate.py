@@ -6,6 +6,7 @@ Two tiers (validate_ir runs ONLY when explicitly called):
     * Location fields: ``start_offset >= 0``, ``start_line >= 1``,
       ``start_col >= 0``, ``start_offset <= end_offset``.
     * ``IrSequence`` and ``IrBlock`` must be non-empty.
+    * ``IrContract`` appears only among a direct call's leading operands.
 
 - **deep** — cheap checks PLUS cross-reference checks against the
   ``ExecutableProgram`` tables:
@@ -29,7 +30,10 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        from ``IrMakeClosure``/``IrDirectCall`` (or a symbol owner) must resolve
        there; extern boundary contracts are checked for internal consistency
        (registered nominals, type-variable positions matching their declared
-       type parameters).
+       type parameters). A direct call to an extern leads with one
+       ``IrContract`` per target parameter, registered in ``program.contracts``;
+       ``IrContract`` appears nowhere else, and no ``IrLoad`` reads the function
+       symbol of an extern with target parameters.
     8. Every non-engine module-qualified ``IrBuiltinLoad``/``IrBuiltinStore``
        and declared builtin-default key identifies a loaded host-backed binding
        declaration, including its scope path. Canonical root ``std/config``
@@ -112,6 +116,7 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrContinue,
+    IrContract,
     IrConvert,
     IrCopyValue,
     IrDirectCall,
@@ -120,7 +125,6 @@ from agm.agl.ir.nodes import (
     IrField,
     IrFieldMode,
     IrFieldSet,
-    IrFunctionParam,
     IrIf,
     IrIndex,
     IrIndexSet,
@@ -168,6 +172,7 @@ from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryO
 from agm.agl.ir.program import (
     ExecutableProgram,
     ExternFunctionBody,
+    FunctionDescriptor,
     IrFunctionBody,
     IrProgramParam,
     NominalKind,
@@ -215,6 +220,7 @@ class _Context:
         "program",
         "payload_requirements",
         "requirement_collectors",
+        "targeted_extern_symbols",
     )
 
     def __init__(
@@ -227,6 +233,15 @@ class _Context:
         self.program = program
         self.deep = deep
         self.check_payload_dominance = check_payload_dominance
+        # Function symbols of type-directed externs: never loaded, as every
+        # value occurrence eta-expands around its own contracts.
+        self.targeted_extern_symbols = frozenset(
+            function.function_symbol
+            for function in program.functions.values()
+            if deep
+            and isinstance(function.impl, ExternFunctionBody)
+            and function.impl.target_count > 0
+        )
         # Every symbol bound by an IrCase arm, inventoried as the traversal
         # meets each arm; complete once the traversal finishes.
         self.payload_symbols: set[SymbolId] = set()
@@ -673,16 +688,41 @@ def _check_ref_chain(
         current = next_key
 
 
-def _resolve_callable_params(
-    fn_id: FunctionId, ctx: _Context, node_desc: str
-) -> "tuple[IrFunctionParam, ...]":
-    """Resolve *fn_id* to its declared parameter tuple.
+def _leading_contract_count(
+    fn_id: FunctionId, arguments: tuple[IrExpr | UseDefault, ...], ctx: _Context
+) -> int:
+    """Return how many leading operands of a direct call are its extern's target contracts.
 
-    ``function_id``s resolve through the unified ``program.functions`` table.
+    Deep: the callee's ``target_count``, checked against arity and operand kinds.
+    Cheap: the run of leading ``IrContract`` operands, as no table is consulted.
     """
+    if not ctx.deep:
+        return next(
+            (i for i, arg in enumerate(arguments) if not isinstance(arg, IrContract)),
+            len(arguments),
+        )
+    fn_desc = _resolve_callable(fn_id, ctx, "IrDirectCall")
+    impl = fn_desc.impl
+    targets = impl.target_count if isinstance(impl, ExternFunctionBody) else 0
+    if len(arguments) != targets + len(fn_desc.params):
+        contracts = f"{targets} target contracts and " if targets else ""
+        raise InvalidIrError(
+            f"IrDirectCall to function_id={fn_id!r} has {len(arguments)}"
+            f" arguments but the function has {contracts}{len(fn_desc.params)} parameters"
+        )
+    if not all(isinstance(arg, IrContract) for arg in arguments[:targets]):
+        raise InvalidIrError(
+            f"IrDirectCall to function_id={fn_id!r}: each of its {targets}"
+            " leading operands must be an IrContract"
+        )
+    return targets
+
+
+def _resolve_callable(fn_id: FunctionId, ctx: _Context, node_desc: str) -> FunctionDescriptor:
+    """Resolve *fn_id* through the unified ``program.functions`` table."""
     fn_desc = ctx.program.functions.get(fn_id)
     if fn_desc is not None:
-        return fn_desc.params
+        return fn_desc
     raise InvalidIrError(
         f"{node_desc} references function_id={fn_id!r} which is not in program.functions"
     )
@@ -911,6 +951,11 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                     raise InvalidIrError(
                         f"IrLoad references symbol_id={node.symbol.value!r}"
                         " which is not in program.symbols"
+                    )
+                if node.symbol in ctx.targeted_extern_symbols:
+                    raise InvalidIrError(
+                        f"IrLoad of symbol_id={node.symbol.value!r} loads the raw closure of"
+                        " a type-directed extern, which has target contracts"
                     )
                 if ctx.check_payload_dominance and _is_payload_candidate(node.symbol, ctx):
                     ctx.requirement_collectors[-1].add(node.symbol)
@@ -1166,14 +1211,18 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 
         case IrDirectCall(function_id=fn_id, arguments=arguments):
             _validate_location(node.location, ctx)
-            if ctx.deep:
-                params = _resolve_callable_params(fn_id, ctx, "IrDirectCall")
-                if len(arguments) != len(params):
+            targets = _leading_contract_count(fn_id, arguments, ctx)
+            for contract in arguments[:targets]:
+                assert isinstance(contract, IrContract)
+                _validate_location(contract.location, ctx)
+                if ctx.deep and contract.contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
-                        f"IrDirectCall to function_id={fn_id!r} has {len(arguments)}"
-                        f" arguments but the function has {len(params)} parameters"
+                        f"IrContract references contract_id={contract.contract_id!r}"
+                        " which is not in program.contracts"
                     )
-                for index, arg in enumerate(arguments):
+            if ctx.deep:
+                params = ctx.program.functions[fn_id].params
+                for index, arg in enumerate(arguments[targets:]):
                     if isinstance(arg, UseDefault):
                         if arg.param_index != index:
                             raise InvalidIrError(
@@ -1186,9 +1235,14 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                                 f"IrDirectCall to function_id={fn_id!r}: UseDefault for"
                                 f" parameter {index} which has no default"
                             )
-            for arg in arguments:
+            for arg in arguments[targets:]:
                 if not isinstance(arg, UseDefault):
                     _validate_expr(arg, ctx)
+
+        case IrContract():
+            raise InvalidIrError(
+                "IrContract is legal only as a leading operand of an IrDirectCall to an extern"
+            )
 
         case IrIndirectCall(callee=callee, arguments=arguments):
             _validate_location(node.location, ctx)

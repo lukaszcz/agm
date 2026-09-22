@@ -935,6 +935,21 @@ class CheckedModuleImage:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class DeclaredHeaderSeed:
+    """The declared-header tables every module environment in a program starts from.
+
+    The whole-program function-signature pre-pass yields the same declared
+    headers for every module, so they are collected once and copied into each
+    environment instead of being re-registered per module.
+    """
+
+    binding_types: PersistentDict[int, Type]
+    signatures: dict[str, FunctionSignature]
+    signatures_by_node_id: dict[int, FunctionSignature]
+    extern_node_ids: set[int]
+
+
 class TypeEnvironment:
     """Mutable type environment used during the type-checking pass.
 
@@ -990,6 +1005,7 @@ class TypeEnvironment:
         scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
+        declared_seed: DeclaredHeaderSeed | None = None,
     ) -> None:
         # Shared nominal type-declaration table (dual-write target alongside
         # ``_types``): defaults to a fresh table seeded with built-in prelude
@@ -1005,11 +1021,15 @@ class TypeEnvironment:
         self._alias_targets: dict[str, TypeExpr] = {}
         self._resolved_aliases: dict[str, GenericAliasDef] = {}
         # Binding node_id → Type (populated as declarations are checked).
-        self._binding_types: PersistentDict[int, Type] = PersistentDict()
+        self._binding_types: PersistentDict[int, Type] = (
+            PersistentDict() if declared_seed is None else declared_seed.binding_types.fork()
+        )
         # Root-scope function signatures by unqualified name: a compatibility
         # map for standalone callers that only know an unqualified spelling;
         # resolved calls use declaration ids.
-        self._function_signatures: dict[str, FunctionSignature] = {}
+        self._function_signatures: dict[str, FunctionSignature] = (
+            {} if declared_seed is None else dict(declared_seed.signatures)
+        )
         # Generic type definitions — name → GenericTypeDef.
         self._generic_types: dict[str, GenericTypeDef] = {}
         # Constructor signatures — ((module, scope path, owner), variant) → signature.
@@ -1022,14 +1042,18 @@ class TypeEnvironment:
         # so _check_declared_name_call can look up the correct cross-module callee
         # by globally unique decl_node_id rather than by bare name (which would
         # collide when modules define different same-named functions).
-        self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
+        self._function_signatures_by_node_id: dict[int, FunctionSignature] = (
+            {} if declared_seed is None else dict(declared_seed.signatures_by_node_id)
+        )
         # Declaration node_ids of ``extern def``s, keyed by the same globally-unique
         # decl_node_id as ``_function_signatures_by_node_id``.  Populated by
         # ``_preregister_funcdef`` (this module's own externs) and by the program
         # function-signature pre-pass seeding (imported externs).  Consulted by
         # ``_check_declared_name_call`` to decide whether a declared-name call
         # site is an extern call site to record.
-        self._extern_node_ids: set[int] = set()
+        self._extern_node_ids: set[int] = (
+            set() if declared_seed is None else set(declared_seed.extern_node_ids)
+        )
         # Constructor field-kinds registry — ((module, scope path, owner), variant)
         # → ordered (field_name, ParamZone) pairs. Populated by _TypeBuilder
         # and consumed without encoding declaration paths into strings.

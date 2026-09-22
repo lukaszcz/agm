@@ -99,6 +99,7 @@ from agm.agl.scope.program import ResolvedProgram
 from agm.agl.scope.symbols import DeclarationKey, ModuleResolution
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
+from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     DeclId,
     DeclKey,
@@ -143,6 +144,7 @@ from agm.agl.typecheck.env import (
     CheckedModule,
     CheckedModuleImage,
     ConstructorSignature,
+    DeclaredHeaderSeed,
     FunctionSignature,
     GenericAliasDef,
     GenericTypeDef,
@@ -1085,6 +1087,34 @@ def _module_static_binding_types(program: Program, env: TypeEnvironment) -> dict
     return result
 
 
+def _declared_header_seed(
+    declared_func_sig_table: Mapping[int, FunctionSignatureRecord],
+) -> DeclaredHeaderSeed:
+    """Collect the declared headers every module environment is seeded with.
+
+    Mirrors the per-module registration in :func:`_prepare_module_environment`,
+    including ``register_function_signature``'s root-scope-only rule for the
+    name-keyed table.
+    """
+    binding_types: PersistentDict[int, Type] = PersistentDict()
+    signatures: dict[str, FunctionSignature] = {}
+    signatures_by_node_id: dict[int, FunctionSignature] = {}
+    extern_node_ids: set[int] = set()
+    for node_id, record in declared_func_sig_table.items():
+        binding_types[node_id] = record.function_type
+        signatures_by_node_id[node_id] = record.signature
+        if not record.scope_path:
+            signatures[record.name] = record.signature
+        if record.is_extern:
+            extern_node_ids.add(node_id)
+    return DeclaredHeaderSeed(
+        binding_types=binding_types,
+        signatures=signatures,
+        signatures_by_node_id=signatures_by_node_id,
+        extern_node_ids=extern_node_ids,
+    )
+
+
 def _prepare_module_environment(
     mid: ModuleId,
     resolved: ModuleResolution,
@@ -1097,6 +1127,7 @@ def _prepare_module_environment(
     program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]],
     type_table: TypeTable,
     entry_seed_env: TypeEnvironment | None = None,
+    declared_seed: DeclaredHeaderSeed | None = None,
 ) -> TypeEnvironment:
     """Build one module's environment before program-wide candidate discovery.
 
@@ -1118,6 +1149,10 @@ def _prepare_module_environment(
       so this module's own re-check dual-writes into the same table.
     - ``entry_seed_env``: the session type env, seeded first so that prior REPL
       bindings are available. The caller supplies it for the entry module only.
+    - ``declared_seed``: the declared headers above, already collected for the
+      whole program, so the constructor copies them instead of this function
+      registering them one by one. Absent for a module whose tables cannot
+      start from the shared copy -- the REPL entry, seeded from its session env.
     """
     import_env = import_env_map[mid]
     assert isinstance(import_env, ImportEnv)
@@ -1133,6 +1168,7 @@ def _prepare_module_environment(
         scope_nodes=resolved.scope_nodes,
         module_id=mid,
         type_table=type_table,
+        declared_seed=declared_seed,
     )
 
     # Seed from the REPL session type env first (for the entry module in REPL
@@ -1174,12 +1210,19 @@ def _prepare_module_environment(
     #   inert -- Phase 4's own re-check still calls ``register_function_signature`` for
     #   this module's own declarations, but only to keep the table live for
     #   ``all_function_signatures()``, not because a later lookup depends on it.
-    for node_id, record in declared_func_sig_table.items():
-        env.set_binding_type(node_id, record.function_type)
-        env.register_function_signature_by_node_id(node_id, record.signature)
-        env.register_function_signature(record.name, record.signature, scope_path=record.scope_path)
-        if record.is_extern:
-            env.register_extern_node_id(node_id)
+    # ``declared_seed`` carries the same four tables this loop would build, so
+    # the caller passes it wherever the constructor can copy them wholesale
+    # instead.  The loop remains for the REPL entry module, whose tables start
+    # from the session env above and so cannot share the program-wide seed.
+    if declared_seed is None:
+        for node_id, record in declared_func_sig_table.items():
+            env.set_binding_type(node_id, record.function_type)
+            env.register_function_signature_by_node_id(node_id, record.signature)
+            env.register_function_signature(
+                record.name, record.signature, scope_path=record.scope_path
+            )
+            if record.is_extern:
+                env.register_extern_node_id(node_id)
 
     return env
 
@@ -1276,6 +1319,7 @@ def _prepare_program(
     inference_sccs = resolved.graph.sccs
     ordered_mids = tuple(mid for inference_scc in inference_sccs for mid in inference_scc)
     module_envs: dict[ModuleId, TypeEnvironment] = {}
+    declared_seed = _declared_header_seed(declared_func_sig_table)
     for mid in ordered_mids:
         module_envs[mid] = _prepare_module_environment(
             mid,
@@ -1289,6 +1333,9 @@ def _prepare_program(
             program_ctor_field_kinds_table,
             shared_type_table,
             entry_seed_env=entry_seed_env if mid == resolved.entry_id else None,
+            declared_seed=(
+                None if entry_seed_env is not None and mid == resolved.entry_id else declared_seed
+            ),
         )
 
     program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}

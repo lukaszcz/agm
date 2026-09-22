@@ -63,12 +63,11 @@ if TYPE_CHECKING:
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.sessions import SessionHost
     from agm.agl.scope.program import ResolvedProgram
-    from agm.agl.scope.symbols import ModuleResolution
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import ExceptionValue, Value
     from agm.agl.syntax.advisories import SpacedQualifier
-    from agm.agl.syntax.nodes import FuncDef, Program
+    from agm.agl.syntax.nodes import FuncDef, Program, TypeAlias
     from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.program import CheckedProgram
@@ -166,6 +165,32 @@ class ArgumentPreflight:
     arguments: "tuple[Value | UseDefault, ...]" = ()
     param_seeds: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
     program_config: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class RunOptions:
+    """The execution knobs of one ``run_prepared`` call.
+
+    Threaded unchanged from :meth:`PipelineDriver.run_prepared`, which names
+    and documents them, through :meth:`PipelineDriver._run_program` down to
+    :meth:`PipelineDriver._execute_ir`. It deliberately carries only what
+    reaches execution, and is not to be completed with the rest of
+    ``run_prepared``'s keywords: the cached ``compiled``/``checked``/
+    ``executable`` artifacts and ``selected_program`` are consumed by the
+    static passes and stop there, and ``host_env``/``warnings`` are assembled
+    mid-pipeline rather than supplied by the caller.
+    """
+
+    check_only: bool = False
+    trace_file: "Path | None" = None
+    host_settings_policy: "HostSettingsPolicy | None" = None
+    builtin_host_settings: "Mapping[str, Value] | None" = None
+    builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None
+    param_seeds: "Mapping[StaticBindingKey, Value] | None" = None
+    process_environment: "Mapping[str, str] | None" = None
+    program_symbol: "SymbolId | None" = None
+    select_default_program: bool = False
+    arguments: "tuple[Value | UseDefault, ...] | None" = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,19 +493,10 @@ class PipelineDriver:
     def _execute_ir(
         self,
         executable: "ExecutableProgram",
+        options: RunOptions,
         *,
         host_env: HostEnvironment,
-        check_only: bool,
-        trace_file: "Path | None",
         warnings: list[Diagnostic],
-        host_settings_policy: "HostSettingsPolicy | None" = None,
-        builtin_host_settings: "Mapping[str, Value] | None" = None,
-        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
-        param_seeds: "Mapping[StaticBindingKey, Value] | None" = None,
-        process_environment: "Mapping[str, str] | None" = None,
-        program_symbol: "SymbolId | None" = None,
-        select_default_program: bool = False,
-        arguments: "tuple[Value | UseDefault, ...] | None" = None,
     ) -> RunResult:
         """Run a freshly lowered ``executable`` — the shared tail of the
         shared pipeline tail.
@@ -490,17 +506,20 @@ class PipelineDriver:
         :class:`IrInterpreter`, mapping an uncaught ``AglRaise`` to a failing
         ``RunResult``. All return paths carry *warnings*.
 
-        *arguments* is *program_symbol*'s own bound value-parameter argument
-        list, in declaration order. When the caller has already validated it
-        against the same executable (:meth:`preflight_arguments`), a length
-        or requiredness mismatch here is a caller contract violation, not a
-        condition this method re-checks. ``None`` (the default) means no
-        argument source was ever consulted: every parameter is derived to its
-        own default, and a required parameter with none becomes the same
-        pre-execution diagnostic :func:`~agm.agl.runtime.arguments.
-        bind_program_arguments` reports for an explicit miss — never an
-        interpreter arity crash.
+        ``options.arguments`` is ``options.program_symbol``'s own bound
+        value-parameter argument list, in declaration order. When the caller
+        has already validated it against the same executable
+        (:meth:`preflight_arguments`), a length or requiredness mismatch here
+        is a caller contract violation, not a condition this method re-checks.
+        ``None`` means no argument source was ever consulted: every parameter
+        is derived to its own default, and a required parameter with none
+        becomes the same pre-execution diagnostic
+        :func:`~agm.agl.runtime.arguments.bind_program_arguments` reports for
+        an explicit miss — never an interpreter arity crash.
         """
+        check_only = options.check_only
+        program_symbol = options.program_symbol
+        arguments = options.arguments
         host_contracts, contract_errors = materialize_ir_contracts(executable, host_env.codecs)
         if contract_errors:
             return RunResult(
@@ -510,7 +529,7 @@ class PipelineDriver:
                 warnings=list(warnings),
             )
 
-        if select_default_program and program_symbol is None:
+        if options.select_default_program and program_symbol is None:
             entry_programs = tuple(
                 symbol
                 for symbol, function_id in executable.program_functions.items()
@@ -564,7 +583,7 @@ class PipelineDriver:
         # ----------------------------------------------------------------
         from agm.agl.runtime.arguments import diagnose_process_environment
 
-        environment_diagnostic = diagnose_process_environment(process_environment)
+        environment_diagnostic = diagnose_process_environment(options.process_environment)
         if environment_diagnostic is not None:
             return RunResult(
                 ok=False,
@@ -601,21 +620,21 @@ class PipelineDriver:
 
         # Create the trace store for this run.  When trace_file is None the
         # store is a no-op and no file is touched.
-        trace = TraceStore(path=trace_file)
-        if trace_file is not None:
+        trace = TraceStore(path=options.trace_file)
+        if options.trace_file is not None:
             from agm.core.fs import mkdir
 
             try:
-                mkdir(trace_file.parent, parents=True, exist_ok=True)
+                mkdir(options.trace_file.parent, parents=True, exist_ok=True)
             except OSError as exc:
                 trace.disable(exc)
         trace.run_start()
 
-        if host_settings_policy is not None:
+        if options.host_settings_policy is not None:
             from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
             reconfigurer: HostSettingsReconfigurer | None = HostSettingsReconfigurer(
-                trace=trace, policy=host_settings_policy
+                trace=trace, policy=options.host_settings_policy
             )
         else:
             reconfigurer = None
@@ -624,12 +643,12 @@ class PipelineDriver:
         # it for config-host compatibility while exposing module-qualified
         # seeds for every host-backed standard-library binding.
         interpreter_builtin_settings: dict[str | BuiltinVarKey, Value] = {}
-        if builtin_host_settings is not None:
-            interpreter_builtin_settings.update(builtin_host_settings)
-        if builtin_var_seeds is not None:
+        if options.builtin_host_settings is not None:
+            interpreter_builtin_settings.update(options.builtin_host_settings)
+        if options.builtin_var_seeds is not None:
             # The structured API wins for a ``std/config`` key supplied by
             # both routes: it is the more specific host declaration.
-            for key, value in builtin_var_seeds.items():
+            for key, value in options.builtin_var_seeds.items():
                 interpreter_builtin_settings[key] = value
 
         try:
@@ -645,8 +664,8 @@ class PipelineDriver:
                 extern_registry=host_env.extern_registry,
                 host_reconfigurer=reconfigurer,
                 builtin_host_settings=interpreter_builtin_settings,
-                param_seeds=param_seeds,
-                process_environment=process_environment,
+                param_seeds=options.param_seeds,
+                process_environment=options.process_environment,
             )
             entry_bindings = interp.run(program_symbol=program_symbol, arguments=arguments)
         except AglRaise as exc:
@@ -1112,10 +1131,11 @@ class PipelineDriver:
         if static.compiled is None or checked is None:
             return static
         assert prepared.resolved is not None
+        aliases = _TypeAliasIndex(checked)
         return replace(
             static,
-            programs=_program_decl_infos(checked, prepared.resolved.graph),
-            module_params=_module_param_infos(checked),
+            programs=_program_decl_infos(checked, prepared.resolved.graph, aliases),
+            module_params=_module_param_infos(checked, aliases),
         )
 
     def _wire_externs_or_fail(
@@ -1207,19 +1227,21 @@ class PipelineDriver:
         """
         result, _executable = self._run_program(
             prepared,
-            check_only=check_only,
-            trace_file=trace_file,
+            RunOptions(
+                check_only=check_only,
+                trace_file=trace_file,
+                host_settings_policy=host_settings_policy,
+                builtin_host_settings=builtin_host_settings,
+                builtin_var_seeds=builtin_var_seeds,
+                param_seeds=param_seeds,
+                process_environment=process_environment,
+                program_symbol=program_symbol,
+                select_default_program=select_default_program,
+                arguments=arguments,
+            ),
             compiled=compiled,
             checked=checked,
             executable=executable,
-            host_settings_policy=host_settings_policy,
-            builtin_host_settings=builtin_host_settings,
-            builtin_var_seeds=builtin_var_seeds,
-            param_seeds=param_seeds,
-            process_environment=process_environment,
-            program_symbol=program_symbol,
-            select_default_program=select_default_program,
-            arguments=arguments,
         )
         return result
 
@@ -1260,7 +1282,7 @@ class PipelineDriver:
         capabilities = self.host_environment().capabilities
         result, executable = self._run_program(
             prepared,
-            check_only=True,
+            RunOptions(check_only=True),
             compiled=compiled,
             selected_program=program,
         )
@@ -1362,21 +1384,12 @@ class PipelineDriver:
     def _run_program(
         self,
         prepared: PreparedProgram,
+        options: RunOptions,
         *,
-        check_only: bool = False,
-        trace_file: "Path | None" = None,
         compiled: "MatchCompiledProgram | None" = None,
         checked: "CheckedProgram | None" = None,
         executable: "ExecutableProgram | None" = None,
-        host_settings_policy: "HostSettingsPolicy | None" = None,
-        builtin_host_settings: "Mapping[str, Value] | None" = None,
-        builtin_var_seeds: "Mapping[BuiltinVarKey, Value] | None" = None,
-        param_seeds: "Mapping[StaticBindingKey, Value] | None" = None,
-        process_environment: "Mapping[str, str] | None" = None,
-        program_symbol: "SymbolId | None" = None,
-        select_default_program: bool = False,
         selected_program: ProgramDeclInfo | None = None,
-        arguments: "tuple[Value | UseDefault, ...] | None" = None,
     ) -> "tuple[RunResult, ExecutableProgram | None]":
         """Back program execution and parameter preflight with one pipeline body.
 
@@ -1500,7 +1513,7 @@ class PipelineDriver:
         if selected_module is not None:
             executable = _select_program_inventory(executable, resolved.graph, selected_module)
 
-        if not check_only:
+        if not options.check_only:
             # Extern (Python FFI) companions: import and resolve every declared
             # extern up front, gated by capability — fail-fast, before evaluation,
             # and after every static pass (so a static error elsewhere is reported
@@ -1525,21 +1538,7 @@ class PipelineDriver:
                 return run_failure, None
 
         return (
-            self._execute_ir(
-                executable,
-                host_env=host_env,
-                check_only=check_only,
-                trace_file=trace_file,
-                warnings=warnings,
-                host_settings_policy=host_settings_policy,
-                builtin_host_settings=builtin_host_settings,
-                builtin_var_seeds=builtin_var_seeds,
-                param_seeds=param_seeds,
-                process_environment=process_environment,
-                program_symbol=program_symbol,
-                select_default_program=select_default_program,
-                arguments=arguments,
-            ),
+            self._execute_ir(executable, options, host_env=host_env, warnings=warnings),
             executable,
         )
 
@@ -1643,7 +1642,7 @@ def _select_program_inventory(
 
 
 def _program_decl_infos(
-    checked: "CheckedProgram", graph: "ModuleGraph"
+    checked: "CheckedProgram", graph: "ModuleGraph", aliases: "_TypeAliasIndex"
 ) -> tuple[ProgramDeclInfo, ...]:
     """Return every ``program def`` declaration's info, in stable sorted order.
 
@@ -1661,9 +1660,11 @@ def _program_decl_infos(
             name=item.name,
             node_id=item.node_id,
             span=item.span,
-            parameters=_program_param_infos(checked, module_id, item),
+            parameters=_program_param_infos(checked, module_id, item, aliases),
             is_entry=module_id == checked.entry_id,
             doc=checked_module.resolved.attributes.docs.get(item.node_id),
+            # Memoized on the graph, so sibling program defs of one module
+            # share the one walk that closed over it.
             closure=graph.source_reachable_modules(module_id),
         )
         for module_id, checked_module, item in program_funcdefs(checked.modules)
@@ -1680,8 +1681,13 @@ def _program_decl_infos(
 
 def _module_param_infos(
     checked: "CheckedProgram",
+    aliases: "_TypeAliasIndex | None" = None,
 ) -> dict["ModuleId", tuple[ParamBindingInfo, ...]]:
-    """Return each checked module's marked static bindings in source order."""
+    """Return each checked module's marked static bindings in source order.
+
+    *aliases* is the caller's shared alias index when it also discovers
+    programs from the same checked program; ``None`` builds one for this call.
+    """
     from agm.agl.syntax.nodes import (
         LetDecl,
         VarDecl,
@@ -1690,6 +1696,7 @@ def _module_param_infos(
         static_items,
     )
 
+    alias_index = _TypeAliasIndex(checked) if aliases is None else aliases
     module_params: dict[ModuleId, tuple[ParamBindingInfo, ...]] = {}
     for module_id, checked_module in checked.modules.items():
         attributes = checked_module.resolved.attributes
@@ -1721,6 +1728,7 @@ def _module_param_infos(
                         tuple(segment.name for segment in item.scope_path),
                         item.type_ann,
                         binding_type,
+                        alias_index,
                     ),
                 )
             )
@@ -1729,7 +1737,10 @@ def _module_param_infos(
 
 
 def _program_param_infos(
-    checked: "CheckedProgram", module_id: "ModuleId", funcdef: "FuncDef"
+    checked: "CheckedProgram",
+    module_id: "ModuleId",
+    funcdef: "FuncDef",
+    aliases: "_TypeAliasIndex",
 ) -> tuple[ProgramParamInfo, ...]:
     """Return *funcdef*'s checked parameter signature as host-facing info.
 
@@ -1753,11 +1764,46 @@ def _program_param_infos(
             span=ast_param.span,
             cli=checked_module.resolved.attributes.program_options[ast_param.node_id],
             is_path=_annotates_path(
-                checked, module_id, scope_path, ast_param.type_expr, param_spec.type
+                checked, module_id, scope_path, ast_param.type_expr, param_spec.type, aliases
             ),
         )
         for ast_param, param_spec in zip(funcdef.params, signature.params, strict=True)
     )
+
+
+class _TypeAliasIndex:
+    """A checked program's type aliases, by declaring module and identity.
+
+    :func:`_annotates_path` follows an annotation's alias chain hop by hop,
+    and every parameter of every program and module starts its own chain, so
+    each module's declarations are collected once and looked up thereafter.
+    Modules are indexed on first consultation, so a program's untouched
+    dependencies are never walked.
+    """
+
+    __slots__ = ("_checked", "_modules")
+
+    def __init__(self, checked: "CheckedProgram") -> None:
+        self._checked = checked
+        self._modules: dict[ModuleId, dict[tuple[tuple[str, ...], str], TypeAlias]] = {}
+
+    def alias(
+        self, module_id: "ModuleId", scope_path: tuple[str, ...], name: str
+    ) -> "TypeAlias | None":
+        """Return *module_id*'s alias declared as *name* under *scope_path*."""
+        module_aliases = self._modules.get(module_id)
+        if module_aliases is None:
+            from agm.agl.syntax.nodes import TypeAlias, static_type_items
+
+            module_aliases = {
+                (tuple(segment.name for segment in item.scope_path), item.name): item
+                for item in static_type_items(
+                    self._checked.modules[module_id].resolved.program.body.items
+                )
+                if isinstance(item, TypeAlias)
+            }
+            self._modules[module_id] = module_aliases
+        return module_aliases.get((scope_path, name))
 
 
 def _annotates_path(
@@ -1766,6 +1812,7 @@ def _annotates_path(
     scope_path: tuple[str, ...],
     type_expr: "TypeExpr | None",
     resolved: "Type",
+    aliases: "_TypeAliasIndex",
 ) -> bool:
     """Return whether *type_expr*, checked as *resolved*, spells the builtin ``path``.
 
@@ -1779,7 +1826,6 @@ def _annotates_path(
         is_standard_option_enum,
         is_standard_optional_enum,
     )
-    from agm.agl.syntax.nodes import TypeAlias, static_type_items
     from agm.agl.syntax.types import AppliedT, NameT
 
     if not isinstance(type_expr, (NameT, AppliedT)):
@@ -1790,38 +1836,26 @@ def _annotates_path(
     if key is None:
         return isinstance(type_expr, NameT) and type_expr.name == PATH_TYPE_NAME
     decl_module, decl_path, decl_name = key
-    alias = next(
-        (
-            item
-            for item in static_type_items(checked.modules[decl_module].resolved.program.body.items)
-            if isinstance(item, TypeAlias)
-            and item.name == decl_name
-            and tuple(segment.name for segment in item.scope_path) == decl_path
-        ),
-        None,
-    )
+    alias = aliases.alias(decl_module, decl_path, decl_name)
     if alias is not None:
         if alias.is_builtin:
             return alias.name == PATH_TYPE_NAME
         return not alias.type_params and _annotates_path(
-            checked, decl_module, decl_path, alias.type_expr, resolved
+            checked, decl_module, decl_path, alias.type_expr, resolved, aliases
         )
     return (
         isinstance(type_expr, AppliedT)
         and (is_standard_option_enum(resolved) or is_standard_optional_enum(resolved))
         and len(type_expr.args) == len(resolved.type_args) == 1
         and _annotates_path(
-            checked, module_id, scope_path, type_expr.args[0], resolved.type_args[0]
+            checked, module_id, scope_path, type_expr.args[0], resolved.type_args[0], aliases
         )
     )
 
 
-def _check_artifact_provenance(
-    *,
-    prepared_entry: "ModuleId",
-    prepared_modules: "Mapping[ModuleId, ModuleResolution]",
-    compiled_entry: "ModuleId",
-    compiled_modules: "Mapping[ModuleId, ModuleResolution]",
+def _check_program_artifact_provenance(
+    resolved: "ResolvedProgram",
+    checked: "CheckedProgram",
 ) -> None:
     """Assert a cached artifact wraps the exact prepared resolutions.
 
@@ -1830,44 +1864,23 @@ def _check_artifact_provenance(
     check anchors on the resolution object itself, which typecheck leaves
     unchanged — it records final pattern-slot meanings in checker-owned maps —
     so a compiled artifact must wrap the very object that was prepared, not
-    merely one sharing its parsed program. Call sites guard this check with
-    :func:`self_validation_enabled` — building its module mappings costs more
-    than the production path should ever pay for an invariant it cannot
-    violate.
+    merely one sharing its parsed program. Match-compiled programs are checked
+    through their ``checked``, which carries the resolutions the compiler
+    consumed. Call sites guard this check with :func:`self_validation_enabled`:
+    the production path should not pay for an invariant it cannot violate.
     """
     same_provenance = (
-        prepared_entry == compiled_entry
-        and prepared_modules.keys() == compiled_modules.keys()
+        resolved.entry_id == checked.entry_id
+        and resolved.modules.keys() == checked.modules.keys()
         and all(
-            compiled_modules[module_id] is prepared_resolved
-            for module_id, prepared_resolved in prepared_modules.items()
+            checked.modules[module_id].resolved is module.resolved
+            for module_id, module in resolved.modules.items()
         )
     )
     if not same_provenance:
         raise ArtifactProvenanceError(
             "Cached match-compilation artifact does not belong to the prepared source."
         )
-
-
-def _check_program_artifact_provenance(
-    resolved: "ResolvedProgram",
-    checked: "CheckedProgram",
-) -> None:
-    """Adapt whole-program artifacts to the shared provenance self-check.
-
-    Match-compiled programs are checked through their `checked`, which
-    carries the resolutions the compiler consumed.
-    """
-    _check_artifact_provenance(
-        prepared_entry=resolved.entry_id,
-        prepared_modules={
-            module_id: module.resolved for module_id, module in resolved.modules.items()
-        },
-        compiled_entry=checked.entry_id,
-        compiled_modules={
-            module_id: module.resolved for module_id, module in checked.modules.items()
-        },
-    )
 
 
 def _run_typecheck_program(

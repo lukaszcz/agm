@@ -2988,8 +2988,34 @@ class _Resolver:
         if node.scope_path:
             with self._named_scope(tuple(segment.name for segment in node.scope_path)):
                 self._validate_qualifier_chains(node)
+                if isinstance(node, (RecordDef, EnumDef, ExceptionDef)):
+                    self._resolve_field_defaults(node)
         else:
             self._validate_qualifier_chains(node)
+            if isinstance(node, (RecordDef, EnumDef, ExceptionDef)):
+                self._resolve_field_defaults(node)
+
+    def _resolve_field_defaults(self, node: RecordDef | EnumDef | ExceptionDef) -> None:
+        """Resolve every field default expression in the declaring module's scope.
+
+        Mirrors a function parameter default (:meth:`_resolve_params_and_body`):
+        a default is an ordinary expression resolved in the type's own lexical
+        layer, so a nullary constructor or module-constant reference inside it
+        resolves the same way it would anywhere else. A ``TypeAlias`` has no
+        fields of its own, so callers never route one here.
+        """
+        if isinstance(node, EnumDef):
+            fields = tuple(
+                fd
+                for member in node.members
+                if isinstance(member, VariantDef)
+                for fd in member.fields
+            )
+        else:
+            fields = node.fields
+        for fd in fields:
+            if fd.default is not None:
+                self._resolve_expr(fd.default)
 
     # ------------------------------------------------------------------
     # Binder handlers

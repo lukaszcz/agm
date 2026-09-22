@@ -1903,6 +1903,227 @@ class TestRecordFieldKinds:
 
 
 # ---------------------------------------------------------------------------
+# TypeTable.field_has_default — each field's declared default *presence*,
+# mirroring field_kinds's shape and caching.
+# ---------------------------------------------------------------------------
+
+
+class TestRecordFieldHasDefault:
+    def test_reads_declared_defaults_in_field_order(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()), ("y", IntType())),
+                field_kinds=(ParamZone.STANDARD, ParamZone.STANDARD),
+                field_has_default=(False, True),
+                decl_node_id=700040,
+            )
+        )
+        handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700040)
+        assert table.field_has_default(handle) == (("x", False), ("y", True))
+
+    def test_enum_member_field_has_default_is_its_own_record_defaults(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Ok",
+                module_id=ENTRY_ID,
+                scope_path=("Result",),
+                fields=(("value", IntType()), ("label", TextType())),
+                field_kinds=(ParamZone.STANDARD, ParamZone.STANDARD),
+                field_has_default=(False, True),
+                is_inline_enum_member=True,
+                decl_node_id=700041,
+            )
+        )
+        member = RecordType(name="Ok", module_id=ENTRY_ID, scope_path=("Result",), decl_id=700041)
+        assert table.field_has_default(member) == (("value", False), ("label", True))
+
+    def test_missing_def_raises_keyerror(self) -> None:
+        table = TypeTable()
+        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
+        with pytest.raises(KeyError):
+            table.field_has_default(handle)
+
+    def test_raises_when_key_registered_as_exception(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700042)
+        )
+        handle = RecordType(name="Boom", module_id=ENTRY_ID, decl_id=700042)
+        with pytest.raises(AssertionError):
+            table.field_has_default(handle)
+
+
+class TestExceptionFieldHasDefault:
+    def test_root_only_returns_declared_field_has_default(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Exception",
+                module_id=ENTRY_ID,
+                fields=(("message", TextType()),),
+                abstract=True,
+                field_kinds=(ParamZone.NAMED_ONLY,),
+                field_has_default=(False,),
+                decl_node_id=700043,
+            )
+        )
+        handle = ExceptionType(name="Exception", module_id=ENTRY_ID, decl_id=700043)
+        assert table.field_has_default(handle) == (("message", False),)
+
+    def test_flattens_base_chain_in_base_first_order(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Root",
+                module_id=ENTRY_ID,
+                fields=(("message", TextType()),),
+                abstract=True,
+                field_kinds=(ParamZone.NAMED_ONLY,),
+                field_has_default=(False,),
+                decl_node_id=700044,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Leaf",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                base=700044,
+                field_kinds=(ParamZone.STANDARD,),
+                field_has_default=(True,),
+                decl_node_id=700045,
+            )
+        )
+        handle = ExceptionType(name="Leaf", module_id=ENTRY_ID, decl_id=700045)
+        assert table.field_has_default(handle) == (
+            ("message", False),
+            ("code", True),
+        )
+
+    def test_returns_same_object_for_same_handle(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Boom",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                field_kinds=(ParamZone.STANDARD,),
+                field_has_default=(True,),
+                decl_node_id=700046,
+            )
+        )
+        handle = ExceptionType(name="Boom", module_id=ENTRY_ID, decl_id=700046)
+        first = table.field_has_default(handle)
+        second = table.field_has_default(handle)
+        assert first is second
+
+    def test_missing_def_raises_keyerror(self) -> None:
+        table = TypeTable()
+        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
+        with pytest.raises(KeyError):
+            table.field_has_default(handle)
+
+    def test_raises_when_key_registered_as_record(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+                decl_node_id=700047,
+            )
+        )
+        handle = ExceptionType(name="Point", module_id=ENTRY_ID, decl_id=700047)
+        with pytest.raises(AssertionError):
+            table.field_has_default(handle)
+
+    def test_raises_on_cyclic_base_chain(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="A",
+                module_id=ENTRY_ID,
+                base=700049,
+                decl_node_id=700048,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="B",
+                module_id=ENTRY_ID,
+                base=700048,
+                decl_node_id=700049,
+            )
+        )
+        handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700048)
+        with pytest.raises(AssertionError, match="cyclic exception base chain"):
+            table.field_has_default(handle)
+
+    def test_field_has_default_cache_updates_when_a_base_def_is_overwritten(self) -> None:
+        """Overwriting a base's TypeDef via merge_from must invalidate a leaf's cached flattening.
+
+        Clones ``TestExceptionFieldKinds``'s equivalent test for the
+        ``field_has_default`` cache, which is populated and invalidated
+        through the same ``_invalidate_cache_for`` path as ``field_kinds``.
+        """
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("old", IntType()),),
+                field_kinds=(ParamZone.STANDARD,),
+                field_has_default=(False,),
+                decl_node_id=700400,
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                fields=(("own", TextType()),),
+                field_kinds=(ParamZone.NAMED_ONLY,),
+                field_has_default=(True,),
+                base=700400,
+                decl_node_id=700401,
+            )
+        )
+        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700401)
+        assert table.field_has_default(child) == (("old", False), ("own", True))
+
+        source = TypeTable()
+        source.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("new", BoolType()),),
+                field_kinds=(ParamZone.POSITIONAL_ONLY,),
+                field_has_default=(True,),
+                decl_node_id=700400,
+            )
+        )
+        table.merge_from(source)
+
+        assert table.field_has_default(child) == (("new", True), ("own", True))
+
+
+# ---------------------------------------------------------------------------
 # Substitution on generic handles
 # ---------------------------------------------------------------------------
 
@@ -2211,6 +2432,86 @@ class TestReRegistration:
                 TypeDef(kind="record", name="X", module_id=ENTRY_ID, fields=(("a", IntType()),))
             )
 
+    def test_register_rejects_a_field_has_default_of_the_wrong_length(self) -> None:
+        # An explicit field_has_default that does not pair one-to-one with
+        # fields is a malformed construction: __post_init__ only fills in an
+        # omitted (None) tuple, so a caller-supplied wrong-length tuple must
+        # still be caught here rather than surfacing later as an unlabelled
+        # zip(..., strict=True) failure.
+        table = TypeTable()
+        with pytest.raises(AssertionError, match="field_has_default has"):
+            table.register(
+                TypeDef(
+                    kind="record",
+                    name="X",
+                    module_id=ENTRY_ID,
+                    fields=(("a", IntType()), ("b", TextType())),
+                    field_has_default=(False,),
+                    decl_node_id=700052,
+                )
+            )
+
+    def test_identical_field_has_default_re_registration_is_a_no_op(self) -> None:
+        # A builtin's seeded canonical TypeDef literal and a real source
+        # declaration of the same reserved identity must compare equal,
+        # including field_has_default, or register()'s self-validation would
+        # spuriously reject the stdlib source declaring what a seed already
+        # registered (see TypeDef.__post_init__'s normalization).
+        table = TypeTable()
+        seeded = TypeDef(
+            kind="record",
+            name="Config",
+            module_id=ENTRY_ID,
+            fields=(("host", TextType()), ("port", IntType())),
+            field_kinds=(ParamZone.STANDARD, ParamZone.STANDARD),
+            field_has_default=(False, True),
+            is_builtin=True,
+            decl_node_id=700050,
+        )
+        table.register(seeded)
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Config",
+                module_id=ENTRY_ID,
+                fields=(("host", TextType()), ("port", IntType())),
+                field_kinds=(ParamZone.STANDARD, ParamZone.STANDARD),
+                field_has_default=(False, True),
+                decl_node_id=700050,
+            )
+        )
+        assert table.get(ENTRY_ID, "Config") == seeded
+
+    def test_conflicting_field_has_default_re_registration_raises(self) -> None:
+        # Same identity, same fields, but a different default-presence shape:
+        # register() must still catch this as a conflict rather than silently
+        # keeping the first registration's shape.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Config",
+                module_id=ENTRY_ID,
+                fields=(("host", TextType()), ("port", IntType())),
+                field_kinds=(ParamZone.STANDARD, ParamZone.STANDARD),
+                field_has_default=(False, True),
+                is_builtin=True,
+                decl_node_id=700051,
+            )
+        )
+        with pytest.raises(AssertionError):
+            table.register(
+                TypeDef(
+                    kind="record",
+                    name="Config",
+                    module_id=ENTRY_ID,
+                    fields=(("host", TextType()), ("port", IntType())),
+                    field_kinds=(ParamZone.STANDARD, ParamZone.STANDARD),
+                    field_has_default=(False, False),
+                    decl_node_id=700051,
+                )
+            )
+
 
 # ---------------------------------------------------------------------------
 # Declaration identity: two declarations can share one name path
@@ -2501,6 +2802,74 @@ class TestEntriesAndMerge:
 
         after = target.record_fields(handle)
         assert after is before
+
+    def test_merge_from_keeps_cached_substitution_when_field_has_default_is_unchanged(
+        self,
+    ) -> None:
+        # field_has_default participates in TypeDef equality, so a builtin's
+        # seeded canonical literal and an incoming source entry with the same
+        # default-presence shape must still hit the skip-if-identical fast
+        # path (and so must not invalidate the cache) rather than being
+        # treated as a conflicting change.
+        seeded = TypeDef(
+            kind="record",
+            name="Shared",
+            module_id=ENTRY_ID,
+            fields=(("a", IntType()), ("b", TextType())),
+            field_kinds=(ParamZone.STANDARD, ParamZone.STANDARD),
+            field_has_default=(False, True),
+            is_builtin=True,
+            decl_node_id=700404,
+        )
+        source = TypeTable()
+        source.register(seeded)
+
+        target = TypeTable()
+        target.register(seeded)
+        handle = RecordType(name="Shared", module_id=ENTRY_ID, decl_id=700404)
+        before = target.record_fields(handle)
+
+        target.merge_from(source)
+
+        after = target.record_fields(handle)
+        assert after is before
+
+    def test_merge_from_invalidates_cache_when_field_has_default_differs(self) -> None:
+        # A source entry that is structurally identical except for
+        # field_has_default must NOT hit the skip-if-identical fast path: it
+        # is a genuine shape change, so the incoming entry wins and the cache
+        # is invalidated.
+        target = TypeTable()
+        target.register(
+            TypeDef(
+                kind="record",
+                name="Shared",
+                module_id=ENTRY_ID,
+                fields=(("a", IntType()), ("b", TextType())),
+                field_kinds=(ParamZone.STANDARD, ParamZone.STANDARD),
+                field_has_default=(False, False),
+                decl_node_id=700405,
+            )
+        )
+        handle = RecordType(name="Shared", module_id=ENTRY_ID, decl_id=700405)
+        assert target.field_has_default(handle) == (("a", False), ("b", False))
+
+        source = TypeTable()
+        new_def = TypeDef(
+            kind="record",
+            name="Shared",
+            module_id=ENTRY_ID,
+            fields=(("a", IntType()), ("b", TextType())),
+            field_kinds=(ParamZone.STANDARD, ParamZone.STANDARD),
+            field_has_default=(False, True),
+            decl_node_id=700405,
+        )
+        source.register(new_def)
+
+        target.merge_from(source)
+
+        assert target.get(ENTRY_ID, "Shared") == new_def
+        assert target.field_has_default(handle) == (("a", False), ("b", True))
 
     def test_merge_from_invalidates_stale_cached_substitution(self) -> None:
         source = TypeTable()

@@ -247,7 +247,7 @@ record_def       ::= attributes? builtin_modifier? "record" decl_head type_param
 record_body      ::= NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
                    | "(" field_list? ")"
                    | field_list
-field_def        ::= attributes? "var"? field_name ":" type_expr
+field_def        ::= attributes? "var"? field_name ":" type_expr ("=" or_expr)?
 
 enum_def         ::= attributes? builtin_modifier? "enum" decl_head type_params?
                     "="? enum_body
@@ -259,7 +259,7 @@ enum_member      ::= attributes? name member_payload? | qualifier_chain name mem
 member_type_args ::= "[" type_expr ("," type_expr)* "]"
 member_payload   ::= "(" field_list? ")"
 field_list       ::= field_inline ("," field_inline)* ","?
-field_inline     ::= attributes? "var"? field_name ":" type_expr
+field_inline     ::= attributes? "var"? field_name ":" type_expr ("=" or_expr)?
 
 exception_def    ::= attributes? builtin_modifier? "exception" decl_head
                     exception_base? exception_body
@@ -282,6 +282,12 @@ in front of the declaration zones every field that carries none of its own. In
 the indented block form, the attribute may sit on the field's line or on the
 line above it. Fields are listed in zone order — positional-only, then
 standard, then named-only.
+
+A field's `"=" or_expr` default is a constant expression, evaluated once at
+the declaration; a constructor call may omit that field, exactly like a
+defaulted function parameter. No required positional-fillable field may
+follow a defaulted one in the same zone. An exception field inherits its
+base's default unchanged.
 
 A `type_params` list declares the declaration's type parameters; each named
 entry is an ordinary name in scope as a type throughout the declaration's body.

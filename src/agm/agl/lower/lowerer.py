@@ -2933,18 +2933,38 @@ class _Lowerer:
             # Build fields in declaration order via the shared TypeTable (its
             # TypeDef stores fields as a declaration-ordered tuple).
             ir_fields = tuple(
-                (fname, arg_slots[fname]) for fname in self._type_table.record_fields(typ)
+                (fname, self._require_constructor_slot(arg_slots, fname))
+                for fname in self._type_table.record_fields(typ)
             )
             return IrMakeRecord(location=loc, nominal=nominal, fields=ir_fields)
 
         if isinstance(typ, ExceptionType):
             nominal = NominalId(typ.decl_id)
             exc_fields = tuple(
-                (fname, arg_slots[fname]) for fname in self._type_table.exception_fields(typ)
+                (fname, self._require_constructor_slot(arg_slots, fname))
+                for fname in self._type_table.exception_fields(typ)
             )
             return IrMakeException(location=loc, nominal=nominal, fields=exc_fields)
 
         raise AssertionError("compiler bug: cannot determine constructor type")  # pragma: no cover
+
+    @staticmethod
+    def _require_constructor_slot(arg_slots: "dict[str, IrExpr]", fname: str) -> "IrExpr":
+        """Return field *fname*'s lowered slot, or fail clearly for an omitted default.
+
+        The checker accepts a constructor call that omits a defaulted field
+        (field defaults follow the same rules as function parameter
+        defaults), but lowering a fallback to the field's own default is not
+        yet implemented, so an omission that reaches here must fail with a
+        clear diagnosis rather than a bare ``KeyError``.
+        """
+        slot = arg_slots.get(fname)
+        if slot is None:
+            raise AssertionError(
+                f"internal error: lowering constructor field '{fname}' with its default "
+                "value is not implemented"
+            )
+        return slot
 
     # ------------------------------------------------------------------
     # Partial call lowering

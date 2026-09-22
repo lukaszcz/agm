@@ -138,6 +138,27 @@ class ConstructorChecker:
     def __init__(self, ctx: ConstructorCheckCtx) -> None:
         self._ctx = ctx
 
+    def _constructor_has_default(
+        self,
+        handle: RecordType | ExceptionType,
+        field_kinds: tuple[tuple[str, ParamZone], ...],
+    ) -> tuple[bool, ...]:
+        """Whether each field in *field_kinds* order has a declared default.
+
+        Positional against ``TypeTable.field_has_default``: both tuples walk
+        the declaration's own ``fields`` in the same order (``builder.py``'s
+        ``_field_zones``/``_field_has_default`` compute them from the same
+        walk, and ``TypeTable.field_kinds``/``field_has_default`` both zip
+        against ``TypeDef.fields``), so a strict positional zip catches an
+        ordering bug immediately instead of an unlabelled ``KeyError``.
+        """
+        return tuple(
+            has_default
+            for (_fname, has_default), (_kind_name, _fkind) in zip(
+                self._ctx._env.type_table.field_has_default(handle), field_kinds, strict=True
+            )
+        )
+
     @staticmethod
     def _alias_constructor_signature(
         *,
@@ -468,10 +489,15 @@ class ConstructorChecker:
         field_kinds = self._generic_constructor_field_kinds(
             owner_name=owner_name, gdef=gdef, signature=sig
         )
+        default_handle = gdef.template if gdef is not None else sig.result_template
+        assert isinstance(default_handle, (RecordType, ExceptionType)), (
+            f"unexpected constructor owner type {default_handle!r}"
+        )
         bound_exprs = bind_constructor_args(
             field_kinds,
             positional,
             named,
+            has_default=self._constructor_has_default(default_handle, field_kinds),
             call_span=span,
             context_desc=f"constructor '{owner_name}'",
         )
@@ -510,8 +536,8 @@ class ConstructorChecker:
         )
         try:
             for field_name, _field_kind in field_kinds:
-                bound_expr = bound_exprs[field_name]
-                if isinstance(bound_expr, Placeholder):
+                bound_expr = bound_exprs.get(field_name)
+                if bound_expr is None or isinstance(bound_expr, Placeholder):
                     continue
                 self._ctx._constrain_argument(
                     fields_by_name[field_name],
@@ -543,7 +569,7 @@ class ConstructorChecker:
         if hole_indices:
             self._ctx._record_partial_call(
                 node,
-                tuple(bound_exprs[name] for name, _kind in field_kinds),
+                tuple(bound_exprs.get(name) for name, _kind in field_kinds),
                 hole_indices,
                 callee_kind="constructor",
             )
@@ -584,7 +610,7 @@ class ConstructorChecker:
             return result
         hole_types: list[Type | None] = [None] * len(hole_indices)
         for fname, _fkind in field_kinds:
-            bound_expr = bound_exprs[fname]
+            bound_expr = bound_exprs.get(fname)
             if isinstance(bound_expr, Placeholder):
                 hole_types[hole_indices[bound_expr.node_id]] = field_types[fname]
         assert all(typ is not None for typ in hole_types), (
@@ -613,7 +639,7 @@ class ConstructorChecker:
             self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
             if hole_indices:
                 binding: tuple[Expr | None, ...] = tuple(
-                    bound_exprs[fname] for fname, _fkind in field_kinds
+                    bound_exprs.get(fname) for fname, _fkind in field_kinds
                 )
                 self._ctx._record_partial_call(
                     node,
@@ -626,8 +652,8 @@ class ConstructorChecker:
         # the produced function is invoked.
         for fname, _fkind in field_kinds:
             expected_field_type = fields[fname]
-            arg_expr = bound_exprs[fname]
-            if isinstance(arg_expr, Placeholder):
+            arg_expr = bound_exprs.get(fname)
+            if arg_expr is None or isinstance(arg_expr, Placeholder):
                 continue
             arg_type = self._ctx._check_expr(arg_expr, expected=expected_field_type)
             self._ctx._assert_assignable_from(
@@ -965,10 +991,15 @@ class ConstructorChecker:
         )
 
         # Bind positional and named args to field names via the shared helper.
-        # All fields are required (no defaults on constructors), so every slot is
-        # non-None after binding — the helper asserts this internally.
+        # A field with a declared default may be omitted, exactly like a
+        # function parameter default.
         bound_exprs = bind_constructor_args(
-            field_kinds, positional, named, call_span=span, context_desc=context_desc
+            field_kinds,
+            positional,
+            named,
+            has_default=self._constructor_has_default(owner, field_kinds),
+            call_span=span,
+            context_desc=context_desc,
         )
         return self._finish_constructor_call(
             owner=owner,

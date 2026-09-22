@@ -715,9 +715,17 @@ def _close_generic_candidate_edges(
 
 
 def validate_required_after_defaulted(
-    params: Sequence[Param], param_zones: Mapping[int, ParamZone]
+    params: Sequence[Param],
+    param_zones: Mapping[int, ParamZone],
+    *,
+    entry_desc: str = "Parameter",
 ) -> None:
-    """Reject a required positional-fillable parameter after a defaulted one."""
+    """Reject a required positional-fillable parameter after a defaulted one.
+
+    *entry_desc* names what *params* are in the diagnostic — ``"Parameter"``
+    for a function/lambda parameter list, ``"Field"`` for a record/enum-member/
+    exception field list.
+    """
     seen_pos_default = False
     for param in params:
         is_pos_fillable = param_zones[param.node_id] in (
@@ -730,9 +738,10 @@ def validate_required_after_defaulted(
             seen_pos_default = True
         elif seen_pos_default:
             raise AglTypeError(
-                f"Parameter '{param.name}' has no default but follows a defaulted "
-                "positional parameter. Required positional parameters must come "
-                "before parameters with defaults.",
+                f"{entry_desc} '{param.name}' has no default but follows a defaulted "
+                f"positional {entry_desc.lower()}. Required positional "
+                f"{entry_desc.lower()}s must come before {entry_desc.lower()}s with "
+                "defaults.",
                 span=param.span,
             )
 

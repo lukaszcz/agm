@@ -154,6 +154,7 @@ from agm.agl.syntax.nodes import (
     NameTarget,
     NullLit,
     OperatorRef,
+    Param,
     Pattern,
     Placeholder,
     Program,
@@ -174,6 +175,7 @@ from agm.agl.syntax.nodes import (
     UnitLit,
     UseDecl,
     VarDecl,
+    VariantDef,
     VarPattern,
     VarRef,
     WildcardPattern,
@@ -1236,6 +1238,12 @@ class _Checker:
                     self._check_program_config(item)
             return UnitType()
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            if isinstance(item, (RecordDef, ExceptionDef)):
+                self._check_field_defaults(item.fields, frozenset(item.type_params))
+            elif isinstance(item, EnumDef):
+                for member in item.members:
+                    if isinstance(member, VariantDef):
+                        self._check_field_defaults(member.fields, frozenset(item.type_params))
             return UnitType()
         if isinstance(item, BuiltinVarDecl):
             with self._own_type_scope(item):
@@ -1352,6 +1360,45 @@ class _Checker:
                 else ()
             )
             self._set_extern_binding_targets(node.node_id, targets)
+        finally:
+            self._current_type_vars = old_type_vars
+
+    def _check_field_defaults(self, fields: tuple[Param, ...], type_vars: frozenset[str]) -> None:
+        """Check a record/enum-member/exception field list's default expressions.
+
+        Reuses the function-parameter default rules for omission, named
+        supply, and positional supply (``validate_required_after_defaulted``),
+        but — unlike a function parameter default — a field default must be a
+        constant expression: it is part of the type's shape (wire schema,
+        value syntax, host decoding), which has no evaluation context.
+        *type_vars* are the declaration's own type parameters (empty for a
+        non-generic declaration or an exception), rigid while checking, so a
+        default like ``None`` for ``Option[T]`` checks against the field's
+        own generic type.
+        """
+        validate_required_after_defaulted(
+            fields, self._resolved.attributes.param_zones, entry_desc="Field"
+        )
+        if not any(fd.default is not None for fd in fields):
+            return
+        old_type_vars = self._current_type_vars
+        self._current_type_vars = type_vars
+        try:
+            for fd in fields:
+                if fd.default is None:
+                    continue
+                assert fd.type_expr is not None
+                field_type = self._env.resolve_type_expr(
+                    fd.type_expr, span=fd.span, type_vars=type_vars
+                )
+                default_type = self._check_boundary_expr(fd.default, expected=field_type)
+                self._assert_assignable_from(default_type, field_type, fd.default.span, fd.default)
+                if not self._is_constant_expr(fd.default):
+                    raise AglTypeError(
+                        "Field default must be a constant expression "
+                        f"({_CONSTANT_EXPRESSION_SHAPE}).",
+                        span=fd.default.span,
+                    )
         finally:
             self._current_type_vars = old_type_vars
 

@@ -599,6 +599,17 @@ class _TypeBuilder:
         """
         return tuple((fd.name, self._attributes.param_zones[fd.node_id]) for fd in fields)
 
+    @staticmethod
+    def _field_has_default(fields: tuple[Param, ...]) -> tuple[bool, ...]:
+        """Whether each field carries a declared default. See ``TypeDef.field_has_default``.
+
+        Structural only: presence, not validity. Constancy and type
+        assignability are checked separately, once the type table is fully
+        built (``_Checker._check_field_defaults``), since that needs the
+        expression-checking machinery this builder does not have.
+        """
+        return tuple(fd.default is not None for fd in fields)
+
     def _build_record(self, stmt: RecordDef) -> None:
         if stmt.type_params:
             self._build_generic_record(stmt)
@@ -626,6 +637,7 @@ class _TypeBuilder:
             fields=tuple(fields.items()),
             mutable_fields=_mutable_field_names(stmt.fields),
             field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
+            field_has_default=self._field_has_default(stmt.fields),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
             external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
@@ -724,6 +736,7 @@ class _TypeBuilder:
                 fields=tuple(fields.items()),
                 mutable_fields=_mutable_field_names(vd.fields),
                 field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
+                field_has_default=self._field_has_default(vd.fields),
                 decl_node_id=decl_id,
                 is_inline_enum_member=True,
                 external_name=self._attributes.external_names.get(vd.node_id, NO_EXTERNAL_NAME),
@@ -835,6 +848,7 @@ class _TypeBuilder:
             abstract=base_type is None,
             base=None if base_type is None else base_type.decl_id,
             field_kinds=tuple(zone for _fname, zone in self._field_zones(stmt.fields)),
+            field_has_default=self._field_has_default(stmt.fields),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
             field_external_names=self._field_external_names(stmt.fields),
@@ -1037,6 +1051,7 @@ class _TypeBuilder:
             fields=tuple(fields.items()),
             mutable_fields=_mutable_field_names(stmt.fields),
             field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
+            field_has_default=self._field_has_default(stmt.fields),
             is_builtin=stmt.is_builtin,
             # Same identity as the handle template registered in phase 1
             # (:meth:`_register_record_or_enum_handle`), so the TypeDef and

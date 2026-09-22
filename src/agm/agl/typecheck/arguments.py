@@ -20,13 +20,14 @@ not mutate the checker state.
 ``bind_constructor_args`` and ``bind_call_args`` are convenience wrappers over
 ``bind_arguments`` for the two common cases.  ``bind_constructor_args`` builds
 the ``BindParam`` list from a field-kinds tuple (record, enum variant,
-exception), asserts every field is bound (constructors have no defaults), and
-returns the ``{field_name: expr}`` mapping in declaration order.
-``bind_call_args`` builds the ``BindParam`` list from a function's
-``ParamSpec`` sequence and returns the declaration-order binding tuple (a bound
-expression or ``None`` to use the parameter's default).  Both apply the VarRef
-bare-name rule and are used by the checker (concrete and generic-inference
-paths) and the lowerer to avoid repeating the same boilerplate at each site.
+exception) plus each field's default presence, and returns the
+``{field_name: expr}`` mapping in declaration order — a field omitted because
+it has a default is absent from the mapping.  ``bind_call_args`` builds the
+``BindParam`` list from a function's ``ParamSpec`` sequence and returns the
+declaration-order binding tuple (a bound expression or ``None`` to use the
+parameter's default).  Both apply the VarRef bare-name rule and are used by
+the checker (concrete and generic-inference paths) and the lowerer to avoid
+repeating the same boilerplate at each site.
 
 See ``agm.agl.semantics.arguments`` for the zone-binding algorithm itself.
 """
@@ -216,15 +217,17 @@ def bind_constructor_args(
     positional: Sequence[Expr],
     named: Sequence[NamedArg],
     *,
+    has_default: tuple[bool, ...],
     call_span: SourceSpan,
     context_desc: str,
 ) -> dict[str, Expr]:
     """Bind positional and named arguments for a record/enum/exception constructor.
 
-    Builds the :class:`BindParam` list from *field_kinds*, runs
-    :func:`bind_arguments` with the ``VarRef`` bare-name rule, asserts every
-    field is bound (constructors have no defaults), and returns an ordered
-    ``{field_name: expr}`` mapping.
+    Builds the :class:`BindParam` list from *field_kinds* and *has_default*,
+    runs :func:`bind_arguments` with the ``VarRef`` bare-name rule, and returns
+    an ordered ``{field_name: expr}`` mapping — omitting a defaulted field the
+    call left unsupplied, exactly as a function call omits a defaulted
+    argument.
 
     Parameters
     ----------
@@ -235,6 +238,9 @@ def bind_constructor_args(
         Positional argument expressions in source order.
     named:
         Named argument expressions in source order.
+    has_default:
+        Whether each field (same order as *field_kinds*) has a declared
+        default — produced by ``TypeTable.field_has_default``.
     call_span:
         The span of the entire call expression (for missing-arg errors).
     context_desc:
@@ -243,8 +249,10 @@ def bind_constructor_args(
 
     Returns
     -------
-    An ordered ``{field_name: Expr}`` dict mapping each declared field to its
-    bound argument expression.  The dict is in field declaration order.
+    An ordered ``{field_name: Expr}`` dict mapping each field the call
+    supplies (explicitly or through the bare-name shorthand) to its bound
+    argument expression.  A field omitted because it has a default is absent
+    from the dict — the caller falls back to the field's own default.
 
     Raises
     ------
@@ -253,7 +261,8 @@ def bind_constructor_args(
         arg in named-only territory that is not a bare name, etc.).
     """
     bind_params = tuple(
-        BindParam(name=fname, kind=fkind, has_default=False) for fname, fkind in field_kinds
+        BindParam(name=fname, kind=fkind, has_default=default)
+        for (fname, fkind), default in zip(field_kinds, has_default, strict=True)
     )
     named_bns: list[BoundName[Expr]] = [
         BoundName(name=na.name, value=na.value, span=na.span) for na in named
@@ -267,8 +276,6 @@ def bind_constructor_args(
         call_span=call_span,
         context_desc=context_desc,
     )
-    # Every field has has_default=False, so bind_arguments either fills every
-    # entry or raises MISSING_REQUIRED — the None branch is unreachable here.
     return {
         fname: bound_expr
         for (fname, _fkind), bound_expr in zip(field_kinds, binding)

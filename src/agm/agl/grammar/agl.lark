@@ -205,7 +205,8 @@ record_body: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT -> record
            | LPAR field_list? RPAR                                     -> record_paren_body
            | field_list                                                -> record_inline_body
 
-field_def: attributes? VAR? field_name COLON type_expr
+// field_def default value uses or_expr, the same shape as param_def's.
+field_def: attributes? VAR? field_name COLON type_expr (EQ or_expr)?
 
 // field_name: a record/struct field or named-key reference. Operator words
 // reach here as plain names — the lexer never promotes one before the `:` of
@@ -239,7 +240,7 @@ variant_payload: LPAR field_list? RPAR
 // field_list: comma-separated field entries.
 field_list: field_inline (COMMA field_inline)* COMMA?
 
-field_inline: attributes? VAR? field_name COLON type_expr
+field_inline: attributes? VAR? field_name COLON type_expr (EQ or_expr)?
 
 // exception_def: record-like throwable nominal with an optional base exception.
 exception_def: attributes? _exception_def_tail

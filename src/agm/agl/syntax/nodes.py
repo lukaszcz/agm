@@ -433,13 +433,16 @@ class Call:
 class Param:
     """A function/lambda parameter or a record/enum-variant/exception field.
 
-    ``default`` is ``None`` for field params (records/variants/exceptions);
-    only ``def``/``builtin def``/lambda params may carry a default expression.
-    ``type_expr`` is ``None`` when a method omits its leading ``self`` annotation
-    or a lambda parameter takes its type from context. ``mutable`` marks
-    a record, enum-variant, or exception field; function and lambda parameters
-    always leave it ``False``. ``attributes`` holds the attribute prefix the
-    source wrote in front of the parameter or field, verbatim.
+    ``default`` is meaningful for every zone: a ``def``/``builtin def``/lambda
+    parameter's default may be any expression, while a field's default (record,
+    enum-variant, or exception) must be a constant expression (checked
+    separately; see ``syntax/constants.py::is_constant_expression``) since it
+    is part of the type's shape, not evaluated code. ``type_expr`` is ``None``
+    when a method omits its leading ``self`` annotation or a lambda parameter
+    takes its type from context. ``mutable`` marks a record, enum-variant, or
+    exception field; function and lambda parameters always leave it ``False``.
+    ``attributes`` holds the attribute prefix the source wrote in front of the
+    parameter or field, verbatim.
     """
 
     name: str

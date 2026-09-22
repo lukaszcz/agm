@@ -7431,6 +7431,98 @@ class TestConstructors:
         assert "enum" in str(err).lower()
 
 
+class TestConstructorFieldDefaults:
+    """A defaulted field may be omitted from a constructor call."""
+
+    def test_record_constructor_omits_defaulted_field(self) -> None:
+        r = accept_type("record Point\n  x: int\n  y: int = 0\nPoint(x = 1)")
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, RecordType)
+        assert constructed.name == "Point"
+
+    def test_record_constructor_may_still_supply_the_defaulted_field(self) -> None:
+        r = accept_type("record Point\n  x: int\n  y: int = 0\nPoint(x = 1, y = 2)")
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, RecordType)
+
+    def test_enum_member_constructor_omits_defaulted_field(self) -> None:
+        r = accept_type('enum Result\n  | Ok(value: int, label: text = "ok")\nOk(value = 1)')
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, RecordType)
+        assert constructed.name == "Ok"
+
+    def test_exception_constructor_omits_defaulted_field(self) -> None:
+        r = accept_type('exception MyErr(code: int = 0)\nMyErr(message = "e")')
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, ExceptionType)
+        assert constructed.name == "MyErr"
+
+    def test_exception_constructor_omits_inherited_defaulted_field(self) -> None:
+        r = accept_type(
+            "exception Base extends Exception\n  code: int = 0\n"
+            "exception Derived extends Base\n  reason: text\n"
+            'Derived(message = "e", reason = "why")'
+        )
+        constructed = r.node_types[r.resolved.program.body.items[-1].node_id]
+        assert isinstance(constructed, ExceptionType)
+        assert constructed.name == "Derived"
+
+    def test_generic_record_constructor_omits_optional_field_default(self) -> None:
+        r = accept_type("record Box[T]\n  value: T\n  label: Option[T] = None\nBox(value = 1)")
+        constructed = r.node_types[r.resolved.program.body.items[1].node_id]
+        assert isinstance(constructed, RecordType)
+        assert constructed.name == "Box"
+        assert constructed.type_args == (IntType(),)
+
+    def test_field_default_wrong_type_is_rejected(self) -> None:
+        err = reject_type('record Point\n  x: int = "wrong"\n1')
+        assert "type" in str(err).lower() or "expected" in str(err).lower()
+
+    def test_field_default_non_constant_is_rejected(self) -> None:
+        err = reject_type("def make() -> int = 1\nrecord Point\n  x: int = make()\n1")
+        assert "constant" in str(err).lower()
+
+    def test_field_required_after_defaulted_is_rejected(self) -> None:
+        err = reject_type("record Point\n  x: int = 0\n  y: int\n1")
+        assert "default" in str(err).lower() or "required" in str(err).lower()
+
+    def test_partial_application_omits_a_defaulted_field_entirely(self) -> None:
+        # A `?` hole on the required field, with the defaulted field neither
+        # supplied nor given its own hole: `bound_exprs.get(fname)` (not
+        # `bound_exprs[fname]`) must treat the missing key as "use the
+        # default" the same way full application does, leaving the partial
+        # function's signature with exactly one parameter.
+        r = accept_type("record Point\n  x: int\n  y: int = 0\nPoint(x = ?)")
+        point = r.type_env.get_type("Point")
+        call = r.resolved.program.body.items[1]
+        assert isinstance(call, Call)
+        assert r.node_types[call.node_id] == FunctionType(params=(IntType(),), result=point)
+
+    def test_with_update_over_a_record_with_a_defaulted_field(self) -> None:
+        # A defaulted field is an ordinary field once a value exists: `with`
+        # neither requires nor treats it specially.
+        r = accept_type(
+            "record Point\n  x: int\n  y: int = 0\nlet p = Point(x = 1, y = 2)\np with x = 9"
+        )
+        point = r.type_env.get_type("Point")
+        update = r.resolved.program.body.items[-1]
+        assert r.node_types[update.node_id] == point
+
+    def test_pattern_match_over_a_record_with_a_defaulted_field_names_only_one_field(
+        self,
+    ) -> None:
+        # A pattern may name only the field it needs; a defaulted field is not
+        # required to appear in the pattern any more than any other field is.
+        r = accept_type(
+            "record Point\n  x: int\n  y: int = 0\n"
+            "let p = Point(x = 1, y = 2)\n"
+            "case p of | Point(x = _ as n) => n"
+        )
+        case = r.resolved.program.body.items[-1]
+        assert isinstance(case, Case)
+        assert r.node_types[case.node_id] == IntType()
+
+
 # ---------------------------------------------------------------------------
 # Enum member construction
 # ---------------------------------------------------------------------------

@@ -540,9 +540,9 @@ record Issue
   description: text
 ```
 
-All fields are required. `var` is valid on records and enum-member records,
-not exceptions. It affects assignment only, not construction or the field's
-type. A fieldless record uses an empty parenthesized field
+A field without a `=` default is required. `var` is valid on records and
+enum-member records, not exceptions. It affects assignment only, not
+construction or the field's type. A fieldless record uses an empty parenthesized field
 list (`record R1()`). Its constructor reference in value position constructs an
 `R1` value; see [Expressions](expressions.md#fieldless-constructor-references).
 By default, record fields are **standard**: they may be supplied positionally

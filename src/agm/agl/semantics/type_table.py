@@ -178,6 +178,24 @@ class TypeDef:
                    chain). Mirrors the ``TypeEnvironment`` constructor-kind
                    registry, computed once at the same declaration site and
                    fed to both.
+    ``field_has_default`` — whether each field has a declared default,
+                   strictly paired with ``fields`` like ``field_kinds``.
+                   Construction may leave it ``None``, which
+                   ``__post_init__`` normalizes to an all-``False`` tuple the
+                   length of ``fields`` — the common case for a declaration
+                   with no defaulted fields, sparing every such call site an
+                   explicit all-``False`` literal; a *typedef* is therefore
+                   never actually seen holding ``None`` once built. The
+                   default EXPRESSION itself is never stored here — presence
+                   is a fact about the type's shape, but the expression is
+                   ordinary code, so it reaches later passes the same route a
+                   function parameter default does: lowered with the
+                   declaration into the constructor descriptor's own
+                   ``IrFunctionParam.default``-shaped slot, independent of
+                   ``syntax``/``ir``. For an exception, its OWN presence
+                   flags only (see :meth:`TypeTable.field_has_default` for
+                   the flattened base chain, which inherits a base field's
+                   default unchanged).
     ``is_builtin`` — ``True`` when this entry came from a source ``builtin``
                    declaration, at whatever path it was written. It is
                    metadata about the declaration, not part of its shape, so
@@ -220,12 +238,27 @@ class TypeDef:
     abstract: bool = False
     base: DeclId | None = None
     field_kinds: tuple[ParamZone, ...] = ()
+    field_has_default: tuple[bool, ...] | None = None
     is_builtin: bool = field(default=False, compare=False)
     decl_node_id: int = field(default=NO_DECL_ID, compare=False)
     is_inline_enum_member: bool = field(default=False, compare=False)
     external_name: ExternalName = NO_EXTERNAL_NAME
     field_external_names: tuple[tuple[str, ExternalName], ...] = ()
     doc: str | None = field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        """Normalize an omitted ``field_has_default`` into all-``False``.
+
+        Every construction site that declares no defaulted field may simply
+        leave ``field_has_default`` unset; this fills the length ``fields``
+        requires so a *typedef* is never actually seen holding ``None``.
+        Normalizing here (not lazily in an accessor) is also what keeps
+        equality meaningful: a seeded canonical literal that omits the
+        argument and a source declaration whose builder computed an explicit
+        all-``False`` tuple end up holding the identical value.
+        """
+        if self.field_has_default is None:
+            object.__setattr__(self, "field_has_default", (False,) * len(self.fields))
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType | ExceptionType:
         """Return the ``RecordType``/``EnumType``/``ExceptionType`` handle naming this ``TypeDef``.
@@ -304,6 +337,8 @@ class TypeTable:
         # Memo for field_kinds's exception branch — same keying convention as
         # _exception_fields_cache above.
         self._exception_field_kinds_cache: dict[DeclId, tuple[tuple[str, ParamZone], ...]] = {}
+        # Memo for field_has_default's exception branch — same keying convention.
+        self._exception_field_has_default_cache: dict[DeclId, tuple[tuple[str, bool], ...]] = {}
         # Whole-table indexes over the live standard-library builtin declarations.
         # Both answer questions about what the session declares as a whole, so
         # they are invalidated wholesale like the fixpoints below.
@@ -366,10 +401,25 @@ class TypeTable:
         declaration itself. Registering an already-registered identity
         reclaims its name path the same way, which is how a caller restores
         a name to a declaration that a since-discarded one took over.
+
+        When self-validation is enabled, also rejects a *typedef* whose
+        ``field_has_default`` does not have one entry per ``fields`` entry —
+        the same positional-pairing invariant :meth:`field_kinds` relies on,
+        but caught immediately here rather than as a distant ``zip(...,
+        strict=True)`` failure the first time some unrelated caller reads
+        :meth:`field_has_default` for it.
         """
         if self_validation_enabled() and typedef.decl_node_id == NO_DECL_ID:
             raise AssertionError(
                 f"cannot register a TypeDef with no declaration identity: {typedef!r}"
+            )
+        if self_validation_enabled() and len(self._own_field_has_default(typedef)) != len(
+            typedef.fields
+        ):
+            raise AssertionError(
+                f"TypeDef {typedef.name!r} declares {len(typedef.fields)} field(s) but "
+                f"field_has_default has {len(typedef.field_has_default or ())} entries: "
+                f"{typedef!r}"
             )
         decl_id = typedef.decl_node_id
         existing = self._defs.get(decl_id)
@@ -672,6 +722,7 @@ class TypeTable:
         # maintain a reverse-inheritance index.
         self._exception_fields_cache.clear()
         self._exception_field_kinds_cache.clear()
+        self._exception_field_has_default_cache.clear()
         # The non-data-reachability and finiteness fixpoints are whole-table
         # (any declaration's flag can in principle depend on any other's), so
         # a single changed identity invalidates the whole cached result rather
@@ -1053,6 +1104,59 @@ class TypeTable:
             (fname, kind)
             for _chain_id, typedef in self._exception_chain(decl_id, caller="field_kinds")
             for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
+        )
+
+    @staticmethod
+    def _own_field_has_default(typedef: TypeDef) -> tuple[bool, ...]:
+        """Return *typedef*'s own per-field default-presence tuple.
+
+        Always a concrete tuple: :meth:`TypeDef.__post_init__` normalizes an
+        omitted (``None``) construction argument into all-``False`` of
+        ``fields``' length before any ``TypeDef`` instance is observable.
+        """
+        assert typedef.field_has_default is not None
+        return typedef.field_has_default
+
+    def field_has_default(self, handle: RecordType | ExceptionType) -> tuple[tuple[str, bool], ...]:
+        """Return *handle*'s ``(field_name, has_default)`` pairs, in field order.
+
+        Whether each field carries a declared default (see
+        :attr:`TypeDef.field_has_default`) — the default EXPRESSION itself is
+        not carried here; it reaches lowering the same route a function
+        parameter default does (see :attr:`TypeDef.field_has_default`'s
+        docstring). Mirrors :meth:`field_kinds` exactly: a record reads
+        straight off its own ``TypeDef`` (declaration-level, so every
+        instantiation of a generic record shares the same defaults); an
+        exception flattens the ``extends`` base chain, base fields first, so
+        an inherited field keeps its base's default presence.
+
+        Raises ``KeyError``/``AssertionError`` under the same conditions as
+        :meth:`field_kinds`.
+        """
+        if isinstance(handle, ExceptionType):
+            decl_id = handle.decl_id
+            cached = self._exception_field_has_default_cache.get(decl_id)
+            if cached is not None:
+                return cached
+            result = self._flatten_exception_field_has_default(decl_id)
+            self._exception_field_has_default_cache[decl_id] = result
+            return result
+        typedef = self._require_record_def(handle, caller="field_has_default")
+        return tuple(
+            zip(
+                (fname for fname, _ftype in typedef.fields),
+                self._own_field_has_default(typedef),
+                strict=True,
+            )
+        )
+
+    def _flatten_exception_field_has_default(self, decl_id: DeclId) -> tuple[tuple[str, bool], ...]:
+        return tuple(
+            (fname, has_default)
+            for _chain_id, typedef in self._exception_chain(decl_id, caller="field_has_default")
+            for (fname, _ftype), has_default in zip(
+                typedef.fields, self._own_field_has_default(typedef), strict=True
+            )
         )
 
     def field_external_names(

@@ -19,6 +19,7 @@ import pytest
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.program import resolve_program
+from agm.agl.semantics.types import RecordType
 from tests._agl_helpers import agl_roots, prepare_inline_command, run_inline_command
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 
@@ -123,6 +124,33 @@ def test_selected_program_preflight_excludes_unreachable_call_sites(tmp_path: Pa
 
     assert preflight.result.ok, preflight.result.diagnostics
     assert [site.callee for site in preflight.result.call_sites] == ["ask"]
+
+
+def test_constructor_field_default_omitted_across_module_boundary(tmp_path: Path) -> None:
+    # A record's default lives with its declaration; an importing module may
+    # omit the defaulted field when constructing it, the same as within the
+    # declaring module itself. Typecheck-only (via check_program), since
+    # lowering an omitted default is exercised at the unit level, not here.
+    from agm.agl import PipelineDriver
+    from agm.agl.typecheck.program import check_program
+    from tests.agl.ir_harness import base_caps
+
+    library_root = tmp_path / "library"
+    library_root.mkdir()
+    (library_root / "shapes.agl").write_text("record Point\n  x: int\n  y: int = 0\n")
+
+    prepared = PipelineDriver.prepare_program(
+        "import shapes\nlet p = shapes::Point(x = 1)\nprogram def main() -> unit = ()\n",
+        roots=agl_roots(library_root),
+    )
+    assert prepared.resolved is not None, prepared.diagnostics
+
+    checked = check_program(prepared.resolved, base_caps())
+    entry_checked = checked.modules[prepared.resolved.entry_id]
+    let_decl = entry_checked.resolved.program.body.items[2]
+    point_type = entry_checked.node_types[let_decl.value.node_id]
+    assert isinstance(point_type, RecordType)
+    assert point_type.name == "Point"
 
 
 def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> None:

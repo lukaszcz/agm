@@ -8,6 +8,8 @@ Collection builds module-root and named-scope layers pre-populated with static d
 
 Inline enum members are nominal record declarations beneath their enum's scope. Every constructor reference resolves to a canonical `ConstructorRef` carrying module, scope path, terminal name, and declaration identity; display spellings are never identity. Where a bare constructor spelling in a pattern or `is` test is ambiguous, scope keeps a candidate set and typecheck selects from the matched nominal type.
 
+A record, enum-member, or exception field's `= expr` default resolves like a function parameter default: an ordinary expression in the declaring type's own lexical layer.
+
 ## Imports and `use`
 
 An import contributes a module's full public qualified surface minus what its `hiding` clause removes. Import tails and `use` declarations add bare names to the lexical region that declares them without narrowing qualified access; `use` selects from routes that are already nameable and never loads a module. Exports and re-exports are resolved program-wide with the same collision rules as local names; routes to one declaration deduplicate, distinct origins stay ambiguous. Loading-level rules are in [modules.md](../modules.md).

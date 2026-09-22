@@ -796,14 +796,14 @@ class AstBuilder(Transformer):
     record_inline_body = record_paren_body
 
     def field_def(self, meta: Meta, args: _Args) -> syntax.Param:
-        # Grammar: attributes? VAR? field_name COLON type_expr
+        # Grammar: attributes? VAR? field_name COLON type_expr (EQ or_expr)?
         rest = _without_attributes(args)
         name_tok = _find_name_token(rest)
-        type_expr = _find_type_expr(rest)
+        type_expr, default = _extract_ann_and_optional_expr(rest)
         return syntax.Param(
             name=str(name_tok),
             type_expr=type_expr,
-            default=None,
+            default=default,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             mutable=any(isinstance(arg, Token) and arg.type == "VAR" for arg in rest),
@@ -902,7 +902,8 @@ class AstBuilder(Transformer):
         # Grammar: field_inline (COMMA field_inline)* COMMA?
         return tuple(a for a in args if isinstance(a, syntax.Param))
 
-    # Grammar: attributes? VAR? field_name COLON type_expr — same shape as ``field_def``.
+    # Grammar: attributes? VAR? field_name COLON type_expr (EQ or_expr)? — same shape as
+    # ``field_def``.
     field_inline = field_def
 
     # ------------------------------------------------------------------

@@ -478,6 +478,15 @@ def test_constructor_result_nominal_rejects_non_nominal_type() -> None:
         lowerer._nominal_for_constructor_result(IntType())
 
 
+def test_lowering_rejects_a_constructor_call_omitting_a_defaulted_field() -> None:
+    """Typecheck legitimately allows omitting a defaulted field; lowering does not
+    yet fill it in, so it must fail with a clear internal error, never a bare
+    KeyError or a silent miscompile.
+    """
+    with pytest.raises(AssertionError, match="lowering constructor field 'y'"):
+        _lower("record Point\n  x: int\n  y: int = 0\nPoint(x = 1)")
+
+
 def test_lowering_erases_flexible_state_from_generic_direct_nested_and_partial_calls() -> None:
     executable = _lower(
         "record Box[T]\n"

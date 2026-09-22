@@ -920,6 +920,46 @@ class TestDeclarations:
         assert len(exc.fields) == 2
         assert [f.name for f in exc.fields] == ["code", "reason"]
 
+    def test_record_def_field_with_default_inline(self) -> None:
+        rec = first(parse("record Point(x: int, y: int = 0)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].default is None
+        assert isinstance(rec.fields[1].default, IntLit)
+        assert rec.fields[1].default.value == 0
+
+    def test_record_def_field_with_default_indented(self) -> None:
+        rec = first(parse("record Point\n  x: int\n  y: int = 0"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].default is None
+        assert isinstance(rec.fields[1].default, IntLit)
+        assert rec.fields[1].default.value == 0
+
+    def test_record_def_field_with_default_and_mutable_marker(self) -> None:
+        rec = first(parse("record Point(var x: int, y: int = 0)"))
+        assert isinstance(rec, RecordDef)
+        assert rec.fields[0].mutable is True
+        assert rec.fields[1].mutable is False
+        assert isinstance(rec.fields[1].default, IntLit)
+
+    def test_record_def_field_with_default_and_attribute(self) -> None:
+        rec = first(parse('record Point(@doc("x coord") x: int, y: int = 0)'))
+        assert isinstance(rec, RecordDef)
+        assert attribute_names(rec.fields[0]) == ["doc"]
+        assert isinstance(rec.fields[1].default, IntLit)
+
+    def test_enum_member_field_with_default(self) -> None:
+        en = first(parse('enum Result | Ok(value: int, label: text = "ok")'))
+        assert isinstance(en, EnumDef)
+        member = en.members[0]
+        assert member.fields[0].default is None
+        assert member.fields[1].default is not None
+
+    def test_exception_field_with_default(self) -> None:
+        exc = first(parse('exception MyErr(msg: text = "failed", code: int)'))
+        assert isinstance(exc, ExceptionDef)
+        assert exc.fields[0].default is not None
+        assert exc.fields[1].default is None
+
     def test_program_keyword_requires_a_definition(self) -> None:
         with pytest.raises(AglSyntaxError):
             parse("program()")

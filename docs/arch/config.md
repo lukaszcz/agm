@@ -6,6 +6,8 @@ AGM is configured through layered TOML files resolved relative to a *config cont
 
 The context locates the directories that contribute configuration. The project directory comes from an environment variable when set, otherwise from walking up from the invocation directory until a recognizable project layout is found ([workspaces.md](workspaces.md)). This is what lets a command behave the same from the main workspace and from a branch worktree.
 
+`context.py` also holds the process-wide memo for reads several independent entry points repeat within one invocation — the activation index, the package pins, and the resolved active package set. A memo key pins everything its value derives from: a content stamp of the files a read parses, and for an editable selection its live source as well, so a rewrite supersedes the entry whoever made it. Writers of activation state invalidate the memo outright.
+
 ## AGM Home and the Standard Library
 
 One AGM home holds config, prompts, sandbox settings, the AgL global library, and the package store: `AGM_HOME` when set, otherwise a populated `<install-prefix>/.agm` beside the executable, otherwise `~/.agm`. `just install` populates the prefix tree and installs the config templates from the repository's `config/`.

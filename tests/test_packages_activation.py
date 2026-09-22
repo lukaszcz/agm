@@ -8,8 +8,10 @@ from typing import Never
 import pytest
 import semver
 
+import agm.packages.activation as activation_module
 from agm.agl.keywords import KEYWORDS
 from agm.cli_support.exec_roots import effective_exec_roots
+from agm.core.toml import TomlDict
 from agm.packages.activation import (
     ActivationIndex,
     ActivePackage,
@@ -1621,3 +1623,118 @@ def test_editable_package_with_broken_source_drops_an_unsatisfiable_command_set(
     ).commands
 
     assert commands == {}
+
+
+def test_one_invocation_parses_the_activation_index_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "agm-home"
+    env = {"AGM_HOME": str(home)}
+    index = ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))})
+    write_activation_index(index, home=home, env=env)
+    original = activation_module.load_toml_file
+    reads = 0
+
+    def counted(path: Path) -> TomlDict:
+        nonlocal reads
+        reads += 1
+        return original(path)
+
+    monkeypatch.setattr(activation_module, "load_toml_file", counted)
+
+    assert load_activation_index(home=home, env=env) == index
+    assert load_activation_index(home=home, env=env) == index
+    assert reads == 1
+
+
+def test_a_written_activation_index_supersedes_an_earlier_read(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    env = {"AGM_HOME": str(home)}
+    first = ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))})
+    write_activation_index(first, home=home, env=env)
+    assert load_activation_index(home=home, env=env) == first
+
+    second = ActivationIndex({"alpha": ActivePackage(semver.Version.parse("2.0.0"))})
+    write_activation_index(second, home=home, env=env)
+
+    assert load_activation_index(home=home, env=env) == second
+
+
+def test_an_activation_index_rewritten_outside_agm_is_read_again(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    env = {"AGM_HOME": str(home)}
+    index = ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))})
+    path = write_activation_index(index, home=home, env=env)
+    assert load_activation_index(home=home, env=env) == index
+
+    path.write_text(
+        '[packages]\n[packages.alpha]\nversion = "3.0.0"\nregistration-order = 0\n',
+        encoding="utf-8",
+    )
+
+    selected = load_activation_index(home=home, env=env).packages["alpha"]
+    assert selected.version == semver.Version.parse("3.0.0")
+
+
+def test_repeated_selections_reuse_one_package_resolution(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    env = {"AGM_HOME": str(home)}
+    _write_package(home, "alpha", "1.0.0")
+    write_activation_index(
+        ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"))}),
+        home=home,
+        env=env,
+    )
+
+    first = select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
+    second = select_active_packages(home=home, proj_dir=None, cwd=tmp_path, env=env)
+
+    assert first is second
+
+
+def test_an_edited_editable_source_command_is_seen_by_a_later_read(tmp_path: Path) -> None:
+    home = tmp_path / "agm-home"
+    root = tmp_path / "editable"
+    _write_development_package(root, "alpha", "1.0.0")
+    module = root / MODULE_TREE_DIRNAME / "main.agl"
+    module.write_text(
+        '@command("tools review")\nprogram def review() -> unit =\n  print "reviewed"\n',
+        encoding="utf-8",
+    )
+    env = {"AGM_HOME": str(home)}
+    index = ActivationIndex({"alpha": ActivePackage(semver.Version.parse("1.0.0"), editable=root)})
+    write_activation_index(index, home=home, env=env)
+    assert (
+        "tools review"
+        in effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env).commands
+    )
+
+    module.write_text(
+        '@command("tools inspect")\nprogram def review() -> unit =\n  print "inspected"\n',
+        encoding="utf-8",
+    )
+
+    commands = effective_command_index(home=home, proj_dir=None, cwd=tmp_path, env=env).commands
+    assert "tools inspect" in commands
+    assert "tools review" not in commands
+
+
+def test_package_pins_are_read_again_after_their_config_layer_changes(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    config = project / "config"
+    config.mkdir(parents=True)
+    (config / "config.toml").write_text('[packages]\nalpha = "1.0.0"\n', encoding="utf-8")
+    home = tmp_path / "home"
+
+    pins = load_package_pins(home=home, proj_dir=project, cwd=project, env={})
+    assert pins == {"alpha": semver.Version.parse("1.0.0")}
+    pins.clear()
+    assert load_package_pins(home=home, proj_dir=project, cwd=project, env={}) == {
+        "alpha": semver.Version.parse("1.0.0")
+    }
+
+    (config / "config.toml").write_text('[packages]\nalpha = "2.0.0"\n', encoding="utf-8")
+
+    assert load_package_pins(home=home, proj_dir=project, cwd=project, env={}) == {
+        "alpha": semver.Version.parse("2.0.0")
+    }

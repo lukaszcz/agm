@@ -91,10 +91,11 @@ let default-aspects = "correctness, maintainability, efficency, adherence to rel
 
 @command("devel review")
 @doc("""
-Review the specified aspects within the given scope.
+Review for the specified aspects within the given scope.
 
 Default aspects: %{default-aspects}
 """)
+@config(config::log = true)
 program def review-main(
   scope: text,
   aspects: text = default-aspects,
@@ -106,6 +107,7 @@ program def review-main(
 
 @command("devel revise")
 @doc("Revise based on a review.")
+@config(config::log = true)
 program def revise-main(
   file: path,
   agent: Agent = config::default-agent)
@@ -121,8 +123,9 @@ program def revise-main(
 @doc("""
 Refine in a review-revise loop.
 
-Runs a refinement loop until no high-severity issues remain, at most for `max-steps` iterations.
+Runs a refinement loop until no high-severity issues remain, for at most `max-steps` iterations.
 """)
+@config(config::log = true)
 program def refine-main(
   scope: text,
   aspects: text = default-aspects,

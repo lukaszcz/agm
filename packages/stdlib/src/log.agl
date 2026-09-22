@@ -1,22 +1,24 @@
 
-enum Level = Error | Warn | Info | Debug
+enum Level = Silent | Error | Warn | Info | Debug
 
 @param @opt-name("log-level") @doc("Least severe level printed by log:: calls.")
 var level: Level = Info
 
 def Level::to-int(self) -> int =
   case self of
-    | Error => 0
-    | Warn => 1
-    | Info => 2
-    | Debug => 3
+    | Silent => 0
+    | Error => 1
+    | Warn => 2
+    | Info => 3
+    | Debug => 4
 
 def Level::from-int(l: int) -> Level =
   if
-    | l == 0 => Error
-    | l == 1 => Warn
-    | l == 2 => Info
-    | l == 3 => Debug
+    | l == 0 => Silent
+    | l == 1 => Error
+    | l == 2 => Warn
+    | l == 3 => Info
+    | l == 4 => Debug
     | else => Debug
 
 def print[T](lvl: Level, val: T) -> unit =

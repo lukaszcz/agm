@@ -1,0 +1,8 @@
+# A constant names a constant of its own module: an imported binding is not a
+# constant expression, so a root initializer may not interpolate one.
+import store
+
+let banner = "[%{store::label}]"
+
+program def main() -> unit =
+  print banner

@@ -1,15 +1,3 @@
 [package]
 name = "devel"
 version = "0.1.0"
-
-[commands.devel.review]
-program = "devel/review::review-main"
-description = "Review changes"
-
-[commands.devel.revise]
-program = "devel/review::revise-main"
-description = "Revise"
-
-[commands.devel.refine]
-program = "devel/review::refine-main"
-description = "Refine"

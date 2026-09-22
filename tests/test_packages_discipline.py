@@ -600,6 +600,36 @@ class TestPackageDiscipline:
         with pytest.raises(DisciplineError):
             validate_package(package)
 
+    @pytest.mark.parametrize(
+        "manifest",
+        (
+            '[package]\nname = "custom"\nversion = "1.0.0"\nrelease-channel = "beta"\n',
+            'unexpected = true\n\n[package]\nname = "custom"\nversion = "1.0.0"\n',
+            (
+                '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+                '[dependencies]\nhelpers = { version = "1.0.0", optional = true }\n'
+            ),
+            (
+                '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+                '[commands]\nlaunch = { program = "custom/main::main", summary = "Launch" }\n'
+            ),
+        ),
+    )
+    def test_rejects_a_manifest_field_the_schema_does_not_define(
+        self, tmp_path: Path, manifest: str
+    ) -> None:
+        """An authored manifest is input: a field AGM cannot act on is an error."""
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(manifest, encoding="utf-8")
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        package = PackageInfo(root=root, manifest=load_manifest(root / "package.toml"))
+
+        with pytest.raises(DisciplineError):
+            validate_package(package)
+
     def test_rejects_invalid_utf8_referenced_source_fixture(self) -> None:
         with pytest.raises(DisciplineError):
             validate_package(_package("invalid_utf8_source"))
@@ -633,6 +663,26 @@ class TestPackageCheckCommand:
 
         check_command.run(PkgCheckArgs(directory=str(root)))
 
+    def test_reports_a_manifest_field_the_schema_does_not_define(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "package"
+        (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
+        (root / "package.toml").write_text(
+            '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
+            '[commands]\nlaunch = { program = "custom/main::main", summary = "Launch" }\n',
+            encoding="utf-8",
+        )
+        (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
+            "program def main() -> unit = ()\n", encoding="utf-8"
+        )
+        self._use_temp_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as raised:
+            check_command.run(PkgCheckArgs(directory=str(root)))
+
+        assert raised.value.code == 1
+
     def test_accepts_a_source_declared_command(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -655,7 +705,7 @@ class TestPackageCheckCommand:
         (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (root / "package.toml").write_text(
             '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
-            '[commands.devel]\ndescription = "Development workflows"\n',
+            '[commands.devel]\ndoc = "Development workflows"\n',
             encoding="utf-8",
         )
         (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
@@ -672,7 +722,7 @@ class TestPackageCheckCommand:
         (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (root / "package.toml").write_text(
             '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
-            '[commands.devel]\ndescription = "Development workflows"\n\n'
+            '[commands.devel]\ndoc = "Development workflows"\n\n'
             '[aliases]\nrev = "devel review"\n',
             encoding="utf-8",
         )
@@ -696,7 +746,7 @@ class TestPackageCheckCommand:
         (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
         (root / "package.toml").write_text(
             '[package]\nname = "custom"\nversion = "1.0.0"\n\n'
-            '[commands.devel]\ndescription = "Development workflows"\n',
+            '[commands.devel]\ndoc = "Development workflows"\n',
             encoding="utf-8",
         )
         (root / MODULE_TREE_DIRNAME / "main.agl").write_text(

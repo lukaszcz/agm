@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeAlias as TypingTypeAlias
 
-from agm.agl.attributes import ProgramCommandSpec, ProgramOptionSpec
+from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.diagnostics import AglError, dollar_spacing_hint
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.external_names import ExternalName
@@ -772,10 +772,10 @@ class AttributeFacts:
         ``@param``, keyed by its binding node id. Bindings without the marker
         have no entry.
     ``command_registrations``
-        The package command every ``program def`` registers itself as, keyed
-        by ``FuncDef.node_id``, as its ``@command``/``@description``/``@help``
-        attributes describe it. Only a program carrying ``@command`` has an
-        entry; the package domain merges these into a manifest's command table.
+        The command path every ``program def`` registers itself as through
+        ``@command``, keyed by ``FuncDef.node_id``. Only a program carrying
+        ``@command`` has an entry; the package domain merges these into a
+        manifest's command table, pairing each with the program's ``@doc``.
     ``docs``
         The ``@doc`` text of every declaration carrying one, parameters and
         fields included, keyed by that declaration's node id.
@@ -794,7 +794,7 @@ class AttributeFacts:
     extern_names: dict[int, str] = field(default_factory=dict)
     program_options: dict[int, ProgramOptionSpec] = field(default_factory=dict)
     params: dict[int, ProgramOptionSpec] = field(default_factory=dict)
-    command_registrations: dict[int, ProgramCommandSpec] = field(default_factory=dict)
+    command_registrations: dict[int, str] = field(default_factory=dict)
     docs: dict[int, str] = field(default_factory=dict)
     external_names: dict[int, ExternalName] = field(default_factory=dict)
     program_configs: dict[int, tuple[AttributeKeyedArg, ...]] = field(default_factory=dict)

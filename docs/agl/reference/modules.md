@@ -345,10 +345,8 @@ Each module's own source is its reference.
 
 Every file-backed module has a static root: imports, declarations, and
 `let`/`var` bindings are allowed there, while bare expressions and
-assignments are not. Root binding initializers must be constant expressions:
-literals, literal containers, constructor applications, unary operators over
-those, and `resource`/`resource-dir` calls
-([Expressions](expressions.md#resource-and-resource-dir)). Put executable
+assignments are not. Root binding initializers must be [constant
+expressions](bindings-and-scope.md#constant-expressions). Put executable
 workflow code in a `program def` body. Because every initializer is a
 constant, declaration order does not matter for a static root's own `let`/`var`
 bindings, root or scoped — see [Names and

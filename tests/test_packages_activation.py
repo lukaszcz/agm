@@ -74,7 +74,7 @@ def test_activation_index_round_trips_command_ownership_and_registration_order(
             "alpha run": CommandRegistration(
                 package="alpha",
                 program="alpha/main::main",
-                description="Run alpha",
+                doc="Run alpha",
             )
         },
     )
@@ -958,18 +958,13 @@ def test_missing_activation_index_reads_as_empty(tmp_path: Path) -> None:
         '[commands.launch]\nprogram = "alpha/main::main"\n',
         '[commands.launch]\npackage = "alpha"\nprogram = 1\n',
         '[commands.launch]\npackage = ""\nprogram = "alpha/main::main"\n',
-        '[commands.launch]\npackage = "alpha"\nhelp = 1\n',
-        '[commands.launch]\npackage = "alpha"\nhelp = ""\n',
+        '[commands.launch]\npackage = "alpha"\ndoc = 1\n',
+        '[commands.launch]\npackage = "alpha"\ndoc = ""\n',
         '[commands]\nlaunch = "not a table"\n',
-        '[packages.alpha]\nversion = "1.0.0"\n\n[commands.launch]\nextra = true\n',
         '[packages.alpha]\nversion = "1.0.0"\n\n[commands.launch]\npackage = "alpha"\n',
         (
             '[packages.alpha]\nversion = "1.0.0"\n\n[commands.launch]\n'
-            'package = "alpha"\nprogram = "alpha/main::main"\ndescription = 1\n'
-        ),
-        (
-            '[packages.alpha]\nversion = "1.0.0"\n\n[commands.launch]\n'
-            'package = "alpha"\nprogram = "alpha/main::main"\nshadowed-package = "bravo"\n'
+            'package = "alpha"\nprogram = "alpha/main::main"\ndoc = 1\n'
         ),
         (
             '[packages.alpha]\nversion = "1.0.0"\n\n[commands."bad  path"]\n'
@@ -995,6 +990,25 @@ def test_activation_index_rejects_invalid_state(tmp_path: Path, content: str) ->
         load_activation_index(home=home, env={"AGM_HOME": str(home)})
 
 
+def test_activation_index_drops_command_fields_this_build_does_not_know(tmp_path: Path) -> None:
+    """A registration another build wrote still loads, minus what it alone understands."""
+    home = tmp_path / "agm-home"
+    index_path = home / "packages" / "index.toml"
+    index_path.parent.mkdir(parents=True)
+    index_path.write_text(
+        '[packages.alpha]\nversion = "1.0.0"\n\n[commands.launch]\n'
+        'package = "alpha"\nprogram = "alpha/main::main"\n'
+        'doc = "Launch alpha"\nshadowed-package = "bravo"\n',
+        encoding="utf-8",
+    )
+
+    index = load_activation_index(home=home, env={"AGM_HOME": str(home)})
+
+    assert index.commands == {
+        "launch": CommandRegistration("alpha", "alpha/main::main", "Launch alpha")
+    }
+
+
 @pytest.mark.parametrize(
     ("active", "command"),
     (
@@ -1002,15 +1016,7 @@ def test_activation_index_rejects_invalid_state(tmp_path: Path, content: str) ->
         (ActivePackage(semver.Version.parse("1.0.0")), CommandRegistration("alpha", "")),
         (
             ActivePackage(semver.Version.parse("1.0.0")),
-            CommandRegistration("alpha", "alpha/main::main", help=""),
-        ),
-        (
-            ActivePackage(semver.Version.parse("1.0.0")),
-            CommandRegistration("alpha", "alpha/main::main", ""),
-        ),
-        (
-            ActivePackage(semver.Version.parse("1.0.0")),
-            CommandRegistration("alpha", "alpha/main::main", description=""),
+            CommandRegistration("alpha", "alpha/main::main", doc=""),
         ),
     ),
 )
@@ -1569,7 +1575,7 @@ def _write_editable_group_package(root: Path) -> None:
     (root / MODULE_TREE_DIRNAME).mkdir(parents=True)
     (root / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n\n'
+        '[commands.devel]\ndoc = "Development workflows"\n\n'
         '[aliases]\nrev = "devel review"\n',
         encoding="utf-8",
     )

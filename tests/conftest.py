@@ -7,10 +7,10 @@ import os
 import shutil
 import signal
 import subprocess
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, NoReturn
 
 import pytest
@@ -214,6 +214,60 @@ def clear_workspace_shell_env(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(name, raising=False)
 
 
+#: The environment the suite was launched with, captured before any fixture
+#: rewrites it.  Only the isolation tests read it — to prove the suite no longer
+#: runs against it.
+LAUNCH_ENVIRONMENT: Mapping[str, str] = MappingProxyType(dict(os.environ))
+
+#: Git identity for every test, so committing never needs a personal
+#: ``~/.gitconfig``.  ``GIT_CONFIG_NOSYSTEM`` drops the machine-wide file too.
+GIT_IDENTITY: Mapping[str, str] = MappingProxyType(
+    {
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "test@test.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "test@test.com",
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+)
+
+#: Variables that tell AGM which project and terminal it is running inside.  A
+#: suite launched from an agm workspace inherits them and would otherwise
+#: resolve *that* project instead of the one the test built.
+_HOST_CONTEXT_VARIABLES = ("PROJ_DIR", "REPO_DIR", "TMUX", "TMUX_PANE")
+
+
+@pytest.fixture(autouse=True)
+def isolate_host_environment(
+    clear_workspace_shell_env: None,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run every test against its own empty home, never the developer's.
+
+    ``HOME`` resolves the AGM home (``~/.agm``), so without this a developer who
+    has run ``agm pkg install`` makes the suite read their installed package
+    store, their ``config.toml`` and their prompts — the suite would then pass
+    or fail depending on the machine.  Point ``HOME`` (and the XDG roots git
+    consults) at a per-test directory, supply git identity explicitly so an
+    empty home can still commit, and drop the project/terminal variables an agm
+    workspace shell exports.
+
+    Tests that need a populated home build one and pass it explicitly, as
+    ``home=`` or in an ``env`` mapping.  The home lives outside the test's own
+    ``tmp_path`` so that a test inspecting that directory sees only its own
+    files.
+    """
+    home = tmp_path_factory.mktemp("isolated-home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
+    for name, value in GIT_IDENTITY.items():
+        monkeypatch.setenv(name, value)
+    for name in _HOST_CONTEXT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
 
@@ -306,18 +360,17 @@ def refuse_real_http_requests(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture()
 def env(tmp_path: Path) -> dict[str, str]:
-    """Environment dict with git identity and isolated HOME."""
+    """Environment dict with git identity and a home of its own.
+
+    A separate home from the one :func:`isolate_host_environment` installs, so a
+    test that passes this mapping to a subprocess can inspect what AGM wrote
+    under it.
+    """
     e = os.environ.copy()
-    e["GIT_AUTHOR_NAME"] = "Test"
-    e["GIT_AUTHOR_EMAIL"] = "test@test.com"
-    e["GIT_COMMITTER_NAME"] = "Test"
-    e["GIT_COMMITTER_EMAIL"] = "test@test.com"
-    e["GIT_CONFIG_NOSYSTEM"] = "1"
+    e.update(GIT_IDENTITY)
     e["SHELL"] = shutil.which("bash") or "/bin/sh"
-    e.pop("PROJ_DIR", None)
-    e.pop("REPO_DIR", None)
-    e.pop("TMUX", None)
-    e.pop("TMUX_PANE", None)
+    for name in _HOST_CONTEXT_VARIABLES:
+        e.pop(name, None)
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     e["HOME"] = str(fake_home)

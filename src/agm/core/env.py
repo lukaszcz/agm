@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -14,10 +15,25 @@ from dotenv.variables import parse_variables
 
 from agm.core.process import exit_with_output
 
+#: The widest and narrowest help AGM renders itself, whatever the terminal
+#: reports: wide help grows unreadable, and a very narrow one leaves no room
+#: for a description column.
+_HELP_WIDTH_RANGE = (40, 80)
+
 
 def resolve_env(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
     """Return *env*, or the process environment when *env* is None (no copy)."""
     return os.environ if env is None else env
+
+
+def help_width() -> int:
+    """Return the column count AGM's hand-rendered help wraps to.
+
+    The terminal's width, clamped: ``COLUMNS`` overrides it, as it does for
+    every other command's Click-rendered help.
+    """
+    narrowest, widest = _HELP_WIDTH_RANGE
+    return max(min(shutil.get_terminal_size().columns, widest), narrowest)
 
 
 def clone_env(env: Mapping[str, str] | None = None) -> dict[str, str]:

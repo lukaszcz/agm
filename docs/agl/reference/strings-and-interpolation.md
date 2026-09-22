@@ -62,6 +62,12 @@ escape (a high surrogate not immediately followed by a matching low one, or a
 low surrogate on its own) is a lexical error, since a `text` value can never
 hold a surrogate code point on its own ([Types](types.md#text)).
 
+A template whose holes are all constant is itself a [constant
+expression](bindings-and-scope.md#constant-expressions), so it may fill a
+position that runs no code — an attribute argument, a `builtin var` default, a
+root binding initializer. An environment hole reads the environment and so is
+never constant.
+
 ## The `$` literal
 
 A `$` at the start of a token opens a **verbatim text literal** (`$`

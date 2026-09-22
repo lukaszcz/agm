@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -14,7 +15,7 @@ from agm.command_catalog import invalid_command_path
 from agm.core.toml import TomlDict, load_toml_file, parse_toml_doc, toml_dict
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
-_COMMAND_FIELDS = frozenset({"program", "description", "help"})
+_COMMAND_FIELDS = frozenset({"program", "doc"})
 
 
 class ManifestError(ValueError):
@@ -33,11 +34,35 @@ class DependencySpec:
 
 @dataclass(frozen=True, slots=True)
 class CommandSpec:
-    """One manifest command registration."""
+    """One manifest command registration.
+
+    ``doc`` is the command's prose. A command naming a program takes it from
+    that program's ``@doc`` every time the package's source is read, and an
+    installed manifest carries the result so a host lists the command without
+    compiling anything (see
+    :func:`agm.packages.source_commands.package_with_source_commands`). A
+    command group, which names no program, carries only what the manifest
+    states.
+    """
 
     program: str | None = None
-    description: str | None = None
-    help: str | None = None
+    doc: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UnknownField:
+    """One manifest key the schema does not define, and where it was found.
+
+    Loading records these rather than refusing the file: a manifest AGM baked
+    into its own store may have been written by a build with fields this one
+    does not know, and a package that cannot be read at all takes the whole CLI
+    down with it. Authored manifests are held to the schema by
+    :func:`agm.packages.discipline.validate_package`, at the boundary where the
+    author can act on the error.
+    """
+
+    context: str
+    name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +79,7 @@ class PackageManifest:
     dependencies: dict[str, DependencySpec] = field(default_factory=dict)
     commands: dict[str, CommandSpec] = field(default_factory=dict)
     aliases: dict[str, str] = field(default_factory=dict)
+    unknown_fields: tuple[UnknownField, ...] = ()
 
 
 def command_paths_for_program(
@@ -196,9 +222,9 @@ def load_manifest_text(content: str, *, commands_complete: bool = True) -> Packa
 
 
 def _parse_manifest(raw: TomlDict, *, commands_complete: bool = True) -> PackageManifest:
-    _only_keys(raw, {"package", "dependencies", "commands", "aliases"}, "manifest")
+    unknown = _unknown_keys(raw, {"package", "dependencies", "commands", "aliases"}, "manifest")
     package = _required_table(raw, "package")
-    _only_keys(
+    unknown += _unknown_keys(
         package,
         {"name", "version", "description", "license", "authors", "repository", "keywords"},
         "package",
@@ -215,9 +241,10 @@ def _parse_manifest(raw: TomlDict, *, commands_complete: bool = True) -> Package
         authors=_optional_str_list(package, "authors", "package"),
         repository=_optional_str(package, "repository", "package"),
         keywords=_optional_str_list(package, "keywords", "package"),
-        dependencies=_dependencies(_optional_table(raw, "dependencies")),
-        commands=_commands(_optional_table(raw, "commands")),
+        dependencies=_dependencies(_optional_table(raw, "dependencies"), unknown),
+        commands=_commands(_optional_table(raw, "commands"), unknown),
         aliases=alias_map,
+        unknown_fields=tuple(unknown),
     )
     if commands_complete:
         validate_command_set(manifest)
@@ -242,7 +269,7 @@ def validate_package_name(value: str) -> str:
     return value
 
 
-def _dependencies(raw: TomlDict) -> dict[str, DependencySpec]:
+def _dependencies(raw: TomlDict, unknown: list[UnknownField]) -> dict[str, DependencySpec]:
     dependencies: dict[str, DependencySpec] = {}
     for name, value in raw.items():
         validate_package_name(name)
@@ -251,15 +278,15 @@ def _dependencies(raw: TomlDict) -> dict[str, DependencySpec]:
                 _minimum_version(value, f"dependency {name!r} version")
             )
         elif isinstance(value, dict):
-            dependencies[name] = _dependency_table(name, toml_dict(value))
+            dependencies[name] = _dependency_table(name, toml_dict(value), unknown)
         else:
             raise ManifestError(f"dependency {name!r} must be a version string or table")
     return dependencies
 
 
-def _dependency_table(name: str, raw: TomlDict) -> DependencySpec:
-    _only_keys(raw, {"version", "path", "url", "hash"}, f"dependency {name!r}")
+def _dependency_table(name: str, raw: TomlDict, unknown: list[UnknownField]) -> DependencySpec:
     context = f"dependency {name!r}"
+    unknown += _unknown_keys(raw, {"version", "path", "url", "hash"}, context)
     version = _minimum_version(_required_str(raw, "version", context), f"{context} version")
     path = _optional_str(raw, "path", context)
     url = _optional_str(raw, "url", context)
@@ -298,13 +325,15 @@ def parse_sha256(value: str) -> str | None:
     return digest.lower()
 
 
-def _commands(raw: TomlDict) -> dict[str, CommandSpec]:
+def _commands(raw: TomlDict, unknown: list[UnknownField]) -> dict[str, CommandSpec]:
     commands: dict[str, CommandSpec] = {}
-    _collect_commands(raw, prefix="", commands=commands)
+    _collect_commands(raw, prefix="", commands=commands, unknown=unknown)
     return commands
 
 
-def _collect_commands(raw: TomlDict, *, prefix: str, commands: dict[str, CommandSpec]) -> None:
+def _collect_commands(
+    raw: TomlDict, *, prefix: str, commands: dict[str, CommandSpec], unknown: list[UnknownField]
+) -> None:
     """Flatten nested TOML command tables into space-separated CLI paths."""
 
     for name, value in raw.items():
@@ -317,24 +346,22 @@ def _collect_commands(raw: TomlDict, *, prefix: str, commands: dict[str, Command
             for key, field in command.items()
             if key in _COMMAND_FIELDS and not isinstance(field, dict)
         }
-        children = {
-            key: child
-            for key, child in command.items()
-            if key not in _COMMAND_FIELDS or isinstance(child, dict)
+        children: TomlDict = {
+            key: child for key, child in command.items() if isinstance(child, dict)
         }
-        unsupported = {key for key, child in children.items() if not isinstance(child, dict)}
-        if unsupported:
-            names = ", ".join(sorted(unsupported))
-            raise ManifestError(f"command {path!r} has unsupported fields: {names}")
+        unknown += _unknown_keys(
+            {key: field for key, field in command.items() if not isinstance(field, dict)},
+            set(_COMMAND_FIELDS),
+            f"command {path!r}",
+        )
         if not children or metadata:
             if path in commands:
                 raise ManifestError(f"command {path!r} is defined more than once")
             commands[path] = CommandSpec(
                 program=_optional_str(metadata, "program", f"command {path!r}"),
-                description=_optional_str(metadata, "description", f"command {path!r}"),
-                help=_optional_str(metadata, "help", f"command {path!r}"),
+                doc=_optional_str(metadata, "doc", f"command {path!r}"),
             )
-        _collect_commands(children, prefix=path, commands=commands)
+        _collect_commands(children, prefix=path, commands=commands, unknown=unknown)
 
 
 def _version(value: str, label: str) -> semver.Version:
@@ -389,8 +416,16 @@ def _optional_str_list(raw: TomlDict, key: str, context: str) -> tuple[str, ...]
     return tuple(value)
 
 
-def _only_keys(raw: TomlDict, allowed: set[str], context: str) -> None:
-    unexpected = set(raw).difference(allowed)
-    if unexpected:
-        names = ", ".join(sorted(unexpected))
-        raise ManifestError(f"{context} has unsupported fields: {names}")
+def _unknown_keys(raw: TomlDict, allowed: set[str], context: str) -> list[UnknownField]:
+    return [UnknownField(context, name) for name in sorted(set(raw).difference(allowed))]
+
+
+def describe_unknown_fields(fields: Iterable[UnknownField]) -> str:
+    """Render *fields* as one message, a clause per context that carries any."""
+    by_context: dict[str, list[str]] = {}
+    for unknown in fields:
+        by_context.setdefault(unknown.context, []).append(unknown.name)
+    return "; ".join(
+        f"{context} has unsupported fields: {', '.join(sorted(names))}"
+        for context, names in by_context.items()
+    )

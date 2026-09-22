@@ -1,0 +1,7 @@
+# A binding defined in terms of itself, directly or through another binding,
+# never becomes constant.
+let opening = "[%{closing}]"
+let closing = "(%{opening})"
+
+program def main() -> unit =
+  print opening

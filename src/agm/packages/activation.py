@@ -72,12 +72,16 @@ def active_package_version(active: ActivePackage) -> semver.Version:
 
 @dataclass(frozen=True, slots=True)
 class CommandRegistration:
-    """One installed package command recorded in the activation index."""
+    """One installed package command recorded in the activation index.
+
+    ``doc`` is the registered program's own ``@doc``, cached here so a host
+    lists the command — in the ``agm`` overview, in its group's help — without
+    reading or compiling the program behind it.
+    """
 
     package: str
     program: str | None
-    description: str | None = None
-    help: str | None = None
+    doc: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,10 +155,8 @@ def write_activation_index(
         command_table["package"] = command.package
         if command.program is not None:
             command_table["program"] = command.program
-        if command.help is not None:
-            command_table["help"] = command.help
-        if command.description is not None:
-            command_table["description"] = command.description
+        if command.doc is not None:
+            command_table["doc"] = command.doc
         commands_table[path_name] = command_table
     doc["commands"] = commands_table
 
@@ -529,8 +531,7 @@ def merge_package_commands(
         commands[path_name] = CommandRegistration(
             package=manifest.name,
             program=spec.program,
-            description=spec.description,
-            help=spec.help,
+            doc=spec.doc,
         )
     updated = ActivationIndex(dict(index.packages), commands)
     _validate_commands(updated)
@@ -575,8 +576,7 @@ def _reconciled_commands(
             commands[path_name] = CommandRegistration(
                 package.manifest.name,
                 spec.program,
-                spec.description,
-                spec.help,
+                spec.doc,
             )
     reconciled = ActivationIndex(dict(index.packages), commands)
     _validate_commands(reconciled)
@@ -741,15 +741,14 @@ def _parse_activation_index(raw: TomlDict) -> ActivationIndex:
     for path_name, value in toml_dict(commands_raw).items():
         if not isinstance(value, dict):
             raise PackageActivationError(f"command registration {path_name!r} must be a table")
+        # A command registration is derived presentation, rewritten whole by
+        # the next install, so a field this build does not know is dropped
+        # rather than refused: an index another build wrote costs a summary,
+        # never the ability to run the command that rewrites it.
         table = toml_dict(value)
-        if set(table).difference({"package", "program", "description", "help"}):
-            raise PackageActivationError(
-                f"command registration {path_name!r} has unsupported fields"
-            )
         package = table.get("package")
         program = table.get("program")
-        description = table.get("description")
-        help_text = table.get("help")
+        doc = table.get("doc")
         if (
             not isinstance(package, str)
             or (program is not None and (not isinstance(program, str) or not program))
@@ -758,13 +757,11 @@ def _parse_activation_index(raw: TomlDict) -> ActivationIndex:
             raise PackageActivationError(
                 f"command registration {path_name!r} requires non-empty package and program strings"
             )
-        if description is not None and (not isinstance(description, str) or not description):
+        if doc is not None and (not isinstance(doc, str) or not doc):
             raise PackageActivationError(
-                f"command registration {path_name!r} has invalid description"
+                f"command registration {path_name!r} has invalid documentation"
             )
-        if help_text is not None and (not isinstance(help_text, str) or not help_text):
-            raise PackageActivationError(f"command registration {path_name!r} has invalid help")
-        commands[path_name] = CommandRegistration(package, program, description, help_text)
+        commands[path_name] = CommandRegistration(package, program, doc)
     index = ActivationIndex(packages, commands)
     _validate_commands(index)
     return index
@@ -804,10 +801,8 @@ def _validate_command_registration(
         )
     if command.program == "":
         raise PackageActivationError(f"command path {path_name!r} requires a program reference")
-    if command.help == "":
-        raise PackageActivationError(f"command path {path_name!r} has invalid help")
-    if command.description is not None and not command.description:
-        raise PackageActivationError(f"command path {path_name!r} has an invalid description")
+    if command.doc is not None and not command.doc:
+        raise PackageActivationError(f"command path {path_name!r} has invalid documentation")
 
 
 def resolve_active_package(

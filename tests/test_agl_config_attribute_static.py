@@ -56,6 +56,22 @@ class TestAcceptedConfigTargets:
     def test_own_module_param_bare_name(self) -> None:
         _check("@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n")
 
+    def test_value_naming_this_modules_own_constant(self) -> None:
+        _check(
+            "@param let count: int = 1\n"
+            "let other: int = 2\n\n"
+            "@config(count = other)\n"
+            "program def main() -> unit = ()\n"
+        )
+
+    def test_value_interpolating_this_modules_own_constant(self) -> None:
+        _check(
+            '@param let label: text = "plain"\n'
+            'let suffix = "tail"\n\n'
+            '@config(label = "head-%{suffix}")\n'
+            "program def main() -> unit = ()\n"
+        )
+
     def test_own_module_param_current_module_anchored_name(self) -> None:
         _check(
             "@param let count: int = 1\n\n@config(::count = 2)\nprogram def main() -> unit = ()\n"
@@ -219,11 +235,12 @@ class TestRejectedConfigTargets:
                 "program def main() -> unit = ()\n"
             )
 
-    def test_a_reference_to_a_static_let_is_not_constant(self) -> None:
+    def test_a_reference_to_a_non_constant_binding_is_rejected(self) -> None:
         with pytest.raises(AglTypeError):
             _check(
                 "@param let count: int = 1\n"
-                "let other: int = 2\n\n"
+                "def helper() -> int = 2\n"
+                "let other: int = helper()\n\n"
                 "@config(count = other)\n"
                 "program def main() -> unit = ()\n"
             )

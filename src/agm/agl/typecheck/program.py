@@ -129,9 +129,11 @@ from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import (
     _check_prepared_module,
     _Checker,
+    is_constant_builtin_call,
     prepare_module_headers,
     require_static_root_constant,
 )
+from agm.agl.typecheck.constant_bindings import ModuleConstantBindings
 from agm.agl.typecheck.declaration_validation import (
     validate_builtin_declaration_uniqueness,
     validate_method_declaration_collisions,
@@ -163,6 +165,7 @@ from agm.agl.typecheck.function_inference import (
     resolve_function_header,
 )
 from agm.agl.zones import ParamZone
+from agm.util.graph import GraphCycleError, toposort
 
 # ---------------------------------------------------------------------------
 # Output types
@@ -867,18 +870,18 @@ def _build_program_func_sig_table(
     return result
 
 
-def _screen_unannotated_binding_is_constant(
-    item: LetDecl | VarDecl, module_resolved: ModuleResolution
-) -> None:
-    """Reject a non-constant unannotated static-root binding before scratch-typing it.
+def _scope_constant_bindings(
+    module_resolved: ModuleResolution, module_id: ModuleId
+) -> ModuleConstantBindings:
+    """Classify one module's constants from scope-resolved data alone.
 
-    Uses only scope-resolved data (no checker-time slot resolution exists yet),
-    so a non-constant initializer never reaches expression checking before
-    candidate function signatures are published.
+    No checker-time slot resolution exists yet when the static-binding
+    pre-pass runs, so constancy is decided here exactly as the checker later
+    decides it, from scope's own constructor classification.
     """
-    require_static_root_constant(
-        item.value,
+    return ModuleConstantBindings(
         module_resolved,
+        module_id,
         is_constructor=lambda node_id: (
             dereference_slot_constructor_ref(
                 node_id,
@@ -888,7 +891,29 @@ def _screen_unannotated_binding_is_constant(
             )
             is not None
         ),
+        is_constant_builtin=lambda node_id: is_constant_builtin_call(module_resolved, node_id),
     )
+
+
+def _constant_dependency_order(
+    bindings: Mapping[int, LetDecl | VarDecl], constants: ModuleConstantBindings
+) -> list[int]:
+    """Order one module's static bindings so a named constant is typed before its reader.
+
+    A constant may name another constant of its own module in either source
+    direction, so an unannotated binding's inferred type can depend on a later
+    one. A cyclic set keeps source order: the constant-expression check reports
+    the cycle itself once the first of them is screened.
+    """
+    position = {node_id: index for index, node_id in enumerate(bindings)}
+    deps = {
+        node_id: constants.dependencies(item.value) & bindings.keys()
+        for node_id, item in bindings.items()
+    }
+    try:
+        return toposort(bindings, deps, key=position.__getitem__)
+    except GraphCycleError:
+        return list(bindings)
 
 
 def _build_program_static_binding_table(
@@ -903,14 +928,15 @@ def _build_program_static_binding_table(
     Annotated: resolve the annotation directly. Unannotated: the static-root
     constant-expression rule already required of every module-level initializer
     in an importable module (``checker.require_static_root_constant``) means an
-    unannotated binding's type depends only on its own initializer -- never on
-    another binding or on candidate function inference, which has not run yet
-    -- so it is screened for constancy and then typed with a throwaway
-    ``_Checker``'s ``infer_static_initializer_type`` over this module's own
-    prepared environment (the same pattern
+    unannotated binding's type depends only on its own initializer and on the
+    constants that initializer names -- never on candidate function inference,
+    which has not run yet -- so it is screened for constancy and then typed
+    with a throwaway ``_Checker``'s ``infer_static_initializer_type`` over this
+    module's own prepared environment (the same pattern
     ``function_inference._seed_candidate_visible_bindings`` uses), which
     installs no binding and writes nothing beyond the initializer's own
-    ordinary node types.
+    ordinary node types. A named constant is typed first and its type installed
+    into the environment, so a binding that names one resolves it there.
 
     A non-static-root module (the REPL, or a ``-c`` entry with no ``program
     def`` of its own) is skipped: it is never imported, so nothing reads its
@@ -932,29 +958,33 @@ def _build_program_static_binding_table(
             result.update(cached.published_binding_types)
             continue
         env = module_envs[mid]
+        constants = _scope_constant_bindings(module_resolved, mid)
+        bindings = {
+            static_binding_node_id(item): item
+            for item in static_items(module_resolved.program.body.items)
+            if isinstance(item, (LetDecl, VarDecl)) and exported_binding_name(item) is not None
+        }
         checker: _Checker | None = None
-        for item in static_items(module_resolved.program.body.items):
-            if not isinstance(item, (LetDecl, VarDecl)):
-                continue
-            if exported_binding_name(item) is None:
-                continue
-            decl_node_id = static_binding_node_id(item)
-            scope_path = tuple(segment.name for segment in item.scope_path)
+        for decl_node_id in _constant_dependency_order(bindings, constants):
+            item = bindings[decl_node_id]
             if item.type_ann is not None:
+                scope_path = tuple(segment.name for segment in item.scope_path)
                 with env.type_scope(scope_path):
-                    result[decl_node_id] = env.resolve_type_expr(
+                    binding_type = env.resolve_type_expr(
                         item.type_ann, span=item.span, type_vars=frozenset()
                     )
-                continue
-            _screen_unannotated_binding_is_constant(item, module_resolved)
-            if checker is None:
-                checker = _Checker(
-                    env=env,
-                    resolved=module_resolved,
-                    capabilities=capabilities,
-                    module_id=mid,
-                )
-            result[decl_node_id] = checker.infer_static_initializer_type(item)
+            else:
+                require_static_root_constant(item.value, module_resolved, constants=constants)
+                if checker is None:
+                    checker = _Checker(
+                        env=env,
+                        resolved=module_resolved,
+                        capabilities=capabilities,
+                        module_id=mid,
+                    )
+                binding_type = checker.infer_static_initializer_type(item)
+            result[decl_node_id] = binding_type
+            env.set_binding_type(decl_node_id, binding_type)
     return result
 
 

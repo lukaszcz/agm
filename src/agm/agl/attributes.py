@@ -8,9 +8,9 @@ other attributes it excludes. Everything here is data — the diagnostics for an
 unknown, misplaced, malformed, duplicate, or conflicting attribute belong to
 the pass that consults the catalog. The typed shapes an attribute's meaning
 takes — :class:`ProgramOptionSpec`, the command-line presentation the
-``@opt-*`` attributes describe, and :class:`ProgramCommandSpec`, the package
-command registration the ``@command`` family describes — live here too, so a
-host reads one without reaching into a pass.
+``@opt-*`` attributes describe, and :class:`ProgramRegistration`, the hosting
+``@doc`` and ``@command`` describe — live here too, so a host reads one
+without reaching into a pass.
 
 It is a top-level leaf sitting on ``zones``, whose ``ParamZone`` the ``@arg-*``
 attributes name, on the pure command catalog, whose command-path rule
@@ -35,12 +35,9 @@ from agm.command_catalog import invalid_command_path
 __all__ = [
     "BUILTIN_ATTRIBUTES",
     "COMMAND_ATTRIBUTE",
-    "COMMAND_PROSE_ATTRIBUTES",
     "CONFIG_ATTRIBUTE",
-    "DESCRIPTION_ATTRIBUTE",
     "DOC_ATTRIBUTE",
     "EXTERN_NAME_ATTRIBUTE",
-    "HELP_ATTRIBUTE",
     "JSON_NAME_ATTRIBUTE",
     "NAME_ADDRESSED_OPTION_ATTRIBUTES",
     "NAME_ATTRIBUTE",
@@ -56,8 +53,8 @@ __all__ = [
     "AttributeArguments",
     "AttributeSpec",
     "AttributeTarget",
-    "ProgramCommandSpec",
     "ProgramOptionSpec",
+    "ProgramRegistration",
     "invalid_external_name",
     "invalid_json_name",
     "invalid_program_command_path",
@@ -164,18 +161,11 @@ EXTERN_NAME_ATTRIBUTE = "extern-name"
 #: its own, and every host surface showing documentation reads that table.
 DOC_ATTRIBUTE = "doc"
 
-#: The attributes registering a ``program def`` as a package command. The path
-#: ``@command`` names is the command a reader invokes; ``@description`` and
-#: ``@help`` are the prose the registration carries, the namesake fields of a
-#: package manifest's command table. The prose attributes describe a
-#: registration rather than a program, so neither means anything without
-#: ``@command`` beside it.
+#: The attribute registering a ``program def`` as a package command: the path
+#: it names is the command a reader invokes. A command is a way to refer to a
+#: program, so the registration carries no prose of its own — the program's
+#: ``@doc`` describes it wherever it runs, its command listing included.
 COMMAND_ATTRIBUTE = "command"
-DESCRIPTION_ATTRIBUTE = "description"
-HELP_ATTRIBUTE = "help"
-
-#: The command attributes carrying prose: legal only beside ``@command``.
-COMMAND_PROSE_ATTRIBUTES: tuple[str, ...] = (DESCRIPTION_ATTRIBUTE, HELP_ATTRIBUTE)
 
 #: The attribute stating the module-parameter and engine-setting values a
 #: ``program def`` selects in source.
@@ -276,18 +266,19 @@ class ProgramOptionSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class ProgramCommandSpec:
-    """The package command one ``program def`` registers itself as.
+class ProgramRegistration:
+    """How a ``program def``'s attribute prefix presents it to a package host.
 
-    ``path`` is the command a reader invokes, in the space-separated spelling a
-    package manifest uses. ``description`` and ``help`` are the registration's
-    prose, absent unless their attribute supplies them; they are distinct from
-    the program's own ``@doc``, which describes the program wherever it is run.
+    ``doc`` is the program's own documentation: the prose every surface naming
+    the program shows, the listing of its registered command included, since a
+    command is a way to refer to a program rather than a thing described on its
+    own. ``command`` is the command path it registers as, in the
+    space-separated spelling a package manifest uses, absent for a program that
+    registers none.
     """
 
-    path: str
-    description: str | None = None
-    help: str | None = None
+    doc: str | None = None
+    command: str | None = None
 
 
 def invalid_program_command_path(path: str) -> str | None:
@@ -386,7 +377,6 @@ _SPECS: tuple[AttributeSpec, ...] = (
     _option_spec(OPTION_METAVAR_ATTRIBUTE, AttributeArguments.ONE_TEXT),
     _option_spec(OPTION_HIDDEN_ATTRIBUTE, AttributeArguments.NONE),
     _program_spec(COMMAND_ATTRIBUTE),
-    *(_program_spec(name) for name in COMMAND_PROSE_ATTRIBUTES),
     AttributeSpec(
         name=CONFIG_ATTRIBUTE,
         targets=frozenset({AttributeTarget.PROGRAM}),

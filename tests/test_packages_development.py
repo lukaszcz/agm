@@ -225,7 +225,7 @@ def test_containing_development_package_accepts_a_group_completed_by_source(
     _write_package(root, "alpha")
     (root / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n',
+        '[commands.devel]\ndoc = "Development workflows"\n',
         encoding="utf-8",
     )
 

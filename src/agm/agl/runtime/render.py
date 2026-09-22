@@ -34,21 +34,11 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
-from agm.agl.value_syntax.lexical import quote_text
+from agm.agl.value_syntax.lexical import quote_text, scalar_text
 
 
 def _indent(level: int) -> str:
     return "  " * level
-
-
-def _scalar_text(value: IntValue | DecimalValue | BoolValue) -> str:
-    """Render an int, decimal, or bool value as plain text."""
-    if isinstance(value, IntValue):
-        return str(value.value)
-    if isinstance(value, DecimalValue):
-        # Drop trailing zeros without using scientific notation.
-        return format(value.value.normalize(), "f")
-    return "true" if value.value else "false"
 
 
 def _shift_after_first(text: str, *, level: int) -> str:
@@ -149,7 +139,7 @@ def _render(
         return "()"
 
     if isinstance(value, (IntValue, DecimalValue, BoolValue)):
-        return _scalar_text(value)
+        return scalar_text(value.value)
 
     if isinstance(value, ConstructorValue):
         return f"<constructor {descriptors.nominals[value.nominal].display_name}>"

@@ -56,18 +56,13 @@ class TestPackageWithSourceCommands:
         _write(
             package,
             "review.agl",
-            '@command("tools review")\n'
-            '@description("Review changes")\n'
-            '@help("Reviews a change")\n'
-            "program def main() -> unit = ()\n",
+            '@command("tools review")\n@doc("Review changes")\nprogram def main() -> unit = ()\n',
         )
 
         merged = package_with_source_commands(package)
 
         assert merged.manifest.commands == {
-            "tools review": CommandSpec(
-                program="tools/review::main", description="Review changes", help="Reviews a change"
-            )
+            "tools review": CommandSpec(program="tools/review::main", doc="Review changes")
         }
 
     def test_a_program_in_a_scope_region_registers_its_qualified_declaration(
@@ -90,12 +85,13 @@ class TestPackageWithSourceCommands:
             "devel review": CommandSpec(program="tools/main::Devel::run")
         }
 
-    def test_prose_without_a_command_attribute_is_a_discipline_error(self, tmp_path: Path) -> None:
+    def test_documentation_of_an_unregistered_program_registers_nothing(
+        self, tmp_path: Path
+    ) -> None:
         package = _package(tmp_path)
-        _write(package, "main.agl", '@description("oops")\nprogram def main() -> unit = ()\n')
+        _write(package, "main.agl", '@doc("Just a program")\nprogram def main() -> unit = ()\n')
 
-        with pytest.raises(DisciplineError, match="command"):
-            package_with_source_commands(package)
+        assert package_with_source_commands(package) is package
 
     def test_a_malformed_command_path_is_a_discipline_error(self, tmp_path: Path) -> None:
         package = _package(tmp_path)
@@ -185,21 +181,38 @@ class TestPackageWithSourceCommands:
         with pytest.raises(DisciplineError, match="tools review"):
             package_with_source_commands(package)
 
-    def test_a_manifest_command_conflicting_with_different_prose_is_a_discipline_error(
+    def test_a_manifest_command_naming_a_different_program_is_a_discipline_error(
         self, tmp_path: Path
     ) -> None:
         package = _package(
             tmp_path,
-            commands={"tools review": CommandSpec(program="tools/review::main", description="Old")},
+            commands={"tools review": CommandSpec(program="tools/other::main")},
         )
+        _write(package, "other.agl", "program def main() -> unit = ()\n")
         _write(
             package,
             "review.agl",
-            '@command("tools review")\n@description("New")\nprogram def main() -> unit = ()\n',
+            '@command("tools review")\nprogram def main() -> unit = ()\n',
         )
 
         with pytest.raises(DisciplineError, match="tools review"):
             package_with_source_commands(package)
+
+    def test_a_command_the_manifest_declares_takes_its_program_documentation(
+        self, tmp_path: Path
+    ) -> None:
+        package = _package(
+            tmp_path, commands={"tools review": CommandSpec(program="tools/review::main")}
+        )
+        _write(
+            package,
+            "review.agl",
+            '@doc("Review changes")\nprogram def main() -> unit = ()\n',
+        )
+
+        merged = package_with_source_commands(package)
+
+        assert merged.manifest.commands["tools review"].doc == "Review changes"
 
     def test_a_path_already_baked_with_an_identical_registration_passes_through(
         self, tmp_path: Path
@@ -214,20 +227,13 @@ class TestPackageWithSourceCommands:
         package = _package(
             tmp_path,
             commands={
-                "tools review": CommandSpec(
-                    program="tools/review::main",
-                    description="Review changes",
-                    help="Reviews a change",
-                )
+                "tools review": CommandSpec(program="tools/review::main", doc="Review changes")
             },
         )
         _write(
             package,
             "review.agl",
-            '@command("tools review")\n'
-            '@description("Review changes")\n'
-            '@help("Reviews a change")\n'
-            "program def main() -> unit = ()\n",
+            '@command("tools review")\n@doc("Review changes")\nprogram def main() -> unit = ()\n',
         )
 
         merged = package_with_source_commands(package)
@@ -257,9 +263,7 @@ class TestPackageWithSourceCommands:
         but the merge must still validate the manifest it was handed rather
         than skip straight past an early return.
         """
-        package = _package(
-            tmp_path, commands={"devel": CommandSpec(description="Development workflows")}
-        )
+        package = _package(tmp_path, commands={"devel": CommandSpec(doc="Development workflows")})
         _write(package, "main.agl", "program def main() -> unit = ()\n")
 
         with pytest.raises(DisciplineError, match="devel"):
@@ -268,20 +272,18 @@ class TestPackageWithSourceCommands:
     def test_a_manifest_group_satisfied_only_by_a_discovered_descendant_is_accepted(
         self, tmp_path: Path
     ) -> None:
-        package = _package(
-            tmp_path, commands={"devel": CommandSpec(description="Development workflows")}
-        )
+        package = _package(tmp_path, commands={"devel": CommandSpec(doc="Development workflows")})
         _write(package, "main.agl", '@command("devel review")\nprogram def review() -> unit = ()\n')
 
         merged = package_with_source_commands(package)
 
-        assert merged.manifest.commands["devel"].description == "Development workflows"
+        assert merged.manifest.commands["devel"].doc == "Development workflows"
         assert merged.manifest.commands["devel review"].program == "tools/main::review"
 
     def test_an_alias_targeting_a_discovered_command_path_resolves(self, tmp_path: Path) -> None:
         package = _package(
             tmp_path,
-            commands={"devel": CommandSpec(description="Development workflows")},
+            commands={"devel": CommandSpec(doc="Development workflows")},
             aliases={"rev": "devel review"},
         )
         _write(package, "main.agl", '@command("devel review")\nprogram def review() -> unit = ()\n')
@@ -311,3 +313,61 @@ def test_discovery_and_validation_parse_each_module_once(
 
     module = str((package.root / MODULE_TREE_DIRNAME / "main.agl").resolve())
     assert counts[module] == 1
+
+
+class TestConstantsFoldedIntoRegistrations:
+    """A registration's text is folded from the module's own constants.
+
+    Discovery still reads the AST alone, so an editable package's command
+    table carries the same prose a compiled run would show.
+    """
+
+    def test_a_command_path_and_prose_interpolate_module_constants(self, tmp_path: Path) -> None:
+        package = _package(tmp_path)
+        _write(
+            package,
+            "review.agl",
+            'let group = "tools"\n'
+            "let rounds = 3\n"
+            '@command("%{group} review")\n'
+            '@doc("Review changes in %{rounds} rounds.")\n'
+            "program def main() -> unit = ()\n",
+        )
+
+        merged = package_with_source_commands(package)
+
+        assert merged.manifest.commands == {
+            "tools review": CommandSpec(
+                program="tools/review::main", doc="Review changes in 3 rounds."
+            )
+        }
+
+    def test_prose_may_name_a_constant_declared_later_in_the_module(self, tmp_path: Path) -> None:
+        package = _package(tmp_path)
+        _write(
+            package,
+            "review.agl",
+            '@command("tools review")\n'
+            "@doc(prose)\n"
+            "program def main() -> unit = ()\n"
+            '\nlet prose = "Review the working tree."\n',
+        )
+
+        merged = package_with_source_commands(package)
+
+        assert merged.manifest.commands["tools review"].doc == "Review the working tree."
+
+    def test_prose_naming_another_module_is_rejected(self, tmp_path: Path) -> None:
+        package = _package(tmp_path)
+        _write(package, "shared.agl", 'let prose = "Shared."\n')
+        _write(
+            package,
+            "review.agl",
+            "import shared\n"
+            '@command("tools review")\n'
+            "@doc(shared::prose)\n"
+            "program def main() -> unit = ()\n",
+        )
+
+        with pytest.raises(DisciplineError, match="constant"):
+            package_with_source_commands(package)

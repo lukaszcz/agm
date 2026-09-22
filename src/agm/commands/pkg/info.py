@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sys
+import textwrap
 
 from agm.cli_support.args import PkgInfoArgs
 from agm.config.context import current_config_context
+from agm.core.env import help_width
 from agm.packages.activation import (
     PackageActivationError,
     active_package_version,
@@ -18,6 +20,7 @@ from agm.packages.model import (
     std_compatibility_upper_bound,
     unmet_std_requirement,
 )
+from agm.util.text import first_paragraph
 from agm.version import AGM_VERSION
 
 
@@ -54,9 +57,18 @@ def run(args: PkgInfoArgs) -> None:
             print(f"  {alias}: {target}")
     if manifest.commands:
         print("commands:")
+        width = help_width()
         for path, command in sorted(manifest.commands.items()):
-            description = "" if command.description is None else f" ({command.description})"
-            print(f"  {path}: {command.program or 'command group'}{description}")
+            print(f"  {path}: {command.program or 'command group'}")
+            if command.doc:
+                print(
+                    textwrap.fill(
+                        first_paragraph(command.doc),
+                        width=width,
+                        initial_indent="      ",
+                        subsequent_indent="      ",
+                    )
+                )
     for name, dependency in sorted(manifest.dependencies.items()):
         requirement = f">= {dependency.version}"
         if is_std_package_name(name):

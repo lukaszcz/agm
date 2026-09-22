@@ -5,10 +5,11 @@
 ## Modules and programs
 
 A source file is a **module**. Its root is static: it holds declarations and
-constant `let`/`var` initializers. Executable code — bare expressions,
-assignments, loops, agent calls — lives in function bodies, and a run starts
-in a [`program def`](#program-definitions). Items are separated by newlines
-or semicolons. There is no syntactic distinction between *statements* and
+[constant](bindings-and-scope.md#constant-expressions) `let`/`var`
+initializers. Executable code — bare expressions, assignments, loops, agent
+calls — lives in function bodies, and a run starts in a
+[`program def`](#program-definitions). Items are separated by newlines or
+semicolons. There is no syntactic distinction between *statements* and
 *expressions*: every item is an expression with a well-defined type.
 
 The module block is the only block that may be empty. A source file holding no

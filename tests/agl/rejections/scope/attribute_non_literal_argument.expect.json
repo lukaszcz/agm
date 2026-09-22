@@ -1,1 +1,1 @@
-{"diagnostic": {"line": 1, "message_contains": ["doc", "text literal"]}}
+{"diagnostic": {"line": 1, "message_contains": ["doc", "not a text constant"]}}

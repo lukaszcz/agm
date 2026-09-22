@@ -163,6 +163,39 @@ def test_registered_command_dispatches_trailing_arguments(
     assert calls == [("tools/lint::main", ["--level", "strict"], "tools", "tools lint")]
 
 
+def test_a_stored_manifest_field_this_build_does_not_know_still_dispatches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One unreadable field in one installed package must not disable the CLI."""
+    import agm.commands.exec_program as exec_program
+
+    home = tmp_path / "home"
+    write_installed_package(
+        home,
+        "tools",
+        source="program def main() -> unit = ()\n",
+        commands={"tools run": "tools/main::main"},
+    )
+    manifest = home / ".agm" / "packages" / "tools" / "1.0.0" / "package.toml"
+    manifest.write_text(
+        '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
+        '[commands]\n"tools run" = { program = "tools/main::main", summary = "Run" }\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        exec_program,
+        "run_registered",
+        lambda program, argument_tokens, **_kwargs: calls.append(program),
+    )
+
+    result = invoke(CliRunner(), ["tools", "run"])
+
+    assert result.exit_code == 0
+    assert calls == ["tools/main::main"]
+
+
 def test_plain_registered_command_does_not_discover_during_outer_parsing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -602,26 +635,30 @@ def test_registered_command_help_omits_program_arguments_on_a_reservation_collis
     assert "help TEXT" not in text
 
 
-def test_registered_command_help_includes_manifest_description_and_program_doc() -> None:
-    """A command description introduces the program's own ``@doc``."""
+def test_registered_command_help_shows_the_program_documentation() -> None:
+    """A command's prose is the ``@doc`` of the program behind it."""
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         '@doc("Program prose.")\nprogram def main() -> unit = ()'
     )
 
-    described = registered_help(
-        "tools lint",
-        CommandRegistration("tools", "tools/lint::main", "Manifest prose."),
-        program=program,
-    )
-    undescribed = registered_help(
+    text = registered_help(
         "tools lint", CommandRegistration("tools", "tools/lint::main"), program=program
     )
 
-    assert "Manifest prose." in described
-    assert "Program prose." in described
-    assert "Program prose." in undescribed
+    assert "Program prose." in text
+
+
+def test_registered_command_help_falls_back_to_the_indexed_documentation() -> None:
+    """An unreadable program still documents its command from the cached ``@doc``."""
+    text = registered_help(
+        "tools lint",
+        CommandRegistration("tools", "tools/lint::main", "Indexed prose."),
+        program=None,
+    )
+
+    assert "Indexed prose." in text
 
 
 def test_registered_command_help_omits_a_hidden_parameter() -> None:
@@ -699,7 +736,7 @@ def test_registered_command_program_option_error_renders_shared_usage_help(
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
         '[commands]\n"tools greet" = { program = "tools/greet::main", '
-        'description = "Greet someone" }\n',
+        'doc = "Greet someone" }\n',
         encoding="utf-8",
     )
     module.write_text(
@@ -747,7 +784,7 @@ def test_registered_command_help_flag_bundled_into_a_short_group_renders_help(
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
         '[commands]\n"tools greet" = { program = "tools/greet::main", '
-        'description = "Greet someone" }\n',
+        'doc = "Greet someone" }\n',
         encoding="utf-8",
     )
     module.write_text(
@@ -1017,7 +1054,7 @@ name = "tools"
 version = "1.0.0"
 
 [commands]
-"tools lint" = { program = "tools/lint::main", description = "Lint package inputs" }
+"tools lint" = { program = "tools/lint::main", doc = "Lint package inputs" }
 """,
         encoding="utf-8",
     )
@@ -1220,7 +1257,7 @@ def test_installed_package_dispatches_its_own_source_declared_command(
     )
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
         '@command("tools review")\n'
-        '@description("Review changes")\n'
+        '@doc("Review changes")\n'
         "program def main(level: text) -> unit = print level\n",
         encoding="utf-8",
     )
@@ -1246,7 +1283,7 @@ def test_editable_package_dispatches_its_own_source_declared_command(
     )
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
         '@command("tools review")\n'
-        '@description("Review changes")\n'
+        '@doc("Review changes")\n'
         "program def main(level: text) -> unit = print level\n",
         encoding="utf-8",
     )
@@ -1564,7 +1601,7 @@ def test_registered_command_argument_error_renders_shared_usage_help(
     (package_root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
         '[commands]\n"tools lint" = { program = "tools/lint::main", '
-        'description = "Lint package inputs" }\n',
+        'doc = "Lint package inputs" }\n',
         encoding="utf-8",
     )
     module.write_text(

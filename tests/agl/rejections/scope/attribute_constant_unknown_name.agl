@@ -1,2 +1,2 @@
-@description("Review changes")
+@doc("aspects: %{aspects}")
 program def main() -> unit = ()

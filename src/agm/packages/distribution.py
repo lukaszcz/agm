@@ -160,11 +160,7 @@ def normalized_manifest(manifest: PackageManifest) -> bytes:
             command = manifest.commands[path]
             rendered = ", ".join(
                 f"{key} = {_toml_string(value)}"
-                for key, value in (
-                    ("program", command.program),
-                    ("help", command.help),
-                    ("description", command.description),
-                )
+                for key, value in (("program", command.program), ("doc", command.doc))
                 if value is not None
             )
             lines.append(f"{_toml_key(path)} = {{ {rendered} }}")

@@ -1,0 +1,5 @@
+let first = "%{second}"
+let second = "%{first}"
+
+@doc(first)
+program def main() -> unit = ()

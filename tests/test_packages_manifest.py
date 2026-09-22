@@ -12,6 +12,7 @@ from agm.agl.keywords import KEYWORDS
 from agm.packages.manifest import (
     CommandSpec,
     ManifestError,
+    UnknownField,
     distribution_manifest,
     expanded_commands,
     load_manifest,
@@ -72,7 +73,7 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
             == "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
         assert manifest.commands["review-loop"].program == "review_tools/review::main"
-        assert manifest.commands["review-loop lint"].description == "Lint review configurations"
+        assert manifest.commands["review-loop lint"].doc == "Lint review configurations"
 
     @pytest.mark.parametrize("name", ("review_tools", "review-tools", "Review2", "_internal"))
     def test_accepts_module_segment_package_names(self, tmp_path: Path, name: str) -> None:
@@ -296,10 +297,7 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
 
     @pytest.mark.parametrize(
         "entry",
-        (
-            "std = 1",
-            'std = { version = "1.0.0", source = "unsupported" }',
-        ),
+        ("std = 1",),
     )
     def test_rejects_invalid_dependency_entries(self, tmp_path: Path, entry: str) -> None:
         path = _write_manifest(
@@ -317,7 +315,7 @@ charlie = { version = "3", url = "https://example.test/charlie.agmpkg", hash = "
         nested = load_manifest_text(
             package
             + """[commands.devel]
-description = "Development workflows"
+doc = "Development workflows"
 
 [commands.devel.review]
 program = "review_tools/main::review"
@@ -329,7 +327,7 @@ program = "review_tools/main::lint"
         space_separated = load_manifest_text(
             package
             + """[commands.devel]
-description = "Development workflows"
+doc = "Development workflows"
 
 [commands."devel review"]
 program = "review_tools/main::review"
@@ -373,8 +371,7 @@ program = "review_tools/main::review"
         "commands",
         (
             "[commands]\nrun = 'review_tools/main::main'\n",
-            "[commands]\nrun = { description = 'missing program' }\n",
-            "[commands]\nrun = { program = 'review_tools/main::main', extra = 'invalid' }\n",
+            "[commands]\nrun = { doc = 'missing program' }\n",
         ),
     )
     def test_rejects_invalid_command_entries(self, tmp_path: Path, commands: str) -> None:
@@ -388,8 +385,6 @@ program = "review_tools/main::review"
     @pytest.mark.parametrize(
         "manifest",
         (
-            '[package]\nname = "review_tools"\nversion = "1.2.3"\nextra = true\n',
-            'unexpected = true\n\n[package]\nname = "review_tools"\nversion = "1.2.3"\n',
             'dependencies = "std"\n\n[package]\nname = "review_tools"\nversion = "1.2.3"\n',
             'commands = []\n\n[package]\nname = "review_tools"\nversion = "1.2.3"\n',
         ),
@@ -399,6 +394,46 @@ program = "review_tools/main::review"
     ) -> None:
         with pytest.raises(ManifestError):
             load_manifest(_write_manifest(tmp_path, manifest))
+
+    @pytest.mark.parametrize(
+        ("manifest", "expected"),
+        (
+            (
+                '[package]\nname = "review_tools"\nversion = "1.2.3"\nrelease = "beta"\n',
+                (UnknownField("package", "release"),),
+            ),
+            (
+                'unexpected = true\n\n[package]\nname = "review_tools"\nversion = "1.2.3"\n',
+                (UnknownField("manifest", "unexpected"),),
+            ),
+            (
+                '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+                '[dependencies]\nstd = { version = "1.0.0", source = "elsewhere" }\n',
+                (UnknownField("dependency 'std'", "source"),),
+            ),
+            (
+                '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+                "[commands]\nrun = { program = 'review_tools/main::main', extra = 'x' }\n",
+                (UnknownField("command 'run'", "extra"),),
+            ),
+        ),
+    )
+    def test_records_fields_the_schema_does_not_define(
+        self, manifest: str, expected: tuple[UnknownField, ...]
+    ) -> None:
+        """Loading keeps reading; validation is what rejects them."""
+        loaded = load_manifest_text(manifest)
+
+        assert loaded.unknown_fields == expected
+        assert loaded.name == "review_tools"
+
+    def test_an_unknown_field_does_not_displace_the_ones_beside_it(self) -> None:
+        loaded = load_manifest_text(
+            '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
+            "[commands]\nrun = { program = 'review_tools/main::run', doc = 'Run', extra = 'x' }\n"
+        )
+
+        assert loaded.commands["run"] == CommandSpec("review_tools/main::run", "Run")
 
     def test_rejects_invalid_utf8_manifest(self, tmp_path: Path) -> None:
         path = tmp_path / "package.toml"
@@ -440,7 +475,7 @@ program = "review_tools/main::review"
 
     _LONELY_GROUP = (
         '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n'
+        '[commands.devel]\ndoc = "Development workflows"\n'
     )
     _ALIAS_TO_UNKNOWN = (
         '[package]\nname = "review_tools"\nversion = "1.2.3"\n\n[aliases]\nrev = "devel review"\n'

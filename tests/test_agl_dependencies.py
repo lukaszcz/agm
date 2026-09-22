@@ -151,6 +151,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             (
                 "agm.agl.modules.ids",
                 "agm.agl.syntax",
+                "agm.agl.value_syntax",
             ),
         ),
         (

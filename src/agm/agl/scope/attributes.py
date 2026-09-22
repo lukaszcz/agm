@@ -31,12 +31,9 @@ from dataclasses import dataclass
 from agm.agl.attributes import (
     BUILTIN_ATTRIBUTES,
     COMMAND_ATTRIBUTE,
-    COMMAND_PROSE_ATTRIBUTES,
     CONFIG_ATTRIBUTE,
-    DESCRIPTION_ATTRIBUTE,
     DOC_ATTRIBUTE,
     EXTERN_NAME_ATTRIBUTE,
-    HELP_ATTRIBUTE,
     JSON_NAME_ATTRIBUTE,
     NAME_ADDRESSED_OPTION_ATTRIBUTES,
     NAME_ATTRIBUTE,
@@ -50,14 +47,15 @@ from agm.agl.attributes import (
     AttributeArguments,
     AttributeSpec,
     AttributeTarget,
-    ProgramCommandSpec,
     ProgramOptionSpec,
+    ProgramRegistration,
     invalid_external_name,
     invalid_json_name,
     invalid_program_command_path,
 )
 from agm.agl.scope.symbols import AglScopeError, AttributeFacts
 from agm.agl.semantics.external_names import ExternalName
+from agm.agl.syntax.module_constants import FoldFailure, ModuleConstants
 from agm.agl.syntax.nodes import (
     Attribute,
     AttributeKeyedArg,
@@ -65,12 +63,12 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     FuncDef,
+    Item,
     Lambda,
     LetDecl,
     Param,
     Program,
     RecordDef,
-    StringLit,
     TypeAlias,
     VarDecl,
     VariantDef,
@@ -81,7 +79,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.visitor import walk
 from agm.agl.zones import ParamZone
 
-__all__ = ["AttributeFacts", "recognize_attributes", "recognize_program_command"]
+__all__ = ["AttributeFacts", "recognize_attributes", "recognize_program_registration"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,17 +157,28 @@ def _function_target(node: FuncDef) -> AttributeTarget:
     return AttributeTarget.FUNCTION
 
 
-def recognize_program_command(node: FuncDef) -> ProgramCommandSpec | None:
-    """Return the package command a ``program def`` registers, or ``None``.
+def recognize_program_registration(
+    node: FuncDef, constants: ModuleConstants
+) -> ProgramRegistration:
+    """Return what a ``program def``'s attribute prefix says about hosting it.
 
     Validates *node*'s attribute prefix against the catalog exactly as the
     scope walk does — this is the one place both share, so a parse-only
     caller (package command discovery) and the full scope pass raise the
-    same diagnostics for the same source. The caller is responsible for
+    same diagnostics for the same source. *constants* folds the module's own
+    constants into any attribute argument that interpolates or names one, and
+    is likewise the one the scope walk uses. The caller is responsible for
     passing a ``program def``; this function trusts that and does not check it.
     """
-    recognized = _validate_attribute_prefix(node.attributes, AttributeTarget.PROGRAM)
-    return _program_command_spec(node, recognized)
+    recognized = _validate_attribute_prefix(
+        node.attributes,
+        AttributeTarget.PROGRAM,
+        constants,
+        constants.static_scope_path_of(node.node_id) or (),
+    )
+    return ProgramRegistration(
+        doc=recognized.text_of(DOC_ATTRIBUTE), command=_program_command_path(recognized)
+    )
 
 
 def recognize_attributes(
@@ -186,7 +195,7 @@ def recognize_attributes(
         for item in static_items(program.body.items)
         if isinstance(item, (LetDecl, VarDecl))
     )
-    recognizer = _Recognizer(declares_receiver, static_binding_ids)
+    recognizer = _Recognizer(declares_receiver, static_binding_ids, ModuleConstants(program))
     walk(program, recognizer.visit)
     return AttributeFacts(
         param_zones=recognizer.param_zones,
@@ -207,21 +216,33 @@ class _Recognizer:
         self,
         declares_receiver: Callable[[FuncDef], bool],
         static_binding_ids: frozenset[int],
+        constants: ModuleConstants,
     ) -> None:
         self._declares_receiver = declares_receiver
         self._static_binding_ids = static_binding_ids
+        self._constants = constants
+        self._scope_path: tuple[str, ...] = ()
         self.param_zones: dict[int, ParamZone] = {}
         self.extern_names: dict[int, str] = {}
         self.program_options: dict[int, ProgramOptionSpec] = {}
         self.params: dict[int, ProgramOptionSpec] = {}
-        self.command_registrations: dict[int, ProgramCommandSpec] = {}
+        self.command_registrations: dict[int, str] = {}
         self.docs: dict[int, str] = {}
         self.external_names: dict[int, ExternalName] = {}
         self.program_configs: dict[int, tuple[AttributeKeyedArg, ...]] = {}
         self._companion_owners: dict[str, str] = {}
 
     def visit(self, node: object) -> None:
-        """Recognize the attributes of *node*, if it is a defining declaration."""
+        """Recognize the attributes of *node*, if it is a defining declaration.
+
+        A static item sets the scope path its own attributes — and those of
+        its parameters or fields — resolve a constant reference from; a
+        declaration nested in a body keeps the enclosing item's path.
+        """
+        if isinstance(node, Item):
+            declared_scope = self._constants.static_scope_path_of(node.node_id)
+            if declared_scope is not None:
+                self._scope_path = declared_scope
         if isinstance(node, FuncDef):
             recognized = self._check(node.attributes, _function_target(node), node.node_id)
             if node.is_extern:
@@ -280,7 +301,9 @@ class _Recognizer:
                     span=param.span,
                 )
             target = AttributeTarget.PARAM_BINDING
-        recognized = _validate_attribute_prefix(attributes, target)
+        recognized = _validate_attribute_prefix(
+            attributes, target, self._constants, self._scope_path
+        )
         documentation = recognized.text_of(DOC_ATTRIBUTE)
         if documentation is not None:
             self.docs[node_id] = documentation
@@ -394,10 +417,10 @@ class _Recognizer:
     # ------------------------------------------------------------------
 
     def _command_registration(self, node: FuncDef, recognized: _Recognized) -> None:
-        """Record the package command one ``program def`` registers itself as."""
-        spec = _program_command_spec(node, recognized)
-        if spec is not None:
-            self.command_registrations[node.node_id] = spec
+        """Record the package command path one ``program def`` registers itself as."""
+        path = _program_command_path(recognized)
+        if path is not None:
+            self.command_registrations[node.node_id] = path
 
     # ------------------------------------------------------------------
     # Fact builder: program config entries
@@ -490,7 +513,10 @@ class _Recognizer:
 
 
 def _validate_attribute_prefix(
-    attributes: tuple[Attribute, ...], target: AttributeTarget
+    attributes: tuple[Attribute, ...],
+    target: AttributeTarget,
+    constants: ModuleConstants,
+    scope_path: tuple[str, ...],
 ) -> _Recognized:
     """Validate one declaration's whole attribute prefix against the catalog.
 
@@ -526,7 +552,7 @@ def _validate_attribute_prefix(
                     f"Attribute '@{attribute.name}' conflicts with '@{other}'.",
                     span=attribute.span,
                 )
-        text = _check_arguments(attribute, spec)
+        text = _check_arguments(attribute, spec, constants, scope_path)
         if text is not None:
             texts[attribute.name] = text
         nodes[attribute.name] = attribute
@@ -546,50 +572,40 @@ def _option_spec(name: str, recognized: _Recognized) -> ProgramOptionSpec:
     )
 
 
-def _program_command_spec(node: FuncDef, recognized: _Recognized) -> ProgramCommandSpec | None:
-    """Return the package command *node* registers via its attribute prefix, or ``None``.
+def _program_command_path(recognized: _Recognized) -> str | None:
+    """Return the package command path an attribute prefix registers, or ``None``.
 
-    Only a program carrying ``@command`` registers anything, so the prose
-    attributes — which describe a registration rather than a program — are
-    rejected without it rather than silently dropped. The path is held to
-    the rule a package manifest's command paths answer to, since both
-    register into the same command tree; whether the path reaches a CLI at
-    all is a package fact, so a program outside a package is simply never
-    asked for its registration.
+    The path is held to the rule a package manifest's command paths answer
+    to, since both register into the same command tree; whether the path
+    reaches a CLI at all is a package fact, so a program outside a package is
+    simply never asked for its registration.
     """
     command = recognized.nodes.get(COMMAND_ATTRIBUTE)
     if command is None:
-        for name in COMMAND_PROSE_ATTRIBUTES:
-            attribute = recognized.nodes.get(name)
-            if attribute is not None:
-                raise AglScopeError(
-                    f"Attribute '@{name}' describes a command registration, so program "
-                    f"{node.name!r} needs a '@{COMMAND_ATTRIBUTE}' attribute beside it.",
-                    span=attribute.span,
-                )
         return None
     path = recognized.texts[COMMAND_ATTRIBUTE]
     invalid = invalid_program_command_path(path)
     if invalid is not None:
-        raise AglScopeError(
-            f"Command path {path!r} {invalid}.",
-            span=command.span,
-        )
-    return ProgramCommandSpec(
-        path=path,
-        description=recognized.text_of(DESCRIPTION_ATTRIBUTE),
-        help=recognized.text_of(HELP_ATTRIBUTE),
-    )
+        raise AglScopeError(f"Command path {path!r} {invalid}.", span=command.span)
+    return path
 
 
-def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:
-    """Reject arguments a built-in attribute's literal schema does not admit.
+def _check_arguments(
+    attribute: Attribute,
+    spec: AttributeSpec,
+    constants: ModuleConstants,
+    scope_path: tuple[str, ...],
+) -> str | None:
+    """Reject arguments a built-in attribute's constant schema does not admit.
 
     Returns the text an attribute taking one argument carries, and ``None``
-    for an attribute whose schema takes none or keyed entries. A schema
-    narrowing that text to a spelling a host has to form
-    (``AttributeSpec.pattern``) is enforced here too, so a fact builder
-    downstream reads an argument already known to be well shaped.
+    for an attribute whose schema takes none or keyed entries. The argument is
+    a constant text expression: a literal, a template whose holes name the
+    module's own constants, or a reference to one, folded here so everything
+    downstream reads plain text. A schema narrowing that text to a spelling a
+    host has to form (``AttributeSpec.pattern``) is enforced on the folded
+    text, so a fact builder downstream reads an argument already known to be
+    well shaped.
     """
     if spec.arguments is AttributeArguments.KEYED_ENTRIES:
         if attribute.args:
@@ -617,18 +633,18 @@ def _check_arguments(attribute: Attribute, spec: AttributeSpec) -> str | None:
             f"Attribute '@{attribute.name}' takes exactly one text argument.",
             span=attribute.span,
         )
-    argument = attribute.args[0]
-    if not isinstance(argument, StringLit):
+    folded = constants.fold_text(attribute.args[0], scope_path=scope_path)
+    if isinstance(folded, FoldFailure):
         raise AglScopeError(
-            f"Attribute '@{attribute.name}' requires a plain text literal argument.",
+            f"Attribute '@{attribute.name}' requires a constant text argument: {folded.message}.",
+            span=folded.span,
+        )
+    if spec.pattern is not None and spec.pattern.fullmatch(folded) is None:
+        raise AglScopeError(
+            f"Attribute '@{attribute.name}' {spec.expected} {folded!r}.",
             span=attribute.span,
         )
-    if spec.pattern is not None and spec.pattern.fullmatch(argument.value) is None:
-        raise AglScopeError(
-            f"Attribute '@{attribute.name}' {spec.expected} {argument.value!r}.",
-            span=attribute.span,
-        )
-    return argument.value
+    return folded
 
 
 def _zone_attribute(recognized: _Recognized) -> ParamZone | None:

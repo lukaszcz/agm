@@ -189,6 +189,27 @@ def test_warm_cached_importer_reflects_a_changed_unannotated_transitive_binding(
     assert capsys.readouterr().out == "changed\n"
 
 
+def test_editing_a_folded_constant_invalidates_the_warm_cache(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A constant a module folds into another of its bindings is part of that
+    module's own source, so editing it re-lowers the module rather than
+    serving the previously folded text."""
+    path = tmp_path / "store.agl"
+    path.write_text('let part = "one"\nlet whole = "[%{part}]"\n')
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import store::*\nprint(whole)\n"
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "[one]\n"
+
+    path.write_text('let part = "two"\nlet whole = "[%{part}]"\n')
+    result = run_inline_command(runtime, source, roots=roots)
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "[two]\n"
+
+
 def test_invalid_import_edit_is_rejected_and_can_be_repaired(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

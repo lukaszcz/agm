@@ -535,7 +535,7 @@ def test_install_accepts_a_manifest_group_satisfied_only_by_a_program_registered
     (root / MODULE_TREE_DIRNAME).mkdir()
     (root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n',
+        '[commands.devel]\ndoc = "Development workflows"\n',
         encoding="utf-8",
     )
     (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
@@ -554,7 +554,7 @@ def test_install_accepts_an_alias_targeting_a_program_registered_command(tmp_pat
     (root / MODULE_TREE_DIRNAME).mkdir()
     (root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n\n'
+        '[commands.devel]\ndoc = "Development workflows"\n\n'
         '[aliases]\nrev = "devel review"\n',
         encoding="utf-8",
     )
@@ -573,7 +573,7 @@ def test_install_rejects_a_genuinely_empty_command_group(tmp_path: Path) -> None
     (root / MODULE_TREE_DIRNAME).mkdir()
     (root / "package.toml").write_text(
         '[package]\nname = "tools"\nversion = "1.0.0"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n',
+        '[commands.devel]\ndoc = "Development workflows"\n',
         encoding="utf-8",
     )
     (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
@@ -1059,7 +1059,7 @@ def test_install_merges_commands_and_unregisters_them_on_uninstall(
         tmp_path / "source",
         "alpha",
         "1.0.0",
-        '\n[commands]\nlaunch = { program = "alpha/main::main", description = "Launch alpha" }\n',
+        '\n[commands]\nlaunch = { program = "alpha/main::main", doc = "Launch alpha" }\n',
     )
     home = tmp_path / "home"
 
@@ -1084,7 +1084,7 @@ def test_install_bakes_a_source_declared_command_into_the_store_manifest(
         '[package]\nname = "alpha"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
-        '@command("launch")\n@description("Launch alpha")\nprogram def main() -> unit = ()\n',
+        '@command("launch")\n@doc("Launch alpha")\nprogram def main() -> unit = ()\n',
         encoding="utf-8",
     )
     home = tmp_path / "home"
@@ -1092,7 +1092,7 @@ def test_install_bakes_a_source_declared_command_into_the_store_manifest(
     installed = install_directory(source, home=home, env={})
 
     assert installed.manifest.commands == {
-        "launch": CommandSpec(program="alpha/main::main", description="Launch alpha")
+        "launch": CommandSpec(program="alpha/main::main", doc="Launch alpha")
     }
     index = load_activation_index(home=home, env={})
     assert index.commands == {

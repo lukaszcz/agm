@@ -119,17 +119,14 @@ def test_archive_discipline_resolves_resources_relative_to_the_package_root(
 def test_write_archive_bakes_a_source_declared_command_into_the_manifest(tmp_path: Path) -> None:
     root = _package_tree(tmp_path)
     (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
-        '@command("tools launch")\n@description("Launch review")\n'
-        "program def main() -> unit = ()\n",
+        '@command("tools launch")\n@doc("Launch review")\nprogram def main() -> unit = ()\n',
         encoding="utf-8",
     )
     archive_path = tmp_path / "package.agmpkg"
 
     metadata = write_archive(root, archive_path)
 
-    expected = {
-        "tools launch": CommandSpec(program="review_tools/main::main", description="Launch review")
-    }
+    expected = {"tools launch": CommandSpec(program="review_tools/main::main", doc="Launch review")}
     assert metadata.manifest.commands == expected
     assert _verify(archive_path).manifest.commands == expected
 
@@ -178,7 +175,7 @@ def test_write_archive_accepts_a_manifest_group_satisfied_only_by_a_program_regi
     root = _package_tree(tmp_path)
     (root / "package.toml").write_text(
         '[package]\nversion = "1.2.3"\nname = "review_tools"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n',
+        '[commands.devel]\ndoc = "Development workflows"\n',
         encoding="utf-8",
     )
     (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
@@ -198,7 +195,7 @@ def test_write_archive_accepts_an_alias_targeting_a_program_registered_command(
     root = _package_tree(tmp_path)
     (root / "package.toml").write_text(
         '[package]\nversion = "1.2.3"\nname = "review_tools"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n\n'
+        '[commands.devel]\ndoc = "Development workflows"\n\n'
         '[aliases]\nrev = "devel review"\n',
         encoding="utf-8",
     )
@@ -216,7 +213,7 @@ def test_write_archive_rejects_a_genuinely_empty_command_group(tmp_path: Path) -
     root = _package_tree(tmp_path)
     (root / "package.toml").write_text(
         '[package]\nversion = "1.2.3"\nname = "review_tools"\n\n'
-        '[commands.devel]\ndescription = "Development workflows"\n',
+        '[commands.devel]\ndoc = "Development workflows"\n',
         encoding="utf-8",
     )
 
@@ -1000,7 +997,7 @@ tools = { version = "2", path = "../tools" }
 remote = { version = "3", url = "https://example.test/remote.agmpkg", hash = "sha256:<HASH>" }
 
 [commands]
-"review all" = { program = "review_tools/main::main", description = "Review all" }
+"review all" = { program = "review_tools/main::main", doc = "Review all" }
 quick = { program = "review_tools/main::main" }
 """.replace("<HASH>", "a" * 64),
         encoding="utf-8",
@@ -1038,7 +1035,7 @@ quick = { program = "review_tools/main::main" }
         b'tools = "2.0.0"\n\n'
         b"[commands]\n"
         b'quick = { program = "review_tools/main::main" }\n'
-        b'"review all" = { program = "review_tools/main::main", description = "Review all" }\n'
+        b'"review all" = { program = "review_tools/main::main", doc = "Review all" }\n'
     )
 
 

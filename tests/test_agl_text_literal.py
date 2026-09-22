@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from agm.agl.ir.program import ValueDescriptors
@@ -9,7 +11,12 @@ from agm.agl.lexer import tokenize
 from agm.agl.matchcompile import LiteralKind, LiteralWitness, render_witness
 from agm.agl.runtime.render import render_value
 from agm.agl.semantics.values import TextValue
-from agm.agl.value_syntax.lexical import ESCAPE_DECODE, ESCAPE_ENCODE, quote_text
+from agm.agl.value_syntax.lexical import (
+    ESCAPE_DECODE,
+    ESCAPE_ENCODE,
+    quote_text,
+    scalar_text,
+)
 from agm.agl.value_syntax.nodes import TextNode
 from agm.agl.value_syntax.reader import read_value
 from agm.util.interp import INTERP_OPEN, INTERP_TRIGGER
@@ -74,3 +81,15 @@ def test_text_literal_surface_constants_define_escape_directions() -> None:
     assert ESCAPE_ENCODE[INTERP_TRIGGER] == r"\%"
     assert "'" not in ESCAPE_ENCODE
     assert "/" not in ESCAPE_ENCODE
+
+
+def test_scalar_text_spells_a_decimal_without_scientific_notation() -> None:
+    assert scalar_text(Decimal("1.50")) == "1.5"
+    assert scalar_text(Decimal("1E+2")) == "100"
+
+
+def test_scalar_text_spells_ints_and_bools_the_way_agl_does() -> None:
+    assert scalar_text(42) == "42"
+    assert scalar_text(-7) == "-7"
+    assert scalar_text(True) == "true"
+    assert scalar_text(False) == "false"

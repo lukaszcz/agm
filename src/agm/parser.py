@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from typing import NoReturn, Protocol
 
 from agm.command_catalog import COMMAND_OVERVIEW
+from agm.core.env import help_width
+from agm.util.text import first_paragraph, format_description_column
 
 
 class _Writeable(Protocol):
@@ -473,10 +475,10 @@ _HELP_TEXTS: dict[str, str] = {
         live source directory.
 
         Nested package.toml [commands] tables form multi-word command paths; entries name a
-        program, or describe a group when program is omitted. Optional description and help text
-        extend source @doc documentation; groups generate subcommand listings. [aliases] maps
-        alternate paths to canonical commands or groups. Alias paths also name config tables:
-        rev = "devel review" makes [rev] equivalent
+        program, or describe a group when program is omitted. A command naming a program is
+        documented by that program's @doc; a group states its own doc text and generates a
+        subcommand listing. [aliases] maps alternate paths to canonical commands or groups.
+        Alias paths also name config tables: rev = "devel review" makes [rev] equivalent
         to [devel.review]. See docs/commands/pkg.md for the manifest reference.
     """),
     "run": textwrap.dedent("""\
@@ -1029,8 +1031,7 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("pkg", "list"): textwrap.dedent("""\
         agm pkg list
 
-        List immutable installed versions and active editable packages, including their registered
-        commands and any command-shadow diagnostics.
+        List immutable installed versions and active editable packages.
     """),
     ("pkg", "info"): textwrap.dedent("""\
         agm pkg info NAME
@@ -1057,7 +1058,11 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
 
 
 def _registered_command_overview() -> tuple[tuple[str, str], ...]:
-    """Read registered command names for help without loading package manifests."""
+    """Read registered command names and summaries without compiling any program.
+
+    A command's summary is the opening paragraph of its program's ``@doc``,
+    cached in the activation index when the package was installed.
+    """
     try:
         from agm.cli_dispatch import load_command_index
         from agm.config.context import current_config_context
@@ -1067,7 +1072,7 @@ def _registered_command_overview() -> tuple[tuple[str, str], ...]:
     except (OSError, SystemExit, ValueError):
         return ()
     return tuple(
-        (path_name, registration.description or "Package-registered command.")
+        (path_name, first_paragraph(registration.doc) if registration.doc else "")
         for path_name, registration in sorted(index.commands.items())
     )
 
@@ -1080,15 +1085,12 @@ def _overview_text() -> str:
         "",
         "Commands:",
     ]
-    width = max(len(name) for name, _ in COMMAND_OVERVIEW)
-    for name, desc in COMMAND_OVERVIEW:
-        lines.append(f"  {name:<{width + 2}} {desc}")
+    width = help_width()
+    lines.extend(format_description_column(COMMAND_OVERVIEW, width=width))
     registered_commands = _registered_command_overview()
     if registered_commands:
         lines.extend(("", "Registered commands:"))
-        width = max(len(name) for name, _ in registered_commands)
-        for name, desc in registered_commands:
-            lines.append(f"  {name:<{width + 2}} {desc}")
+        lines.extend(format_description_column(registered_commands, width=width))
     lines.extend(
         [
             "",

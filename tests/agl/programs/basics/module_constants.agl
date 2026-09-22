@@ -1,0 +1,26 @@
+# A root binding's initializer is a constant expression, so it may be a
+# template whose holes name this module's own constants or a bare reference to
+# one, in either source direction. A `@param` binding is such a constant: a
+# reader sees the value the host settled on, while `@config` substitutes the
+# declared initializer it is evaluated before.
+import std/config
+
+@param let audience: text = "the team"
+
+let banner = "%{title} for %{audience}"
+let title = "Review %{subject-count} files, precise: %{precise}"
+let subject-count = 2
+let precise = true
+
+var summary = "%{banner}!"
+
+@config(
+  audience = "%{crew} crew",
+)
+program def main() -> unit =
+  print banner
+  print summary
+  summary := "%{crew} done"
+  print summary
+
+let crew = "review"

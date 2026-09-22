@@ -15,6 +15,7 @@ from typer.core import TyperCommand, TyperGroup, TyperOption
 from agm.cli_support.args import ExecArgs
 from agm.config.context import current_config_context
 from agm.core import dry_run
+from agm.util.text import first_paragraph
 
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ProgramDeclInfo
@@ -136,9 +137,11 @@ class _RunOptionValues(TypedDict):
     no_log_file: bool
 
 
-def _help_paragraphs(*parts: str | None) -> str:
-    """Join distinct authored help blocks in presentation order."""
-    return "\n\n".join({part: None for part in parts if part})
+def _command_summary(path: str, command: CommandRegistration) -> str:
+    """Return the one-line summary a group listing shows for one descendant."""
+    if command.doc:
+        return first_paragraph(command.doc)
+    return f"Run the {path} workflow." if command.program else "Browse subcommands."
 
 
 def registered_command_help(
@@ -163,15 +166,13 @@ def registered_command_help(
     The help is the referenced program's own command help, spelled for the
     command the reader invokes rather than the ``program def`` behind it: its
     usage line names ``agm <path>`` and the program's positional slots, its
-    options are the program's own plus *run_options* and ``--dry-run``. The
-    manifest description introduces the source ``@doc`` and any additional
-    manifest help.
+    options are the program's own plus *run_options* and ``--dry-run``. Its
+    prose is the program's ``@doc`` in full, falling back to the summary the
+    activation index cached when the program itself cannot be read.
     """
     from agm.cli_support.program_options import render_program_help
 
-    description = _help_paragraphs(
-        registration.description, None if program is None else program.doc, registration.help
-    )
+    description = (None if program is None else program.doc) or registration.doc
     return render_program_help(
         command,
         program_name=f"agm {path_name}",
@@ -219,7 +220,7 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
 def registered_group_help(
     path_name: str, commands: Mapping[str, CommandRegistration]
 ) -> str | None:
-    """Render authored guidance and a generated listing for an explicit or implicit group."""
+    """Render a command group's own prose, if it states any, and a generated listing."""
     registration = commands.get(path_name)
     if registration is not None and registration.program is not None:
         return None
@@ -231,33 +232,11 @@ def registered_group_help(
     if not descendants:
         return None
 
-    program_docs: dict[tuple[str, str], str | None] = {}
-
-    def program_doc(program: str, package: str) -> str | None:
-        from agm.commands.exec_program import registered_program_declaration
-
-        key = (program, package)
-        if key not in program_docs:
-            declaration = registered_program_declaration(program, package)
-            program_docs[key] = None if declaration is None else declaration.doc
-        return program_docs[key]
-
-    listed_commands: dict[str, click.Command] = {}
-    for path, command in descendants.items():
-        summary = command.description or command.help
-        if not summary:
-            if command.program:
-                summary = (
-                    program_doc(command.program, command.package) or f"Run the {path} workflow."
-                )
-            else:
-                summary = "Browse subcommands."
-        listed_commands[path] = click.Command(path, help=summary)
-
-    guidance = _help_paragraphs(
-        registration.description if registration else None,
-        registration.help if registration else None,
-    )
+    listed_commands = {
+        path: click.Command(path, help=_command_summary(path, command))
+        for path, command in descendants.items()
+    }
+    guidance = registration.doc if registration is not None and registration.doc else None
     group = click.Group(
         help=guidance or f"Commands available under {path_name}.",
         commands=listed_commands,

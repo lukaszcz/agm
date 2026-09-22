@@ -111,7 +111,6 @@ from agm.agl.semantics.types import (
     reroot_type,
     substitute,
 )
-from agm.agl.syntax.constants import is_constant_expression
 from agm.agl.syntax.nodes import (
     ArrayLit,
     AsPattern,
@@ -191,6 +190,7 @@ from agm.agl.typecheck.builtins import (
     BuiltinCallChecker,
     PendingBuiltinObligation,
 )
+from agm.agl.typecheck.constant_bindings import ModuleConstantBindings
 from agm.agl.typecheck.constructors import ConstructorChecker, type_name_not_a_value
 from agm.agl.typecheck.env import (
     AglTypeError,
@@ -716,10 +716,12 @@ def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
 
 #: Shared wording for a constant-expression diagnostic: a ``builtin var``
 #: initializer and a ``@config`` value both require this shape.
-_CONSTANT_EXPRESSION_SHAPE = "constructors, 'resource(...)', and literals only"
+_CONSTANT_EXPRESSION_SHAPE = (
+    "constructors, 'resource(...)', literals, and this module's own constants only"
+)
 
 
-def _is_constant_builtin_call(resolved: ModuleResolution, node_id: int) -> bool:
+def is_constant_builtin_call(resolved: ModuleResolution, node_id: int) -> bool:
     """Whether *node_id* is a call to a designated constant-safe builtin.
 
     Shared by every constant-expression predicate in this module and by the
@@ -730,7 +732,7 @@ def _is_constant_builtin_call(resolved: ModuleResolution, node_id: int) -> bool:
 
 
 def require_static_root_constant(
-    expr: Expr, resolved: ModuleResolution, *, is_constructor: Callable[[int], bool]
+    expr: Expr, resolved: ModuleResolution, *, constants: ModuleConstantBindings
 ) -> None:
     """Raise ``AglTypeError`` unless a static module-root binding initializer is constant.
 
@@ -739,16 +741,12 @@ def require_static_root_constant(
     unannotated exported binding's initializer before scratch-typing it, so
     both raise the identical diagnostic.
     """
-    if is_constant_expression(
-        expr,
-        is_constructor=is_constructor,
-        is_constant_builtin=lambda node_id: _is_constant_builtin_call(resolved, node_id),
-    ):
+    if constants.is_constant(expr):
         return
     raise AglTypeError(
         static_root_message(
             "Root let and var initializers must be constant expressions "
-            "(constructors and literals only).",
+            "(constructors, literals, and this module's own constants only).",
             subject="bindings",
             file_backed=resolved.origin_path is not None,
             declares_program_entry=declares_source_entry(resolved.program.body.items),
@@ -822,6 +820,7 @@ class _Checker:
         self._generic_function_expr_result_dependencies: dict[int, tuple[bool, ...]] = {}
         self._generic_function_binding_result_dependencies: dict[int, tuple[bool, ...]] = {}
         self._node_types: dict[int, Type] = {}
+        self._module_constants: ModuleConstantBindings | None = None
         self._inference_region: _InferenceRegion | None = None
         self._contract_specs: dict[int, OutputContractSpec] = {}
         self._call_sites: list[CallSiteRecord] = []
@@ -1251,9 +1250,7 @@ class _Checker:
             self._validate_parameter_binding(item)
             if static_root:
                 require_static_root_constant(
-                    item.value,
-                    self._resolved,
-                    is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
+                    item.value, self._resolved, constants=self._constant_bindings
                 )
             return binding_type
         if isinstance(item, AssignStmt):
@@ -1565,17 +1562,32 @@ class _Checker:
                     span=node.default.span,
                 )
 
+    @property
+    def _constant_bindings(self) -> ModuleConstantBindings:
+        """This module's constant bindings, built on first use.
+
+        A reference is constant when it names one of them, so every constant
+        position in the module shares one classification — and one cycle
+        diagnostic.
+        """
+        if self._module_constants is None:
+            self._module_constants = ModuleConstantBindings(
+                self._resolved,
+                self._module_id,
+                is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
+                is_constant_builtin=lambda node_id: is_constant_builtin_call(
+                    self._resolved, node_id
+                ),
+            )
+        return self._module_constants
+
     def _is_constant_expr(self, expr: Expr) -> bool:
         """Whether *expr* is a constant expression (see ``_CONSTANT_EXPRESSION_SHAPE``).
 
         Shared by a ``builtin var`` initializer and a ``@config`` value: both
         require a value that a host can compute without running arbitrary code.
         """
-        return is_constant_expression(
-            expr,
-            is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
-            is_constant_builtin=lambda node_id: _is_constant_builtin_call(self._resolved, node_id),
-        )
+        return self._constant_bindings.is_constant(expr)
 
     @staticmethod
     def _binder_result(value_type: Type) -> Type:

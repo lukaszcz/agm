@@ -334,7 +334,7 @@ def test_info_command_reads_manifest_metadata_and_current_dependency_status(
         'description = "Alpha package"\nlicense = "MIT"\n'
         'authors = ["Ada", "Lin"]\nrepository = "https://example.test/alpha"\n'
         'keywords = ["agents", "tools"]\n\n'
-        '[commands]\nrun = { program = "alpha/main::main", description = "Run Alpha" }\n\n'
+        '[commands]\nrun = { program = "alpha/main::main", doc = "Run Alpha" }\n\n'
         f'[dependencies]\nstd = "{AGM_VERSION}"\n'
         'bravo = "1"\ncharlie = "2"\ndelta = "1"\necho = "1"\n'
     )
@@ -358,7 +358,8 @@ def test_info_command_reads_manifest_metadata_and_current_dependency_status(
     assert "authors: Ada, Lin" in output
     assert "repository: https://example.test/alpha" in output
     assert "keywords: agents, tools" in output
-    assert "run: alpha/main::main (Run Alpha)" in output
+    assert "run: alpha/main::main" in output
+    assert "Run Alpha" in output
     bound = std_compatibility_bound(AGM_VERSION)
     assert f"requires std >= {AGM_VERSION}, < {bound}: running AGM {AGM_VERSION}" in output
     assert "requires bravo >= 1.0.0: missing" in output
@@ -381,7 +382,31 @@ def test_info_command_reads_manifest_metadata_and_current_dependency_status(
     assert raised.value.code == 1
 
 
-def test_list_attributes_commands_to_the_active_owner_and_rereads_editable_commands(
+def test_a_stored_manifest_field_this_build_does_not_know_keeps_the_package_usable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A package another AGM installed stays listable and inspectable.
+
+    Its baked manifest is AGM's own artifact, rewritten whole by the next
+    install; a field this build has no meaning for must not strand the store.
+    """
+    home = _context(tmp_path).home
+    install_directory(_command_package(tmp_path, "alpha"), home=home)
+    stored = home / ".agm" / "packages" / "alpha" / "1.0.0" / "package.toml"
+    stored.write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\nrelease-channel = "beta"\n\n'
+        '[commands]\nlaunch = { program = "alpha/main::main", doc = "Launch", summary = "x" }\n',
+        encoding="utf-8",
+    )
+
+    list_command.run(PkgListArgs())
+    assert capsys.readouterr().out.splitlines() == ["alpha 1.0.0 active"]
+
+    info_command.run(PkgInfoArgs("alpha"))
+    assert "alpha 1.0.0" in capsys.readouterr().out
+
+
+def test_list_reports_every_stored_version_and_each_editable_package(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     home = _context(tmp_path).home
@@ -395,14 +420,8 @@ def test_list_attributes_commands_to_the_active_owner_and_rereads_editable_comma
     list_command.run(PkgListArgs())
 
     lines = capsys.readouterr().out.splitlines()
-    assert lines[lines.index("alpha 1.0.0 installed") + 1] == "alpha 2.0.0 active"
-    assert lines[lines.index("alpha 2.0.0 active") + 1] == "  command launch (shadows bravo)"
-    assert lines[lines.index("bravo 1.0.0 editable") + 1] == "  command bravo run"
+    assert lines == ["alpha 1.0.0 installed", "alpha 2.0.0 active", "bravo 1.0.0 editable"]
 
     _write_command_manifest(bravo, "bravo", version="1.1.0", commands=("bravo updated",))
     list_command.run(PkgListArgs())
-    updated = capsys.readouterr().out
-    assert "bravo 1.1.0 editable" in updated
-    assert "command bravo updated" in updated
-    assert "command bravo run" not in updated
-    assert "shadows bravo" not in updated
+    assert "bravo 1.1.0 editable" in capsys.readouterr().out

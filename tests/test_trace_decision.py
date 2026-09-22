@@ -1,8 +1,9 @@
-"""Tests for resolve_trace_decision and the trace helpers.
+"""Tests for the trace decision and the trace helpers.
 
 Coverage:
-- resolve_trace_decision: initial-value precedence (CLI > config file), default off,
-  path resolution, explicit disable beats lower-layer enable.
+- EngineSeedTiers.trace_decision: initial-value precedence (CLI > config file),
+  default off, path resolution, explicit disable beats lower-layer enable, and
+  agreement with the ``trace`` engine seed the same tiers produce.
 - resolve_log_file / prepare_trace_log with their enabled/path shapes.
 - --trace flag parsing + mutual-exclusivity rejection in typer (cli.py) parser.
 - Integration: default run writes no trace; --trace writes one; [exec] trace=true writes one;
@@ -23,13 +24,11 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.exec as exec_command
 import agm.commands.repl as repl_command
+from agm.agl.semantics.values import BoolValue
 from agm.cli_support.args import ExecArgs
-from agm.core.log import (
-    LiveTracePathResolver,
-    TraceDecision,
-    resolve_log_file,
-    resolve_trace_decision,
-)
+from agm.cli_support.engine_seeds import EngineSeedTiers, build_host_engine_seeds
+from agm.config.general import exec_config_from_merged
+from agm.core.log import LiveTracePathResolver, TraceDecision, resolve_log_file
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,157 +46,135 @@ def _isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: resolve_trace_decision
+# Unit tests: EngineSeedTiers.trace_decision
 # ---------------------------------------------------------------------------
 
 
-class TestResolveTraceDecisionDefaults:
-    """Default (all unset/False/None) → disabled, no path."""
+def _tiers(
+    *,
+    cli: dict[str, object | None] | None = None,
+    exec_table: dict[str, object] | None = None,
+) -> EngineSeedTiers:
+    """Build the seed tiers ``agm exec``/``agm repl`` resolve their trace from."""
+    table = dict(exec_table or {})
+    return build_host_engine_seeds(
+        config=exec_config_from_merged({"exec": table}),
+        primary_table=table,
+        cli_values=dict(cli or {}),
+    )
+
+
+def _decision(
+    *,
+    cli: dict[str, object | None] | None = None,
+    exec_table: dict[str, object] | None = None,
+) -> TraceDecision:
+    return _tiers(cli=cli, exec_table=exec_table).trace_decision()
+
+
+class TestTraceDecisionDefaults:
+    """Default (no flags, no config) -> disabled, no path."""
 
     def test_all_defaults_disabled(self) -> None:
-        d = resolve_trace_decision(
-            cli_no_trace=False,
-            cli_trace=False,
-            cli_trace_file=None,
-            config_trace=False,
-            config_trace_file=None,
-        )
-        assert d == TraceDecision(enabled=False, explicit_path=None)
+        assert _decision() == TraceDecision(enabled=False, explicit_path=None)
 
     def test_returns_frozen_dataclass(self) -> None:
-        d = resolve_trace_decision(
-            cli_no_trace=False,
-            cli_trace=False,
-            cli_trace_file=None,
-            config_trace=False,
-            config_trace_file=None,
-        )
+        decision = _decision()
         with pytest.raises((AttributeError, TypeError)):
-            setattr(d, "enabled", True)
+            setattr(decision, "enabled", True)
 
 
-class TestResolveTraceDecisionCliLayer:
+class TestTraceDecisionCliLayer:
     """CLI flags take highest precedence."""
 
     def test_cli_trace_enables(self) -> None:
-        d = resolve_trace_decision(
-            cli_no_trace=False,
-            cli_trace=True,
-            cli_trace_file=None,
-            config_trace=False,
-            config_trace_file=None,
-        )
-        assert d.enabled is True
-        assert d.explicit_path is None
+        decision = _decision(cli={"trace": True})
+        assert decision.enabled is True
+        assert decision.explicit_path is None
 
     def test_cli_no_trace_disables(self) -> None:
-        d = resolve_trace_decision(
-            cli_no_trace=True,
-            cli_trace=False,
-            cli_trace_file=None,
-            config_trace=False,
-            config_trace_file=None,
-        )
-        assert d.enabled is False
-        assert d.explicit_path is None
+        decision = _decision(cli={"trace": False})
+        assert decision.enabled is False
+        assert decision.explicit_path is None
 
     def test_cli_trace_file_enables_with_path(self) -> None:
-        d = resolve_trace_decision(
-            cli_no_trace=False,
-            cli_trace=False,
-            cli_trace_file="/tmp/trace.jsonl",
-            config_trace=False,
-            config_trace_file=None,
-        )
-        assert d.enabled is True
-        assert d.explicit_path == "/tmp/trace.jsonl"
+        decision = _decision(cli={"trace-file": "/tmp/trace.jsonl"})
+        assert decision.enabled is True
+        assert decision.explicit_path == "/tmp/trace.jsonl"
 
     def test_cli_no_trace_overrides_config_trace_true(self) -> None:
         """CLI --no-trace beats config trace=true."""
-        d = resolve_trace_decision(
-            cli_no_trace=True,
-            cli_trace=False,
-            cli_trace_file=None,
-            config_trace=True,
-            config_trace_file=None,
-        )
-        assert d.enabled is False
+        assert _decision(cli={"trace": False}, exec_table={"trace": True}).enabled is False
 
     def test_cli_no_trace_overrides_config_trace_file(self) -> None:
-        """CLI --no-trace beats config trace_file setting."""
-        d = resolve_trace_decision(
-            cli_no_trace=True,
-            cli_trace=False,
-            cli_trace_file=None,
-            config_trace=False,
-            config_trace_file="/tmp/config.jsonl",
-        )
-        assert d.enabled is False
+        """CLI --no-trace beats a configured trace-file."""
+        decision = _decision(cli={"trace": False}, exec_table={"trace-file": "/tmp/config.jsonl"})
+        assert decision.enabled is False
 
     def test_cli_trace_file_path_beats_config_path(self) -> None:
-        """CLI --trace-file path takes precedence over config trace_file."""
-        d = resolve_trace_decision(
-            cli_no_trace=False,
-            cli_trace=False,
-            cli_trace_file="/cli/path.jsonl",
-            config_trace=False,
-            config_trace_file="/config/path.jsonl",
+        decision = _decision(
+            cli={"trace-file": "/cli/path.jsonl"},
+            exec_table={"trace-file": "/config/path.jsonl"},
         )
-        assert d.explicit_path == "/cli/path.jsonl"
+        assert decision.explicit_path == "/cli/path.jsonl"
+
+    def test_cleared_cli_trace_file_keeps_the_configured_destination(self) -> None:
+        """``--no-trace-file`` clears only the CLI seed, not a configured path."""
+        decision = _decision(
+            cli={"trace-file": None}, exec_table={"trace-file": "/config/path.jsonl"}
+        )
+        assert decision.enabled is True
+        assert decision.explicit_path == "/config/path.jsonl"
 
 
-class TestResolveTraceDecisionConfigLayer:
+class TestTraceDecisionConfigLayer:
     """Config layer: lowest priority."""
 
     def test_config_trace_true_enables(self) -> None:
-        d = resolve_trace_decision(
-            cli_no_trace=False,
-            cli_trace=False,
-            cli_trace_file=None,
-            config_trace=True,
-            config_trace_file=None,
-        )
-        assert d.enabled is True
-        assert d.explicit_path is None
+        decision = _decision(exec_table={"trace": True})
+        assert decision.enabled is True
+        assert decision.explicit_path is None
 
     def test_config_trace_file_enables(self) -> None:
-        d = resolve_trace_decision(
-            cli_no_trace=False,
-            cli_trace=False,
-            cli_trace_file=None,
-            config_trace=False,
-            config_trace_file="/config/trace.jsonl",
-        )
-        assert d.enabled is True
-        assert d.explicit_path == "/config/trace.jsonl"
+        decision = _decision(exec_table={"trace-file": "/config/trace.jsonl"})
+        assert decision.enabled is True
+        assert decision.explicit_path == "/config/trace.jsonl"
 
     def test_config_trace_false_does_not_enable(self) -> None:
-        """config_trace=False (default) with no other flags → still disabled."""
-        d = resolve_trace_decision(
-            cli_no_trace=False,
-            cli_trace=False,
-            cli_trace_file=None,
-            config_trace=False,
-            config_trace_file=None,
-        )
-        assert d.enabled is False
+        assert _decision(exec_table={"trace": False}).enabled is False
 
 
-class TestResolveTraceDecisionPrecedence:
+class TestTraceDecisionPrecedence:
     """Verify the CLI > config-file chain where the two layers disagree."""
 
-    def test_path_none_when_only_config_and_enabled_by_cli(self) -> None:
-        """CLI --trace (no path) + config trace_file → path comes from config."""
-        d = resolve_trace_decision(
-            cli_no_trace=False,
-            cli_trace=True,
-            cli_trace_file=None,
-            config_trace=False,
-            config_trace_file="/config/trace.jsonl",
-        )
-        assert d.enabled is True
-        # CLI enables but provides no path; config provides the path
-        assert d.explicit_path == "/config/trace.jsonl"
+    def test_cli_enable_takes_the_path_from_config(self) -> None:
+        """CLI --trace (no path) + config trace-file -> path comes from config."""
+        decision = _decision(cli={"trace": True}, exec_table={"trace-file": "/config/trace.jsonl"})
+        assert decision.enabled is True
+        assert decision.explicit_path == "/config/trace.jsonl"
+
+
+@pytest.mark.parametrize(
+    "cli,exec_table",
+    [
+        ({}, {}),
+        ({"trace": True}, {}),
+        ({"trace": False}, {"trace": True}),
+        ({"trace-file": "/cli/t.jsonl"}, {}),
+        ({"trace-file": None}, {"trace-file": "/config/t.jsonl"}),
+        ({}, {"trace": True}),
+        ({}, {"trace-file": "/config/t.jsonl"}),
+        ({}, {"trace": False, "trace-file": "/config/t.jsonl"}),
+    ],
+)
+def test_decision_agrees_with_the_seeded_trace_setting(
+    cli: dict[str, object | None], exec_table: dict[str, object]
+) -> None:
+    """The file a run opens and the ``trace`` a program reads come from one rule."""
+    tiers = _tiers(cli=cli, exec_table=exec_table)
+    seed = tiers.merged().get("trace")
+    seeded = isinstance(seed, BoolValue) and seed.value
+    assert tiers.trace_decision().enabled is seeded
 
 
 # ---------------------------------------------------------------------------

@@ -118,11 +118,7 @@ from agm.config.qualified_keys import (
 from agm.core import dry_run
 from agm.core.cleanup import preserve_primary_error
 from agm.core.fs import read_text_arg
-from agm.core.log import (
-    LiveTracePathResolver,
-    prepare_trace_log_from_decision,
-    resolve_trace_decision,
-)
+from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
 from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
 from agm.packages.activation import load_activation_index
@@ -689,20 +685,9 @@ def run(
     else:
         resolved_timeout = None
 
-    # Config tables and ``@config`` (never the CLI — see
-    # ``EngineSeedTiers.config_merged``) feed the derived ``trace`` rule the
-    # same way ``EngineSeedTiers._resolve_trace`` does.
-    config_result = engine_tiers.config_merged(config_engine_values)
-    config_trace_value = config_result.get("trace")
-    config_trace = isinstance(config_trace_value, BoolValue) and config_trace_value.value
-    config_trace_file = _option_text(config_result.get("trace-file"))
-    trace_decision = resolve_trace_decision(
-        cli_no_trace=args.no_trace,
-        cli_trace=args.trace,
-        cli_trace_file=args.trace_file,
-        config_trace=config_trace,
-        config_trace_file=config_trace_file,
-    )
+    # One resolution for both the readable ``trace`` seed above and the trace
+    # file opened below.
+    trace_decision = engine_tiers.trace_decision(middle=config_engine_values)
 
     factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
     session_host = create_agl_session_host(idle_timeout=resolved_timeout)

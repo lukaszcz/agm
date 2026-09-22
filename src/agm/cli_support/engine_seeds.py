@@ -6,7 +6,9 @@ CLI flag, then the command's configuration tables — so it lives here rather th
 in either command.  :func:`build_host_engine_seeds` returns the three tiers as
 an :class:`EngineSeedTiers`; :meth:`EngineSeedTiers.merged` flattens them, with
 room for a caller-supplied middle tier, into the one mapping the engine seeds
-from.
+from, and :meth:`EngineSeedTiers.trace_decision` reads the same resolution back
+as the host's own trace-file decision, so a run's log file and its readable
+``trace`` setting can never disagree.
 """
 
 from __future__ import annotations
@@ -16,7 +18,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.runtime.engine_config import convert_config_value, raw_option_str
-from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind, EngineKeySpec
+from agm.config.engine_keys import (
+    ENGINE_KEYS,
+    EngineKeyKind,
+    EngineKeySpec,
+    trace_write_implies_enabled,
+)
+from agm.core.log import TraceDecision
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -127,6 +135,44 @@ class EngineSeedTiers:
             result["trace"] = trace
         return result
 
+    def trace_decision(self, middle: "Mapping[str, Value] | None" = None) -> TraceDecision:
+        """Resolve the trace decision the host's own log file starts from.
+
+        The same resolution :meth:`merged` seeds ``trace`` with, read back as
+        an on/off state plus the explicit destination (``None`` → the
+        auto-generated timestamped path).  Left unconfigured everywhere,
+        tracing is off.  The path is the CLI's when it named one, otherwise
+        the config tiers'.
+
+        A program's own ``std/config::trace``/``trace-file`` write is not a
+        layer here: it takes effect at runtime, from its program point onward,
+        through the host settings reconfigurer, and overrides this decision —
+        see ``docs/agl/reference/host-environment.md``.
+        """
+        from agm.agl.semantics.values import BoolValue
+
+        config_result = self.config_merged(middle)
+        trace = self._resolve_trace(config_result)
+        path = self._trace_file_text(self.cli)
+        if path is None:
+            path = self._trace_file_text(config_result)
+        return TraceDecision(
+            enabled=isinstance(trace, BoolValue) and trace.value,
+            explicit_path=path,
+        )
+
+    @staticmethod
+    def _trace_file_text(values: "Mapping[str, Value]") -> str | None:
+        """Return the trace path *values* carries, or ``None`` for an empty/absent one."""
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+        from agm.agl.runtime.option import option_text
+        from agm.agl.semantics.values import RecordValue
+
+        value = values.get("trace-file")
+        if not isinstance(value, RecordValue):
+            return None
+        return option_text(value, nominals=NO_BUILTIN_DECLARATIONS)
+
     def _resolve_trace(self, config_result: "Mapping[str, Value]") -> "Value | None":
         """Recompute the derived ``trace`` setting.
 
@@ -145,19 +191,15 @@ class EngineSeedTiers:
         if self.cli_trace is not None:
             raw, origin = self.cli_trace
         elif "trace" in config_result or "trace-file" in config_result:
-            from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
-            from agm.agl.runtime.option import option_text
-            from agm.agl.semantics.values import BoolValue, RecordValue
+            from agm.agl.semantics.values import BoolValue
 
             trace_value = config_result.get("trace")
             is_trace_true = isinstance(trace_value, BoolValue) and trace_value.value
-            trace_file_value = config_result.get("trace-file")
-            trace_file_path = (
-                option_text(trace_file_value, nominals=NO_BUILTIN_DECLARATIONS)
-                if isinstance(trace_file_value, RecordValue)
-                else None
+            # The config layer follows the declared register relation a
+            # runtime write follows: a real destination implies the switch.
+            raw = is_trace_true or trace_write_implies_enabled(
+                "trace-file", self._trace_file_text(config_result) is not None
             )
-            raw = is_trace_true or trace_file_path is not None
             origin = "trace/trace-file configuration"
         else:
             return None

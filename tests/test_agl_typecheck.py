@@ -5846,6 +5846,19 @@ class TestCatchReachability:
         r = accept_type(source)
         assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
 
+    def test_an_omitted_extends_resolves_against_a_cold_compilation(self) -> None:
+        """The canonical ``Exception`` is established before any body that implies it.
+
+        An entry module's declarations resolve before the standard library's,
+        so a warm process must not be what makes the implied base resolvable.
+        """
+        from agm.agl import artifact_cache
+
+        artifact_cache.clear_retained_artifacts()
+        source = self._HIERARCHY + "try 1 catch Plain => 2 catch _ => 3"
+        r = accept_type(source)
+        assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
+
 
 # ---------------------------------------------------------------------------
 # Raise

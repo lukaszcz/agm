@@ -298,6 +298,12 @@ def _decl_key(module_id: ModuleId, item: RecordDef | EnumDef | ExceptionDef | Ty
     return (module_id, tuple(segment.name for segment in item.scope_path), item.name)
 
 
+def _is_exception_root_key(key: DeclKey) -> bool:
+    """Whether *key* names the standard library's own ``Exception`` declaration."""
+    module_id, scope_path, name = key
+    return name == "Exception" and not scope_path and module_id.is_standard_library
+
+
 def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
     """Run only phase 1 (shell registration) of ``_TypeBuilder.collect``.
 
@@ -741,8 +747,14 @@ def _build_program_type_table(
     # dependency-ordering constraint of any kind, since every reference
     # (including an exception's ``extends`` base) is a handle, valid whether
     # or not the referenced declaration's own body has been resolved yet.
-    def source_decl_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:
-        return (key[0].segments, key[1], key[2])
+    # The one exception is the canonical ``Exception`` itself: an exception
+    # that omits ``extends`` takes it as its base, and
+    # ``TypeTable.exception_root`` reads it from the registered standard-library
+    # declaration, so that declaration resolves before every other body.
+    def source_decl_sort_key(
+        key: DeclKey,
+    ) -> tuple[bool, tuple[str, ...], tuple[str, ...], str]:
+        return (not _is_exception_root_key(key), key[0].segments, key[1], key[2])
 
     body_order = sorted(all_type_keys, key=source_decl_sort_key)
 

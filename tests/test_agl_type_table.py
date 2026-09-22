@@ -1424,6 +1424,96 @@ class TestMethodIndex:
 
         assert table.method_candidates(point, "show") == (replacement,)
 
+    def test_registering_a_declaration_elsewhere_retires_it_from_its_former_receiver(
+        self,
+    ) -> None:
+        table = TypeTable()
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700120)
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700120)
+        )
+        owned = MethodDef(
+            module_id=ModuleId.from_path("methods"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        on_text = replace(
+            owned,
+            decl_node_id=2,
+            signature=FunctionType(params=(TextType(),), result=IntType()),
+        )
+
+        table.register_method(point, owned)
+        table.register_builtin_method("text", on_text)
+
+        assert table.method_candidates(point, "show") == ()
+        assert table.method_candidates(TextType(), "show") == (on_text,)
+
+        back_on_point = replace(owned, decl_node_id=3)
+        table.register_method(point, back_on_point)
+
+        assert table.method_candidates(TextType(), "show") == ()
+        assert table.method_candidates(point, "show") == (back_on_point,)
+
+    def test_restoring_an_unpromoted_declaration_returns_it_to_its_former_receiver(self) -> None:
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700121)
+        typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700121)
+        previous = TypeTable()
+        previous.register(typedef)
+        current = TypeTable()
+        current.register(typedef)
+        kept = MethodDef(
+            module_id=ModuleId.from_path("methods"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        unpromoted = replace(
+            kept,
+            decl_node_id=2,
+            signature=FunctionType(params=(TextType(),), result=IntType()),
+        )
+        previous.register_method(point, kept)
+        current.register_builtin_method("text", unpromoted)
+
+        current.restore_methods_from(previous, {unpromoted.decl_node_id})
+
+        assert current.method_candidates(TextType(), "show") == ()
+        assert current.method_candidates(point, "show") == (kept,)
+
+        # The restored declaration is tracked like any other: registering it
+        # again elsewhere retires it from the receiver it was restored to.
+        current.register_builtin_method("text", unpromoted)
+
+        assert current.method_candidates(point, "show") == ()
+        assert current.method_candidates(TextType(), "show") == (unpromoted,)
+
+    def test_restoring_nothing_leaves_the_current_methods_alone(self) -> None:
+        point = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700122)
+        typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700122)
+        previous = TypeTable()
+        previous.register(typedef)
+        current = TypeTable()
+        current.register(typedef)
+        method = MethodDef(
+            module_id=ModuleId.from_path("methods"),
+            scope_path=("Point",),
+            name="show",
+            decl_node_id=1,
+            signature=FunctionType(params=(point,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        current.register_method(point, method)
+
+        current.restore_methods_from(previous, {999})
+
+        assert current.method_candidates(point, "show") == (method,)
+
     def test_method_candidates_collapse_the_exception_chain_into_one_level(self) -> None:
         table = TypeTable()
         root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=700102)

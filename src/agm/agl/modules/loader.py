@@ -187,6 +187,52 @@ class ModuleGraph:
     # REPL promotion uses this to retain declarations with relative priorities
     # without retaining imported operators as session declarations.
     entry_infix_ambient: dict[str, tuple[int, syntax.InfixAssoc]] = field(default_factory=dict)
+    # Memo for dependency_closures. The graph is frozen, so a closure computed
+    # once holds for its lifetime; it takes no part in equality or repr, and
+    # being init-less it is never carried over by `replace`, which is free to
+    # hand back a graph with different modules or edges.
+    _closures: dict[ModuleId, tuple[LoadedModule, ...]] = field(
+        default_factory=dict, compare=False, repr=False, init=False
+    )
+
+    def dependency_closures(self) -> Mapping[ModuleId, tuple[LoadedModule, ...]]:
+        """Return each loaded module's transitive dependencies, itself included.
+
+        Closures hold the loaded modules themselves, ordered by module id so
+        two graphs list the same modules alike. Computed for the whole graph at
+        once on first use: :attr:`sccs` lists components dependencies-first, so
+        a component's outside neighbours already have their closures when it is
+        reached.
+        """
+        if not self._closures:
+            reached: dict[ModuleId, frozenset[ModuleId]] = {
+                module_id: frozenset((module_id,)) for module_id in self.modules
+            }
+            for component in self.sccs:
+                members = frozenset(component)
+                closure = members.union(
+                    *(
+                        reached[neighbour]
+                        for member in component
+                        for neighbour in self.adjacency.get(member, ())
+                        if neighbour not in members
+                    )
+                )
+                for member in component:
+                    reached[member] = closure
+            self._closures.update(
+                (
+                    module_id,
+                    tuple(
+                        self.modules[reached_id]
+                        for reached_id in sorted(
+                            reached[module_id] & self.modules.keys(), key=_mid_sort_key
+                        )
+                    ),
+                )
+                for module_id in self.modules
+            )
+        return self._closures
 
     def source_reachable_modules(self, module_id: ModuleId) -> tuple[ModuleId, ...]:
         """Return modules reachable through source-authored import/export edges.

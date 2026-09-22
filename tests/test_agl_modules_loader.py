@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -654,6 +655,90 @@ class TestCycles:
                 assert len(scc) == 1
             if mid_id in scc:
                 assert len(scc) == 1
+
+
+# ---------------------------------------------------------------------------
+# Dependency closures
+# ---------------------------------------------------------------------------
+
+
+def _closure_by_search(graph: ModuleGraph, start: ModuleId) -> set[ModuleId]:
+    """Return *start*'s reachable set by plain search, as an independent oracle."""
+    seen = {start}
+    frontier = [start]
+    while frontier:
+        for neighbour in graph.adjacency.get(frontier.pop(), ()):
+            if neighbour not in seen:
+                seen.add(neighbour)
+                frontier.append(neighbour)
+    return seen
+
+
+class TestDependencyClosures:
+    def _diamond_with_a_cycle(self, tmp_path: Path) -> ModuleGraph:
+        """entry -> top -> {left, right}; both -> bottom; bottom -> right."""
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "top", "import left\nimport right")
+        _write_module(root, "left", "import bottom")
+        _write_module(root, "right", "import bottom")
+        _write_module(root, "bottom", "import right")
+        return load_graph("import top", entry_path=None, roots=_roots(root))
+
+    def test_closures_match_a_plain_search_over_every_module(self, tmp_path: Path) -> None:
+        graph = self._diamond_with_a_cycle(tmp_path)
+        closures = graph.dependency_closures()
+
+        assert set(closures) == set(graph.modules)
+        for module_id in graph.modules:
+            assert {module.module_id for module in closures[module_id]} == _closure_by_search(
+                graph, module_id
+            )
+
+    def test_a_closure_spans_a_cycle_without_reaching_its_dependents(self, tmp_path: Path) -> None:
+        graph = self._diamond_with_a_cycle(tmp_path)
+        closures = graph.dependency_closures()
+        left = ModuleId.from_path("left")
+        right = ModuleId.from_path("right")
+        bottom = ModuleId.from_path("bottom")
+
+        reached = {
+            mid: {module.module_id for module in closure} for mid, closure in closures.items()
+        }
+
+        assert {left, bottom, right}.issubset(reached[left])
+        assert reached[right] == reached[bottom]
+        assert ModuleId.from_path("top") not in reached[left]
+        assert left not in reached[right]
+
+    def test_closures_are_sorted_and_computed_once_per_graph(self, tmp_path: Path) -> None:
+        graph = self._diamond_with_a_cycle(tmp_path)
+        closures = graph.dependency_closures()
+
+        for closure in closures.values():
+            ids = [module.module_id for module in closure]
+            assert ids == sorted(ids, key=lambda mid: mid.segments)
+        assert graph.dependency_closures() is closures
+
+    def test_a_replaced_graph_closes_over_its_own_modules(self, tmp_path: Path) -> None:
+        graph = self._diamond_with_a_cycle(tmp_path)
+        bottom = ModuleId.from_path("bottom")
+        assert bottom in graph.dependency_closures()
+
+        trimmed = replace(graph, modules={graph.entry_id: graph.modules[graph.entry_id]})
+
+        assert set(trimmed.dependency_closures()) == {trimmed.entry_id}
+
+    def test_a_graph_without_dependencies_closes_each_module_over_itself(
+        self, tmp_path: Path
+    ) -> None:
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "lone")
+        graph = load_graph("import lone", entry_path=None, roots=_roots(root), default_stdlib=False)
+        lone = ModuleId.from_path("lone")
+
+        assert graph.dependency_closures()[lone] == (graph.modules[lone],)
 
 
 # ---------------------------------------------------------------------------

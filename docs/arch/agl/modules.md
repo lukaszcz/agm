@@ -22,7 +22,7 @@ Text construction also has a pure AgL builder in `packages/stdlib/src/text.agl`:
 
 ## Infix Resolution
 
-User-operator chains are resolved once the graph is known, using each module's local declarations plus every operator made bare-visible at the chain's lexical scope. Conflicting fixities in one layer are rejected before scope runs. The graph keeps both full import/export adjacency and source-authored adjacency without loader injections, so execution uses the former while `CheckedProgram.runtime_modules` and dry-run call-site inventories use the latter.
+User-operator chains are resolved once the graph is known, using each module's local declarations plus every operator made bare-visible at the chain's lexical scope. Conflicting fixities in one layer are rejected before scope runs. The graph keeps both full import/export adjacency and source-authored adjacency without loader injections, so execution uses the former while `CheckedProgram.runtime_modules` and dry-run call-site inventories use the latter. It also answers each module's transitive dependency closure over the full adjacency, computed once per graph for the passes that key artifacts on it.
 
 ## Compilation Caches
 

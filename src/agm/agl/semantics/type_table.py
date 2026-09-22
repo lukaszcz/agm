@@ -314,6 +314,11 @@ class TypeTable:
         # name preserves every declaration identity that contributes it.
         self._methods: dict[DeclId, dict[str, dict[DeclKey, MethodDef]]] = {}
         self._builtin_methods: dict[str, dict[str, dict[DeclKey, MethodDef]]] = {}
+        # Declaration key -> the one candidate map holding it. Registering a
+        # method first retires its declaration wherever it stood, so each key
+        # occupies exactly one map and supersession is a lookup rather than a
+        # walk of every receiver's methods.
+        self._method_sites: dict[DeclKey, dict[DeclKey, MethodDef]] = {}
         # Whole-table non-data-reachability fixpoint (see
         # :meth:`nominal_reaches_non_data`), computed lazily on first use and
         # invalidated (set back to ``None``) whenever a declaration is added,
@@ -455,20 +460,26 @@ class TypeTable:
         return tuple(sorted(methods.values(), key=cls._method_sort_key))
 
     def _remove_method_declaration(self, declaration_key: DeclKey) -> None:
-        """Remove a superseded method declaration from every receiver."""
-        for methods in self._methods.values():
-            for candidates in methods.values():
-                candidates.pop(declaration_key, None)
-        for methods in self._builtin_methods.values():
-            for candidates in methods.values():
-                candidates.pop(declaration_key, None)
+        """Remove a superseded method declaration from the receiver holding it."""
+        site = self._method_sites.pop(declaration_key, None)
+        if site is not None:
+            del site[declaration_key]
+
+    def _forget_methods_of(self, decl_id: DeclId) -> None:
+        """Drop every method a superseded declaration owns, index included."""
+        for candidates in self._methods.pop(decl_id, {}).values():
+            for key in candidates:
+                del self._method_sites[key]
+
+    def _file_method(self, candidates: dict[DeclKey, MethodDef], method: MethodDef) -> None:
+        """Move *method*'s declaration into *candidates*, recording where it lands."""
+        self._remove_method_declaration(method.declaration_key)
+        candidates[method.declaration_key] = method
+        self._method_sites[method.declaration_key] = candidates
 
     def _put_method(self, decl_id: DeclId, method: MethodDef) -> None:
         """Register *method* under its declaration key on *decl_id*."""
-        self._remove_method_declaration(method.declaration_key)
-        self._methods.setdefault(decl_id, {}).setdefault(method.name, {})[
-            method.declaration_key
-        ] = method
+        self._file_method(self._methods.setdefault(decl_id, {}).setdefault(method.name, {}), method)
 
     def register_method(self, owner: NominalOwner, method: MethodDef) -> None:
         """Register *method* under its nominal *owner*."""
@@ -476,10 +487,9 @@ class TypeTable:
 
     def register_builtin_method(self, constructor: str, method: MethodDef) -> None:
         """Register *method* under a built-in receiver type constructor."""
-        self._remove_method_declaration(method.declaration_key)
-        self._builtin_methods.setdefault(constructor, {}).setdefault(method.name, {})[
-            method.declaration_key
-        ] = method
+        self._file_method(
+            self._builtin_methods.setdefault(constructor, {}).setdefault(method.name, {}), method
+        )
 
     def restore_methods_from(self, previous: TypeTable, declaration_ids: Collection[int]) -> None:
         """Restore methods replaced by unpromoted declarations from *previous*."""
@@ -498,14 +508,8 @@ class TypeTable:
         }
         if not declaration_keys:
             return
-        for methods in self._methods.values():
-            for candidates in methods.values():
-                for key in declaration_keys:
-                    candidates.pop(key, None)
-        for methods in self._builtin_methods.values():
-            for candidates in methods.values():
-                for key in declaration_keys:
-                    candidates.pop(key, None)
+        for key in declaration_keys:
+            self._remove_method_declaration(key)
         for decl_id, methods in previous._methods.items():
             for candidates in methods.values():
                 for key, method in candidates.items():
@@ -1608,7 +1612,7 @@ class TypeTable:
             if self._defs.get(decl_id) == typedef:
                 continue
             self._defs[decl_id] = typedef
-            self._methods.pop(decl_id, None)
+            self._forget_methods_of(decl_id)
             self._invalidate_cache_for(decl_id)
         for name_key, decl_id in other._name_index.items():
             self._name_index[name_key] = decl_id

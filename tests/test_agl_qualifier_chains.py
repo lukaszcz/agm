@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TypeVar
 
 import pytest
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.loader import LoadedModule, ModuleGraph
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError, ModuleResolution
 from agm.agl.scope.imports import (
@@ -33,7 +33,7 @@ from agm.agl.syntax import (
     VarRef,
 )
 from agm.agl.syntax.nodes import ConstructorPattern, ImportDecl, static_items
-from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
+from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.visitor import walk
 
 
@@ -71,22 +71,35 @@ def _entry_resolution(tmp_path: Path, modules: dict[str, str]) -> ModuleResoluti
 
 
 def _resolve_without_loader(modules: dict[str, str]) -> ModuleResolution:
-    """Resolve a parsed graph without exercising module loading behavior."""
-    loaded: dict[ModuleId, object] = {}
+    """Resolve a parsed graph without exercising module loading behavior.
+
+    Every module is inline (``path is None``), so the graph carries no
+    dependency edges: the loader's own resolution of import declarations into
+    edges is exactly what these tests stand apart from.
+    """
+    loaded: dict[ModuleId, LoadedModule] = {}
     for path, source in modules.items():
         module_id = ENTRY_ID if path == "entry" else ModuleId.from_path(path)
         program = parse_program(source)
-        loaded[module_id] = SimpleNamespace(
+        loaded[module_id] = LoadedModule(
+            module_id=module_id,
             program=program,
+            path=None,
+            source=SourceId(0),
             imports=tuple(
                 item for item in static_items(program.body.items) if isinstance(item, ImportDecl)
             ),
             export_decls=(),
-            path=None,
-            spaced_qualifiers=(),
             source_text=source,
+            spaced_qualifiers=(),
+            companion_path=None,
         )
-    graph = SimpleNamespace(modules=loaded, entry_id=ENTRY_ID, sccs=())
+    graph = ModuleGraph(
+        modules=loaded,
+        entry_id=ENTRY_ID,
+        sccs=tuple((module_id,) for module_id in loaded),
+        adjacency={module_id: () for module_id in loaded},
+    )
     return resolve_program(graph).modules[ENTRY_ID].resolved
 
 

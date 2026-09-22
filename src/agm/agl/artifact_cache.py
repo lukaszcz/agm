@@ -150,39 +150,17 @@ def retained_module_sources(graph: ModuleGraph) -> dict[ModuleId, Sources]:
 
     A module's own artifacts depend on it and every module reachable from it
     through the graph's dependency edges, whose exports decide what its imports
-    name.
+    name -- the graph's own dependency closures, computed once per graph.
 
     A pass derives this once and uses it twice -- to look up what is
     retained, and to refresh it with what the pass produced.
     """
-    sources: dict[ModuleId, Sources] = {}
-    for module_id, loaded in graph.modules.items():
-        if loaded.path is None or module_id == graph.entry_id:
-            continue
-        reachable = _reachable(graph, module_id)
-        sources[module_id] = tuple(
-            graph.modules[reached]
-            for reached in sorted(reachable, key=_ordering_key)
-            if reached in graph.modules
-        )
-    return sources
-
-
-def _ordering_key(module_id: ModuleId) -> str:
-    """Return a stable ordering key, so two graphs list the same modules alike."""
-    return module_id.path_str()
-
-
-def _reachable(graph: ModuleGraph, start: ModuleId) -> set[ModuleId]:
-    """Return *start* and every module reachable from it through dependency edges."""
-    seen = {start}
-    frontier = [start]
-    while frontier:
-        for neighbour in graph.adjacency.get(frontier.pop(), ()):
-            if neighbour not in seen:
-                seen.add(neighbour)
-                frontier.append(neighbour)
-    return seen
+    closures = graph.dependency_closures()
+    return {
+        module_id: closures[module_id]
+        for module_id, loaded in graph.modules.items()
+        if loaded.path is not None and module_id != graph.entry_id
+    }
 
 
 def retained_resolved_modules(retainable: RetainedSources) -> dict[ModuleId, ResolvedModule]:

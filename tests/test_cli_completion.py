@@ -106,6 +106,37 @@ review-tools = { program = "tools/review::main" }
     assert completion.complete_help_path(_make_ctx(help_command=["tools"]), "li") == ["lint"]
 
 
+def test_one_completion_loads_the_command_index_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One TAB builds the registered-command index once, not once per completion surface."""
+    import agm.cli_dispatch as cli_dispatch
+    from agm.config.context import ConfigContext
+    from agm.packages.activation import ActivationIndex, CommandRegistration
+
+    index = ActivationIndex(
+        packages={}, commands={"tools lint": CommandRegistration("tools", "tools/lint::main")}
+    )
+    loads = 0
+
+    def counted_load(*, home: Path, proj_dir: Path | None, cwd: Path) -> ActivationIndex:
+        nonlocal loads
+        loads += 1
+        return index
+
+    monkeypatch.setattr(cli_dispatch, "load_command_index", counted_load)
+    monkeypatch.setattr(
+        completion, "current_config_context", lambda: ConfigContext(tmp_path, None, tmp_path)
+    )
+
+    from agm.cli import app
+
+    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete.get_completions(["tools", "lint"], "--")
+
+    assert loads == 1
+
+
 _PATH_PROGRAM = (
     "program def main(\n"
     "  @arg-pos source: path,\n"
@@ -516,7 +547,7 @@ def test_complete_registered_commands_silently_degrades_on_bad_index(
         lambda **_: (_ for _ in ()).throw(ValueError("bad index")),
     )
 
-    assert completion.complete_registered_commands([], "") == []
+    assert completion.complete_registered_commands([], "", _root_ctx()) == []
 
 
 def test_complete_open_target_includes_repo_and_branches(
@@ -628,7 +659,7 @@ def test_nested_registered_help_does_not_leak_builtin_children(
     monkeypatch.setattr(
         completion,
         "complete_registered_commands",
-        lambda command_path, incomplete: ["lint"],
+        lambda command_path, incomplete, ctx: ["lint"],
     )
 
     assert completion.complete_help_path(_make_ctx(help_command=["tools", "pkg"]), "") == ["lint"]

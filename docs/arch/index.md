@@ -45,7 +45,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - `src/agm/agent/` implements agent runner invocation and session backends.
 - `src/agm/project/`, `src/agm/vcs/`, `src/agm/tmux/` implement project layout, git integration, and tmux sessions.
 - `src/agm/packages/` implements package manifests, identity, the store, and discipline validation.
-- `src/agm/sandbox/` implements the SRT sandbox runtime.
+- `src/agm/sandbox/` implements the sandbox preparation library, with SRT as its shipped backend.
 - `src/agm/agl/` is the AgL language implementation and host runtime; `packages/stdlib/src/` is the AgL standard library with its Python companions.
 - `src/agm/version.py` defines AGM's release version; package and project metadata keep it in lockstep.
 - `tests/` holds the test suite, `docs/` the documentation, `config/` the config templates and editor modes, `stubs/` local typing stubs, and `tools/` repository tooling.

@@ -214,10 +214,14 @@ class RunConfig:
     def alias_for(self, command_name: str) -> str | None:
         return self.aliases.get(command_name)
 
-    def memory_limit_for(self, command_name: str) -> str | None:
+    def memory_limit_for(self, command_name: str | None) -> str | None:
+        if command_name is None:
+            return self.default_memory_limit
         return self.command_memory_limits.get(command_name, self.default_memory_limit)
 
-    def swap_limit_for(self, command_name: str) -> str | None:
+    def swap_limit_for(self, command_name: str | None) -> str | None:
+        if command_name is None:
+            return self.default_swap_limit
         return self.command_swap_limits.get(command_name, self.default_swap_limit)
 
     def pty_for(self, command_name: str) -> bool:

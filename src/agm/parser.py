@@ -514,11 +514,13 @@ _HELP_TEXTS: dict[str, str] = {
                        The wrapper exports SANDBOX_CGROUP and enables the
                        memory controller for descendant cgroups. The default
                        memory limit is 32G. Use 0 for a zero limit or
-                       unlimited for no memory cap.
+                       unlimited for no memory cap. LIMIT accepts infinity or
+                       unlimited, a percentage, or whitespace-separated
+                       <number>[KMGTPE][B] groups (case-sensitive suffixes).
           --swap LIMIT
                        Set MemorySwapMax=LIMIT in the delegated systemd-run
                        scope. In sandbox mode the default is 0. Use unlimited
-                       for no swap cap.
+                       for no swap cap. Same LIMIT grammar as --memory.
           --no-memory-limit
                        Do not set MemoryMax.
           --no-swap-limit

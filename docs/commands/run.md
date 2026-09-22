@@ -29,6 +29,7 @@
 - `-f`, `--file SETTINGS`: use one settings file directly instead of discovered settings
 - `--memory LIMIT`: set `MemoryMax=LIMIT` in the delegated `systemd-run --user --scope` (the bootstrap exports `SANDBOX_CGROUP` and enables the memory controller for descendant cgroups); defaults to `32G` in sandbox mode; `0` means a zero memory limit; `unlimited` means no memory cap
 - `--swap LIMIT`: set `MemorySwapMax=LIMIT` in the delegated scope; defaults to `0` in sandbox mode; `unlimited` means no swap cap
+- `LIMIT` grammar (both flags, whitespace-trimmed): `infinity` or `unlimited`, a percentage (`N%`), or whitespace-separated `<number>[KMGTPE][B]` groups with case-sensitive suffixes
 - `--no-memory-limit`: do not set `MemoryMax`
 - `--no-swap-limit`: do not set `MemorySwapMax`
 - `--no-patch`: do not append project notes, deps, and repo `.git` paths to `filesystem.allowWrite`

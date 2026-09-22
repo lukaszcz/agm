@@ -1,33 +1,30 @@
-"""agm run."""
+"""agm run: a thin client of the sandbox preparation library."""
 
 from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import sys
 from pathlib import Path
 from typing import NoReturn
-from uuid import uuid4
 
 from agm.cli_support.args import RunArgs
 from agm.config.context import current_config_context
 from agm.config.general import load_run_config
 from agm.core import dry_run
 from agm.core.env import clone_env
+from agm.core.path import display_path
 from agm.core.process import run_foreground
-from agm.sandbox import srt
-
-DEFAULT_MEMORY_LIMIT = "32G"
-DEFAULT_SWAP_LIMIT = "0"
-_SYSTEMD_DELEGATED_CGROUP_BOOTSTRAP = (
-    "CG=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup); "
-    'mkdir -p "${CG}/init"; '
-    'echo $$ > "${CG}/init/cgroup.procs"; '
-    'echo "+memory" > "${CG}/cgroup.subtree_control"; '
-    'export SANDBOX_CGROUP="$CG"; '
-    'exec "$@"'
+from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError, default_backend
+from agm.sandbox.prepare import (
+    ResolvedLimits,
+    prepare,
+    print_dry_run,
+    resolve_limits,
+    settings_source,
 )
+from agm.sandbox.profile import profile_name
+from agm.sandbox.request import Default, LimitSpec, SandboxRequest, SandboxSpec
 
 
 def normalize_run_command(run_command: list[str]) -> list[str]:
@@ -36,196 +33,183 @@ def normalize_run_command(run_command: list[str]) -> list[str]:
     return run_command
 
 
-def _normalize_systemd_limit(limit: str) -> str:
-    if limit.strip().lower() == "unlimited":
-        return "infinity"
-    return limit
+def _limit_spec(*, flag_value: str | None, no_limit: bool, no_sandbox: bool) -> LimitSpec:
+    """Map `--memory`/`--swap`-style flags to a `LimitSpec`.
 
-
-def _systemd_run_prefix(*, memory_limit: str | None, swap_limit: str | None) -> list[str]:
-    prefix = [
-        "systemd-run",
-        "--user",
-        "--scope",
-        "-q",
-    ]
-    if memory_limit is not None:
-        prefix.extend(["-p", f"MemoryMax={_normalize_systemd_limit(memory_limit)}"])
-    if swap_limit is not None:
-        prefix.extend(["-p", f"MemorySwapMax={_normalize_systemd_limit(swap_limit)}"])
-    prefix.extend(["-p", "Delegate=yes"])
-    return prefix
-
-
-def _systemd_scope_name() -> str:
-    return f"agm-run-{uuid4().hex}.scope"
-
-
-def _resource_limit_run_context(
-    env: dict[str, str], memory_limit: str | None, swap_limit: str | None
-) -> tuple[list[str], list[str] | None]:
-    if memory_limit is None and swap_limit is None:
-        return [], None
-    if shutil.which("systemd-run", path=env.get("PATH")) is None:
-        print("Error: systemd-run is not installed or not in PATH.", file=sys.stderr)
-        raise SystemExit(1)
-    scope_name = _systemd_scope_name()
-    return (
-        [
-            *_systemd_run_prefix(memory_limit=memory_limit, swap_limit=swap_limit),
-            "--unit",
-            scope_name,
-            "--",
-            "bash",
-            "-c",
-            _SYSTEMD_DELEGATED_CGROUP_BOOTSTRAP,
-            "--",
-        ],
-        # --no-block: hand the teardown to systemd and return immediately.  The
-        # stop job then completes on its own even if this process is killed
-        # before the scope's members have finished dying.
-        ["systemctl", "--user", "--no-block", "stop", scope_name],
-    )
-
-
-def _run_with_optional_resource_limits(
-    *,
-    subprocess_args: list[str],
-    cwd: Path,
-    env: dict[str, str],
-    memory_limit: str | None,
-    swap_limit: str | None,
-) -> NoReturn:
-    """Run *subprocess_args* in the foreground and exit with its status.
-
-    Never returns: the child's exit code becomes this process's, and an
-    interrupt exits 130.
+    An explicit, non-empty flag always wins (an empty value, e.g. `--memory
+    ""`, is treated as not given); otherwise `--no-sandbox` means no default
+    limit (today's behaviour: only `--no-sandbox` plus an explicit flag
+    applies one), while sandboxed runs fall through to config/built-in
+    defaults via `Default`.
     """
 
-    process_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
-        env, memory_limit, swap_limit
+    if no_limit:
+        return None
+    if flag_value:
+        return flag_value
+    if no_sandbox:
+        return None
+    return Default
+
+
+def _limit_detail(raw: str | None) -> str:
+    return raw if raw is not None else "disabled"
+
+
+def _print_run_configuration(
+    *,
+    request: SandboxRequest,
+    command_name: str,
+    command_alias: str | None,
+    allocate_pty: bool,
+    effective_pty: bool,
+    limits: ResolvedLimits,
+) -> None:
+    dry_run.print_configuration("run")
+    dry_run.print_detail("cwd", str(request.cwd))
+    dry_run.print_detail("sandbox", "enabled" if request.sandboxed else "disabled")
+    dry_run.print_detail("patch proj dir", "enabled" if request.spec.patch else "disabled")
+    dry_run.print_detail("command name", command_name)
+    dry_run.print_detail("alias command", command_alias or "disabled")
+    dry_run.print_detail(
+        "pty",
+        "enabled" if allocate_pty else "disabled" if not effective_pty else "not a terminal",
     )
-    subprocess_args = [*process_prefix, *subprocess_args]
-    try:
-        raise SystemExit(
-            run_foreground(
-                subprocess_args,
-                cwd=cwd,
-                env=env,
-                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
-                isolate_process_group=True,
-            )
+    dry_run.print_detail("memory limit", _limit_detail(limits.memory_raw))
+    dry_run.print_detail("swap limit", _limit_detail(limits.swap_raw))
+
+
+def _print_sandbox_settings_detail(request: SandboxRequest) -> None:
+    spec = request.spec
+    if spec.settings_file is not None:
+        detail = display_path(spec.settings_file, cwd=request.cwd)
+    else:
+        candidates = default_backend().settings_candidates(request)
+        detail = ", ".join(display_path(path, cwd=request.cwd) for path in candidates)
+    patch_target = request.proj_dir if spec.patch else None
+
+    dry_run.print_configuration("sandbox")
+    dry_run.print_detail("settings source", settings_source(spec))
+    dry_run.print_detail("settings candidates", detail)
+    dry_run.print_detail(
+        "patch proj dir path",
+        display_path(patch_target, cwd=request.cwd) if patch_target is not None else "disabled",
+    )
+
+
+def _report_settings_error(error: SandboxSettingsError, *, cwd: Path) -> None:
+    if error.path is not None:
+        print(
+            f"Error: settings file not found: {display_path(error.path, cwd=cwd)}", file=sys.stderr
         )
-    except KeyboardInterrupt:
-        print("\nInterrupted")
-        raise SystemExit(130)
+    elif error.candidates:
+        print("Error: no sandbox settings file found.", file=sys.stderr)
+        print(
+            "Checked: " + ", ".join(display_path(path, cwd=cwd) for path in error.candidates),
+            file=sys.stderr,
+        )
+    else:
+        print(f"Error: {error}", file=sys.stderr)
+
+
+def _fail_sandbox_error(
+    error: SandboxUnavailableError | SandboxSettingsError, *, cwd: Path
+) -> NoReturn:
+    if isinstance(error, SandboxSettingsError):
+        _report_settings_error(error, cwd=cwd)
+    else:
+        print(f"Error: {error}", file=sys.stderr)
+        if error.detail is not None:
+            print(error.detail, file=sys.stderr)
+    raise SystemExit(1) from error
 
 
 def run(args: RunArgs) -> None:
     current = Path.cwd()
     resolved_env = clone_env()
     context = current_config_context(cwd=current, env=resolved_env)
-    run_args = args
-    run_command = normalize_run_command(list(run_args.run_command))
+    run_command = normalize_run_command(list(args.run_command))
     if not run_command:
         print("Error: command is required.", file=sys.stderr)
         raise SystemExit(1)
-    patch_proj_dir = context.proj_dir if not run_args.no_patch else None
 
-    run_config = load_run_config(
-        home=context.home,
-        proj_dir=context.proj_dir,
-        cwd=context.cwd,
-    )
-    command_name = Path(run_command[0]).name or run_command[0]
+    run_config = load_run_config(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+    command_name = profile_name(run_command[0])
     command_alias = run_config.alias_for(command_name)
-    configured_memory_limit = run_config.memory_limit_for(command_name)
-    configured_swap_limit = run_config.swap_limit_for(command_name)
-    configured_pty = run_config.pty_for(command_name)
-    effective_pty = configured_pty if run_args.pty is None else run_args.pty
-    allocate_pty = effective_pty and os.isatty(0) and os.isatty(1)
-    if run_args.no_memory_limit:
-        effective_memory_limit = None
-    elif run_args.no_sandbox:
-        effective_memory_limit = run_args.memory
-    else:
-        effective_memory_limit = run_args.memory or configured_memory_limit or DEFAULT_MEMORY_LIMIT
-    if run_args.no_swap_limit:
-        effective_swap_limit = None
-    elif run_args.no_sandbox:
-        effective_swap_limit = run_args.swap
-    else:
-        effective_swap_limit = run_args.swap or configured_swap_limit or DEFAULT_SWAP_LIMIT
+
     effective_run_command = list(run_command)
+    alias_name: str | None = None
     if command_alias is not None:
         alias_parts = shlex.split(command_alias)
         effective_run_command = [*alias_parts, *effective_run_command[1:]]
-    if allocate_pty:
-        effective_run_command = [
-            sys.executable,
-            "-m",
-            "agm.sandbox.pty",
-            "--",
-            *effective_run_command,
-        ]
-    process_prefix, interrupt_cleanup_cmd = _resource_limit_run_context(
-        resolved_env, effective_memory_limit, effective_swap_limit
+        alias_name = profile_name(alias_parts[0])
+
+    configured_pty = run_config.pty_for(command_name)
+    effective_pty = configured_pty if args.pty is None else args.pty
+    allocate_pty = effective_pty and os.isatty(0) and os.isatty(1)
+
+    spec = SandboxSpec(
+        profile_name=command_name,
+        memory=_limit_spec(
+            flag_value=args.memory, no_limit=args.no_memory_limit, no_sandbox=args.no_sandbox
+        ),
+        swap=_limit_spec(
+            flag_value=args.swap, no_limit=args.no_swap_limit, no_sandbox=args.no_sandbox
+        ),
+        settings_file=Path(args.settings_file) if args.settings_file is not None else None,
+        patch=not args.no_patch,
     )
-    if dry_run.enabled():
-        dry_run.print_configuration("run")
-        dry_run.print_detail("cwd", str(current))
-        dry_run.print_detail("sandbox", "disabled" if run_args.no_sandbox else "enabled")
-        dry_run.print_detail("patch proj dir", "disabled" if run_args.no_patch else "enabled")
-        dry_run.print_detail("command name", command_name)
-        dry_run.print_detail("alias command", command_alias or "disabled")
-        dry_run.print_detail(
-            "pty",
-            "enabled" if allocate_pty else "disabled" if not effective_pty else "not a terminal",
-        )
-        dry_run.print_detail(
-            "memory limit",
-            effective_memory_limit if effective_memory_limit is not None else "disabled",
-        )
-        dry_run.print_detail(
-            "swap limit", effective_swap_limit if effective_swap_limit is not None else "disabled"
-        )
-        if not run_args.no_sandbox:
-            srt.run_sandboxed(
-                command=effective_run_command,
-                cwd=current,
-                env=resolved_env,
-                home=context.home,
-                proj_dir=context.proj_dir,
-                command_name=run_command[0],
-                alias_command_name=effective_run_command[0] if command_alias is not None else None,
-                settings_file=run_args.settings_file,
-                patch_proj_dir=patch_proj_dir,
-                process_prefix=process_prefix,
-            )
-            return
-        subprocess_args = [*process_prefix, *effective_run_command]
-        dry_run.print_labeled_command("run", subprocess_args, cwd=current)
-        return
-
-    if run_args.no_sandbox:
-        _run_with_optional_resource_limits(
-            subprocess_args=list(effective_run_command),
-            cwd=current,
-            env=resolved_env,
-            memory_limit=effective_memory_limit,
-            swap_limit=effective_swap_limit,
-        )
-
-    srt.run_sandboxed(
+    request = SandboxRequest(
         command=effective_run_command,
         cwd=current,
         env=resolved_env,
         home=context.home,
         proj_dir=context.proj_dir,
-        command_name=run_command[0],
-        alias_command_name=effective_run_command[0] if command_alias is not None else None,
-        settings_file=run_args.settings_file,
-        patch_proj_dir=patch_proj_dir,
-        process_prefix=process_prefix,
-        interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+        spec=spec,
+        alias_name=alias_name,
+        pty=allocate_pty,
+        sandboxed=not args.no_sandbox,
     )
+
+    if dry_run.enabled():
+        try:
+            limits = resolve_limits(spec, run_config)
+        except SandboxSettingsError as error:
+            _fail_sandbox_error(error, cwd=current)
+        _print_run_configuration(
+            request=request,
+            command_name=command_name,
+            command_alias=command_alias,
+            allocate_pty=allocate_pty,
+            effective_pty=effective_pty,
+            limits=limits,
+        )
+        if request.sandboxed:
+            _print_sandbox_settings_detail(request)
+        try:
+            prepared = prepare(request, run_config=run_config, resolve_settings=False)
+        except (SandboxUnavailableError, SandboxSettingsError) as error:
+            _fail_sandbox_error(error, cwd=current)
+        print_dry_run(prepared, label="sandbox" if request.sandboxed else "run")
+        prepared.close()
+        return
+
+    try:
+        prepared = prepare(request, run_config=run_config)
+    except (SandboxUnavailableError, SandboxSettingsError) as error:
+        _fail_sandbox_error(error, cwd=current)
+
+    try:
+        exit_code = run_foreground(
+            prepared.argv,
+            cwd=prepared.cwd,
+            env=prepared.env,
+            interrupt_cleanup_cmd=prepared.interrupt_cleanup_cmd,
+            isolate_process_group=True,
+        )
+    except KeyboardInterrupt:
+        print("\nInterrupted")
+        exit_code = 130
+    finally:
+        prepared.close()
+    raise SystemExit(exit_code)

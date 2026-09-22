@@ -1,22 +1,30 @@
 # Sandboxed Execution
 
-`agm run` executes a command inside a sandbox with an explicitly configured filesystem and network policy and optional memory limits, so agent-driven and untrusted commands run with least privilege by default while staying easy to configure per project and per command.
+A command runs inside a sandbox with an explicit filesystem/network policy and optional memory limits, giving agent-driven and untrusted commands least privilege by default. `agm run` is the CLI entry point; the preparation library below is a reusable in-process API for any caller (agent invocation, `exec`) needing a sandboxed command without a CLI subprocess round trip.
 
-## Sandbox Runtime
+## Preparation Library
 
-Isolation is delegated to SRT, the external sandbox-runtime tool; AGM implements none itself. `agm run` resolves a merged settings file, invokes SRT with it, and passes the target command through. Interactive commands run through AGM's PTY relay by default, giving applications a controlling terminal inside SRT's detached session; redirected commands remain unwrapped. The sandbox and PTY can each be bypassed explicitly.
+`sandbox/request.py` is the leaf: the plain data types (`SandboxSpec`, `SandboxRequest`, `PreparedSandboxCommand`, `LimitSpec`) and `cleanup_artifacts()`, importing nothing else from `agm.sandbox` so the rest of the package layers above it with no cycle. `PreparedSandboxCommand.close()` removes the run's temp settings files and empty tracked artifacts; idempotent, never gated by dry-run.
+
+`prepare.py::prepare()` turns a `SandboxRequest` into a `PreparedSandboxCommand`, composing the `systemd-run` resource-limit prefix, a backend's wrapper argv, and an optional PTY wrapper. `resolve_limits()` is the one place memory/swap limits resolve against `[run.<name>]` → `[run]` → the built-in floor and validate against systemd's grammar; both `prepare()` and a display-only caller (`agm run --dry-run`) call it, so the policy exists once. The library never prints or exits: failures raise `SandboxUnavailableError` or `SandboxSettingsError`, each carrying structured fields a caller formats into its own message.
+
+## Backends
+
+`backend.py` defines the `SandboxBackend` protocol (availability, settings resolution, argv wrapping, env adjustment) and a `default_backend()` registry seam for future methods. `srt.py::SrtBackend` is the shipped implementation, delegating isolation to the external `srt` tool: settings resolution/merging, git write-access patching, bwrap-artifact cleanup tracking, and a Node fetch-proxy env default.
+
+`profile.py::profile_name()` derives a sandbox profile name from an executable path, selecting both the per-command settings file and the `[run.<name>]` limit overrides; a `run`-only alias never affects it. The config layer takes a profile name only pre-normalized this way, never deriving one itself.
 
 ## Settings Resolution
 
-Sandbox settings are discovered and merged across the same install/home/project/workspace scopes as general configuration. A per-command settings file is selected by command name, falling back to a default. Policy sections merge by key; list-valued keys append with duplicates removed, and later deny lists subtract from earlier allow lists. Before execution AGM patches in write access to the project-internal git directories the command legitimately needs.
+Settings are discovered and merged across the same install/home/project/workspace scopes as general configuration. A per-command file is selected by profile name, falling back to a default; policy sections merge by key, list-valued keys appending (duplicates removed), later deny lists subtracting from earlier allow lists.
 
-## Resource Limits
+## `agm run`
 
-Memory and swap limits are enforced through `systemd-run`, which places the sandboxed process in a transient scope; the process primitive registers the scope's stop as a cleanup command so an interrupted run does not leak it ([core.md](core.md)).
+`commands/run.py` is a thin client: it maps CLI flags and config to a `SandboxRequest`/`SandboxSpec` (alias remapping happens here only, never for agent or `exec` argv), calls `prepare()`, and runs the result in the foreground or, under `--dry-run`, prints the same detail lines. It holds no limit, PTY, or settings logic of its own. Interactive commands run through AGM's PTY relay by default; sandbox and PTY can each be bypassed explicitly.
 
 ## Code Entry Points
 
-- `src/agm/commands/run.py` — the `agm run` command: alias remapping, limit flags, sandbox invocation.
-- `src/agm/sandbox/srt.py` — SRT settings resolution, the merge chain, project write-path patching, artifact cleanup.
+- `src/agm/sandbox/request.py`, `prepare.py` — leaf data types and `cleanup_artifacts()`; `prepare()`, `resolve_limits()`, dry-run printing.
+- `src/agm/sandbox/backend.py`, `profile.py`, `srt.py` — the `SandboxBackend` protocol and errors; profile-name derivation; the SRT backend.
 - `src/agm/sandbox/pty.py` — controlling-terminal allocation and terminal I/O relay.
-- `src/agm/config/sandbox/` — sandbox settings discovery and merging.
+- `src/agm/commands/run.py`, `src/agm/config/sandbox/` — the `agm run` command; sandbox settings discovery and merging.

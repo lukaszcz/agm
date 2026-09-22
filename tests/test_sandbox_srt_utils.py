@@ -1,16 +1,14 @@
-"""Comprehensive tests for agm.config.sandbox.srt and agm.sandbox.srt."""
+"""Comprehensive tests for agm.config.sandbox.srt and the srt backend's private helpers."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Generator
-from unittest.mock import patch
+from typing import Generator
 
 import pytest
 
 import agm.core.dry_run as dry_run
-import agm.sandbox.srt as srt
 from agm.config.sandbox.srt import (
     JsonDict,
     _first_missing_component,
@@ -24,13 +22,8 @@ from agm.config.sandbox.srt import (
     sandbox_settings_path,
     track_bwrap_artifacts,
 )
-from agm.sandbox.srt import (
-    _cleanup,
-    _print_dry_run,
-    _resolve_settings_path,
-    _write_json_temp,
-    require_srt_installed,
-)
+from agm.sandbox.request import cleanup_artifacts
+from agm.sandbox.srt import _write_json_temp
 
 # ---------------------------------------------------------------------------
 # Fixture: always reset dry-run state after each test
@@ -396,13 +389,17 @@ class TestSandboxSettingsPath:
         result = sandbox_settings_path(settings_dir, "unknown", alias_command_name=None)
         assert result == settings_dir / "default.json"
 
-    def test_uses_basename_of_command_path(self, tmp_path: Path) -> None:
+    def test_takes_command_name_verbatim_without_normalizing_it(self, tmp_path: Path) -> None:
+        """`sandbox_settings_path` requires an already-normalized name (the caller applies
+        `agm.sandbox.profile.profile_name`); it never derives one from a path itself."""
+
         settings_dir = tmp_path / "sandbox"
         settings_dir.mkdir()
         cmd_file = settings_dir / "node.json"
         cmd_file.write_text("{}", encoding="utf-8")
-        result = sandbox_settings_path(settings_dir, "/usr/bin/node")
-        assert result == cmd_file
+        result = sandbox_settings_path(settings_dir, "not-normalized-node")
+        assert result != cmd_file
+        assert result == settings_dir / "default.json"
 
 
 # ===========================================================================
@@ -577,105 +574,53 @@ class TestFirstMissingComponent:
 
 
 class TestTrackBwrapArtifacts:
-    def _make_settings(self, tmp_path: Path, data: JsonDict) -> Path:
-        p = tmp_path / "settings.json"
-        p.write_text(json.dumps(data), encoding="utf-8")
-        return p
+    """`track_bwrap_artifacts` takes already-loaded settings data, not a path: it never
+    reads or parses a settings file itself (a caller that merged or patched settings
+    already has the data in hand, and must not re-parse it)."""
 
     def test_tracks_mandatory_deny_path(self, tmp_path: Path) -> None:
-        settings_path = self._make_settings(tmp_path, {})
-        artifacts = track_bwrap_artifacts(settings_path, tmp_path)
+        artifacts = track_bwrap_artifacts({}, tmp_path)
         # .gitconfig should be tracked as a candidate under cwd
         names = [a.name for a in artifacts]
         assert ".gitconfig" in names
 
     def test_tracks_filesystem_deny_write_entries(self, tmp_path: Path) -> None:
-        settings_path = self._make_settings(
-            tmp_path,
-            {"filesystem": {"denyWrite": [".custom-deny"]}},
-        )
-        artifacts = track_bwrap_artifacts(settings_path, tmp_path)
+        data: JsonDict = {"filesystem": {"denyWrite": [".custom-deny"]}}
+        artifacts = track_bwrap_artifacts(data, tmp_path)
         names = [a.name for a in artifacts]
         assert ".custom-deny" in names
 
     def test_skips_glob_patterns_in_deny_write(self, tmp_path: Path) -> None:
-        settings_path = self._make_settings(
-            tmp_path,
-            {"filesystem": {"denyWrite": ["*.txt", "dir/**"]}},
-        )
-        artifacts = track_bwrap_artifacts(settings_path, tmp_path)
+        data: JsonDict = {"filesystem": {"denyWrite": ["*.txt", "dir/**"]}}
+        artifacts = track_bwrap_artifacts(data, tmp_path)
         names = [a.name for a in artifacts]
         assert "*.txt" not in names
         assert "dir/**" not in names
 
     def test_skips_paths_not_under_cwd(self, tmp_path: Path) -> None:
-        settings_path = self._make_settings(
-            tmp_path,
-            {"filesystem": {"denyWrite": ["/absolute/outside"]}},
-        )
-        artifacts = track_bwrap_artifacts(settings_path, tmp_path)
+        data: JsonDict = {"filesystem": {"denyWrite": ["/absolute/outside"]}}
+        artifacts = track_bwrap_artifacts(data, tmp_path)
         paths = [str(a) for a in artifacts]
         assert "/absolute/outside" not in paths
 
     def test_does_not_track_already_existing_paths(self, tmp_path: Path) -> None:
         existing = tmp_path / ".gitconfig"
         existing.write_text("", encoding="utf-8")
-        settings_path = self._make_settings(tmp_path, {})
-        artifacts = track_bwrap_artifacts(settings_path, tmp_path)
+        artifacts = track_bwrap_artifacts({}, tmp_path)
         # .gitconfig exists → _first_missing_component returns None → not tracked
         assert existing not in artifacts
 
     def test_no_duplicates_in_result(self, tmp_path: Path) -> None:
-        settings_path = self._make_settings(
-            tmp_path,
-            {"filesystem": {"denyWrite": [".gitconfig"]}},
-        )
-        artifacts = track_bwrap_artifacts(settings_path, tmp_path)
+        data: JsonDict = {"filesystem": {"denyWrite": [".gitconfig"]}}
+        artifacts = track_bwrap_artifacts(data, tmp_path)
         names = [a.name for a in artifacts]
         assert names.count(".gitconfig") <= 1
 
     def test_adds_git_hook_paths_when_dot_git_dir_exists(self, tmp_path: Path) -> None:
         (tmp_path / ".git").mkdir()
-        settings_path = self._make_settings(tmp_path, {})
-        artifacts = track_bwrap_artifacts(settings_path, tmp_path)
+        artifacts = track_bwrap_artifacts({}, tmp_path)
         names = [a.name for a in artifacts]
         assert "hooks" in names or "config" in names
-
-
-# ===========================================================================
-# agm.sandbox.srt — require_srt_installed
-# ===========================================================================
-
-
-class TestRequireSrtInstalled:
-    def test_does_not_raise_when_srt_found(self) -> None:
-        with patch("shutil.which", return_value="/usr/bin/srt"):
-            require_srt_installed(None)  # should not raise
-
-    def test_raises_system_exit_when_srt_not_found(self) -> None:
-        with patch("shutil.which", return_value=None):
-            with pytest.raises(SystemExit) as exc_info:
-                require_srt_installed(None)
-        assert exc_info.value.code == 1
-
-    def test_passes_path_to_which(self) -> None:
-        calls: list[object] = []
-
-        def fake_which(name: str, path: str | None = None) -> str | None:
-            calls.append(path)
-            return "/bin/srt"
-
-        with patch("shutil.which", side_effect=fake_which):
-            require_srt_installed("/custom/bin")
-
-        assert calls == ["/custom/bin"]
-
-    def test_stderr_message_on_missing_srt(self, capsys: pytest.CaptureFixture[str]) -> None:
-        with patch("shutil.which", return_value=None):
-            with pytest.raises(SystemExit):
-                require_srt_installed(None)
-        captured = capsys.readouterr()
-        assert "srt" in captured.err
 
 
 # ===========================================================================
@@ -721,47 +666,47 @@ class TestWriteJsonTemp:
 
 
 # ===========================================================================
-# agm.sandbox.srt — _cleanup
+# agm.sandbox.request — cleanup_artifacts
 # ===========================================================================
 
 
-class TestCleanup:
+class TestCleanupArtifacts:
     def test_removes_temp_files(self, tmp_path: Path) -> None:
         f1 = tmp_path / "temp1.json"
         f2 = tmp_path / "temp2.json"
         f1.write_text("{}", encoding="utf-8")
         f2.write_text("{}", encoding="utf-8")
-        _cleanup([f1, f2], [])
+        cleanup_artifacts([f1, f2], [])
         assert not f1.exists()
         assert not f2.exists()
 
     def test_ignores_missing_temp_files(self, tmp_path: Path) -> None:
         missing = tmp_path / "ghost.json"
-        _cleanup([missing], [])  # should not raise
+        cleanup_artifacts([missing], [])  # should not raise
 
     def test_removes_empty_artifact_dirs(self, tmp_path: Path) -> None:
         empty_dir = tmp_path / "artifact_dir"
         empty_dir.mkdir()
-        _cleanup([], [empty_dir])
+        cleanup_artifacts([], [empty_dir])
         assert not empty_dir.exists()
 
     def test_removes_empty_artifact_files(self, tmp_path: Path) -> None:
         empty_file = tmp_path / "artifact_file"
         empty_file.write_bytes(b"")
-        _cleanup([], [empty_file])
+        cleanup_artifacts([], [empty_file])
         assert not empty_file.exists()
 
     def test_does_not_remove_non_empty_artifact_files(self, tmp_path: Path) -> None:
         non_empty = tmp_path / "artifact_with_content"
         non_empty.write_text("content", encoding="utf-8")
-        _cleanup([], [non_empty])
+        cleanup_artifacts([], [non_empty])
         assert non_empty.exists()
 
     def test_does_not_remove_non_empty_artifact_dirs(self, tmp_path: Path) -> None:
         d = tmp_path / "dir_with_child"
         d.mkdir()
         (d / "child.txt").write_text("x", encoding="utf-8")
-        _cleanup([], [d])
+        cleanup_artifacts([], [d])
         assert d.exists()
 
     def test_cleans_both_temp_files_and_artifacts(self, tmp_path: Path) -> None:
@@ -769,432 +714,6 @@ class TestCleanup:
         temp_file.write_text("{}", encoding="utf-8")
         artifact = tmp_path / "artifact"
         artifact.mkdir()
-        _cleanup([temp_file], [artifact])
+        cleanup_artifacts([temp_file], [artifact])
         assert not temp_file.exists()
         assert not artifact.exists()
-
-
-# ===========================================================================
-# agm.sandbox.srt — _resolve_settings_path
-# ===========================================================================
-
-
-class TestResolveSettingsPath:
-    def test_explicit_settings_file_returned_directly(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        cwd = tmp_path / "work"
-        settings_file = tmp_path / "custom.json"
-        settings_file.write_text("{}", encoding="utf-8")
-        temp_files: list[Path] = []
-        result = _resolve_settings_path(
-            cwd=cwd,
-            home=home,
-            proj_dir=None,
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=str(settings_file),
-            temp_files=temp_files,
-        )
-        assert result == settings_file
-        assert temp_files == []
-
-    def test_relative_settings_file_resolves_against_cwd(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        home = tmp_path / "home"
-        cwd = tmp_path / "work"
-        cwd.mkdir(parents=True)
-        (cwd / "sandbox").mkdir()
-        (cwd / "sandbox" / "custom.json").write_text("{}", encoding="utf-8")
-        monkeypatch.chdir(cwd)
-        temp_files: list[Path] = []
-        result = _resolve_settings_path(
-            cwd=cwd,
-            home=home,
-            proj_dir=None,
-            command_name="echo",
-            alias_command_name=None,
-            settings_file="sandbox/custom.json",
-            temp_files=temp_files,
-        )
-        assert result == cwd / "sandbox" / "custom.json"
-        assert temp_files == []
-
-    def test_explicit_settings_file_not_found_exits(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        cwd = tmp_path / "work"
-        temp_files: list[Path] = []
-        with pytest.raises(SystemExit) as exc_info:
-            _resolve_settings_path(
-                cwd=cwd,
-                home=home,
-                proj_dir=None,
-                command_name="echo",
-                alias_command_name=None,
-                settings_file=str(tmp_path / "nonexistent.json"),
-                temp_files=temp_files,
-            )
-        assert exc_info.value.code == 1
-
-    def test_no_settings_found_exits(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        cwd = tmp_path / "work"
-        cwd.mkdir()
-        temp_files: list[Path] = []
-        with pytest.raises(SystemExit) as exc_info:
-            _resolve_settings_path(
-                cwd=cwd,
-                home=home,
-                proj_dir=None,
-                command_name="echo",
-                alias_command_name=None,
-                settings_file=None,
-                temp_files=temp_files,
-            )
-        assert exc_info.value.code == 1
-
-    def test_single_settings_file_returned_directly(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        cwd = tmp_path / "work"
-        cwd.mkdir()
-        home_sandbox = home / ".agm" / "sandbox"
-        home_sandbox.mkdir(parents=True)
-        default_settings = home_sandbox / "default.json"
-        default_settings.write_text("{}", encoding="utf-8")
-        temp_files: list[Path] = []
-        result = _resolve_settings_path(
-            cwd=cwd,
-            home=home,
-            proj_dir=None,
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=None,
-            temp_files=temp_files,
-        )
-        assert result == default_settings
-        assert temp_files == []
-
-    def test_multiple_settings_files_are_merged(self, tmp_path: Path) -> None:
-        home = tmp_path / "home"
-        cwd = tmp_path / "work"
-        cwd.mkdir()
-        home_sandbox = home / ".agm" / "sandbox"
-        home_sandbox.mkdir(parents=True)
-        cwd_sandbox = cwd / ".sandbox"
-        cwd_sandbox.mkdir()
-        home_settings_data: JsonDict = {"enabled": True, "network": {"allowedDomains": ["a.com"]}}
-        cwd_settings_data: JsonDict = {"enabled": False}
-        (home_sandbox / "default.json").write_text(json.dumps(home_settings_data), encoding="utf-8")
-        (cwd_sandbox / "default.json").write_text(json.dumps(cwd_settings_data), encoding="utf-8")
-        temp_files: list[Path] = []
-        result = _resolve_settings_path(
-            cwd=cwd,
-            home=home,
-            proj_dir=None,
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=None,
-            temp_files=temp_files,
-        )
-        assert len(temp_files) == 1
-        assert result == temp_files[0]
-        merged = json.loads(result.read_text(encoding="utf-8"))
-        assert merged["enabled"] is False
-        assert merged["network"]["allowedDomains"] == ["a.com"]
-
-
-# ===========================================================================
-# agm.sandbox.srt — _print_dry_run
-# ===========================================================================
-
-
-class TestPrintDryRun:
-    def test_prints_sandbox_configuration_header(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        dry_run.set_enabled(True)
-        _print_dry_run(
-            cwd=tmp_path / "work",
-            home=tmp_path / "home",
-            proj_dir=None,
-            command=["echo", "hello"],
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=None,
-            patch_proj_dir=None,
-            process_prefix=[],
-        )
-        captured = capsys.readouterr()
-        assert "sandbox" in captured.out
-
-    def test_prints_explicit_settings_source(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        dry_run.set_enabled(True)
-        settings_file = str(tmp_path / "custom.json")
-        _print_dry_run(
-            cwd=tmp_path / "work",
-            home=tmp_path / "home",
-            proj_dir=None,
-            command=["echo"],
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=settings_file,
-            patch_proj_dir=None,
-            process_prefix=[],
-        )
-        captured = capsys.readouterr()
-        assert "explicit" in captured.out
-        assert settings_file in captured.out
-
-    def test_prints_merged_settings_source_when_no_file(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        dry_run.set_enabled(True)
-        _print_dry_run(
-            cwd=tmp_path / "work",
-            home=tmp_path / "home",
-            proj_dir=None,
-            command=["echo"],
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=None,
-            patch_proj_dir=None,
-            process_prefix=[],
-        )
-        captured = capsys.readouterr()
-        assert "merged" in captured.out
-
-    def test_prints_patch_proj_dir_path_when_set(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        dry_run.set_enabled(True)
-        proj_dir = tmp_path / "project"
-        _print_dry_run(
-            cwd=tmp_path / "work",
-            home=tmp_path / "home",
-            proj_dir=None,
-            command=["echo"],
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=None,
-            patch_proj_dir=proj_dir,
-            process_prefix=[],
-        )
-        captured = capsys.readouterr()
-        assert str(proj_dir) in captured.out
-
-    def test_prints_disabled_when_patch_proj_dir_is_none(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        dry_run.set_enabled(True)
-        _print_dry_run(
-            cwd=tmp_path / "work",
-            home=tmp_path / "home",
-            proj_dir=None,
-            command=["echo"],
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=None,
-            patch_proj_dir=None,
-            process_prefix=[],
-        )
-        captured = capsys.readouterr()
-        assert "disabled" in captured.out
-
-    def test_prints_command_with_process_prefix(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        dry_run.set_enabled(True)
-        _print_dry_run(
-            cwd=tmp_path / "work",
-            home=tmp_path / "home",
-            proj_dir=None,
-            command=["myapp", "--flag"],
-            command_name="myapp",
-            alias_command_name=None,
-            settings_file=None,
-            patch_proj_dir=None,
-            process_prefix=["systemd-run", "--user"],
-        )
-        captured = capsys.readouterr()
-        assert "systemd-run" in captured.out
-        assert "myapp" in captured.out
-        assert "srt" in captured.out
-
-
-class TestSrtDryRun:
-    def test_print_dry_run_with_explicit_settings_file(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        from agm.core import dry_run
-
-        home = tmp_path / "home"
-        home.mkdir()
-        cwd = tmp_path / "work"
-        cwd.mkdir()
-
-        dry_run_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            dry_run,
-            "print_configuration",
-            lambda label: dry_run_calls.append({"config": label}),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_detail",
-            lambda k, v: dry_run_calls.append({"detail": (k, v)}),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_labeled_command",
-            lambda label, cmd, cwd=None: dry_run_calls.append({"cmd": cmd}),
-        )
-
-        srt._print_dry_run(
-            cwd=cwd,
-            home=home,
-            proj_dir=None,
-            command=["echo", "hi"],
-            command_name="echo",
-            alias_command_name=None,
-            settings_file="explicit.json",
-            patch_proj_dir=None,
-            process_prefix=[],
-        )
-
-        config_calls = [c for c in dry_run_calls if "config" in c]
-        detail_calls = [c for c in dry_run_calls if "detail" in c]
-        assert any(c["config"] == "sandbox" for c in config_calls)
-        assert any(
-            d["detail"][0] == "settings source" and d["detail"][1] == "explicit"
-            for d in detail_calls
-        )
-
-    def test_print_dry_run_with_merged_settings(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        from agm.core import dry_run
-
-        home = tmp_path / "home"
-        home.mkdir()
-        cwd = tmp_path / "work"
-        cwd.mkdir()
-
-        dry_run_calls: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            dry_run,
-            "print_configuration",
-            lambda label: dry_run_calls.append({"config": label}),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_detail",
-            lambda k, v: dry_run_calls.append({"detail": (k, v)}),
-        )
-        monkeypatch.setattr(
-            dry_run,
-            "print_labeled_command",
-            lambda label, cmd, cwd=None: dry_run_calls.append({"cmd": cmd}),
-        )
-
-        srt._print_dry_run(
-            cwd=cwd,
-            home=home,
-            proj_dir=None,
-            command=["echo"],
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=None,
-            patch_proj_dir=None,
-            process_prefix=["systemd-run"],
-        )
-
-        detail_calls = [c for c in dry_run_calls if "detail" in c]
-        assert any(
-            d["detail"][0] == "settings source" and d["detail"][1] == "merged" for d in detail_calls
-        )
-
-    def test_run_sandboxed_dry_run_calls_print_dry_run(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        from agm.core import dry_run
-
-        home = tmp_path / "home"
-        home.mkdir()
-        cwd = tmp_path / "work"
-        cwd.mkdir()
-
-        monkeypatch.setattr(srt, "require_srt_installed", lambda _path=None: None)
-        monkeypatch.setattr(dry_run, "enabled", lambda: True)
-
-        print_called: list[bool] = []
-        monkeypatch.setattr(
-            srt,
-            "_print_dry_run",
-            lambda **kwargs: print_called.append(True),
-        )
-
-        srt.run_sandboxed(
-            command=["echo", "hi"],
-            cwd=cwd,
-            env={},
-            home=home,
-            proj_dir=None,
-            command_name="echo",
-            alias_command_name=None,
-            settings_file=None,
-            patch_proj_dir=None,
-        )
-
-        assert print_called == [True]
-
-
-class TestSrtKeyboardInterrupt:
-    def test_keyboard_interrupt_raises_system_exit_130(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        from agm.core import dry_run
-
-        home = tmp_path / "home"
-        home.mkdir()
-        cwd = tmp_path / "work"
-        cwd.mkdir()
-
-        monkeypatch.setattr(srt, "require_srt_installed", lambda _path=None: None)
-        monkeypatch.setattr(dry_run, "enabled", lambda: False)
-
-        settings_file = tmp_path / "settings.json"
-        settings_file.write_text('{"filesystem": {"allowWrite": []}}', encoding="utf-8")
-
-        def fake_resolve_settings(**kwargs: Any) -> Path:
-            return settings_file
-
-        def fake_run_foreground(cmd: list[str], **kwargs: Any) -> int:
-            raise KeyboardInterrupt()
-
-        monkeypatch.setattr(srt, "_resolve_settings_path", fake_resolve_settings)
-        monkeypatch.setattr(srt, "run_foreground", fake_run_foreground)
-        monkeypatch.setattr(srt, "track_bwrap_artifacts", lambda settings, cwd: [])
-        monkeypatch.setattr(srt, "patch_for_proj_dir", lambda data, proj_dir: data)
-        monkeypatch.setattr(srt, "load_settings", lambda path: {})
-        monkeypatch.setattr(srt, "_cleanup", lambda temp_files, tracked_artifacts: None)
-
-        with pytest.raises(SystemExit) as exc_info:
-            srt.run_sandboxed(
-                command=["echo"],
-                cwd=cwd,
-                env={},
-                home=home,
-                proj_dir=None,
-                command_name="echo",
-                alias_command_name=None,
-                settings_file=str(settings_file),
-                patch_proj_dir=None,
-            )
-        assert exc_info.value.code == 130
-
-
-# ---------------------------------------------------------------------------
-# completion.py – edge cases
-# ---------------------------------------------------------------------------

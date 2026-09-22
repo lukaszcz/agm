@@ -1,2 +1,2 @@
-@param @opt-env("PARAM_TOOLS_TRACE") let trace: bool = false
+@param @opt-env("PARAM_TOOLS_LEVEL") let level: bool = false
 @param let retries: int = 1

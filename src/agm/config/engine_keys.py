@@ -64,10 +64,10 @@ class EngineKeySpec:
 # every projection below is derived from it.
 ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
     EngineKeySpec(
-        "log",
+        "trace",
         EngineKeyKind.BOOL,
         EngineKeyConsumer.HOST_CONSUMED,
-        config_attr="log",
+        config_attr="trace",
         default=False,
     ),
     EngineKeySpec(
@@ -85,10 +85,10 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
         has_default=False,
     ),
     EngineKeySpec(
-        "log-file",
+        "trace-file",
         EngineKeyKind.OPTION_TEXT,
         EngineKeyConsumer.HOST_CONSUMED,
-        config_attr="log_file",
+        config_attr="trace_file",
         default=None,
     ),
     EngineKeySpec(
@@ -125,14 +125,14 @@ HOST_CONSUMED_ENGINE_KEYS: frozenset[str] = engine_keys_for(EngineKeyConsumer.HO
 TRACE_ENGINE_KEYS: frozenset[str] = frozenset(
     spec.name
     for spec in ENGINE_KEYS
-    if spec.consumer is EngineKeyConsumer.HOST_CONSUMED and spec.name in {"log", "log-file"}
+    if spec.consumer is EngineKeyConsumer.HOST_CONSUMED and spec.name in {"trace", "trace-file"}
 )
 
 
 def trace_write_implies_enabled(key: str, value_is_some: bool) -> bool:
     """Return whether a trace-register write also enables trace logging.
 
-    A ``Some`` write to ``log-file`` supplies a trace destination and therefore
-    implies the ``log`` register is enabled.
+    A ``Some`` write to ``trace-file`` supplies a trace destination and therefore
+    implies the ``trace`` register is enabled.
     """
-    return key == "log-file" and value_is_some
+    return key == "trace-file" and value_is_some

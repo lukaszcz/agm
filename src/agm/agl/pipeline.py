@@ -302,7 +302,7 @@ class RunResult:
         source order.  Empty for ordinary runs.
     ``trace_path``
         Path of the JSONL trace file written during this run, or ``None``
-        when logging was disabled (``--no-log``) or the run was a dry-run.
+        when tracing was disabled (``--no-trace``) or the run was a dry-run.
         This handle identifies the prepared program.
     """
 
@@ -471,7 +471,7 @@ class PipelineDriver:
         *,
         host_env: HostEnvironment,
         check_only: bool,
-        log_file: "Path | None",
+        trace_file: "Path | None",
         warnings: list[Diagnostic],
         host_settings_policy: "HostSettingsPolicy | None" = None,
         builtin_host_settings: "Mapping[str, Value] | None" = None,
@@ -599,14 +599,14 @@ class PipelineDriver:
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
 
-        # Create the trace store for this run.  When log_file is None the
+        # Create the trace store for this run.  When trace_file is None the
         # store is a no-op and no file is touched.
-        trace = TraceStore(path=log_file)
-        if log_file is not None:
+        trace = TraceStore(path=trace_file)
+        if trace_file is not None:
             from agm.core.fs import mkdir
 
             try:
-                mkdir(log_file.parent, parents=True, exist_ok=True)
+                mkdir(trace_file.parent, parents=True, exist_ok=True)
             except OSError as exc:
                 trace.disable(exc)
         trace.run_start()
@@ -979,7 +979,7 @@ class PipelineDriver:
         source: str,
         *,
         check_only: bool = False,
-        log_file: "Path | None" = None,
+        trace_file: "Path | None" = None,
         entry_path: "Path | None" = None,
         roots: "RootSet | None" = None,
         package_roots: "Iterable[PackageInfo]" = (),
@@ -1002,7 +1002,7 @@ class PipelineDriver:
                 default_stdlib=default_stdlib,
             ),
             check_only=check_only,
-            log_file=log_file,
+            trace_file=trace_file,
             builtin_var_seeds=builtin_var_seeds,
             process_environment=process_environment,
             select_default_program=True,
@@ -1154,7 +1154,7 @@ class PipelineDriver:
         prepared: PreparedProgram,
         *,
         check_only: bool = False,
-        log_file: "Path | None" = None,
+        trace_file: "Path | None" = None,
         compiled: "MatchCompiledProgram | None" = None,
         checked: "CheckedProgram | None" = None,
         executable: "ExecutableProgram | None" = None,
@@ -1208,7 +1208,7 @@ class PipelineDriver:
         result, _executable = self._run_program(
             prepared,
             check_only=check_only,
-            log_file=log_file,
+            trace_file=trace_file,
             compiled=compiled,
             checked=checked,
             executable=executable,
@@ -1364,7 +1364,7 @@ class PipelineDriver:
         prepared: PreparedProgram,
         *,
         check_only: bool = False,
-        log_file: "Path | None" = None,
+        trace_file: "Path | None" = None,
         compiled: "MatchCompiledProgram | None" = None,
         checked: "CheckedProgram | None" = None,
         executable: "ExecutableProgram | None" = None,
@@ -1529,7 +1529,7 @@ class PipelineDriver:
                 executable,
                 host_env=host_env,
                 check_only=check_only,
-                log_file=log_file,
+                trace_file=trace_file,
                 warnings=warnings,
                 host_settings_policy=host_settings_policy,
                 builtin_host_settings=builtin_host_settings,

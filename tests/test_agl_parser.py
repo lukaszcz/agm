@@ -192,12 +192,12 @@ class TestConflictGuard:
     """Asserts the grammar has 0 shift/reduce and 0 reduce/reduce conflicts.
 
     The Lark LALR parser emits conflict warnings at DEBUG level; this test
-    captures that log stream and verifies it is clean.  Any conflict message
+    captures that trace stream and verifies it is clean.  Any conflict message
     causes an immediate failure so a regression is caught before it ships.
     """
 
     def test_zero_conflicts(self) -> None:
-        """Build the Lark parser and assert the debug log contains no conflicts.
+        """Build the Lark parser and assert the debug trace contains no conflicts.
 
         Two kinds of LALR(1) conflict manifest differently:
         - Shift/Reduce: Lark logs a DEBUG message containing "Shift/Reduce".
@@ -244,11 +244,11 @@ class TestConflictGuard:
             root_logger.removeHandler(handler)
             root_logger.setLevel(old_level)
 
-        log_output = stream.getvalue()
+        trace_output = stream.getvalue()
         # Any line containing "Shift/Reduce" or "Reduce/Reduce" is a conflict.
         conflict_lines = [
             line
-            for line in log_output.splitlines()
+            for line in trace_output.splitlines()
             if "Shift/Reduce" in line or "Reduce/Reduce" in line
         ]
         assert conflict_lines == [], "LALR(1) conflicts detected:\n" + "\n".join(conflict_lines)
@@ -1362,7 +1362,7 @@ class TestAttributes:
         )
 
     def test_attribute_keyed_argument_suffix_qualified(self) -> None:
-        fd = first(parse("@config(log::level = 1)\ndef f() -> int = 1"))
+        fd = first(parse("@config(trace::level = 1)\ndef f() -> int = 1"))
         assert isinstance(fd, FuncDef)
         (attribute,) = fd.attributes
         (keyed,) = attribute.keyed_args
@@ -1370,7 +1370,7 @@ class TestAttributes:
         assert keyed.key.name == "level"
         assert keyed.key.qualifier is not None
         assert keyed.key.qualifier.anchor is None
-        assert [s.name for s in keyed.key.qualifier.segments] == ["log"]
+        assert [s.name for s in keyed.key.qualifier.segments] == ["trace"]
         assert isinstance(keyed.value, IntLit)
         assert keyed.value.value == 1
 
@@ -1419,7 +1419,7 @@ class TestAttributes:
         fd = first(
             parse(
                 "@config(\n"
-                "  config::log = true,\n"
+                "  config::trace = true,\n"
                 "  std/log::level = 1,\n"
                 "  ::verbose = 3,\n"
                 "  logging::debug::trace = false,\n"
@@ -1430,7 +1430,7 @@ class TestAttributes:
         )
         (attribute,) = fd.attributes
         assert [k.key.name for k in attribute.keyed_args] == [
-            "log",
+            "trace",
             "level",
             "verbose",
             "trace",
@@ -1438,12 +1438,12 @@ class TestAttributes:
         ]
 
     def test_attribute_mixed_positional_and_keyed_arguments(self) -> None:
-        fd = first(parse('@config("why", config::log = true)\ndef f() -> int = 1'))
+        fd = first(parse('@config("why", config::trace = true)\ndef f() -> int = 1'))
         (attribute,) = fd.attributes
         (positional,) = attribute.args
         assert isinstance(positional, StringLit)
         (keyed,) = attribute.keyed_args
-        assert keyed.key.name == "log"
+        assert keyed.key.name == "trace"
 
     def test_attribute_duplicate_keyed_argument_is_not_a_parse_error(self) -> None:
         fd = first(parse("@config(x = 1, x = 2)\ndef f() -> int = 1"))

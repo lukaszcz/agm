@@ -571,7 +571,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm exec [--strict-json|--no-strict-json] [--max-call-depth N]
                  [--default-agent AGENT] [--timeout DURATION|--no-timeout]
                  [--dry-run]
-                 [--log|--log-file PATH|--no-log] [--no-log-file]
+                 [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
                  [--no-stdlib] [-I DIR]... [-p PATH]
                  (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [ARG]... [--NAME VALUE]...
 
@@ -611,8 +611,8 @@ _HELP_TEXTS: dict[str, str] = {
         With several declared programs and none selected with -p, this text
         is printed followed by the paths to choose from.
 
-        Trace logging is OFF by default.  Enable it with --log, --log-file, or
-        [exec] log = true in config.toml.  A source ``std/config::KEY := VALUE``
+        Trace logging is OFF by default.  Enable it with --trace, --trace-file,
+        or [exec] trace = true in config.toml.  A source ``std/config::KEY := VALUE``
         write takes effect from its program point and overrides the CLI flag,
         which overrides the config-file layer.
 
@@ -633,13 +633,13 @@ _HELP_TEXTS: dict[str, str] = {
                                 with --timeout.
           --dry-run             Run the full static pipeline and validate program
                                 arguments, but do not execute the workflow.
-          --log                 Enable trace logging (auto timestamped path).
-          --log-file PATH       Write trace log to PATH.
-          --no-log-file         Clear the CLI log-file seed only; use --no-log to
-                                disable tracing entirely.
-          --no-log              Disable trace logging (overrides config).
-          --log, --log-file, and --no-log are mutually exclusive.
-          --log-file and --no-log-file are mutually exclusive.
+          --trace               Enable trace logging (auto timestamped path).
+          --trace-file PATH     Write trace log to PATH.
+          --no-trace-file       Clear the CLI trace-file seed only; use --no-trace
+                                to disable tracing entirely.
+          --no-trace            Disable trace logging (overrides config).
+          --trace, --trace-file, and --no-trace are mutually exclusive.
+          --trace-file and --no-trace-file are mutually exclusive.
           --no-stdlib           Disable the automatic import std/prelude::* prelude
                                 throughout the loaded program (entry and library modules).
           -I DIR, --module-path DIR
@@ -662,7 +662,7 @@ _HELP_TEXTS: dict[str, str] = {
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-call-depth N]
                  [--default-agent AGENT] [--dry-run] [--no-stdlib]
-                 [--quiet] [--log|--log-file PATH|--no-log] [--plain]
+                 [--quiet] [--trace|--trace-file PATH|--no-trace] [--plain]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
         parsed, type-checked, and evaluated once against a persistent session
@@ -701,10 +701,10 @@ _HELP_TEXTS: dict[str, str] = {
                                 each loaded REPL program (entries and library modules).
                                 Explicit imports remain available, and :reset
                                 keeps this choice.
-          --log                 Enable trace logging (auto timestamped path).
-          --log-file PATH       Write a JSONL trace log to PATH.
-          --no-log              Disable trace logging.
-          --log, --log-file, and --no-log are mutually exclusive.
+          --trace               Enable trace logging (auto timestamped path).
+          --trace-file PATH     Write a JSONL trace log to PATH.
+          --no-trace            Disable trace logging.
+          --trace, --trace-file, and --no-trace are mutually exclusive.
           --dry-run             Statically check only: run the full static pipeline
                                 for each entry but never evaluate it (no agent/exec
                                 calls, no persisted bindings); echo the inferred type.
@@ -717,7 +717,7 @@ _HELP_TEXTS: dict[str, str] = {
         Exit codes:
           0  The session ended normally (:quit / :exit / Ctrl-D).
           1  Pre-loop setup failure: invalid [exec] config or an
-             unwritable --log-file (reported before the prompt).
+             unwritable --trace-file (reported before the prompt).
     """),
     "check": textwrap.dedent("""\
         agm check [-I DIR]... [--no-stdlib] FILE...

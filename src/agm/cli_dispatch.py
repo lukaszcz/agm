@@ -129,12 +129,12 @@ class _RunOptionValues(TypedDict):
     strict_json: bool | None
     max_call_depth: int | None
     default_agent: str | None
-    log_file: str | None
-    no_log: bool
-    log: bool
+    trace_file: str | None
+    no_trace: bool
+    trace: bool
     timeout: str | None
     no_timeout: bool
-    no_log_file: bool
+    no_trace_file: bool
 
 
 def _command_summary(path: str, command: CommandRegistration) -> str:

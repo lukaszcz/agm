@@ -2152,7 +2152,7 @@ class TestParserHelpers:
             "--default-agent",
             "--timeout",
             "--no-timeout",
-            "--no-log-file",
+            "--no-trace-file",
         ):
             assert option in result
         assert "--runner" not in result
@@ -2406,12 +2406,14 @@ class TestExecModulePathOption:
 class TestExecEngineFlagExclusivity:
     """Parser-contract tests for exec's mutually exclusive engine flags."""
 
-    def test_exec_rejects_log_file_with_no_log_file(
+    def test_exec_rejects_trace_file_with_no_trace_file(
         self, runner: CliRunner, tmp_path: Path
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("let x = 1\n")
-        result = invoke(runner, ["exec", str(agl_file), "--log-file", "out.log", "--no-log-file"])
+        result = invoke(
+            runner, ["exec", str(agl_file), "--trace-file", "out.log", "--no-trace-file"]
+        )
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 

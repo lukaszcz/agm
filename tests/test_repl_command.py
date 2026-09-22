@@ -3,7 +3,7 @@
 Covers:
 - the CLI surface maps each flag onto ``ReplArgs`` (parser-contract style;
   ``repl.run`` is mocked so no real terminal is needed);
-- ``--no-log`` / ``--log-file`` are mutually exclusive (usage error, exit 1);
+- ``--no-trace`` / ``--trace-file`` are mutually exclusive (usage error, exit 1);
 - there is no ``--input`` option: the REPL has no entry function, so there
   is no pre-seed CLI option;
 - ``repl.run`` resolves ``[exec]`` config, builds a session, and hands off to
@@ -81,8 +81,8 @@ class TestReplArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "strict_json") is None
         assert getattr(args, "quiet") is False
-        assert getattr(args, "no_log") is False
-        assert getattr(args, "log_file") is None
+        assert getattr(args, "no_trace") is False
+        assert getattr(args, "trace_file") is None
         assert getattr(args, "plain") is False
 
     def test_input_option_removed(self, runner: CliRunner, recorded_runs: list[object]) -> None:
@@ -108,13 +108,13 @@ class TestReplArgsParsing:
         assert invoke(runner, ["repl", "--quiet"]).exit_code == 0
         assert getattr(recorded_runs[0], "quiet") is True
 
-    def test_log_file_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
-        assert invoke(runner, ["repl", "--log-file", "/tmp/r.log"]).exit_code == 0
-        assert getattr(recorded_runs[0], "log_file") == "/tmp/r.log"
+    def test_trace_file_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
+        assert invoke(runner, ["repl", "--trace-file", "/tmp/r.log"]).exit_code == 0
+        assert getattr(recorded_runs[0], "trace_file") == "/tmp/r.log"
 
-    def test_no_log_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
-        assert invoke(runner, ["repl", "--no-log"]).exit_code == 0
-        assert getattr(recorded_runs[0], "no_log") is True
+    def test_no_trace_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
+        assert invoke(runner, ["repl", "--no-trace"]).exit_code == 0
+        assert getattr(recorded_runs[0], "no_trace") is True
 
     def test_plain_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--plain"]).exit_code == 0
@@ -122,10 +122,10 @@ class TestReplArgsParsing:
 
 
 class TestReplMutualExclusion:
-    def test_no_log_and_log_file_conflict(
+    def test_no_trace_and_trace_file_conflict(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
-        result = invoke(runner, ["repl", "--no-log", "--log-file", "/tmp/x.log"])
+        result = invoke(runner, ["repl", "--no-trace", "--trace-file", "/tmp/x.log"])
         assert result.exit_code == 1
         assert recorded_runs == []  # never dispatched
 
@@ -235,9 +235,9 @@ def _args(
     *,
     strict_json: bool | None = None,
     quiet: bool = False,
-    no_log: bool = False,
-    log: bool = False,
-    log_file: str | None = None,
+    no_trace: bool = False,
+    trace: bool = False,
+    trace_file: str | None = None,
     default_agent: str | None = None,
     no_stdlib: bool = False,
     plain: bool = True,
@@ -252,9 +252,9 @@ def _args(
     return ReplArgs(
         strict_json=strict_json,
         quiet=quiet,
-        no_log=no_log,
-        log=log,
-        log_file=log_file,
+        no_trace=no_trace,
+        trace=trace,
+        trace_file=trace_file,
         default_agent=default_agent,
         no_stdlib=no_stdlib,
         plain=plain,
@@ -679,8 +679,8 @@ class TestReplRun:
             "[exec]\n"
             "strict-json = true\n"
             'timeout = "2s"\n'
-            "log = true\n"
-            'log-file = "configured.jsonl"\n'
+            "trace = true\n"
+            'trace-file = "configured.jsonl"\n'
         )
         monkeypatch.setattr(
             repl_command, "prepare_trace_log_from_decision", lambda *args, **kwargs: None
@@ -692,8 +692,8 @@ class TestReplRun:
         assert set(session._engine_seed) == {
             "strict-json",
             "timeout",
-            "log",
-            "log-file",
+            "trace",
+            "trace-file",
         }
 
     def test_cli_false_strict_json_over_empty_exec_config_seeds_correctly(
@@ -730,11 +730,11 @@ class TestReplRun:
         assert call["history_path"] == agm_home / "repl_history"
 
     @pytest.mark.parametrize(
-        ("args", "expected_log", "expected_file"),
+        ("args", "expected_trace", "expected_file"),
         [
-            (_args(log=True), True, None),
-            (_args(no_log=True), False, None),
-            (_args(log_file="custom.jsonl"), True, "custom.jsonl"),
+            (_args(trace=True), True, None),
+            (_args(no_trace=True), False, None),
+            (_args(trace_file="custom.jsonl"), True, "custom.jsonl"),
         ],
     )
     def test_cli_logging_flags_seed_builtin_settings(
@@ -743,7 +743,7 @@ class TestReplRun:
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
         args: ReplArgs,
-        expected_log: bool,
+        expected_trace: bool,
         expected_file: str | None,
     ) -> None:
         from agm.agl.semantics.values import BoolValue, RecordValue, TextValue
@@ -760,13 +760,13 @@ class TestReplRun:
             for key, value in session._current.items()
             if key in HOST_CONSUMED_ENGINE_KEYS
         }
-        assert host_settings["log"] == BoolValue(expected_log)
+        assert host_settings["trace"] == BoolValue(expected_trace)
         if expected_file is None:
-            assert "log-file" not in host_settings
+            assert "trace-file" not in host_settings
         else:
-            log_file = host_settings["log-file"]
-            assert isinstance(log_file, RecordValue)
-            assert log_file.fields["value"] == TextValue(expected_file)
+            trace_file = host_settings["trace-file"]
+            assert isinstance(trace_file, RecordValue)
+            assert trace_file.fields["value"] == TextValue(expected_file)
 
     def test_dry_run_runs_console_in_check_only_mode(
         self,
@@ -988,8 +988,8 @@ class TestReplRun:
         args = ReplArgs(
             strict_json=None,
             quiet=False,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as excinfo:
             repl_command.run(args)
@@ -1330,29 +1330,29 @@ class TestReplModuleParameterConfig:
 
 
 class TestReplTrace:
-    def test_log_file_threaded_into_session(
+    def test_trace_file_threaded_into_session(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
-        log_file = tmp_path / "trace.log"
-        repl_command.run(_args(log_file=str(log_file)))
+        trace_file = tmp_path / "trace.log"
+        repl_command.run(_args(trace_file=str(trace_file)))
         # The validate-up-front touch creates the (empty) file.
-        assert log_file.exists()
+        assert trace_file.exists()
         session = fake_plain_console[0]["session"]
         assert isinstance(session, ReplSession)
 
-    def test_no_log_writes_no_trace(
+    def test_no_trace_writes_no_trace(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args(no_log=True))
-        # Nothing under .agent-files was created for a --no-log session.
+        repl_command.run(_args(no_trace=True))
+        # Nothing under .agent-files was created for a --no-trace session.
         assert not (tmp_path / ".agent-files").exists()
 
     def test_dry_run_writes_no_trace(
@@ -1365,12 +1365,12 @@ class TestReplTrace:
 
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
-        log_file = tmp_path / "trace.log"
-        repl_command.run(_args(log_file=str(log_file)))
+        trace_file = tmp_path / "trace.log"
+        repl_command.run(_args(trace_file=str(trace_file)))
         # Dry-run is side-effect-free: the trace path is never touched.
-        assert not log_file.exists()
+        assert not trace_file.exists()
 
-    def test_unwritable_log_file_exits_1(
+    def test_unwritable_trace_file_exits_1(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -1380,8 +1380,8 @@ class TestReplTrace:
         # A path whose parent is a regular file cannot be created (mkdir fails).
         not_a_dir = tmp_path / "afile"
         not_a_dir.write_text("x")
-        log_file = not_a_dir / "trace.log"
+        trace_file = not_a_dir / "trace.log"
         with pytest.raises(SystemExit) as excinfo:
-            repl_command.run(_args(log_file=str(log_file)))
+            repl_command.run(_args(trace_file=str(trace_file)))
         assert excinfo.value.code == 1
         assert fake_plain_console == []

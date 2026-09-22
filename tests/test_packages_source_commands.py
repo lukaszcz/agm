@@ -140,7 +140,7 @@ class TestPackageWithSourceCommands:
             package,
             "review.agl",
             'import std/config\n\n@command("tools review")\n'
-            "@config(config::log = true)\nprogram def main() -> unit = ()\n",
+            "@config(config::trace = true)\nprogram def main() -> unit = ()\n",
         )
 
         merged = package_with_source_commands(package)

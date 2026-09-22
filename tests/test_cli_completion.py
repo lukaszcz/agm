@@ -247,7 +247,7 @@ def test_registered_command_completes_path_parameter_values(
     assert _completion_values(["tools", "lint"], f"--journal={files}/d") == [expected]
     assert expected in _completion_values(["tools", "lint"], f"{files}/d")
     assert expected in _completion_values(
-        ["tools", "lint", "--log-file", "trace.jsonl", "--dry-run"], f"{files}/d"
+        ["tools", "lint", "--trace-file", "trace.jsonl", "--dry-run"], f"{files}/d"
     )
     assert _completion_values(["tools", "lint", "--name"], f"{files}/d") == []
     assert _completion_values(["tools", "lint", "--timeout"], f"{files}/d") == []
@@ -467,7 +467,7 @@ version = "1.0.0"
     assert "--tools.lint.module-verbose" in values
     assert "--no-tools.lint.module-verbose" in values
     assert "--dry-run" in values
-    assert "--log-file" in values
+    assert "--trace-file" in values
     assert "--no-timeout" in values
     assert "--module-path" not in values
 
@@ -492,11 +492,11 @@ def test_registered_parameter_fixture_completion_offers_qualified_module_flags(
     ]
 
     assert "--retries" in values
-    assert "--logging.trace" in values
-    assert "--param_tools.logging.trace" in values
-    assert "--format.trace" in values
-    assert "--param_tools.format.trace" in values
-    assert "--trace" not in values
+    assert "--logging.level" in values
+    assert "--param_tools.logging.level" in values
+    assert "--format.level" in values
+    assert "--param_tools.format.level" in values
+    assert "--level" not in values
 
 
 def test_complete_registered_commands_silently_degrades_on_bad_index(

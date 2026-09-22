@@ -629,7 +629,7 @@ def test_unrelated_config_sections_do_not_prevent_pin_loading(tmp_path: Path) ->
     config = project / "config"
     config.mkdir(parents=True)
     (config / "config.toml").write_text(
-        '[packages]\nalpha = "1.0.0"\n\n[unrelated]\nlog-file = "%{MISSING}"\n',
+        '[packages]\nalpha = "1.0.0"\n\n[unrelated]\ntrace-file = "%{MISSING}"\n',
         encoding="utf-8",
     )
 

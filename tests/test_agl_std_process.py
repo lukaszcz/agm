@@ -33,7 +33,7 @@ def test_process_exit_preserves_the_requested_system_exit_code(
     trace_path = tmp_path / "trace.jsonl"
 
     with pytest.raises(SystemExit) as raised:
-        PipelineDriver().run(_exit_program(call), roots=_roots(), log_file=trace_path)
+        PipelineDriver().run(_exit_program(call), roots=_roots(), trace_file=trace_path)
 
     assert raised.value.code == expected_code
     records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
@@ -86,7 +86,7 @@ def test_process_exit_reaches_the_cli_process_and_finalizes_its_trace(
             "-c",
             "from agm.cli import main; main()",
             "exec",
-            "--log-file",
+            "--trace-file",
             str(trace_path),
             str(program),
         ],
@@ -155,7 +155,7 @@ def test_process_metadata_matches_the_subprocess_identity(
             "-c",
             "from agm.cli import main; main()",
             "exec",
-            "--no-log",
+            "--no-trace",
             str(program),
         ],
         cwd=tmp_path,

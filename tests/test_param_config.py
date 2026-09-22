@@ -464,8 +464,8 @@ def test_reports_each_module_route_and_the_program_route() -> None:
                     "logging.verbose",
                     "A.logging.verbose",
                     "default-agent",
-                    "log",
-                    "log-file",
+                    "trace",
+                    "trace-file",
                     "strict-json",
                     "timeout",
                 }

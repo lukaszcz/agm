@@ -318,7 +318,7 @@ class ReplSession:
         # it from a completed entry's own resolved state.
         self._shell_exec_timeout: float | None = self._seeded_timeout_seconds()
         # ONE current-value map for the engine keys' ``Value`` registers
-        # (strict-json, timeout, log, log-file, default-agent): the live
+        # (strict-json, timeout, trace, trace-file, default-agent): the live
         # setting each entry's interpreter is built with and reads back after
         # a write. Starts equal to the seed -- nothing has run yet -- is
         # overwritten from a completed entry's own resolved state afterward

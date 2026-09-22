@@ -518,20 +518,20 @@ def test_a_credential_with_a_control_character_never_leaks_into_the_failure(
     """A bearer token with a trailing newline is an invalid header value; the failure
     must name only the header, never echo the credential, in either the exception or
     the trace."""
-    log_path = tmp_path / "trace.jsonl"
+    trace_path = tmp_path / "trace.jsonl"
     source = """import std/http
 program def main() -> unit =
   let _ = http::get("https://x/y", auth = http::Auth::Bearer("SECRET\\n"))
   ()
 """
-    result, adapter = _run(monkeypatch, tmp_path, [], source, log_file=log_path)
+    result, adapter = _run(monkeypatch, tmp_path, [], source, trace_file=trace_path)
     assert not result.ok
     assert result.error is not None
     assert result.error.type_name == "HttpRequestError"
     assert "SECRET" not in str(result.error.fields)
     assert len(adapter.sent) == 0
 
-    records = _load_jsonl(log_path)
+    records = _load_jsonl(trace_path)
     failure_recs = [r for r in records if r.get("kind") == "http_failure"]
     assert failure_recs
     assert "SECRET" not in str(failure_recs[0]["message"])
@@ -668,7 +668,7 @@ program def main() -> unit =
 def test_trace_records_are_shaped_with_credential_redaction(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    log_path = tmp_path / "trace.jsonl"
+    trace_path = tmp_path / "trace.jsonl"
     outcomes = [
         {
             "status": 200,
@@ -684,11 +684,11 @@ program def main() -> unit =
     body = http::Body::Text("hi", "text/plain"))
   ()
 """
-    result, adapter = _run(monkeypatch, tmp_path, outcomes, source, log_file=log_path)
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source, trace_file=trace_path)
     assert result.ok, result.error
     adapter.assert_complete()
 
-    records = _load_jsonl(log_path)
+    records = _load_jsonl(trace_path)
     request_recs = [r for r in records if r.get("kind") == "http_request"]
     response_recs = [r for r in records if r.get("kind") == "http_response"]
     assert request_recs and response_recs
@@ -718,7 +718,7 @@ program def main() -> unit =
 def test_trace_records_receive_kind_and_save_path_for_save(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    log_path = tmp_path / "trace.jsonl"
+    trace_path = tmp_path / "trace.jsonl"
     destination = tmp_path / "out.bin"
     outcomes = [{"status": 200, "body": "payload"}]
     source = f"""import std/http
@@ -726,11 +726,11 @@ program def main() -> unit =
   let _ = http::download("https://x/y", "{destination}")
   ()
 """
-    result, adapter = _run(monkeypatch, tmp_path, outcomes, source, log_file=log_path)
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source, trace_file=trace_path)
     assert result.ok, result.error
     adapter.assert_complete()
 
-    records = _load_jsonl(log_path)
+    records = _load_jsonl(trace_path)
     response_recs = [r for r in records if r.get("kind") == "http_response"]
     assert response_recs
     assert response_recs[0]["receive"] == "save"
@@ -742,18 +742,18 @@ program def main() -> unit =
 def test_trace_records_receive_kind_for_ignore(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    log_path = tmp_path / "trace.jsonl"
+    trace_path = tmp_path / "trace.jsonl"
     outcomes = [{"status": 200, "body": "dropped"}]
     source = """import std/http
 program def main() -> unit =
   let _ = http::get("https://x/y", receive = http::Receive::Ignore)
   ()
 """
-    result, adapter = _run(monkeypatch, tmp_path, outcomes, source, log_file=log_path)
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source, trace_file=trace_path)
     assert result.ok, result.error
     adapter.assert_complete()
 
-    records = _load_jsonl(log_path)
+    records = _load_jsonl(trace_path)
     response_recs = [r for r in records if r.get("kind") == "http_response"]
     assert response_recs
     assert response_recs[0]["receive"] == "ignore"
@@ -763,18 +763,18 @@ program def main() -> unit =
 
 
 def test_trace_records_a_failure_verbatim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    log_path = tmp_path / "trace.jsonl"
+    trace_path = tmp_path / "trace.jsonl"
     outcomes = [{"fail": "connection"}]
     source = """import std/http
 program def main() -> unit =
   let _ = http::get("https://x/y")
   ()
 """
-    result, adapter = _run(monkeypatch, tmp_path, outcomes, source, log_file=log_path)
+    result, adapter = _run(monkeypatch, tmp_path, outcomes, source, trace_file=trace_path)
     assert not result.ok
     adapter.assert_complete()
 
-    records = _load_jsonl(log_path)
+    records = _load_jsonl(trace_path)
     failure_recs = [r for r in records if r.get("kind") == "http_failure"]
     assert failure_recs
     assert failure_recs[0]["error_type"] == "HttpConnectionError"

@@ -65,7 +65,7 @@ class ConfigCommandNotFound(ValueError):
 # not exist, cwd is used as a fallback.
 _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
     "exec": [
-        "log-file",
+        "trace-file",
     ],
     "loop": [
         "tasks_dir",
@@ -366,10 +366,10 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
     resolved = dict(config)
     for section_name, section in resolved.items():
         if isinstance(section, dict):
-            # Every known section lists "log-file" explicitly; unknown/program
-            # sections fall back to just "log-file" since that's the only
-            # path-like field they carry.
-            fields = _CONFIG_PATH_FIELDS.get(section_name, ["log-file"])
+            # Every known section lists its path-like fields explicitly;
+            # unknown/program sections fall back to just "trace-file", the only
+            # path-like engine key they carry.
+            fields = _CONFIG_PATH_FIELDS.get(section_name, ["trace-file"])
             resolved[section_name] = _resolve_section_paths(
                 toml_dict(section),
                 fields,
@@ -663,8 +663,8 @@ class ExecConfig:
 
     strict_json: bool
     timeout: float | None
-    log: bool
-    log_file: str | None
+    trace: bool
+    trace_file: str | None
     # Raw TOML value (a string or a native table): exec/repl decode it as a
     # host Agent value through the shared host-value decoder.
     default_agent: object | None = None
@@ -687,7 +687,7 @@ def exec_config_from_merged(
 
     When *program_table* is supplied, each engine key present in that already
     resolved qualified program table overrides the global ``[exec]`` value.
-    Engine keys use kebab-case names: ``strict-json``, ``log-file``.
+    Engine keys use kebab-case names: ``strict-json``, ``trace-file``.
     """
     exec_table = toml_dict(merged.get("exec"))
 
@@ -704,8 +704,8 @@ def exec_config_from_merged(
 
     resolved_timeout = _optional_timeout(effective, "timeout")
 
-    resolved_log = _optional_bool(effective, "log")
-    resolved_log_file = _optional_str(effective, "log-file")
+    resolved_trace = _optional_bool(effective, "trace")
+    resolved_trace_file = _optional_str(effective, "trace-file")
     # Keep every explicitly supplied Agent value raw (a string or a native
     # TOML table) so exec/repl can decode it through the shared host-value
     # decoder at their AgL host boundary; other commands stay free of AgL
@@ -716,8 +716,8 @@ def exec_config_from_merged(
         strict_json=resolved_strict_json,
         max_call_depth=resolved_max_call_depth,
         timeout=resolved_timeout,
-        log=resolved_log,
-        log_file=resolved_log_file,
+        trace=resolved_trace,
+        trace_file=resolved_trace_file,
         default_agent=resolved_default_agent,
     )
 

@@ -91,8 +91,8 @@ class TestBuiltinVarRegisters:
         assert result.ok
         assert result.bindings["b"] == BoolValue(True)
 
-    def test_log_default_reads_false(self) -> None:
-        result = _run_program("import std/config::*\nlet l = std/config::log\nprint l")
+    def test_trace_default_reads_false(self) -> None:
+        result = _run_program("import std/config::*\nlet l = std/config::trace\nprint l")
         assert result.ok
         assert result.bindings["l"] == BoolValue(False)
 
@@ -439,11 +439,11 @@ class TestStdConfigQualified:
         assert caught.ok, caught.diagnostics
         assert caught.bindings["caught"] == BoolValue(True)
 
-    def test_log_file_some_round_trips(self) -> None:
+    def test_trace_file_some_round_trips(self) -> None:
         result = _run_program(
             "import std/config::*\n"
-            'std/config::log-file := Some("x")\n'
-            "let f = std/config::log-file\n"
+            'std/config::trace-file := Some("x")\n'
+            "let f = std/config::trace-file\n"
             "print f"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
@@ -452,12 +452,12 @@ class TestStdConfigQualified:
         assert set(bound.fields) == {"value"}
         assert bound.fields["value"] == TextValue("x")
 
-    def test_clearing_log_file_does_not_enable_logging(self) -> None:
+    def test_clearing_trace_file_does_not_enable_logging(self) -> None:
         result = _run_program(
             "import std/config::*\n"
-            "std/config::log := false\n"
-            "std/config::log-file := None\n"
-            "let enabled = std/config::log\n"
+            "std/config::trace := false\n"
+            "std/config::trace-file := None\n"
+            "let enabled = std/config::trace\n"
             "enabled"
         )
 

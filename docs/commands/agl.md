@@ -10,7 +10,7 @@ the [AgL language reference](../agl/reference/index.md).
 agm exec [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT]
          [--timeout DURATION|--no-timeout] [--dry-run]
-         [--log|--log-file PATH|--no-log] [--no-log-file]
+         [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
          [--no-stdlib]
          [-I DIR]... [-p PATH]
          (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [ARG]... [--NAME VALUE]...
@@ -97,12 +97,12 @@ a direct `agm repl` entry is a static error.
 - `--timeout DURATION` / `--no-timeout`: Override the initial shell-exec and agent idle
   timeouts, seeding `std/config::timeout` with `Some(DURATION)`, or remove configured ones,
   seeding `None`.
-- `--log` / `--log-file PATH` / `--no-log` (mutually exclusive): Trace logging, **off by
-  default**. `--log` writes to an auto-timestamped path under `.agent-files/`; `--log-file`
-  writes a JSONL trace to `PATH`; `--no-log` disables it, overriding `[exec] log = true`. These
-  set the initial state; a `std/config::log := true` write still enables tracing.
-- `--no-log-file`: Clear only the initial `log-file` value; an `[exec] log-file` path or
-  `--log`'s auto path still applies. Use `--no-log` to disable tracing.
+- `--trace` / `--trace-file PATH` / `--no-trace` (mutually exclusive): Trace logging, **off by
+  default**. `--trace` writes to an auto-timestamped path under `.agent-files/`; `--trace-file`
+  writes a JSONL trace to `PATH`; `--no-trace` disables it, overriding `[exec] trace = true`.
+  These set the initial state; a `std/config::trace := true` write still enables tracing.
+- `--no-trace-file`: Clear only the initial `trace-file` value; an `[exec] trace-file` path or
+  `--trace`'s auto path still applies. Use `--no-trace` to disable tracing.
 - `--dry-run`: Run the static pipeline, program-argument validation, and contract
   materialization, but evaluate nothing: static errors exit 1, a clean check exits 0 with no
   program output. `extern def` companions are not imported (no side effects), so a broken
@@ -164,7 +164,7 @@ Also reported before any agent runs: a parameter supplied twice (two flags, or p
 
 **Reserved names.** Program arguments and engine settings share one flag and config namespace,
 so a name-addressable parameter named after an engine setting (`default-agent`, `strict-json`,
-`timeout`, `log`, `log-file`) is a static error even if never supplied, also
+`timeout`, `trace`, `trace-file`) is a static error even if never supplied, also
 reported by `agm check`.
 A projected flag that collides with a reserved flag has no static check, only a host one: selecting that
 program for execution fails, while `--help` and shell completion silently fall back to
@@ -174,7 +174,7 @@ program for execution fails, while `--help` and shell completion silently fall b
   `--max-call-depth`, `--no-stdlib`, `--dry-run`;
 - every engine-setting flag in both polarities: `--default-agent`,
   `--strict-json`/`--no-strict-json`, `--timeout`/`--no-timeout`,
-  `--log`/`--no-log`, `--log-file`/`--no-log-file` (so `no-log: text` collides);
+  `--trace`/`--no-trace`, `--trace-file`/`--no-trace-file` (so `no-trace: text` collides);
 - other parameters' projected flags (`cache: bool`'s `--no-cache` vs `no-cache: bool`).
 
 A [registered package command](pkg.md#registered-commands) reserves `--dry-run`, `-h`/`--help`,
@@ -318,8 +318,8 @@ placeholder. Opening a session from a command without it raises `SessionError`. 
 default-agent = "claude/sonnet-medium" # native shorthand or custom command
 strict-json = false         # lenient JSON recovery is the default
 timeout = "30m"             # initial shell-exec and agent idle timeout
-log = false                 # trace logging off by default; set true to enable
-# log-file = "trace.jsonl" # explicit trace path (omit for auto timestamped path)
+trace = false               # trace logging off by default; set true to enable
+# trace-file = "trace.jsonl"  # explicit trace path (omit for auto timestamped path)
 
 ```
 
@@ -364,8 +364,8 @@ by qualified reference, by importing `std/config` and writing them:
 import std/config
 
 program def main(spec: text) -> unit =
-  std/config::log := true             # enable trace logging for this program
-  std/config::log-file := Some("trace.jsonl")  # explicit trace path
+  std/config::trace := true           # enable trace logging for this program
+  std/config::trace-file := Some("trace.jsonl")  # explicit trace path
   std/config::strict-json := true     # require bare JSON from agents
   std/config::default-agent := AgentClaude("sonnet", "medium")
   std/config::timeout := Some("30s")  # shell-exec idle timeout
@@ -375,19 +375,19 @@ program def main(spec: text) -> unit =
 ```
 
 A qualified target (`std/config::KEY := …`) always works; after `import std/config::*`, so does
-bare `KEY := …`. `timeout` (`Option[text]`) and `log-file` (`Option[path]`) take `Some("…")` or
-`None`.
+bare `KEY := …`. `timeout` (`Option[text]`) and `trace-file` (`Option[path]`) take `Some("…")`
+or `None`.
 
-Precedence for `default-agent`, `log`, `strict-json`, `log-file`, and `timeout` is
+Precedence for `default-agent`, `strict-json`, `timeout`, `trace`, and `trace-file` is
 `source write > CLI > qualified program table > @config > [exec].X > engine default`, where
 `@config` is the selected program's own [`@config`](../agl/reference/attributes.md#config)
 entries. CLI, config, and `@config` supply the **initial** value; a source write overrides it
-from that program point on: after `--no-log`, `std/config::log := true` enables tracing from
+from that program point on: after `--no-trace`, `std/config::trace := true` enables tracing from
 there, and `std/config::strict-json := true` overrides `[exec] strict-json = false`.
 
-Writes take effect **positionally**, like `var` mutation. `log`/`log-file` writes reconfigure
-the trace destination for subsequent calls; `log-file := Some(path)` enables logging, and a later
-`log := false` disables it without clearing the path. `strict-json` and `timeout`
+Writes take effect **positionally**, like `var` mutation. `trace`/`trace-file` writes reconfigure
+the trace destination for subsequent calls; `trace-file := Some(path)` enables tracing, and a
+later `trace := false` disables it without clearing the path. `strict-json` and `timeout`
 writes affect subsequent agent-output parsing and `exec` calls.
 
 A CLI, program-table, or `[exec]` timeout seeds both the shell-exec and agent idle timeouts; a
@@ -507,7 +507,7 @@ $ echo $?
 ```text
 agm repl [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT]
-         [--quiet] [--dry-run] [--no-stdlib] [--log|--log-file PATH|--no-log] [--plain]
+         [--quiet] [--dry-run] [--no-stdlib] [--trace|--trace-file PATH|--no-trace] [--plain]
 ```
 
 Interactive AgL. Unlike `agm exec`, which runs a whole program in a fresh environment, the REPL
@@ -614,7 +614,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
   saved `echo = true`).
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library
   modules); explicit imports still work. `:reset` keeps this choice.
-- `--log` / `--log-file PATH` / `--no-log`: As for `agm exec`; with `--log-file`, each evaluated
+- `--trace` / `--trace-file PATH` / `--no-trace`: As for `agm exec`; with `--trace-file`, each evaluated
   entry appends its JSONL records to `PATH` as one trace *run*. `--dry-run` writes no trace.
 - `--dry-run`: Run each entry through the static pipeline (parse, resolve, typecheck, match
   compilation) but **never evaluate** it: no agent or `exec` calls, no persisted bindings. The
@@ -638,7 +638,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
   that are also values (a record constructor, a binding) evaluate normally.
 - **Engine settings**: import `std/config` and write a qualified target
   (`std/config::strict-json := true`). The write takes effect positionally, so subsequent entries see
-  it even if a later expression in the same entry fails; `log`/`log-file` writes reconfigure the
+  it even if a later expression in the same entry fails; `trace`/`trace-file` writes reconfigure the
   trace destination. The initial `[exec] timeout` is also the idle timeout for CLI and Pi RPC
   agent sessions; a source `timeout` write changes only shell `exec`. `:reset` restores the
   pre-loop CLI/`[exec]` defaults.
@@ -660,7 +660,7 @@ without exiting.
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: a blank or invalid `[exec] default-agent` or `--default-agent`, or an unwritable `--log-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: a blank or invalid `[exec] default-agent` or `--default-agent`, or an unwritable `--trace-file` — reported before the prompt appears |
 
 ### Examples
 

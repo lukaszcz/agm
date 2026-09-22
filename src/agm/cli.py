@@ -45,7 +45,7 @@ from agm.cli_support.args import (
     WorktreeNewArgs,
     WorktreeRemoveArgs,
 )
-from agm.cli_support.run_options import exec_option_conflict, log_option_conflict
+from agm.cli_support.run_options import exec_option_conflict, trace_option_conflict
 from agm.command_catalog import COMMAND_OVERVIEW
 from agm.config.general import parse_timeout
 from agm.parser import (
@@ -978,23 +978,23 @@ def exec_cmd(
         metavar="AGENT",
         help="Seed the free-ask default session from an Agent value or command.",
     ),
-    log_file: str | None = typer.Option(
+    trace_file: str | None = typer.Option(
         None,
-        "--log-file",
+        "--trace-file",
         help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
         autocompletion=completion.complete_path_argument,
     ),
-    no_log: bool = typer.Option(
+    no_trace: bool = typer.Option(
         False,
-        "--no-log",
-        help="Disable trace logging (overrides [exec] log = true in config.toml).",
+        "--no-trace",
+        help="Disable trace logging (overrides [exec] trace = true in config.toml).",
     ),
-    log: bool = typer.Option(
+    trace: bool = typer.Option(
         False,
-        "--log",
+        "--trace",
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
-            "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
+            "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
             "config.toml opt in."
         ),
     ),
@@ -1036,13 +1036,13 @@ def exec_cmd(
             "Mutually exclusive with --timeout."
         ),
     ),
-    no_log_file: bool = typer.Option(
+    no_trace_file: bool = typer.Option(
         False,
-        "--no-log-file",
+        "--no-trace-file",
         help=(
-            "Clears only the in-program log-file binding; a log-file path set in "
-            "config or auto-assigned by --log still applies.  Use --no-log to disable "
-            "tracing entirely.  Mutually exclusive with --log-file."
+            "Clears only the in-program trace-file binding; a trace-file path set in "
+            "config or auto-assigned by --trace still applies.  Use --no-trace to disable "
+            "tracing entirely.  Mutually exclusive with --trace-file."
         ),
     ),
     _dry_run: bool = _dry_run_option(),
@@ -1097,14 +1097,14 @@ def exec_cmd(
         strict_json=strict_json,
         max_call_depth=max_call_depth,
         default_agent=default_agent,
-        no_log=no_log,
-        log_file=log_file,
-        log=log,
+        no_trace=no_trace,
+        trace_file=trace_file,
+        trace=trace,
         module_paths=module_paths,
         no_stdlib=no_stdlib,
         timeout=timeout,
         no_timeout=no_timeout,
-        no_log_file=no_log_file,
+        no_trace_file=no_trace_file,
         pipeline_cache=discovery.cached_artifacts(file),
     )
     _reject_run_option_conflict("exec", exec_option_conflict(exec_args))
@@ -1138,24 +1138,24 @@ def repl_cmd(
         "--quiet",
         help="Suppress automatic echoing of entry results.",
     ),
-    log_file: str | None = typer.Option(
+    trace_file: str | None = typer.Option(
         None,
-        "--log-file",
+        "--trace-file",
         help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
         autocompletion=completion.complete_path_argument,
     ),
-    no_log: bool = typer.Option(
+    no_trace: bool = typer.Option(
         False,
-        "--no-log",
+        "--no-trace",
         help="Disable trace logging.",
     ),
-    log: bool = typer.Option(
+    trace: bool = typer.Option(
         False,
-        "--log",
+        "--trace",
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
-            "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
-            "config.toml opt in. A std/config::log write takes effect in the REPL too."
+            "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
+            "config.toml opt in. A std/config::trace write takes effect in the REPL too."
         ),
     ),
     no_stdlib: bool = typer.Option(
@@ -1180,7 +1180,7 @@ def repl_cmd(
     del _help
     del _dry_run
     _reject_run_option_conflict(
-        "repl", log_option_conflict(no_log=no_log, log=log, log_file=log_file)
+        "repl", trace_option_conflict(no_trace=no_trace, trace=trace, trace_file=trace_file)
     )
     # Imported lazily: pulls in the AgL DSL (runtime, repl console), which would
     # otherwise slow every non-AgL ``agm`` invocation's startup.
@@ -1192,9 +1192,9 @@ def repl_cmd(
             max_call_depth=max_call_depth,
             default_agent=default_agent,
             quiet=quiet,
-            no_log=no_log,
-            log_file=log_file,
-            log=log,
+            no_trace=no_trace,
+            trace_file=trace_file,
+            trace=trace,
             no_stdlib=no_stdlib,
             plain=plain,
         )

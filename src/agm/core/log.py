@@ -24,11 +24,11 @@ def default_agent_files_dir() -> Path:
 
 
 @dataclass(frozen=True)
-class LogDecision:
-    """A run's initial logging decision, resolved from the CLI and config layers.
+class TraceDecision:
+    """A run's initial trace-logging decision, resolved from the CLI and config layers.
 
     ``enabled`` is the starting on/off state.  ``explicit_path`` is the resolved
-    log-file path when the user (or config) provided one explicitly; ``None``
+    trace-file path when the user (or config) provided one explicitly; ``None``
     means use the auto-generated timestamped path inside ``.agent-files/``.
     """
 
@@ -36,54 +36,54 @@ class LogDecision:
     explicit_path: str | None  # None → auto timestamped path when enabled
 
 
-def resolve_log_decision(
+def resolve_trace_decision(
     *,
-    cli_no_log: bool,
-    cli_log: bool,
-    cli_log_file: str | None,
-    config_log: bool,
-    config_log_file: str | None,
-) -> LogDecision:
-    """Resolve the logging decision a run STARTS with, from the two host layers.
+    cli_no_trace: bool,
+    cli_trace: bool,
+    cli_trace_file: str | None,
+    config_trace: bool,
+    config_trace_file: str | None,
+) -> TraceDecision:
+    """Resolve the trace decision a run STARTS with, from the two host layers.
 
     Precedence (highest first): CLI > config file.
 
-    A program's own ``std/config::log``/``log-file`` write is deliberately not a
-    layer here.  It is not resolved at startup at all: it takes effect at
+    A program's own ``std/config::trace``/``trace-file`` write is deliberately
+    not a layer here.  It is not resolved at startup at all: it takes effect at
     runtime, from its program point onward, through the host settings
     reconfigurer, and it overrides whichever value this function chose.  So for
     the setting as a whole the source wins — see
     ``docs/agl/reference/host-environment.md`` for the full precedence chain.
 
     CLI layer:
-      - ``--no-log``        → enabled=False, path=None  (explicit disable)
-      - ``--log-file PATH`` → enabled=True,  path=PATH
-      - ``--log``           → enabled=True,  path=None
-      - (none)              → enabled=None   (unset; fall through)
+      - ``--no-trace``        → enabled=False, path=None  (explicit disable)
+      - ``--trace-file PATH`` → enabled=True,  path=PATH
+      - ``--trace``           → enabled=True,  path=None
+      - (none)                → enabled=None   (unset; fall through)
 
     Config layer:
-      - ``config_log=True`` or ``config_log_file`` → enabled=True
-      - ``config_log=False`` (default) and no file → fall through as None
+      - ``config_trace=True`` or ``config_trace_file`` → enabled=True
+      - ``config_trace=False`` (default) and no file → fall through as None
       Note: config cannot express an explicit False distinctly from default;
-      use CLI ``--no-log`` to force off when config has defaults.
+      use CLI ``--no-trace`` to force off when config has defaults.
 
     Enabled resolution: first non-None of [cli, config], default False.
     Path resolution:    first non-None of [cli.path, config.path].
     """
     # --- CLI layer ---
-    if cli_no_log:
+    if cli_no_trace:
         cli_enabled: bool | None = False
-    elif cli_log_file is not None:
+    elif cli_trace_file is not None:
         cli_enabled = True
-    elif cli_log:
+    elif cli_trace:
         cli_enabled = True
     else:
         cli_enabled = None
-    cli_path = cli_log_file  # None when --log or --no-log; explicit str otherwise
+    cli_path = cli_trace_file  # None when --trace or --no-trace; explicit str otherwise
 
     # --- Config layer ---
-    config_path = config_log_file
-    config_enabled: bool | None = True if (config_log or config_log_file) else None
+    config_path = config_trace_file
+    config_enabled: bool | None = True if (config_trace or config_trace_file) else None
 
     # --- Resolve enabled ---
     resolved_enabled = next((v for v in [cli_enabled, config_enabled] if v is not None), False)
@@ -91,22 +91,22 @@ def resolve_log_decision(
     # --- Resolve path ---
     resolved_path = next((p for p in [cli_path, config_path] if p is not None), None)
 
-    return LogDecision(enabled=resolved_enabled, explicit_path=resolved_path)
+    return TraceDecision(enabled=resolved_enabled, explicit_path=resolved_path)
 
 
-def prepare_trace_log_from_decision(decision: LogDecision, *, command_name: str) -> Path | None:
-    """Prepare the trace file for an already-resolved :class:`LogDecision`.
+def prepare_trace_log_from_decision(decision: TraceDecision, *, command_name: str) -> Path | None:
+    """Prepare the trace file for an already-resolved :class:`TraceDecision`.
 
-    The two commands that support the full ``--log``/``--no-log``/``--log-file``
-    + config precedence chain (``agm exec`` and ``agm repl``) resolve the
-    decision once — they also seed their engine-setting registers from it — and
-    then hand it here.  Callers handle the ``--dry-run`` short-circuit before
-    calling.
+    The two commands that support the full
+    ``--trace``/``--no-trace``/``--trace-file`` + config precedence chain
+    (``agm exec`` and ``agm repl``) resolve the decision once — they also seed
+    their engine-setting registers from it — and then hand it here.  Callers
+    handle the ``--dry-run`` short-circuit before calling.
     """
     return prepare_trace_log(
         command_name=command_name,
         enabled=decision.enabled,
-        log_file=decision.explicit_path,
+        trace_file=decision.explicit_path,
     )
 
 
@@ -125,28 +125,28 @@ class LiveTracePathResolver:
     not destroy whatever the destination already holds; only the parent
     directory is created.
 
-    Instances are callable with the positional ``(enabled, log_file)`` signature
-    of the host settings policy's ``resolve_trace_path`` hook.  Shared by
-    ``agm exec`` and ``agm repl``.
+    Instances are callable with the positional ``(enabled, trace_file)``
+    signature of the host settings policy's ``resolve_trace_path`` hook.
+    Shared by ``agm exec`` and ``agm repl``.
     """
 
     def __init__(self, *, command_name: str, auto_path: Path | None) -> None:
         self._command_name = command_name
         self._auto_path = auto_path
 
-    def __call__(self, enabled: bool, log_file: str | None) -> Path | None:
+    def __call__(self, enabled: bool, trace_file: str | None) -> Path | None:
         if not enabled:
             return None
-        if log_file is None and self._auto_path is not None:
+        if trace_file is None and self._auto_path is not None:
             path = self._auto_path
         else:
             path = _log_file_path(
                 command_name=self._command_name,
-                log_file=log_file,
+                log_file=trace_file,
                 unique=True,
                 extension=".jsonl",
             )
-            if log_file is None:
+            if trace_file is None:
                 self._auto_path = path
         mkdir(path.parent, parents=True, exist_ok=True)
         return path
@@ -200,7 +200,7 @@ def prepare_trace_log(
     *,
     command_name: str,
     enabled: bool,
-    log_file: str | None,
+    trace_file: str | None,
 ) -> Path | None:
     """Resolve and validate the JSONL trace path up front, or return ``None``.
 
@@ -217,7 +217,7 @@ def prepare_trace_log(
         return None
     log_path = _log_file_path(
         command_name=command_name,
-        log_file=log_file,
+        log_file=trace_file,
         unique=True,
         extension=".jsonl",
     )

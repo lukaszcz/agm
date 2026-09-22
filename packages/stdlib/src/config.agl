@@ -3,7 +3,7 @@ import std/option::Option
 import std/path::path
 
 builtin var default-agent: Agent = AgentClaude("sonnet", "medium")
-builtin var log: bool = false
-builtin var log-file: Option[path] = None
 builtin var strict-json: bool = false
 builtin var timeout: Option[text] = None
+builtin var trace: bool = false
+builtin var trace-file: Option[path] = None

@@ -1,8 +1,8 @@
 """Host-service reconfiguration for host-consumed ``builtin var`` settings.
 
-Writing the ``default-agent``, ``log``, or ``log-file`` engine settings (via
+Writing the ``default-agent``, ``trace``, or ``trace-file`` engine settings (via
 ``std/config::NAME := ...``) updates the host-visible state: ``default-agent``
-changes what unnamed ``ask`` calls dispatch through, and ``log``/``log-file``
+changes what unnamed ``ask`` calls dispatch through, and ``trace``/``trace-file``
 repoint the trace store. These tests drive the ``agm exec``
 command with the agent runner subprocess mocked, plus a direct pipeline test with
 a recording policy for the reconfiguration hooks.
@@ -30,16 +30,16 @@ _STDLIB = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
 
 def _exec_args(
-    agl_file: Path, *, no_log: bool = True, log: bool = False, log_file: str | None = None
+    agl_file: Path, *, no_trace: bool = True, trace: bool = False, trace_file: str | None = None
 ) -> ExecArgs:
     """Build ExecArgs for *agl_file* with logging off unless overridden."""
     return ExecArgs(
         file=str(agl_file),
         argument_tokens=[],
         strict_json=None,
-        no_log=no_log,
-        log=log,
-        log_file=log_file,
+        no_trace=no_trace,
+        trace=trace,
+        trace_file=trace_file,
     )
 
 
@@ -195,17 +195,17 @@ class TestDefaultAgentReconfiguration:
 
 
 class TestTraceReconfiguration:
-    def test_log_file_write_routes_trace_until_log_is_disabled(self, tmp_path: Path) -> None:
-        """A path enables tracing, while a later ``log := false`` disables it."""
+    def test_trace_file_write_routes_trace_until_trace_is_disabled(self, tmp_path: Path) -> None:
+        """A path enables tracing, while a later ``trace := false`` disables it."""
         trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
             "import std/config::*\n"
             'print "before"\n'
-            f'std/config::log-file := Some("{trace_path}")\n'
+            f'std/config::trace-file := Some("{trace_path}")\n'
             'print "after"\n'
-            "std/config::log := false\n"
+            "std/config::trace := false\n"
             'print "disabled"\n',
         )
 
@@ -221,26 +221,26 @@ class TestTraceReconfiguration:
         assert "before" not in rendered
         assert "disabled" not in rendered
 
-    def test_log_false_disables_further_trace_writes(
+    def test_trace_false_disables_further_trace_writes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Setting ``log := false`` after logging was on stops later trace writes."""
+        """Setting ``trace := false`` after logging was on stops later trace writes."""
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
 
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
             "import std/config::*\n"
-            "std/config::log := true\n"
+            "std/config::trace := true\n"
             'print "first"\n'
-            "std/config::log := false\n"
+            "std/config::trace := false\n"
             'print "second"\n',
         )
 
         exec_command.run(_exec_args(agl_file))
 
         logs = list(tmp_path.glob("exec-*.jsonl"))
-        assert len(logs) == 1, f"expected exactly one auto-named log, got {logs}"
+        assert len(logs) == 1, f"expected exactly one auto-named trace, got {logs}"
         text = logs[0].read_text(encoding="utf-8")
         import json
 
@@ -252,25 +252,25 @@ class TestTraceReconfiguration:
         assert "first" in rendered
         assert "second" not in rendered
 
-    def test_cli_log_flag_seeds_log_register_true(
+    def test_cli_trace_flag_seeds_trace_register_true(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``--log`` seeds the ``log`` register so a read before any write sees True."""
+        """``--trace`` seeds the ``trace`` register so a read before any write sees True."""
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "import std/config::*\nlet l = std/config::log\nprint l\n")
+        write_file_program(agl_file, "import std/config::*\nlet l = std/config::trace\nprint l\n")
 
-        exec_command.run(_exec_args(agl_file, no_log=False, log=True))
+        exec_command.run(_exec_args(agl_file, no_trace=False, trace=True))
 
         assert capsys.readouterr().out == "true\n"
 
     def test_untouched_logging_still_writes(self, tmp_path: Path) -> None:
-        """A program that never touches the settings logs to --log-file as before."""
+        """A program that never touches the settings logs to --trace-file as before."""
         trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'print "hello"\n')
 
-        exec_command.run(_exec_args(agl_file, no_log=False, log_file=str(trace_path)))
+        exec_command.run(_exec_args(agl_file, no_trace=False, trace_file=str(trace_path)))
 
         assert trace_path.exists()
         import json
@@ -282,19 +282,19 @@ class TestTraceReconfiguration:
         ]
         assert "hello" in rendered
 
-    def test_log_write_keeps_one_auto_trace_file_for_the_whole_run(
+    def test_trace_write_keeps_one_auto_trace_file_for_the_whole_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``--log`` plus a mid-run ``log := true`` keeps the run in ONE file."""
+        """``--trace`` plus a mid-run ``trace := true`` keeps the run in ONE file."""
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'import std/config::*\nprint "before"\nstd/config::log := true\nprint "after"\n',
+            'import std/config::*\nprint "before"\nstd/config::trace := true\nprint "after"\n',
         )
 
         with patch("agm.core.log.datetime", _StepClock()):
-            exec_command.run(_exec_args(agl_file, no_log=False, log=True))
+            exec_command.run(_exec_args(agl_file, no_trace=False, trace=True))
 
         logs = list(tmp_path.glob("exec-*.jsonl"))
         assert len(logs) == 1, f"the run split its trace across {logs}"
@@ -303,7 +303,7 @@ class TestTraceReconfiguration:
         assert "run_end" in kinds
         assert rendered == ["before", "after"]
 
-    def test_toggling_log_off_and_on_reuses_the_same_auto_trace_file(
+    def test_toggling_trace_off_and_on_reuses_the_same_auto_trace_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A program that turns logging on, off, then on again writes ONE file."""
@@ -312,11 +312,11 @@ class TestTraceReconfiguration:
         write_file_program(
             agl_file,
             "import std/config::*\n"
-            "std/config::log := true\n"
+            "std/config::trace := true\n"
             'print "first"\n'
-            "std/config::log := false\n"
+            "std/config::trace := false\n"
             'print "second"\n'
-            "std/config::log := true\n"
+            "std/config::trace := true\n"
             'print "third"\n',
         )
 
@@ -328,10 +328,10 @@ class TestTraceReconfiguration:
         _, rendered = _trace_kinds_and_prints(logs[0])
         assert rendered == ["first", "third"]
 
-    def test_explicit_log_file_still_wins_over_the_auto_path(
+    def test_explicit_trace_file_still_wins_over_the_auto_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``--log-file`` keeps the whole run in the named file, minting nothing."""
+        """``--trace-file`` keeps the whole run in the named file, minting nothing."""
         auto_dir = tmp_path / "agent-files"
         auto_dir.mkdir()
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: auto_dir)
@@ -339,11 +339,11 @@ class TestTraceReconfiguration:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            'import std/config::*\nprint "before"\nstd/config::log := true\nprint "after"\n',
+            'import std/config::*\nprint "before"\nstd/config::trace := true\nprint "after"\n',
         )
 
         with patch("agm.core.log.datetime", _StepClock()):
-            exec_command.run(_exec_args(agl_file, no_log=False, log_file=str(trace_path)))
+            exec_command.run(_exec_args(agl_file, no_trace=False, trace_file=str(trace_path)))
 
         assert list(auto_dir.glob("exec-*.jsonl")) == []
         kinds, rendered = _trace_kinds_and_prints(trace_path)
@@ -359,11 +359,11 @@ def test_trace_reconfiguration_disables_logging_after_a_path_failure(tmp_path: P
 
     trace = TraceStore(path=tmp_path / "trace.jsonl")
     policy = HostSettingsPolicy(
-        resolve_trace_path=lambda enabled, log_file: (_ for _ in ()).throw(OSError("unwritable"))
+        resolve_trace_path=lambda enabled, trace_file: (_ for _ in ()).throw(OSError("unwritable"))
     )
 
     HostSettingsReconfigurer(trace=trace, policy=policy).reconfigure_trace(
-        enabled=True, log_file=None
+        enabled=True, trace_file=None
     )
 
     assert trace.path is None

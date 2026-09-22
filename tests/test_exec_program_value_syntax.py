@@ -13,7 +13,7 @@ import pytest
 
 import agm.commands.exec as exec_command
 from tests._agl_helpers import write_file_program
-from tests.test_exec_command import _config_home, _exec_args_no_log
+from tests.test_exec_command import _config_home, _exec_args_no_trace
 
 
 def _point_program(tmp_path: Path) -> Path:
@@ -86,7 +86,7 @@ class TestValueSyntaxOnHostSurfaces:
 
         assert (
             exec_command.run(
-                _exec_args_no_log(agl_file, argument_tokens=["--point", "Point(x = 1, y = 2)"])
+                _exec_args_no_trace(agl_file, argument_tokens=["--point", "Point(x = 1, y = 2)"])
             )
             is None
         )
@@ -100,7 +100,7 @@ class TestValueSyntaxOnHostSurfaces:
         agl_file = _point_program(tmp_path)
         monkeypatch.setenv("POINT", "Point(x = 3, y = 4)")
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
 
         out = capsys.readouterr().out
         assert out.splitlines()[0] == "3,4"
@@ -112,7 +112,7 @@ class TestValueSyntaxOnHostSurfaces:
         agl_file = _point_program(tmp_path)
         monkeypatch.delenv("POINT", raising=False)
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
 
         out = capsys.readouterr().out
         assert out.splitlines()[0] == "5,6"
@@ -126,7 +126,7 @@ class TestValueSyntaxOnHostSurfaces:
 
         assert (
             exec_command.run(
-                _exec_args_no_log(
+                _exec_args_no_trace(
                     agl_file,
                     argument_tokens=[
                         "--point",
@@ -149,7 +149,7 @@ class TestValueSyntaxOnHostSurfaces:
 
         assert (
             exec_command.run(
-                _exec_args_no_log(agl_file, argument_tokens=["--backup", "claude/opus-high"])
+                _exec_args_no_trace(agl_file, argument_tokens=["--backup", "claude/opus-high"])
             )
             is None
         )
@@ -163,7 +163,7 @@ class TestValueSyntaxOnHostSurfaces:
         _config_home(tmp_path, monkeypatch, '[prog.main]\nworker = "codex/o3-high"\n')
         agl_file = _agent_program(tmp_path)
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
 
         out = capsys.readouterr().out
         assert out.splitlines()[0] == "codex o3 high"
@@ -178,7 +178,7 @@ class TestValueSyntaxOnHostSurfaces:
         )
         agl_file = _agent_program(tmp_path)
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
 
         out = capsys.readouterr().out
         assert out.splitlines()[0] == "claude sonnet high"
@@ -192,7 +192,7 @@ class TestValueSyntaxOnHostSurfaces:
         _config_home(tmp_path, monkeypatch, "[prog.main]\nratio = 1.5\n")
         agl_file = _numeric_program(tmp_path)
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
 
         out = capsys.readouterr().out
         assert out.splitlines()[0] == "ratio 1.5"
@@ -231,7 +231,7 @@ class TestHostTextRejectsLoneSurrogates:
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
-                _exec_args_no_log(agl_file, argument_tokens=["--name", "a" + "\udc00" + "b"])
+                _exec_args_no_trace(agl_file, argument_tokens=["--name", "a" + "\udc00" + "b"])
             )
 
         assert exc_info.value.code == 1
@@ -243,7 +243,7 @@ class TestHostTextRejectsLoneSurrogates:
         agl_file = _positional_text_program(tmp_path)
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["a" + "\udc00" + "b"]))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["a" + "\udc00" + "b"]))
 
         assert exc_info.value.code == 1
         assert "name" in capsys.readouterr().err
@@ -255,7 +255,7 @@ class TestHostTextRejectsLoneSurrogates:
         monkeypatch.setenv("NAME", "a" + "\udc80" + "b")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 1
         assert "name" in capsys.readouterr().err
@@ -266,7 +266,7 @@ class TestHostTextRejectsLoneSurrogates:
         _config_home(tmp_path, monkeypatch, '[prog.main]\nextra = "hello"\n')
         agl_file = _numeric_program(tmp_path)
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
 
         out = capsys.readouterr().out
         assert out.splitlines()[-1] == 'extra "hello"'
@@ -285,7 +285,7 @@ class TestHostTextRejectsLoneSurrogates:
         agl_file = _point_program(tmp_path)
         monkeypatch.delenv("POINT", raising=False)
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
 
         out = capsys.readouterr().out
         assert out.splitlines()[-1] == '{"a": 1, "b": 2}'
@@ -304,7 +304,7 @@ class TestHostTextRejectsLoneSurrogates:
         agl_file = _point_program(tmp_path)
         monkeypatch.delenv("POINT", raising=False)
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
 
         out = capsys.readouterr().out
         assert out.splitlines()[-1] == '"Foo(x = 1)"'
@@ -320,7 +320,7 @@ class TestHostTextRejectsLoneSurrogates:
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
-                _exec_args_no_log(
+                _exec_args_no_trace(
                     agl_file,
                     argument_tokens=[
                         "--point",

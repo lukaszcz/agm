@@ -332,12 +332,12 @@ def test_registered_command_forwards_exec_run_time_options(
             "claude",
             "--timeout",
             "30s",
-            "--log-file",
+            "--trace-file",
             "trace.jsonl",
         ],
     )
-    negated = invoke(CliRunner(), ["tools", "lint", "--log", "--no-timeout", "--no-log-file"])
-    plain = invoke(CliRunner(), ["tools", "lint", "--no-log", "--level=--timeout"])
+    negated = invoke(CliRunner(), ["tools", "lint", "--trace", "--no-timeout", "--no-trace-file"])
+    plain = invoke(CliRunner(), ["tools", "lint", "--no-trace", "--level=--timeout"])
 
     assert [result.exit_code for result in (full, negated, plain)] == [0, 0, 0]
     assert calls == [
@@ -348,24 +348,24 @@ def test_registered_command_forwards_exec_run_time_options(
             max_call_depth=9,
             default_agent="claude",
             timeout="30s",
-            log_file="trace.jsonl",
-            no_log=False,
+            trace_file="trace.jsonl",
+            no_trace=False,
         ),
         ExecArgs(
             file="tools/lint::main",
             strict_json=None,
-            no_log=False,
-            log_file=None,
-            log=True,
+            no_trace=False,
+            trace_file=None,
+            trace=True,
             no_timeout=True,
-            no_log_file=True,
+            no_trace_file=True,
         ),
         ExecArgs(
             file="tools/lint::main",
             argument_tokens=["--level=--timeout"],
             strict_json=None,
-            no_log=True,
-            log_file=None,
+            no_trace=True,
+            trace_file=None,
         ),
     ]
 
@@ -373,9 +373,9 @@ def test_registered_command_forwards_exec_run_time_options(
 @pytest.mark.parametrize(
     "options",
     [
-        ["--log", "--no-log"],
-        ["--log", "--log-file", "trace.jsonl"],
-        ["--log-file", "trace.jsonl", "--no-log-file"],
+        ["--trace", "--no-trace"],
+        ["--trace", "--trace-file", "trace.jsonl"],
+        ["--trace-file", "trace.jsonl", "--no-trace-file"],
         ["--timeout", "5s", "--no-timeout"],
     ],
 )
@@ -410,7 +410,7 @@ def test_registered_command_conflict_help_includes_module_parameters(
         ),
     )
 
-    result = invoke(CliRunner(), ["tools", "run", "--log", "--no-log"])
+    result = invoke(CliRunner(), ["tools", "run", "--trace", "--no-trace"])
 
     assert result.exit_code == 1
     assert "Parameters of tools/main" in result.output
@@ -985,14 +985,14 @@ def test_registered_command_applies_exec_run_time_options(
     )
     trace = tmp_path / "trace.jsonl"
 
-    strict = invoke(CliRunner(), ["tools", "run", "--strict-json", "--log-file", str(trace)])
+    strict = invoke(CliRunner(), ["tools", "run", "--strict-json", "--trace-file", str(trace)])
     lenient = invoke(CliRunner(), ["tools", "run", "--no-strict-json"])
     help_result = invoke(CliRunner(), ["tools", "run", "--help"])
 
     assert strict.stdout == "true\n"
     assert lenient.stdout == "false\n"
     assert trace.read_text(encoding="utf-8")
-    assert "--log-file" in help_result.output
+    assert "--trace-file" in help_result.output
     assert "--no-timeout" in help_result.output
     assert "--module-path" not in help_result.output
 
@@ -1116,16 +1116,16 @@ def test_exec_installed_reference_preserves_all_file_options(
     args = ExecArgs(
         file="tools/review::main",
         strict_json=True,
-        no_log=True,
-        log_file="trace.jsonl",
+        no_trace=True,
+        trace_file="trace.jsonl",
         argument_tokens=["--subject", "changes"],
-        log=True,
+        trace=True,
         module_paths=["modules"],
         no_stdlib=True,
         max_call_depth=4,
         timeout="5s",
         no_timeout=True,
-        no_log_file=True,
+        no_trace_file=True,
         default_agent='AgentCommand("fake")',
     )
 
@@ -1145,7 +1145,7 @@ def test_exec_prefers_an_existing_file_path_containing_a_reference_separator(
     calls: list[ExecArgs] = []
     monkeypatch.setattr(exec_program, "run", lambda args, **_: calls.append(args))
 
-    args = ExecArgs(file=str(agl_file), strict_json=None, no_log=False, log_file=None)
+    args = ExecArgs(file=str(agl_file), strict_json=None, no_trace=False, trace_file=None)
     exec_command.run(args)
 
     assert calls == [args]
@@ -1576,8 +1576,8 @@ def test_program_argument_parse_failure_raises_a_typed_usage_error(tmp_path: Pat
                 file=str(source),
                 argument_tokens=["--unknown"],
                 strict_json=None,
-                no_log=False,
-                log_file=None,
+                no_trace=False,
+                trace_file=None,
                 no_stdlib=True,
             ),
         )
@@ -1690,8 +1690,8 @@ def test_plain_exec_argument_error_still_renders_the_base_exec_usage(
                 file=str(source),
                 argument_tokens=["--unknown"],
                 strict_json=None,
-                no_log=False,
-                log_file=None,
+                no_trace=False,
+                trace_file=None,
                 no_stdlib=True,
             )
         )
@@ -1820,8 +1820,8 @@ def test_editable_registered_dispatch_uses_the_live_manifest(
                 program="main",
                 argument_tokens=[],
                 strict_json=None,
-                no_log=False,
-                log_file=None,
+                no_trace=False,
+                trace_file=None,
             ),
             ("tools", "updated"),
         )
@@ -1961,7 +1961,7 @@ def test_exec_unknown_installed_reference_exits_cleanly(
 
     with pytest.raises(SystemExit) as exc_info:
         exec_command.run(
-            ExecArgs(file="missing/main::main", strict_json=None, no_log=False, log_file=None)
+            ExecArgs(file="missing/main::main", strict_json=None, no_trace=False, trace_file=None)
         )
 
     assert exc_info.value.code == 1
@@ -2192,8 +2192,8 @@ def test_registered_command_binds_parameter_fixture_across_host_inputs(
 
     config = home / ".agm" / "config.toml"
     config.write_text(
-        "[param_tools.logging]\nretries = 2\ntrace = false\n\n"
-        '[param_tools.format]\ntrace = true\nformat = "module"\n\n'
+        "[param_tools.logging]\nretries = 2\nlevel = false\n\n"
+        '[param_tools.format]\nlevel = true\nformat = "module"\n\n'
         "[param.review]\nretries = 3\n",
         encoding="utf-8",
     )
@@ -2204,7 +2204,7 @@ def test_registered_command_binds_parameter_fixture_across_host_inputs(
     assert audit.exit_code == 0
     assert audit.stdout == "2\n"
 
-    monkeypatch.setenv("PARAM_TOOLS_TRACE", "true")
+    monkeypatch.setenv("PARAM_TOOLS_LEVEL", "true")
     environment = invoke(CliRunner(), ["param", "review"])
     assert environment.exit_code == 0
     assert environment.stdout == "3\ntrue\ntrue\nmodule\n"
@@ -2216,8 +2216,8 @@ def test_registered_command_binds_parameter_fixture_across_host_inputs(
             "review",
             "--retries",
             "4",
-            "--no-param_tools.logging.trace",
-            "--no-param_tools.format.trace",
+            "--no-param_tools.logging.level",
+            "--no-param_tools.format.level",
             "--param_tools.format.format",
             "cli",
         ],
@@ -2225,26 +2225,26 @@ def test_registered_command_binds_parameter_fixture_across_host_inputs(
     assert cli_values.exit_code == 0
     assert cli_values.stdout == "4\nfalse\nfalse\ncli\n"
 
-    qualified_traces = invoke(
+    qualified_levels = invoke(
         CliRunner(),
         [
             "param",
             "review",
-            "--param_tools.logging.trace",
-            "--param_tools.format.trace",
+            "--param_tools.logging.level",
+            "--param_tools.format.level",
         ],
     )
-    assert qualified_traces.exit_code == 0
-    assert qualified_traces.stdout == "3\ntrue\ntrue\nmodule\n"
+    assert qualified_levels.exit_code == 0
+    assert qualified_levels.stdout == "3\ntrue\ntrue\nmodule\n"
 
-    ambiguous = invoke(CliRunner(), ["param", "review", "--trace"])
+    ambiguous = invoke(CliRunner(), ["param", "review", "--level"])
     assert ambiguous.exit_code == 1
 
     help_result = invoke(CliRunner(), ["param", "review", "--help"])
     assert help_result.exit_code == 0
     assert "Parameters of param_tools/logging" in help_result.output
     assert "Parameters of param_tools/format" in help_result.output
-    assert "--logging.trace" in help_result.output
+    assert "--logging.level" in help_result.output
 
 
 def test_parameter_fixture_runs_by_installed_reference_and_file(

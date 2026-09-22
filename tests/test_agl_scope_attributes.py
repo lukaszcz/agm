@@ -636,7 +636,7 @@ class TestParseOnlyCommandRecognition:
 
     def test_a_program_carrying_config_is_still_recognized(self) -> None:
         function, constants = self._program(
-            'import std/config\n\n@command("audit")\n@config(config::log = true)\n'
+            'import std/config\n\n@command("audit")\n@config(config::trace = true)\n'
             "program def main() -> unit = ()\n"
         )
 
@@ -651,7 +651,7 @@ class TestProgramConfigRecognition:
     def test_every_entry_reaches_the_fact_table(self) -> None:
         resolution = resolve_entry(
             "import std/config\n\n"
-            "@config(config::log = true, config::timeout = None)\n"
+            "@config(config::trace = true, config::timeout = None)\n"
             "program def main() -> unit = ()\n"
         )
 
@@ -659,7 +659,7 @@ class TestProgramConfigRecognition:
         entries = resolution.attributes.program_configs[program.node_id]
         assert len(entries) == 2
         assert all(isinstance(entry.key, VarRef) for entry in entries)
-        assert [entry.key.name for entry in entries] == ["log", "timeout"]
+        assert [entry.key.name for entry in entries] == ["trace", "timeout"]
 
     def test_a_program_without_config_has_no_entry(self) -> None:
         resolution = resolve_entry("program def main() -> unit = ()\n")
@@ -671,7 +671,7 @@ class TestProgramConfigRecognition:
             "import std/config\n\n"
             "scope Tools\n"
             "\n"
-            "  @config(config::log = true)\n"
+            "  @config(config::trace = true)\n"
             "  program def run() -> unit = ()\n"
             "end Tools\n"
             "\n"
@@ -693,12 +693,12 @@ class TestProgramConfigRecognition:
         with pytest.raises(AglScopeError):
             resolve_entry(
                 "import std/config\n\n"
-                "@config(config::log = true)\n@config(config::log = false)\n"
+                "@config(config::trace = true)\n@config(config::trace = false)\n"
                 "program def main() -> unit = ()\n"
             )
 
     def test_config_on_a_plain_function_is_rejected(self) -> None:
         with pytest.raises(AglScopeError):
             resolve_entry(
-                "import std/config\n\n@config(config::log = true)\ndef helper() -> unit = ()\n"
+                "import std/config\n\n@config(config::trace = true)\ndef helper() -> unit = ()\n"
             )

@@ -105,7 +105,7 @@ def raw_option_str(
     Returns ``None`` when the key is absent or empty/invalid in both tables.
 
     Used by ``commands/exec.py`` and ``commands/repl.py`` to extract the raw
-    timeout/log-file strings before passing them to :func:`convert_config_value`.
+    timeout/trace-file strings before passing them to :func:`convert_config_value`.
     """
     for table in (primary, fallback):
         val = table.get(key)
@@ -207,7 +207,7 @@ def convert_config_value(
     ``default-agent`` is an ``Agent`` value, not a scalar or ``Option`` setting;
     its host-supplied text or JSON-shaped data (``--default-agent``/config)
     decodes through :func:`convert_host_value` exactly like every other key.
-    For ``Option[T]`` engine keys (``timeout``, ``log-file``) a present *raw*
+    For ``Option[T]`` engine keys (``timeout``, ``trace-file``) a present *raw*
     is boxed as an :class:`~agm.agl.runtime.arguments.OptionSome` and decoded
     through :func:`convert_host_value` against the *whole* ``Option[T]``
     type — the same deferred-decode path a program's own ``Option[T]``

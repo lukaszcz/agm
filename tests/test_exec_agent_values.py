@@ -35,7 +35,7 @@ def test_exec_agent_method_single_attempt_accepts_command_without_session_id(
     )
     fake_agent_transport.queue(fake_agent_transport.success("done"))
 
-    result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
+    result = _invoke(CliRunner(), ["exec", "--no-trace", str(program)])
 
     assert result.exit_code == 0, result.output
     assert result.output == "done\n"
@@ -55,7 +55,7 @@ def test_exec_agent_method_command_session_substitutes_its_session_id(
     )
     fake_agent_transport.queue(fake_agent_transport.success("done"))
 
-    result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
+    result = _invoke(CliRunner(), ["exec", "--no-trace", str(program)])
 
     assert result.exit_code == 0, result.output
     assert result.output == "done\n"
@@ -80,7 +80,7 @@ def test_exec_default_agent_command_without_a_session_id_placeholder_fails_free_
         lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
     )
 
-    result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
+    result = _invoke(CliRunner(), ["exec", "--no-trace", str(program)])
 
     assert result.exit_code != 0
     assert "%{SESSION_ID}" in result.output
@@ -124,7 +124,7 @@ def test_exec_default_agent_precedence_is_config_then_cli_then_source(
         lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
     )
     fake_agent_transport.queue(fake_agent_transport.success("done"))
-    argv = ["exec", "--no-log"]
+    argv = ["exec", "--no-trace"]
     if cli_agent is not None:
         argv.extend(["--default-agent", cli_agent])
     argv.append(str(program))
@@ -152,7 +152,7 @@ def test_exec_retries_with_the_output_contract_feedback(
         fake_agent_transport.success("not an integer"), fake_agent_transport.success("7")
     )
 
-    result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
+    result = _invoke(CliRunner(), ["exec", "--no-trace", str(program)])
 
     assert result.exit_code == 0, result.output
     assert result.output == "7\n"
@@ -184,7 +184,7 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
     )
     fake_agent_transport.queue(result)
 
-    invocation = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
+    invocation = _invoke(CliRunner(), ["exec", "--no-trace", str(program)])
 
     assert invocation.exit_code == 0, invocation.output
     assert "AgentCommand" in invocation.output

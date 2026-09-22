@@ -291,7 +291,7 @@ def test_config_attribute_program_configs_round_trip_through_the_resolved_cache(
             "entry": "import helper\n\nprogram def main() -> unit = ()\n",
             "helper": (
                 "import std/config\n\n"
-                "@config(config::log = true)\n"
+                "@config(config::trace = true)\n"
                 "program def build() -> unit = ()\n"
             ),
         },
@@ -320,7 +320,7 @@ def test_config_attribute_program_config_targets_round_trip_through_the_checked_
             "entry": "import helper\n\nprogram def main() -> unit = ()\n",
             "helper": (
                 "import std/config\n\n"
-                "@config(config::log = true)\n"
+                "@config(config::trace = true)\n"
                 "program def build() -> unit = ()\n"
             ),
         },

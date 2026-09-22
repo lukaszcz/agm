@@ -23,20 +23,20 @@ class TestExecConfig:
         cfg = ExecConfig(
             strict_json=False,
             timeout=None,
-            log=False,
-            log_file=None,
+            trace=False,
+            trace_file=None,
         )
         assert cfg.strict_json is False
         assert cfg.timeout is None
-        assert cfg.log is False
-        assert cfg.log_file is None
+        assert cfg.trace is False
+        assert cfg.trace_file is None
 
     def test_frozen(self) -> None:
         cfg = ExecConfig(
             strict_json=False,
             timeout=None,
-            log=False,
-            log_file=None,
+            trace=False,
+            trace_file=None,
         )
         with pytest.raises((AttributeError, TypeError)):
             cfg.strict_json = True
@@ -54,8 +54,8 @@ class TestExecConfigFromConfigFiles:
         cfg = self._config(home, tmp_path)
         assert cfg.strict_json is False
         assert cfg.timeout is None
-        assert cfg.log is False
-        assert cfg.log_file is None
+        assert cfg.trace is False
+        assert cfg.trace_file is None
 
     def test_exec_settings_load_from_toml(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
@@ -92,17 +92,17 @@ class TestExecConfigFromConfigFiles:
         cfg = self._config(home, tmp_path)
         assert cfg.timeout == pytest.approx(60.0)
 
-    def test_log_settings_loaded_from_config(self, tmp_path: Path) -> None:
+    def test_trace_settings_loaded_from_config(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         config = home / ".agm" / "config.toml"
         config.parent.mkdir(parents=True)
-        log_path = tmp_path / "trace.jsonl"
-        config.write_text(f"[exec]\nlog = true\nlog-file = {str(log_path)!r}\n")
+        trace_path = tmp_path / "trace.jsonl"
+        config.write_text(f"[exec]\ntrace = true\ntrace-file = {str(trace_path)!r}\n")
         cfg = self._config(home, tmp_path)
-        assert cfg.log is True
-        assert cfg.log_file == str(log_path)
+        assert cfg.trace is True
+        assert cfg.trace_file == str(trace_path)
 
-    def test_escaped_log_file_interpolation_is_not_reapplied(
+    def test_escaped_trace_file_interpolation_is_not_reapplied(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("NAME", "expanded")
@@ -111,11 +111,11 @@ class TestExecConfigFromConfigFiles:
         literal_dir = config_dir / "%{NAME}"
         literal_dir.mkdir(parents=True)
         (literal_dir / "base.jsonl").touch()
-        (config_dir / "config.toml").write_text('[exec]\nlog-file = "\\\\%{NAME}/base.jsonl"\n')
+        (config_dir / "config.toml").write_text('[exec]\ntrace-file = "\\\\%{NAME}/base.jsonl"\n')
 
         cfg = self._config(home, tmp_path)
 
-        assert cfg.log_file == str(literal_dir / "base.jsonl")
+        assert cfg.trace_file == str(literal_dir / "base.jsonl")
 
 
 class TestExecConfigProgramTableOverride:
@@ -184,7 +184,7 @@ class TestModuleParameterConfigRoutes:
     def _run(self, source: Path, modules: Path) -> None:
         exec_engine.run(
             replace(
-                ExecArgs(file=str(source), strict_json=None, no_log=True, log_file=None),
+                ExecArgs(file=str(source), strict_json=None, no_trace=True, trace_file=None),
                 module_paths=[str(modules)],
             )
         )
@@ -294,7 +294,9 @@ class TestPackageEntryConfigRoute:
         home, module = self._install(tmp_path)
         self._use_home(monkeypatch, home, tmp_path)
 
-        exec_engine.run(ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None))
+        exec_engine.run(
+            ExecArgs(file=str(module), strict_json=None, no_trace=False, trace_file=None)
+        )
 
         assert capsys.readouterr().out == "prod\n"
 
@@ -346,7 +348,9 @@ class TestPackageEntryConfigRoute:
         home, module = self._install_registered(tmp_path, '[dev.review]\nlevel = "cmd"\n')
         self._use_home(monkeypatch, home, tmp_path)
 
-        exec_engine.run(ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None))
+        exec_engine.run(
+            ExecArgs(file=str(module), strict_json=None, no_trace=False, trace_file=None)
+        )
         exec_engine.run_registered("tools/main::main", [])
 
         assert capsys.readouterr().out == "cmd\ncmd\n"
@@ -361,7 +365,7 @@ class TestPackageEntryConfigRoute:
 
         with pytest.raises(SystemExit):
             exec_engine.run(
-                ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None)
+                ExecArgs(file=str(module), strict_json=None, no_trace=False, trace_file=None)
             )
 
     def test_command_table_key_is_not_reported_as_undeclared(
@@ -373,7 +377,9 @@ class TestPackageEntryConfigRoute:
         home, module = self._install_registered(tmp_path, '[dev.review]\nlevel = "cmd"\n')
         self._use_home(monkeypatch, home, tmp_path)
 
-        exec_engine.run(ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None))
+        exec_engine.run(
+            ExecArgs(file=str(module), strict_json=None, no_trace=False, trace_file=None)
+        )
 
         assert capsys.readouterr().err == ""
 
@@ -386,7 +392,9 @@ class TestPackageEntryConfigRoute:
         home, module = self._install_registered(tmp_path, "[dev.review]\nbogus = 1\n")
         self._use_home(monkeypatch, home, tmp_path)
 
-        exec_engine.run(ExecArgs(file=str(module), strict_json=None, no_log=False, log_file=None))
+        exec_engine.run(
+            ExecArgs(file=str(module), strict_json=None, no_trace=False, trace_file=None)
+        )
 
         assert "bogus" in capsys.readouterr().err
 
@@ -404,7 +412,9 @@ class TestPackageEntryConfigRoute:
         loose.write_text(self._SOURCE, encoding="utf-8")
         self._use_home(monkeypatch, home, tmp_path)
 
-        exec_engine.run(ExecArgs(file=str(loose), strict_json=None, no_log=False, log_file=None))
+        exec_engine.run(
+            ExecArgs(file=str(loose), strict_json=None, no_trace=False, trace_file=None)
+        )
 
         assert capsys.readouterr().out == "stem\n"
 
@@ -426,8 +436,8 @@ class TestPackageEntryConfigRoute:
             ExecArgs(
                 file=str(module),
                 strict_json=None,
-                no_log=False,
-                log_file=None,
+                no_trace=False,
+                trace_file=None,
                 argument_tokens=["--level", "bare"],
             )
         )

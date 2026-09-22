@@ -113,8 +113,8 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
 @pytest.mark.parametrize(
     ("write", "expected"),
     [
-        ("std/config::log := true", (True, None)),
-        ('std/config::log-file := Some("trace.jsonl")', (True, "trace.jsonl")),
+        ("std/config::trace := true", (True, None)),
+        ('std/config::trace-file := Some("trace.jsonl")', (True, "trace.jsonl")),
     ],
 )
 def test_trace_setting_writes_reconfigure_trace(
@@ -125,8 +125,8 @@ def test_trace_setting_writes_reconfigure_trace(
 
     trace_settings: list[tuple[bool, str | None]] = []
 
-    def resolve_trace_path(enabled: bool, log_file: str | None) -> None:
-        trace_settings.append((enabled, log_file))
+    def resolve_trace_path(enabled: bool, trace_file: str | None) -> None:
+        trace_settings.append((enabled, trace_file))
         return None
 
     result = _run(
@@ -143,8 +143,8 @@ def test_default_agent_write_does_not_reconfigure_host_services() -> None:
 
     trace_settings: list[tuple[bool, str | None]] = []
 
-    def resolve_trace_path(enabled: bool, log_file: str | None) -> None:
-        trace_settings.append((enabled, log_file))
+    def resolve_trace_path(enabled: bool, trace_file: str | None) -> None:
+        trace_settings.append((enabled, trace_file))
         return None
 
     result = _run(
@@ -168,8 +168,8 @@ def test_exec_uses_stdlib_default_agent_when_no_host_seed(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                no_log=True,
-                log_file=None,
+                no_trace=True,
+                trace_file=None,
             )
         )
         is None
@@ -260,8 +260,8 @@ def test_exec_agent_source_cli_and_config_precedence(
                 file=str(program),
                 strict_json=None,
                 default_agent=cli_literal,
-                no_log=True,
-                log_file=None,
+                no_trace=True,
+                trace_file=None,
             )
         )
         is None
@@ -300,7 +300,9 @@ def test_program_table_default_agent_beats_exec_default_agent(
     )
 
     assert (
-        exec_command.run(ExecArgs(file=str(program), strict_json=None, no_log=True, log_file=None))
+        exec_command.run(
+            ExecArgs(file=str(program), strict_json=None, no_trace=True, trace_file=None)
+        )
         is None
     )
 
@@ -336,8 +338,8 @@ def test_cli_default_agent_beats_program_table(
                 file=str(program),
                 strict_json=None,
                 default_agent='AgentCommand("cli-level")',
-                no_log=True,
-                log_file=None,
+                no_trace=True,
+                trace_file=None,
             )
         )
         is None
@@ -367,7 +369,9 @@ def test_exec_config_runner_key_leaves_the_default_agent_unset(
     )
 
     assert (
-        exec_command.run(ExecArgs(file=str(program), strict_json=None, no_log=True, log_file=None))
+        exec_command.run(
+            ExecArgs(file=str(program), strict_json=None, no_trace=True, trace_file=None)
+        )
         is None
     )
 
@@ -389,8 +393,8 @@ def test_exec_treats_non_agent_syntax_from_cli_as_a_command(
                 file=str(program),
                 strict_json=None,
                 default_agent=value,
-                no_log=True,
-                log_file=None,
+                no_trace=True,
+                trace_file=None,
             )
         )
         is None
@@ -413,8 +417,8 @@ def test_exec_rejects_text_that_opens_a_member_call_but_fails_to_read_from_cli(
                 file=str(program),
                 strict_json=None,
                 default_agent=value,
-                no_log=True,
-                log_file=None,
+                no_trace=True,
+                trace_file=None,
             )
         )
 
@@ -447,8 +451,8 @@ def test_exec_rejects_non_string_agent_value_from_config(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                no_log=True,
-                log_file=None,
+                no_trace=True,
+                trace_file=None,
             )
         )
 
@@ -475,7 +479,9 @@ def test_exec_treats_non_agent_syntax_from_config_as_a_command(
     )
 
     assert (
-        exec_command.run(ExecArgs(file=str(program), strict_json=None, no_log=True, log_file=None))
+        exec_command.run(
+            ExecArgs(file=str(program), strict_json=None, no_trace=True, trace_file=None)
+        )
         is None
     )
     assert capsys.readouterr().out == "ran\n"
@@ -491,7 +497,11 @@ def test_exec_rejects_blank_agent_literal_from_cli(
     with pytest.raises(SystemExit) as exc_info:
         exec_command.run(
             ExecArgs(
-                file=str(program), strict_json=None, default_agent="", no_log=True, log_file=None
+                file=str(program),
+                strict_json=None,
+                default_agent="",
+                no_trace=True,
+                trace_file=None,
             )
         )
 
@@ -523,8 +533,8 @@ def test_exec_rejects_malformed_agent_command_literal_from_cli(
                 file=str(program),
                 strict_json=None,
                 default_agent='AgentCommand("nonexistent-bin -p \'oops")',
-                no_log=True,
-                log_file=None,
+                no_trace=True,
+                trace_file=None,
             )
         )
 
@@ -548,8 +558,8 @@ def test_exec_allows_well_formed_agent_command_literal_from_cli(
                 file=str(program),
                 strict_json=None,
                 default_agent='AgentCommand("echo hi")',
-                no_log=True,
-                log_file=None,
+                no_trace=True,
+                trace_file=None,
             )
         )
         is None
@@ -580,7 +590,9 @@ def test_source_write_of_malformed_agent_command_stays_a_runtime_error(
     )
 
     with pytest.raises(SystemExit) as exc_info:
-        exec_command.run(ExecArgs(file=str(program), strict_json=None, no_log=True, log_file=None))
+        exec_command.run(
+            ExecArgs(file=str(program), strict_json=None, no_trace=True, trace_file=None)
+        )
 
     assert exc_info.value.code == 2
     out, err = capsys.readouterr()
@@ -612,14 +624,14 @@ class TestMalformedAgentCommandAtConstruction:
 def test_restamp_engine_setting_ignores_non_enum_backed_keys() -> None:
     """A boolean-kind or unrecognized key carries no host-enum identity to restamp.
 
-    ``log``/``strict-json`` are boolean-kind and an unrecognized name is not a
+    ``trace``/``strict-json`` are boolean-kind and an unrecognized name is not a
     key at all, so :func:`restamp_engine_setting` leaves such a value untouched
     regardless of the ``from``/``to`` tables given.
     """
     from agm.agl.runtime.engine_config import restamp_engine_setting
 
     stray = agent_value("AgentCommand", command="unused")
-    for key in ("log", "strict-json", "not-an-engine-key"):
+    for key in ("trace", "strict-json", "not-an-engine-key"):
         assert (
             restamp_engine_setting(
                 key, stray, from_table=NO_BUILTIN_DECLARATIONS, to_table=NO_BUILTIN_DECLARATIONS

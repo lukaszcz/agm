@@ -516,8 +516,8 @@ class TestUncaughtAgentCallErrorSpan:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
+            no_trace=True,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_run(args)
@@ -2484,16 +2484,16 @@ class TestTraceWriteFailureIsBestEffort:
         statement still runs and the RunResult is a normal success."""
         from pathlib import Path
 
-        log_file = Path(str(tmp_path)) / "trace.log"
+        trace_file = Path(str(tmp_path)) / "trace.log"
         rt = PipelineDriver()
 
         # Pre-create the trace file and make it read-only so the first record
         # write (run_start) fails — the run must still complete normally.
-        log_file.write_text("")
-        log_file.chmod(0o444)
+        trace_file.write_text("")
+        trace_file.chmod(0o444)
 
         program = 'print "a"\nprint "b"\nprint "c"\n'
-        result = run_inline_command(rt, program, log_file=log_file)
+        result = run_inline_command(rt, program, trace_file=trace_file)
 
         # Program semantics unaffected: clean success, all prints emitted.
         assert result.ok is True

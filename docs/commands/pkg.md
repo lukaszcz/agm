@@ -185,8 +185,8 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
   options, `--dry-run`, and `-h`/`--help`; its parameters may reuse other spellings `agm exec`
   reserves, such as `--module-path` or `-p`, which `agm exec` still rejects.
 - **Run-time options.** `agm exec`'s engine-setting flags (`--strict-json`/`--no-strict-json`,
-  `--default-agent`, `--timeout`/`--no-timeout`, `--log`/`--no-log`,
-  `--log-file`/`--no-log-file`) and `--max-call-depth` work as for
+  `--default-agent`, `--timeout`/`--no-timeout`, `--trace`/`--no-trace`,
+  `--trace-file`/`--no-trace-file`) and `--max-call-depth` work as for
   [`agm exec`](agl.md#agm-exec), anywhere after the command path.
 - **Configuration.** Omitted signature arguments and engine settings use the program route:
   the program's qualified table (e.g. `[review-tools.main.review]` for

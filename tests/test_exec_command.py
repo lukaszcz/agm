@@ -2,7 +2,7 @@
 
 Covers:
 - CLI wires FILE argument and params, --strict-json/--no-strict-json,
-  --default-agent, --log-file, --no-log flags into ExecArgs
+  --default-agent, --trace-file, --no-trace flags into ExecArgs
 - Missing file exits with code 1 and prints to stderr
 - Unreadable file exits with code 1 and prints error to stderr
 - Valid programs execute through the program pipeline; static failures and uncaught
@@ -54,8 +54,8 @@ def inline_args(command: str, *, argument_tokens: list[str] | None = None) -> Ex
         command=command,
         argument_tokens=argument_tokens or [],
         strict_json=None,
-        no_log=True,
-        log_file=None,
+        no_trace=True,
+        trace_file=None,
     )
 
 
@@ -89,8 +89,8 @@ def file_args(path: Path) -> ExecArgs:
         command=None,
         argument_tokens=[],
         strict_json=None,
-        no_log=True,
-        log_file=None,
+        no_trace=True,
+        trace_file=None,
     )
 
 
@@ -349,7 +349,7 @@ class TestModuleParameterHostInputs:
             encoding="utf-8",
         )
 
-        exec_engine.run(_exec_args_no_log(source))
+        exec_engine.run(_exec_args_no_trace(source))
 
         assert capsys.readouterr().out == "Optional::Default\n"
 
@@ -489,11 +489,11 @@ class TestExecArgsParsing:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
 
-        result = invoke(runner, ["exec", "--log-file", "--msg", "--dry-run", str(agl_file)])
+        result = invoke(runner, ["exec", "--trace-file", "--msg", "--dry-run", str(agl_file)])
 
         assert result.exit_code == 0
         args = recorded_runs[0]
-        assert getattr(args, "log_file") == "--msg"
+        assert getattr(args, "trace_file") == "--msg"
         assert getattr(args, "argument_tokens") == []
 
     def test_exec_does_not_duplicate_a_marker_used_as_a_host_option_value(
@@ -502,11 +502,11 @@ class TestExecArgsParsing:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, "program def main() -> unit = ()\n")
 
-        result = invoke(runner, ["exec", "--log-file", "--", "--no-stdlib", str(agl_file)])
+        result = invoke(runner, ["exec", "--trace-file", "--", "--no-stdlib", str(agl_file)])
 
         assert result.exit_code == 0
         args = recorded_runs[0]
-        assert getattr(args, "log_file") == "--"
+        assert getattr(args, "trace_file") == "--"
         assert getattr(args, "no_stdlib") is True
 
     def test_exec_preserves_a_marker_used_as_a_program_option_value(
@@ -596,29 +596,29 @@ class TestExecArgsParsing:
 
         assert getattr(recorded_runs[0], "default_agent") == 'AgentCommand("echo agent")'
 
-    def test_exec_log_file_flag(
+    def test_exec_trace_file_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, "let x = 1\n")
 
-        result = invoke(runner, ["exec", "--log-file", "/tmp/out.log", str(agl_file)])
+        result = invoke(runner, ["exec", "--trace-file", "/tmp/out.log", str(agl_file)])
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        assert getattr(args, "log_file") == "/tmp/out.log"
+        assert getattr(args, "trace_file") == "/tmp/out.log"
 
-    def test_exec_no_log_flag(
+    def test_exec_no_trace_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, "let x = 1\n")
 
-        result = invoke(runner, ["exec", "--no-log", str(agl_file)])
+        result = invoke(runner, ["exec", "--no-trace", str(agl_file)])
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        assert getattr(args, "no_log") is True
+        assert getattr(args, "no_trace") is True
 
     def test_exec_program_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
@@ -824,8 +824,8 @@ class TestExecCommandInline:
             command=None,
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
+            no_trace=True,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
@@ -1025,8 +1025,8 @@ class TestExecCommandBehavior:
             file=str(tmp_path / "nonexistent.agl"),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
@@ -1041,8 +1041,8 @@ class TestExecCommandBehavior:
             file=str(tmp_path / "nonexistent.agl"),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         with pytest.raises(SystemExit):
             exec_command.run(args)
@@ -1062,8 +1062,8 @@ class TestExecCommandBehavior:
             file=str(a_dir),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
@@ -1096,8 +1096,8 @@ class TestExecCommandBehavior:
                 file=str(unreadable),
                 argument_tokens=[],
                 strict_json=None,
-                no_log=False,
-                log_file=None,
+                no_trace=False,
+                trace_file=None,
             )
             with pytest.raises(SystemExit) as exc_info:
                 exec_command.run(args)
@@ -1120,8 +1120,8 @@ class TestExecCommandBehavior:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         # a simple valid program succeeds
         result = exec_command.run(args)
@@ -1139,8 +1139,8 @@ class TestExecCommandBehavior:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
@@ -1151,39 +1151,39 @@ class TestExecCommandBehavior:
     def test_static_discovery_failure_does_not_truncate_trace(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         write_file_program(agl_file, "let x = undefined-name\n")
-        log_path = tmp_path / "trace.jsonl"
-        log_path.write_text("existing trace\n", encoding="utf-8")
+        trace_path = tmp_path / "trace.jsonl"
+        trace_path.write_text("existing trace\n", encoding="utf-8")
 
         args = ExecArgs(
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=str(log_path),
+            no_trace=False,
+            trace_file=str(trace_path),
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
 
         assert exc_info.value.code == 1
-        assert log_path.read_text(encoding="utf-8") == "existing trace\n"
+        assert trace_path.read_text(encoding="utf-8") == "existing trace\n"
 
 
 def _exec_args(
-    agl_file: Path, *, argument_tokens: list[str] | None = None, log_file: str | None = None
+    agl_file: Path, *, argument_tokens: list[str] | None = None, trace_file: str | None = None
 ) -> ExecArgs:
     """Build ExecArgs for *agl_file* with all optional flags defaulted."""
     return ExecArgs(
         file=str(agl_file),
         argument_tokens=argument_tokens or [],
         strict_json=None,
-        no_log=False,
-        log_file=log_file,
+        no_trace=False,
+        trace_file=trace_file,
     )
 
 
-def _exec_args_no_log(agl_file: Path, **overrides: object) -> ExecArgs:
+def _exec_args_no_trace(agl_file: Path, **overrides: object) -> ExecArgs:
     """Build ``ExecArgs`` with trace logging disabled."""
-    values = {"no_log": True, **overrides}
+    values = {"no_trace": True, **overrides}
     return replace(_exec_args(agl_file), **values)
 
 
@@ -1208,13 +1208,13 @@ _skip_if_root = pytest.mark.skipif(
 
 
 class TestExecLogFileValidatedUpFront:
-    """a non-writable --log-file fails up front with a clean Error + exit 1."""
+    """a non-writable --trace-file fails up front with a clean Error + exit 1."""
 
     @_skip_if_root
-    def test_unwritable_log_dir_exits_1_with_clean_error_before_running(
+    def test_unwritable_trace_dir_exits_1_with_clean_error_before_running(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A --log-file under a read-only directory yields ``Error: ...`` + exit 1
+        """A --trace-file under a read-only directory yields ``Error: ...`` + exit 1
         BEFORE any program statement runs (no raw PermissionError traceback)."""
         agl_file = tmp_path / "test.agl"
         # If the program ran, it would print to stdout — it must NOT.
@@ -1223,11 +1223,11 @@ class TestExecLogFileValidatedUpFront:
         ro_dir = tmp_path / "ro"
         ro_dir.mkdir()
         ro_dir.chmod(0o555)
-        log_path = ro_dir / "trace.log"
+        trace_path = ro_dir / "trace.log"
 
         try:
             with pytest.raises(SystemExit) as exc_info:
-                exec_command.run(_exec_args(agl_file, log_file=str(log_path)))
+                exec_command.run(_exec_args(agl_file, trace_file=str(trace_path)))
         finally:
             ro_dir.chmod(0o755)  # restore so tmp_path cleanup succeeds
 
@@ -1425,8 +1425,8 @@ class TestExecCommandWarnings:
             command="let x = undefined-name\n",
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -1640,24 +1640,24 @@ class TestExecLowersGraphOnce:
         """A required-argument failure preempts the run: no trace file, no program output."""
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'program def main(n: int) -> unit = print "n=%{n}"\n')
-        log_path = tmp_path / "trace.jsonl"
+        trace_path = tmp_path / "trace.jsonl"
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args(agl_file, log_file=str(log_path)))
+            exec_command.run(_exec_args(agl_file, trace_file=str(trace_path)))
 
         assert exc_info.value.code == 1
         assert capsys.readouterr().err
-        assert not log_path.exists()
+        assert not trace_path.exists()
 
 
 class TestExecCLIPaths:
-    """Cover the CLI paths for missing FILE and --no-log/--log-file conflict."""
+    """Cover the CLI paths for missing FILE and --no-trace/--trace-file conflict."""
 
     def test_exec_missing_file_exits_nonzero(self, runner: CliRunner) -> None:
         result = invoke(runner, ["exec"])
         assert result.exit_code != 0
 
-    def test_exec_no_log_and_log_file_conflict(
+    def test_exec_no_trace_and_trace_file_conflict(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
@@ -1665,7 +1665,7 @@ class TestExecCLIPaths:
         # recorded_runs intercepts exec.run so we don't actually run the file.
         result = invoke(
             runner,
-            ["exec", "--no-log", "--log-file", "/tmp/x.log", str(agl_file)],
+            ["exec", "--no-trace", "--trace-file", "/tmp/x.log", str(agl_file)],
         )
         assert result.exit_code != 0
 
@@ -1682,8 +1682,8 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         result = exec_command.run(args)
         assert result is None  # no SystemExit → exit 0
@@ -1696,7 +1696,7 @@ class TestExecCommandExitCodes:
             agl_file,
             'import std/config\nlet worker = AgentCommand("worker")\n'
             "program def main(value: int) -> unit =\n"
-            "  std/config::log := false\n"
+            "  std/config::trace := false\n"
             "  print value\n",
         )
         from agm.cli_support.args import ExecArgs
@@ -1705,8 +1705,8 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=["--value", "7"],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
 
         assert exec_command.run(args) is None
@@ -1725,8 +1725,8 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
@@ -1770,8 +1770,8 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
+            no_trace=True,
+            trace_file=None,
         )
 
         # A host transport failure remains an in-language AgentCallError.
@@ -1811,8 +1811,8 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         assert exec_command.run(args) is None  # exit 0
         captured = capsys.readouterr()
@@ -1834,8 +1834,8 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
@@ -1860,8 +1860,8 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -1881,8 +1881,8 @@ class TestExecCommandExitCodes:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
@@ -1958,8 +1958,8 @@ class TestExecConfigWiring:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         assert exec_command.run(args) is None
         assert captured["default_strict_json"] is True
@@ -1986,8 +1986,8 @@ class TestExecConfigWiring:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=False,  # CLI --no-strict-json overrides config true
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         assert exec_command.run(args) is None
         assert captured["default_strict_json"] is False
@@ -2018,8 +2018,8 @@ class TestExecConfigWiring:
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         assert exec_command.run(args) is None
         assert captured["shell_exec_timeout"] == 60.0
@@ -2050,8 +2050,8 @@ class TestExecConfigWiring:
                     file=str(agl_file),
                     argument_tokens=[],
                     strict_json=None,
-                    no_log=True,
-                    log_file=None,
+                    no_trace=True,
+                    trace_file=None,
                 )
             )
 
@@ -2435,7 +2435,9 @@ class TestJsonProgramArgumentsCLI:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=['--pt={"x": 1, "y": 2}']))
+            exec_command.run(
+                _exec_args_no_trace(agl_file, argument_tokens=['--pt={"x": 1, "y": 2}'])
+            )
             is None
         )
         assert capsys.readouterr().out.strip() == "1"
@@ -2448,7 +2450,7 @@ class TestJsonProgramArgumentsCLI:
         write_file_program(agl_file, "program def main(price: decimal) -> unit = print price\n")
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--price", "1.5"]))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--price", "1.5"]))
             is None
         )
         assert capsys.readouterr().out.strip() == "1.5"
@@ -2461,7 +2463,7 @@ class TestJsonProgramArgumentsCLI:
         write_file_program(agl_file, "program def main(tags: array[text]) -> unit = print tags\n")
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=['--tags=["a", "b"]']))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=['--tags=["a", "b"]']))
             is None
         )
         # The output should contain the rendered array.
@@ -2476,7 +2478,7 @@ class TestJsonProgramArgumentsCLI:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--pt", "not_json"]))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--pt", "not_json"]))
         assert exc_info.value.code == 1
 
 
@@ -2488,15 +2490,15 @@ class TestJsonProgramArgumentsCLI:
 class TestUncaughtExceptionOutputFormat:
     """exec.py's exit-2 stderr includes the source location of runtime errors."""
 
-    def _exec_args_nolog(self, agl_file: Path) -> "ExecArgs":
+    def _exec_args_no_trace_only(self, agl_file: Path) -> "ExecArgs":
         from agm.cli_support.args import ExecArgs
 
         return ExecArgs(
             file=str(agl_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
+            no_trace=True,
+            trace_file=None,
         )
 
     def test_uncaught_exception_stderr_includes_line(
@@ -2507,7 +2509,7 @@ class TestUncaughtExceptionOutputFormat:
         # Force an uncaught ExecError from an exec call on line 1.
         write_file_program(agl_file, 'let x: int = exec "echo not-an-int"\nx\n')
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(self._exec_args_nolog(agl_file))
+            exec_command.run(self._exec_args_no_trace_only(agl_file))
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
         err = captured.err
@@ -2536,8 +2538,8 @@ class TestExecBinaryFileError:
             file=str(binary_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
+            no_trace=True,
+            trace_file=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(args)
@@ -2559,8 +2561,8 @@ class TestExecBinaryFileError:
             file=str(binary_file),
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
+            no_trace=True,
+            trace_file=None,
         )
         with pytest.raises(SystemExit):
             exec_command.run(args)
@@ -2644,7 +2646,7 @@ class TestExecAgentValues:
             'let x = impl.ask("do it")\n'
             "print x\n",
         )
-        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        result = self._run_agm_exec([str(agl_file), "--no-trace"], env=env, cwd=tmp_path)
 
         assert result.returncode == 0, result.stderr
         assert "FROM-VALUE" in result.stdout
@@ -2660,7 +2662,7 @@ class TestExecAgentValues:
             'let x = impl.ask("do it")\nprint x\n',
         )
 
-        result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
+        result = self._run_agm_exec([str(agl_file), "--no-trace"], env=env, cwd=tmp_path)
 
         assert result.returncode == 0, result.stderr
         assert re.search(r"^arg=--file=/", result.stdout, re.MULTILINE)
@@ -2668,7 +2670,7 @@ class TestExecAgentValues:
 
 
 class TestExecTimeoutAndLogFileFlags:
-    """CLI ``--timeout`` / ``--no-timeout`` / ``--no-log-file`` resolution."""
+    """CLI ``--timeout`` / ``--no-timeout`` / ``--no-trace-file`` resolution."""
 
     def _capture_timeout(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         from collections.abc import Mapping
@@ -2690,7 +2692,7 @@ class TestExecTimeoutAndLogFileFlags:
                 prepared: PreparedProgram,
                 *,
                 check_only: bool = False,
-                log_file: Path | None = None,
+                trace_file: Path | None = None,
                 compiled: MatchCompiledProgram | None = None,
                 executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
@@ -2704,7 +2706,7 @@ class TestExecTimeoutAndLogFileFlags:
                 return super().run_prepared(
                     prepared,
                     check_only=check_only,
-                    log_file=log_file,
+                    trace_file=trace_file,
                     compiled=compiled,
                     executable=executable,
                     host_settings_policy=host_settings_policy,
@@ -2725,7 +2727,7 @@ class TestExecTimeoutAndLogFileFlags:
         captured = self._capture_timeout(monkeypatch)
         monkeypatch.setattr(exec_engine.os, "environ", {"EXEC_ONLY": "seeded"})
 
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
 
         assert captured["process_environment"] == {"EXEC_ONLY": "seeded"}
 
@@ -2736,7 +2738,7 @@ class TestExecTimeoutAndLogFileFlags:
         write_file_program(agl_file, "let x = 1\nx\n")
         captured = self._capture_timeout(monkeypatch)
 
-        result = exec_command.run(_exec_args_no_log(agl_file, timeout="45s"))
+        result = exec_command.run(_exec_args_no_trace(agl_file, timeout="45s"))
         assert result is None
         assert captured["shell_exec_timeout"] == pytest.approx(45.0)
 
@@ -2747,7 +2749,7 @@ class TestExecTimeoutAndLogFileFlags:
         write_file_program(agl_file, "let x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, timeout="not-a-duration"))
+            exec_command.run(_exec_args_no_trace(agl_file, timeout="not-a-duration"))
         assert exc_info.value.code == 1
         assert "invalid --timeout" in capsys.readouterr().err
 
@@ -2758,7 +2760,7 @@ class TestExecTimeoutAndLogFileFlags:
         write_file_program(agl_file, "let x = 1\nx\n")
         captured = self._capture_timeout(monkeypatch)
 
-        result = exec_command.run(_exec_args_no_log(agl_file, no_timeout=True))
+        result = exec_command.run(_exec_args_no_trace(agl_file, no_timeout=True))
         assert result is None
         assert captured["shell_exec_timeout"] is None
 
@@ -2768,7 +2770,7 @@ class TestExecTimeoutAndLogFileFlags:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "import std/config\nprint std/config::timeout\n")
 
-        exec_command.run(_exec_args_no_log(agl_file, timeout="0.0001s"))
+        exec_command.run(_exec_args_no_trace(agl_file, timeout="0.0001s"))
 
         assert capsys.readouterr().out == 'Option::Some(value = "0.0001s")\n'
 
@@ -2793,11 +2795,11 @@ class TestExecTimeoutAndLogFileFlags:
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
 
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
 
         assert capsys.readouterr().out == 'Option::Some(value = "0.0001s")\n'
 
-    def test_cli_no_log_file_clears_visible_seed_not_configured_trace(
+    def test_cli_no_trace_file_clears_visible_seed_not_configured_trace(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -2809,17 +2811,17 @@ class TestExecTimeoutAndLogFileFlags:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         (home / ".agm" / "config.toml").write_text(
-            f'[exec]\nlog = true\nlog-file = "{trace_path}"\n'
+            f'[exec]\ntrace = true\ntrace-file = "{trace_path}"\n'
         )
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "import std/config\nprint std/config::log-file\n")
+        write_file_program(agl_file, "import std/config\nprint std/config::trace-file\n")
         monkeypatch.setattr(
             exec_engine,
             "current_config_context",
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
 
-        exec_command.run(_exec_args_no_log(agl_file, no_log=False, no_log_file=True))
+        exec_command.run(_exec_args_no_trace(agl_file, no_trace=False, no_trace_file=True))
 
         assert capsys.readouterr().out == "Option::None\n"
         assert trace_path.exists()
@@ -2851,7 +2853,7 @@ class TestExecSourceConfigPrecedence:
         )
 
         captured = _spy_runtime(monkeypatch)
-        result = exec_command.run(_exec_args_no_log(agl_file))
+        result = exec_command.run(_exec_args_no_trace(agl_file))
         assert result is None
         # constructor gets the config-file default; the source assignment
         # applies the live change at the point where it executes.
@@ -2875,7 +2877,7 @@ class TestExecSourceConfigPrecedence:
             "print r\n",
         )
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, strict_json=False))
+            exec_command.run(_exec_args_no_trace(agl_file, strict_json=False))
         assert exc_info.value.code == 2
 
     def test_source_strict_json_overrides_config_strict_json(
@@ -2893,7 +2895,7 @@ class TestExecSourceConfigPrecedence:
         )
 
         captured = _spy_runtime(monkeypatch)
-        result = exec_command.run(_exec_args_no_log(agl_file))
+        result = exec_command.run(_exec_args_no_trace(agl_file))
         assert result is None
         # runtime is wired with the config-file value (True); the source
         # assignment (False) overrides it at runtime when it executes.
@@ -2916,7 +2918,7 @@ class TestExecSourceConfigPrecedence:
         )
 
         captured = _spy_runtime(monkeypatch)
-        result = exec_command.run(_exec_args_no_log(agl_file))
+        result = exec_command.run(_exec_args_no_trace(agl_file))
         assert result is None
         # constructor gets the config-file default (None); the source
         # declaration updates shell_exec_timeout at binding time.
@@ -2930,7 +2932,7 @@ class TestExecSourceConfigPrecedence:
         write_file_program(agl_file, "import std/config\nstd/config::timeout := 60\nlet x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
         assert exc_info.value.code == 1
 
     def test_source_timeout_overrides_config_timeout(
@@ -2948,7 +2950,7 @@ class TestExecSourceConfigPrecedence:
         )
 
         captured = _spy_runtime(monkeypatch)
-        result = exec_command.run(_exec_args_no_log(agl_file))
+        result = exec_command.run(_exec_args_no_trace(agl_file))
         assert result is None
         # runtime is wired with the config-file value (999.0); the source
         # assignment (30s) overrides it at runtime when it executes.
@@ -2968,17 +2970,17 @@ class TestExecSourceConfigPrecedence:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
         assert exc_info.value.code == 2
 
     # ------------------------------------------------------------------
-    # log source declaration
+    # trace source declaration
     # ------------------------------------------------------------------
 
-    def test_source_log_write_creates_trace_file(self, tmp_path: Path) -> None:
-        """``std/config::log := true`` in source enables trace logging (creates a file)."""
+    def test_source_trace_write_creates_trace_file(self, tmp_path: Path) -> None:
+        """``std/config::trace := true`` in source enables trace logging (creates a file)."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, 'import std/config\nstd/config::log := true\nprint "hi"\n')
+        write_file_program(agl_file, 'import std/config\nstd/config::trace := true\nprint "hi"\n')
 
         # Run in tmp_path so .agent-files/ is created there.
         import os
@@ -2991,23 +2993,24 @@ class TestExecSourceConfigPrecedence:
                     file=str(agl_file),
                     argument_tokens=[],
                     strict_json=None,
-                    no_log=False,
-                    log_file=None,
+                    no_trace=False,
+                    trace_file=None,
                 )
             )
         finally:
             os.chdir(old_cwd)
 
         agent_files = tmp_path / ".agent-files"
-        log_files = list(agent_files.glob("exec-*.jsonl"))
-        assert log_files, "Expected a trace log file from std/config::log := true"
+        trace_files = list(agent_files.glob("exec-*.jsonl"))
+        assert trace_files, "Expected a trace trace file from std/config::trace := true"
 
-    def test_source_log_file_write_writes_to_specified_path(self, tmp_path: Path) -> None:
-        """``std/config::log-file := Some("path")`` in source writes the trace to that path."""
-        log_path = tmp_path / "trace.log"
+    def test_source_trace_file_write_writes_to_specified_path(self, tmp_path: Path) -> None:
+        """``std/config::trace-file := Some("path")`` in source writes the trace to that path."""
+        trace_path = tmp_path / "trace.log"
         agl_file = tmp_path / "prog.agl"
         write_file_program(
-            agl_file, f'import std/config\nstd/config::log-file := Some("{log_path}")\nprint "hi"\n'
+            agl_file,
+            f'import std/config\nstd/config::trace-file := Some("{trace_path}")\nprint "hi"\n',
         )
 
         exec_command.run(
@@ -3015,14 +3018,14 @@ class TestExecSourceConfigPrecedence:
                 file=str(agl_file),
                 argument_tokens=[],
                 strict_json=None,
-                no_log=False,
-                log_file=None,
+                no_trace=False,
+                trace_file=None,
             )
         )
-        assert log_path.exists(), "Expected trace log at source-specified path"
+        assert trace_path.exists(), "Expected trace trace at source-specified path"
 
 
-def _exec_args_inline_no_log(
+def _exec_args_inline_no_trace(
     command: str,
     *,
     strict_json: bool | None = None,
@@ -3033,9 +3036,9 @@ def _exec_args_inline_no_log(
         command=command,
         argument_tokens=[],
         strict_json=strict_json,
-        no_log=True,
-        log_file=None,
-        log=False,
+        no_trace=True,
+        trace_file=None,
+        trace=False,
     )
 
 
@@ -3060,7 +3063,7 @@ class TestExecModuleRoots:
         write_file_program(entry, "import mylib::*\nlet r = answer()\nprint r\n")
 
         # A successful run returns normally (no SystemExit).
-        exec_command.run(_exec_args_no_log(entry))
+        exec_command.run(_exec_args_no_trace(entry))
         captured = capsys.readouterr()
         assert "42" in captured.out
 
@@ -3074,7 +3077,7 @@ class TestExecModuleRoots:
         write_file_program(entry, "import broken::*\nlet r = f()\nr\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(entry))
+            exec_command.run(_exec_args_no_trace(entry))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         # The diagnostic should mention the broken.agl file path
@@ -3103,7 +3106,7 @@ class TestExecModuleRoots:
         monkeypatch.setattr(exec_engine, "current_config_context", lambda: FakeCtx())
 
         # A successful run returns normally (no SystemExit).
-        exec_command.run(_exec_args_inline_no_log(entry_source))
+        exec_command.run(_exec_args_inline_no_trace(entry_source))
         captured = capsys.readouterr()
         assert "Hi!" in captured.out
 
@@ -3115,7 +3118,7 @@ class TestExecModuleRoots:
         write_file_program(entry, "import no_such_module::*\nlet x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(entry))
+            exec_command.run(_exec_args_no_trace(entry))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "no_such_module" in captured.err
@@ -3130,7 +3133,7 @@ class TestExecModuleRoots:
         write_file_program(entry, "import calc::*\nlet r = square(4)\nprint r\n")
 
         # A successful run returns normally (no SystemExit).
-        exec_command.run(_exec_args_no_log(entry))
+        exec_command.run(_exec_args_no_trace(entry))
         captured = capsys.readouterr()
         assert "16" in captured.out
 
@@ -3150,7 +3153,7 @@ class TestExecModuleRoots:
             ),
             pytest.raises(SystemExit) as exc_info,
         ):
-            exec_command.run(_exec_args_no_log(entry))
+            exec_command.run(_exec_args_no_trace(entry))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error:" in captured.err
@@ -3173,7 +3176,7 @@ class TestExecModuleRoots:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(entry))
+            exec_command.run(_exec_args_no_trace(entry))
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error:" in captured.err
@@ -3204,7 +3207,7 @@ class TestExecModuleRoots:
                     extra=(),
                 ),
             )
-            exec_command.run(_exec_args_no_log(entry))
+            exec_command.run(_exec_args_no_trace(entry))
         captured = capsys.readouterr()
         assert "314" in captured.out
 
@@ -3225,7 +3228,7 @@ class TestExecModuleRoots:
             entry, "import pkg/*::*\nlet s = add(3, 4)\nlet p = mul(3, 4)\nprint s\nprint p\n"
         )
 
-        exec_command.run(_exec_args_no_log(entry))
+        exec_command.run(_exec_args_no_trace(entry))
         captured = capsys.readouterr()
         assert "7" in captured.out
         assert "12" in captured.out
@@ -3241,7 +3244,7 @@ class TestExecModuleRoots:
         entry = tmp_path / "prog.agl"
         write_file_program(entry, "import mathlib\nlet r = mathlib::square(7)\nprint r\n")
 
-        exec_command.run(_exec_args_no_log(entry))
+        exec_command.run(_exec_args_no_trace(entry))
         captured = capsys.readouterr()
         assert "49" in captured.out
 
@@ -3284,7 +3287,7 @@ class TestExecModuleRoots:
                 "create_agl_session_host",
                 lambda **_: AgentDispatcherSessionHost(mock_agent),
             )
-            exec_command.run(_exec_args_no_log(entry))
+            exec_command.run(_exec_args_no_trace(entry))
             out, _ = capsys.readouterr()
             return out
 
@@ -3324,9 +3327,9 @@ class TestExecCliModulePaths:
             command=None,
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
-            log=False,
+            no_trace=True,
+            trace_file=None,
+            trace=False,
             module_paths=[str(lib_root)],
         )
         exec_command.run(args)
@@ -3358,9 +3361,9 @@ class TestExecCliModulePaths:
             command=None,
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
-            log=False,
+            no_trace=True,
+            trace_file=None,
+            trace=False,
             module_paths=[str(root_a), str(root_b)],
         )
         exec_command.run(args)
@@ -3385,9 +3388,9 @@ class TestExecCliModulePaths:
             command=None,
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
-            log=False,
+            no_trace=True,
+            trace_file=None,
+            trace=False,
             module_paths=[],  # no CLI roots
         )
         with pytest.raises(SystemExit) as exc_info:
@@ -3424,9 +3427,9 @@ class TestExecCliModulePaths:
             command="import util::*\nlet r = greet()\nprint r\n",
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
-            log=False,
+            no_trace=True,
+            trace_file=None,
+            trace=False,
             module_paths=[str(lib_root)],
         )
         exec_command.run(args)
@@ -3466,7 +3469,7 @@ class TestEntryModuleConfig:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_program.run(_exec_args_no_log(agl_file), entry_module_segments=("tools", "main"))
+            exec_program.run(_exec_args_no_trace(agl_file), entry_module_segments=("tools", "main"))
 
         assert exc_info.value.code == 1
         assert "Error: invalid exec configuration" in capsys.readouterr().err
@@ -3477,7 +3480,7 @@ class TestEntryModuleConfig:
         agl_file = tmp_path / "exec.agl"
         agl_file.write_text('program def main() -> unit = print "usable"\n')
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "usable\n"
 
     def test_command_named_entry_stem_uses_its_qualified_program_table(
@@ -3499,7 +3502,7 @@ class TestEntryModuleConfig:
             agl_file, 'program def main(region: text = "default") -> unit = print region\n'
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
 
     def test_schema_named_entry_stem_has_no_qualified_program_table(
@@ -3521,7 +3524,7 @@ class TestEntryModuleConfig:
             agl_file, 'program def main(region: text = "default") -> unit = print region\n'
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "default\n"
 
     def test_reserved_entry_stem_still_selects_among_several_programs(
@@ -3534,7 +3537,7 @@ class TestEntryModuleConfig:
             'program def second() -> unit = print "second"\n'
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file, program="second")) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file, program="second")) is None
         assert capsys.readouterr().out == "second\n"
 
     def test_cli_strict_json_overrides_selected_qualified_program_table(
@@ -3592,7 +3595,7 @@ class TestEntryModuleConfig:
         agl_file = tmp_path / "workflow.agl"
         agl_file.write_text('program def main() -> unit = print "configured"\n')
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
 
 
@@ -3615,7 +3618,7 @@ class TestProgramValueArguments:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["alice", "--tag", "x"]))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["alice", "--tag", "x"]))
             is None
         )
         assert capsys.readouterr().out == "alice:x\n"
@@ -3631,7 +3634,7 @@ class TestProgramValueArguments:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["alice", "--tag=y"]))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["alice", "--tag=y"]))
             is None
         )
         assert capsys.readouterr().out == "alice:y\n"
@@ -3644,14 +3647,17 @@ class TestProgramValueArguments:
             agl_file, "program def main(verbose: bool = false) -> unit = print verbose\n"
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "false\n"
 
-        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--verbose"])) is None
+        assert (
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--verbose"])) is None
+        )
         assert capsys.readouterr().out == "true\n"
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--no-verbose"])) is None
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--no-verbose"]))
+            is None
         )
         assert capsys.readouterr().out == "false\n"
 
@@ -3664,11 +3670,11 @@ class TestProgramValueArguments:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--tag", "eu"])) is None
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--tag", "eu"])) is None
         )
         assert capsys.readouterr().out == 'Option::Some(value = "eu")\n'
 
-        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--no-tag"])) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--no-tag"])) is None
         assert capsys.readouterr().out == "Option::None\n"
 
     def test_json_form_array_argument(
@@ -3680,7 +3686,7 @@ class TestProgramValueArguments:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--nums=[1, 2, 3]"]))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--nums=[1, 2, 3]"]))
             is None
         )
         output = capsys.readouterr().out
@@ -3698,7 +3704,7 @@ class TestProgramValueArguments:
 
         assert (
             exec_command.run(
-                _exec_args_no_log(
+                _exec_args_no_trace(
                     agl_file, argument_tokens=["--worker", "claude/sonnet-experimental"]
                 )
             )
@@ -3728,7 +3734,7 @@ class TestProgramValueArguments:
             "program def main(worker: Agent) -> unit = print worker\n",
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         output = capsys.readouterr().out
         assert "AgentPi" in output
         assert "openai" in output
@@ -3753,7 +3759,7 @@ class TestProgramValueArguments:
             agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
 
     def test_config_table_supplies_a_native_string_to_a_json_argument(
@@ -3773,7 +3779,7 @@ class TestProgramValueArguments:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "program def main(data: json = null) -> unit = print data\n")
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == '"hello"\n'
 
     def test_cli_overrides_configured_argument(
@@ -3795,7 +3801,8 @@ class TestProgramValueArguments:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--tag", "cli"])) is None
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--tag", "cli"]))
+            is None
         )
         assert capsys.readouterr().out == "cli\n"
 
@@ -3819,7 +3826,9 @@ class TestProgramValueArguments:
             '  print(id ++ ":" ++ tag)\n',
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["one", "cli"])) is None
+        assert (
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["one", "cli"])) is None
+        )
         assert capsys.readouterr().out == "one:cli\n"
 
     def test_signature_default_used_when_cli_and_config_omit(
@@ -3830,7 +3839,7 @@ class TestProgramValueArguments:
             agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "default\n"
 
     def test_required_argument_without_default_errors_when_omitted(
@@ -3840,7 +3849,7 @@ class TestProgramValueArguments:
         write_file_program(agl_file, "program def main(name: text) -> unit = print name\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 1
         assert capsys.readouterr().err
@@ -3863,7 +3872,7 @@ class TestProgramValueArguments:
             agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         captured = capsys.readouterr()
         assert captured.out == "configured\n"
         reported = [line for line in captured.err.splitlines() if line.strip()]
@@ -3877,7 +3886,7 @@ class TestProgramValueArguments:
         write_file_program(agl_file, "program def main(dry-run: bool = false) -> unit = ()\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 1
         assert capsys.readouterr().err.startswith("Error:")
@@ -3889,7 +3898,7 @@ class TestProgramValueArguments:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "program def main(agent: text) -> unit = print agent\n")
 
-        result = invoke(CliRunner(), ["exec", "--no-log", str(agl_file), "--agent", "codex"])
+        result = invoke(CliRunner(), ["exec", "--no-trace", str(agl_file), "--agent", "codex"])
 
         assert result.exit_code == 0
         assert result.stdout == "codex\n"
@@ -3903,7 +3912,7 @@ class TestProgramValueArguments:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 1
         assert capsys.readouterr().err.startswith("Error:")
@@ -3917,7 +3926,7 @@ class TestProgramValueArguments:
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
-                _exec_args_no_log(agl_file, argument_tokens=["--name", "world", "--bogus", "x"])
+                _exec_args_no_trace(agl_file, argument_tokens=["--name", "world", "--bogus", "x"])
             )
 
         assert exc_info.value.code == 1
@@ -3934,7 +3943,7 @@ class TestProgramValueArguments:
         write_file_program(agl_file, "program def main(@arg-pos name: text) -> unit = print name\n")
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--", "--odd"])) is None
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--", "--odd"])) is None
         )
         assert capsys.readouterr().out == "--odd\n"
 
@@ -3948,7 +3957,7 @@ class TestProgramValueArguments:
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
-                _exec_args_no_log(agl_file, argument_tokens=["--tag", "x", "--tag", "y"])
+                _exec_args_no_trace(agl_file, argument_tokens=["--tag", "x", "--tag", "y"])
             )
 
         assert exc_info.value.code == 1
@@ -3969,7 +3978,7 @@ class TestProgramValueArguments:
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
-                _exec_args_no_log(agl_file, argument_tokens=["alice", "x", "--tag", "y"])
+                _exec_args_no_trace(agl_file, argument_tokens=["alice", "x", "--tag", "y"])
             )
 
         assert exc_info.value.code == 1
@@ -4002,7 +4011,7 @@ class TestProgramValueArguments:
             agl_file, 'program def main(@arg-pos name: text = "default") -> unit = print name\n'
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         captured = capsys.readouterr()
         assert captured.out == "default\n"
         reported = [line for line in captured.err.splitlines() if line.strip()]
@@ -4032,7 +4041,7 @@ class TestProgramValueArguments:
             agl_file, "program def main(tag: Option[text] = Option::None) -> unit = print tag\n"
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == 'Option::Some(value = "eu")\n'
 
     def test_program_argument_qualified_config_conflict_exits_cleanly(
@@ -4055,7 +4064,7 @@ class TestProgramValueArguments:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_engine.run(_exec_args_no_log(agl_file), entry_module_segments=("tools", "main"))
+            exec_engine.run(_exec_args_no_trace(agl_file), entry_module_segments=("tools", "main"))
 
         assert exc_info.value.code == 1
         assert "Error: invalid qualified configuration" in capsys.readouterr().err
@@ -4089,7 +4098,7 @@ class TestProgramOptionAttributesCLI:
         agl_file = self._greeter(tmp_path)
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--addressee", "agm"]))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--addressee", "agm"]))
             is None
         )
         assert capsys.readouterr().out == "agm\n"
@@ -4100,7 +4109,7 @@ class TestProgramOptionAttributesCLI:
         agl_file = self._greeter(tmp_path)
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--who", "agm"]))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--who", "agm"]))
 
         assert exc_info.value.code == 1
         assert "--who" in capsys.readouterr().err
@@ -4110,7 +4119,9 @@ class TestProgramOptionAttributesCLI:
     ) -> None:
         agl_file = self._greeter(tmp_path)
 
-        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-a", "agm"])) is None
+        assert (
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["-a", "agm"])) is None
+        )
         assert capsys.readouterr().out == "agm\n"
 
     def test_short_option_with_an_attached_value(
@@ -4118,7 +4129,7 @@ class TestProgramOptionAttributesCLI:
     ) -> None:
         agl_file = self._greeter(tmp_path)
 
-        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-aagm"])) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["-aagm"])) is None
         assert capsys.readouterr().out == "agm\n"
 
     def test_bundled_short_flags(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -4133,7 +4144,7 @@ class TestProgramOptionAttributesCLI:
             ") -> unit = print(verbose and quiet)\n",
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-vq"])) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["-vq"])) is None
         assert capsys.readouterr().out == "true\n"
 
     def test_environment_supplies_an_omitted_argument(
@@ -4142,7 +4153,7 @@ class TestProgramOptionAttributesCLI:
         agl_file = self._greeter(tmp_path)
         monkeypatch.setenv("GREET_WHO", "from-env")
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "from-env\n"
 
     def test_a_cli_token_overrides_the_environment(
@@ -4152,7 +4163,7 @@ class TestProgramOptionAttributesCLI:
         monkeypatch.setenv("GREET_WHO", "from-env")
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--addressee", "cli"]))
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--addressee", "cli"]))
             is None
         )
         assert capsys.readouterr().out == "cli\n"
@@ -4164,7 +4175,7 @@ class TestProgramOptionAttributesCLI:
         agl_file = self._greeter(tmp_path)
         monkeypatch.setenv("GREET_WHO", "from-env")
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "from-env\n"
 
     def test_the_config_table_is_keyed_by_the_external_name(
@@ -4174,7 +4185,7 @@ class TestProgramOptionAttributesCLI:
         agl_file = self._greeter(tmp_path)
         monkeypatch.delenv("GREET_WHO", raising=False)
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
 
     def test_the_declared_name_in_the_config_table_is_an_undeclared_key(
@@ -4184,7 +4195,7 @@ class TestProgramOptionAttributesCLI:
         agl_file = self._greeter(tmp_path)
         monkeypatch.delenv("GREET_WHO", raising=False)
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         captured = capsys.readouterr()
         assert captured.out == "world\n"
         assert "who" in captured.err
@@ -4197,7 +4208,7 @@ class TestProgramOptionAttributesCLI:
             agl_file, "program def main(@arg-pos count: int) -> unit = print count\n"
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--", "-5"])) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--", "-5"])) is None
         assert capsys.readouterr().out == "-5\n"
 
     def test_a_short_option_colliding_with_a_host_flag_is_a_host_diagnostic(
@@ -4210,7 +4221,7 @@ class TestProgramOptionAttributesCLI:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 1
         assert capsys.readouterr().err.startswith("Error:")
@@ -4407,7 +4418,7 @@ class TestProgramArgumentsDynamicHelp:
         assert not print_exec_help(tokens=["--tag", "-h"], file=str(agl_file), command=None)
 
         assert (
-            exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--tag", "-h"])) is None
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--tag", "-h"])) is None
         )
         assert capsys.readouterr().out == "-h\n"
 
@@ -4426,7 +4437,9 @@ class TestProgramArgumentsDynamicHelp:
 
         assert not print_exec_help(tokens=["-va", "-h"], file=str(agl_file), command=None)
 
-        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-va", "-h"])) is None
+        assert (
+            exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["-va", "-h"])) is None
+        )
         assert capsys.readouterr().out == "-h\n"
 
     def test_a_help_flag_bundled_with_a_boolean_short_asks_for_help(
@@ -4444,7 +4457,7 @@ class TestProgramArgumentsDynamicHelp:
         )
 
         assert not print_exec_help(tokens=["-vh"], file=str(agl_file), command=None)
-        assert exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["-vh"])) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["-vh"])) is None
 
         assert "--verbose" in capsys.readouterr().out
 
@@ -4725,7 +4738,7 @@ class TestNegatedConstantDefaults:
             encoding="utf-8",
         )
 
-        assert exec_command.run(_exec_args_no_log(entry)) is None
+        assert exec_command.run(_exec_args_no_trace(entry)) is None
         assert capsys.readouterr().out == "true\n"
 
     def test_root_binding_may_be_negated(
@@ -4739,7 +4752,7 @@ class TestNegatedConstantDefaults:
             encoding="utf-8",
         )
 
-        assert exec_command.run(_exec_args_no_log(entry)) is None
+        assert exec_command.run(_exec_args_no_trace(entry)) is None
         assert capsys.readouterr().out == "-1/false\n"
 
 
@@ -4777,7 +4790,7 @@ class TestDefaultAgentDecodeWithNoStdlib:
         write_file_program(agl_file, "let x = 1\nprogram def main() -> unit = ()\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True))
+            exec_command.run(_exec_args_no_trace(agl_file, no_stdlib=True))
         assert exc_info.value.code == 1
 
     def test_process_environment_is_inert_without_stdlib(
@@ -4788,7 +4801,7 @@ class TestDefaultAgentDecodeWithNoStdlib:
         agl_file = tmp_path / "plain.agl"
         agl_file.write_text("program def main() -> unit = ()\n", encoding="utf-8")
 
-        assert exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file, no_stdlib=True)) is None
         assert capsys.readouterr().out == ""
         assert os.environ["AGL_TEST_NO_STDLIB"] == "original"
 
@@ -4800,7 +4813,7 @@ class TestDefaultAgentDecodeWithNoStdlib:
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
-                _exec_args_no_log(
+                _exec_args_no_trace(
                     agl_file,
                     no_stdlib=True,
                     default_agent="nonexistent-bin -p 'oops",
@@ -4820,7 +4833,9 @@ class TestDefaultAgentDecodeWithNoStdlib:
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
-                _exec_args_no_log(agl_file, no_stdlib=True, default_agent='AgentClaude(model = "x"')
+                _exec_args_no_trace(
+                    agl_file, no_stdlib=True, default_agent='AgentClaude(model = "x"'
+                )
             )
 
         assert exc_info.value.code == 1
@@ -4833,7 +4848,7 @@ class TestDefaultAgentDecodeWithNoStdlib:
         write_file_program(agl_file, "let x = 1\nprogram def main() -> unit = ()\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, no_stdlib=True, default_agent=""))
+            exec_command.run(_exec_args_no_trace(agl_file, no_stdlib=True, default_agent=""))
 
         assert exc_info.value.code == 1
         assert "--default-agent" in capsys.readouterr().err
@@ -4855,7 +4870,7 @@ class TestDefaultAgentHostSyntax:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "import std/config\nprint std/config::default-agent\n")
 
-        assert exec_command.run(_exec_args_no_log(agl_file, default_agent=literal)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file, default_agent=literal)) is None
 
         rendered = capsys.readouterr().out
         assert "AgentCommand" in rendered
@@ -4878,7 +4893,7 @@ class TestExecProcessEnvironment:
             'print getenv("AGL_TEST_ENV")\n',
         )
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "original\nchanged\n"
         assert os.environ["AGL_TEST_ENV"] == "original"
 
@@ -4895,11 +4910,11 @@ class TestExecProcessEnvironment:
         )
 
         monkeypatch.setenv("AGL_TEST_DOLLAR_HOLE", "from-shell")
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "from-shell\n"
 
         monkeypatch.delenv("AGL_TEST_DOLLAR_HOLE", raising=False)
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "unset\n"
 
 
@@ -4912,7 +4927,7 @@ class TestExecProgramSelection:
         agl_file = tmp_path / "sole.agl"
         write_file_program(agl_file, 'program def main() -> unit = print "sole"\n')
 
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "sole\n"
 
     def test_requires_a_program_when_the_entry_declares_several(
@@ -4930,7 +4945,7 @@ class TestExecProgramSelection:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -4945,7 +4960,7 @@ class TestExecProgramSelection:
         write_file_program(agl_file, 'program def main() -> unit = print "sole"\n')
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, program="missing"))
+            exec_command.run(_exec_args_no_trace(agl_file, program="missing"))
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -4970,7 +4985,7 @@ class TestExecProgramSelection:
         write_file_program(agl_file, 'program def main() -> unit = print "sole"\n')
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, program="missing"))
+            exec_command.run(_exec_args_no_trace(agl_file, program="missing"))
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -4984,7 +4999,7 @@ class TestExecProgramSelection:
         agl_file.write_text("let value = 1\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 1
         assert capsys.readouterr().out == ""
@@ -4997,9 +5012,9 @@ class TestExecProgramSelection:
             command='let value = "inline"\nprint value\n',
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
-            log=False,
+            no_trace=True,
+            trace_file=None,
+            trace=False,
         )
 
         assert exec_command.run(args) is None
@@ -5021,9 +5036,9 @@ class TestExecProgramSelection:
             command='print "only selected mains run"',
             argument_tokens=[],
             strict_json=None,
-            no_log=True,
-            log_file=None,
-            log=False,
+            no_trace=True,
+            trace_file=None,
+            trace=False,
         )
 
         assert exec_command.run(args) is None
@@ -5049,9 +5064,9 @@ class TestExecProgramSelection:
             command='print "only selected mains run"',
             argument_tokens=["stray"],
             strict_json=None,
-            no_log=True,
-            log_file=None,
-            log=False,
+            no_trace=True,
+            trace_file=None,
+            trace=False,
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -5068,7 +5083,7 @@ class TestExecProgramSelection:
         previous = decimal.getcontext().copy()
         decimal.getcontext().prec = 4
         try:
-            assert exec_command.run(_exec_args_no_log(agl_file)) is None
+            assert exec_command.run(_exec_args_no_trace(agl_file)) is None
             assert capsys.readouterr().out == "0.3333333333333333333333333333\n"
             assert decimal.getcontext().prec == 4
         finally:
@@ -5085,7 +5100,7 @@ class TestExecProgramSelection:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file, max_call_depth=512))
+            exec_command.run(_exec_args_no_trace(agl_file, max_call_depth=512))
 
         assert exc_info.value.code == 2
         assert "RecursionError" in capsys.readouterr().err
@@ -5097,30 +5112,30 @@ class TestExecProgramSelection:
         write_file_program(agl_file, "program def main() -> unit = print(1 / 0)\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 2
         assert "at line 1" in capsys.readouterr().err
 
 
 class TestProgramLogFilePathResolution:
-    """Qualified program log-file paths are anchored to their config directory."""
+    """Qualified program trace-file paths are anchored to their config directory."""
 
-    def test_program_log_file_relative_resolved_to_config_dir(self, tmp_path: Path) -> None:
+    def test_program_trace_file_relative_resolved_to_config_dir(self, tmp_path: Path) -> None:
         from agm.config.general import load_general_config
         from agm.config.qualified_keys import QualifiedConfigKey, resolve_qualified_values
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[myprog.main]\nlog-file = "my.log"\n')
+        (home / ".agm" / "config.toml").write_text('[myprog.main]\ntrace-file = "my.log"\n')
 
         config = load_general_config(home=home, proj_dir=None, cwd=tmp_path)
-        key = QualifiedConfigKey(("myprog",), ("main",), "log-file")
-        log_file_val = resolve_qualified_values(config, (key,))[key]
+        key = QualifiedConfigKey(("myprog",), ("main",), "trace-file")
+        trace_file_val = resolve_qualified_values(config, (key,))[key]
 
-        assert isinstance(log_file_val, str)
-        assert Path(log_file_val).is_absolute()
-        assert log_file_val.endswith("my.log")
+        assert isinstance(trace_file_val, str)
+        assert Path(trace_file_val).is_absolute()
+        assert trace_file_val.endswith("my.log")
 
 
 class TestExecDevelopmentPackages:
@@ -5149,7 +5164,7 @@ class TestExecDevelopmentPackages:
         entry = alpha / MODULE_TREE_DIRNAME / "main.agl"
         entry.write_text('program def main(message: text = "default") -> unit = print message\n')
 
-        assert exec_command.run(_exec_args_no_log(entry)) is None
+        assert exec_command.run(_exec_args_no_trace(entry)) is None
         assert capsys.readouterr().out == "package-qualified\n"
 
     def test_direct_exec_does_not_mount_package_entry_parent_as_loose_root(
@@ -5168,7 +5183,7 @@ class TestExecDevelopmentPackages:
             "  let _ = alpha/settings::answer()\n"
         )
 
-        assert exec_command.run(_exec_args_no_log(entry, no_stdlib=True)) is None
+        assert exec_command.run(_exec_args_no_trace(entry, no_stdlib=True)) is None
 
     def test_direct_exec_reports_an_invalid_development_manifest(self, tmp_path: Path) -> None:
         alpha = tmp_path / "alpha"
@@ -5178,7 +5193,7 @@ class TestExecDevelopmentPackages:
         entry.write_text("program def main() -> unit = ()\n")
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(entry))
+            exec_command.run(_exec_args_no_trace(entry))
 
         assert exc_info.value.code == 1
 
@@ -5202,7 +5217,7 @@ class TestExecDevelopmentPackages:
             "import bravo/shared\nprogram def main() -> unit =\n  let _ = bravo/shared::answer()\n"
         )
 
-        assert exec_command.run(_exec_args_no_log(entry, no_stdlib=True)) is None
+        assert exec_command.run(_exec_args_no_trace(entry, no_stdlib=True)) is None
 
 
 class TestExecStandardLibraryEntries:
@@ -5253,7 +5268,7 @@ class TestExecStandardLibraryEntries:
         )
         self._config_context(monkeypatch, home, tmp_path)
 
-        assert exec_command.run(_exec_args_no_log(entry, no_stdlib=True)) is None
+        assert exec_command.run(_exec_args_no_trace(entry, no_stdlib=True)) is None
         assert capsys.readouterr().out == "package-qualified\n"
 
     def test_stdlib_entry_cannot_import_a_loose_cli_module_root(
@@ -5275,7 +5290,7 @@ class TestExecStandardLibraryEntries:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(entry, no_stdlib=True, module_paths=[str(loose)]))
+            exec_command.run(_exec_args_no_trace(entry, no_stdlib=True, module_paths=[str(loose)]))
 
         assert exc_info.value.code == 1
 
@@ -5297,6 +5312,6 @@ class TestExecStandardLibraryEntries:
         )
 
         assert (
-            exec_command.run(_exec_args_no_log(entry, no_stdlib=True, module_paths=[str(loose)]))
+            exec_command.run(_exec_args_no_trace(entry, no_stdlib=True, module_paths=[str(loose)]))
             is None
         )

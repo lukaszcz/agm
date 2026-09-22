@@ -294,15 +294,15 @@ key:
 
 | Setting | AgL type | Portable default |
 | --- | -------- | ---------------- |
-| `log` | `bool` | `false` |
+| `trace` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
 | `default-agent` | `Agent` | `AgentClaude("sonnet", "medium")` |
-| `log-file` | `Option[path]` | `None` |
+| `trace-file` | `Option[path]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::strict-json`).
-`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML values read the same [host Agent syntax](../../commands/agl.md#host-agent-syntax) as an `Agent`-typed parameter: compact shorthand, then a JSON object, then an `Agent` member constructor call, and otherwise a verbatim command. The optional settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
+`default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML values read the same [host Agent syntax](../../commands/agl.md#host-agent-syntax) as an `Agent`-typed parameter: compact shorthand, then a JSON object, then an `Agent` member constructor call, and otherwise a verbatim command. The optional settings (`trace-file`, `timeout`) take a `Some("…")` or `None` value.
 
 ### Precedence
 
@@ -329,7 +329,7 @@ positional argument in a named-only position.
 ### Config-file schema
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
-`log-file`). A qualified table uses a module suffix (the entry
+`trace-file`). A qualified table uses a module suffix (the entry
 file's stem, or a package's declared route) and the selected program's own
 declaration name — `[prog.main]` for a program named `main` in a file whose
 stem or route is `prog`. The same table supplies both that program's engine-key
@@ -355,20 +355,20 @@ surrogate code point is a host invocation error.
 
 ### Positional effect
 
-The host applies each effective initial setting before execution. Thus a declared `log` or `log-file` default configures the trace service when
+The host applies each effective initial setting before execution. Thus a declared `trace` or `trace-file` default configures the trace service when
 no CLI/config seed is supplied. Every setting takes effect
 **positionally** thereafter: a write to `std/config::X` governs the statements
 that follow it, in program order, and does not affect statements before it. A
-completed write remains effective if a later expression fails. Writing `log` or
-`log-file` updates the trace destination used by subsequent calls. Assigning
-`Some(path)` to `log-file`
-enables logging; a later `log := false` disables it while retaining the path.
+completed write remains effective if a later expression fails. Writing `trace`
+or `trace-file` updates the trace destination used by subsequent calls.
+Assigning `Some(path)` to `trace-file`
+enables tracing; a later `trace := false` disables it while retaining the path.
 Writing `strict-json` or `timeout` changes subsequent agent-output parsing or
 `exec` calls, respectively. A write the engine cannot accept — a `timeout`
 whose text is not a duration — raises the catchable `TypeError`
 ([Exceptions](exceptions.md#typeerror)) and leaves the setting unchanged.
 Trace output is best-effort: a filesystem failure disables tracing for the rest
-of the run without rolling back the assigned `log` or `log-file` value.
+of the run without rolling back the assigned `trace` or `trace-file` value.
 
 ### Error surface for `timeout`
 
@@ -384,11 +384,12 @@ of the run without rolling back the assigned `log` or `log-file` value.
 - Reading `timeout` returns the exact `Option[text]` value assigned or supplied
   initially; duration parsing does not normalize its text.
 
-### `--no-log-file` semantics
+### `--no-trace-file` semantics
 
-`--no-log-file` clears the initial `log-file` value. It does **not** suppress a
-trace configured elsewhere — a `[exec] log-file` path or an auto path from
-`--log` still applies. Use `--no-log` to disable tracing entirely.
+`--no-trace-file` clears the initial `trace-file` value. It does **not**
+suppress a trace configured elsewhere — a `[exec] trace-file` path or an auto
+path from `--trace` still applies. Use `--no-trace` to disable tracing
+entirely.
 
 ### Other host-configurable defaults
 

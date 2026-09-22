@@ -24,9 +24,9 @@ Flag notes:
       return exactly one bare JSON value; the default is lenient recovery
       (fence/prose stripping + trivial repair, then strict schema validation).
       A source-level ``strict_json`` call option overrides this default.
-    - Trace logging is OFF by default.  ``--log`` enables it (auto-named path);
-      ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
-      of these three flags may be given (mutually exclusive).  ``[exec] log =
+    - Trace logging is OFF by default.  ``--trace`` enables it (auto-named path);
+      ``--trace-file PATH`` writes to PATH; ``--no-trace`` disables it.  At most one
+      of these three flags may be given (mutually exclusive).  ``[exec] trace =
       true`` in config also enables logging; CLI flags override config.
     - ``--default-agent AGENT`` seeds ``std/config::default-agent`` from host Agent
       syntax or a canonical constructor, taking precedence over the qualified program
@@ -42,7 +42,7 @@ Flag notes:
       disables the automatic import throughout the loaded program. Ordinary imports are
       qualified by default; tails and ``use`` declarations make names bare.
     - A program reads and writes the engine settings (``strict-json``,
-      ``default-agent``, ``timeout``, ``log``, ``log-file``) through the
+      ``default-agent``, ``timeout``, ``trace``, ``trace-file``) through the
       ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
       from its program point onward and overrides the CLI flag, which overrides
       the config-file layer.  ``--max-call-depth`` remains a host/runtime
@@ -121,7 +121,7 @@ from agm.core.fs import read_text_arg
 from agm.core.log import (
     LiveTracePathResolver,
     prepare_trace_log_from_decision,
-    resolve_log_decision,
+    resolve_trace_decision,
 )
 from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
@@ -525,23 +525,23 @@ def run(
         cli_values["timeout"] = args.timeout
     elif args.no_timeout:
         cli_values["timeout"] = None
-    if args.no_log:
-        cli_values["log"] = False
-    elif args.log:
-        cli_values["log"] = True
-    if args.log_file is not None:
-        cli_values["log-file"] = args.log_file
-    elif args.no_log_file:
-        cli_values["log-file"] = None
+    if args.no_trace:
+        cli_values["trace"] = False
+    elif args.trace:
+        cli_values["trace"] = True
+    if args.trace_file is not None:
+        cli_values["trace-file"] = args.trace_file
+    elif args.no_trace_file:
+        cli_values["trace-file"] = None
     if args.default_agent is not None:
         cli_values["default-agent"] = args.default_agent
 
-    # strict-json/timeout/log are resolved only after preflight, below, once a
+    # strict-json/timeout/trace are resolved only after preflight, below, once a
     # selected program's own ``@config`` entries (ranked between the config
     # tables and the CLI, see ``EngineSeedTiers.merged``) are known. Building
     # these three tiers (never merging them) is possible now: neither
     # ``build_host_engine_seeds`` nor discovery/preflight reads
-    # strict-json/timeout/log's resolved host values.
+    # strict-json/timeout/trace's resolved host values.
     process_environment = dict(os.environ)
     engine_tiers = build_host_engine_seeds(
         config=config,
@@ -657,7 +657,7 @@ def run(
     # 1 — is what lets ``@config`` reach them without a second lowering pass
     # or a duplicated precedence rule. A ``@config`` value is decoded against
     # *executable*'s own nominal identity (see ``preflight_arguments``); an
-    # enum-backed value (``timeout``, ``log-file``, ``default-agent``) is
+    # enum-backed value (``timeout``, ``trace-file``, ``default-agent``) is
     # restamped onto the standard identity every other engine tier already
     # uses, so it reads back through the same plain accessors.
     config_engine_values: dict[str, Value] = {}
@@ -690,18 +690,18 @@ def run(
         resolved_timeout = None
 
     # Config tables and ``@config`` (never the CLI — see
-    # ``EngineSeedTiers.config_merged``) feed the derived ``log`` rule the
-    # same way ``EngineSeedTiers._resolve_log`` does.
+    # ``EngineSeedTiers.config_merged``) feed the derived ``trace`` rule the
+    # same way ``EngineSeedTiers._resolve_trace`` does.
     config_result = engine_tiers.config_merged(config_engine_values)
-    config_log_value = config_result.get("log")
-    config_log = isinstance(config_log_value, BoolValue) and config_log_value.value
-    config_log_file = _option_text(config_result.get("log-file"))
-    log_decision = resolve_log_decision(
-        cli_no_log=args.no_log,
-        cli_log=args.log,
-        cli_log_file=args.log_file,
-        config_log=config_log,
-        config_log_file=config_log_file,
+    config_trace_value = config_result.get("trace")
+    config_trace = isinstance(config_trace_value, BoolValue) and config_trace_value.value
+    config_trace_file = _option_text(config_result.get("trace-file"))
+    trace_decision = resolve_trace_decision(
+        cli_no_trace=args.no_trace,
+        cli_trace=args.trace,
+        cli_trace_file=args.trace_file,
+        config_trace=config_trace,
+        config_trace_file=config_trace_file,
     )
 
     factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
@@ -714,16 +714,16 @@ def run(
     )
 
     # Resolve + validate the trace log file up front.  --dry-run is
-    # side-effect-free: no trace is written regardless of --log-file.  A source
-    # ``std/config::log``/``log-file`` write takes effect at runtime via the host
-    # reconfigurer, not here.
+    # side-effect-free: no trace is written regardless of --trace-file.  A source
+    # ``std/config::trace``/``trace-file`` write takes effect at runtime via the
+    # host reconfigurer, not here.
     if dry_run.enabled():
-        log_file = None
+        trace_file = None
     else:
-        log_file = prepare_trace_log_from_decision(log_decision, command_name="exec")
+        trace_file = prepare_trace_log_from_decision(trace_decision, command_name="exec")
 
     policy = HostSettingsPolicy(
-        resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=log_file),
+        resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=trace_file),
     )
 
     # Warnings live on their own channel and never affect the exit code;
@@ -755,7 +755,7 @@ def run(
         result = runtime.run_prepared(
             prepared,
             check_only=dry_run.enabled(),
-            log_file=log_file,
+            trace_file=trace_file,
             compiled=discovery.compiled,
             executable=executable,
             host_settings_policy=policy,
@@ -885,8 +885,8 @@ def run_registered(
             file=program,
             argument_tokens=argument_tokens,
             strict_json=None,
-            no_log=False,
-            log_file=None,
+            no_trace=False,
+            trace_file=None,
         )
         if args is None
         else args

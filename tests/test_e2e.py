@@ -7899,16 +7899,18 @@ class TestPackageInstall:
 
         run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
         overridden = run_agm(
-            ["publish", "--no-strict-json", "--log-file", str(trace), "--subject", "flag"],
+            ["publish", "--no-strict-json", "--trace-file", str(trace), "--subject", "flag"],
             env=env,
             cwd=tmp_path,
         )
         timed = run_agm(
-            ["publish", "--timeout", "5s", "--max-call-depth", "64", "--no-log"],
+            ["publish", "--timeout", "5s", "--max-call-depth", "64", "--no-trace"],
             env=env,
             cwd=tmp_path,
         )
-        conflicting = run_agm(["publish", "--log", "--no-log"], env=env, cwd=tmp_path, check=False)
+        conflicting = run_agm(
+            ["publish", "--trace", "--no-trace"], env=env, cwd=tmp_path, check=False
+        )
 
         assert overridden.stdout == "flag\nfalse\n"
         assert trace.stat().st_size > 0
@@ -9529,7 +9531,7 @@ class TestExecCommand:
         env["REVIEW_COUNT"] = str(review_count)
 
         result = run_agm(
-            ["exec", str(program), "--task", "CSV parser", "--no-log"],
+            ["exec", str(program), "--task", "CSV parser", "--no-trace"],
             env=env,
             cwd=work,
         )
@@ -9574,7 +9576,7 @@ class TestExecCommand:
         env["COUNT_FILE"] = str(count_file)
         env["PROMPT_LOG"] = str(prompt_log)
 
-        result = run_agm(["exec", str(program), "--no-log"], env=env, cwd=work)
+        result = run_agm(["exec", str(program), "--no-trace"], env=env, cwd=work)
 
         assert result.returncode == 0
         assert result.stdout == "accepted\n"

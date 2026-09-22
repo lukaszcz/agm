@@ -77,12 +77,12 @@ class TestProgramConfigTargetsPublishedByTheChecker:
 
     def test_engine_setting_target(self) -> None:
         checked = resolve_and_check_entry(
-            "import std/config\n\n@config(config::log = true)\nprogram def main() -> unit = ()\n",
+            "import std/config\n\n@config(config::trace = true)\nprogram def main() -> unit = ()\n",
             base_caps(),
         )
         node_id = _program_node_id(checked, "main")
         (target,) = _config_targets(checked, node_id)
-        assert target == (STD_CONFIG_ID, (), "log")
+        assert target == (STD_CONFIG_ID, (), "trace")
 
     def test_cross_module_param_target(self, tmp_path: Path) -> None:
         graph = make_file_graph_from_files(
@@ -114,7 +114,7 @@ class TestLoweringIntoTheExecutable:
                 "entry": (
                     "import std/config\n\n"
                     "@param let count: int = 1\n\n"
-                    "@config(config::log = true, count = 2)\n"
+                    "@config(config::trace = true, count = 2)\n"
                     "program def main() -> unit = ()\n"
                 ),
             },
@@ -130,12 +130,12 @@ class TestLoweringIntoTheExecutable:
         symbol = executable.program_symbols[node_id]
         entries = dict(executable.program_configs[symbol])
 
-        log_target = (STD_CONFIG_ID, (), "log")
+        trace_target = (STD_CONFIG_ID, (), "trace")
         count_target = (graph.entry_id, (), "count")
-        log_value = entries[log_target]
+        trace_value = entries[trace_target]
         count_value = entries[count_target]
-        assert isinstance(log_value, IrConstBool)
-        assert log_value.value is True
+        assert isinstance(trace_value, IrConstBool)
+        assert trace_value.value is True
         assert isinstance(count_value, IrConstInt)
         assert count_value.value == 2
 
@@ -158,7 +158,7 @@ class TestPreflightProgramConfig:
 
     def test_decodes_an_engine_setting_value(self, tmp_path: Path) -> None:
         source = (
-            "import std/config\n\n@config(config::log = true)\nprogram def main() -> unit = ()\n"
+            "import std/config\n\n@config(config::trace = true)\nprogram def main() -> unit = ()\n"
         )
         runtime = PipelineDriver()
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
@@ -173,7 +173,7 @@ class TestPreflightProgramConfig:
             compiled=discovery.compiled,
         )
         assert preflight.result.ok
-        target = (STD_CONFIG_ID, (), "log")
+        target = (STD_CONFIG_ID, (), "trace")
         assert preflight.program_config == {target: BoolValue(True)}
 
     def test_decodes_a_param_target_value(self, tmp_path: Path) -> None:

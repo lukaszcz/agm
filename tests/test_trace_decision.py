@@ -1,12 +1,12 @@
-"""Tests for resolve_log_decision and the log helpers.
+"""Tests for resolve_trace_decision and the trace helpers.
 
 Coverage:
-- resolve_log_decision: initial-value precedence (CLI > config file), default off,
+- resolve_trace_decision: initial-value precedence (CLI > config file), default off,
   path resolution, explicit disable beats lower-layer enable.
-- resolve_log_file / prepare_trace_log with enabled/log_file shape.
-- --log flag parsing + mutual-exclusivity rejection in typer (cli.py) parser.
-- Integration: default run writes no trace; --log writes one; [exec] log=true writes one;
-  --no-log overrides config log=true.
+- resolve_log_file / prepare_trace_log with their enabled/path shapes.
+- --trace flag parsing + mutual-exclusivity rejection in typer (cli.py) parser.
+- Integration: default run writes no trace; --trace writes one; [exec] trace=true writes one;
+  --no-trace overrides config trace=true.
 """
 
 from __future__ import annotations
@@ -26,9 +26,9 @@ import agm.commands.repl as repl_command
 from agm.cli_support.args import ExecArgs
 from agm.core.log import (
     LiveTracePathResolver,
-    LogDecision,
-    resolve_log_decision,
+    TraceDecision,
     resolve_log_file,
+    resolve_trace_decision,
 )
 
 # ---------------------------------------------------------------------------
@@ -47,153 +47,153 @@ def _isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: resolve_log_decision
+# Unit tests: resolve_trace_decision
 # ---------------------------------------------------------------------------
 
 
-class TestResolveLogDecisionDefaults:
+class TestResolveTraceDecisionDefaults:
     """Default (all unset/False/None) → disabled, no path."""
 
     def test_all_defaults_disabled(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            config_log=False,
-            config_log_file=None,
+        d = resolve_trace_decision(
+            cli_no_trace=False,
+            cli_trace=False,
+            cli_trace_file=None,
+            config_trace=False,
+            config_trace_file=None,
         )
-        assert d == LogDecision(enabled=False, explicit_path=None)
+        assert d == TraceDecision(enabled=False, explicit_path=None)
 
     def test_returns_frozen_dataclass(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            config_log=False,
-            config_log_file=None,
+        d = resolve_trace_decision(
+            cli_no_trace=False,
+            cli_trace=False,
+            cli_trace_file=None,
+            config_trace=False,
+            config_trace_file=None,
         )
         with pytest.raises((AttributeError, TypeError)):
             setattr(d, "enabled", True)
 
 
-class TestResolveLogDecisionCliLayer:
+class TestResolveTraceDecisionCliLayer:
     """CLI flags take highest precedence."""
 
-    def test_cli_log_enables(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=True,
-            cli_log_file=None,
-            config_log=False,
-            config_log_file=None,
+    def test_cli_trace_enables(self) -> None:
+        d = resolve_trace_decision(
+            cli_no_trace=False,
+            cli_trace=True,
+            cli_trace_file=None,
+            config_trace=False,
+            config_trace_file=None,
         )
         assert d.enabled is True
         assert d.explicit_path is None
 
-    def test_cli_no_log_disables(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=True,
-            cli_log=False,
-            cli_log_file=None,
-            config_log=False,
-            config_log_file=None,
+    def test_cli_no_trace_disables(self) -> None:
+        d = resolve_trace_decision(
+            cli_no_trace=True,
+            cli_trace=False,
+            cli_trace_file=None,
+            config_trace=False,
+            config_trace_file=None,
         )
         assert d.enabled is False
         assert d.explicit_path is None
 
-    def test_cli_log_file_enables_with_path(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file="/tmp/trace.jsonl",
-            config_log=False,
-            config_log_file=None,
+    def test_cli_trace_file_enables_with_path(self) -> None:
+        d = resolve_trace_decision(
+            cli_no_trace=False,
+            cli_trace=False,
+            cli_trace_file="/tmp/trace.jsonl",
+            config_trace=False,
+            config_trace_file=None,
         )
         assert d.enabled is True
         assert d.explicit_path == "/tmp/trace.jsonl"
 
-    def test_cli_no_log_overrides_config_log_true(self) -> None:
-        """CLI --no-log beats config log=true."""
-        d = resolve_log_decision(
-            cli_no_log=True,
-            cli_log=False,
-            cli_log_file=None,
-            config_log=True,
-            config_log_file=None,
+    def test_cli_no_trace_overrides_config_trace_true(self) -> None:
+        """CLI --no-trace beats config trace=true."""
+        d = resolve_trace_decision(
+            cli_no_trace=True,
+            cli_trace=False,
+            cli_trace_file=None,
+            config_trace=True,
+            config_trace_file=None,
         )
         assert d.enabled is False
 
-    def test_cli_no_log_overrides_config_log_file(self) -> None:
-        """CLI --no-log beats config log_file setting."""
-        d = resolve_log_decision(
-            cli_no_log=True,
-            cli_log=False,
-            cli_log_file=None,
-            config_log=False,
-            config_log_file="/tmp/config.jsonl",
+    def test_cli_no_trace_overrides_config_trace_file(self) -> None:
+        """CLI --no-trace beats config trace_file setting."""
+        d = resolve_trace_decision(
+            cli_no_trace=True,
+            cli_trace=False,
+            cli_trace_file=None,
+            config_trace=False,
+            config_trace_file="/tmp/config.jsonl",
         )
         assert d.enabled is False
 
-    def test_cli_log_file_path_beats_config_path(self) -> None:
-        """CLI --log-file path takes precedence over config log_file."""
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file="/cli/path.jsonl",
-            config_log=False,
-            config_log_file="/config/path.jsonl",
+    def test_cli_trace_file_path_beats_config_path(self) -> None:
+        """CLI --trace-file path takes precedence over config trace_file."""
+        d = resolve_trace_decision(
+            cli_no_trace=False,
+            cli_trace=False,
+            cli_trace_file="/cli/path.jsonl",
+            config_trace=False,
+            config_trace_file="/config/path.jsonl",
         )
         assert d.explicit_path == "/cli/path.jsonl"
 
 
-class TestResolveLogDecisionConfigLayer:
+class TestResolveTraceDecisionConfigLayer:
     """Config layer: lowest priority."""
 
-    def test_config_log_true_enables(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            config_log=True,
-            config_log_file=None,
+    def test_config_trace_true_enables(self) -> None:
+        d = resolve_trace_decision(
+            cli_no_trace=False,
+            cli_trace=False,
+            cli_trace_file=None,
+            config_trace=True,
+            config_trace_file=None,
         )
         assert d.enabled is True
         assert d.explicit_path is None
 
-    def test_config_log_file_enables(self) -> None:
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            config_log=False,
-            config_log_file="/config/trace.jsonl",
+    def test_config_trace_file_enables(self) -> None:
+        d = resolve_trace_decision(
+            cli_no_trace=False,
+            cli_trace=False,
+            cli_trace_file=None,
+            config_trace=False,
+            config_trace_file="/config/trace.jsonl",
         )
         assert d.enabled is True
         assert d.explicit_path == "/config/trace.jsonl"
 
-    def test_config_log_false_does_not_enable(self) -> None:
-        """config_log=False (default) with no other flags → still disabled."""
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=False,
-            cli_log_file=None,
-            config_log=False,
-            config_log_file=None,
+    def test_config_trace_false_does_not_enable(self) -> None:
+        """config_trace=False (default) with no other flags → still disabled."""
+        d = resolve_trace_decision(
+            cli_no_trace=False,
+            cli_trace=False,
+            cli_trace_file=None,
+            config_trace=False,
+            config_trace_file=None,
         )
         assert d.enabled is False
 
 
-class TestResolveLogDecisionPrecedence:
+class TestResolveTraceDecisionPrecedence:
     """Verify the CLI > config-file chain where the two layers disagree."""
 
     def test_path_none_when_only_config_and_enabled_by_cli(self) -> None:
-        """CLI --log (no path) + config log_file → path comes from config."""
-        d = resolve_log_decision(
-            cli_no_log=False,
-            cli_log=True,
-            cli_log_file=None,
-            config_log=False,
-            config_log_file="/config/trace.jsonl",
+        """CLI --trace (no path) + config trace_file → path comes from config."""
+        d = resolve_trace_decision(
+            cli_no_trace=False,
+            cli_trace=True,
+            cli_trace_file=None,
+            config_trace=False,
+            config_trace_file="/config/trace.jsonl",
         )
         assert d.enabled is True
         # CLI enables but provides no path; config provides the path
@@ -201,7 +201,7 @@ class TestResolveLogDecisionPrecedence:
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: resolve_log_file with new enabled/log_file signature
+# Unit tests: resolve_log_file with its enabled/log_file signature
 # ---------------------------------------------------------------------------
 
 
@@ -240,13 +240,13 @@ class TestResolveLogFileNewShape:
         assert result.is_absolute()
         assert result == tmp_path / "out.jsonl"
 
-    def test_trace_preparation_preserves_an_explicit_log_extension(
+    def test_trace_preparation_preserves_an_explicit_file_extension(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from agm.core.log import prepare_trace_log
 
         monkeypatch.chdir(tmp_path)
-        path = prepare_trace_log(command_name="exec", enabled=True, log_file="trace.log")
+        path = prepare_trace_log(command_name="exec", enabled=True, trace_file="trace.log")
         assert path == tmp_path / "trace.log"
 
     def test_unique_flag_differentiates_paths(
@@ -333,7 +333,7 @@ class TestLiveTracePathResolver:
 
 
 # ---------------------------------------------------------------------------
-# CLI parsing: --log flag (typer, cli.py)
+# CLI parsing: --trace flag (typer, cli.py)
 # ---------------------------------------------------------------------------
 
 
@@ -352,41 +352,41 @@ class TestExecLogFlagParsing:
         monkeypatch.setattr(exec_command, "run", fake_run)
         return calls
 
-    def test_log_flag_sets_log_true(
+    def test_trace_flag_sets_trace_true(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
-        result = invoke(runner, ["exec", "--log", str(agl_file)])
+        result = invoke(runner, ["exec", "--trace", str(agl_file)])
         assert result.exit_code == 0
-        assert getattr(recorded_runs[0], "log") is True
+        assert getattr(recorded_runs[0], "trace") is True
 
-    def test_log_and_no_log_mutually_exclusive(
+    def test_trace_and_no_trace_mutually_exclusive(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
-        result = invoke(runner, ["exec", "--log", "--no-log", str(agl_file)])
+        result = invoke(runner, ["exec", "--trace", "--no-trace", str(agl_file)])
         assert result.exit_code != 0
         assert recorded_runs == []
 
-    def test_log_and_log_file_mutually_exclusive(
+    def test_trace_and_trace_file_mutually_exclusive(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
-        result = invoke(runner, ["exec", "--log", "--log-file", "/tmp/x.jsonl", str(agl_file)])
+        result = invoke(runner, ["exec", "--trace", "--trace-file", "/tmp/x.jsonl", str(agl_file)])
         assert result.exit_code != 0
         assert recorded_runs == []
 
-    def test_default_log_is_false(
+    def test_default_trace_is_false(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text("let x = 1\n")
         result = invoke(runner, ["exec", str(agl_file)])
         assert result.exit_code == 0
-        assert getattr(recorded_runs[0], "log") is False
+        assert getattr(recorded_runs[0], "trace") is False
 
 
 class TestReplLogFlagParsing:
@@ -404,29 +404,31 @@ class TestReplLogFlagParsing:
         monkeypatch.setattr(repl_command, "run", fake_run)
         return calls
 
-    def test_log_flag_sets_log_true(self, runner: CliRunner, recorded_runs: list[object]) -> None:
-        result = invoke(runner, ["repl", "--log"])
+    def test_trace_flag_sets_trace_true(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        result = invoke(runner, ["repl", "--trace"])
         assert result.exit_code == 0
-        assert getattr(recorded_runs[0], "log") is True
+        assert getattr(recorded_runs[0], "trace") is True
 
-    def test_log_and_no_log_mutually_exclusive(
+    def test_trace_and_no_trace_mutually_exclusive(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
-        result = invoke(runner, ["repl", "--log", "--no-log"])
+        result = invoke(runner, ["repl", "--trace", "--no-trace"])
         assert result.exit_code != 0
         assert recorded_runs == []
 
-    def test_log_and_log_file_mutually_exclusive(
+    def test_trace_and_trace_file_mutually_exclusive(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
-        result = invoke(runner, ["repl", "--log", "--log-file", "/tmp/x.jsonl"])
+        result = invoke(runner, ["repl", "--trace", "--trace-file", "/tmp/x.jsonl"])
         assert result.exit_code != 0
         assert recorded_runs == []
 
-    def test_default_log_is_false(self, runner: CliRunner, recorded_runs: list[object]) -> None:
+    def test_default_trace_is_false(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         result = invoke(runner, ["repl"])
         assert result.exit_code == 0
-        assert getattr(recorded_runs[0], "log") is False
+        assert getattr(recorded_runs[0], "trace") is False
 
 
 # ---------------------------------------------------------------------------
@@ -437,23 +439,23 @@ class TestReplLogFlagParsing:
 def _exec_args(
     command: str,
     *,
-    log: bool = False,
-    no_log: bool = False,
-    log_file: str | None = None,
+    trace: bool = False,
+    no_trace: bool = False,
+    trace_file: str | None = None,
 ) -> ExecArgs:
     return ExecArgs(
         file=None,
         command=command,
         argument_tokens=[],
         strict_json=None,
-        log=log,
-        no_log=no_log,
-        log_file=log_file,
+        trace=trace,
+        no_trace=no_trace,
+        trace_file=trace_file,
     )
 
 
 class TestIntegrationDefaultNoTrace:
-    """Default run (no log flags) writes NO trace file."""
+    """Default run (no trace flags) writes NO trace file."""
 
     def test_default_exec_writes_no_trace(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -467,37 +469,39 @@ class TestIntegrationDefaultNoTrace:
 
 
 class TestIntegrationLogFlagWritesTrace:
-    """--log flag causes a trace file to be written."""
+    """--trace flag causes a trace file to be written."""
 
-    def test_log_flag_creates_trace(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        _isolated_home(monkeypatch, tmp_path)
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _: None)
-        exec_command.run(_exec_args('print "hello"', log=True))
-        agent_files = tmp_path / ".agent-files"
-        assert agent_files.exists()
-        log_files = list(agent_files.glob("exec-*.jsonl"))
-        assert len(log_files) == 1
-
-    def test_explicit_log_file_path_used(
+    def test_trace_flag_creates_trace(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _isolated_home(monkeypatch, tmp_path)
-        log_path = tmp_path / "my_trace.jsonl"
-        exec_command.run(_exec_args('print "hi"', log_file=str(log_path)))
-        assert log_path.exists()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _: None)
+        exec_command.run(_exec_args('print "hello"', trace=True))
+        agent_files = tmp_path / ".agent-files"
+        assert agent_files.exists()
+        trace_files = list(agent_files.glob("exec-*.jsonl"))
+        assert len(trace_files) == 1
+
+    def test_explicit_trace_file_path_used(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+        trace_path = tmp_path / "my_trace.jsonl"
+        exec_command.run(_exec_args('print "hi"', trace_file=str(trace_path)))
+        assert trace_path.exists()
 
 
 class TestIntegrationConfigLogTrue:
-    """[exec] log=true in config causes a trace file to be written."""
+    """[exec] trace=true in config causes a trace file to be written."""
 
-    def test_config_log_true_creates_trace(
+    def test_config_trace_true_creates_trace(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         home = tmp_path / "home"
         home.mkdir()
         (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text("[exec]\nlog = true\n")
+        (home / ".agm" / "config.toml").write_text("[exec]\ntrace = true\n")
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.delenv("AGM_PROJECT_DIR", raising=False)
         monkeypatch.chdir(tmp_path)
@@ -505,37 +509,37 @@ class TestIntegrationConfigLogTrue:
         exec_command.run(_exec_args('print "hello"'))
         agent_files = tmp_path / ".agent-files"
         assert agent_files.exists()
-        log_files = list(agent_files.glob("exec-*.jsonl"))
-        assert len(log_files) == 1
+        trace_files = list(agent_files.glob("exec-*.jsonl"))
+        assert len(trace_files) == 1
 
-    def test_config_log_file_creates_trace_at_path(
+    def test_config_trace_file_creates_trace_at_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         home = tmp_path / "home"
         home.mkdir()
         (home / ".agm").mkdir()
-        log_path = tmp_path / "config_trace.jsonl"
-        (home / ".agm" / "config.toml").write_text(f"[exec]\nlog-file = {str(log_path)!r}\n")
+        trace_path = tmp_path / "config_trace.jsonl"
+        (home / ".agm" / "config.toml").write_text(f"[exec]\ntrace-file = {str(trace_path)!r}\n")
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.delenv("AGM_PROJECT_DIR", raising=False)
         exec_command.run(_exec_args('print "hello"'))
-        assert log_path.exists()
+        assert trace_path.exists()
 
 
 class TestIntegrationNoLogOverridesConfig:
-    """--no-log overrides config log=true."""
+    """--no-trace overrides config trace=true."""
 
-    def test_no_log_overrides_config_log_true(
+    def test_no_trace_overrides_config_trace_true(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         home = tmp_path / "home"
         home.mkdir()
         (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text("[exec]\nlog = true\n")
+        (home / ".agm" / "config.toml").write_text("[exec]\ntrace = true\n")
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.delenv("AGM_PROJECT_DIR", raising=False)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _: None)
-        exec_command.run(_exec_args('print "hello"', no_log=True))
+        exec_command.run(_exec_args('print "hello"', no_trace=True))
         agent_files = tmp_path / ".agent-files"
-        assert not agent_files.exists(), "--no-log must override config log=true"
+        assert not agent_files.exists(), "--no-trace must override config trace=true"

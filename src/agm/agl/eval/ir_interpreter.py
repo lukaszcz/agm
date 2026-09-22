@@ -602,13 +602,13 @@ class IrInterpreter:
             )
             self._builtin_host_settings["default-agent"] = default_agent
             self._check_default_agent_dispatchable(default_agent)
-        log_file = self._builtin_host_settings.get("log-file")
-        # ``log-file`` always has a declared default (unlike ``default-agent``),
+        trace_file = self._builtin_host_settings.get("trace-file")
+        # ``trace-file`` always has a declared default (unlike ``default-agent``),
         # so it is always present here.
-        assert isinstance(log_file, RecordValue)
-        self._builtin_host_settings["log-file"] = restamp_engine_setting(
-            "log-file",
-            log_file,
+        assert isinstance(trace_file, RecordValue)
+        self._builtin_host_settings["trace-file"] = restamp_engine_setting(
+            "trace-file",
+            trace_file,
             from_table=NO_BUILTIN_DECLARATIONS,
             to_table=self._program.builtin_nominals,
         )
@@ -2118,7 +2118,7 @@ class IrInterpreter:
         The runtime-live keys route through ``_apply_config_effect`` so the
         live effect (strict-json mode, shell timeout) takes hold from
         the write onward; the host-consumed keys update their register.
-        Writes to the ``log``/``log-file`` trace-register pair additionally
+        Writes to the ``trace``/``trace-file`` register pair additionally
         reconfigure the live trace service when a host reconfigurer is present;
         ``default-agent`` remains a register-only value.
         """
@@ -2141,7 +2141,7 @@ class IrInterpreter:
             isinstance(value, RecordValue)
             and option_text(value, nominals=self._program.builtin_nominals) is not None,
         ):
-            self._builtin_host_settings["log"] = BoolValue(True)
+            self._builtin_host_settings["trace"] = BoolValue(True)
         if self._host_reconfigurer is None or name not in TRACE_ENGINE_KEYS:
             return
         try:
@@ -2153,17 +2153,17 @@ class IrInterpreter:
     def _reconfigure_host_service(self) -> None:
         """Reflect a host-consumed register write into the live host service.
 
-        ``log``/``log-file`` recompute the trace destination from the current
-        register pair (either write repoints the same trace store).
+        ``trace``/``trace-file`` recompute the trace destination from the
+        current register pair (either write repoints the same trace store).
         """
         assert self._host_reconfigurer is not None
-        log = self._builtin_host_settings["log"]
-        assert isinstance(log, BoolValue)
-        log_file_reg = self._builtin_host_settings["log-file"]
-        assert isinstance(log_file_reg, RecordValue)
+        trace = self._builtin_host_settings["trace"]
+        assert isinstance(trace, BoolValue)
+        trace_file_reg = self._builtin_host_settings["trace-file"]
+        assert isinstance(trace_file_reg, RecordValue)
         self._host_reconfigurer.reconfigure_trace(
-            enabled=log.value,
-            log_file=option_text(log_file_reg, nominals=self._program.builtin_nominals),
+            enabled=trace.value,
+            trace_file=option_text(trace_file_reg, nominals=self._program.builtin_nominals),
         )
 
     # ------------------------------------------------------------------

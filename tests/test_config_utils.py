@@ -765,7 +765,7 @@ def test_load_refine_config_max_steps_unlimited(tmp_path: Path) -> None:
     assert refine.no_max_steps is False
 
 
-def test_config_path_interpolation_runs_once_and_resolves_program_log_file(
+def test_config_path_interpolation_runs_once_and_resolves_program_trace_file(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
@@ -775,14 +775,14 @@ def test_config_path_interpolation_runs_once_and_resolves_program_log_file(
     (config_dir / "%{PROMPT_DIR}" / "prompt.md").write_text("prompt")
     (config_dir / "config.toml").write_text(
         'version = 1\n[loop]\nprompt_file = "\\\\%{PROMPT_DIR}/prompt.md"\n'
-        '[program]\nlog-file = "program.log"\n',
+        '[program]\ntrace-file = "program.log"\n',
         encoding="utf-8",
     )
 
     merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
 
     assert merged["loop"]["prompt_file"] == str(config_dir / "%{PROMPT_DIR}" / "prompt.md")
-    assert merged["program"]["log-file"] == str(tmp_path / "program.log")
+    assert merged["program"]["trace-file"] == str(tmp_path / "program.log")
 
 
 def test_a_later_layer_replaces_a_key_whose_kind_changed(tmp_path: Path) -> None:
@@ -805,11 +805,11 @@ def test_a_later_layer_replaces_a_key_whose_kind_changed(tmp_path: Path) -> None
     assert merged["agent"] == {"command": "codex"}
 
 
-def test_exec_log_file_expands_tilde_and_interpolates(
+def test_exec_trace_file_expands_tilde_and_interpolates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pins the pre-existing [exec] log-file behavior: tilde expansion and
+    """Pins the [exec] trace-file behavior: tilde expansion and
     ``%{name}`` interpolation both apply, same as every other path field."""
     home_dir = tmp_path / "user-home"
     home_dir.mkdir()
@@ -818,14 +818,14 @@ def test_exec_log_file_expands_tilde_and_interpolates(
 
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[exec]\nlog-file = "~/%{LOG_SUBDIR}/agm.log"\n')
+    (home / ".agm" / "config.toml").write_text('[exec]\ntrace-file = "~/%{LOG_SUBDIR}/agm.log"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
 
     merged = load_merged_config(home=home, proj_dir=None, cwd=cwd)
 
-    assert merged["exec"]["log-file"] == str(home_dir / "logs" / "agm.log")
+    assert merged["exec"]["trace-file"] == str(home_dir / "logs" / "agm.log")
 
 
 def test_review_log_file_expands_tilde(

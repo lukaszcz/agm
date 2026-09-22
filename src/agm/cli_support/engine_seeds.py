@@ -70,7 +70,7 @@ def _decode_engine_value(
 ) -> "Value":
     """Decode one engine value, printing an origin-tagged error and exiting 1 on failure.
 
-    Shared by the ordinary per-key seeding loop and the derived ``log`` rule,
+    Shared by the ordinary per-key seeding loop and the derived ``trace`` rule,
     so both go through one decode-failure contract (message and exit code).
     """
     from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
@@ -88,8 +88,8 @@ class EngineSeedTiers:
 
     The three tiers are independent: ``upper``/``lower`` always reflect the
     config tables, whether or not ``cli`` also names the same key — this
-    matters for ``log-file``, where ``--no-log-file`` clears only the CLI
-    seed and must not hide a config-table path from the derived ``log`` rule
+    matters for ``trace-file``, where ``--no-trace-file`` clears only the CLI
+    seed and must not hide a config-table path from the derived ``trace`` rule
     (see :meth:`merged`). ``cli`` still wins the actual seeded value for a
     key it names.
     """
@@ -97,7 +97,7 @@ class EngineSeedTiers:
     cli: "Mapping[str, Value]"
     upper: "Mapping[str, Value]"
     lower: "Mapping[str, Value]"
-    cli_log: "tuple[object, str] | None"
+    cli_trace: "tuple[object, str] | None"
     _type_table: "TypeTable" = field(repr=False)
 
     def config_merged(self, middle: "Mapping[str, Value] | None" = None) -> "dict[str, Value]":
@@ -106,63 +106,63 @@ class EngineSeedTiers:
         *middle*: already-decoded engine settings ranked between ``lower``
         and ``upper`` (a selected program's own ``@config`` entries, restamped
         onto the standard identity by the caller). Exposed so a host reads
-        the same config-only view :meth:`merged` derives ``log`` from — e.g.
+        the same config-only view :meth:`merged` derives ``trace`` from — e.g.
         to resolve its own trace-file decision — without recomputing it.
         """
         mid: "Mapping[str, Value]" = middle if middle is not None else {}
         return {**self.lower, **mid, **self.upper}
 
     def merged(self, middle: "Mapping[str, Value] | None" = None) -> "dict[str, Value]":
-        """Flatten to one mapping: ``lower`` < *middle* < ``upper`` < ``cli``, plus derived ``log``.
+        """Flatten to one mapping: ``lower`` < *middle* < ``upper`` < ``cli``, plus ``trace``.
 
         *middle*: already-decoded engine settings ranked between ``lower``
-        and ``upper``. The derived ``log`` setting is resolved from the
+        and ``upper``. The derived ``trace`` setting is resolved from the
         config-only merge (``cli`` excluded, except for its own fast path) —
-        see :meth:`_resolve_log`.
+        see :meth:`_resolve_trace`.
         """
         config_result = self.config_merged(middle)
         result = {**config_result, **self.cli}
-        log = self._resolve_log(config_result)
-        if log is not None:
-            result["log"] = log
+        trace = self._resolve_trace(config_result)
+        if trace is not None:
+            result["trace"] = trace
         return result
 
-    def _resolve_log(self, config_result: "Mapping[str, Value]") -> "Value | None":
-        """Recompute the derived ``log`` setting.
+    def _resolve_trace(self, config_result: "Mapping[str, Value]") -> "Value | None":
+        """Recompute the derived ``trace`` setting.
 
-        An explicit CLI ``log``, or a non-``None`` CLI ``log-file``, wins
-        outright. Otherwise ``log`` is derived from *config_result* alone
+        An explicit CLI ``trace``, or a non-``None`` CLI ``trace-file``, wins
+        outright. Otherwise ``trace`` is derived from *config_result* alone
         (``lower``/*middle*/``upper``, ``cli`` excluded): when it names
-        ``log`` or ``log-file`` at all, ``log`` is true iff its ``log`` is
-        true or its ``log-file`` resolves to a real path (``Some``) — each
+        ``trace`` or ``trace-file`` at all, ``trace`` is true iff its ``trace``
+        is true or its ``trace-file`` resolves to a real path (``Some``) — each
         key independently carrying whichever tier won that merge. Left
-        unconfigured everywhere, ``log`` stays absent (``None``).
+        unconfigured everywhere, ``trace`` stays absent (``None``).
 
         Excluding ``cli`` here (beyond its own fast path) is deliberate:
-        ``--no-log-file`` clears only the CLI seed, not a trace a config
+        ``--no-trace-file`` clears only the CLI seed, not a trace a config
         table independently establishes.
         """
-        if self.cli_log is not None:
-            raw, origin = self.cli_log
-        elif "log" in config_result or "log-file" in config_result:
+        if self.cli_trace is not None:
+            raw, origin = self.cli_trace
+        elif "trace" in config_result or "trace-file" in config_result:
             from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
             from agm.agl.runtime.option import option_text
             from agm.agl.semantics.values import BoolValue, RecordValue
 
-            log_value = config_result.get("log")
-            is_log_true = isinstance(log_value, BoolValue) and log_value.value
-            log_file_value = config_result.get("log-file")
-            log_file_path = (
-                option_text(log_file_value, nominals=NO_BUILTIN_DECLARATIONS)
-                if isinstance(log_file_value, RecordValue)
+            trace_value = config_result.get("trace")
+            is_trace_true = isinstance(trace_value, BoolValue) and trace_value.value
+            trace_file_value = config_result.get("trace-file")
+            trace_file_path = (
+                option_text(trace_file_value, nominals=NO_BUILTIN_DECLARATIONS)
+                if isinstance(trace_file_value, RecordValue)
                 else None
             )
-            raw = is_log_true or log_file_path is not None
-            origin = "log/log-file configuration"
+            raw = is_trace_true or trace_file_path is not None
+            origin = "trace/trace-file configuration"
         else:
             return None
 
-        return _decode_engine_value("log", raw, origin, self._type_table)
+        return _decode_engine_value("trace", raw, origin, self._type_table)
 
 
 def build_host_engine_seeds(
@@ -177,14 +177,14 @@ def build_host_engine_seeds(
     ``cli`` holds every explicitly supplied CLI value; ``upper`` holds every
     *primary_table* value; ``lower`` holds every *fallback_table* value not
     already covered by *primary_table*. A table value the CLI overrides is
-    not decoded, except ``log-file``, which the derived ``log`` rule still
+    not decoded, except ``trace-file``, which the derived ``trace`` rule still
     reads from the config tiers. A setting
     left to its default in every source stays absent from every tier, so a
     ``builtin var`` initializer supplies it instead of being suppressed by a
     host-side floor. ``cli_values`` contains only explicitly supplied CLI
     values; its present ``None`` values represent an explicit empty
-    ``Option``. ``log`` is seeded like any other key here;
-    :meth:`EngineSeedTiers.merged` recomputes it once the ``log-file``
+    ``Option``. ``trace`` is seeded like any other key here;
+    :meth:`EngineSeedTiers.merged` recomputes it once the ``trace-file``
     implication and any caller-supplied middle tier are folded in.
 
     Every key, ``default-agent`` included, decodes through
@@ -209,9 +209,9 @@ def build_host_engine_seeds(
             cli[spec.name] = _decode_engine_value(
                 spec.name, cli_values[spec.name], f"--{spec.name}", type_table
             )
-            # An overridden table value is never decoded, except ``log-file``:
-            # ``--no-log-file`` leaves a configured trace path enabling ``log``.
-            if spec.name != "log-file":
+            # An overridden table value is never decoded, except ``trace-file``:
+            # ``--no-trace-file`` leaves a configured trace path enabling ``trace``.
+            if spec.name != "trace-file":
                 continue
         if spec.name in primary_table:
             tier = upper
@@ -227,13 +227,13 @@ def build_host_engine_seeds(
                 spec.name, value, f"configuration key {spec.name}", type_table
             )
 
-    if "log" in cli_values:
-        cli_log: tuple[object, str] | None = (cli_values["log"], "--log")
-    elif cli_values.get("log-file") is not None:
-        cli_log = (True, "--log-file")
+    if "trace" in cli_values:
+        cli_trace: tuple[object, str] | None = (cli_values["trace"], "--trace")
+    elif cli_values.get("trace-file") is not None:
+        cli_trace = (True, "--trace-file")
     else:
-        cli_log = None
+        cli_trace = None
 
     return EngineSeedTiers(
-        cli=cli, upper=upper, lower=lower, cli_log=cli_log, _type_table=type_table
+        cli=cli, upper=upper, lower=lower, cli_trace=cli_trace, _type_table=type_table
     )

@@ -141,12 +141,12 @@ def _assert_setting(session: ReplSession, key: str, expected: object) -> None:
 _PERSISTED_WRITES = [
     pytest.param("strict-json", "true", BoolValue(True), id="strict-json"),
     pytest.param("timeout", 'Some("45s")', ("Some", "value", TextValue("45s")), id="timeout"),
-    pytest.param("log", "true", BoolValue(True), id="log"),
+    pytest.param("trace", "true", BoolValue(True), id="trace"),
     pytest.param(
-        "log-file",
+        "trace-file",
         'Some("trace.jsonl")',
         ("Some", "value", TextValue("trace.jsonl")),
-        id="log-file",
+        id="trace-file",
     ),
     pytest.param(
         "default-agent",
@@ -281,8 +281,8 @@ def _host_seeded_session(
     *,
     strict_json: bool | None = None,
     timeout: str | None = None,
-    log: bool | None = None,
-    log_file: str | None = None,
+    trace: bool | None = None,
+    trace_file: str | None = None,
     default_agent: str | None = None,
 ) -> ReplSession:
     """Build a session with explicit host seeds ONLY for the given keys.
@@ -296,10 +296,10 @@ def _host_seeded_session(
         raw["strict-json"] = strict_json
     if timeout is not None:
         raw["timeout"] = timeout
-    if log is not None:
-        raw["log"] = log
-    if log_file is not None:
-        raw["log-file"] = log_file
+    if trace is not None:
+        raw["trace"] = trace
+    if trace_file is not None:
+        raw["trace-file"] = trace_file
     engine_base = build_engine_config_seeds(raw)
     if default_agent is not None:
         engine_base["default-agent"] = agent_value("AgentCommand", command=default_agent)
@@ -327,8 +327,8 @@ def declared_defaults_stdlib(tmp_path_factory: pytest.TempPathFactory) -> Path:
         'builtin var default-agent: Agent = AgentCommand("declared")\n'
         "builtin var strict-json: bool = true\n"
         'builtin var timeout: Option[text] = Option[text]::Some("2s")\n'
-        "builtin var log: bool = true\n"
-        'builtin var log-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
+        "builtin var trace: bool = true\n"
+        'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
         encoding="utf-8",
     )
     _copy_core_and_option(config_path.parent)
@@ -343,13 +343,13 @@ _HOST_SEED_PRECEDENCE = [
         ("Some", "value", TextValue("3s")),
         id="timeout",
     ),
-    pytest.param({"log": True}, "log", "false", BoolValue(True), id="log"),
+    pytest.param({"trace": True}, "trace", "false", BoolValue(True), id="trace"),
     pytest.param(
-        {"log_file": "host.jsonl"},
-        "log-file",
+        {"trace_file": "host.jsonl"},
+        "trace-file",
         'Some("written.jsonl")',
         ("Some", "value", TextValue("host.jsonl")),
-        id="log-file",
+        id="trace-file",
     ),
     pytest.param(
         {"default_agent": "host"},
@@ -460,12 +460,12 @@ class TestSeedGovernsRuntimeEffectOverDriverArgument:
 _DECLARED_DEFAULT_PRECEDENCE = [
     pytest.param("strict-json", "false", BoolValue(True), id="strict-json"),
     pytest.param("timeout", 'Some("99s")', ("Some", "value", TextValue("2s")), id="timeout"),
-    pytest.param("log", "false", BoolValue(True), id="log"),
+    pytest.param("trace", "false", BoolValue(True), id="trace"),
     pytest.param(
-        "log-file",
+        "trace-file",
         'Some("written.jsonl")',
         ("Some", "value", TextValue("declared.jsonl")),
-        id="log-file",
+        id="trace-file",
     ),
     pytest.param(
         "default-agent",
@@ -570,7 +570,7 @@ class TestResetRestoresMixedSeedOrigins:
     into one ``_engine_seed``, and the three persisted-register fields into
     one ``_current``) put most at risk: a single session seeded with an
     explicit CLI/host value for one key (``timeout``) AND a std/config
-    declared default LEARNED FROM SOURCE for another (``log-file``), with both
+    declared default LEARNED FROM SOURCE for another (``trace-file``), with both
     then overwritten by a source write, must have one ``:reset`` restore both
     together from the same seed map.
     """
@@ -585,7 +585,7 @@ class TestResetRestoresMixedSeedOrigins:
             "import std/prelude::{Option, Agent}\n"
             'builtin var default-agent: Agent = AgentCommand("declared")\n'
             'builtin var timeout: Option[text] = Option[text]::Some("2s")\n'
-            'builtin var log-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
+            'builtin var trace-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
             encoding="utf-8",
         )
         _copy_core_and_option(config_path.parent)
@@ -595,15 +595,15 @@ class TestResetRestoresMixedSeedOrigins:
         )
 
         _ok(s, "import std/config")
-        # log-file's declared default is now learned from source (recorded
+        # trace-file's declared default is now learned from source (recorded
         # into the seed); write over both keys before resetting.
         _ok(s, 'std/config::timeout := Some("9s")')
-        _ok(s, 'std/config::log-file := Some("written.jsonl")')
+        _ok(s, 'std/config::trace-file := Some("written.jsonl")')
         s.reset()
 
         assert s._shell_exec_timeout == 5.0
         _ok(s, "import std/config")
-        value = _read(s, "log-file")
+        value = _read(s, "trace-file")
         assert isinstance(value, RecordValue)
         assert value.fields["value"] == TextValue("declared.jsonl")
 
@@ -625,34 +625,34 @@ class TestPartialFailureDiscipline:
 
 
 class TestLiveHostReconfiguration:
-    def test_log_file_write_repoints_later_repl_entries(self, tmp_path: Path) -> None:
+    def test_trace_file_write_repoints_later_repl_entries(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
         policy = HostSettingsPolicy(
-            resolve_trace_path=lambda enabled, log_file: (
-                Path(log_file) if enabled or log_file is not None else None
+            resolve_trace_path=lambda enabled, trace_file: (
+                Path(trace_file) if enabled or trace_file is not None else None
             ),
         )
         s = _session(host_settings_policy=policy)
         _ok(s, "import std/config")
-        _ok(s, f'std/config::log-file := Some("{trace_path}")')
+        _ok(s, f'std/config::trace-file := Some("{trace_path}")')
         _ok(s, 'print "later"')
 
         assert trace_path.exists()
         assert '"rendered": "later"' in trace_path.read_text(encoding="utf-8")
 
-    def test_log_false_settles_into_no_log_for_later_entries(self, tmp_path: Path) -> None:
-        """A deliberate ``log := false`` keeps later entries untraced."""
+    def test_trace_false_settles_into_no_trace_for_later_entries(self, tmp_path: Path) -> None:
+        """A deliberate ``trace := false`` keeps later entries untraced."""
         trace_path = tmp_path / "trace.jsonl"
         policy = HostSettingsPolicy(
-            resolve_trace_path=lambda enabled, log_file: (
-                (Path(log_file) if log_file is not None else trace_path) if enabled else None
+            resolve_trace_path=lambda enabled, trace_file: (
+                (Path(trace_file) if trace_file is not None else trace_path) if enabled else None
             ),
         )
         s = _session(host_settings_policy=policy, trace_path=trace_path)
         _ok(s, "import std/config")
-        _ok(s, "std/config::log := true")
+        _ok(s, "std/config::trace := true")
         _ok(s, 'print "traced"')
-        _ok(s, "std/config::log := false")
+        _ok(s, "std/config::trace := false")
 
         result = _ok(s, 'print "untraced"')
         assert result.trace_path is None
@@ -671,8 +671,8 @@ def test_reset_uses_declared_live_engine_defaults(tmp_path: Path) -> None:
         'builtin var default-agent: Agent = AgentCommand("declared")\n'
         "builtin var strict-json: bool = true\n"
         'builtin var timeout: Option[text] = Option[text]::Some("2s")\n'
-        "builtin var log: bool = false\n"
-        "builtin var log-file: Option[text] = Option[text]::None\n"
+        "builtin var trace: bool = false\n"
+        "builtin var trace-file: Option[text] = Option[text]::None\n"
     )
     _copy_core_and_option(config_path.parent)
     session = ReplSession(stdlib_root=stdlib_root, default_stdlib=False)

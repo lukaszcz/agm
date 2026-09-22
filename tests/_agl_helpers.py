@@ -268,7 +268,7 @@ def program_config_engine_seeds(
     Mirrors ``agm.commands.exec_program``'s own split of
     ``ArgumentPreflight.program_config`` by ``is_engine_builtin_var_key``,
     restamped onto the executable's own nominal identity, so a scenario
-    harness feeds an engine setting from ``@config`` (``std/config::log``,
+    harness feeds an engine setting from ``@config`` (``std/config::trace``,
     ``timeout``, ...) the same way the real ``agm exec`` host does. A module
     parameter's own ``@config`` entries need no such seam: preflight already
     folds them into ``param_seeds``.

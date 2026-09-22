@@ -52,10 +52,10 @@ _MODULES: dict[str, str] = {
         "import std/option::{Option}\n"
         "\n"
         'builtin var default-agent: Agent = AgentClaude("sonnet", "medium")\n'
-        "builtin var log: bool = false\n"
-        "builtin var log-file: Option[text] = None\n"
         "builtin var strict-json: bool = false\n"
         "builtin var timeout: Option[text] = None\n"
+        "builtin var trace: bool = false\n"
+        "builtin var trace-file: Option[text] = None\n"
     ),
     "io.agl": ("builtin def print[T](value: T) -> unit\nbuiltin def render[T](value: T) -> text\n"),
     "exec.agl": (

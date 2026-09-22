@@ -2681,20 +2681,20 @@ class TestIrExec:
             def __init__(self) -> None:
                 self.calls = 0
 
-            def reconfigure_trace(self, *, enabled: bool, log_file: str | None) -> None:
-                del enabled, log_file
+            def reconfigure_trace(self, *, enabled: bool, trace_file: str | None) -> None:
+                del enabled, trace_file
                 self.calls += 1
                 if self.calls > 1:
                     raise RuntimeError("trace service unavailable")
 
         reconfigurer = Reconfigurer()
-        program = _make_program((IrBuiltinStore(_LOC, "log", IrConstBool(_LOC, True)),))
+        program = _make_program((IrBuiltinStore(_LOC, "trace", IrConstBool(_LOC, True)),))
         interpreter = IrInterpreter(program, host_reconfigurer=reconfigurer)
 
         with pytest.raises(RuntimeError, match="trace service unavailable"):
             interpreter.run()
 
-        assert interpreter.builtin_host_settings["log"] == BoolValue(False)
+        assert interpreter.builtin_host_settings["trace"] == BoolValue(False)
 
     def test_ir_exec_spawn_error_records_exec_trace(self, tmp_path: pathlib.Path) -> None:
         """A shell spawn failure still records the attempted exec command."""

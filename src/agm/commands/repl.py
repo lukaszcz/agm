@@ -57,7 +57,7 @@ from agm.core.cleanup import preserve_primary_error
 from agm.core.log import (
     LiveTracePathResolver,
     prepare_trace_log_from_decision,
-    resolve_log_decision,
+    resolve_trace_decision,
 )
 from agm.core.toml import toml_dict
 from agm.packages.activation import select_package_roots
@@ -83,25 +83,25 @@ def run(args: ReplArgs) -> None:
         args.max_call_depth if args.max_call_depth is not None else config.max_call_depth
     )
 
-    # Resolve the CLI > config logging decision ONCE: it both drives the trace
-    # file prepared here and seeds the readable ``log``/``log-file`` registers
-    # below, exactly as ``agm exec`` does.
-    log_decision = resolve_log_decision(
-        cli_no_log=args.no_log,
-        cli_log=args.log,
-        cli_log_file=args.log_file,
-        config_log=config.log,
-        config_log_file=config.log_file,
+    # Resolve the CLI > config trace decision ONCE: it both drives the trace
+    # file prepared here and seeds the readable ``trace``/``trace-file``
+    # registers below, exactly as ``agm exec`` does.
+    trace_decision = resolve_trace_decision(
+        cli_no_trace=args.no_trace,
+        cli_trace=args.trace,
+        cli_trace_file=args.trace_file,
+        config_trace=config.trace,
+        config_trace_file=config.trace_file,
     )
 
     # Resolve and validate the trace log file up front so an unwritable
-    # ``--log-file`` exits 1 BEFORE the loop starts rather than crashing
+    # ``--trace-file`` exits 1 BEFORE the loop starts rather than crashing
     # mid-session.  ``--dry-run`` is side-effect-free (no eval, no trace),
     # mirroring ``agm exec``.
     trace_path = (
         None
         if dry_run.enabled()
-        else prepare_trace_log_from_decision(log_decision, command_name="repl")
+        else prepare_trace_log_from_decision(trace_decision, command_name="repl")
     )
 
     runner_agent = value_driven_agent_factory(idle_timeout=config.timeout)
@@ -136,12 +136,12 @@ def run(args: ReplArgs) -> None:
     cli_values: dict[str, object | None] = {}
     if args.strict_json is not None:
         cli_values["strict-json"] = args.strict_json
-    if args.no_log:
-        cli_values["log"] = False
-    elif args.log:
-        cli_values["log"] = True
-    if args.log_file is not None:
-        cli_values["log-file"] = args.log_file
+    if args.no_trace:
+        cli_values["trace"] = False
+    elif args.trace:
+        cli_values["trace"] = True
+    if args.trace_file is not None:
+        cli_values["trace-file"] = args.trace_file
     if args.default_agent is not None:
         cli_values["default-agent"] = args.default_agent
 

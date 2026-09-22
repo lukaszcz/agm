@@ -303,18 +303,18 @@ class TestQualifiedConfigKeys:
         (home_config / "lower.log").touch()
         (cwd_config / "higher.log").touch()
         (home_config / "config.toml").write_text(
-            "[judge.review]\nlog-file = 'lower.log'\n", encoding="utf-8"
+            "[judge.review]\ntrace-file = 'lower.log'\n", encoding="utf-8"
         )
         (cwd_config / "config.toml").write_text(
-            "[\"review-tools/judge\".review]\nlog-file = 'higher.log'\n",
+            "[\"review-tools/judge\".review]\ntrace-file = 'higher.log'\n",
             encoding="utf-8",
         )
-        key = QualifiedConfigKey(("review-tools", "judge"), ("review",), "log-file")
+        key = QualifiedConfigKey(("review-tools", "judge"), ("review",), "trace-file")
 
         config = load_general_config(home=home, proj_dir=None, cwd=cwd)
 
         assert config.layers == (
-            {"judge": {"review": {"log-file": str(home_config / "lower.log")}}},
-            {"review-tools/judge": {"review": {"log-file": str(cwd_config / "higher.log")}}},
+            {"judge": {"review": {"trace-file": str(home_config / "lower.log")}}},
+            {"review-tools/judge": {"review": {"trace-file": str(cwd_config / "higher.log")}}},
         )
         assert resolve_qualified_values(config, (key,)) == {key: str(cwd_config / "higher.log")}

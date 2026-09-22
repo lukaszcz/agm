@@ -72,7 +72,7 @@ class EntryResult:
         ``True`` iff there are no error diagnostics AND no runtime error.
     ``trace_path``
         Path of the JSONL trace file the entry's records were appended to, or
-        ``None`` when tracing is disabled (no ``--log-file``) or for a
+        ``None`` when tracing is disabled (no ``--trace-file``) or for a
         ``check_only`` (dry-run) entry, which writes no trace.
     ``installed``
         Names installed before a failed entry stopped. Empty for pre-execution

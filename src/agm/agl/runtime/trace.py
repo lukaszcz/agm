@@ -94,7 +94,7 @@ class TraceStore:
         self._path = None
 
     def activate(self, path: Path | None) -> None:
-        """Repoint the store according to the current live log settings."""
+        """Repoint the store according to the current live trace settings."""
         if not self._disabled:
             self._path = path
 

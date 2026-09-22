@@ -179,17 +179,17 @@ def test_hidden_param_remains_resolvable_and_is_marked_hidden() -> None:
 
 
 def test_exec_and_registered_host_surfaces_shadow_different_bare_names() -> None:
-    log = _param("A/logging", "log")
+    trace = _param("A/logging", "trace")
     call_depth = _param("A/logging", "max-call-depth", IntType())
-    exec_surface = build_param_surface(EXEC_RESERVED_FLAGS, _program(), (log, call_depth))
+    exec_surface = build_param_surface(EXEC_RESERVED_FLAGS, _program(), (trace, call_depth))
     registered_surface = build_param_surface(
-        REGISTERED_RESERVED_FLAGS, _program(), (log, call_depth)
+        REGISTERED_RESERVED_FLAGS, _program(), (trace, call_depth)
     )
 
-    assert exec_surface.shadowed_bare == frozenset({"log", "max-call-depth"})
-    assert registered_surface.shadowed_bare == frozenset({"log", "max-call-depth"})
-    assert "log" not in _entry(exec_surface, log).spellings
-    assert "log" not in _entry(registered_surface, log).spellings
+    assert exec_surface.shadowed_bare == frozenset({"trace", "max-call-depth"})
+    assert registered_surface.shadowed_bare == frozenset({"trace", "max-call-depth"})
+    assert "trace" not in _entry(exec_surface, trace).spellings
+    assert "trace" not in _entry(registered_surface, trace).spellings
     assert "max-call-depth" not in _entry(exec_surface, call_depth).spellings
     assert "max-call-depth" not in _entry(registered_surface, call_depth).spellings
 

@@ -29,7 +29,7 @@ from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import write_file_program
 from tests._package_helpers import install_directory
 from tests.test_cli_registered_commands import invoke
-from tests.test_exec_command import _config_home, _exec_args_no_log, _spy_runtime
+from tests.test_exec_command import _config_home, _exec_args_no_trace, _spy_runtime
 
 
 class TestConfigParamPrecedence:
@@ -42,7 +42,7 @@ class TestConfigParamPrecedence:
             "@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = "
             "print(count)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file, argument_tokens=["--count", "5"]))
+        exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--count", "5"]))
         assert capsys.readouterr().out == "5\n"
 
     def test_opt_env_beats_config(
@@ -56,7 +56,7 @@ class TestConfigParamPrecedence:
             "program def main() -> unit = print(count)\n",
         )
         monkeypatch.setenv("COUNT_ENV", "7")
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == "7\n"
 
     def test_program_route_beats_config(
@@ -69,7 +69,7 @@ class TestConfigParamPrecedence:
             "print(count)\n",
         )
         _config_home(tmp_path, monkeypatch, "[prog.main]\ncount = 9\n")
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == "9\n"
 
     def test_config_beats_module_route(
@@ -83,7 +83,7 @@ class TestConfigParamPrecedence:
             "program def main() -> unit = print(helper::count)\n",
         )
         _config_home(tmp_path, monkeypatch, "[helper]\ncount = 9\n")
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == "2\n"
 
     def test_config_beats_declared_initializer(
@@ -95,7 +95,7 @@ class TestConfigParamPrecedence:
             "@param let count: int = 1\n\n@config(count = 42)\nprogram def main() -> unit = "
             "print(count)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == "42\n"
 
 
@@ -109,7 +109,7 @@ class TestConfigParamTargetShapes:
             "@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = "
             "print(count)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == "2\n"
 
     def test_imported_module_target(
@@ -122,7 +122,7 @@ class TestConfigParamTargetShapes:
             "import helper\n\n@config(helper::count = 2)\n"
             "program def main() -> unit = print(helper::count)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == "2\n"
 
     def test_scoped_target(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -135,7 +135,7 @@ class TestConfigParamTargetShapes:
             "@config(Logging::level = 2)\n"
             "program def main() -> unit = print(Logging::level)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == "2\n"
 
 
@@ -154,7 +154,7 @@ class TestConfigEnginePrecedence:
             'import std/config\n\n@config(config::timeout = Some("2s"))\n'
             "program def main() -> unit = print(config::timeout)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file, timeout="9s"))
+        exec_command.run(_exec_args_no_trace(agl_file, timeout="9s"))
         assert capsys.readouterr().out == 'Option::Some(value = "9s")\n'
 
     def test_program_table_beats_config(
@@ -167,7 +167,7 @@ class TestConfigEnginePrecedence:
             "program def main() -> unit = print(config::timeout)\n",
         )
         _config_home(tmp_path, monkeypatch, '[prog.main]\ntimeout = "9s"\n')
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == 'Option::Some(value = "9s")\n'
 
     def test_config_beats_exec_table(
@@ -180,7 +180,7 @@ class TestConfigEnginePrecedence:
             "program def main() -> unit = print(config::timeout)\n",
         )
         _config_home(tmp_path, monkeypatch, '[exec]\ntimeout = "9s"\n')
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == 'Option::Some(value = "2s")\n'
 
     def test_config_beats_declared_default(
@@ -192,7 +192,7 @@ class TestConfigEnginePrecedence:
             'import std/config\n\n@config(config::timeout = Some("2s"))\n'
             "program def main() -> unit = print(config::timeout)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == 'Option::Some(value = "2s")\n'
 
     def test_source_write_still_wins_over_config(self, tmp_path: Path) -> None:
@@ -207,7 +207,7 @@ class TestConfigEnginePrecedence:
             "  let r: int = exec \"printf '```json\\n5\\n```'\"\n"
             "  print r\n",
         )
-        result = exec_command.run(_exec_args_no_log(agl_file))
+        result = exec_command.run(_exec_args_no_trace(agl_file))
         assert result is None  # lenient recovery succeeds; source write overrode @config
 
 
@@ -237,7 +237,7 @@ class TestConfigTimeoutReachesEveryTimeoutConsumer:
             'import std/config\n\n@config(config::timeout = Some("3s"))\n'
             "program def main() -> unit = ()\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
 
         assert captured["agent_idle_timeout"] == pytest.approx(3.0)
         assert captured["session_idle_timeout"] == pytest.approx(3.0)
@@ -245,15 +245,15 @@ class TestConfigTimeoutReachesEveryTimeoutConsumer:
 
 
 class TestConfigLogFileDerivesLog:
-    def test_config_log_file_enables_log_via_derived_rule(self, tmp_path: Path) -> None:
-        """A ``@config`` ``log-file`` alone (no explicit ``log = true``) enables
+    def test_config_trace_file_enables_trace_via_derived_rule(self, tmp_path: Path) -> None:
+        """A ``@config`` ``trace-file`` alone (no explicit ``trace = true``) enables
         tracing through the same derived rule ``build_host_engine_seeds`` applies
         to the config-file tiers."""
-        log_path = tmp_path / "trace.jsonl"
+        trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            f'import std/config\n\n@config(config::log-file = Some("{log_path}"))\n'
+            f'import std/config\n\n@config(config::trace-file = Some("{trace_path}"))\n'
             'program def main() -> unit = print "hi"\n',
         )
         exec_command.run(
@@ -261,49 +261,49 @@ class TestConfigLogFileDerivesLog:
                 file=str(agl_file),
                 argument_tokens=[],
                 strict_json=None,
-                no_log=False,
-                log_file=None,
+                no_trace=False,
+                trace_file=None,
             )
         )
-        assert log_path.exists()
+        assert trace_path.exists()
 
-    def test_config_log_file_seeds_the_log_register_true(
+    def test_config_trace_file_seeds_the_trace_register_true(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """The program-visible ``std/config::log`` register (not just the file
-        the host actually writes) reflects a ``@config``-only ``log-file``:
+        """The program-visible ``std/config::trace`` register (not just the file
+        the host actually writes) reflects a ``@config``-only ``trace-file``:
         both must agree with the derived rule, or the register lies about the
         real tracing state."""
-        log_path = tmp_path / "trace.jsonl"
+        trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            f'import std/config\n\n@config(config::log-file = Some("{log_path}"))\n'
-            "program def main() -> unit = print(config::log)\n",
+            f'import std/config\n\n@config(config::trace-file = Some("{trace_path}"))\n'
+            "program def main() -> unit = print(config::trace)\n",
         )
         exec_command.run(
             ExecArgs(
                 file=str(agl_file),
                 argument_tokens=[],
                 strict_json=None,
-                no_log=False,
-                log_file=None,
+                no_trace=False,
+                trace_file=None,
             )
         )
         assert capsys.readouterr().out == "true\n"
-        assert log_path.exists()
+        assert trace_path.exists()
 
 
 class TestConfigLogFlagInteractions:
-    """Documented contract: ``--no-log-file`` clears only the CLI seed and never
-    hides a config-table-established trace; ``--no-log`` always disables."""
+    """Documented contract: ``--no-trace-file`` clears only the CLI seed and never
+    hides a config-table-established trace; ``--no-trace`` always disables."""
 
-    def test_no_log_file_does_not_suppress_a_config_log_file(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "trace.jsonl"
+    def test_no_trace_file_does_not_suppress_a_config_trace_file(self, tmp_path: Path) -> None:
+        trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            f'import std/config\n\n@config(config::log-file = Some("{log_path}"))\n'
+            f'import std/config\n\n@config(config::trace-file = Some("{trace_path}"))\n'
             'program def main() -> unit = print "hi"\n',
         )
         exec_command.run(
@@ -311,19 +311,19 @@ class TestConfigLogFlagInteractions:
                 file=str(agl_file),
                 argument_tokens=[],
                 strict_json=None,
-                no_log=False,
-                log_file=None,
-                no_log_file=True,
+                no_trace=False,
+                trace_file=None,
+                no_trace_file=True,
             )
         )
-        assert log_path.exists()
+        assert trace_path.exists()
 
-    def test_no_log_suppresses_a_config_log_file(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "trace.jsonl"
+    def test_no_trace_suppresses_a_config_trace_file(self, tmp_path: Path) -> None:
+        trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            f'import std/config\n\n@config(config::log-file = Some("{log_path}"))\n'
+            f'import std/config\n\n@config(config::trace-file = Some("{trace_path}"))\n'
             'program def main() -> unit = print "hi"\n',
         )
         exec_command.run(
@@ -331,11 +331,11 @@ class TestConfigLogFlagInteractions:
                 file=str(agl_file),
                 argument_tokens=[],
                 strict_json=None,
-                no_log=True,
-                log_file=None,
+                no_trace=True,
+                trace_file=None,
             )
         )
-        assert not log_path.exists()
+        assert not trace_path.exists()
 
 
 class TestConfigTimeoutValidation:
@@ -351,7 +351,7 @@ class TestConfigTimeoutValidation:
             "program def main() -> unit = ()\n",
         )
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
         assert exc_info.value.code == 1
 
 
@@ -370,7 +370,7 @@ class TestConfigDryRun:
             'import std/config\n\n@config(config::timeout = Some("5s"))\n'
             'program def main() -> unit = print "ran"\n',
         )
-        assert exec_command.run(_exec_args_no_log(agl_file)) is None
+        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == ""
 
 
@@ -380,7 +380,7 @@ class TestConfigDefaultAgent:
     ) -> None:
         """``default-agent`` is the other enum-backed engine key (``AGENT``
         kind): a ``@config`` value for it goes through the same executable ->
-        standard identity restamp as ``timeout``/``log-file`` (``OPTION_TEXT``)."""
+        standard identity restamp as ``timeout``/``trace-file`` (``OPTION_TEXT``)."""
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
@@ -388,7 +388,7 @@ class TestConfigDefaultAgent:
             '@config(config::default-agent = AgentCommand("config-agent"))\n'
             "program def main() -> unit = print(config::default-agent)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert "config-agent" in capsys.readouterr().out
 
 
@@ -403,7 +403,7 @@ class TestConfigStrictJson:
             "  print r\n",
         )
         with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
+            exec_command.run(_exec_args_no_trace(agl_file))
         assert exc_info.value.code == 2  # strict JSON rejects the fenced payload
 
 
@@ -424,7 +424,7 @@ class TestConfigCombinesParamAndEngineTargets:
             "  print count\n"
             "  print(config::timeout)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file))
+        exec_command.run(_exec_args_no_trace(agl_file))
         assert capsys.readouterr().out == '7\nOption::Some(value = "4s")\n'
 
 
@@ -441,7 +441,7 @@ class TestProgramDefCalledAsAnOrdinaryFunctionIgnoresConfig:
             "def call_build() -> unit = build()\n\n"
             "program def main() -> unit = call_build()\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file, program="main"))
+        exec_command.run(_exec_args_no_trace(agl_file, program="main"))
         # build's own @config entry never applies: it is not the selected program.
         assert capsys.readouterr().out == "1\n"
 
@@ -460,7 +460,7 @@ class TestProgramDefCalledAsAnOrdinaryFunctionIgnoresConfig:
             "@config(count = 2)\n"
             "program def main() -> unit = print(count)\n",
         )
-        exec_command.run(_exec_args_no_log(agl_file, program="build"))
+        exec_command.run(_exec_args_no_trace(agl_file, program="build"))
         assert capsys.readouterr().out == "99\n"
 
 

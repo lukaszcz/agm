@@ -2208,11 +2208,11 @@ def test_program_def_entries_execute_via_agm_exec(tmp_path: Path) -> None:
 
     runner = CliRunner()
     sole_result = runner.invoke(
-        get_command(cli.app), ["exec", "--no-log", str(sole)], catch_exceptions=False
+        get_command(cli.app), ["exec", "--no-trace", str(sole)], catch_exceptions=False
     )
     selected_result = runner.invoke(
         get_command(cli.app),
-        ["exec", "--no-log", "-p", "review::main", str(selected)],
+        ["exec", "--no-trace", "-p", "review::main", str(selected)],
         catch_exceptions=False,
     )
 

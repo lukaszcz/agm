@@ -81,7 +81,7 @@ class EntryPipelineCtx(Protocol):
     _param_seed_values: dict[StaticBindingKey, Value]
     _pending_param_raw_values: dict[StaticBindingKey, object]
     # The current-value register for the five engine keys with a ``Value``
-    # form (strict-json, timeout, log, log-file, default-agent); a key is
+    # form (strict-json, timeout, trace, trace-file, default-agent); a key is
     # present only once a host seed or a learned declared default has made it
     # meaningful. See ``ReplSession._current``.
     _current: dict[str, Value]
@@ -1279,7 +1279,7 @@ class EntryPipeline:
         # A store disabled by a failed write nulls its own path for the rest of
         # the entry; that is a transient I/O condition, not a destination the
         # session should adopt.  Keeping the session path lets the next entry
-        # retry at the original destination.  A store that settled into no-log
-        # mode deliberately (``std/config::log := false``) does persist ``None``.
+        # retry at the original destination.  A store that settled into no-trace
+        # mode deliberately (``std/config::trace := false``) does persist ``None``.
         if not trace.disabled:
             self._ctx._trace_path = trace.path

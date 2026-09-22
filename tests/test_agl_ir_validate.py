@@ -764,7 +764,7 @@ def test_deep_accepts_known_builtin_keys() -> None:
             IrBuiltinLoad(location=LOC, key="strict-json"),
             IrBuiltinStore(
                 location=LOC,
-                key="log",
+                key="trace",
                 value=IrConstBool(location=LOC, value=True),
             ),
         )
@@ -1945,7 +1945,7 @@ class TestProgramConfigsValidation:
 
     def test_entry_for_a_non_program_symbol_raises(self) -> None:
         """A program_configs entry not indexed by a linked program is rejected."""
-        target: StaticBindingKey = (STD_CONFIG_ID, (), "log")
+        target: StaticBindingKey = (STD_CONFIG_ID, (), "trace")
         prog = _make_program(
             program_configs={SYM1: ((target, IrConstBool(location=LOC, value=True)),)}
         )
@@ -1956,7 +1956,7 @@ class TestProgramConfigsValidation:
     def test_duplicate_target_within_one_entry_raises(self) -> None:
         """The same target repeated within one program's entries is rejected."""
         fn_desc = _make_fn_desc(fn_sym=SYM0)
-        target: StaticBindingKey = (STD_CONFIG_ID, (), "log")
+        target: StaticBindingKey = (STD_CONFIG_ID, (), "trace")
         prog = _make_program(
             functions={FN0: fn_desc},
             program_symbols={10: SYM0},
@@ -1975,7 +1975,7 @@ class TestProgramConfigsValidation:
     def test_a_single_entry_validates(self) -> None:
         """A program_configs entry on a linked program with one target validates."""
         fn_desc = _make_fn_desc(fn_sym=SYM0)
-        target: StaticBindingKey = (STD_CONFIG_ID, (), "log")
+        target: StaticBindingKey = (STD_CONFIG_ID, (), "trace")
         prog = _make_program(
             functions={FN0: fn_desc},
             program_symbols={10: SYM0},

@@ -36,7 +36,7 @@ def _check_multi(tmp_path: Path, modules: dict[str, str]) -> None:
 class TestAcceptedConfigTargets:
     def test_engine_setting_bool(self) -> None:
         _check(
-            "import std/config\n\n@config(config::log = true)\nprogram def main() -> unit = ()\n"
+            "import std/config\n\n@config(config::trace = true)\nprogram def main() -> unit = ()\n"
         )
 
     def test_engine_setting_option_text(self) -> None:
@@ -256,7 +256,7 @@ class TestRejectedConfigTargets:
     def test_an_engine_setting_wrong_typed_value_is_rejected(self) -> None:
         with pytest.raises(AglTypeError):
             _check(
-                "import std/config\n\n@config(config::log = 1)\nprogram def main() -> unit = ()\n"
+                "import std/config\n\n@config(config::trace = 1)\nprogram def main() -> unit = ()\n"
             )
 
     def test_a_non_engine_builtin_var_is_not_a_legal_target(self) -> None:
@@ -274,8 +274,8 @@ class TestRejectedConfigTargets:
     def test_duplicate_target_via_two_engine_spellings_is_rejected(self) -> None:
         with pytest.raises(AglTypeError):
             _check(
-                "import std/config\nuse std/config::log\n\n"
-                "@config(log = true, config::log = false)\n"
+                "import std/config\nuse std/config::trace\n\n"
+                "@config(trace = true, config::trace = false)\n"
                 "program def main() -> unit = ()\n"
             )
 

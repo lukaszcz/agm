@@ -4718,7 +4718,7 @@ class TestEntryResultShape:
         s = open_session()
         r = s.eval_entry("let x = 1")
         assert isinstance(r, EntryResult)
-        assert r.trace_path is None  # no --log-file → no trace path
+        assert r.trace_path is None  # no --trace-file → no trace path
         with pytest.raises(dataclasses.FrozenInstanceError):
             r.ok = False
 

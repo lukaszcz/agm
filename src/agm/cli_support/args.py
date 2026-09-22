@@ -244,10 +244,10 @@ class CheckArgs:
 class ExecArgs:
     file: str | None
     strict_json: bool | None
-    no_log: bool
-    log_file: str | None
+    no_trace: bool
+    trace_file: str | None
     argument_tokens: list[str] = field(default_factory=list)
-    log: bool = False
+    trace: bool = False
     command: str | None = None
     program: str | None = None
     module_paths: list[str] = field(default_factory=list)
@@ -256,7 +256,7 @@ class ExecArgs:
     max_call_depth: int | None = None
     timeout: str | None = None
     no_timeout: bool = False
-    no_log_file: bool = False
+    no_trace_file: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
     default_agent: str | None = None
     # Static artifacts produced only when CLI ambiguity required early discovery.
@@ -267,9 +267,9 @@ class ExecArgs:
 class ReplArgs:
     strict_json: bool | None
     quiet: bool
-    no_log: bool
-    log_file: str | None
-    log: bool = False
+    no_trace: bool
+    trace_file: str | None
+    trace: bool = False
     # Optional recursion call-depth override (None = no override).
     max_call_depth: int | None = None
     no_stdlib: bool = False

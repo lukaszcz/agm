@@ -295,8 +295,8 @@ class TestProjectOption:
 class TestEngineKeyFlags:
     def test_bool_engine_key_contributes_both_polarities(self) -> None:
         flags = engine_key_flags()
-        assert "--log" in flags
-        assert "--no-log" in flags
+        assert "--trace" in flags
+        assert "--no-trace" in flags
 
     def test_option_engine_key_contributes_both_polarities(self) -> None:
         flags = engine_key_flags()
@@ -459,7 +459,7 @@ class TestBuildProgramCommand:
 
         assert isinstance(result, ProgramCommand)
 
-    @pytest.mark.parametrize("flag", ["max-call-depth", "log-file", "no-timeout"])
+    @pytest.mark.parametrize("flag", ["max-call-depth", "trace-file", "no-timeout"])
     def test_run_time_exec_flags_are_reserved_on_a_registered_command(self, flag: str) -> None:
         result = build_program_command(
             _program(_param("value", TextType(), external=flag)), REGISTERED_RESERVED_FLAGS
@@ -1308,13 +1308,13 @@ class TestCompletionQueries:
 
     @pytest.mark.parametrize(
         ("tokens", "expected"),
-        [(["--log-file", "trace.jsonl", "--dry-run"], "source"), (["--log-file"], None)],
+        [(["--trace-file", "trace.jsonl", "--dry-run"], "source"), (["--trace-file"], None)],
     )
     def test_host_options_and_their_values_fill_no_slot(
         self, tokens: list[str], expected: str | None
     ) -> None:
         slot = self._command().next_positional(
-            tokens, "b.txt", host_options={"--log-file": True, "--dry-run": False}
+            tokens, "b.txt", host_options={"--trace-file": True, "--dry-run": False}
         )
 
         assert (None if slot is None else slot.name) == expected
@@ -1386,7 +1386,7 @@ class TestModuleParameterOptions:
         program = self._program()
         own = _module_param(program.module, "verbose", BoolType(), short="v")
         logging = _module_param(
-            ModuleId(("A", "logging")), "trace", BoolType(), scope_path=("debug",)
+            ModuleId(("A", "logging")), "level", BoolType(), scope_path=("debug",)
         )
         command = _command_with_module_params(program, own, logging)
 
@@ -1395,8 +1395,8 @@ class TestModuleParameterOptions:
             (["--no-verbose"], {own.key: False}),
             (["--tool.verbose"], {own.key: True}),
             (["--no-tool.verbose"], {own.key: False}),
-            (["--logging.debug.trace"], {logging.key: True}),
-            (["--no-A.logging.debug.trace"], {logging.key: False}),
+            (["--logging.debug.level"], {logging.key: True}),
+            (["--no-A.logging.debug.level"], {logging.key: False}),
             (["-v"], {own.key: True}),
         ):
             parsed = command.parse(tokens)
@@ -1435,23 +1435,23 @@ class TestModuleParameterOptions:
 
     def test_ambiguous_module_spelling_is_a_usage_error(self) -> None:
         program = self._program()
-        left = _module_param(ModuleId(("A", "one")), "trace", BoolType())
-        right = _module_param(ModuleId(("B", "two")), "trace", BoolType())
+        left = _module_param(ModuleId(("A", "one")), "level", BoolType())
+        right = _module_param(ModuleId(("B", "two")), "level", BoolType())
         command = _command_with_module_params(program, left, right)
 
         with pytest.raises(ValueError) as exc_info:
-            command.parse(["--trace"])
+            command.parse(["--level"])
 
         assert left.declaration_path in str(exc_info.value)
         assert right.declaration_path in str(exc_info.value)
-        assert "--A.one.trace" in str(exc_info.value)
-        assert "--B.two.trace" in str(exc_info.value)
+        assert "--A.one.level" in str(exc_info.value)
+        assert "--B.two.level" in str(exc_info.value)
         assert command.parse([]).params == {}
 
     def test_ambiguous_short_module_spelling_is_a_usage_error(self) -> None:
         program = self._program()
-        left = _module_param(ModuleId(("A", "one")), "trace", BoolType(), short="t")
-        right = _module_param(ModuleId(("B", "two")), "trace", BoolType(), short="t")
+        left = _module_param(ModuleId(("A", "one")), "level", BoolType(), short="t")
+        right = _module_param(ModuleId(("B", "two")), "level", BoolType(), short="t")
         command = _command_with_module_params(program, left, right)
 
         with pytest.raises(ValueError) as exc_info:
@@ -1465,8 +1465,8 @@ class TestModuleParameterOptions:
         self, tokens: list[str]
     ) -> None:
         program = self._program()
-        left = _module_param(ModuleId(("A", "one")), "trace", BoolType(), short="t")
-        right = _module_param(ModuleId(("B", "two")), "trace", BoolType(), short="t")
+        left = _module_param(ModuleId(("A", "one")), "level", BoolType(), short="t")
+        right = _module_param(ModuleId(("B", "two")), "level", BoolType(), short="t")
         command = _command_with_module_params(program, left, right)
 
         with pytest.raises(ValueError) as parse_error:
@@ -1481,37 +1481,37 @@ class TestModuleParameterOptions:
     def test_attached_value_for_a_preceding_short_option_owns_an_ambiguous_letter(self) -> None:
         program = self._program()
         tag = _module_param(program.module, "tag", TextType(), short="x")
-        left = _module_param(ModuleId(("A", "one")), "trace", BoolType(), short="t")
-        right = _module_param(ModuleId(("B", "two")), "trace", BoolType(), short="t")
+        left = _module_param(ModuleId(("A", "one")), "level", BoolType(), short="t")
+        right = _module_param(ModuleId(("B", "two")), "level", BoolType(), short="t")
         command = _command_with_module_params(program, tag, left, right)
 
         assert command.parse(["-xt"]).params == {tag.key: "t"}
 
     def test_click_command_rejects_ambiguous_options_when_used_directly(self) -> None:
         program = self._program()
-        left = _module_param(ModuleId(("A", "one")), "trace", BoolType())
-        right = _module_param(ModuleId(("B", "two")), "trace", BoolType())
+        left = _module_param(ModuleId(("A", "one")), "level", BoolType())
+        right = _module_param(ModuleId(("B", "two")), "level", BoolType())
         command = _command_with_module_params(program, left, right)
 
         with pytest.raises(click.UsageError) as exc_info:
-            command.command.main(args=["--trace"], standalone_mode=False)
+            command.command.main(args=["--level"], standalone_mode=False)
 
         assert left.declaration_path in str(exc_info.value)
         assert right.declaration_path in str(exc_info.value)
 
     def test_ambiguous_value_spelling_reports_candidates_before_click_rejects_it(self) -> None:
         program = self._program()
-        left = _module_param(ModuleId(("A", "one")), "trace", TextType())
-        right = _module_param(ModuleId(("B", "two")), "trace", TextType())
+        left = _module_param(ModuleId(("A", "one")), "level", TextType())
+        right = _module_param(ModuleId(("B", "two")), "level", TextType())
         command = _command_with_module_params(program, left, right)
 
         with pytest.raises(ValueError) as exc_info:
-            command.parse(["--trace=hello"])
+            command.parse(["--level=hello"])
 
         assert left.declaration_path in str(exc_info.value)
         assert right.declaration_path in str(exc_info.value)
         with pytest.raises(ValueError) as exc_info:
-            command.parse(["--trace", "hello"])
+            command.parse(["--level", "hello"])
 
         assert left.declaration_path in str(exc_info.value)
         assert right.declaration_path in str(exc_info.value)
@@ -1519,22 +1519,22 @@ class TestModuleParameterOptions:
     def test_ambiguous_spelling_is_not_taken_from_a_valid_option_value(self) -> None:
         program = self._program()
         tag = _module_param(program.module, "tag", TextType(), short="t")
-        left = _module_param(ModuleId(("A", "one")), "trace", TextType())
-        right = _module_param(ModuleId(("B", "two")), "trace", TextType())
+        left = _module_param(ModuleId(("A", "one")), "level", TextType())
+        right = _module_param(ModuleId(("B", "two")), "level", TextType())
         command = _command_with_module_params(program, tag, left, right)
 
-        assert command.parse(["--tag", "--trace"]).params == {tag.key: "--trace"}
-        assert command.parse(["-t", "--trace"]).params == {tag.key: "--trace"}
-        assert command.parse(["-t--trace"]).params == {tag.key: "--trace"}
+        assert command.parse(["--tag", "--level"]).params == {tag.key: "--level"}
+        assert command.parse(["-t", "--level"]).params == {tag.key: "--level"}
+        assert command.parse(["-t--level"]).params == {tag.key: "--level"}
 
     def test_direct_click_ambiguity_with_an_equals_value_reports_candidates(self) -> None:
         program = self._program()
-        left = _module_param(ModuleId(("A", "one")), "trace", TextType())
-        right = _module_param(ModuleId(("B", "two")), "trace", TextType())
+        left = _module_param(ModuleId(("A", "one")), "level", TextType())
+        right = _module_param(ModuleId(("B", "two")), "level", TextType())
         command = _command_with_module_params(program, left, right)
 
         with pytest.raises(click.UsageError) as exc_info:
-            command.command.main(args=["--trace=hello"], standalone_mode=False)
+            command.command.main(args=["--level=hello"], standalone_mode=False)
 
         assert left.declaration_path in str(exc_info.value)
         assert right.declaration_path in str(exc_info.value)
@@ -1543,7 +1543,7 @@ class TestModuleParameterOptions:
         program = self._program()
         own = _module_param(program.module, "verbose", BoolType(), doc="Own setting.")
         logging = _module_param(
-            ModuleId(("A", "logging")), "trace", BoolType(), scope_path=("debug",), doc="Trace."
+            ModuleId(("A", "logging")), "level", BoolType(), scope_path=("debug",), doc="Log level."
         )
         hidden = _module_param(ModuleId(("A", "logging")), "secret", TextType(), hidden=True)
         command = _command_with_module_params(program, own, logging, hidden)
@@ -1553,16 +1553,16 @@ class TestModuleParameterOptions:
         assert "Parameters of tool" in help_text
         assert "Parameters of A/logging" in help_text
         assert "--verbose" in help_text
-        assert "--trace" in help_text
+        assert "--level" in help_text
         assert "--tool.verbose" not in help_text
-        assert "--logging.debug.trace" not in help_text
+        assert "--logging.debug.level" not in help_text
         assert "--secret" not in help_text
         spellings = command.option_spellings()
         expected = {
             "--verbose",
             "--tool.verbose",
-            "--logging.debug.trace",
-            "--A.logging.debug.trace",
+            "--logging.debug.level",
+            "--A.logging.debug.level",
         }
         assert expected <= set(spellings)
         assert "--secret" not in spellings
@@ -1721,11 +1721,11 @@ class TestModuleParameterOptions:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         program = self._program()
-        left = _module_param(ModuleId(("A", "one")), "trace", BoolType(), env="LEFT_TRACE")
-        right = _module_param(ModuleId(("B", "two")), "trace", BoolType(), env="RIGHT_TRACE")
+        left = _module_param(ModuleId(("A", "one")), "level", BoolType(), env="LEFT_LEVEL")
+        right = _module_param(ModuleId(("B", "two")), "level", BoolType(), env="RIGHT_LEVEL")
         command = _command_with_module_params(program, left, right)
-        monkeypatch.setenv("LEFT_TRACE", "true")
-        monkeypatch.setenv("RIGHT_TRACE", "false")
+        monkeypatch.setenv("LEFT_LEVEL", "true")
+        monkeypatch.setenv("RIGHT_LEVEL", "false")
 
         assert command.parse([]).params == {left.key: True, right.key: False}
 
@@ -1832,7 +1832,7 @@ class TestHostLookingProgramValues:
             "--no-stdlib",
             "--no-region",
             "-t",
-            "--log",
+            "--trace",
             "-tagm",
             "--message=inline",
             "--",
@@ -1872,12 +1872,12 @@ class TestHostLookingProgramValues:
         command = _command(_param("message", TextType()))
 
         protected, replacements = protect_host_option_values(
-            ["--log-file", "--message", "--dry-run"],
+            ["--trace-file", "--message", "--dry-run"],
             command,
-            {"--log-file": True, "--dry-run": False},
+            {"--trace-file": True, "--dry-run": False},
         )
 
-        assert protected == ["--log-file", "--message", "--dry-run"]
+        assert protected == ["--trace-file", "--message", "--dry-run"]
         assert replacements == {}
 
     def test_bare_marker_used_as_a_program_value_is_protected(self) -> None:
@@ -2098,9 +2098,9 @@ class TestRetainEndOfOptions:
         from agm.cli_support.program_options import retain_end_of_options
 
         assert retain_end_of_options(
-            ["--log-file", "--", "--no-stdlib", "prog.agl"],
-            {"--log-file": True, "--no-stdlib": False},
-        ) == ["--log-file", "--", "--no-stdlib", "prog.agl"]
+            ["--trace-file", "--", "--no-stdlib", "prog.agl"],
+            {"--trace-file": True, "--no-stdlib": False},
+        ) == ["--trace-file", "--", "--no-stdlib", "prog.agl"]
 
     def test_a_host_short_bundle_can_end_in_a_value_option(self) -> None:
         from agm.cli_support.program_options import retain_end_of_options

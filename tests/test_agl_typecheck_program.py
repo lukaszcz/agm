@@ -350,24 +350,14 @@ def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: P
     from agm.agl.typecheck.program import (
         _build_program_func_sig_table,
         _build_program_type_table,
+        _module_type_seeds,
     )
 
     resolved = resolve_program(
         _make_graph_from_files(tmp_path, {"entry": "builtin def print[T](value: T) -> unit\n()"})
     )
-    (
-        program_type_table,
-        program_generic_table,
-        program_alias_table,
-        _,
-        _,
-    ) = _build_program_type_table(resolved)
-    records = _build_program_func_sig_table(
-        resolved,
-        program_type_table,
-        program_generic_table,
-        program_alias_table,
-    )
+    tables = _build_program_type_table(resolved)
+    records = _build_program_func_sig_table(resolved, tables, _module_type_seeds(tables))
     builtin = next(
         item
         for item in resolved.modules[ENTRY_ID].resolved.program.body.items
@@ -3574,9 +3564,9 @@ def test_cross_module_generic_enum_body_resolved(tmp_path: Path) -> None:
 def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> None:
     """A generic record template carries the owning module's module_id.
 
-    Before the fix, _build_generic_record created the template RecordType without
-    module_id=self._module_id, so all generic templates got module_id=ENTRY_ID.
-    After the fix, the template carries the owning library module's module_id.
+    The template ``RecordType`` carries module_id=self._module_id, so a
+    generic declared in a library module is not mistaken for an entry-module
+    one.
 
     Tested via the internal _build_program_type_table function to access the
     program_generic_table, which is not exposed on the public CheckedProgram API.
@@ -3589,7 +3579,7 @@ def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> N
     }
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_program(mg)
-    _gtt, program_generic_table, _gat, _gcts, _gckft = _build_program_type_table(rg)
+    program_generic_table = _build_program_type_table(rg).generics
 
     lib_id = ModuleId.from_path("lib")
     gdef = program_generic_table.get((lib_id, (), "Box"))
@@ -3619,7 +3609,7 @@ def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> Non
     }
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_program(mg)
-    _gtt, program_generic_table, _gat, _gcts, _gckft = _build_program_type_table(rg)
+    program_generic_table = _build_program_type_table(rg).generics
 
     lib_id = ModuleId.from_path("lib")
     gdef = program_generic_table.get((lib_id, (), "Opt"))

@@ -14276,11 +14276,10 @@ class TestGenericNominalModuleId:
         assert isinstance(inferred, RecordType)
         assert contains_inference_var(engine.zonk(inferred))
 
-    def test_build_generic_record_stamps_module_id(self) -> None:
-        """_TypeBuilder._build_generic_record stamps the template with module_id.
+    def test_generic_record_template_stamps_module_id(self) -> None:
+        """A generic record's template ``RecordType`` carries its owning module_id.
 
-        The checker's _build_generic_record must pass module_id=self._module_id
-        when constructing the template RecordType.  Verify via parse+check.
+        Verified via parse+check.
         """
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.typecheck.env import GenericTypeDef

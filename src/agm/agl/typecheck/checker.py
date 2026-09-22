@@ -110,6 +110,7 @@ from agm.agl.semantics.types import (
     iter_type,
     reroot_type,
     substitute,
+    transform_type,
 )
 from agm.agl.syntax.nodes import (
     ArrayLit,
@@ -2120,38 +2121,42 @@ class _Checker:
             span=node.span,
         )
 
-    def _builtin_value_template(
-        self, ref: BindingRef, signature: FunctionSignature
-    ) -> FunctionType:
-        """Build a required-parameter signature over the live host contracts."""
-        params = tuple(param.type for param in signature.params if not param.has_default)
-        result = signature.result
-        kind = BUILTIN_CALL_NAMES.get(ref.name)
-        static_kind = builtin_type_static_kind(ref.module_id, ref.scope_path, ref.name)
-        if static_kind is BuiltinStaticKind.SESSION_OPEN:
-            params = (self._builtins.contract_type("Agent"),)
-            result = self._builtins.contract_type("Session")
-        elif static_kind is BuiltinStaticKind.SESSION_DEFAULT:
-            result = self._builtins.contract_type("Session")
-        elif kind is BuiltinKind.ASK_REQUEST:
-            result = self._builtins.contract_type("AgentRequest")
-        elif kind is BuiltinKind.EXEC:
-            result = self._builtins.contract_type("ExecResult")
+    def _live_builtin_nominal(self, typ: Type) -> Type:
+        """Re-point one builtin nominal at the declaration this program selects.
 
-        if ref.is_method and params:
-            session = self._env.type_table.standard_builtin_declaration("Session")
-            receiver = params[0]
-            if (
-                session is not None
-                and isinstance(receiver, RecordType)
-                and receiver.decl_id == session.decl_node_id
-            ):
-                params = (self._builtins.contract_type("Session"), *params[1:])
-                if ref.name == "fork":
-                    result = params[0]
-                elif ref.name == "stats":
-                    result = self._builtins.contract_type("SessionStats")
-        return FunctionType(params=params, result=result)
+        ``TypeTable.builtin_declaration`` is the same selection the host mints
+        from, so a nominal already naming it — and any type that names no
+        builtin declaration at all — is returned unchanged.
+        """
+        if not isinstance(typ, (RecordType, EnumType, ExceptionType)):
+            return typ
+        live = self._env.type_table.builtin_declaration(typ.name)
+        if live is None or live.decl_node_id == typ.decl_id:
+            return typ
+        return live.handle(() if isinstance(typ, ExceptionType) else typ.type_args)
+
+    def _live_builtin_signature(self, template: FunctionType) -> FunctionType:
+        """Return *template* with every builtin nominal on this program's contracts.
+
+        A ``builtin def``'s header names the standard library's own
+        declarations. A program that declares its own ``builtin`` of one of
+        those names owns the values the host mints for it
+        (``lower.lowerer.builtin_nominals_from_declarations``), so every
+        parameter and the result are re-pointed onto the selected
+        declarations before the signature types a reference.
+        """
+        live = transform_type(template, self._live_builtin_nominal)
+        assert isinstance(live, FunctionType)
+        return live
+
+    def _builtin_value_template(self, signature: FunctionSignature) -> FunctionType:
+        """Build a required-parameter signature over the live host contracts."""
+        return self._live_builtin_signature(
+            FunctionType(
+                params=tuple(param.type for param in signature.params if not param.has_default),
+                result=signature.result,
+            )
+        )
 
     def _builtin_value_type(
         self,
@@ -2166,7 +2171,7 @@ class _Checker:
         kind = BUILTIN_CALL_NAMES.get(ref.name)
         signature = self._env.get_function_signature_by_node_id(ref.decl_node_id)
         assert signature is not None
-        template = self._builtin_value_template(ref, signature)
+        template = self._builtin_value_template(signature)
         engine = self._active_inference_engine()
 
         target = explicit_target
@@ -3486,6 +3491,33 @@ class _Checker:
             target.append(index)
         return (*ordinary, *contextual)
 
+    def _constrain_bound_arguments(
+        self,
+        param_types: Sequence[Type],
+        binding: Sequence[Expr | None],
+        *,
+        subject: str,
+        error_subject: str,
+    ) -> None:
+        """Constrain every supplied argument against its parameter, in check order.
+
+        Unlike :meth:`_check_bound_call_args`' post-solve assignability check,
+        this unifies a still-flexible parameter slot with its argument, which
+        is what selects a generic instantiation. Unfilled and placeholder
+        positions contribute nothing.
+        """
+        for index in self._argument_check_order(binding):
+            bound_expr = binding[index]
+            if bound_expr is None or isinstance(bound_expr, Placeholder):
+                continue
+            self._constrain_argument(
+                param_types[index],
+                bound_expr,
+                role=ConstraintRole.FUNCTION_ARGUMENT,
+                subject=subject,
+                error_subject=error_subject,
+            )
+
     def _check_bound_call_args(
         self,
         params: tuple[ParamSpec, ...],
@@ -3598,18 +3630,12 @@ class _Checker:
             expr for expr in binding if expr is not None and not isinstance(expr, Placeholder)
         )
         try:
-            for index in self._argument_check_order(binding):
-                param = params[index]
-                bound_expr = binding[index]
-                if bound_expr is None or isinstance(bound_expr, Placeholder):
-                    continue
-                self._constrain_argument(
-                    param.type,
-                    bound_expr,
-                    role=ConstraintRole.FUNCTION_ARGUMENT,
-                    subject=func_name,
-                    error_subject=f"call to '{func_name}'",
-                )
+            self._constrain_bound_arguments(
+                tuple(param.type for param in params),
+                binding,
+                subject=func_name,
+                error_subject=f"call to '{func_name}'",
+            )
 
             produced = self._call_result_type(params, result, binding, hole_indices)
             if expected is not None:
@@ -3796,18 +3822,12 @@ class _Checker:
         # check cannot solve those; only ``_constrain_argument`` unifies a
         # flexible slot with its argument's type, exactly like the generic
         # declared-call path does for a plain function.
-        for index in self._argument_check_order(binding):
-            param = params[index]
-            bound_expr = binding[index]
-            if bound_expr is None or isinstance(bound_expr, Placeholder):
-                continue
-            self._constrain_argument(
-                param.type,
-                bound_expr,
-                role=ConstraintRole.FUNCTION_ARGUMENT,
-                subject=method.name,
-                error_subject=f"call to '{method.name}'",
-            )
+        self._constrain_bound_arguments(
+            tuple(param.type for param in params),
+            binding,
+            subject=method.name,
+            error_subject=f"call to '{method.name}'",
+        )
         result_type = self._finish_declared_call(
             node, params, callee_type.result, binding, {}, check_args=False
         )
@@ -3896,18 +3916,12 @@ class _Checker:
         binding: tuple[Expr | None, ...] = node.args
         if hole_indices:
             self._record_partial_call(node, binding, hole_indices, callee_kind="value")
-        for index in self._argument_check_order(node.args):
-            arg = node.args[index]
-            ptype = callee_type.params[index]
-            if isinstance(arg, Placeholder):
-                continue
-            self._constrain_argument(
-                ptype,
-                arg,
-                role=ConstraintRole.FUNCTION_ARGUMENT,
-                subject="function value",
-                error_subject="function value call",
-            )
+        self._constrain_bound_arguments(
+            callee_type.params,
+            node.args,
+            subject="function value",
+            error_subject="function value call",
+        )
         assert self._inference_region is not None
         self._resolve_operator_values(self._inference_region)
         params = tuple(
@@ -5186,18 +5200,12 @@ class _Checker:
             parameter_indices = tuple(
                 index for index in parameter_indices if not signature.params[index].has_default
             )
-        result = specialized.result
-        if method.is_builtin:
-            if method.name == "ask-request":
-                result = self._builtins.contract_type("AgentRequest")
-            elif method.name == "fork":
-                result = receiver
-            elif method.name == "stats":
-                result = self._builtins.contract_type("SessionStats")
         bound = FunctionType(
             params=tuple(specialized.params[index] for index in parameter_indices),
-            result=result,
+            result=specialized.result,
         )
+        if method.is_builtin:
+            bound = self._live_builtin_signature(bound)
         if type_args is not None:
             explicit = (
                 {own_type_params[0]: explicit_target}

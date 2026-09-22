@@ -1,0 +1,26 @@
+# A program-declared `builtin record ExecResult` inside a named scope region
+# shadows the standard library's own declaration: the host mints THIS
+# declaration for every `exec` result from here on. Binding `exec` as a value
+# rather than calling it directly types the binding against the standard
+# library's own `builtin def exec` header, so the shadowing declaration is
+# what its result must be typed as -- `report` names the scope's own
+# `ExecResult`, and the bound value's result has to reach it.
+scope A
+  builtin
+  record ExecResult
+    stdout: text
+    exit-code: int
+    stderr: text
+    timed-out: bool
+
+  def report(result: ExecResult) -> text =
+    "%{result.stdout}/%{result.exit-code}"
+
+  def run(command: text) -> text =
+    let run-command = exec
+    report(run-command(command))
+end A
+
+program def main() -> unit =
+  print(A::run("first"))
+  print(A::run("second"))

@@ -13,6 +13,7 @@ journal there.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import os
 from collections.abc import Callable
 
@@ -30,10 +31,12 @@ from agm.agl.semantics.types import (
     TypeTemplate,
 )
 from agm.agl.syntax.types import IntT, NameT
+from agm.agl.typecheck import env as env_module
 from agm.agl.typecheck.env import (
     AliasFact,
     BindingTypeFact,
     ConstructorSignature,
+    EnvironmentFact,
     EnvironmentFacts,
     FunctionSignature,
     GenericTypeDef,
@@ -321,6 +324,51 @@ class TestFactScenarios:
         scenario.record(already_holding)
         already_holding.replay(facts)
         assert scenario.query(already_holding) == expected
+
+
+# ---------------------------------------------------------------------------
+# Fact-to-mutator forwarding contract
+# ---------------------------------------------------------------------------
+
+
+def _fact_classes() -> list[type[EnvironmentFact]]:
+    """Every journaled fact ``typecheck.env`` declares."""
+    return [
+        value
+        for value in vars(env_module).values()
+        if isinstance(value, type)
+        and issubclass(value, EnvironmentFact)
+        and dataclasses.is_dataclass(value)
+    ]
+
+
+class TestFactForwarding:
+    def test_each_fact_supplies_its_mutator_by_parameter_name(self) -> None:
+        """A fact replays as a keyword call, so its fields are that method's parameters.
+
+        Renaming a mutator, a parameter, or a fact field, or giving a mutator
+        a new required parameter, breaks replay without a type error --
+        ``_MUTATOR`` names the method as text.
+        """
+        facts = _fact_classes()
+        assert len(facts) == len({fact.__name__ for fact in facts}) > 0
+        for fact in facts:
+            mutator = getattr(TypeEnvironment, fact._MUTATOR)
+            parameters = inspect.signature(mutator).parameters
+            for name in fact.__match_args__:
+                assert parameters[name].kind in (
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.KEYWORD_ONLY,
+                ), (fact.__name__, name)
+            required = {
+                name
+                for name, parameter in parameters.items()
+                if name != "self" and parameter.default is inspect.Parameter.empty
+            }
+            assert required <= set(fact.__match_args__), fact.__name__
+
+    def test_every_fact_has_a_replay_scenario(self) -> None:
+        assert {fact._MUTATOR for fact in _fact_classes()} <= set(_SCENARIO_IDS)
 
 
 # ---------------------------------------------------------------------------

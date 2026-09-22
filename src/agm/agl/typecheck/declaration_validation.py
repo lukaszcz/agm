@@ -64,7 +64,15 @@ def builtin_method_receiver_for(
 
 @dataclass(frozen=True, slots=True)
 class _MemberDeclaration:
-    """A source member declaration whose name occupies a nominal member namespace.
+    """A member declaration whose name occupies a nominal member namespace.
+
+    ``origin`` is the declaration's provenance: ``"source"`` for one read
+    from a program being compiled here, ``"registered"`` for one read back
+    from the shared type table (an imported owner, or a type retained from an
+    earlier REPL entry). A source declaration supersedes the registration of
+    the same member it produced on a previous pass.
+
+    ``span`` locates a declaration for reporting; it is not provenance.
 
     ``module_id`` is the declaration's owning module: a method's declaring
     module (the module whose program declares the function, not its owner's
@@ -75,6 +83,7 @@ class _MemberDeclaration:
     kind: Literal["field", "method"]
     span: SourceSpan | None
     module_id: ModuleId
+    origin: Literal["source", "registered"]
 
 
 @dataclass(slots=True)
@@ -82,11 +91,12 @@ class _MemberIndex:
     """Every nominal member namespace this validation can reach.
 
     ``members`` is the single source for the question "what does this owner
-    declare?": source declarations carry their spans, and an owner outside this
-    compile unit — an imported base, or a type retained from an earlier REPL
-    entry — contributes its registered fields and directly declared methods
-    without one. ``declared`` names the owners this compile unit contributes
-    to, which are exactly the owners whose members need checking.
+    declare?": a program being compiled here contributes ``"source"`` members,
+    and an owner outside this compile unit — an imported base, or a type
+    retained from an earlier REPL entry — contributes ``"registered"`` ones
+    from its registered fields and directly declared methods. ``declared``
+    names the owners this compile unit contributes to, which are exactly the
+    owners whose members need checking.
     """
 
     members: dict[DeclId, dict[str, list[_MemberDeclaration]]] = field(default_factory=dict)
@@ -106,12 +116,12 @@ def _index_registered_owner(index: _MemberIndex, type_table: TypeTable, owner_id
     members = index.members.setdefault(owner_id, {})
     for field_name, _field_type in typedef.fields:
         members.setdefault(field_name, []).append(
-            _MemberDeclaration("field", None, typedef.module_id)
+            _MemberDeclaration("field", None, typedef.module_id, "registered")
         )
     for method_name, methods in type_table.declared_methods(owner_id).items():
         same_named = members.setdefault(method_name, [])
         same_named.extend(
-            _MemberDeclaration("method", None, method.module_id) for method in methods
+            _MemberDeclaration("method", None, method.module_id, "registered") for method in methods
         )
 
 
@@ -138,9 +148,11 @@ def _member_declarations(
                     same_named[:] = [
                         member
                         for member in same_named
-                        if not (member.kind == "field" and member.span is None)
+                        if not (member.kind == "field" and member.origin == "registered")
                     ]
-                    same_named.append(_MemberDeclaration("field", source_field.span, module_id))
+                    same_named.append(
+                        _MemberDeclaration("field", source_field.span, module_id, "source")
+                    )
         for function in static_function_items(resolved.program.body.items):
             owner_path = resolved.receiver_owner_for(module_id, function)
             if (
@@ -151,8 +163,7 @@ def _member_declarations(
             method_owner_id = owner_ids.get((owner_path.module_id, owner_path.scope_path))
             if method_owner_id is None:
                 # A method on an owner retained from an earlier REPL entry or
-                # another module: its members come from the shared type table,
-                # without source spans.
+                # another module: its members come from the shared type table.
                 typedef = type_table.get(
                     owner_path.module_id, owner_path.scope_path[-1], owner_path.scope_path[:-1]
                 )
@@ -168,9 +179,9 @@ def _member_declarations(
             same_named[:] = [
                 member
                 for member in same_named
-                if not (member.kind == "method" and member.span is None)
+                if not (member.kind == "method" and member.origin == "registered")
             ]
-            same_named.append(_MemberDeclaration("method", function.span, module_id))
+            same_named.append(_MemberDeclaration("method", function.span, module_id, "source"))
     return index
 
 
@@ -246,11 +257,11 @@ def _raise_collision(
     A field/method clash on one owner (``owner_id == conflicting_id``) always
     prefers whichever of the two came later. A method pair between two
     related owners (``prefer_later``) does too, since either side may be the
-    later declaration; there, a span-less side (a retained declaration from
-    an earlier compile unit) is also never preferred over a spanned one, so
-    the report always lands on a real declaration. An ancestor field clash
-    never swaps: the method stays ``declared`` regardless of source order,
-    since the field's owner is a different, unrelated type.
+    later declaration; there, a span-less side is also never preferred over
+    a spanned one, so the report always lands on a locatable declaration. An
+    ancestor field clash never swaps: the method stays ``declared``
+    regardless of source order, since the field's owner is a different,
+    unrelated type.
     """
     swap = (
         (prefer_later or owner_id == conflicting_id)
@@ -391,7 +402,7 @@ def validate_method_declaration_collisions(
                 conflict = _ancestor_field(index, ancestors, name)
                 if conflict is not None:
                     _raise_collision(type_table, owner_id, name, method, *conflict)
-                if method.span is None:
+                if method.origin == "registered":
                     # A retained declaration from an earlier compile unit:
                     # the pair check only starts from the new declaration's
                     # own owner, which the symmetric level-mate relation

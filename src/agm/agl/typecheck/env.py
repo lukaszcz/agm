@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, cast
 
 if TYPE_CHECKING:
     from agm.agl.scope.program import ResolvedModule
@@ -92,6 +92,7 @@ from agm.agl.semantics.types import (
     substitute,
 )
 from agm.agl.syntax.nodes import Expr, Pattern, QualifierAnchor, QualifierChain
+from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
 from agm.agl.zones import ParamZone
@@ -141,13 +142,61 @@ def _render_type_atom(atom: NameAtom) -> str:
     return atom if isinstance(atom, str) else "::".join(atom)
 
 
+def _member_values(source: object, names: tuple[str, ...]) -> tuple[object, ...]:
+    """Read *names* off *source*, in order."""
+    values: list[object] = []
+    for name in names:
+        value: object = getattr(source, name)
+        values.append(value)
+    return tuple(values)
+
+
+# ---------------------------------------------------------------------------
+# _Record — shared behavior of this module's data records
+# ---------------------------------------------------------------------------
+
+
+class _Record:
+    """Base of this module's frozen, slotted data records.
+
+    ``__match_args__`` names a record's fields in declaration order, which is
+    all its state amounts to, so the hooks below move that state by name.
+    Restoring one ``CheckedModuleImage`` runs them thousands of times, which
+    is why they read that tuple rather than the field tuple
+    ``dataclass(frozen=True, slots=True)``'s own hooks rebuild per object.
+    ``image``/``rehydrate`` carry a record's state across the same way.
+    """
+
+    __slots__ = ()
+    __match_args__: ClassVar[tuple[str, ...]] = ()
+
+    def __getstate__(self) -> tuple[object, ...]:
+        return _member_values(self, self.__match_args__)
+
+    def __setstate__(self, state: tuple[object, ...]) -> None:
+        for name, value in zip(self.__match_args__, state):
+            object.__setattr__(self, name, value)
+
+
+def _pickles_by_name[T: _Record](cls: type[T]) -> type[T]:
+    """Reinstate :class:`_Record`'s pickle hooks on a record class.
+
+    ``dataclass(slots=True)`` rebuilds the class and puts its own hooks in the
+    new body, where they would otherwise shadow the inherited ones.
+    """
+    setattr(cls, "__getstate__", _Record.__getstate__)
+    setattr(cls, "__setstate__", _Record.__setstate__)
+    return cls
+
+
 # ---------------------------------------------------------------------------
 # ParamSpec — per-parameter descriptor in a FunctionSignature
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ParamSpec:
+class ParamSpec(_Record):
     """Full descriptor for one parameter in a ``FunctionSignature``.
 
     ``name``        — the declared parameter name.
@@ -167,8 +216,9 @@ class ParamSpec:
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class FunctionSignature:
+class FunctionSignature(_Record):
     """Full declared signature of a root or named-scope ``def``.
 
     Carries named/default/kind information needed for declared-name call sites.
@@ -185,8 +235,9 @@ class FunctionSignature:
     type_params: tuple[str, ...] = ()
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class GenericTypeDef:
+class GenericTypeDef(_Record):
     """Template for a generic record or enum definition.
 
     ``kind``        — ``"record"`` or ``"enum"``.
@@ -202,8 +253,9 @@ class GenericTypeDef:
     template: RecordType | EnumType
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class GenericAliasDef:
+class GenericAliasDef(_Record):
     """Resolved template for a parameterized type alias.
 
     ``type_params`` — ordered tuple of type-parameter names.
@@ -215,8 +267,9 @@ class GenericAliasDef:
     template: Type
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ConstructorSignature:
+class ConstructorSignature(_Record):
     """Signature for one record constructor.
 
     ``owner_name``      — name of the record declaration.
@@ -254,8 +307,9 @@ class AglTypeError(AglError):
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class CallSiteRecord:
+class CallSiteRecord(_Record):
     """Static call-site descriptor recorded by the checker for one agent/exec call.
 
     Captured in ``_check_agent_call`` — the one place where the call's resolved
@@ -288,8 +342,9 @@ class CallSiteRecord:
     col: int
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class OutputContractSpec:
+class OutputContractSpec(_Record):
     """Statically derived output contract for one ``AgentCall`` node.
 
     ``target_type``
@@ -323,8 +378,9 @@ class OutputContractSpec:
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ArgumentBindings:
+class ArgumentBindings(_Record):
     """Checker-computed argument bindings for call-like constructs, keyed by node_id.
 
     The checker is the single source of truth for how each construct's
@@ -354,8 +410,9 @@ class ArgumentBindings:
     constructor_patterns: dict[int, tuple[tuple[str, Pattern], ...]]
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class PartialCallSpec:
+class PartialCallSpec(_Record):
     """Checker-computed routing metadata for a call that produces a function.
 
     ``callee_kind`` identifies which lowering path the underlying call uses.
@@ -411,8 +468,9 @@ def dereference_slot_constructor_ref(
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class CheckedModule:
+class CheckedModule(_Record):
     """Output of the type-checking pass.
 
     ``resolved``
@@ -560,40 +618,25 @@ class CheckedModule:
         """Closed type metadata this module contributes to importers."""
         return self.type_env.module_interface()
 
+    @property
+    def environment_facts(self) -> EnvironmentFacts:
+        """This module's own-facts journal, as its image persists it."""
+        return self.type_env.own_facts()
+
     def image(self) -> CheckedModuleImage:
         """Build a data-only image for cache persistence and rehydration.
 
-        Retains every field except ``resolved``/``type_env``/``import_env``/
-        ``source_text`` — recovered from the current ``ResolvedModule`` on
-        rehydration — plus the module's closed type interface and its
-        environment's own-facts journal. Raises if ``type_env`` never started
-        an own-facts journal (the single-module and REPL-seed paths never do).
+        Every image field is this module's member of the same name: the
+        checked side tables directly, ``interface`` and ``environment_facts``
+        through the type environment. The four members with no image field —
+        ``resolved``, ``type_env``, ``import_env``, ``source_text`` — are
+        recovered from the current ``ResolvedModule`` on rehydration. Raises
+        if ``type_env`` never started an own-facts journal (the single-module
+        and REPL-seed paths never do).
         """
-        return CheckedModuleImage(
-            node_types=self.node_types,
-            contract_specs=self.contract_specs,
-            call_sites=self.call_sites,
-            warnings=self.warnings,
-            function_signatures=self.function_signatures,
-            cast_specs=self.cast_specs,
-            argument_bindings=self.argument_bindings,
-            pattern_classifications=self.pattern_classifications,
-            partial_calls=self.partial_calls,
-            interface=self.interface,
-            environment_facts=self.type_env.own_facts(),
-            published_signatures=self.published_signatures,
-            published_binding_types=self.published_binding_types,
-            module_id=self.module_id,
-            slot_resolution=self.slot_resolution,
-            slot_constructor_refs=self.slot_constructor_refs,
-            is_test_constructor_refs=self.is_test_constructor_refs,
-            pattern_binding_refs=self.pattern_binding_refs,
-            pattern_constructor_refs=self.pattern_constructor_refs,
-            pattern_constructor_owners=self.pattern_constructor_owners,
-            method_selections=self.method_selections,
-            explicit_builtin_targets=self.explicit_builtin_targets,
-            program_config_targets=self.program_config_targets,
-        )
+        image = object.__new__(CheckedModuleImage)
+        image.__setstate__(_member_values(self, CheckedModuleImage.__match_args__))
+        return image
 
 
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:
@@ -670,8 +713,9 @@ def assert_checked_module_closed(checked: CheckedModule) -> None:
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ModuleTypeInterface:
+class ModuleTypeInterface(_Record):
     """Closed declarations a compiled module contributes to its importers."""
 
     types: dict[DeclKey, Type]
@@ -709,106 +753,132 @@ class PublishedModuleSurface(Protocol):
 # ---------------------------------------------------------------------------
 
 
+class EnvironmentFact(_Record):
+    """One recorded ``TypeEnvironment`` mutator call, replayable onto another.
+
+    ``_MUTATOR`` names the method the call went to, and a fact's fields are
+    that method's arguments spelled with its parameter names, so replaying one
+    is a keyword call. A fact whose replay is more than that forward overrides
+    :meth:`apply`.
+    """
+
+    __slots__ = ()
+    _MUTATOR: ClassVar[str]
+
+    def apply(self, env: TypeEnvironment) -> None:
+        """Replay this call on *env*."""
+        mutator: Callable[..., None] = getattr(env, self._MUTATOR)
+        mutator(**dict(zip(self.__match_args__, _member_values(self, self.__match_args__))))
+
+
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class BindingTypeFact:
+class BindingTypeFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.set_binding_type` call."""
+
+    _MUTATOR = "set_binding_type"
 
     node_id: int
     typ: Type
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.set_binding_type(node_id=self.node_id, typ=self.typ)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class FunctionSignatureFact:
+class FunctionSignatureFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_function_signature` call."""
+
+    _MUTATOR = "register_function_signature"
 
     name: str
     sig: FunctionSignature
     scope_path: ScopePath
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_function_signature(name=self.name, sig=self.sig, scope_path=self.scope_path)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class FunctionSignatureByNodeIdFact:
+class FunctionSignatureByNodeIdFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_function_signature_by_node_id` call."""
+
+    _MUTATOR = "register_function_signature_by_node_id"
 
     node_id: int
     sig: FunctionSignature
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_function_signature_by_node_id(node_id=self.node_id, sig=self.sig)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ExternNodeIdFact:
+class ExternNodeIdFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_extern_node_id` call."""
+
+    _MUTATOR = "register_extern_node_id"
 
     node_id: int
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_extern_node_id(node_id=self.node_id)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class TypeFact:
+class TypeFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_type` call."""
+
+    _MUTATOR = "register_type"
 
     name: str
     typ: Type
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_type(name=self.name, typ=self.typ)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class GenericTypeFact:
+class GenericTypeFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_generic_type` call."""
+
+    _MUTATOR = "register_generic_type"
 
     name: str
     gdef: GenericTypeDef
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_generic_type(name=self.name, gdef=self.gdef)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class AliasFact:
+class AliasFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_alias` call."""
+
+    _MUTATOR = "register_alias"
 
     name: str
     target_expr: TypeExpr
     type_params: tuple[str, ...]
 
     def apply(self, env: TypeEnvironment) -> None:
-        # Structural == on syntax type nodes: skipping an identical one keeps a frozen alias.
+        """Replay the registration, unless it is already in place.
+
+        Structural ``==`` on syntax type nodes: skipping an identical
+        registration keeps a frozen alias frozen.
+        """
         if env.has_alias_registration(self.name, self.target_expr, self.type_params):
             return
-        env.register_alias(
-            name=self.name, target_expr=self.target_expr, type_params=self.type_params
-        )
+        super().apply(env)
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ConstructorSignatureFact:
+class ConstructorSignatureFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_constructor_signature` call."""
+
+    _MUTATOR = "register_constructor_signature"
 
     sig: ConstructorSignature
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_constructor_signature(sig=self.sig)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ConstructorFieldKindsFact:
+class ConstructorFieldKindsFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_constructor_field_kinds` call.
 
     ``module_id`` is always the resolved owner module (never ``None``), so
     replay never re-derives it from the replaying environment.
     """
+
+    _MUTATOR = "register_constructor_field_kinds"
 
     owner_name: str
     fields: tuple[tuple[str, ParamZone], ...]
@@ -816,67 +886,43 @@ class ConstructorFieldKindsFact:
     module_id: ModuleId
     decl_id: int | None
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_constructor_field_kinds(
-            owner_name=self.owner_name,
-            fields=self.fields,
-            scope_path=self.scope_path,
-            module_id=self.module_id,
-            decl_id=self.decl_id,
-        )
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class UnregisteredNameFact:
+class UnregisteredNameFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.unregister_name` call."""
+
+    _MUTATOR = "unregister_name"
 
     name: str
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.unregister_name(self.name)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class FrozenAliasFact:
+class FrozenAliasFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.freeze_alias` call."""
+
+    _MUTATOR = "freeze_alias"
 
     name: str
     template: Type
     type_params: tuple[str, ...]
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.freeze_alias(self.name, self.template, type_params=self.type_params)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class MethodHeaderFact:
+class MethodHeaderFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_method_def` call."""
+
+    _MUTATOR = "register_method_def"
 
     receiver: NominalOwner | str
     method: MethodDef
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_method_def(self.receiver, self.method)
 
-
-EnvironmentFact = (
-    BindingTypeFact
-    | FunctionSignatureFact
-    | FunctionSignatureByNodeIdFact
-    | ExternNodeIdFact
-    | TypeFact
-    | GenericTypeFact
-    | AliasFact
-    | ConstructorSignatureFact
-    | ConstructorFieldKindsFact
-    | UnregisteredNameFact
-    | FrozenAliasFact
-    | MethodHeaderFact
-)
-
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class EnvironmentFacts:
+class EnvironmentFacts(_Record):
     """Ordered journal of a ``TypeEnvironment``'s journaled mutator calls.
 
     Data only, so it serializes under the artifact allow-list.
@@ -897,8 +943,9 @@ class EnvironmentFacts:
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class CheckedModuleImage:
+class CheckedModuleImage(_Record):
     """Data-only image of a ``CheckedModule``, ready to persist and rehydrate.
 
     Every ``CheckedModule`` field except ``resolved``, ``type_env``,
@@ -907,6 +954,8 @@ class CheckedModuleImage:
     module's closed type contribution) and ``environment_facts`` (its
     environment's own-facts journal). Built by :meth:`CheckedModule.image`;
     turned back into an equivalent ``CheckedModule`` by :meth:`rehydrate`.
+    Both directions move a field by its name, so every field here names the
+    ``CheckedModule`` member it mirrors.
     """
 
     node_types: dict[int, Type]
@@ -948,37 +997,29 @@ class CheckedModuleImage:
         env.begin_facts()
         env.replay(self.environment_facts)
         env.seal()
-        return CheckedModule(
-            resolved=resolved_module.resolved,
-            node_types=self.node_types,
-            contract_specs=self.contract_specs,
-            call_sites=self.call_sites,
-            warnings=self.warnings,
-            type_env=env,
-            function_signatures=self.function_signatures,
-            cast_specs=self.cast_specs,
-            argument_bindings=self.argument_bindings,
-            pattern_classifications=self.pattern_classifications,
-            partial_calls=self.partial_calls,
-            published_signatures=self.published_signatures,
-            published_binding_types=self.published_binding_types,
-            module_id=self.module_id,
-            import_env=resolved_module.import_env,
-            source_text=resolved_module.source_text,
-            slot_resolution=self.slot_resolution,
-            slot_constructor_refs=self.slot_constructor_refs,
-            is_test_constructor_refs=self.is_test_constructor_refs,
-            pattern_binding_refs=self.pattern_binding_refs,
-            pattern_constructor_refs=self.pattern_constructor_refs,
-            pattern_constructor_owners=self.pattern_constructor_owners,
-            method_selections=self.method_selections,
-            explicit_builtin_targets=self.explicit_builtin_targets,
-            program_config_targets=self.program_config_targets,
-        )
+        # The live members an image cannot carry; every other field of the
+        # rehydrated module is this image's field of the same name.
+        live: dict[str, object] = {
+            "resolved": resolved_module.resolved,
+            "type_env": env,
+            "import_env": resolved_module.import_env,
+            "source_text": resolved_module.source_text,
+        }
+        state: list[object] = []
+        for name in CheckedModule.__match_args__:
+            if name in live:
+                state.append(live[name])
+                continue
+            retained: object = getattr(self, name)
+            state.append(retained)
+        module = object.__new__(CheckedModule)
+        module.__setstate__(tuple(state))
+        return module
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class DeclaredHeaderSeed:
+class DeclaredHeaderSeed(_Record):
     """The declared-header tables every module environment in a program starts from.
 
     The whole-program function-signature pre-pass yields the same declared
@@ -1158,15 +1199,16 @@ class TypeEnvironment:
         # full path; this frame only maps a bare source spelling to that path.
         self._type_scope: tuple[str, ...] = ()
         self._sealed = False
-        # Mutation journal, active from begin_facts() until end_facts() takes it
-        # or seal() snapshots it into _own_facts. restore_*, remove_binding_types
-        # and seed_from never run in either window; not journaled.
+        # Mutation journal, active from begin_facts() until end_facts() takes
+        # it; seal() leaves it in place, where no further mutator can reach it,
+        # so own_facts() keeps answering from it. restore_*,
+        # remove_binding_types and seed_from never run in either window; not
+        # journaled.
         # ``_resolve_name_type`` does write ``_resolved_aliases`` directly (a memo
         # re-derivable from ``_alias_targets``) on a query path, but every declared
         # alias is frozen during header preparation, so that write is unreachable
         # once the body-check window opens.
         self._journal: list[EnvironmentFact] | None = None
-        self._own_facts: EnvironmentFacts | None = None
         # Memo for the own-type-name enumeration, which rebuilds a whole-namespace
         # answer and is asked for repeatedly (once per owner-form resolution).  It
         # is populated only once ``seal`` has frozen the declaration namespace, so
@@ -1258,14 +1300,12 @@ class TypeEnvironment:
 
         Validates the environment first when self-validation is enabled; sealing
         itself — the functional state that gates further mutation and memoization
-        (see :attr:`is_sealed`) — always happens, regardless of the flag. Closes
-        an active journal into a stable snapshot :meth:`own_facts` returns.
+        (see :attr:`is_sealed`) — always happens, regardless of the flag. It also
+        closes an active journal: no journaled mutator runs on a sealed
+        environment, so what :meth:`own_facts` reports can no longer change.
         """
         if self_validation_enabled():
             self.assert_closed()
-        if self._journal is not None:
-            self._own_facts = EnvironmentFacts(tuple(self._journal))
-            self._journal = None
         self._sealed = True
 
     # --- Mutation journal ---
@@ -1291,18 +1331,15 @@ class TypeEnvironment:
         return facts
 
     def own_facts(self) -> EnvironmentFacts:
-        """Return this environment's own-facts journal.
+        """Return a snapshot of this environment's own-facts journal.
 
-        The sealed snapshot once :meth:`seal` has run, else the active
-        journal. Raises if :meth:`begin_facts` was never called: such an
-        environment (module path, REPL seed) never journaled anything and has
-        no own facts to persist.
+        Raises if :meth:`begin_facts` was never called, or if
+        :meth:`end_facts` already took the journal: such an environment
+        (module path, REPL seed) has no own facts to persist.
         """
-        if self._own_facts is not None:
-            return self._own_facts
-        if self._journal is not None:
-            return EnvironmentFacts(tuple(self._journal))
-        raise AssertionError("own-facts journal was never started")
+        if self._journal is None:
+            raise AssertionError("own-facts journal was never started")
+        return EnvironmentFacts(tuple(self._journal))
 
     def has_alias_registration(
         self, name: str, target_expr: TypeExpr, type_params: tuple[str, ...]
@@ -2265,10 +2302,8 @@ class TypeEnvironment:
         """
         if qualifier.anchor is QualifierAnchor.MODULE:
             return None
-        bases = (
-            ((),)
-            if qualifier.anchor is QualifierAnchor.CURRENT_MODULE
-            else tuple(self._type_scope[:end] for end in range(len(self._type_scope), -1, -1))
+        bases = enclosing_scope_bases(
+            self._type_scope, rooted=qualifier.anchor is QualifierAnchor.CURRENT_MODULE
         )
         for base in bases:
             candidate = "::".join((*base, *qualifier.route_segments, name))
@@ -2280,10 +2315,8 @@ class TypeEnvironment:
         """Whether a local scope begins the qualifier in an active lexical layer."""
         if qualifier.anchor is QualifierAnchor.MODULE:
             return False
-        bases = (
-            ((),)
-            if qualifier.anchor is QualifierAnchor.CURRENT_MODULE
-            else tuple(self._type_scope[:end] for end in range(len(self._type_scope), -1, -1))
+        bases = enclosing_scope_bases(
+            self._type_scope, rooted=qualifier.anchor is QualifierAnchor.CURRENT_MODULE
         )
         for base in bases:
             path = (*base, *qualifier.route_segments)

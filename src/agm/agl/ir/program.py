@@ -131,6 +131,17 @@ class NominalDescriptor:
                        ``semantics.arguments.positional_field_names``), in
                        field order. Used for RECORD and EXCEPTION; ``()`` for
                        ENUM and for a fieldless RECORD/EXCEPTION.
+    ``field_defaults`` — each field's lowered default expression, strictly
+                       paired with ``fields`` (``None`` for a required
+                       field); the constructor counterpart of
+                       ``IrFunctionParam.default``. A construction site may
+                       leave it ``()``, which ``__post_init__`` normalizes to
+                       an all-``None`` tuple sized to ``fields`` — the common
+                       case for a declaration with no defaulted fields, and
+                       the whole case for ENUM (``fields`` itself is always
+                       ``()`` there). ``IrMakeRecord``/``IrMakeException``
+                       fill an omitted field with ``UseDefault(index)``,
+                       which the evaluator resolves against this tuple.
     ``bears_name_path`` — whether this identity is the one its
                        ``(module_id, scope_path, declared_name)`` path
                        currently resolves to, per the type table's name
@@ -164,8 +175,21 @@ class NominalDescriptor:
     variants: tuple[VariantDescriptor, ...] = ()
     mutable_fields: frozenset[str] = frozenset()
     positional_fields: tuple[str, ...] = ()
+    field_defaults: "tuple[IrExpr | None, ...]" = ()
     bears_name_path: bool = field(default=True, compare=False)
     base: NominalId | None = None
+
+    def __post_init__(self) -> None:
+        """Normalize an omitted ``field_defaults`` into an all-``None`` tuple sized to ``fields``.
+
+        Mirrors ``TypeDef.field_has_default``'s normalization: a construction
+        site that declares no defaulted field, or knows nothing about
+        defaults at all (every builtin/reserved/generic-template site but
+        the two record/exception builders), may simply leave
+        ``field_defaults`` at its default ``()``.
+        """
+        if not self.field_defaults and self.fields:
+            object.__setattr__(self, "field_defaults", (None,) * len(self.fields))
 
     @property
     def display_name(self) -> str:

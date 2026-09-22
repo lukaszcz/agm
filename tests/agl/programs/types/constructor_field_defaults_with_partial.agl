@@ -1,0 +1,42 @@
+# Constructor field defaults combined with 'with' (functional update, both on
+# an explicitly constructed value and on a bare all-defaulted constructor
+# value) and with partial application (a placeholder for the required field,
+# the defaulted fields left to omission or partially overridden).
+
+record Point
+  x: int
+  y: int = 0
+  z: int = 0
+
+record Limits
+  retries: int = 3
+  timeout: int = 30
+
+program def main(mode: text, base: int) -> unit =
+  if
+    | mode == "with" =>
+        let p = Point(x = base)
+        print p.x
+        print p.y
+        print p.z
+
+        let q = p with y = 5
+        print q.x
+        print q.y
+        print q.z
+
+        let l = Limits with retries = base
+        print l.retries
+        print l.timeout
+    | else =>
+        let make-point = Point(?)
+        let p2 = make-point(base)
+        print p2.x
+        print p2.y
+        print p2.z
+
+        let make-point-y: (int) -> Point = Point(x = ?, y = 9)
+        let p3 = make-point-y(base)
+        print p3.x
+        print p3.y
+        print p3.z

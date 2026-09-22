@@ -10,7 +10,10 @@ Both whole-program linking (``lower/program.py``, from a checked module's own
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from agm.agl.ir.ids import NominalId
+from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.semantics.arguments import positional_field_names
 from agm.agl.semantics.type_table import TypeDef, TypeTable
@@ -25,9 +28,26 @@ def exception_descriptor(
     type_table: TypeTable,
     *,
     bears_name_path: bool,
+    field_defaults: Mapping[NominalId, "tuple[IrExpr | None, ...]"],
 ) -> NominalDescriptor:
-    """Build one exception descriptor from its authoritative declaration."""
+    """Build one exception descriptor from its authoritative declaration.
+
+    *field_defaults* maps a declaration's own identity to its lowered
+    per-field defaults (see ``_LinkState.field_defaults``); flattened base
+    first across the ``extends`` chain — like ``fields`` itself — so an
+    inherited field keeps its base's lowered default. A chain link absent
+    from *field_defaults* (declares no defaulted field) contributes an
+    all-``None`` run.
+    """
     nominal = NominalId(typedef.decl_node_id)
+    chain = type_table.exception_chain_defs(typedef.decl_node_id)
+    flattened_defaults = tuple(
+        default
+        for chain_typedef in chain
+        for default in field_defaults.get(
+            NominalId(chain_typedef.decl_node_id), (None,) * len(chain_typedef.fields)
+        )
+    )
     return NominalDescriptor(
         nominal=nominal,
         module_id=typedef.module_id,
@@ -38,5 +58,6 @@ def exception_descriptor(
         fields=tuple(type_table.exception_fields(handle).keys()),
         variants=(),
         positional_fields=positional_field_names(type_table.field_kinds(handle)),
+        field_defaults=flattened_defaults,
         bears_name_path=bears_name_path,
     )

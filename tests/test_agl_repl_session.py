@@ -321,6 +321,27 @@ class TestPersistence:
         assert stale.error is not None
         assert stale.error.type_name == "Detailed"
 
+    def test_redeclared_record_keeps_its_own_default_across_generations(self) -> None:
+        """Each nominal handle keeps the field default that was live when it
+        was bound, mirroring how a redeclaration supersedes cleanly without
+        disturbing an old binding's identity.
+        """
+        session = open_session()
+        assert session.eval_entry("record Ver\n  v: int = 1").ok
+        first = session.eval_entry("let a = Ver()")
+        assert first.ok, first.diagnostics
+
+        assert session.eval_entry("record Ver\n  v: int = 2").ok
+        second = session.eval_entry("let b = Ver()")
+        assert second.ok, second.diagnostics
+
+        read_a = session.eval_entry("a.v")
+        read_b = session.eval_entry("b.v")
+        assert read_a.ok, read_a.diagnostics
+        assert read_b.ok, read_b.diagnostics
+        assert read_a.value == IntValue(1)
+        assert read_b.value == IntValue(2)
+
     def test_generic_receiver_method_declared_in_a_later_entry_is_callable(self) -> None:
         session = open_session()
         assert session.eval_entry("record Box[T](value: T)").ok
@@ -7130,6 +7151,40 @@ class TestExternRepl:
 
         assert not result.ok
         assert result.diagnostics
+
+    def test_record_field_default_survives_a_later_entry_rejected_past_lowering(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: rollback of a rejected entry must not drop an earlier
+        entry's accumulated constructor field defaults.
+
+        ``LinkImage.snapshot_state``/``restore_state`` roll back a rejected
+        entry's linker delta (``entry_pipeline.py`` calls ``restore_state``
+        after any entry that fails past lowering, like the companion-import
+        failure above). If the snapshot dropped ``_LinkState.field_defaults``,
+        the record declared before the failing entry would lose its default
+        and a later omission would raise instead of using it.
+        """
+        self._write_extern_lib(
+            tmp_path,
+            "broken",
+            "extern def f() -> int\n",
+            "raise RuntimeError('boom')\n",
+        )
+        session = self._make_session_with_root(tmp_path)
+
+        declared = session.eval_entry("record P\n  x: int = 7")
+        assert declared.ok, declared.diagnostics
+        first = session.eval_entry("P().x")
+        assert first.ok, first.diagnostics
+        assert _int(first.value) == 7
+
+        failed = session.eval_entry("import broken::*\nf()")
+        assert not failed.ok
+
+        later = session.eval_entry("P().x")
+        assert later.ok, later.diagnostics
+        assert _int(later.value) == 7
 
     # -- One extern registry per session: a companion imports exactly once --
 

@@ -340,10 +340,11 @@ immediately followed by `[` (`NAME[`):
 applies only to this constructor form; ordinary applied type expressions may
 have whitespace, so both `Option[int]` and `Option [int]` are valid type
 expressions. Both `Option` and the constructor (`Some`/`None`) must be `NAME`,
-not `OP_NAME`. The result is an ordinary function value for a field-bearing
-member or a constructed member-record value for a fieldless member. The latter can be
-passed as a value but is not callable; see
-[Fieldless constructor references](expressions.md#fieldless-constructor-references).
+not `OP_NAME`. The result is an ordinary function value for a member with a
+required field, or a constructed member-record value for a fieldless or
+all-defaulted member. The latter can be passed as a value but is not
+callable; see
+[Fieldless and all-defaulted constructor references](expressions.md#fieldless-and-all-defaulted-constructor-references).
 
 ## Strict parametricity
 

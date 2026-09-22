@@ -100,6 +100,7 @@ class ConstructorCheckCtx(Protocol):
         span: SourceSpan,
         expected: Type | None,
         subject: str,
+        all_defaulted: bool = False,
     ) -> Type: ...
 
     def _zonk_constructor_owner(
@@ -202,8 +203,10 @@ class ConstructorChecker:
     ) -> Type:
         """Handle a generic constructor used as a bare value (not in direct call position).
 
-        For nullary variants (no fields): instantiate from the expected nominal type.
-        For payload constructors: instantiate to a FunctionType from expected FunctionType.
+        For nullary variants (no fields) and for a payload constructor whose
+        fields all have declared defaults: instantiate from the expected
+        nominal type. For a constructor with a required field: instantiate to
+        a FunctionType from expected FunctionType.
         """
         if sig is None:
             ctor_ref, sig, _resolved_gdef = self._generic_constructor_data(ctor_ref)
@@ -216,6 +219,7 @@ class ConstructorChecker:
             span=span,
             expected=expected,
             subject=ctor_ref.owner_name,
+            all_defaulted=self._all_fields_have_default_for_sig(sig),
         )
         return self._contextualize_member_result(result, expected, span, ctor_ref.owner_name)
 
@@ -340,13 +344,15 @@ class ConstructorChecker:
         type_args: tuple[TypeExpr, ...],
         sig: ConstructorSignature,
         span: SourceSpan,
+        all_defaulted: bool = False,
     ) -> Type:
         """Instantiate a generic constructor value from explicit type arguments.
 
         Shared core of the bare and qualified type-apply-as-value paths. A
-        field-bearing constructor yields a ``FunctionType`` from its field
-        types to its concrete member record; a fieldless one constructs that
-        record immediately.
+        constructor with a required field yields a ``FunctionType`` from its
+        field types to its concrete member record; a fieldless one, or one
+        whose fields all have declared defaults (*all_defaulted*), constructs
+        that record immediately.
         """
         subst = {
             p: self._ctx._env.resolve_type_expr(
@@ -356,7 +362,7 @@ class ConstructorChecker:
         }
         concrete_params = tuple(substitute(ft, subst) for ft in sig.field_templates)
         concrete_result = substitute(sig.result_template, subst)
-        if not concrete_params:
+        if not concrete_params or all_defaulted:
             return concrete_result
         return FunctionType(params=concrete_params, result=concrete_result)
 
@@ -445,6 +451,7 @@ class ConstructorChecker:
             type_args=type_args,
             sig=sig,
             span=span,
+            all_defaulted=self._all_fields_have_default_for_sig(sig),
         )
         return self._contextualize_member_result(result, expected, span, ctor_ref.owner_name)
 
@@ -723,12 +730,13 @@ class ConstructorChecker:
     ) -> Type:
         """Type a non-generic constructor used in value position (not directly called).
 
-        A constructor with fields becomes a ``FunctionType`` (field types →
-        owner type) so it can be passed around and called positionally.  A
-        zero-field record or nullary variant keeps its bare nominal value (a
-        zero-arg construction).  An exception constructor is rejected — its
-        construction has special trace-id semantics and is out of scope as a
-        first-class value.
+        A constructor with a required field becomes a ``FunctionType`` (field
+        types → owner type) so it can be passed around and called
+        positionally.  A zero-field record, a nullary variant, or a record
+        whose every field has a default keeps its bare nominal value (a
+        zero-arg construction using each field's default).  An exception
+        constructor is rejected — its construction has special trace-id
+        semantics and is out of scope as a first-class value.
         """
         zonked_owner = self._ctx._zonk_constructor_owner(owner)
         assert isinstance(zonked_owner, (RecordType, ExceptionType))
@@ -741,12 +749,37 @@ class ConstructorChecker:
             )
         self._reject_session_constructor(owner, span)
         fields = self._ctx._env.type_table.record_fields(owner)
-        if fields:
+        if fields and not self._all_fields_have_default(owner):
             params = tuple(fields.values())
             return self._contextualize_member_result(
                 FunctionType(params=params, result=owner), expected, span, owner.name
             )
         return self._check_constructor_call(owner=owner, positional=(), named=(), span=span)
+
+    def _all_fields_have_default(self, owner: RecordType) -> bool:
+        """True when every one of *owner*'s fields carries a declared default."""
+        return all(
+            has_default
+            for _fname, has_default in self._ctx._env.type_table.field_has_default(owner)
+        )
+
+    def _all_fields_have_default_for_sig(self, sig: ConstructorSignature) -> bool:
+        """True when every field of *sig*'s target record has a declared default.
+
+        Declaration-level (``TypeDef.field_has_default``), read off
+        ``result_template``'s own declaration identity rather than
+        ``ConstructorRef.owner_decl_node_id`` — a transparent alias's
+        ``ConstructorRef`` still names the alias itself, but its resolved
+        signature's ``result_template`` always names the real target record
+        (or enum member), so this applies uniformly to a generic record's
+        template too — every instantiation shares the same defaulted fields.
+        """
+        target = sig.result_template
+        assert isinstance(target, RecordType)
+        typedef = self._ctx._env.type_table.get_by_id(target.decl_id)
+        assert typedef is not None, f"compiler bug: no TypeDef for declaration {target.decl_id!r}"
+        assert typedef.field_has_default is not None
+        return all(typedef.field_has_default)
 
     # --- Cross-module constructor value/call (public entry points) ---
 

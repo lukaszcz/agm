@@ -269,11 +269,12 @@ let q = Option[int]::Some(value = 2) # qualification disambiguates the owner
 
 ### Field-bearing constructors as values
 
-A constructor with fields is an **ordinary function value**: it can be stored,
-passed to a function, and called like any other function value. When a
-constructor is reached **through a variable** rather than written directly, it
-is a positional callable — its arguments are supplied positionally in
-**declaration order**, since a function value has no named parameters
+A constructor with at least one required field (no `=` default) is an
+**ordinary function value**: it can be stored, passed to a function, and
+called like any other function value. When a constructor is reached
+**through a variable** rather than written directly, it is a positional
+callable — its arguments are supplied positionally in **declaration order**,
+since a function value has no named parameters
 ([Functions](functions.md)):
 
 <!-- agl-check: fragment -->
@@ -299,7 +300,7 @@ annotation supplies that evidence, and a surrounding higher-order call may
 supply it through another argument or its result. A bare `let f = Some` is a
 static error because the binding has no such evidence.
 
-### Fieldless constructor references
+### Fieldless and all-defaulted constructor references
 
 A fieldless constructor reference constructs its value immediately in value
 position. This applies uniformly to a standalone record and an enum member,
@@ -316,8 +317,24 @@ let ready = Ready
 let qualified-ready = Status::Ready
 ```
 
-Calls remain direct constructor calls, so `Marker()` and `Status::Ready()`
-construct the same values as the bare references above. A fieldless constructor reference is not a `() -> T` function
+A constructor whose every field has a `= <constant expr>` default behaves the
+same way: its bare reference constructs the value immediately, filling every
+field with its default:
+
+```agl
+record Config
+  retries: int = 3
+  verbose: bool = false
+
+program def main() -> unit =
+  let config = Config
+  print(config.retries)   # 3
+  print(config == Config())   # true — same value either spelling
+```
+
+Calls remain direct constructor calls, so `Marker()`, `Status::Ready()`, and
+`Config()` construct the same values as the bare references above. A
+fieldless or all-defaulted constructor reference is not a `() -> T` function
 value. Supply an explicit function when one is required:
 
 ```agl

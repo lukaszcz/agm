@@ -134,6 +134,7 @@ from agm.agl.ir.program import (
     ExternFunctionBody,
     FunctionDescriptor,
     IrFunctionBody,
+    NominalDescriptor,
     ValueDescriptors,
     nominal_conforms,
 )
@@ -949,14 +950,18 @@ class IrInterpreter:
         if self._call_depth >= self._max_call_depth:
             raise self._recursion_error()
 
+    def _eval_expr_in_frame(self, expr: IrExpr, frame: Frame) -> Value:
+        """Evaluate *expr* with *frame* pushed as the active frame."""
+        self._frames.append(frame)
+        try:
+            return self._eval(expr)
+        finally:
+            self._frames.pop()
+
     def _eval_default_in_frame(self, param: "IrFunctionParam", frame: Frame) -> Value:
         """Evaluate an omitted argument's default expression in *frame*."""
         assert param.default is not None, "arg omitted but param has no default (lowerer bug)"
-        self._frames.append(frame)
-        try:
-            return self._eval(param.default)
-        finally:
-            self._frames.pop()
+        return self._eval_expr_in_frame(param.default, frame)
 
     def _eval_extern_default(self, param: "IrFunctionParam") -> Value:
         """Evaluate an omitted extern argument's default expression.
@@ -967,6 +972,52 @@ class IrInterpreter:
         module scope for its own defaults.
         """
         return self._eval_default_in_frame(param, {})
+
+    def _eval_constructor_default(
+        self, descriptor: "NominalDescriptor", field_index: int, location: Location | None
+    ) -> Value:
+        """Evaluate an omitted constructor field's default expression.
+
+        Mirrors :meth:`_eval_extern_default`: a field default never captures
+        anything (it is a constant expression checked at the declaring
+        type's own scope), so it evaluates in a fresh empty frame. It runs in
+        the declaring module's call context, entered like any other callee's
+        (:meth:`_enter_call`), so trace spans attribute it correctly.
+        """
+        default = descriptor.field_defaults[field_index]
+        assert default is not None, "omitted constructor field has no default (lowerer bug)"
+        previous_module = self._enter_call(descriptor.module_id, location)
+        try:
+            return self._eval_expr_in_frame(default, {})
+        finally:
+            self._exit_call(previous_module)
+
+    def _eval_constructor_fields(
+        self,
+        nominal: NominalId,
+        fields: "tuple[tuple[str, IrExpr | UseDefault], ...]",
+        location: Location | None,
+    ) -> dict[str, Value]:
+        """Evaluate one record/exception construction's field slots.
+
+        Shared by ``IrMakeRecord`` and ``IrMakeException``: a supplied slot
+        evaluates in the current frame, an omitted (``UseDefault``) one
+        through :meth:`_eval_constructor_default` against the constructed
+        nominal's own descriptor. The descriptor is looked up only when a
+        slot actually needs it, so a construction with every field supplied
+        never requires its nominal to be registered in ``program.nominals``
+        (some hand-built/reserved constructions are not).
+        """
+        return {
+            fname: (
+                self._eval_constructor_default(
+                    self._program.nominals[nominal], fexpr.param_index, location
+                )
+                if isinstance(fexpr, UseDefault)
+                else self._eval(fexpr)
+            )
+            for fname, fexpr in fields
+        }
 
     def _extern_call_window(self) -> ContextManager[None]:
         """Open this interpreter's callback window for one extern invocation."""
@@ -1677,17 +1728,17 @@ class IrInterpreter:
                             assert_never(unreachable_seg)
                 return TextValue("".join(parts))
 
-            case IrMakeRecord(nominal=nominal, fields=fields):
-                record_fields: dict[str, Value] = {
-                    fname: self._eval(fexpr) for fname, fexpr in fields
-                }
-                return RecordValue(nominal=nominal, fields=record_fields)
+            case IrMakeRecord(location=location, nominal=nominal, fields=fields):
+                return RecordValue(
+                    nominal=nominal,
+                    fields=self._eval_constructor_fields(nominal, fields, location),
+                )
 
-            case IrMakeException(nominal=nominal, fields=fields):
-                exc_fields: dict[str, Value] = {
-                    fname: self._eval(field_expr) for fname, field_expr in fields
-                }
-                return ExceptionValue(nominal=nominal, fields=exc_fields)
+            case IrMakeException(location=location, nominal=nominal, fields=fields):
+                return ExceptionValue(
+                    nominal=nominal,
+                    fields=self._eval_constructor_fields(nominal, fields, location),
+                )
 
             case IrMakeConstructor(nominal=nominal):
                 return ConstructorValue(nominal=nominal)

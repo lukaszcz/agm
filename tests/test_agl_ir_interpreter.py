@@ -1540,6 +1540,118 @@ class TestIrUpdateRecord:
 
 
 # ---------------------------------------------------------------------------
+# IrMakeRecord / IrMakeException — UseDefault field slots
+# ---------------------------------------------------------------------------
+
+
+class TestConstructorFieldDefaults:
+    """Tests for ``UseDefault`` field slots on ``IrMakeRecord``/``IrMakeException``.
+
+    A constructor's own ``NominalDescriptor.field_defaults`` carries the
+    lowered default per field, the same shape a function's
+    ``FunctionDescriptor.params`` carries via ``IrFunctionParam.default``;
+    ``UseDefault(index)`` indexes into it.
+    """
+
+    def test_omitted_field_evaluates_its_default(self) -> None:
+        """A UseDefault slot evaluates the descriptor's own default expression."""
+        out_sym, out_desc = _let_sym(0, "out")
+        nominal = NominalId(9)
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrMakeRecord(
+                        _LOC,
+                        nominal,
+                        (("x", IrConstInt(_LOC, 1)), ("y", UseDefault(param_index=1))),
+                    ),
+                ),
+            ),
+            {out_sym: out_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Point",
+                    kind=NominalKind.RECORD,
+                    fields=("x", "y"),
+                    field_defaults=(None, IrConstInt(_LOC, 0)),
+                )
+            },
+        )
+        out = IrInterpreter(prog).run()["out"]
+        assert isinstance(out, RecordValue)
+        assert out.fields == {"x": IntValue(1), "y": IntValue(0)}
+
+    def test_omitted_exception_field_evaluates_its_default(self) -> None:
+        """A UseDefault slot on IrMakeException evaluates the descriptor's default."""
+        out_sym, out_desc = _let_sym(0, "out")
+        nominal = NominalId(9)
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrMakeException(_LOC, nominal, (("code", UseDefault(param_index=0)),)),
+                ),
+            ),
+            {out_sym: out_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Problem",
+                    kind=NominalKind.EXCEPTION,
+                    fields=("code",),
+                    field_defaults=(IrConstInt(_LOC, 0),),
+                )
+            },
+        )
+        out = IrInterpreter(prog).run()["out"]
+        assert isinstance(out, ExceptionValue)
+        assert out.fields == {"code": IntValue(0)}
+
+    def test_omitted_field_default_evaluates_fresh_on_every_construction(self) -> None:
+        """Each omitted-field construction evaluates its default anew, not once and shared.
+
+        A mutable-typed default (here an array) must not become the same
+        aliased ``Value`` object across two separate constructions — the same
+        pitfall a shared mutable default argument would have.
+        """
+        first_sym, first_desc = _let_sym(0, "first")
+        second_sym, second_desc = _let_sym(1, "second")
+        nominal = NominalId(9)
+        make = IrMakeRecord(_LOC, nominal, (("items", UseDefault(param_index=0)),))
+        prog = _make_program(
+            (
+                IrBind(_LOC, first_sym, make),
+                IrBind(_LOC, second_sym, make),
+            ),
+            {first_sym: first_desc, second_sym: second_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Box",
+                    kind=NominalKind.RECORD,
+                    fields=("items",),
+                    field_defaults=(IrMakeArray(_LOC, ()),),
+                )
+            },
+        )
+        bindings = IrInterpreter(prog).run()
+        first, second = bindings["first"], bindings["second"]
+        assert isinstance(first, RecordValue)
+        assert isinstance(second, RecordValue)
+        assert first.fields["items"] is not second.fields["items"]
+
+
+# ---------------------------------------------------------------------------
 # IrIndexSet — IndexError / KeyError raised by the container or the final store
 # ---------------------------------------------------------------------------
 

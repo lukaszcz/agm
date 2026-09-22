@@ -1,0 +1,86 @@
+# Constructor field defaults: omission by named/positional call, bare
+# all-defaulted spelling vs an explicit call (equal values), a nested
+# bare-defaulted record used as a default, an Option field defaulted to
+# 'None' and to 'Some(1)', a generic record's '= None' default, and an
+# enum-member/exception default. 'mode' selects, for the trailing enum
+# member and exception, between supplying their defaulted fields explicitly
+# and omitting them -- a genuinely different code path per scenario, not
+# just a different literal threaded through the same flow.
+
+record Retry
+  count: int = 3
+
+record Config
+  retry: Retry = Retry
+  verbose: bool = false
+
+record Pair
+  x: int
+  y: int = 9
+
+record Setting
+  level: Option[int] = Some(1)
+
+record Box[T]
+  value: T
+  note: Option[T] = None
+
+enum Outcome
+  | Ok(value: int, tag: text = "ok")
+  | Err(reason: text)
+
+exception Failure extends Exception
+  code: int = 0
+
+program def main(mode: text, base: int) -> unit =
+  # Named supply overrides both defaults.
+  let c1 = Config(retry = Retry(count = base), verbose = true)
+  print c1.retry.count
+  print c1.verbose
+
+  # 'verbose' omitted -> its default.
+  let c2 = Config(retry = Retry(count = base))
+  print c2.retry.count
+  print c2.verbose
+
+  # Bare all-defaulted spelling and an explicit call build equal values.
+  let c3 = Config
+  let c4 = Config()
+  print(c3 == c4)
+  print c3.retry.count
+  print c3.verbose
+
+  # Positional call supplies the required field, omits the trailing default.
+  let pr = Pair(base)
+  print pr.x
+  print pr.y
+
+  let s = Setting()
+  case s.level of
+    | Some(value) => print value
+    | None => print(-1)
+
+  let boxed: Box[int] = Box(value = base)
+  case boxed.note of
+    | Some(value) => print value
+    | None => print(-1)
+
+  if
+    | mode == "supplied" =>
+        let outcome: Outcome = Ok(value = base, tag = "custom")
+        case outcome of
+          | Ok(value, tag) => print tag
+          | Err(reason) => print reason
+        try
+          raise Failure(message = "boom", code = base)
+        catch Failure as e =>
+          print e.code
+    | else =>
+        let outcome: Outcome = Ok(value = base)
+        case outcome of
+          | Ok(value, tag) => print tag
+          | Err(reason) => print reason
+        try
+          raise Failure(message = "boom")
+        catch Failure as e =>
+          print e.code

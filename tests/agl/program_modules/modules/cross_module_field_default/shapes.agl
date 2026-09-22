@@ -1,0 +1,6 @@
+# A library declaring a constant a field default names, and a record whose
+# defaulted field reads it.
+let base-margin = 100
+
+record Box
+  value: int = base-margin

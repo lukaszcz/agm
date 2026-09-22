@@ -478,13 +478,34 @@ def test_constructor_result_nominal_rejects_non_nominal_type() -> None:
         lowerer._nominal_for_constructor_result(IntType())
 
 
-def test_lowering_rejects_a_constructor_call_omitting_a_defaulted_field() -> None:
-    """Typecheck legitimately allows omitting a defaulted field; lowering does not
-    yet fill it in, so it must fail with a clear internal error, never a bare
-    KeyError or a silent miscompile.
+def test_constructor_descriptor_carries_lowered_field_defaults() -> None:
+    """A record's ``NominalDescriptor.field_defaults`` holds the lowered default
+    expression per field, ``None`` for a required field, in declaration order —
+    the same shape a function's ``IrFunctionParam.default`` carries.
     """
-    with pytest.raises(AssertionError, match="lowering constructor field 'y'"):
-        _lower("record Point\n  x: int\n  y: int = 0\nPoint(x = 1)")
+    from tests.agl.ir_harness import nominal_id_for
+
+    program = _lower("record Point\n  x: int\n  y: int = 0\nlet p = Point(x = 1)\n()")
+    nominal = nominal_id_for(program, "Point")
+    desc = program.nominals[nominal]
+    assert desc.fields == ("x", "y")
+    assert desc.field_defaults[0] is None
+    assert isinstance(desc.field_defaults[1], IrConstInt)
+    assert desc.field_defaults[1].value == 0
+
+
+def test_constructor_call_omitting_a_defaulted_field_lowers_to_use_default() -> None:
+    """A constructor call omitting a defaulted field lowers ``UseDefault(index)`` for
+    it, the same sentinel an omitted call argument uses against its callee's own
+    ``FunctionDescriptor.params`` — one code path, not a second default mechanism.
+    """
+    program = _lower("record Point\n  x: int\n  y: int = 0\nlet p = Point(x = 1)\n()")
+    entry = program.modules[program.entry_module]
+    root_capture = _let_root_capture(entry.initializers[0])
+    assert isinstance(root_capture.value, IrMakeRecord)
+    fields_dict = dict(root_capture.value.fields)
+    assert isinstance(fields_dict["x"], IrConstInt)
+    assert fields_dict["y"] == UseDefault(param_index=1)
 
 
 def test_lowering_erases_flexible_state_from_generic_direct_nested_and_partial_calls() -> None:

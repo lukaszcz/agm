@@ -77,6 +77,35 @@ def test_edited_imports_change_the_next_execution(
     assert capsys.readouterr().out == expected
 
 
+def test_field_default_survives_the_module_cache_disk_round_trip(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A cached library module's constructor field default round-trips
+    through ``LoweredModule.capture()``/``link_into()`` and an on-disk
+    artifact restore.
+
+    ``clear_retained_artifacts()`` drops only in-memory retention (disk
+    persists), forcing the second compile to rehydrate ``lib``'s
+    ``LoweredModule`` -- and with it, ``NominalDescriptor.field_defaults`` for
+    its defaulted record -- from ``artifact_serialization`` rather than reuse
+    the in-process object.
+    """
+    (tmp_path / "lib.agl").write_text("record Limits\n  retries: int = 3\n")
+    roots = agl_roots(tmp_path)
+    runtime = PipelineDriver()
+    source = "import lib::*\nprint(Limits().retries)\n"
+
+    artifact_cache.clear_retained_artifacts()
+    assert run_inline_command(runtime, source, roots=roots).ok
+    assert capsys.readouterr().out == "3\n"
+
+    artifact_cache.clear_retained_artifacts()  # drop memory only; disk persists
+    result = run_inline_command(runtime, source, roots=roots)
+
+    assert result.ok, result.diagnostics
+    assert capsys.readouterr().out == "3\n"
+
+
 def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

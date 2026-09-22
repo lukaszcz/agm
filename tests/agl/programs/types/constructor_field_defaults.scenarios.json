@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "base_zero_defaults",
+      "params": {
+        "mode": "defaults",
+        "base": 0
+      },
+      "expect": {
+        "stdout": "0\ntrue\n0\nfalse\ntrue\n3\nfalse\n0\n9\n1\n-1\nok\n0\n"
+      }
+    },
+    {
+      "name": "base_five_supplied",
+      "params": {
+        "mode": "supplied",
+        "base": 5
+      },
+      "expect": {
+        "stdout": "5\ntrue\n5\nfalse\ntrue\n3\nfalse\n5\n9\n1\n-1\ncustom\n5\n"
+      }
+    },
+    {
+      "name": "base_negative_defaults",
+      "params": {
+        "mode": "defaults",
+        "base": -3
+      },
+      "expect": {
+        "stdout": "-3\ntrue\n-3\nfalse\ntrue\n3\nfalse\n-3\n9\n1\n-1\nok\n0\n"
+      }
+    }
+  ]
+}

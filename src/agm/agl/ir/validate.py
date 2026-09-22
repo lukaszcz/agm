@@ -318,6 +318,81 @@ def _check_nominal_in_table(nominal: NominalId, ctx: _Context) -> None:
         )
 
 
+def _validate_use_default_slot(
+    context: str,
+    noun: str,
+    value: UseDefault,
+    index: int,
+    ctx: _Context,
+    has_default: "bool | None",
+) -> None:
+    """Validate one ``UseDefault`` sentinel: shared by call arguments and
+    constructor field slots.
+
+    The sentinel's ``param_index`` must equal its list position -- a
+    structural, node-local invariant with no program-table dependency, so it
+    is checked unconditionally, in both tiers. Whether the referenced slot
+    actually carries a default requires the callee's/nominal's resolved
+    parameter table, so it is checked only under ``ctx.deep`` and only when
+    *has_default* is supplied (``None`` when the caller has no such table to
+    resolve, e.g. an unresolved ``function_id``/nominal under the cheap tier).
+    *context* is prose already naming the call/construction (e.g.
+    ``"IrDirectCall to function_id=3"``); *noun* is ``"parameter"`` or
+    ``"field"``.
+    """
+    if value.param_index != index:
+        raise InvalidIrError(
+            f"{context}: UseDefault at position {index} has param_index="
+            f"{value.param_index} (must equal its position)"
+        )
+    if ctx.deep and has_default is False:
+        raise InvalidIrError(f"{context}: UseDefault for {noun} {index} which has no default")
+
+
+def _validate_constructor_fields(
+    nominal: NominalId,
+    fields: "tuple[tuple[str, IrExpr | UseDefault], ...]",
+    ctx: _Context,
+    node_name: str,
+) -> None:
+    """Validate an ``IrMakeRecord``/``IrMakeException``'s field slots.
+
+    Mirrors ``IrDirectCall``'s argument checks: field-slot count and name
+    parity against the constructed nominal's own declared fields, then each
+    ``UseDefault`` slot through :func:`_validate_use_default_slot` (deep tier
+    only, since both need the resolved ``NominalDescriptor``). Every other
+    slot is a plain expression.
+    """
+    if ctx.deep:
+        _check_nominal_in_table(nominal, ctx)
+    desc = ctx.program.nominals.get(nominal)
+    context = f"{node_name} for nominal {nominal!r}"
+    if ctx.deep and desc is not None:
+        if len(fields) != len(desc.fields):
+            raise InvalidIrError(
+                f"{context} has {len(fields)} field slots but the nominal declares"
+                f" {len(desc.fields)} fields"
+            )
+        for index, (fname, _fexpr) in enumerate(fields):
+            if fname != desc.fields[index]:
+                raise InvalidIrError(
+                    f"{context}: field slot {index} is named {fname!r} but the nominal"
+                    f" declares {desc.fields[index]!r} at that position"
+                )
+    for index, (_fname, fexpr) in enumerate(fields):
+        if isinstance(fexpr, UseDefault):
+            _validate_use_default_slot(
+                context,
+                "field",
+                fexpr,
+                index,
+                ctx,
+                desc.field_defaults[index] is not None if ctx.deep and desc is not None else None,
+            )
+        else:
+            _validate_expr(fexpr, ctx)
+
+
 def _check_nominal_field(
     nominal: NominalId, field: str, mode: IrFieldMode, ctx: _Context, node_name: str
 ) -> None:
@@ -1054,17 +1129,11 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 
         case IrMakeRecord(nominal=nominal, fields=fields):
             _validate_location(node.location, ctx)
-            if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-            for _fname, fexpr in fields:
-                _validate_expr(fexpr, ctx)
+            _validate_constructor_fields(nominal, fields, ctx, "IrMakeRecord")
 
         case IrMakeException(nominal=nominal, fields=fields):
             _validate_location(node.location, ctx)
-            if ctx.deep:
-                _check_nominal_in_table(nominal, ctx)
-            for _fname, field_expr in fields:
-                _validate_expr(field_expr, ctx)
+            _validate_constructor_fields(nominal, fields, ctx, "IrMakeException")
 
         case IrMakeConstructor(nominal=nominal):
             _validate_location(node.location, ctx)
@@ -1166,6 +1235,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 
         case IrDirectCall(function_id=fn_id, arguments=arguments):
             _validate_location(node.location, ctx)
+            params: tuple[IrFunctionParam, ...] | None = None
             if ctx.deep:
                 params = _resolve_callable_params(fn_id, ctx, "IrDirectCall")
                 if len(arguments) != len(params):
@@ -1173,21 +1243,18 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                         f"IrDirectCall to function_id={fn_id!r} has {len(arguments)}"
                         f" arguments but the function has {len(params)} parameters"
                     )
-                for index, arg in enumerate(arguments):
-                    if isinstance(arg, UseDefault):
-                        if arg.param_index != index:
-                            raise InvalidIrError(
-                                f"IrDirectCall to function_id={fn_id!r}: UseDefault at"
-                                f" position {index} has param_index={arg.param_index}"
-                                " (must equal its position)"
-                            )
-                        if params[index].default is None:
-                            raise InvalidIrError(
-                                f"IrDirectCall to function_id={fn_id!r}: UseDefault for"
-                                f" parameter {index} which has no default"
-                            )
-            for arg in arguments:
-                if not isinstance(arg, UseDefault):
+            context = f"IrDirectCall to function_id={fn_id!r}"
+            for index, arg in enumerate(arguments):
+                if isinstance(arg, UseDefault):
+                    _validate_use_default_slot(
+                        context,
+                        "parameter",
+                        arg,
+                        index,
+                        ctx,
+                        params[index].default is not None if params is not None else None,
+                    )
+                else:
                     _validate_expr(arg, ctx)
 
         case IrIndirectCall(callee=callee, arguments=arguments):
@@ -1384,6 +1451,18 @@ def _validate_program_tables(ctx: _Context) -> None:
             raise InvalidIrError(
                 "enum and exception descriptors must have empty mutable_fields "
                 f"for nominal {nom_key!r}"
+            )
+
+        if nom_desc.kind in (NominalKind.RECORD, NominalKind.EXCEPTION):
+            if len(nom_desc.field_defaults) != len(nom_desc.fields):
+                raise InvalidIrError(
+                    f"{nom_desc.kind!r} descriptor for nominal {nom_key!r} has"
+                    f" {len(nom_desc.field_defaults)} field_defaults but"
+                    f" {len(nom_desc.fields)} fields"
+                )
+        elif nom_desc.field_defaults:
+            raise InvalidIrError(
+                f"enum descriptor for nominal {nom_key!r} must have empty field_defaults"
             )
 
         if nom_desc.kind is NominalKind.EXCEPTION:

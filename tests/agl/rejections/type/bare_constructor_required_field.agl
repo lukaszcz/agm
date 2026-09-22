@@ -1,0 +1,7 @@
+record Point
+  x: int
+  y: int = 0
+
+program def main() -> unit =
+  let p: Point = Point
+  print(p.x)

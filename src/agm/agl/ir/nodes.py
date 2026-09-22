@@ -556,12 +556,16 @@ class IrMakeRecord:
     ``nominal`` — the ``NominalId`` of the record type.
     ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
         each ``expr`` is already coerced to the declared field type by the
-        lowerer via ``lower_coerced``.
+        lowerer via ``lower_coerced``. An omitted defaulted field carries
+        ``UseDefault(index)`` in place of ``expr`` — the evaluator fills it
+        from ``nominal``'s own ``NominalDescriptor.field_defaults[index]``,
+        the same sentinel an omitted call argument uses against its callee's
+        ``FunctionDescriptor.params``.
     """
 
     location: Location
     nominal: NominalId
-    fields: "tuple[tuple[str, IrExpr], ...]"
+    fields: "tuple[tuple[str, IrExpr | UseDefault], ...]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -575,11 +579,13 @@ class IrMakeException:
         ``builtin exception`` included.
     ``fields`` — declaration-order tuple of ``(field_name, expr)`` pairs;
         each expression is coerced to the declared field type by the lowerer.
+        An omitted defaulted field carries ``UseDefault(index)``, exactly as
+        ``IrMakeRecord.fields`` does.
     """
 
     location: Location
     nominal: NominalId
-    fields: "tuple[tuple[str, IrExpr], ...]"
+    fields: "tuple[tuple[str, IrExpr | UseDefault], ...]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -948,7 +954,15 @@ class IrCapture:
 
 @dataclass(frozen=True, slots=True)
 class UseDefault:
-    """Sentinel in IrDirectCall.arguments: use the param default for this arg."""
+    """Sentinel for an omitted defaulted argument/field: use the owner's own default.
+
+    In ``IrDirectCall.arguments``, ``param_index`` indexes the callee's
+    ``FunctionDescriptor.params``. In ``IrMakeRecord.fields``/
+    ``IrMakeException.fields``, it indexes the constructed nominal's own
+    ``NominalDescriptor.field_defaults`` — the same sentinel, reused rather
+    than duplicated, because both cases fill an omitted slot from an
+    owner-carried default expression.
+    """
 
     param_index: int
 

@@ -670,10 +670,13 @@ class EntryPipeline:
         # can fail from here on rolls back against this snapshot: an entry
         # rejected before anything is promoted discards its whole link delta
         # via ``restore_state``. A partially run entry keeps its delta, caching
-        # and marking only dependency-complete library modules, and needs no
-        # nominal rollback at all -- the link image's nominal state is rebuilt
-        # from the shared type table on every lowering, so it is always current
-        # regardless of what this entry did or did not promote.
+        # and marking only dependency-complete library modules. ``link.nominals``
+        # itself needs no separate rollback handling -- it is rebuilt wholesale
+        # from the shared type table on every lowering pass -- but that rebuild
+        # reads per-field defaults back from ``link.field_defaults``, which IS
+        # part of this entry's delta and must roll back with it like every
+        # other ``_LinkState`` field (``snapshot_state``/``restore_state``
+        # cover every field of the dataclass for exactly this reason).
         link_snapshot = self._ctx._link_image.snapshot_state()
         try:
             with frontend_recursion_boundary():

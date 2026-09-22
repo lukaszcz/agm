@@ -77,24 +77,13 @@ class LinkImage:
         self._linked_modules.update(module_ids)
 
     def snapshot_state(self) -> _LinkState:
-        """Return an independent rollback snapshot of incremental linker state."""
-        state = self._state
-        return _LinkState(
-            next_sym=state.next_sym,
-            next_fn=state.next_fn,
-            next_source=state.next_source,
-            next_contract=state.next_contract,
-            decl_to_sym=dict(state.decl_to_sym),
-            fn_node_to_sym=dict(state.fn_node_to_sym),
-            fn_node_to_id=dict(state.fn_node_to_id),
-            symbols=dict(state.symbols),
-            functions=dict(state.functions),
-            nominals=dict(state.nominals),
-            builtin_nominals=state.builtin_nominals,
-            sources=dict(state.sources),
-            contracts=dict(state.contracts),
-            initializer_origins=dict(state.initializer_origins),
-        )
+        """Return an independent rollback snapshot of incremental linker state.
+
+        Delegates to ``_LinkState.snapshot()``, defined beside that
+        dataclass's own field list so a newly added field is copied by the
+        same edit that adds it.
+        """
+        return self._state.snapshot()
 
     def restore_state(self, snapshot: _LinkState) -> None:
         """Restore a previously snapshotted incremental linker state."""

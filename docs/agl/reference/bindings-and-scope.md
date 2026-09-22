@@ -383,8 +383,8 @@ let b: Box[int] = Box(value = 1)
 ### Constructors in the value namespace
 
 Record constructors and injected enum-member constructors are normal bindings
-in the value namespace. A field-bearing constructor can be referenced bare, stored, and
-passed as a function value:
+in the value namespace. A constructor with at least one required field can be
+referenced without being called, stored, and passed as a function value:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -395,10 +395,12 @@ let one = mk(1)                  # called positionally, in field order
 Direct construction uses positional-greedy binding — positional arguments fill
 positional-capable fields first, then named arguments follow (`Box(value = 1)`,
 `Some(value = x)`, or `Ok(42)` for a single-standard-field member). A
-field-bearing constructor reached **through a variable** is an ordinary function
-value invoked **positionally**, in declaration order. A fieldless constructor
-reference constructs its value; use `fn() => R1` where a `() -> R1` function is
-required. See [Expressions](expressions.md#fieldless-constructor-references)
+constructor with a required field, reached **through a variable**, is an
+ordinary function value invoked **positionally**, in declaration order. A
+fieldless constructor reference, or one whose every field has a `=` default,
+constructs its value immediately instead; use `fn() => R1` where a `() -> R1`
+function is required. See
+[Expressions](expressions.md#fieldless-and-all-defaulted-constructor-references)
 and [Generics](generics.md) for constructor typing and inference.
 
 ### Overload sets, shadowing, and ambiguity

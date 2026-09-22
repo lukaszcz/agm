@@ -13,6 +13,7 @@ import pytest
 from agm.agl.ir.ids import NominalId, SourceId
 from agm.agl.ir.nodes import (
     IrBind,
+    IrConstInt,
     IrMakeConstructor,
     IrMakeException,
     IrMakeRecord,
@@ -825,7 +826,7 @@ def test_validate_accepts_valid_ir_make_record() -> None:
     node = IrMakeRecord(
         location=loc,
         nominal=nominal_id,
-        fields=(),
+        fields=(("x", IrConstInt(location=loc, value=1)),),
     )
     from agm.agl.modules.ids import ENTRY_ID as EID
 

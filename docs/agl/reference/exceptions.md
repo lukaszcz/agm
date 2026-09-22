@@ -32,7 +32,13 @@ exception DeployError extends Exception
 
 An exception extends exactly one base exception type; omitting `extends` means
 `extends Exception`. Constructor fields include the inherited fields first,
-followed by fields declared on the subtype.
+followed by fields declared on the subtype. A field with `= <constant expr>`
+is optional, inherited defaults included: a `raise`/construction that omits
+it uses the default. Unlike a record or enum member, an exception is never
+constructible from a bare reference, even when every field has a default
+(see [Fieldless and all-defaulted constructor
+references](expressions.md#fieldless-and-all-defaulted-constructor-references)):
+exception construction always needs an explicit call, `raise Abort(...)`.
 `trace-id` is not reserved: a user-declared exception may use it as one of its
 own fields. Exception fields do not accept `var` and cannot be reassigned.
 `builtin exception` is the standard-library form for host-recognized exception

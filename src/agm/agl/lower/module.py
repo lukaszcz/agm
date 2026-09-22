@@ -9,7 +9,7 @@ from agm.agl import artifact_serialization
 from agm.agl.artifact_cache import retain_lowered_module, retained_lowered_module
 from agm.agl.ir.builtin_vars import BuiltinVarKey
 from agm.agl.ir.contracts import ContractRequest
-from agm.agl.ir.ids import ContractId, FunctionId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SymbolId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import ExecutableModule, FunctionDescriptor, SymbolDescriptor
 from agm.agl.ir.static_keys import StaticBindingKey
@@ -31,6 +31,7 @@ class LoweredModule:
     defaults: dict[BuiltinVarKey | str, IrExpr]
     program_configs: dict[SymbolId, tuple[tuple[StaticBindingKey, IrExpr], ...]]
     resources: tuple[tuple[Path | None, str | None, Path], ...]
+    field_defaults: dict[NominalId, tuple[IrExpr | None, ...]]
 
     def link_into(self, link: _LinkState) -> None:
         """Publish this module's declarations and bodies to the program linker."""
@@ -40,6 +41,7 @@ class LoweredModule:
         link.decl_to_sym.update(self.declarations)
         link.fn_node_to_sym.update(self.function_symbols)
         link.fn_node_to_id.update(self.function_ids)
+        link.field_defaults.update(self.field_defaults)
 
 
 def capture(
@@ -50,6 +52,7 @@ def capture(
     resources: tuple[tuple[Path | None, str | None, Path], ...],
     contract_start: int,
     contract_end: int,
+    field_defaults: dict[NominalId, tuple[IrExpr | None, ...]],
 ) -> LoweredModule:
     """Extract the tables owned by one freshly lowered module."""
     functions = {fid: fn for fid, fn in link.functions.items() if fn.module_id == module.module_id}
@@ -73,6 +76,7 @@ def capture(
         defaults,
         program_configs,
         resources,
+        field_defaults,
     )
 
 

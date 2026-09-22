@@ -648,6 +648,21 @@ class TypeTable:
         chain.reverse()
         return chain
 
+    def exception_chain_defs(self, decl_id: DeclId) -> tuple[TypeDef, ...]:
+        """Return *decl_id*'s exception base chain, base first, own def last.
+
+        The shared walk every flattened exception accessor
+        (:meth:`exception_fields`, :meth:`field_kinds`, :meth:`field_has_default`,
+        :meth:`field_external_names`) builds on, exposed for a caller outside
+        this module that needs the same base-first order over its own
+        per-declaration data (e.g. a lowered field default keyed by
+        declaration identity) instead of reimplementing the chain walk.
+        """
+        return tuple(
+            typedef
+            for _decl_id, typedef in self._exception_chain(decl_id, caller="exception_chain_defs")
+        )
+
     def ancestor_defs(self, decl_id: DeclId) -> tuple[TypeDef, ...]:
         """Return *decl_id*'s exception ancestors, nearest first.
 

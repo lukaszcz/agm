@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "cross_module_default",
+      "module_roots": ["program_modules/modules/cross_module_field_default"],
+      "expect": {
+        "stdout": "100\n1\n"
+      }
+    }
+  ]
+}

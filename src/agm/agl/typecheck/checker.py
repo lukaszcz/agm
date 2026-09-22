@@ -2438,8 +2438,14 @@ class _Checker:
         span: SourceSpan,
         expected: Type | None,
         subject: str,
+        all_defaulted: bool = False,
     ) -> Type:
-        """Freshen a generic constructor value in the active expression region."""
+        """Freshen a generic constructor value in the active expression region.
+
+        *all_defaulted* extends the nullary-constructor rule: a
+        field-bearing constructor whose fields all have declared defaults
+        stays bare (constructs immediately) exactly like a fieldless one.
+        """
         engine = self._active_inference_engine()
         instantiation = engine.instantiate(type_params, (*field_templates, result_template))
         for type_param in type_params:
@@ -2455,7 +2461,7 @@ class _Checker:
         result = instantiation.templates[-1]
         concrete: Type = (
             FunctionType(params=instantiation.templates[:-1], result=result)
-            if field_templates
+            if field_templates and not all_defaulted
             else result
         )
         if expected is not None:

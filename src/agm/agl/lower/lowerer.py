@@ -262,6 +262,7 @@ from agm.agl.syntax.nodes import (
     UnitLit,
     UseDecl,
     VarDecl,
+    VariantDef,
     VarRef,
     pattern_binder_candidates,
     scoped_public_name,
@@ -307,13 +308,19 @@ def reserved_fallback_superseded(name: str, type_table: TypeTable) -> bool:
 
 
 def _add_builtin_nominals(
-    nominals: dict[NominalId, NominalDescriptor], type_table: TypeTable
+    nominals: dict[NominalId, NominalDescriptor],
+    type_table: TypeTable,
+    field_defaults: "Mapping[NominalId, tuple[IrExpr | None, ...]]",
 ) -> None:
     """Register the host's reserved prelude and exception nominal descriptors.
 
     Record/enum field and variant names, and exception field names, are all
     resolved through *type_table* (every built-in prelude and exception type
-    is seeded into every table by ``create_seeded_type_table``).
+    is seeded into every table by ``create_seeded_type_table``). *field_defaults*
+    is the same accumulated link-state table every other nominal descriptor
+    reads (see ``_LinkState.field_defaults``); threading it here rather than
+    an empty mapping keeps a reserved identity's defaults live should one ever
+    be declared with a default, instead of a second silent "no defaults" spot.
 
     A reserved identity a standard-library declaration supersedes is left out:
     the source declaration bears that name path, and nothing can reach the
@@ -324,16 +331,18 @@ def _add_builtin_nominals(
             continue
         nominal = NominalId(require_reserved_nominal_id(name))
         if isinstance(typ, RecordType):
+            fields = tuple(type_table.record_fields(typ).keys())
             nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
                 module_id=RESERVED_ID,
                 scope_path=(),
                 declared_name=name,
                 kind=NominalKind.RECORD,
-                fields=tuple(type_table.record_fields(typ).keys()),
+                fields=fields,
                 mutable_fields=type_table.record_mutable_fields(typ),
                 variants=(),
                 positional_fields=positional_field_names(type_table.field_kinds(typ)),
+                field_defaults=field_defaults.get(nominal, ()),
             )
             continue
         if isinstance(typ, ExceptionType):
@@ -358,7 +367,11 @@ def _add_builtin_nominals(
         if reserved_fallback_superseded(exc_name, type_table):
             continue
         descriptor = exception_descriptor(
-            type_table.exception_def(exc_type), exc_type, type_table, bears_name_path=True
+            type_table.exception_def(exc_type),
+            exc_type,
+            type_table,
+            bears_name_path=True,
+            field_defaults=field_defaults,
         )
         nominals[descriptor.nominal] = descriptor
 
@@ -446,6 +459,17 @@ class _LinkState:
     symbols: dict[SymbolId, SymbolDescriptor] = field(default_factory=dict)
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
+    # Lowered constructor field defaults, keyed by the declaring record/
+    # exception/enum-variant's own identity, one entry per field in
+    # declaration order (``None`` for a required field). Populated while a
+    # declaring module's own items are lowered (``_Lowerer._lower_field_defaults``)
+    # and read back once every module has been processed, building nominal
+    # descriptors (``_record_descriptor``/``exception_descriptor`` in
+    # ``lower/program.py``) — the constructor counterpart of
+    # ``IrFunctionParam.default``, persisted across REPL entries like
+    # ``functions``/``symbols`` so an already-linked module's descriptors keep
+    # their defaults without being lowered again.
+    field_defaults: dict[NominalId, tuple[IrExpr | None, ...]] = field(default_factory=dict)
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
@@ -454,6 +478,39 @@ class _LinkState:
     # re-classifying source items; the entry mapping is overwritten before
     # promotion consumes it on each REPL entry.
     initializer_origins: dict[ModuleId, tuple[InitializerOrigin, ...]] = field(default_factory=dict)
+
+    def snapshot(self) -> "_LinkState":
+        """Return an independent shallow copy, for the REPL's rollback snapshot.
+
+        Every ``dict``-valued field is re-keyed into a fresh ``dict`` so later
+        mutation of the live state cannot reach the snapshot; every other
+        field is shared as-is (a counter, or the immutable
+        ``BuiltinNominals``). Reflective (``dataclasses.fields``/``getattr``)
+        copying is not an option under this repository's
+        ``disallow_any_expr`` mypy setting -- every dynamic-attribute
+        expression is typed ``Any``. Defined here, directly beside the field
+        list, so a newly added field is copied by the same edit that adds it
+        rather than in a distant caller that can silently forget it (the
+        ``field_defaults`` bug this method's addition fixed: a caller that
+        enumerated fields by hand, at a distance, missed one).
+        """
+        return _LinkState(
+            next_sym=self.next_sym,
+            next_fn=self.next_fn,
+            next_source=self.next_source,
+            next_contract=self.next_contract,
+            decl_to_sym=dict(self.decl_to_sym),
+            fn_node_to_sym=dict(self.fn_node_to_sym),
+            fn_node_to_id=dict(self.fn_node_to_id),
+            symbols=dict(self.symbols),
+            functions=dict(self.functions),
+            nominals=dict(self.nominals),
+            field_defaults=dict(self.field_defaults),
+            builtin_nominals=self.builtin_nominals,
+            sources=dict(self.sources),
+            contracts=dict(self.contracts),
+            initializer_origins=dict(self.initializer_origins),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -501,6 +558,11 @@ class _Lowerer:
         seed = checked.resolved.program.node_id << 32
         self._allocation = _ModuleAllocation(seed, seed, seed) if stable_ids else link
         self.resources: list[tuple[Path | None, str | None, Path]] = []
+        # This module's own contribution to ``link.field_defaults``, kept
+        # alongside it so the module cache can capture exactly what this
+        # lowering pass added (mirrors how ``lowerer.resources`` feeds
+        # ``module_cache.capture``).
+        self.field_defaults: dict[NominalId, tuple[IrExpr | None, ...]] = {}
         self._module_id = module_id
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
@@ -2925,7 +2987,15 @@ class _Lowerer:
         arg_slots: "dict[str, IrExpr]",
         span: "SourceSpan",
     ) -> IrExpr:
-        """Build the IrMake* node for a constructor from already-lowered slots."""
+        """Build the IrMake* node for a constructor from already-lowered slots.
+
+        An omitted field (absent from *arg_slots* because the checker allowed
+        the call to skip a defaulted field) lowers to ``UseDefault(index)`` —
+        the same sentinel an omitted call argument uses — so the evaluator
+        fills it from the constructed nominal's own ``NominalDescriptor
+        .field_defaults`` the way ``IrDirectCall`` fills an omitted argument
+        from its callee's ``FunctionDescriptor.params``.
+        """
         loc = self._loc(span)
 
         if isinstance(typ, RecordType):
@@ -2933,38 +3003,20 @@ class _Lowerer:
             # Build fields in declaration order via the shared TypeTable (its
             # TypeDef stores fields as a declaration-ordered tuple).
             ir_fields = tuple(
-                (fname, self._require_constructor_slot(arg_slots, fname))
-                for fname in self._type_table.record_fields(typ)
+                (fname, arg_slots.get(fname, UseDefault(index)))
+                for index, fname in enumerate(self._type_table.record_fields(typ))
             )
             return IrMakeRecord(location=loc, nominal=nominal, fields=ir_fields)
 
         if isinstance(typ, ExceptionType):
             nominal = NominalId(typ.decl_id)
             exc_fields = tuple(
-                (fname, self._require_constructor_slot(arg_slots, fname))
-                for fname in self._type_table.exception_fields(typ)
+                (fname, arg_slots.get(fname, UseDefault(index)))
+                for index, fname in enumerate(self._type_table.exception_fields(typ))
             )
             return IrMakeException(location=loc, nominal=nominal, fields=exc_fields)
 
         raise AssertionError("compiler bug: cannot determine constructor type")  # pragma: no cover
-
-    @staticmethod
-    def _require_constructor_slot(arg_slots: "dict[str, IrExpr]", fname: str) -> "IrExpr":
-        """Return field *fname*'s lowered slot, or fail clearly for an omitted default.
-
-        The checker accepts a constructor call that omits a defaulted field
-        (field defaults follow the same rules as function parameter
-        defaults), but lowering a fallback to the field's own default is not
-        yet implemented, so an omission that reaches here must fail with a
-        clear diagnosis rather than a bare ``KeyError``.
-        """
-        slot = arg_slots.get(fname)
-        if slot is None:
-            raise AssertionError(
-                f"internal error: lowering constructor field '{fname}' with its default "
-                "value is not implemented"
-            )
-        return slot
 
     # ------------------------------------------------------------------
     # Partial call lowering
@@ -3814,6 +3866,46 @@ class _Lowerer:
         return 1
 
     # ------------------------------------------------------------------
+    # Constructor field defaults
+    # ------------------------------------------------------------------
+
+    def _lower_field_defaults(self, decl_node_id: int, fields: "tuple[Param, ...]") -> None:
+        """Lower and publish one record/exception/variant's field defaults.
+
+        Mirrors ``_lower_declared_params``'s per-parameter default lowering:
+        each default is coerced to its own field's declared type (read off
+        the shared ``TypeTable``, so a generic declaration's template field
+        type carries its own type variables unresolved, exactly as the
+        checker rigidified them for its assignability check). A default may
+        reference this module's own constants, so it lowers under
+        ``substituted_constants`` too — not for ``builtin var``'s reason
+        (evaluated before any initializer has run), since a field default
+        instead runs at construction time, after the module is fully
+        initialized. It substitutes so each omitted-field construction gets a
+        fresh evaluation of a referenced constant's own initializer rather
+        than a frame load of its one already-computed value: a default
+        naming a constant that holds a mutable container would otherwise
+        share that single container's identity across every construction
+        that omits the field. Skipped when no field of *fields* declares a
+        default.
+        """
+        if not any(fd.default is not None for fd in fields):
+            return
+        typedef = self._type_table.get_by_id(decl_node_id)
+        assert typedef is not None, f"compiler bug: no TypeDef for declaration {decl_node_id!r}"
+        field_types = dict(typedef.fields)
+        with self.substituted_constants():
+            defaults = tuple(
+                self.lower_coerced(fd.default, field_types[fd.name])
+                if fd.default is not None
+                else None
+                for fd in fields
+            )
+        nominal = NominalId(decl_node_id)
+        self._link.field_defaults[nominal] = defaults
+        self.field_defaults[nominal] = defaults
+
+    # ------------------------------------------------------------------
     # Item lowering
     # ------------------------------------------------------------------
 
@@ -3898,11 +3990,22 @@ class _Lowerer:
                     return self._lower_extern_funcdef(funcdef)
                 return self._lower_funcdef(funcdef)
 
+            case RecordDef(fields=fields, node_id=nid):
+                self._lower_field_defaults(nid, fields)
+                return None
+
+            case ExceptionDef(fields=fields, node_id=nid):
+                self._lower_field_defaults(nid, fields)
+                return None
+
+            case EnumDef(members=members):
+                for member in members:
+                    if isinstance(member, VariantDef):
+                        self._lower_field_defaults(member.node_id, member.fields)
+                return None
+
             case (
-                RecordDef()
-                | EnumDef()
-                | ExceptionDef()
-                | TypeAlias()
+                TypeAlias()
                 | ImportDecl()
                 | ExportDecl()
                 | UseDecl()

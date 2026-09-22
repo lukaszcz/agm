@@ -59,8 +59,10 @@ from agm.agl.ir import (
     IrMakeArray,
     IrMakeClosure,
     IrMakeDict,
+    IrMakeException,
     IrMakeJsonArray,
     IrMakeJsonObject,
+    IrMakeRecord,
     IrNominalCaseKey,
     IrProgramParam,
     IrRenderTemplate,
@@ -2136,6 +2138,159 @@ class TestIrDirectCall:
         prog = _make_program(functions={FN0: fn_desc})
         with pytest.raises(InvalidIrError, match="9999"):
             validate_ir(prog)
+
+    def test_use_default_out_of_position_raises_even_with_deep_false(self) -> None:
+        """UseDefault's position invariant is cheap (node-local): checked in both
+        tiers, unlike the arity/default-presence checks, which need the
+        resolved callee params and so run only under ``deep``.
+        """
+        call = _make_direct_call(FN0, args=(UseDefault(param_index=99),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, call),))
+        with pytest.raises(InvalidIrError, match="param_index"):
+            validate_ir(prog, deep=False)
+
+
+class TestConstructorFieldUseDefault:
+    """``UseDefault`` field-slot invariants on ``IrMakeRecord``/``IrMakeException``.
+
+    Mirrors ``TestIrDirectCall``'s ``UseDefault`` argument checks: the same
+    sentinel, now indexing a constructed nominal's own
+    ``NominalDescriptor.field_defaults`` instead of a callee's params.
+    """
+
+    def test_valid_omitted_record_field_passes(self) -> None:
+        """A UseDefault slot for a field with a declared default passes."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            field_defaults=(None, IrConstInt(location=LOC, value=0)),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", IrConstInt(LOC, 1)), ("y", UseDefault(1))))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        validate_ir(prog)  # no exception
+
+    def test_valid_omitted_exception_field_passes(self) -> None:
+        """A UseDefault slot on IrMakeException for a defaulted field passes."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Problem",
+            kind=NominalKind.EXCEPTION,
+            fields=("code",),
+            field_defaults=(IrConstInt(location=LOC, value=0),),
+        )
+        make = IrMakeException(LOC, NOM0, (("code", UseDefault(0)),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        validate_ir(prog)  # no exception
+
+    def test_use_default_out_of_position_raises(self) -> None:
+        """UseDefault at the wrong slot position raises InvalidIrError."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x",),
+            field_defaults=(IrConstInt(location=LOC, value=0),),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", UseDefault(99)),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        with pytest.raises(InvalidIrError, match="param_index"):
+            validate_ir(prog)
+
+    def test_use_default_for_non_defaulted_field_raises(self) -> None:
+        """UseDefault for a field with no declared default raises InvalidIrError."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x",),
+            field_defaults=(None,),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", UseDefault(0)),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        with pytest.raises(InvalidIrError, match="no default"):
+            validate_ir(prog)
+
+    def test_use_default_out_of_position_raises_even_with_deep_false(self) -> None:
+        """A constructor UseDefault's position invariant is checked in both
+        tiers too, consistent with IrDirectCall's arguments.
+        """
+        make = IrMakeRecord(LOC, NOM0, (("x", UseDefault(99)),))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),))
+        with pytest.raises(InvalidIrError, match="param_index"):
+            validate_ir(prog, deep=False)
+
+    def test_constructor_field_slot_count_mismatch_raises(self) -> None:
+        """More field slots than the nominal declares raises InvalidIrError,
+        not a bare IndexError from indexing past ``field_defaults``.
+        """
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x",),
+            field_defaults=(None,),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", IrConstInt(LOC, 1)), ("y", IrConstInt(LOC, 2))))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        with pytest.raises(InvalidIrError, match="field slots"):
+            validate_ir(prog)
+
+    def test_constructor_field_name_mismatch_raises(self) -> None:
+        """A field slot named differently than the nominal's declared field at
+        that position raises InvalidIrError.
+        """
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            field_defaults=(None, IrConstInt(location=LOC, value=0)),
+        )
+        make = IrMakeRecord(LOC, NOM0, (("x", IrConstInt(LOC, 1)), ("z", IrConstInt(LOC, 2))))
+        prog = _make_program(initializers=(IrBind(LOC, SYM0, make),), nominals={NOM0: descriptor})
+        with pytest.raises(InvalidIrError, match="field slot 1 is named 'z'"):
+            validate_ir(prog)
+
+    def test_record_field_defaults_length_must_match_fields(self) -> None:
+        """A record descriptor's field_defaults must be as long as its fields."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Point",
+            kind=NominalKind.RECORD,
+            fields=("x", "y"),
+            field_defaults=(None,),
+        )
+        with pytest.raises(InvalidIrError, match="field_defaults"):
+            validate_ir(_make_program(nominals={NOM0: descriptor}))
+
+    def test_enum_descriptor_cannot_declare_field_defaults(self) -> None:
+        """An enum descriptor must have an empty field_defaults."""
+        descriptor = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Color",
+            kind=NominalKind.ENUM,
+            field_defaults=(IrConstInt(location=LOC, value=0),),
+        )
+        with pytest.raises(InvalidIrError, match="field_defaults"):
+            validate_ir(_make_program(nominals={NOM0: descriptor}))
 
 
 # ===========================================================================

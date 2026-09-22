@@ -348,15 +348,15 @@ class _TypeBuilder:
                 module_id = self._module_id
                 bare_name = _bare_name(item.name)
                 scope_path = tuple(segment.name for segment in item.scope_path)
-                self._env.register_type(
-                    item.name,
-                    ExceptionType(
-                        name=bare_name,
-                        module_id=module_id,
-                        scope_path=scope_path,
-                        decl_id=_decl_identity(module_id, scope_path, bare_name, item.node_id),
-                    ),
+                handle = ExceptionType(
+                    name=bare_name,
+                    module_id=module_id,
+                    scope_path=scope_path,
+                    decl_id=_decl_identity(module_id, scope_path, bare_name, item.node_id),
                 )
+                self._env.register_type(item.name, handle)
+                if item.is_builtin and module_id.is_standard_library:
+                    self._env.type_table.declare_standard_builtin_exception(handle)
                 self._exception_defs[item.name] = item
             else:
                 self._register_name(

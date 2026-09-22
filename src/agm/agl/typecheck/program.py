@@ -303,12 +303,6 @@ def _decl_key(module_id: ModuleId, item: RecordDef | EnumDef | ExceptionDef | Ty
     return (module_id, tuple(segment.name for segment in item.scope_path), item.name)
 
 
-def _is_exception_root_key(key: DeclKey) -> bool:
-    """Whether *key* names the standard library's own ``Exception`` declaration."""
-    module_id, scope_path, name = key
-    return name == "Exception" and not scope_path and module_id.is_standard_library
-
-
 def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
     """Run only phase 1 (shell registration) of ``_TypeBuilder.collect``.
 
@@ -398,10 +392,9 @@ def _resolve_body_for_one(
 ) -> None:
     """Resolve the body of one structured type key and update the program table.
 
-    Called once per key in a fixed deterministic order: every type reference
-    is a handle, valid regardless of whether the referenced type's own body
-    has been resolved yet. The one ordering constraint the caller imposes is
-    documented at the body-resolution loop.
+    Called once per key in a fixed deterministic order (no dependency
+    ordering): every type reference is a handle, valid regardless of whether
+    the referenced type's own body has been resolved yet.
     """
     cross_env = cross_envs[mid]
     builder = per_module_builders[mid]
@@ -561,18 +554,20 @@ def _build_program_type_table(
             enums, and exceptions get their handle entered into the type
             table directly (a handle carries no field/variant data, so there
             is nothing left to fill in later — forward references within or
-            across modules are valid immediately). Inline member arity is
-            provisional until its resolved fields reveal which owner
-            parameters survive transparent aliases.
+            across modules are valid immediately), and a standard-library
+            ``builtin exception``'s handle is also published as its identity
+            (:meth:`~agm.agl.semantics.type_table.TypeTable.declare_standard_builtin_exception`).
+            Inline member arity is provisional until its resolved fields
+            reveal which owner parameters survive transparent aliases.
             Type aliases are registered as lazy program alias keys (their target
             type is not known until the alias body is resolved, so they have
             no handle entry yet).
 
     Step B: Resolve every type body in a fixed deterministic order (sorted by
-            ``(ModuleId.segments, name)``, after the canonical ``Exception``)
-            with no declaration-to-declaration dependency — every nominal
-            field/variant/element type reference is a handle, valid regardless
-            of whether the referenced declaration's own body has been resolved
+            ``(ModuleId.segments, scope_path, name)``) with no ordering
+            constraint — every nominal field/variant/element type reference,
+            and every exception base, is a handle, valid regardless of
+            whether the referenced declaration's own body has been resolved
             yet. Transparent aliases are resolved lazily when referenced so
             alias dependencies do not impose a body ordering, while recursive
             aliases are still rejected.
@@ -765,18 +760,14 @@ def _build_program_type_table(
             cross_envs=cross_envs,
         )
 
-    # Step B: resolve every type body in a fixed deterministic order. Every
-    # reference (including an exception's ``extends`` base) is a handle, valid
-    # whether or not the referenced declaration's own body has been resolved
-    # yet, so the order is free of declaration-to-declaration dependencies but
-    # NOT of builtin ones: an exception that omits ``extends`` takes the
-    # canonical ``Exception`` as its base, and ``TypeTable.exception_root``
-    # answers only from a standard-library declaration that body resolution
-    # has already registered. That declaration therefore sorts first.
-    def source_decl_sort_key(
-        key: DeclKey,
-    ) -> tuple[bool, tuple[str, ...], tuple[str, ...], str]:
-        return (not _is_exception_root_key(key), key[0].segments, key[1], key[2])
+    # Step B: resolve every type body in a fixed deterministic order, with no
+    # dependency-ordering constraint of any kind: every reference is a handle,
+    # valid whether or not the referenced declaration's own body has been
+    # resolved yet. That holds for an exception's ``extends`` base too,
+    # including the canonical ``Exception`` an omitted ``extends`` takes,
+    # whose identity Step A published (``TypeTable.exception_root``).
+    def source_decl_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+        return (key[0].segments, key[1], key[2])
 
     body_order = sorted(all_type_keys, key=source_decl_sort_key)
 

@@ -5851,6 +5851,8 @@ class TestCatchReachability:
 
         An entry module's declarations resolve before the standard library's,
         so a warm process must not be what makes the implied base resolvable.
+        The base taken is the standard library's own declaration, never the
+        reserved fallback identity that stands in for an unloaded one.
         """
         from agm.agl import artifact_cache
 
@@ -5858,6 +5860,12 @@ class TestCatchReachability:
         source = self._HIERARCHY + "try 1 catch Plain => 2 catch _ => 3"
         r = accept_type(source)
         assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
+        table = r.type_env.type_table
+        plain = table.get(ENTRY_ID, "Plain")
+        root = table.standard_builtin_declaration("Exception")
+        assert plain is not None and root is not None
+        assert plain.base == root.decl_node_id
+        assert plain.base != EXCEPTION_BASE.decl_id
 
 
 # ---------------------------------------------------------------------------

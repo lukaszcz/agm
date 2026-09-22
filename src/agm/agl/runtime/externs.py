@@ -563,6 +563,17 @@ class ExternRegistry:
                 setattr(module, name, classes[0])
         return module
 
+    def holds_current(self, companion_path: Path) -> bool:
+        """Whether :meth:`load_companion` of *companion_path* would reuse an import."""
+        canonical = companion_path.resolve()
+        cached = self._by_path.get(canonical)
+        if cached is None:
+            return False
+        try:
+            return cached[0] == fs.identity_stamp(canonical)
+        except OSError:
+            return False
+
     def load_companion(self, module_id: ModuleId, companion_path: Path) -> ModuleType:
         """Import *companion_path* for *module_id*, executing it once per version.
 

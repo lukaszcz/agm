@@ -34,6 +34,7 @@ from agm.packages.model import (
 from agm.packages.store import (
     canonical_package_provenance_path,
     canonical_package_store_path,
+    package_store_path,
 )
 
 
@@ -125,6 +126,20 @@ def load_activation_index(*, home: Path, env: Mapping[str, str] | None = None) -
     except (OSError, TOMLKitError, UnicodeDecodeError) as exc:
         raise PackageActivationError(f"cannot load package activation index {path}: {exc}") from exc
     return _parse_activation_index(raw)
+
+
+def is_active_package(
+    package: PackageInfo, *, home: Path, env: Mapping[str, str] | None = None
+) -> bool:
+    """Whether the activation index selects *package*: its name, at its root."""
+
+    active = load_activation_index(home=home, env=env).packages.get(package.manifest.name)
+    if active is None:
+        return False
+    root = active.editable or package_store_path(
+        package.manifest.name, active.version, home=home, env=env
+    )
+    return root.resolve() == package.root.resolve()
 
 
 def write_activation_index(

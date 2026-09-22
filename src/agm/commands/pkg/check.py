@@ -7,7 +7,6 @@ from pathlib import Path
 
 from agm.cli_support.args import PkgCheckArgs
 from agm.config.context import current_config_context
-from agm.core.pyenv import requirement_status
 from agm.packages.dependencies import DependencyError, validate_dependencies
 from agm.packages.discipline import (
     DisciplineError,
@@ -16,6 +15,7 @@ from agm.packages.discipline import (
 )
 from agm.packages.manifest import ManifestError, load_manifest
 from agm.packages.model import PackageInfo
+from agm.packages.python_deps import unsatisfied_python_dependencies
 from agm.packages.source_commands import package_with_source_commands
 
 
@@ -33,11 +33,8 @@ def run(args: PkgCheckArgs) -> None:
     except (DependencyError, DisciplineError, ManifestError) as exc:
         print(f"pkg check: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-    unsatisfied = False
-    for spec in package.manifest.python_dependencies:
-        status = requirement_status(spec)
-        if not status.satisfied:
-            unsatisfied = True
-            print(f"pkg check: python requirement {spec}: {status.describe()}", file=sys.stderr)
+    unsatisfied = unsatisfied_python_dependencies(package.manifest.python_dependencies)
+    for spec, status in unsatisfied:
+        print(f"pkg check: python requirement {spec}: {status.describe()}", file=sys.stderr)
     if unsatisfied:
         raise SystemExit(1)

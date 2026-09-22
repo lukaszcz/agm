@@ -1,0 +1,6 @@
+[package]
+name = "python_requirement"
+version = "1.0.0"
+
+[python]
+dependencies = ["agm-test-absent-distribution>=1.0"]

@@ -1141,6 +1141,7 @@ class PipelineDriver:
             capabilities=capabilities,
             registry=host_env.extern_registry,
             companion_paths=prepared.companion_paths,
+            packages=prepared.roots.packages,
             module_ids=module_ids,
             nominals=nominals,
             functions=functions,
@@ -2015,6 +2016,7 @@ def _wire_extern_registry(
     capabilities: "HostCapabilities",
     registry: "ExternRegistry",
     companion_paths: "Mapping[ModuleId, Path | None]",
+    packages: "tuple[PackageInfo, ...]",
     module_ids: "set[ModuleId] | None" = None,
     nominals: "Mapping[NominalId, NominalDescriptor] | None" = None,
     functions: "Mapping[FunctionId, FunctionDescriptor] | None" = None,
@@ -2022,13 +2024,16 @@ def _wire_extern_registry(
     """Import every companion and resolve every declared extern, up front.
 
     Returns diagnostics — a single capability-gate diagnostic when the host
-    disables ``supports_extern`` and the program declares any extern, or one
-    diagnostic per companion that fails to import or resolve — collected
-    before any evaluation.  Returns ``[]`` immediately when the program
-    declares no extern, regardless of the capability (non-extern programs are
-    never affected).  Mutates *registry* in place, so a ``PipelineDriver``
-    that reuses the same ``HostEnvironment`` across multiple runs (e.g. the
-    REPL) imports each companion only once.
+    disables ``supports_extern`` and the program declares any extern, one per
+    mounted package in *packages* whose Python requirements do not hold when
+    one of its companions is about to be imported (that companion is then not
+    imported; one already imported at its current version stays usable), or
+    one per companion that fails to import or resolve — collected before any
+    evaluation.  Returns ``[]``
+    immediately when the program declares no extern, regardless of the
+    capability (non-extern programs are never affected).  Mutates *registry*
+    in place, so a ``PipelineDriver`` that reuses the same ``HostEnvironment``
+    across multiple runs (e.g. the REPL) imports each companion only once.
     """
     from agm.agl.runtime.externs import ExternImportError, ExternResolutionError
 
@@ -2057,6 +2062,8 @@ def _wire_extern_registry(
     diagnostics: list[Diagnostic] = []
     loaded_modules: set["ModuleId"] = set()
     failed_modules: set["ModuleId"] = set()
+    requirement_verdicts: dict[Path, bool] = {}
+    check_requirements = any(package.manifest.python_dependencies for package in packages)
     for mid, name in declarations:
         if mid in failed_modules:
             # This module's companion already failed to import; every extern
@@ -2068,6 +2075,15 @@ def _wire_extern_registry(
                 f"module {mid.display()!r} declares extern {name!r} but has no "
                 "companion path recorded by the loader"
             )
+            if (
+                check_requirements
+                and not registry.holds_current(companion_path)
+                and not _package_requirements_hold(
+                    companion_path, packages, requirement_verdicts, diagnostics
+                )
+            ):
+                failed_modules.add(mid)
+                continue
             try:
                 registry.load_companion(mid, companion_path)
             except ExternImportError as exc:
@@ -2080,6 +2096,57 @@ def _wire_extern_registry(
         except ExternResolutionError as exc:
             diagnostics.append(exc.to_diagnostic())
     return diagnostics
+
+
+def _package_requirements_hold(
+    companion_path: Path,
+    packages: "tuple[PackageInfo, ...]",
+    verdicts: dict[Path, bool],
+    diagnostics: list[Diagnostic],
+) -> bool:
+    """Whether the Python requirements of *companion_path*'s owning package hold.
+
+    A package is evaluated once, its verdict recorded in *verdicts* by root,
+    appending one diagnostic to *diagnostics* when some requirement does not
+    hold. A companion no package owns, or whose package declares no
+    requirement, needs nothing and evaluates nothing.
+    """
+    from agm.packages.model import owning_package
+
+    package = owning_package(companion_path, packages)
+    if package is None or not package.manifest.python_dependencies:
+        return True
+    verdict = verdicts.get(package.root)
+    if verdict is None:
+        from agm.packages.python_deps import unsatisfied_python_dependencies
+
+        unsatisfied = unsatisfied_python_dependencies(package.manifest.python_dependencies)
+        verdict = verdicts[package.root] = not unsatisfied
+        if unsatisfied:
+            listed = "; ".join(f"{spec}: {status.describe()}" for spec, status in unsatisfied)
+            diagnostics.append(
+                Diagnostic(
+                    message=(
+                        f"package {package.manifest.name!r} has unsatisfied Python "
+                        f"requirements ({listed}); {_requirement_repair(package)}"
+                    ),
+                    line=1,
+                )
+            )
+    return verdict
+
+
+def _requirement_repair(package: "PackageInfo") -> str:
+    """How to install *package*'s requirements: sync when active, else install it.
+
+    ``agm pkg sync`` covers only the activation index's selections.
+    """
+    from agm.config.context import current_config_context
+    from agm.packages.activation import is_active_package
+
+    if is_active_package(package, home=current_config_context().home):
+        return "run `agm pkg sync` to install them"
+    return f"install the package with `agm pkg install [--editable] {package.root}`"
 
 
 def assemble_host_environment(

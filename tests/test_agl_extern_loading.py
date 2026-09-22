@@ -261,6 +261,21 @@ class TestExternRegistryLoadAndResolve:
         assert registry_a.resolve(mid, "f")(None) == 1
         assert registry_b.resolve(mid, "f")(None) == 1
 
+    def test_holds_current_only_while_the_imported_file_is_unchanged(self, tmp_path: Path) -> None:
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x):\n    return x + 1\n")
+        registry = ExternRegistry()
+        assert not registry.holds_current(py_path)
+
+        registry.load_companion(ModuleId.from_path("lib/mod"), py_path)
+        assert registry.holds_current(py_path)
+
+        py_path.write_text("def f(x):\n    return x + 100\n")
+        assert not registry.holds_current(py_path)
+
+        py_path.unlink()
+        assert not registry.holds_current(py_path)
+
     def test_a_rewritten_companion_is_reimported(self, tmp_path: Path) -> None:
         """An edited companion runs its new code, not the code first imported.
 
@@ -828,6 +843,7 @@ class TestCapabilityGate:
             capabilities=caps_off,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
+            packages=(),
         )
         assert len(diagnostics) == 1
 
@@ -841,6 +857,7 @@ class TestCapabilityGate:
             capabilities=caps_off,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
+            packages=(),
         )
         assert diagnostics == []
 
@@ -858,6 +875,7 @@ class TestCapabilityGate:
             capabilities=_CAPS,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
+            packages=(),
         )
         assert diagnostics == []
 
@@ -877,6 +895,7 @@ class TestFailFastDiagnostics:
             capabilities=_CAPS,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
+            packages=(),
         )
         assert len(diagnostics) == 1
         assert "lib/mod" in diagnostics[0].message
@@ -896,6 +915,7 @@ class TestFailFastDiagnostics:
             capabilities=_CAPS,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
+            packages=(),
         )
         assert len(diagnostics) == 1
 
@@ -922,6 +942,7 @@ class TestFailFastDiagnostics:
             capabilities=_CAPS,
             registry=registry,
             companion_paths=companion_paths,
+            packages=(),
         )
         assert diagnostics == []
         mid = ModuleId.from_path("lib/mod")
@@ -944,6 +965,7 @@ class TestFailFastDiagnostics:
             capabilities=_CAPS,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
+            packages=(),
         )
         assert len(diagnostics) == 1
 
@@ -1036,6 +1058,7 @@ class TestRegistryPopulatedViaPipeline:
             capabilities=driver.host_environment().capabilities,
             registry=driver.host_environment().extern_registry,
             companion_paths=prepared.companion_paths,
+            packages=prepared.roots.packages,
         )
         assert diagnostics == []
         fn = driver.host_environment().extern_registry.resolve(ModuleId.from_path("lib/mod"), "f")

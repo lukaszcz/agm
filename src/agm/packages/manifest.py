@@ -7,13 +7,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import semver
-from packaging.requirements import InvalidRequirement, Requirement
 from tomlkit.exceptions import TOMLKitError
 
 from agm.agl.keywords import is_plain_name
 from agm.agl.modules.ids import ModuleId
 from agm.command_catalog import invalid_command_path
-from agm.core.pyenv import marker_value
 from agm.core.toml import TomlDict, load_toml_file, parse_toml_doc, toml_dict
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
@@ -320,6 +318,12 @@ def _python_dependencies(raw: TomlDict, unknown: list[UnknownField]) -> tuple[st
     """
     unknown += _unknown_keys(raw, {"dependencies"}, "python")
     specs = _optional_str_list(raw, "dependencies", "python")
+    if not specs:
+        return specs
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    from agm.core.pyenv import marker_value
+
     for spec in specs:
         try:
             requirement = Requirement(spec)

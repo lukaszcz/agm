@@ -117,7 +117,12 @@ listed more than once, for example with markers selecting per-environment varian
 Requirements are stored verbatim, as declared, and are part of the package's content hash.
 [`install`](#commands) and [`sync`](#commands) install unsatisfied requirements into that
 environment (`just install` ends with `agm pkg sync`); [`check`](#commands) and
-[`info`](#commands) only report them.
+[`info`](#commands) only report them. The activation index is the source of truth: `sync` installs
+only the requirements of active packages. A program whose run imports one of the package's
+companions while a requirement is unsatisfied fails before running, with an error naming the
+package and the requirement. It suggests `agm pkg sync` when the package is the active one (same
+name and root), otherwise installing it with `agm pkg install [--editable] <root>`, as for a
+development checkout or a project-pinned version that is not active.
 
 ### `[commands]`
 

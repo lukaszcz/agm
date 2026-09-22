@@ -55,8 +55,10 @@ may resolve to the same companion name.
 
 An extern is allowed only in a file-backed module. A module with externs needs
 a `.py` sibling, imported once before evaluation begins. Missing companions,
-missing callables, and import failures are load-time diagnostics. In a REPL
-session a companion is imported once until `:reset`.
+missing callables, import failures, and unsatisfied
+[`[python]` requirements](packages.md#resources-and-companions) of the owning
+package are load-time diagnostics. In a REPL session a companion is imported
+once until `:reset`.
 
 During the import, AGM temporarily supplies a module named `agl`. A companion
 imports the program's nominal classes, value constructors, and exception carrier from it:

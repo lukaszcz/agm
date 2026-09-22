@@ -314,6 +314,7 @@ def test_fs_externs_honor_the_existing_extern_capability_gate() -> None:
         companion_paths={
             module_id: module.companion_path for module_id, module in graph.modules.items()
         },
+        packages=(),
     )
 
     assert len(diagnostics) == 1

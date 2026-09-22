@@ -721,6 +721,7 @@ class EntryPipeline:
             capabilities=host_env.capabilities,
             registry=host_env.extern_registry,
             companion_paths=companion_paths,
+            packages=self._ctx._ensure_roots().packages,
             nominals=lowered.program.nominals,
             functions=lowered.program.functions,
         )

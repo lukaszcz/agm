@@ -7754,6 +7754,28 @@ class TestPackageSync:
         assert "agm-test-absent-alpha>=1" in result.stdout
         assert not log.exists()
 
+    def test_exec_of_a_companion_with_an_unsatisfied_requirement_points_to_sync(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        _install_fake_uv(tmp_path / "bin", env)
+        alpha = write_python_package(tmp_path / "alpha", "alpha", "agm-test-absent-alpha>=1")
+        (alpha / "src" / "twice.agl").write_text("extern def twice(x: int) -> int\n")
+        (alpha / "src" / "twice.py").write_text("def twice(x):\n    return 2 * x\n")
+        run_agm(["pkg", "install", str(alpha)], env=env, cwd=tmp_path)
+
+        result = run_agm(
+            ["exec", "-c", "import alpha/twice\nprint(alpha/twice::twice(2))"],
+            env=env,
+            cwd=tmp_path,
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "agm-test-absent-alpha>=1" in result.stderr
+        assert "agm pkg sync" in result.stderr
+        assert "Traceback" not in result.stderr
+
     def test_installer_failure_exits_non_zero(self, tmp_path: Path, env: dict[str, str]) -> None:
         env["AGM_HOME"] = str(tmp_path / "agm-home")
         log = _install_fake_uv(tmp_path / "bin", env)

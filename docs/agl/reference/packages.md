@@ -188,7 +188,11 @@ against its environment (see [`agm pkg`](../../commands/pkg.md#python)).
 [`agm pkg install`](../../commands/pkg.md#commands) and
 [`agm pkg sync`](../../commands/pkg.md#commands) install unsatisfied
 requirements (`just install` ends with `agm pkg sync`), and
-[`agm pkg check`](../../commands/pkg.md#commands) reports them.
+[`agm pkg check`](../../commands/pkg.md#commands) reports them. `agm pkg sync`
+covers only active packages. A run that would import a companion of a package
+with an unsatisfied requirement fails before evaluation with an error naming
+the package and the requirement. It suggests `agm pkg sync` when that package
+is the active one, otherwise installing it with `agm pkg install`.
 
 ## Diagnostics
 

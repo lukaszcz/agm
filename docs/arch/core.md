@@ -20,7 +20,7 @@ One module wraps `requests` for outbound HTTP: it opens a pooled session, builds
 
 ## Python Environment
 
-Package companions run in AGM's own interpreter, so one module classifies PEP 508 requirements against that interpreter's installed distributions (installed, unsatisfied, missing, or not applicable) and installs requirements into it — through `uv` when on `PATH`, else `pip` — via the dry-run-aware process primitives.
+Package companions run in AGM's own interpreter, so one module classifies PEP 508 requirements against that interpreter's installed distributions (installed, unsatisfied, missing, or not applicable) and installs requirements into it — through `uv` when on `PATH`, else `pip` — via the dry-run-aware process primitives. Package installation and sync, `agm pkg check`, and AgL companion loading all evaluate requirements through it.
 
 ## Dry Run and Cleanup
 

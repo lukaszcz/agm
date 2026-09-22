@@ -4144,6 +4144,68 @@ class TestFailureEffects:
 
 
 # ---------------------------------------------------------------------------
+# Unpromoted declarations reach no session table
+# ---------------------------------------------------------------------------
+
+
+class TestUnpromotedDeclarationTables:
+    """A failed entry's own declarations reach no session table.
+
+    Each test declares one kind of session-table state after the statement
+    that fails, then shows a later entry cannot reach it. The redeclaration
+    counterparts -- an unpromoted declaration leaving the previous owner of
+    a name in place -- live in :class:`TestRedefinition` and
+    :class:`TestFailureEffects`.
+    """
+
+    def test_unpromoted_method_on_a_nominal_receiver_is_unreachable(self) -> None:
+        session = open_session()
+        assert session.eval_entry("record R()").ok
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\ndef R::fresh(self) -> int = value'
+        )
+
+        assert not failed.ok
+        assert not session.eval_entry("R().fresh()").ok
+
+    def test_unpromoted_method_on_a_builtin_receiver_is_unreachable(self) -> None:
+        session = open_session()
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\ndef int::fresh(self) -> int = value'
+        )
+
+        assert not failed.ok
+        assert not session.eval_entry("(0).fresh()").ok
+
+    def test_unpromoted_record_is_not_nameable_by_a_later_annotation(self) -> None:
+        session = open_session()
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\nrecord Box\n  item: int'
+        )
+
+        assert not failed.ok
+        assert "Box" not in session.type_names()
+        assert not session.eval_entry("Box(item = 1)").ok
+        # The name index alone is not enough: an annotation reads the type
+        # namespace, which the entry also wrote.
+        assert not session.eval_entry("def take(b: Box) -> int = 1").ok
+
+    def test_unpromoted_generic_alias_leaves_no_type_parameters(self) -> None:
+        session = open_session()
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\ntype Pair[a] = array[a]'
+        )
+
+        assert not failed.ok
+        assert "Pair" not in session.type_names()
+        assert not session.eval_entry("def take(xs: Pair[int]) -> int = 1").ok
+
+
+# ---------------------------------------------------------------------------
 # Exactly-once agent dispatch
 # ---------------------------------------------------------------------------
 

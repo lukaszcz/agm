@@ -1243,6 +1243,22 @@ def test_archive_reader_rejects_manifest_prefix_and_record_errors(tmp_path: Path
         _verify(archive_path)
 
 
+@pytest.mark.parametrize("missing", ["package.toml", "RECORD"])
+def test_archive_reader_rejects_a_tree_without_its_manifest_or_its_record(
+    tmp_path: Path, missing: str
+) -> None:
+    """Neither bookkeeping file may be left out, whichever one it is."""
+    root = _package_tree(tmp_path)
+    archive_path = tmp_path / "package.agmpkg"
+    write_archive(root, archive_path)
+    contents = archive_contents(archive_path)
+    del contents["review_tools-1.2.3/" + missing]
+    write_zip(archive_path, list(contents.items()))
+
+    with pytest.raises(ArchiveError, match="package.toml and RECORD"):
+        _verify(archive_path)
+
+
 def test_archive_reader_rejects_unsorted_record_and_mismatched_prefix(tmp_path: Path) -> None:
     root = _package_tree(tmp_path)
     archive_path = tmp_path / "package.agmpkg"

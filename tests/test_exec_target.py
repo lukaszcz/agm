@@ -133,6 +133,18 @@ class TestResolveInstalledReference:
         assert result.entry_path == result.package.module_root / "main.agl"
         assert result.entry_path == module
 
+    def test_a_nested_module_reference_resolves_below_the_module_tree(self, tmp_path: Path) -> None:
+        """Every segment between the package name and the module names a directory."""
+        home = tmp_path / "home"
+        module = write_installed_package(home, "tools", module_path="cli/deep/run")
+
+        result = resolve_installed_reference(
+            "tools/cli/deep/run::main", home=home, proj_dir=None, cwd=tmp_path
+        )
+
+        assert isinstance(result, PackageProgramReference)
+        assert result.entry_path == module
+
     def test_unknown_package_is_an_error(self, tmp_path: Path) -> None:
         result = resolve_installed_reference(
             "missing/main::main", home=tmp_path, proj_dir=None, cwd=tmp_path

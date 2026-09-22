@@ -11,6 +11,7 @@ import pytest
 import semver
 
 from agm.core.env import agm_installation_prefix
+from agm.packages.activation import ActivePackage
 from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
@@ -24,6 +25,7 @@ from agm.packages.store import (
     package_provenance_path,
     package_store_path,
     satisfying_from_store,
+    satisfying_installed_package,
     store_root,
 )
 
@@ -245,6 +247,42 @@ def test_satisfying_from_store_selects_the_highest_version(tmp_path: Path) -> No
 
     assert selected is not None
     assert str(selected.manifest.version) == "2.0.0"
+
+
+@pytest.mark.parametrize(
+    ("editable_name", "editable_version"),
+    [("bravo", "2.0.0"), ("alpha", "0.9.0")],
+    ids=["wrong-name", "below-the-floor"],
+)
+def test_an_active_editable_source_is_selected_only_on_its_own_identity(
+    tmp_path: Path, editable_name: str, editable_version: str
+) -> None:
+    """An editable source stands in for a dependency only if it *is* that dependency."""
+    editable = tmp_path / "live"
+    editable.mkdir()
+    (editable / "package.toml").write_text(
+        f'[package]\nname = "{editable_name}"\nversion = "{editable_version}"\n',
+        encoding="utf-8",
+    )
+    active = ActivePackage(semver.Version.parse(editable_version), editable=editable)
+    requirement = DependencySpec(semver.Version.parse("1.0.0"))
+
+    assert satisfying_installed_package([], "alpha", requirement, active) is None
+
+
+def test_an_active_editable_source_satisfies_its_own_dependency(tmp_path: Path) -> None:
+    editable = tmp_path / "live"
+    editable.mkdir()
+    (editable / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.5.0"\n', encoding="utf-8"
+    )
+    active = ActivePackage(semver.Version.parse("1.5.0"), editable=editable)
+    requirement = DependencySpec(semver.Version.parse("1.0.0"))
+
+    selected = satisfying_installed_package([], "alpha", requirement, active)
+
+    assert selected is not None
+    assert selected.root == editable
 
 
 def test_satisfying_from_store_considers_candidates_outside_the_store(tmp_path: Path) -> None:

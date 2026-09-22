@@ -605,6 +605,27 @@ def test_fork_returns_a_distinct_live_handle_and_reset_preserves_the_original_ha
     assert service.ask(forked, SessionAskRequest(prompt="forked")).content == "answer"
 
 
+def test_a_fork_of_an_ephemeral_session_outlives_its_own_close() -> None:
+    """A fork inherits its parent's agent and transport but never its ephemerality."""
+    service, factory = _service()
+    host = AglSessionHost(service)
+    agent = AgentCommand(command="worker")
+    parent = host.open_ephemeral(agent, "Cli")
+    factory.backends[0].fork_result = FakeBackend(capabilities=SessionCapabilities.all())
+
+    forked = host.fork(parent)
+    host.close(forked)
+    host.close(parent)
+
+    assert service.is_known(forked)
+    snapshot = host.snapshot(forked)
+    assert (snapshot.agent, snapshot.transport) == (agent, "Cli")
+    host.close(forked)
+    assert not service.is_known(parent)
+    with pytest.raises(AglSessionHostError):
+        host.close(parent)
+
+
 def test_supported_operations_dispatch_to_the_backend() -> None:
     service, factory = _service()
     handle = service.open(object(), "rpc")

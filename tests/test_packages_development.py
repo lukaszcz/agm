@@ -108,6 +108,27 @@ def test_discovery_uses_path_dependencies_recursively_and_ignores_unavailable_so
     assert tuple(package.manifest.name for package in packages) == ("alpha", "bravo")
 
 
+def test_discovery_accepts_a_path_dependency_whose_group_is_completed_by_source(
+    tmp_path: Path,
+) -> None:
+    """A source tree's ``@command`` programs are merged later, so a bare group is legal."""
+    alpha = tmp_path / "alpha"
+    bravo = tmp_path / "bravo"
+    _write_package(
+        alpha, "alpha", '\n[dependencies]\nbravo = { version = "1", path = "../bravo" }\n'
+    )
+    _write_package(bravo, "bravo")
+    (bravo / "package.toml").write_text(
+        '[package]\nname = "bravo"\nversion = "1.0.0"\n\n'
+        '[commands.devel]\ndoc = "Development workflows"\n',
+        encoding="utf-8",
+    )
+
+    packages = discover_development_packages(alpha / "alpha" / "main.agl")
+
+    assert tuple(package.manifest.name for package in packages) == ("alpha", "bravo")
+
+
 def test_recursive_discovery_leaves_store_dependencies_to_activation(tmp_path: Path) -> None:
     home = tmp_path / "home"
     alpha = tmp_path / "alpha"

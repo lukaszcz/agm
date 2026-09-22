@@ -8,6 +8,7 @@ asserted.
 from __future__ import annotations
 
 import json
+import unittest.mock
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol, cast
@@ -28,6 +29,7 @@ from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import REPO_STDLIB_ROOT, agl_roots, run_inline_command, write_file_program
 from tests._http_helpers import install as install_fake_http
+from tests._process_helpers import FakeShell
 from tests.agl.ir_harness import write_companion_file, write_module_file
 
 # ---------------------------------------------------------------------------
@@ -174,53 +176,69 @@ class TestPrintRecord:
 
 
 class TestExecCommandRecord:
-    def test_exec_produces_exec_record(self, tmp_path: Path) -> None:
+    def _exec_record(
+        self, tmp_path: Path, source: str, shell: FakeShell | None = None
+    ) -> dict[str, object]:
+        """Run *source* and return its single ``exec_command`` trace record."""
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        _run_inline(rt, 'let x: text = exec "echo hi"\nx', log_file=log_path)
-        records = _load_jsonl(log_path)
-        kinds = [r.get("kind") for r in records]
-        assert "exec_command" in kinds
+        with unittest.mock.patch(
+            "agm.core.process.run_capture_result", side_effect=shell or FakeShell(stdout="captured")
+        ):
+            _run_inline(rt, source, log_file=log_path)
+        records = [r for r in _load_jsonl(log_path) if r.get("kind") == "exec_command"]
+        assert len(records) == 1
+        return records[0]
 
-    def test_exec_record_has_exit_code(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        _run_inline(rt, 'let x: text = exec "echo hi"\nx', log_file=log_path)
-        records = _load_jsonl(log_path)
-        exec_recs = [r for r in records if r.get("kind") == "exec_command"]
-        assert exec_recs
-        rec = exec_recs[0]
-        assert rec.get("exit_code") == 0
+    def test_a_successful_exec_is_recorded_in_full(self, tmp_path: Path) -> None:
+        rec = self._exec_record(tmp_path, 'let x: text = exec "echo hello"\nx')
 
-    def test_exec_record_has_stdout(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        _run_inline(rt, 'let x: text = exec "echo captured"\nx', log_file=log_path)
-        records = _load_jsonl(log_path)
-        exec_recs = [r for r in records if r.get("kind") == "exec_command"]
-        assert exec_recs
-        rec = exec_recs[0]
-        assert "captured" in rec.get("stdout", "")
-
-    def test_exec_record_has_command(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        _run_inline(rt, 'let x: text = exec "echo hello"\nx', log_file=log_path)
-        records = _load_jsonl(log_path)
-        exec_recs = [r for r in records if r.get("kind") == "exec_command"]
-        assert exec_recs
-        assert "echo hello" in exec_recs[0].get("command", "")
-
-    def test_exec_record_has_duration(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        _run_inline(rt, 'let x: text = exec "echo hello"\nx', log_file=log_path)
-        records = _load_jsonl(log_path)
-        exec_recs = [r for r in records if r.get("kind") == "exec_command"]
-        assert exec_recs
-        duration = exec_recs[0].get("duration")
+        assert "echo hello" in cast(str, rec["command"])
+        assert rec["exit_code"] == 0
+        assert "captured" in cast(str, rec["stdout"])
+        assert rec["timed_out"] is False
+        duration = rec["duration"]
         assert isinstance(duration, float)
         assert duration >= 0
+
+    def test_a_failing_exec_records_its_exit_code(self, tmp_path: Path) -> None:
+        shell = FakeShell(responses=[{"command": "false", "returncode": 3, "stderr": "nope"}])
+        rec = self._exec_record(tmp_path, 'let r = exec "false"\nr.exit-code', shell)
+
+        assert rec["exit_code"] == 3
+        assert "nope" in cast(str, rec["stderr"])
+        assert rec["timed_out"] is False
+
+    def test_a_timed_out_exec_is_recorded_as_timed_out(self, tmp_path: Path) -> None:
+        shell = FakeShell(
+            responses=[
+                {"command": "sleep 99", "returncode": 7, "stdout": "partial", "timed_out": True}
+            ]
+        )
+        rec = self._exec_record(tmp_path, 'exec "sleep 99"', shell)
+
+        assert rec["timed_out"] is True
+        assert rec["exit_code"] == 7
+        assert "partial" in cast(str, rec["stdout"])
+
+    def test_a_timed_out_exec_without_an_exit_code_records_minus_one(self, tmp_path: Path) -> None:
+        shell = FakeShell(
+            responses=[{"command": "sleep 99", "returncode": None, "timed_out": True}]
+        )
+        rec = self._exec_record(tmp_path, 'exec "sleep 99"', shell)
+
+        assert rec["timed_out"] is True
+        assert rec["exit_code"] == -1
+
+    def test_a_shell_that_cannot_spawn_is_recorded_as_a_failure(self, tmp_path: Path) -> None:
+        shell = FakeShell(
+            responses=[{"command": "whatever", "returncode": None, "spawn_error": "no shell"}]
+        )
+        rec = self._exec_record(tmp_path, 'exec "whatever"', shell)
+
+        assert rec["exit_code"] == -1
+        assert "no shell" in cast(str, rec["stderr"])
+        assert rec["timed_out"] is False
 
 
 class TestAgentCallRecord:

@@ -32,6 +32,7 @@ program def main(mode: int) -> unit =
         print(selected)
         print(values.count(fn(value: int) => value > 1))
         print(values.index-of(2))
+        print(values.index-of?(3))
         values.each(fn(value: int) => print(value))
         print(values.fold(0, fn(total: int, value: int) => total + value))
         print(values.foldr(0, fn(total: int, value: int) => total * 10 + value))

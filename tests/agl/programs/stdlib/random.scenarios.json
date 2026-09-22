@@ -16,9 +16,9 @@
       "expect": {"stdout": "true\n1\n2\n1\n1\n", "calls": {}}
     },
     {
-      "name": "uuid_is_a_version_four_text_identifier",
+      "name": "shuffle_reaches_every_permutation_and_uuid_is_version_four",
       "params": {"mode": 4},
-      "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
+      "expect": {"stdout": "true\ntrue\ntrue\ntrue\n", "calls": {}}
     },
     {
       "name": "choice_on_an_empty_array_raises_the_typed_index_error",

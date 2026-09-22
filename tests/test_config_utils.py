@@ -785,6 +785,26 @@ def test_config_path_interpolation_runs_once_and_resolves_program_log_file(
     assert merged["program"]["log-file"] == str(tmp_path / "program.log")
 
 
+def test_a_later_layer_replaces_a_key_whose_kind_changed(tmp_path: Path) -> None:
+    """Layers merge table into table; any other shape change is a plain override."""
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text(
+        'version = 1\nagent = "claude"\n[loop]\nprompt_file = "home.md"\n', encoding="utf-8"
+    )
+
+    project = tmp_path / "project"
+    (project / "config").mkdir(parents=True)
+    (project / "config" / "config.toml").write_text(
+        'loop = "disabled"\n[agent]\ncommand = "codex"\n', encoding="utf-8"
+    )
+
+    merged = load_merged_config(home=home, proj_dir=project, cwd=tmp_path)
+
+    assert merged["loop"] == "disabled"
+    assert merged["agent"] == {"command": "codex"}
+
+
 def test_exec_log_file_expands_tilde_and_interpolates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

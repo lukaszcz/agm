@@ -37,6 +37,8 @@ program def main(mode: int) -> unit =
     | 3 =>
         print("banana".index-of("na"))
         print("banana".index-of?("na"))
+        print("banana".index-of("ba"))
+        print("banana".index-of?("ba"))
         print("banana".index-of?("zz"))
         let missing = try
           "banana".index-of("zz") as text

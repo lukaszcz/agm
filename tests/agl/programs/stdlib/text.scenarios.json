@@ -20,7 +20,7 @@
       "name": "search_methods_distinguish_matches_options_and_typed_failures",
       "params": {"mode": 3},
       "expect": {
-        "stdout": "2\nOption::Some(value = 2)\nOption::None\nmissing caught\n",
+        "stdout": "2\nOption::Some(value = 2)\n0\nOption::Some(value = 0)\nOption::None\nmissing caught\n",
         "calls": {}
       }
     },

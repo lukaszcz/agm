@@ -61,18 +61,21 @@ def write_installed_package(
     *,
     source: str = "program def main(level: text) -> unit = ()\n",
     commands: Mapping[str, str] | None = None,
+    module_path: str = "main",
 ) -> Path:
     """Install and activate a one-module package named *name* under *home*.
 
     *commands* registers manifest command paths against program references, so
-    a test can exercise a package that owns CLI commands.
+    a test can exercise a package that owns CLI commands.  *module_path* is the
+    module's ``/``-separated path below the package name, so a test can install
+    a module nested inside the module tree.
 
-    Returns the path of the package's ``main.agl`` module, so a test can edit
-    or remove the entry file it will later resolve.
+    Returns the path of the package's module file, so a test can edit or remove
+    the entry file it will later resolve.
     """
 
     package_root = home / ".agm" / "packages" / name / "1.0.0"
-    module = package_root / MODULE_TREE_DIRNAME / "main.agl"
+    module = package_root.joinpath(MODULE_TREE_DIRNAME, *module_path.split("/")).with_suffix(".agl")
     module.parent.mkdir(parents=True)
     registrations = "".join(
         f'"{path}" = {{ program = "{program}" }}\n' for path, program in (commands or {}).items()

@@ -115,122 +115,6 @@ from agm.agl.syntax.types import (
 )
 
 # ---------------------------------------------------------------------------
-# Known-node set (for loud failure on unknown types)
-# ---------------------------------------------------------------------------
-
-# NOTE: This set must stay in lockstep with walk()'s dispatch below: every node
-# class listed here must have a matching ``isinstance`` branch in walk(), and
-# vice versa.  Adding a node class requires updating both.
-_KNOWN_NODE_TYPES: frozenset[type] = frozenset(
-    {
-        Program,
-        # declaration attributes
-        Attribute,
-        AttributeKeyedArg,
-        # type nodes
-        TextT,
-        JsonT,
-        BoolT,
-        IntT,
-        DecimalT,
-        NameT,
-        ArrayT,
-        DictT,
-        UnitT,
-        FuncT,
-        AppliedT,
-        # module system nodes
-        QualifierSegment,
-        QualifierChain,
-        ImportItem,
-        ImportDecl,
-        ExportItem,
-        ExportDecl,
-        UseDecl,
-        ScopeSegment,
-        # declaration nodes
-        RecordDef,
-        VariantDef,
-        VariantRef,
-        EnumDef,
-        ExceptionDef,
-        TypeAlias,
-        FuncDef,
-        BuiltinVarDecl,
-        InfixDecl,
-        ScopeRegion,
-        # binder nodes
-        LetDecl,
-        VarDecl,
-        AssignStmt,
-        NameTarget,
-        IndexTarget,
-        FieldTarget,
-        # literal nodes
-        UnitLit,
-        IntLit,
-        DecimalLit,
-        BoolLit,
-        NullLit,
-        StringLit,
-        ArrayLit,
-        DictEntry,
-        DictLit,
-        # template nodes
-        TextSegment,
-        InterpSegment,
-        Template,
-        # expression nodes
-        VarRef,
-        FieldAccess,
-        IndexAccess,
-        NamedArg,
-        Placeholder,
-        BinaryOp,
-        OperatorRef,
-        UnaryNot,
-        UnaryNeg,
-        Cast,
-        IsTest,
-        TypeApply,
-        Call,
-        RecordUpdate,
-        Param,
-        Lambda,
-        Block,
-        IfBranch,
-        If,
-        CaseBranch,
-        Case,
-        Loop,
-        Break,
-        Continue,
-        CatchClause,
-        Try,
-        Raise,
-        Return,
-        RawInfixChain,
-        RawInfixOperand,
-        RawInfixOperator,
-        RawPrefixNot,
-        # pattern nodes
-        WildcardPattern,
-        LiteralPattern,
-        VarPattern,
-        AsPattern,
-        PatternField,
-        ConstructorPattern,
-        # sentinel
-        ElseSentinel,
-    }
-)
-
-
-def _is_known_node(node: object) -> bool:
-    return type(node) in _KNOWN_NODE_TYPES
-
-
-# ---------------------------------------------------------------------------
 # walk() — closed-set pre-order traversal
 # ---------------------------------------------------------------------------
 
@@ -246,12 +130,6 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     Raises ``TypeError`` if *node* is not a known AST node type.
     """
-    if not _is_known_node(node):
-        raise TypeError(
-            f"walk() encountered unknown node type {type(node)!r}. "
-            "Update agm.agl.syntax.visitor to handle new node classes."
-        )
-
     callback(node)
 
     if isinstance(node, Program):
@@ -618,11 +496,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         pass  # leaf sentinel
 
     else:
-        # A node is in _KNOWN_NODE_TYPES (the guard at the top passed) but has no
-        # walk branch here.  This dispatch MUST stay in lockstep with
-        # _KNOWN_NODE_TYPES: every known node class needs an explicit branch.
-        # Fail loudly rather than silently dropping the node's children.
-        raise AssertionError(
-            f"walk(): node type {type(node)!r} is known but has no walk branch. "
-            "Add an isinstance branch (and keep _KNOWN_NODE_TYPES in lockstep)."
+        # Fail loudly rather than silently dropping the node's children: the
+        # dispatch above is the closed set of node classes walk() understands.
+        raise TypeError(
+            f"walk() encountered unknown node type {type(node)!r}. "
+            "Add an isinstance branch for it in agm.agl.syntax.visitor.walk()."
         )

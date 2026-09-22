@@ -81,6 +81,7 @@ TEMPLATE_START = "TEMPLATE_START"
 STRING_FRAGMENT = "STRING_FRAGMENT"
 INTERP_START = "INTERP_START"  # "%{" sequence
 INTERP_END = "INTERP_END"  # "}" that closes an interpolation
+ENV_HOLE = "ENV_HOLE"  # whole "${NAME}" hole; its value is NAME
 TEMPLATE_END = "TEMPLATE_END"
 VERBATIM_START = "VERBATIM_START"  # "$" opening a verbatim text literal
 VERBATIM_END = "VERBATIM_END"  # closes a verbatim text literal (empty value)

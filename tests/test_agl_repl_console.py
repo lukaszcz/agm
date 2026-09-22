@@ -397,6 +397,12 @@ class TestLexer:
         styles = {style for style, _text in fragments}
         assert "class:agl.string" in styles
 
+    def test_environment_hole_is_styled_as_part_of_its_string(self) -> None:
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document('print "${HOME}"'))(0)
+        assert ("class:agl.string", "${HOME}") in fragments
+        assert "".join(text for _style, text in fragments) == 'print "${HOME}"'
+
     def test_half_typed_dollar_verbatim_header_preserves_prefix_highlighting(self) -> None:
         # `ask $` with nothing typed after the `$` yet is a half-typed entry
         # (lexing raises IncompleteInputError at the `$`); the prefix before it

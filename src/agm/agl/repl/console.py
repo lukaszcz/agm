@@ -50,6 +50,7 @@ from agm.agl.lexer import (
     tokenize,
 )
 from agm.agl.lexer.tokens import (
+    ENV_HOLE,
     MODPATH,
     MODQUAL,
     SOFT_KEYWORD_TOKENS,
@@ -98,6 +99,7 @@ _STRING_TOKENS: frozenset[str] = frozenset(
         "TEMPLATE_END",
         "INTERP_START",
         "INTERP_END",
+        ENV_HOLE,
         VERBATIM_START,
         VERBATIM_END,
     }

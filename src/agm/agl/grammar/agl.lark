@@ -68,7 +68,7 @@
 // ---------------------------------------------------------------------------
 
 %declare _NEWLINE _INDENT _DEDENT
-%declare TEMPLATE_START STRING_FRAGMENT INTERP_START INTERP_END TEMPLATE_END
+%declare TEMPLATE_START STRING_FRAGMENT INTERP_START INTERP_END TEMPLATE_END ENV_HOLE
 %declare VERBATIM_START VERBATIM_END
 
 // ---------------------------------------------------------------------------
@@ -812,6 +812,7 @@ template: TEMPLATE_START template_segment* TEMPLATE_END
 
 template_segment: STRING_FRAGMENT    -> tmpl_text
                 | interp             -> tmpl_interp
+                | ENV_HOLE           -> tmpl_env
 
 type_args: DCOLON LSQB type_arg_list RSQB
 

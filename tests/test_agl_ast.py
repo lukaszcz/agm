@@ -2276,27 +2276,6 @@ class TestWalk:
             "Positional sub-pattern VarPattern not visited in ConstructorPattern"
         )
 
-    def test_walk_known_node_without_branch_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A node in _KNOWN_NODE_TYPES but lacking a walk branch must fail loudly.
-
-        Guards the lockstep invariant: a future contributor who adds a node to
-        _KNOWN_NODE_TYPES without an isinstance branch in walk() should get a
-        crash, not silently-dropped children.
-        """
-        from agm.agl.syntax import visitor
-
-        class FakeKnownNode:
-            pass
-
-        monkeypatch.setattr(
-            visitor,
-            "_KNOWN_NODE_TYPES",
-            visitor._KNOWN_NODE_TYPES | {FakeKnownNode},
-        )
-
-        with pytest.raises(AssertionError, match="known but has no walk branch"):
-            visitor.walk(FakeKnownNode(), lambda n: None)
-
 
 # ---------------------------------------------------------------------------
 # Union alias sanity

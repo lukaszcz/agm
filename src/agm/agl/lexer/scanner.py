@@ -50,6 +50,7 @@ from agm.agl.lexer.tokens import (
     DCOLON,
     DECIMAL,
     DOT,
+    ENV_HOLE,
     EQ,
     EQ_EQ,
     GE,
@@ -63,7 +64,6 @@ from agm.agl.lexer.tokens import (
     LSQB,
     LT,
     MINUS,
-    MODQUAL,
     NAME,
     NEQ,
     NEWLINE,
@@ -194,8 +194,8 @@ class _LitSeg:
 class _InterpSeg:
     """An interpolation hole of a triple-quoted template.
 
-    ``tokens`` include the opener, the expression or desugared environment
-    lookup, and the closer, all carrying their original source positions.
+    ``tokens`` are an expression hole's opener, body, and closer, or an
+    environment hole's single token, all carrying their source positions.
     """
 
     tokens: list[Token]
@@ -519,9 +519,12 @@ class _Scanner:
             if ch == "\\":
                 buf.append(self._decode_template_escape())
             elif (interpolation := self._template_interpolation()) is not None:
-                # Expression fragments include the opener in their diagnostic
-                # span; environment fragments end before it.
-                opener = next(interpolation)
+                # The hole's first token settles the fragment boundary: an
+                # expression hole has consumed its `%{` opener by the time it
+                # yields one, so the fragment's diagnostic span covers the
+                # opener; an environment hole consumes nothing before its
+                # token, so the fragment ends in front of it.
+                head = next(interpolation)
                 yield self._make_token(
                     STRING_FRAGMENT,
                     "".join(buf),
@@ -530,7 +533,7 @@ class _Scanner:
                     frag_start_col,
                 )
                 buf = []
-                yield opener
+                yield head
                 yield from interpolation
                 frag_start_pos = self._pos
                 frag_start_line = self._line
@@ -541,75 +544,41 @@ class _Scanner:
                 buf.append(ch)
 
     def _template_interpolation(self) -> Iterator[Token] | None:
-        """Recognize either ordinary-template hole without advancing the cursor."""
+        """Recognize either template hole without advancing the cursor."""
         if self._src.startswith(INTERP_OPEN, self._pos):
             return self._scan_interpolation()
         name = lexical.environment_hole_name(self._src, self._pos)
-        return self._scan_interpolation(name) if name is not None else None
+        return self._scan_environment_hole(name) if name is not None else None
 
-    def _scan_interpolation(self, environment_name: str | None = None) -> Iterator[Token]:
-        """Emit one hole, sharing its opener across names and expressions."""
+    def _scan_interpolation(self) -> Iterator[Token]:
+        """Emit an expression hole: its ``%{`` opener, its code tokens, and its ``}``."""
         start_pos, start_line, start_col = self._pos, self._line, self._col
-        opener = Token(
-            INTERP_START,
-            INTERP_OPEN,
-            start_pos=start_pos,
-            line=start_line,
-            column=start_col,
-            end_line=start_line,
-            end_column=start_col + 2,
-            end_pos=start_pos + 2,
-        )
-        if environment_name is not None:
-            yield opener
         self._advance(in_string=True)
         self._advance(in_string=True)
-        if environment_name is None:
-            yield opener
-            yield from self._scan_interp_code()
-        else:
-            yield from self._scan_environment_interpolation(environment_name)
+        yield self._make_token(INTERP_START, INTERP_OPEN, start_pos, start_line, start_col)
+        yield from self._scan_interp_code()
 
-    def _scan_environment_interpolation(self, name: str) -> Iterator[Token]:
-        """Desugar an environment hole's body to ``std/prelude::getenv(\"NAME\")``.
+    def _scan_environment_hole(self, name: str) -> Iterator[Token]:
+        """Emit one ``ENV_HOLE`` token spanning a whole ``${NAME}`` hole.
 
-        The synthetic expression uses the source span of its compact spelling.
-        It consequently has the same scope, type, and runtime behavior as the
-        explicit interpolation while retaining diagnostics at the hole the
-        author wrote.
+        The token carries the environment variable's name and the span of the
+        spelling the author wrote; the parser builds the environment read from
+        it.  It is yielded before its characters are consumed so that the
+        literal fragment its caller flushes ends in front of the hole.
         """
-        start_pos = self._pos
-        start_line = self._line
-        start_col = self._col
-        name_start = self._pos
-        for _ in name:
+        width = len("${" + name + "}")
+        yield Token(
+            ENV_HOLE,
+            name,
+            start_pos=self._pos,
+            line=self._line,
+            column=self._col,
+            end_line=self._line,
+            end_column=self._col + width,
+            end_pos=self._pos + width,
+        )
+        for _ in range(width):
             self._advance(in_string=True)
-        name_end = self._pos
-        self._advance(in_string=True)  # }
-
-        def token(typ: str, value: str, start: int, end: int) -> Token:
-            return Token(
-                typ,
-                value,
-                start_pos=start,
-                line=start_line,
-                column=start_col + start - start_pos,
-                end_line=start_line,
-                end_column=start_col + end - start_pos,
-                end_pos=end,
-            )
-
-        # The qualifier transformer removes the two source characters occupied
-        # by ``::`` from every MODQUAL span.  Give this synthetic token an
-        # equivalent width inside the hole so its resulting span stays valid.
-        yield token(MODQUAL, "std/prelude", name_start, name_start + 2)
-        yield token(NAME, "getenv", name_start, name_start)
-        yield token(LPAR, "(", name_start, name_start)
-        yield token(TEMPLATE_START, '"', name_start, name_start)
-        yield token(STRING_FRAGMENT, name, name_start, name_end)
-        yield token(TEMPLATE_END, '"', name_end, name_end)
-        yield token(RPAR, ")", name_end, name_end)
-        yield token(INTERP_END, "}", name_end, self._pos)
 
     def _scan_interp_code(self) -> Iterator[Token]:
         """Scan code tokens inside ``%{...}`` up to and including the closing ``}``.

@@ -54,8 +54,13 @@ from agm.agl.syntax.types import (
     render_type_expr,
 )
 
-# Types used internally
-_NamedArgList = list[syntax.NamedArg]
+# The receiver parameter every method declares first.
+_SELF_PARAM = "self"
+
+# An environment hole ``${NAME}`` reads the environment through this function,
+# named in full so that neither an import nor a local binding can affect it.
+_ENVIRONMENT_MODULE = "std/prelude"
+_ENVIRONMENT_READER = "getenv"
 
 
 @dataclass(frozen=True, slots=True)
@@ -984,6 +989,7 @@ class AstBuilder(Transformer):
             is_program=is_program,
             is_builtin=is_builtin,
             is_extern=is_extern,
+            is_method=_declares_method(params),
             scope_path=scope_path,
             receiver_type=receiver_type,
             attributes=_find_attributes(args),
@@ -3153,6 +3159,45 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def tmpl_env(self, meta: Meta, args: _Args) -> syntax.InterpSegment:
+        """``${NAME}`` — an environment hole, a call reading the environment.
+
+        Every node built here spans the hole the author wrote, so the hole
+        resolves, types, and runs exactly like the qualified call spelled out
+        in its place, and its diagnostics stay on the hole.
+        """
+        del meta
+        token = args[0]
+        assert isinstance(token, Token)
+        span = self._span_from_token(token)
+        qualifier = syntax.QualifierChain(
+            anchor=None,
+            segments=(
+                syntax.QualifierSegment(
+                    name=_ENVIRONMENT_MODULE,
+                    type_args=None,
+                    span=span,
+                    node_id=self._next_id(),
+                ),
+            ),
+            member=_ENVIRONMENT_READER,
+            span=span,
+            node_id=self._next_id(),
+        )
+        call = syntax.Call(
+            callee=syntax.VarRef(
+                name=_ENVIRONMENT_READER,
+                span=span,
+                node_id=self._next_id(),
+                qualifier=qualifier,
+            ),
+            args=(syntax.StringLit(value=str(token), span=span, node_id=self._next_id()),),
+            named_args=(),
+            span=span,
+            node_id=self._next_id(),
+        )
+        return syntax.InterpSegment(expr=call, span=span, node_id=self._next_id())
+
     # ------------------------------------------------------------------
     # Array and dict literals
     # ------------------------------------------------------------------
@@ -3349,12 +3394,17 @@ def _find_field_tuple(args: _Args) -> tuple[syntax.Param, ...]:
 def _check_function_param_annotations(entries: tuple[syntax.Param, ...]) -> None:
     """Require annotations on named-function parameters except a leading ``self``."""
     for index, entry in enumerate(entries):
-        if entry.type_expr is not None or (index == 0 and entry.name == "self"):
+        if entry.type_expr is not None or (index == 0 and entry.name == _SELF_PARAM):
             continue
         message = f"Parameter {entry.name!r} has no type annotation."
-        if entry.name == "self":
-            message += " A bare 'self' must be the first parameter."
+        if entry.name == _SELF_PARAM:
+            message += f" A bare {_SELF_PARAM!r} must be the first parameter."
         raise AglSyntaxError(message, span=entry.span)
+
+
+def _declares_method(entries: tuple[syntax.Param, ...]) -> bool:
+    """Whether a leading ``self`` receiver makes the declaration a method."""
+    return bool(entries) and entries[0].name == _SELF_PARAM
 
 
 def _is_member_tuple(a: object) -> bool:

@@ -1095,7 +1095,15 @@ def test_perform_emits_no_insecure_warning_when_verify_tls_is_true() -> None:
         ("text/plain", "utf-8"),
         ("text/plain; charset=iso-8859-1", "iso-8859-1"),
         ('text/plain; charset="UTF-16"', "UTF-16"),
+        ("text/plain; CHARSET=UTF-16", "UTF-16"),
+        ("text/plain; charset='utf-16'", "utf-16"),
         ("text/plain; xcharset=iso-8859-1", "utf-8"),
+        # A present but empty declaration is not a fallback to UTF-8: it is
+        # returned empty and fails to decode.
+        ("text/plain; charset", ""),
+        ('text/plain; charset=""', ""),
+        # An RFC 2231 extended parameter carries its own charset and language.
+        ("text/plain; charset*=us-ascii''utf-16", "utf-16"),
     ],
 )
 def test_resolve_charset(content_type: str | None, expected: str) -> None:
@@ -1116,6 +1124,8 @@ def test_resolve_charset(content_type: str | None, expected: str) -> None:
         ("undefined", "61"),
         # ``codecs.lookup`` raises ``ValueError`` rather than ``LookupError`` for this label.
         ("bad\0codec", "61"),
+        # A present but empty declaration names no codec, so it decodes nothing.
+        ("", "61"),
     ],
 )
 def test_perform_rejects_a_charset_outside_the_text_encoding_allowlist(

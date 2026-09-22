@@ -8,6 +8,8 @@ rule the standard library's HTTP companion relies on.
 from __future__ import annotations
 
 import codecs
+import email.message
+import email.utils
 import http.cookiejar
 import re
 import time
@@ -24,6 +26,7 @@ import requests
 import requests.auth
 import requests.cookies
 import requests.exceptions
+import requests.utils
 import urllib3.exceptions
 
 from agm.core import fs
@@ -34,10 +37,6 @@ _CHUNK_SIZE = 64 * 1024
 
 # RFC 9110 tchar: the only characters a method token may contain.
 _METHOD_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
-
-# The same header validity rules ``requests.utils.check_header_validity`` applies.
-_HEADER_NAME = re.compile(r"^[^:\s][^:\r\n]*$")
-_HEADER_VALUE = re.compile(r"^\S[^\r\n]*$|^$")
 
 # Canonical Python codec names for every WHATWG Encoding Standard text encoding,
 # excluding its ``replacement``/``x-user-defined`` pseudo-encodings. A label the
@@ -278,28 +277,20 @@ class DecodeFailure(Exception):
 def resolve_charset(content_type: str | None) -> str:
     """The charset declared in a ``Content-Type`` header, else UTF-8.
 
-    Never guesses statistically: an unlabelled body is always read as UTF-8.
+    Never guesses statistically: only a body with no ``charset`` parameter at
+    all is read as UTF-8. A present but empty one is returned empty, and fails
+    to decode rather than falling back. ``email.message`` parses the
+    parameters, covering a quoted value, an escaped quote and an RFC 2231
+    extended parameter; a single-quoted value, which that grammar has no
+    place for, is unwrapped here. The label keeps its case: only
+    ``codecs.lookup`` reads it.
     """
-    if content_type is not None:
-        start = 0
-        quoted = False
-        escaped = False
-        for index, char in enumerate(f"{content_type};"):
-            if quoted:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    quoted = False
-            elif char == '"':
-                quoted = True
-            elif char == ";":
-                name, separator, value = content_type[start:index].partition("=")
-                if separator and name.strip().casefold() == "charset":
-                    return value.strip().strip("\"'")
-                start = index + 1
-    return "utf-8"
+    if content_type is None:
+        return "utf-8"
+    message = email.message.Message()
+    message["Content-Type"] = content_type
+    charset = email.utils.collapse_rfc2231_value(message.get_param("charset", "utf-8"))
+    return charset.strip("'")
 
 
 def _response_headers(response: requests.Response) -> dict[str, str]:
@@ -316,18 +307,17 @@ def _validate_method(method: str) -> None:
 def _validate_headers(headers: Mapping[str, str]) -> None:
     """Raise a ``request``-kind failure naming only the header NAME for an invalid entry.
 
-    Checked before any header reaches ``requests``, whose own validator
-    raises an exception that quotes the value -- unsafe when the value is a
-    credential such as a bearer token or session cookie.
+    Applies ``requests``' own header rules before any header reaches it, but
+    reports only the name: ``requests``' exception quotes the value -- unsafe
+    when that value is a credential such as a bearer token or session cookie.
     """
     for name, value in headers.items():
         try:
             name.encode("ascii")
             value.encode("latin-1")
-        except UnicodeEncodeError:
+            requests.utils.check_header_validity((name, value))
+        except (UnicodeEncodeError, requests.exceptions.InvalidHeader):
             raise TransportError("request", f"invalid HTTP header: {name!r}") from None
-        if not _HEADER_NAME.fullmatch(name) or not _HEADER_VALUE.fullmatch(value):
-            raise TransportError("request", f"invalid HTTP header: {name!r}")
 
 
 def _cookie_header(cookies: Mapping[str, str]) -> str:

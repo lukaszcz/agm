@@ -17,6 +17,17 @@ from agm.core.path import is_portable_relative_path
 RECORD_NAME = "RECORD"
 _DIGEST_PREFIX = "sha256="
 _LINE_BREAKS = frozenset("\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def is_sha256_hex(value: str) -> bool:
+    """Return whether *value* is a bare lowercase SHA-256 hexadecimal digest.
+
+    Callers that accept a ``sha256``-style prefix or uppercase spelling
+    normalize first; this is the digest shape itself.
+    """
+
+    return len(value) == 64 and all(character in _HEX_DIGITS for character in value)
 
 
 class RecordError(ValueError):
@@ -245,10 +256,6 @@ def _record_digest(value: str) -> str:
     """Validate and return one serialized SHA-256 digest."""
 
     digest = value.removeprefix(_DIGEST_PREFIX)
-    if (
-        not value.startswith(_DIGEST_PREFIX)
-        or len(digest) != 64
-        or any(character not in "0123456789abcdef" for character in digest)
-    ):
+    if not value.startswith(_DIGEST_PREFIX) or not is_sha256_hex(digest):
         raise RecordError("package record has an invalid SHA-256 digest")
     return digest

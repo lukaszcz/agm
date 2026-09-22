@@ -13,6 +13,7 @@ from agm.agl.keywords import is_plain_name
 from agm.agl.modules.ids import ModuleId
 from agm.command_catalog import invalid_command_path
 from agm.core.toml import TomlDict, load_toml_file, parse_toml_doc, toml_dict
+from agm.packages.record import is_sha256_hex
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
 _COMMAND_FIELDS = frozenset({"program", "doc"})
@@ -108,17 +109,27 @@ def expanded_commands(manifest: PackageManifest) -> dict[str, CommandSpec]:
     builds the expansion rather than re-checking it.
     """
     commands = dict(manifest.commands)
-    if not manifest.aliases:
-        return commands
     for alias, target in manifest.aliases.items():
-        additions = {alias: manifest.commands.get(target, CommandSpec())}
-        additions.update(
-            (alias + path[len(target) :], spec)
-            for path, spec in manifest.commands.items()
-            if path.startswith(target + " ")
-        )
-        commands.update(additions)
+        commands.update(_alias_additions(manifest.commands, alias, target))
     return commands
+
+
+def _alias_additions(
+    commands: dict[str, CommandSpec], alias: str, target: str
+) -> dict[str, CommandSpec]:
+    """Return the paths *alias* contributes for canonical *target* and its descendants.
+
+    The single statement of what an alias expands to: :func:`expanded_commands`
+    applies it and :func:`validate_command_set` checks the result of applying it.
+    """
+
+    additions = {alias: commands.get(target, CommandSpec())}
+    additions.update(
+        (alias + path[len(target) :], spec)
+        for path, spec in commands.items()
+        if path.startswith(target + " ")
+    )
+    return additions
 
 
 def validate_command_set(manifest: PackageManifest) -> None:
@@ -146,11 +157,7 @@ def validate_command_set(manifest: PackageManifest) -> None:
     for alias, target in manifest.aliases.items():
         if target not in canonical_paths:
             raise ManifestError(f"alias {alias!r} names unknown canonical command {target!r}")
-        additions = {
-            alias,
-            *(alias + path[len(target) :] for path in commands if path.startswith(target + " ")),
-        }
-        for path in additions:
+        for path in _alias_additions(commands, alias, target):
             if path in canonical_paths or path in added:
                 raise ManifestError(f"alias {alias!r} conflicts with command {path!r}")
             added.add(path)
@@ -319,10 +326,8 @@ def parse_sha256(value: str) -> str | None:
     )
     if prefix is None:
         return None
-    digest = value[len(prefix) :]
-    if len(digest) != 64 or any(character not in "0123456789abcdefABCDEF" for character in digest):
-        return None
-    return digest.lower()
+    digest = value[len(prefix) :].lower()
+    return digest if is_sha256_hex(digest) else None
 
 
 def _commands(raw: TomlDict, unknown: list[UnknownField]) -> dict[str, CommandSpec]:

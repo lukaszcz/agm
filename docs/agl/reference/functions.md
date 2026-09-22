@@ -179,7 +179,9 @@ instead of an AgL body or the host — like `builtin def`, it has no body and a
 mandatory return type, but its implementation lives in ordinary program
 source (a co-located `.py` file) rather than the host. See
 [Python FFI](ffi.md) for the declaration syntax, the type mapping across the
-boundary, and the error model.
+boundary, and the error model. A type parameter that no parameter mentions
+makes it **type-directed**: each call site's resolved type reaches the
+companion ([Target type parameters](ffi.md#target-type-parameters)).
 
 ### Parameters
 

@@ -482,7 +482,7 @@ class TypeNode:
     """One described type.
 
     ``label`` is the type's schema-canonical spelling (shared by every
-    occurrence of a hoisted definition); the root's source spelling is
+    occurrence of a hoisted definition); the root's own label is
     ``ContractRequest.target_type_label``. ``schema`` is the node's JSON Schema
     fragment as a JSON string, whose ``$ref``s resolve against the tree's ``defs``.
     ``doc`` is the declaration's ``@doc``. ``nominal`` identifies a record,

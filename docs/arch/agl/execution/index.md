@@ -11,4 +11,4 @@ Every decision that needs type information — which built-in path, which codec,
 - [lowering.md](lowering.md) — lowering, linking, and the execution IR.
 - [evaluator.md](evaluator.md) — the interpreter, values, control flow, and host-backed operations.
 - [runtime.md](runtime.md) — agents and sessions, codecs, rendering, serialization, tracing, host-backed values.
-- [ffi.md](ffi.md) — the Python FFI: companion loading and the value boundary.
+- [ffi.md](ffi.md) — the Python FFI: companion loading, the value boundary, and target contracts.

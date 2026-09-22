@@ -1,0 +1,59 @@
+# Type-directed externs: a type parameter no value parameter mentions is a
+# target the caller chooses. Every occurrence resolves it (annotation,
+# explicit `::[…]`, parameter type, expected function type) and the companion
+# builds a value of the target from the `agl.TypeContract` it receives:
+# scalars, enum members, records whose text fields take their `@doc`, and a
+# recursive chain. `describe` reads only the contract's label and doc.
+@doc("The owning team.")
+enum Team
+  | @doc("Invoices and refunds.") Billing
+  | @doc("Outages and bugs.") Technical
+
+record Triage
+  @doc("Which team should handle this?")
+  team: Team
+  urgent: bool
+  @doc("Escalate to the on-call engineer.")
+  action: text
+
+enum Chain
+  | End
+  | Link(step: int, next: Chain)
+
+record Oracle(depth: int)
+
+extern def guess[T](depth: int) -> T
+extern def Oracle::divine[T](self) -> T
+extern def describe[T]() -> text
+
+def route(pick: (int) -> Team, depth: int) -> Team = pick(depth)
+
+def total(chain: Chain) -> int =
+  case chain of
+    | End => 0
+    | Link(step, next) => step + total(next)
+
+program def main(depth: int) -> unit =
+  let urgent: bool = guess(depth)
+  let count = guess::[int](depth)
+  print $ urgent=%{urgent} count=%{count}
+
+  let team: Team = guess(depth)
+  print team
+  let billing = guess::[Team::Billing](depth)
+  print billing
+
+  let triage = guess::[Triage](depth)
+  print triage
+
+  let chain: Chain = Oracle(depth = depth).divine()
+  print total(chain)
+
+  let pick: (int) -> Team = guess
+  print route(pick, depth)
+  let triage-of = guess::[Triage](?)
+  print triage-of(depth + 1)
+
+  print describe::[Option[Team]]()
+  print describe::[Team]()
+  print describe::[Team::Billing]()

@@ -432,7 +432,8 @@ class CheckedModule:
         parse output. ``unit`` agent calls are omitted because they have no
         output contract.
     ``target_contract_specs``
-        Maps a type-directed extern call's node id → one strict JSON
+        Maps the node id of each type-directed extern occurrence (call,
+        reference, method projection, partial application) → one strict JSON
         ``OutputContractSpec`` per target parameter of the callee
         (``FunctionSignature.target_params``), in declaration order.
     ``call_sites``

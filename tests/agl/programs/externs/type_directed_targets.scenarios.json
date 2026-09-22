@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "shallow",
+      "params": {
+        "depth": 0
+      },
+      "expect": {
+        "stdout": "urgent=false count=0\nTeam::Billing\nTeam::Billing\nTriage(team = Team::Billing, urgent = true, action = \"Escalate to the on-call engineer.\")\n0\nTeam::Billing\nTriage(team = Team::Billing, urgent = false, action = \"Escalate to the on-call engineer.\")\nstd/option::Option[Team]: None\nTeam: The owning team.\nTeam::Billing: Invoices and refunds.\n"
+      }
+    },
+    {
+      "name": "one_step",
+      "params": {
+        "depth": 1
+      },
+      "expect": {
+        "stdout": "urgent=true count=1\nTeam::Technical\nTeam::Billing\nTriage(team = Team::Billing, urgent = false, action = \"Escalate to the on-call engineer.\")\n0\nTeam::Technical\nTriage(team = Team::Technical, urgent = true, action = \"Escalate to the on-call engineer.\")\nstd/option::Option[Team]: None\nTeam: The owning team.\nTeam::Billing: Invoices and refunds.\n"
+      }
+    },
+    {
+      "name": "deep_chain",
+      "params": {
+        "depth": 3
+      },
+      "expect": {
+        "stdout": "urgent=true count=3\nTeam::Technical\nTeam::Billing\nTriage(team = Team::Technical, urgent = false, action = \"Escalate to the on-call engineer.\")\n3\nTeam::Technical\nTriage(team = Team::Technical, urgent = true, action = \"Escalate to the on-call engineer.\")\nstd/option::Option[Team]: None\nTeam: The owning team.\nTeam::Billing: Invoices and refunds.\n"
+      }
+    }
+  ]
+}

@@ -24,7 +24,7 @@ from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.boundary import BoundaryViolation, encode_boundary_value
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import AglNonDataValue
+from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
 from agm.agl.runtime.type_contracts import TypeContract, build_type_contract
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
@@ -370,6 +370,10 @@ class TestContractValueIsNotData:
     def test_render_rejects(self) -> None:
         with pytest.raises(AglNonDataValue):
             render_value(ContractValue(ContractId(0)), ValueDescriptors(nominals={}, functions={}))
+
+    def test_serialize_rejects(self) -> None:
+        with pytest.raises(AglNonDataValue):
+            value_to_json_obj(ContractValue(ContractId(0)))
 
     def test_compares_by_identity_only(self) -> None:
         contract = ContractValue(ContractId(0))

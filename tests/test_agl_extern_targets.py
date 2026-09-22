@@ -32,7 +32,6 @@ from agm.agl.ir.nodes import (
 )
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.parser import parse_program
-from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.types import (
     ArrayType,
@@ -44,7 +43,7 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
 )
-from agm.agl.semantics.values import ContractValue, TextValue
+from agm.agl.semantics.values import TextValue
 from agm.agl.syntax.nodes import (
     Block,
     Call,
@@ -880,11 +879,6 @@ class TestContractDelivery:
         )
         assert bindings["a"].split()[1:] == ["q", "c"]
         assert bindings["a"].startswith("contract:text#")
-
-
-def test_contract_value_is_not_data() -> None:
-    with pytest.raises(AglNonDataValue):
-        value_to_json_obj(ContractValue(ContractId(0)))
 
 
 # ---------------------------------------------------------------------------

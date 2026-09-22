@@ -2836,7 +2836,10 @@ class _Checker:
     def _record_target_contract_specs(
         self, node_id: int, specs: tuple[OutputContractSpec, ...]
     ) -> None:
-        """Store a region-owned type-directed extern call's target contracts."""
+        """Store target contracts per type-directed extern occurrence node.
+
+        An occurrence is a call, reference, method projection, or partial application.
+        """
         self._record_side_table_addition(
             "target_contract_specs", self._target_contract_specs, node_id
         )

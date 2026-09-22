@@ -181,6 +181,56 @@ class BuiltinCheckCtx(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Output-target rules shared with type-directed extern targets
+# ---------------------------------------------------------------------------
+
+
+def reject_type_var_target(name: str, target_type: Type, span: SourceSpan) -> None:
+    """A *name* builtin's or extern's target type may not contain a type variable.
+
+    Applied to the final resolved target — whether it came from an explicit
+    ``::[…]`` argument or was inferred from the contextual expected type
+    (e.g. a generic ``def``'s return type) — so a type variable never reaches
+    codec selection or schema generation (which cannot serialise one).
+    """
+    if contains_type_var(target_type):
+        tv = next(iter(free_type_vars(target_type)))
+        raise AglTypeError(
+            f"'{name}' target type cannot contain a type variable ('{tv}').",
+            span=span,
+        )
+
+
+def reject_unparseable_target(name: str, target_type: Type, span: SourceSpan) -> None:
+    """Reject a resolved *name* output target containing a type variable or being a function."""
+    reject_type_var_target(name, target_type, span)
+    if isinstance(target_type, FunctionType):
+        raise AglTypeError(f"'{name}' output cannot be parsed into a function value.", span=span)
+
+
+def check_schema_compilable(
+    ctx: BuiltinCheckCtx, target_type: Type, codec_name: str, span: SourceSpan, *, use: str
+) -> None:
+    """Reject *target_type* if lowering will schema-compile it but cannot.
+
+    The lowerer derives schema/decode metadata only for the built-in JSON
+    codec, so custom codecs are responsible for their own output format and
+    parsing behavior.
+    """
+    if codec_name != "json":
+        return
+    message = ctx._env.type_table.no_finite_schema_message(target_type, use=use)
+    if message is not None:
+        raise AglTypeError(message, span=span)
+    if not ctx._type_is_wire_serializable(target_type):
+        raise AglTypeError(
+            f"{use.capitalize()} '{target_type!r}' is not JSON-serializable; "
+            "use a JSON-serializable data type.",
+            span=span,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Collaborator class
 # ---------------------------------------------------------------------------
 
@@ -553,7 +603,7 @@ class BuiltinCallChecker:
         """
         if target_type is None:
             raise AglTypeError(missing_hint, span=node.span)
-        self._reject_type_var_target(name, target_type, node.span)
+        reject_type_var_target(name, target_type, node.span)
         arg = self._single_positional_argument(node, name)
         arg_type = self._ctx._check_expr(arg, expected=TextType())
         self._ctx._assert_assignable_from(arg_type, TextType(), arg.span, arg)
@@ -613,7 +663,7 @@ class BuiltinCallChecker:
                 expected, self.default_target(BuiltinKind.ASK), node.span, "ask"
             )
         )
-        self._reject_type_var_target("ask", target_type, node.span)
+        reject_type_var_target("ask", target_type, node.span)
         self._register_ask_like_obligation(
             node,
             target_type=target_type,
@@ -644,7 +694,7 @@ class BuiltinCallChecker:
         agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
         explicit = self._resolve_explicit_target(node, "ask-request")
         target_type: Type = explicit if explicit is not None else TextType()
-        self._reject_type_var_target("ask-request", target_type, node.span)
+        reject_type_var_target("ask-request", target_type, node.span)
         # The contract resolved above is threaded through so the coherence walk
         # does not run a second time for this call site.
         self._register_ask_like_obligation(
@@ -762,12 +812,7 @@ class BuiltinCallChecker:
             raise AglTypeError(
                 "Cannot infer a concrete target type for this built-in call.", span=obligation.span
             )
-        self._reject_type_var_target(obligation.kind.value, target_type, obligation.span)
-        if isinstance(target_type, FunctionType):
-            raise AglTypeError(
-                "cannot parse agent or exec output into a function/agent value.",
-                span=obligation.span,
-            )
+        reject_unparseable_target(obligation.kind.value, target_type, obligation.span)
         if obligation.kind is BuiltinObligationKind.EXEC:
             self._finalize_exec(obligation)
         else:
@@ -841,7 +886,7 @@ class BuiltinCallChecker:
                 expected, self.default_target(BuiltinKind.EXEC), node.span, "exec"
             )
         )
-        self._reject_type_var_target("exec", target_type, node.span)
+        reject_type_var_target("exec", target_type, node.span)
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():
             if arg_name not in self._EXEC_ALLOWED_NAMED_ARGS:
@@ -1047,7 +1092,7 @@ class BuiltinCallChecker:
 
         Raises ``AglTypeError`` when more than one type argument is provided
         (arity error). The ask/ask-request/exec callers apply the
-        type-variable guard (see :meth:`_reject_type_var_target`) to the
+        type-variable guard (see :func:`reject_type_var_target`) to the
         *final* target type, covering both the explicit and the
         contextual/inferred target paths; ``print``, ``render``, ``copy``,
         and ``shallow-copy`` do not apply that guard, because none of them
@@ -1099,44 +1144,6 @@ class BuiltinCallChecker:
         if isinstance(zonked, InferenceVarType):
             self._ctx._defer_builtin_default(zonked, default, span, subject)
         return zonked
-
-    def _reject_type_var_target(self, name: str, target_type: Type, span: SourceSpan) -> None:
-        """A *name* builtin's target type may not contain a type variable.
-
-        Applied to the final resolved target — whether it came from an explicit
-        ``::[…]`` argument or was inferred from the contextual expected type
-        (e.g. a generic ``def``'s return type) — so a type variable never reaches
-        codec selection or schema generation (which cannot serialise one).
-        """
-        if contains_type_var(target_type):
-            tv = next(iter(free_type_vars(target_type)))
-            raise AglTypeError(
-                f"'{name}' target type cannot contain a type variable ('{tv}').",
-                span=span,
-            )
-
-    def _check_schema_compilable(
-        self, target_type: Type, codec_name: str, span: SourceSpan, *, use: str
-    ) -> None:
-        """Reject *target_type* if lowering will schema-compile it but cannot.
-
-        Shared by ``ask`` finalization and ``exec``. The lowerer derives
-        schema/decode metadata only for the built-in JSON codec, so custom
-        codecs are responsible for their own output format and parsing behavior.
-        Text (and unit/structured-exec)
-        outputs do not build a schema.
-        """
-        if codec_name != "json":
-            return
-        message = self._ctx._env.type_table.no_finite_schema_message(target_type, use=use)
-        if message is not None:
-            raise AglTypeError(message, span=span)
-        if not self._ctx._type_is_wire_serializable(target_type):
-            raise AglTypeError(
-                f"{use.capitalize()} '{target_type!r}' is not JSON-serializable; "
-                "use a JSON-serializable data type.",
-                span=span,
-            )
 
     # --- shared parse-option handling (ask / exec) ---
 
@@ -1196,7 +1203,9 @@ class BuiltinCallChecker:
     ) -> OutputContractSpec:
         """Resolve the codec, validate the schema, and record the parsed output contract."""
         codec_name, effective_strict = self._resolve_codec(obligation)
-        self._check_schema_compilable(obligation.target_type, codec_name, obligation.span, use=use)
+        check_schema_compilable(
+            self._ctx, obligation.target_type, codec_name, obligation.span, use=use
+        )
         spec = OutputContractSpec(obligation.target_type, codec_name, effective_strict)
         assert not contains_inference_var(spec.target_type)
         self._ctx._record_contract_spec(obligation.node_id, spec)

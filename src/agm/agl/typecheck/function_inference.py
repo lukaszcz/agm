@@ -34,6 +34,7 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
     contains_inference_var,
+    free_type_vars,
     substitute,
 )
 from agm.agl.syntax.nodes import (
@@ -884,6 +885,12 @@ def register_method_header(
         env.register_method_def(receiver.owner, method)
 
 
+def _target_params(type_params: tuple[str, ...], params: Sequence[ParamSpec]) -> tuple[str, ...]:
+    """Return the type parameters no value parameter mentions, in declaration order."""
+    bound = {name for param in params for name in free_type_vars(param.type)}
+    return tuple(name for name in type_params if name not in bound)
+
+
 def resolve_function_header(
     env: TypeEnvironment,
     node: FuncDef,
@@ -951,6 +958,7 @@ def resolve_function_header(
         params=tuple(params),
         result=resolved_result,
         type_params=signature_type_params,
+        target_params=_target_params(signature_type_params, params) if node.is_extern else (),
     )
     return (
         signature,

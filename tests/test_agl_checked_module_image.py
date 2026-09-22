@@ -1,7 +1,7 @@
 """Tests for ``CheckedModuleImage``: image/rehydrate parity and journal scope.
 
 Builds one multi-module program (generics, aliases, an enum with a method, a
-scoped record and function, an extern declaration, a self-method, a
+scoped record and function, extern declarations (one type-directed), a self-method, a
 cross-module candidate-function dependency, and a static ``let``/``var`` pair with
 an unannotated ``let``), compiles it once, then checks that turning each
 non-entry module into a ``CheckedModuleImage``
@@ -106,9 +106,15 @@ extern def double_value(value: int) -> int
 def quadruple(value: int) -> int = double_value(double_value(value))
 
 def quadruple-fn() -> (int) -> int = quadruple(?)
+
+extern def convert[T](value: int) -> T
+
+def convert-to-text(value: int) -> text = convert(value)
 """
 
-_EXTERN_COMPANION_SRC = "def double_value(value):\n    return value * 2\n"
+_EXTERN_COMPANION_SRC = (
+    "def double_value(value):\n    return value * 2\ndef convert(value):\n    return str(value)\n"
+)
 
 _METHODS_SRC = """\
 record Point(x: int, y: int)

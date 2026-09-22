@@ -468,6 +468,7 @@ class EntryPipeline:
             resolved=entry.resolved,
             node_types=entry.node_types,
             contract_specs=entry.contract_specs,
+            target_contract_specs=entry.target_contract_specs,
             call_sites=entry.call_sites,
             warnings=entry.warnings,
             type_env=entry.type_env,

@@ -262,6 +262,7 @@ def _assert_checked_module_closed(module: CheckedModule) -> None:
     assert_checked_output_closed(
         node_types=module.node_types,
         contract_specs=module.contract_specs,
+        target_contract_specs=module.target_contract_specs,
         call_sites=module.call_sites,
         function_signatures=module.function_signatures,
         cast_specs=module.cast_specs,

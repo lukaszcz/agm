@@ -178,11 +178,16 @@ class FunctionSignature:
     ``result``      — the declared return type.
     ``type_params`` — tuple of type-parameter names for generic functions
                       (empty for non-generic functions).
+    ``target_params`` — an ``extern def``'s type parameters no value parameter
+                      (receiver included) mentions, in declaration order; each
+                      call site resolves them and delivers their contracts.
+                      Empty for every other function.
     """
 
     params: tuple[ParamSpec, ...]
     result: Type
     type_params: tuple[str, ...] = ()
+    target_params: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,26 +295,21 @@ class CallSiteRecord:
 
 @dataclass(frozen=True, slots=True)
 class OutputContractSpec:
-    """Statically derived output contract for one ``AgentCall`` node.
+    """Statically derived output contract for one ``ask``/``exec`` call, or for one
+    target parameter of a type-directed extern occurrence (always strict ``json``).
 
     ``target_type``
-        The resolved semantic type the agent's output will be parsed into.
+        The resolved semantic type the output will be parsed into.
     ``codec_name``
         The codec selected for this call (e.g. ``"text"`` or ``"json"``).
         Output-discarding unit calls use ``"none"``. When ``structured_exec``
-        is ``True`` this field holds the placeholder
-        value ``"text"`` and is **unused** —  will branch on
-        ``structured_exec`` to skip codec lookup and return the raw ``ExecResult``
-        handle instead.
+        is ``True`` this field holds the unused placeholder ``"text"``.
     ``strict_json``
-        The effective strict-JSON flag for this call (``None`` means the
-        codec is not JSON-based and the flag is irrelevant; this is
-        always ``None`` since the only codec is ``"text"``).
+        The strict-JSON flag; ``None`` when unset or the codec is not JSON.
     ``structured_exec``
         ``True`` for the structured ``exec`` form (target is ``ExecResult``):
         returns the raw result record, does not parse stdout, does not raise
         on nonzero exit.  ``False`` (the default) for all other calls.
-        must branch on this flag to skip the codec/parse pipeline entirely.
     """
 
     target_type: Type
@@ -431,6 +431,10 @@ class CheckedModule:
         Maps ``AgentCall.node_id`` → ``OutputContractSpec`` for call sites that
         parse output. ``unit`` agent calls are omitted because they have no
         output contract.
+    ``target_contract_specs``
+        Maps a type-directed extern call's node id → one strict JSON
+        ``OutputContractSpec`` per target parameter of the callee
+        (``FunctionSignature.target_params``), in declaration order.
     ``call_sites``
         Tuple of ``CallSiteRecord`` — one per agent-call/exec site, in source
         order — captured by the checker.  The ``--dry-run`` inventory is
@@ -518,6 +522,7 @@ class CheckedModule:
     program_config_targets: dict[int, tuple[ModuleId, tuple[str, ...], str]] = field(
         default_factory=dict
     )
+    target_contract_specs: dict[int, tuple[OutputContractSpec, ...]] = field(default_factory=dict)
 
     def binding_for(self, node_id: int) -> BindingRef | None:
         """Return *node_id*'s checked binding, dereferencing a pattern slot."""
@@ -593,6 +598,7 @@ class CheckedModule:
             method_selections=self.method_selections,
             explicit_builtin_targets=self.explicit_builtin_targets,
             program_config_targets=self.program_config_targets,
+            target_contract_specs=self.target_contract_specs,
         )
 
 
@@ -606,6 +612,7 @@ def assert_checked_output_closed(
     *,
     node_types: Mapping[int, Type],
     contract_specs: Mapping[int, OutputContractSpec],
+    target_contract_specs: Mapping[int, tuple[OutputContractSpec, ...]],
     call_sites: Iterable[CallSiteRecord],
     function_signatures: Mapping[str, FunctionSignature],
     cast_specs: Mapping[int, CastSpec],
@@ -627,6 +634,7 @@ def assert_checked_output_closed(
         (
             *node_types.values(),
             *(spec.target_type for spec in contract_specs.values()),
+            *(spec.target_type for specs in target_contract_specs.values() for spec in specs),
             *(site.target_type for site in call_sites),
             *(signature.result for signature in function_signatures.values()),
             *(
@@ -651,6 +659,7 @@ def assert_checked_module_closed(checked: CheckedModule) -> None:
     assert_checked_output_closed(
         node_types=checked.node_types,
         contract_specs=checked.contract_specs,
+        target_contract_specs=checked.target_contract_specs,
         call_sites=checked.call_sites,
         function_signatures=checked.function_signatures,
         cast_specs=checked.cast_specs,
@@ -932,6 +941,7 @@ class CheckedModuleImage:
     method_selections: dict[int, MethodDef]
     explicit_builtin_targets: dict[int, Type]
     program_config_targets: dict[int, tuple[ModuleId, tuple[str, ...], str]]
+    target_contract_specs: dict[int, tuple[OutputContractSpec, ...]]
 
     def rehydrate(self, resolved_module: ResolvedModule, env: TypeEnvironment) -> CheckedModule:
         """Reconstruct an equivalent ``CheckedModule`` over a freshly prepared *env*.
@@ -974,6 +984,7 @@ class CheckedModuleImage:
             method_selections=self.method_selections,
             explicit_builtin_targets=self.explicit_builtin_targets,
             program_config_targets=self.program_config_targets,
+            target_contract_specs=self.target_contract_specs,
         )
 
 

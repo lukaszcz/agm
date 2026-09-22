@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import warnings
 from pathlib import Path
@@ -1222,3 +1223,107 @@ def test_no_allowlisted_charset_can_decode_to_a_surrogate() -> None:
         for sample in samples:
             decoded = sample.decode(name, errors="ignore")
             assert not any(0xD800 <= ord(ch) <= 0xDFFF for ch in decoded), (name, sample)
+
+
+def test_perform_save_digests_the_body_it_wrote(tmp_path: Path) -> None:
+    destination = tmp_path / "out.bin"
+    content = b"archive bytes"
+    session, adapter = fake_session([{"status": 200, "body_hex": content.hex()}])
+
+    result = http.perform(
+        session,
+        http.RequestSpec(
+            method="GET",
+            url="https://example.org/x",
+            receive=http.Save(destination, sha256=True),
+            timeout_seconds=5.0,
+        ),
+    )
+
+    assert destination.read_bytes() == content
+    assert result.body_sha256 == hashlib.sha256(content).hexdigest()
+    adapter.assert_complete()
+
+
+def test_perform_runs_on_headers_once_before_streaming_the_body(tmp_path: Path) -> None:
+    destination = tmp_path / "out.bin"
+    session, adapter = fake_session([{"status": 200, "body_hex": b"hello".hex()}])
+    body_written_when_called: list[bool] = []
+
+    http.perform(
+        session,
+        http.RequestSpec(
+            method="GET",
+            url="https://example.org/x",
+            receive=http.Save(destination),
+            timeout_seconds=5.0,
+        ),
+        on_headers=lambda: body_written_when_called.append(destination.exists()),
+    )
+
+    assert body_written_when_called == [False]
+    assert destination.read_bytes() == b"hello"
+    adapter.assert_complete()
+
+
+def test_perform_runs_on_headers_only_after_the_last_redirect_hop() -> None:
+    session, adapter = fake_session(
+        [
+            {"status": 302, "headers": {"location": "https://example.org/final"}},
+            {"status": 200, "body": "arrived"},
+        ]
+    )
+    requests_sent_when_called: list[int] = []
+
+    result = http.perform(
+        session,
+        http.RequestSpec(method="GET", url="https://example.org/x", timeout_seconds=5.0),
+        on_headers=lambda: requests_sent_when_called.append(len(adapter.sent)),
+    )
+
+    assert requests_sent_when_called == [2]
+    assert result.text == "arrived"
+    adapter.assert_complete()
+
+
+def test_perform_save_abandons_a_body_past_its_size_limit(tmp_path: Path) -> None:
+    destination = tmp_path / "out.bin"
+    destination.write_bytes(b"previous")
+    session, adapter = fake_session([{"status": 200, "body_hex": b"far too much".hex()}])
+
+    with pytest.raises(http.SizeLimitExceeded) as excinfo:
+        http.perform(
+            session,
+            http.RequestSpec(
+                method="GET",
+                url="https://example.org/x",
+                receive=http.Save(destination, max_bytes=4),
+                timeout_seconds=5.0,
+            ),
+        )
+
+    assert excinfo.value.path == destination
+    assert excinfo.value.limit == 4
+    assert destination.read_bytes() == b"previous"
+    assert [child.name for child in tmp_path.iterdir()] == ["out.bin"]
+    adapter.assert_complete()
+
+
+def test_perform_save_accepts_a_body_at_its_size_limit(tmp_path: Path) -> None:
+    destination = tmp_path / "out.bin"
+    session, adapter = fake_session([{"status": 200, "body_hex": b"hello".hex()}])
+
+    result = http.perform(
+        session,
+        http.RequestSpec(
+            method="GET",
+            url="https://example.org/x",
+            receive=http.Save(destination, max_bytes=5),
+            timeout_seconds=5.0,
+        ),
+    )
+
+    assert destination.read_bytes() == b"hello"
+    assert result.body_bytes == 5
+    assert result.body_sha256 == ""
+    adapter.assert_complete()

@@ -61,7 +61,17 @@ if TYPE_CHECKING:
 
 # These companion module attributes are APIs, never synthesized nominal aliases.
 _COMPANION_API_NAMES = frozenset(
-    {"AglException", "array", "dict", "json", "nominals", "option_none", "option_some", "runtime"}
+    {
+        "AglException",
+        "array",
+        "dict",
+        "json",
+        "nominals",
+        "option",
+        "option_none",
+        "option_some",
+        "runtime",
+    }
 )
 
 
@@ -157,6 +167,15 @@ class _CompanionRuntime:
         active = self._active_call.get()
         state = active.state if active is not None else self._detached_state
         return state.get_or_create(key, factory, close)
+
+    def tracing(self) -> bool:
+        """Whether :meth:`trace` would record: an active call whose store is writing.
+
+        Lets a companion skip building a payload that tracing, off by
+        default, would discard.
+        """
+        active = self._active_call.get()
+        return active is not None and active.trace_store.path is not None
 
     def trace(self, kind: str, payload: dict[str, object]) -> None:
         """Emit a companion trace record tagged with the active call's origin and span.
@@ -531,6 +550,7 @@ class ExternRegistry:
         if option_cls is not None:
             setattr(module, "option_none", functools.partial(_option_none, option_cls))
             setattr(module, "option_some", functools.partial(_option_some, option_cls))
+            setattr(module, "option", functools.partial(_option, option_cls))
         _build_nominal_namespace(nominals, leaves)
         names: dict[str, list[type[object]]] = {}
         for cls in leaves.values():
@@ -858,3 +878,14 @@ def _option_some(option_cls: type, value: object) -> object:
     Bound as ``agl.option_some``; see :func:`_option_none`.
     """
     return cast(object, getattr(option_cls, "Some")(value=value))
+
+
+def _option(option_cls: type, value: object, present: bool) -> object:
+    """Build ``Option::Some(value)`` when *present*, else ``Option::None``.
+
+    Bound as ``agl.option``, for a companion that has already computed both
+    the value and whether it exists. *value* is evaluated by the caller, so a
+    site whose value is only well-defined when present uses a conditional
+    over :func:`_option_some`/:func:`_option_none` instead.
+    """
+    return _option_some(option_cls, value) if present else _option_none(option_cls)

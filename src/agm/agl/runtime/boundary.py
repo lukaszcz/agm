@@ -7,7 +7,7 @@ import operator
 from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Protocol, Self, SupportsIndex, cast, overload
+from typing import NoReturn, Protocol, Self, SupportsIndex, cast, overload
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
@@ -83,6 +83,34 @@ class AglException(Exception):
             raise TypeError("AglException requires an AgL exception value")
         super().__init__(exception_message(decoded))
         self.value = decoded
+
+
+class AglExceptionClass(Protocol):
+    """A synthesized AgL exception class, constructed from its declared fields.
+
+    The raise helpers below take the class rather than resolving one by name:
+    the boundary knows nothing of the standard library's declarations, so a
+    companion supplies the identity it declared.
+    """
+
+    def __call__(self, **fields: object) -> object: ...
+
+
+def raise_index_error(
+    exc_cls: AglExceptionClass, message: str, index: int, length: int
+) -> NoReturn:
+    """Raise an AgL ``IndexError``-shaped exception for *index* against *length*."""
+    raise AglException(exc_cls(message=message, index=index, length=length))
+
+
+def raise_key_error(exc_cls: AglExceptionClass, message: str, key: str) -> NoReturn:
+    """Raise an AgL ``KeyError``-shaped exception for the missing *key*."""
+    raise AglException(exc_cls(message=message, key=key))
+
+
+def raise_parse_error(exc_cls: AglExceptionClass, raw: str, message: str) -> NoReturn:
+    """Raise an AgL parse-error-shaped exception carrying the unparsable *raw* input."""
+    raise AglException(exc_cls(message=message, raw=raw))
 
 
 _FunctionEncoder = Callable[[IrClosureValue], object] | None

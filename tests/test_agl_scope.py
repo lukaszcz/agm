@@ -2107,7 +2107,11 @@ class TestMethodReceiverClassification:
                 "Alias",
                 "Target",
             ),
+            # The alias below the method is still an alias scope: receiver
+            # classification reads the whole module, not the text above it.
+            ("def Count::value(self) -> int = 1\ntype Count = int", "Count", "int"),
         ),
+        ids=("alias-above", "alias-target-above", "alias-below"),
     )
     def test_alias_scope_receiver_is_rejected_with_its_target(
         self, source: str, alias: str, target: str

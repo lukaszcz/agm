@@ -207,15 +207,28 @@ class TestMainDepRepo:
 # ---------------------------------------------------------------------------
 
 
+def _branches(repo: Path, env: dict[str, str]) -> set[str]:
+    """Return the repository's branch names."""
+
+    return set(git_output(repo, ["branch", "--format=%(refname:short)"], env).split())
+
+
+def _worktree_paths(repo: Path, env: dict[str, str]) -> set[Path]:
+    """Return the resolved paths of every worktree git still tracks for *repo*."""
+
+    listing = git_output(repo, ["worktree", "list", "--porcelain"], env).splitlines()
+    return {
+        Path(line[len("worktree ") :]).resolve() for line in listing if line.startswith("worktree ")
+    }
+
+
 class TestDepRemoveRun:
-    def _setup_dep_dir(self, tmp_path: Path) -> tuple[Path, Path, Path]:
-        """Create a minimal project + dep directory layout."""
+    def _dep_project(self, tmp_path: Path, env: dict[str, str]) -> tuple[Path, Path, Path]:
+        """Build a real project whose ``deps/mylib/main`` is a git repository."""
         project_dir = tmp_path / "project"
-        deps_dir = project_dir / "deps"
-        dep_dir = deps_dir / "mylib"
-        repo_path = dep_dir / "repo"
-        repo_path.mkdir(parents=True)
-        return project_dir, dep_dir, repo_path
+        init_repo(project_dir / "repo", env)
+        dep_dir = project_dir / "deps" / "mylib"
+        return project_dir, dep_dir, init_repo(dep_dir / "main", env)
 
     @pytest.mark.parametrize(
         ("scenario", "remove_all", "target"),
@@ -272,145 +285,93 @@ class TestDepRemoveRun:
 
         assert all(marker.is_file() for marker in preserved)
 
-    def test_remove_single_worktree_by_branch_name(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("checkout", "branch", "target"),
+        [
+            ("checkout-dir", "feature", "mylib/feature"),
+            ("feat/x", "feat/x", "mylib/feat/x"),
+            ("feat-a", "different-branch-name", "mylib/feat-a"),
+        ],
+        ids=["by-branch", "nested-ref", "by-path"],
+    )
+    def test_removes_the_selected_worktree_and_its_branch(
+        self,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        checkout: str,
+        branch: str,
+        target: str,
     ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
+        """A target names a checkout either by its branch or by its directory."""
+        project_dir, dep_dir, repo = self._dep_project(tmp_path, env)
+        worktree = add_linked_worktree(repo, dep_dir / checkout, env, branch=branch)
+        kept = add_linked_worktree(repo, dep_dir / "kept", env, branch="kept")
 
-        wt_path = dep_dir / "checkout-dir"
-        wt_path.mkdir()
-        linked_wt = WorktreeInfo(path=wt_path, branch="feature")
+        monkeypatch.chdir(project_dir)
+        dep_remove.run(DepRemoveArgs(all=False, target=target))
 
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-                linked_wt,
-            ],
-        )
+        assert not worktree.exists()
+        assert branch not in _branches(repo, env)
+        assert _worktree_paths(repo, env) == {repo.resolve(), kept.resolve()}
+        assert (kept / "README.md").is_file()
 
-        removed: list[Path] = []
-        deleted: list[str] = []
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
-        )
-        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
-
-        args = DepRemoveArgs(all=False, target="mylib/feature")
-        dep_remove.run(args)
-
-        assert removed == [wt_path]
-        assert deleted == ["feature"]
-
-    def test_remove_single_worktree_with_nested_ref(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_removes_a_detached_checkout_without_deleting_any_branch(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
+        project_dir, dep_dir, repo = self._dep_project(tmp_path, env)
+        detached = dep_dir / "detached"
+        git_run(repo, ["worktree", "add", "--detach", str(detached), "HEAD", "-q"], env)
+        before = _branches(repo, env)
 
-        wt_path = dep_dir / "feat" / "x"
-        wt_path.mkdir(parents=True)
-        linked_wt = WorktreeInfo(path=wt_path, branch="feat/x")
+        monkeypatch.chdir(project_dir)
+        dep_remove.run(DepRemoveArgs(all=False, target="mylib/detached"))
 
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-                linked_wt,
-            ],
-        )
+        assert not detached.exists()
+        assert _branches(repo, env) == before
+        assert _worktree_paths(repo, env) == {repo.resolve()}
 
-        removed: list[Path] = []
-        deleted: list[str] = []
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
-        )
-        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
-
-        dep_remove.run(DepRemoveArgs(all=False, target="mylib/feat/x"))
-
-        assert removed == [wt_path]
-        assert deleted == ["feat/x"]
-
-    def test_remove_all_removes_linked_worktrees_and_dep_dir(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_remove_all_removes_every_linked_worktree_and_the_dep_dir(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
+        project_dir, dep_dir, repo = self._dep_project(tmp_path, env)
+        add_linked_worktree(repo, dep_dir / "feat-a", env, branch="feat-a")
+        add_linked_worktree(repo, dep_dir / "feat-b", env, branch="feat-b")
 
-        wt_path = dep_dir / "feat-a"
-        wt_path.mkdir()
-        linked_wt = WorktreeInfo(path=wt_path, branch="feat-a")
+        monkeypatch.chdir(project_dir)
+        dep_remove.run(DepRemoveArgs(all=True, target="mylib"))
 
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-                linked_wt,
-            ],
-        )
-
-        removed: list[Path] = []
-        deleted: list[str] = []
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
-        )
-        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
-
-        args = DepRemoveArgs(all=True, target="mylib")
-        dep_remove.run(args)
-
-        assert removed == [wt_path]
-        assert deleted == ["feat-a"]
         assert not dep_dir.exists()
+        assert (project_dir / "repo" / "README.md").is_file()
 
-    def test_remove_all_exits_on_detached_worktree(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_remove_all_keeps_everything_when_a_worktree_is_detached(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
+        """A detached checkout has no branch to restore it from, so nothing is removed."""
+        project_dir, dep_dir, repo = self._dep_project(tmp_path, env)
+        attached = add_linked_worktree(repo, dep_dir / "feat-a", env, branch="feat-a")
+        detached = dep_dir / "detached"
+        git_run(repo, ["worktree", "add", "--detach", str(detached), "HEAD", "-q"], env)
 
-        wt_path = dep_dir / "detached"
-        wt_path.mkdir()
-        detached_wt = WorktreeInfo(path=wt_path, branch=None)
-
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-                detached_wt,
-            ],
-        )
-
-        args = DepRemoveArgs(all=True, target="mylib")
+        monkeypatch.chdir(project_dir)
         with pytest.raises(SystemExit):
-            dep_remove.run(args)
+            dep_remove.run(DepRemoveArgs(all=True, target="mylib"))
+
+        assert _worktree_paths(repo, env) == {
+            repo.resolve(),
+            attached.resolve(),
+            detached.resolve(),
+        }
+        assert (attached / "README.md").is_file()
 
     def test_exits_when_dep_dir_does_not_exist(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        project_dir = tmp_path / "project"
-        project_dir.mkdir()
+        project_dir, _dep_dir, _repo = self._dep_project(tmp_path, env)
 
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-
-        args = DepRemoveArgs(all=False, target="nonexistent/feature")
+        monkeypatch.chdir(project_dir)
         with pytest.raises(SystemExit):
-            dep_remove.run(args)
+            dep_remove.run(DepRemoveArgs(all=False, target="nonexistent/feature"))
 
     @pytest.mark.parametrize(
         ("target", "remove_all", "message"),
@@ -440,182 +401,42 @@ class TestDepRemoveRun:
 
         assert message in capsys.readouterr().err
 
-    def test_remove_repo_ref_exits_when_linked_worktrees_exist(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("ref", ["repo", "main"], ids=["by-name", "by-path"])
+    def test_removing_the_main_checkout_removes_the_whole_dependency(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch, ref: str
     ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
+        """``repo`` names the main checkout, whatever directory it actually lives in."""
+        project_dir, dep_dir, _repo = self._dep_project(tmp_path, env)
 
-        wt_path = dep_dir / "feature"
-        wt_path.mkdir()
-        linked_wt = WorktreeInfo(path=wt_path, branch="feature")
-
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-                linked_wt,
-            ],
-        )
-
-        args = DepRemoveArgs(all=False, target="mylib/repo")
-        with pytest.raises(SystemExit):
-            dep_remove.run(args)
-
-    def test_remove_repo_ref_removes_dep_dir_when_no_linked_worktrees(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
-
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-            ],
-        )
-
-        args = DepRemoveArgs(all=False, target="mylib/repo")
-        dep_remove.run(args)
+        monkeypatch.chdir(project_dir)
+        dep_remove.run(DepRemoveArgs(all=False, target=f"mylib/{ref}"))
 
         assert not dep_dir.exists()
 
-    def test_exits_when_worktree_not_found(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_removing_the_main_checkout_exits_while_linked_worktrees_exist(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
-        other_path = dep_dir / "other-checkout"
-        other_path.mkdir()
+        project_dir, dep_dir, repo = self._dep_project(tmp_path, env)
+        worktree = add_linked_worktree(repo, dep_dir / "feature", env, branch="feature")
 
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-                WorktreeInfo(path=other_path, branch="other"),
-            ],
-        )
-
-        args = DepRemoveArgs(all=False, target="mylib/nonexistent")
+        monkeypatch.chdir(project_dir)
         with pytest.raises(SystemExit):
-            dep_remove.run(args)
+            dep_remove.run(DepRemoveArgs(all=False, target="mylib/repo"))
 
-    def test_remove_worktree_matched_by_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        assert (repo / "README.md").is_file()
+        assert (worktree / "README.md").is_file()
+
+    def test_exits_when_no_checkout_matches_the_target(
+        self, tmp_path: Path, env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
+        project_dir, dep_dir, repo = self._dep_project(tmp_path, env)
+        other = add_linked_worktree(repo, dep_dir / "other-checkout", env, branch="other")
 
-        # The worktree path matches dep_dir / "feat-a" exactly
-        wt_path = dep_dir / "feat-a"
-        wt_path.mkdir()
-        linked_wt = WorktreeInfo(path=wt_path, branch="different-branch-name")
+        monkeypatch.chdir(project_dir)
+        with pytest.raises(SystemExit):
+            dep_remove.run(DepRemoveArgs(all=False, target="mylib/nonexistent"))
 
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-                linked_wt,
-            ],
-        )
-
-        removed: list[Path] = []
-        deleted: list[str] = []
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
-        )
-        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
-
-        # Target is "feat-a" which matches by path
-        args = DepRemoveArgs(all=False, target="mylib/feat-a")
-        dep_remove.run(args)
-
-        assert removed == [wt_path]
-        assert deleted == ["different-branch-name"]
-
-    def test_remove_detached_worktree_matched_by_path_skips_branch_delete(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
-
-        wt_path = dep_dir / "detached"
-        wt_path.mkdir()
-        linked_wt = WorktreeInfo(path=wt_path, branch=None)
-
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-                linked_wt,
-            ],
-        )
-
-        removed: list[Path] = []
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
-        )
-
-        def fail_branch_delete(repo: Path, branch: str) -> None:
-            raise AssertionError(f"detached worktree should not delete branch {branch}")
-
-        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", fail_branch_delete)
-
-        dep_remove.run(DepRemoveArgs(all=False, target="mylib/detached"))
-
-        assert removed == [wt_path]
-
-    def test_remove_worktree_matched_by_later_path(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        project_dir, dep_dir, repo_path = self._setup_dep_dir(tmp_path)
-
-        first_path = dep_dir / "first"
-        second_path = dep_dir / "second"
-        first_path.mkdir()
-        second_path.mkdir()
-        first_wt = WorktreeInfo(path=first_path, branch="first")
-        second_wt = WorktreeInfo(path=second_path, branch="actual-second-branch")
-
-        monkeypatch.setattr(dep_remove, "require_current_project_dir", lambda: project_dir)
-        monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
-        monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
-        monkeypatch.setattr(
-            dep_remove.git_helpers,
-            "worktree_list",
-            lambda p: [
-                WorktreeInfo(path=repo_path, branch="main"),
-                first_wt,
-                second_wt,
-            ],
-        )
-
-        removed: list[Path] = []
-        deleted: list[str] = []
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
-        )
-        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
-
-        dep_remove.run(DepRemoveArgs(all=False, target="mylib/second"))
-
-        assert removed == [second_path]
-        assert deleted == ["actual-second-branch"]
+        assert _worktree_paths(repo, env) == {repo.resolve(), other.resolve()}
 
 
 # ---------------------------------------------------------------------------

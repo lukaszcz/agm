@@ -9,7 +9,6 @@ from typing import cast
 import pytest
 from tomlkit.exceptions import ParseError
 
-import agm.core.fs as fs_mod
 import agm.project.dependency_env as dep_env_module
 from agm.project.dependency_env import (
     _dependency_config_checkout_name,
@@ -28,6 +27,7 @@ from agm.project.dependency_env import (
     update_main_dependency_configs,
 )
 from agm.vcs.git import WorktreeInfo
+from tests._git_helpers import init_repo
 
 # ---------------------------------------------------------------------------
 # dep_env_var_name
@@ -581,8 +581,6 @@ class TestUpdateMainDependencyConfigs:
         branch_dir.mkdir()
         # Create a real git repo so is_git_repo returns True
         subprocess.run(["git", "init", "-b", "main"], cwd=branch_dir, env=env, check=True)
-        # Mock is_git_repo to avoid calling the real git
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         update_main_dependency_configs(project_dir)
         config_file = project_dir / "config" / "config.toml"
         assert config_file.exists()
@@ -601,7 +599,6 @@ class TestUpdateMainDependencyConfigs:
         dep_dir = deps_dir / "mylib"
         dep_dir.mkdir()
         # No git repos inside dep_dir
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: False)
         update_main_dependency_configs(project_dir)
         config_file = project_dir / "config" / "config.toml"
         assert not config_file.exists()
@@ -621,7 +618,6 @@ class TestUpdateMainDependencyConfigs:
             branch_dir = dep_dir / "main"
             branch_dir.mkdir()
             subprocess.run(["git", "init", "-b", "main"], cwd=branch_dir, env=env, check=True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         update_main_dependency_configs(project_dir)
         config_file = project_dir / "config" / "config.toml"
         content = config_file.read_text(encoding="utf-8")
@@ -663,7 +659,6 @@ class TestUpdateDependencyConfigsForBranch:
         branch_dir = dep_dir / "feat"
         branch_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=branch_dir, env=env, check=True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         update_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
         config_file = project_dir / "config" / "feat" / "config.toml"
         assert config_file.exists()
@@ -686,7 +681,6 @@ class TestUpdateDependencyConfigsForBranch:
         main_dir = dep_dir / "main"
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         update_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
         config_file = project_dir / "config" / "feat" / "config.toml"
         assert config_file.exists()
@@ -732,7 +726,6 @@ class TestEnsureDependencyConfigsForBranch:
         (project_dir / "config" / "config.toml").write_text(
             '[deps]\nmylib = "main"\n', encoding="utf-8"
         )
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
         config_file = project_dir / "config" / "feat" / "config.toml"
         assert config_file.exists()
@@ -753,7 +746,6 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir = dep_dir / "main"
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         main_config_dir = project_dir / "config"
         main_config_dir.mkdir()
         (main_config_dir / "config.toml").write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
@@ -781,7 +773,6 @@ class TestEnsureDependencyConfigsForBranch:
             main_dir = dep_dir / "main"
             main_dir.mkdir()
             subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         main_config_dir = project_dir / "config"
         main_config_dir.mkdir()
         (main_config_dir / "config.toml").write_text(
@@ -812,7 +803,6 @@ class TestEnsureDependencyConfigsForBranch:
             main_dir = dep_dir / "main"
             main_dir.mkdir()
             subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         # Create parent workspace config with a specific dep version
         parent_config_dir = project_dir / "config" / "parent-branch"
         parent_config_dir.mkdir(parents=True)
@@ -842,7 +832,6 @@ class TestEnsureDependencyConfigsForBranch:
             main_dir = deps_dir / dep_name / "main"
             main_dir.mkdir(parents=True)
             subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         parent_config_dir = project_dir / "config" / "parent-branch"
         parent_config_dir.mkdir(parents=True)
         (parent_config_dir / "config.toml").write_text(
@@ -892,7 +881,6 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir = dep_dir / "main"
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         # Create parent workspace config
         parent_config_dir = project_dir / "config" / "parent-branch"
         parent_config_dir.mkdir(parents=True)
@@ -939,7 +927,6 @@ class TestEnsureDependencyConfigsForBranch:
         main_dir = dep_dir / "main"
         main_dir.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
 
         ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
 
@@ -1460,21 +1447,24 @@ class TestEnsureDependencyConfigsForBranchSkipsNone:
 
 class TestDependencyConfigCheckoutNameHappyPath:
     def test_returns_checkout_name_when_branch_is_git_repo(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """_dependency_config_checkout_name returns checkout name when branch is a git repo."""
+        """A checkout named after the branch is preferred over the main checkout."""
         dep_dir = tmp_path / "dep"
-        dep_dir.mkdir()
-        feat_dir = dep_dir / "feat"
-        feat_dir.mkdir()
-        # Create .git so exists check passes
-        (feat_dir / ".git").mkdir()
+        init_repo(dep_dir / "main", env)
+        init_repo(dep_dir / "feat", env)
 
-        monkeypatch.setattr(fs_mod, "exists", lambda p: True)
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda p: True)
+        assert dep_env_module._dependency_config_checkout_name(dep_dir, "feat") == "feat"
 
-        result = dep_env_module._dependency_config_checkout_name(dep_dir, "feat")
-        assert result == "feat"
+    def test_falls_back_to_the_main_checkout_when_the_branch_has_none(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        """A directory that is not a repository does not count as the branch checkout."""
+        dep_dir = tmp_path / "dep"
+        init_repo(dep_dir / "main", env)
+        (dep_dir / "feat").mkdir()
+
+        assert dep_env_module._dependency_config_checkout_name(dep_dir, "feat") == "main"
 
 
 class TestUpdateDependencyConfigsForBranchNoCheckout:
@@ -1491,7 +1481,6 @@ class TestUpdateDependencyConfigsForBranchNoCheckout:
         dep_dir = deps_dir / "orphan"
         dep_dir.mkdir()
         # No checkout directories at all - _dependency_config_checkout_name returns None
-        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: False)
         update_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
         # No config should be created
         config_file = project_dir / "config" / "feat" / "config.toml"

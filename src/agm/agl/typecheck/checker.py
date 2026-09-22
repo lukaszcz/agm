@@ -355,7 +355,23 @@ class PendingExternCallObligation:
     contract_targets: tuple[Type, ...] = ()
 
 
-_PendingFinalization = PendingBuiltinObligation | PendingExternCallObligation
+@dataclass(frozen=True, slots=True)
+class PendingTargetContractObligation:
+    """A type-directed extern value occurrence's target contracts awaiting region finalization.
+
+    A value occurrence (reference or partial application) is not a call, so it
+    emits no inventory record.
+    """
+
+    node_id: int
+    callee: str
+    contract_targets: tuple[Type, ...]
+    span: SourceSpan
+
+
+_PendingFinalization = (
+    PendingBuiltinObligation | PendingExternCallObligation | PendingTargetContractObligation
+)
 
 
 @dataclass(slots=True)
@@ -1946,15 +1962,21 @@ class _Checker:
                         )
                     )
                 else:
-                    self._finalize_extern_call_obligation(
-                        replace(
-                            obligation,
-                            target_type=region.engine.zonk(obligation.target_type),
-                            contract_targets=tuple(
-                                region.engine.zonk(target) for target in obligation.contract_targets
-                            ),
-                        )
+                    contract_targets = tuple(
+                        region.engine.zonk(target) for target in obligation.contract_targets
                     )
+                    if isinstance(obligation, PendingExternCallObligation):
+                        self._finalize_extern_call_obligation(
+                            replace(
+                                obligation,
+                                target_type=region.engine.zonk(obligation.target_type),
+                                contract_targets=contract_targets,
+                            )
+                        )
+                    else:
+                        self._finalize_target_contracts(
+                            obligation.node_id, obligation.callee, contract_targets, obligation.span
+                        )
             self._finalize_extern_provenance(region)
             if region.engine.has_variables():
                 final_type = region.engine.zonk(typ)
@@ -2020,6 +2042,28 @@ class _Checker:
                 span=node.span,
                 contract_targets=contract_targets,
             )
+        )
+
+    def _register_target_contract_obligation(
+        self, node_id: int, targets: _ExternTargets, span: SourceSpan
+    ) -> None:
+        """Queue the target contracts of the type-directed extern value occurrence at *node_id*."""
+        assert self._inference_region is not None
+        self._inference_region.finalization_obligations.extend(
+            PendingTargetContractObligation(
+                node_id=node_id,
+                callee=target.name,
+                contract_targets=target.contract_targets,
+                span=span,
+            )
+            for target in targets
+            if target.contract_targets
+        )
+
+    def _register_member_target_contract_obligation(self, node: FieldAccess) -> None:
+        """Queue the target contracts of the extern method value occurrence *node* selects."""
+        self._register_target_contract_obligation(
+            node.node_id, self._extern_expr_targets.get(node.node_id, ()), node.span
         )
 
     def _record_node_type(self, node_id: int, typ: Type) -> None:
@@ -2100,11 +2144,13 @@ class _Checker:
         if isinstance(expr, IsTest):
             return self._check_is_test(expr)
         if isinstance(expr, FieldAccess):
-            return self._require_field_access_type(
+            typ = self._require_field_access_type(
                 expr,
                 self._check_field_access(expr, expected=expected),
                 expected=expected,
             )
+            self._register_member_target_contract_obligation(expr)
+            return typ
         if isinstance(expr, RecordUpdate):
             return self._check_record_update(expr, expected=expected)
         if _is_index_like(expr):
@@ -2328,8 +2374,10 @@ class _Checker:
                             node.span, role=ConstraintRole.EXPECTED_RESULT, subject=ref.name
                         ),
                     )
+                occurrence = self._extern_ref_targets(ref, concrete, instantiation.variables)
+                self._register_target_contract_obligation(node.node_id, occurrence, node.span)
                 self._set_extern_expr_targets(
-                    node.node_id, self._extern_targets_for_ref(ref, concrete)
+                    node.node_id, self._extern_targets_for_ref(ref, occurrence)
                 )
                 self._set_generic_function_expr_result_dependencies(
                     node.node_id, self._generic_function_result_dependencies(sig)
@@ -2342,7 +2390,10 @@ class _Checker:
                         self._inferred_return_binding_provenance.get(ref.decl_node_id, set()),
                     )
                 return concrete
-        self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, typ))
+        # A non-generic extern has no target parameters, so this occurrence queues nothing.
+        self._set_extern_expr_targets(
+            node.node_id, self._extern_targets_for_ref(ref, self._extern_ref_targets(ref, typ, {}))
+        )
         if isinstance(typ, FunctionType):
             self._set_generic_function_expr_result_dependencies(
                 node.node_id,
@@ -2529,12 +2580,14 @@ class _Checker:
             self._record_node_type(node.expr.node_id, typ)
             return typ
         if isinstance(node.expr, FieldAccess):
-            return self._require_field_access_type(
+            typ = self._require_field_access_type(
                 node.expr,
                 self._check_specialized_field_access(node.expr, type_args=node.type_args),
                 expected=expected,
                 type_args=node.type_args,
             )
+            self._register_member_target_contract_obligation(node.expr)
+            return typ
 
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
@@ -2602,7 +2655,9 @@ class _Checker:
             ),
         )
         self._record_node_type(node.expr.node_id, concrete)
-        self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, concrete))
+        occurrence = self._extern_ref_targets(ref, concrete, subst)
+        self._register_target_contract_obligation(node.expr.node_id, occurrence, node.span)
+        self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, occurrence))
         self._set_generic_function_expr_result_dependencies(
             node.node_id, self._generic_function_result_dependencies(sig)
         )
@@ -3232,23 +3287,37 @@ class _Checker:
         assert self._return_extern_targets_stack
         self._return_extern_targets_stack[-1].extend(targets)
 
-    def _extern_targets_for_ref(self, ref: BindingRef, typ: Type) -> _ExternTargets:
-        """Return extern call targets represented by a resolved value reference."""
-        if ref.kind is BinderKind.function_binding and self._env.is_extern_node_id(
+    def _extern_ref_targets(
+        self, ref: BindingRef, typ: Type, instantiation: Mapping[str, Type]
+    ) -> _ExternTargets:
+        """Return the target a reference to extern *ref* selects under *instantiation*.
+
+        Empty unless *ref* names an extern.
+        """
+        if ref.kind is not BinderKind.function_binding or not self._env.is_extern_node_id(
             ref.decl_node_id
         ):
-            assert isinstance(typ, FunctionType), (
-                f"extern binding {ref.name!r} has non-function type {typ!r}"
-            )
-            return (
-                _ExternTarget(
-                    name=ref.name,
-                    result_type=typ.result,
-                    decl_node_id=ref.decl_node_id,
-                    module_id=ref.module_id,
-                ),
-            )
-        return self._extern_binding_targets.get(ref.decl_node_id, ())
+            return ()
+        assert isinstance(typ, FunctionType), (
+            f"extern binding {ref.name!r} has non-function type {typ!r}"
+        )
+        signature = self._env.get_function_signature_by_node_id(ref.decl_node_id)
+        assert signature is not None
+        return (
+            _ExternTarget(
+                name=ref.name,
+                result_type=typ.result,
+                decl_node_id=ref.decl_node_id,
+                module_id=ref.module_id,
+                contract_targets=_contract_targets(signature, instantiation),
+            ),
+        )
+
+    def _extern_targets_for_ref(
+        self, ref: BindingRef, occurrence: _ExternTargets
+    ) -> _ExternTargets:
+        """Return a reference's extern provenance: its *occurrence* target, else its binding's."""
+        return occurrence or self._extern_binding_targets.get(ref.decl_node_id, ())
 
     def _extern_targets_for_function_exprs(
         self, exprs: Sequence[Expr], result_type: Type
@@ -3775,18 +3844,17 @@ class _Checker:
             )
             contract_targets = _contract_targets(sig, instantiation)
             if hole_indices:
-                self._set_extern_expr_targets(
-                    node.node_id,
-                    (
-                        _ExternTarget(
-                            name=func_name,
-                            result_type=extern_target_type,
-                            decl_node_id=callee_ref.decl_node_id,
-                            module_id=callee_ref.module_id,
-                            contract_targets=contract_targets,
-                        ),
+                partial_targets = (
+                    _ExternTarget(
+                        name=func_name,
+                        result_type=extern_target_type,
+                        decl_node_id=callee_ref.decl_node_id,
+                        module_id=callee_ref.module_id,
+                        contract_targets=contract_targets,
                     ),
                 )
+                self._set_extern_expr_targets(node.node_id, partial_targets)
+                self._register_target_contract_obligation(node.node_id, partial_targets, node.span)
             else:
                 self._register_extern_call_obligation(
                     node, func_name, extern_target_type, contract_targets
@@ -3945,20 +4013,23 @@ class _Checker:
             # whereas value-position syntax uses TypeApply; both route through
             # ``_check_specialized_field_access`` (see its docstring for why the
             # specialization must be published on the inner node here too).
-            if isinstance(node.callee, FieldAccess) and node.type_args:
-                callee_type = self._require_field_access_type(
-                    node.callee,
-                    self._check_specialized_field_access(node.callee, type_args=node.type_args),
-                    expected=expected,
-                    type_args=node.type_args,
-                )
-            elif isinstance(node.callee, FieldAccess):
-                callee_type = self._require_field_access_type(
-                    node.callee,
-                    self._check_field_access(node.callee, expected=None),
-                    expected=expected,
-                )
-                self._record_node_type(node.callee.node_id, callee_type)
+            if isinstance(node.callee, FieldAccess):
+                if node.type_args:
+                    callee_type = self._require_field_access_type(
+                        node.callee,
+                        self._check_specialized_field_access(node.callee, type_args=node.type_args),
+                        expected=expected,
+                        type_args=node.type_args,
+                    )
+                else:
+                    callee_type = self._require_field_access_type(
+                        node.callee,
+                        self._check_field_access(node.callee, expected=None),
+                        expected=expected,
+                    )
+                    self._record_node_type(node.callee.node_id, callee_type)
+                # Only a partial member call reaches here: the method is a value occurrence.
+                self._register_member_target_contract_obligation(node.callee)
             else:
                 callee_type = self._check_expr(node.callee, expected=None)
         with self._frame_direct_candidate_use(exprs=(node.callee,)):

@@ -1,9 +1,12 @@
 """Type-directed externs: target type parameters and their per-occurrence resolution.
 
 A target parameter is an extern type parameter no value parameter (receiver
-included) mentions. Each direct or method call resolves it from explicit type
-arguments or the expected type and records one strict JSON contract spec per
-target parameter, in declaration order.
+included) mentions. Each occurrence (direct or method call, value reference,
+partial application) resolves it from explicit type arguments or the expected
+type and records one strict JSON contract spec per target parameter, in
+declaration order: a call and a declared partial application at the ``Call``
+node, a reference and a member partial application at the ``VarRef`` or
+``FieldAccess`` naming the extern.
 """
 
 from __future__ import annotations
@@ -24,7 +27,17 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
 )
-from agm.agl.syntax.nodes import Block, Call, FuncDef, LetDecl
+from agm.agl.syntax.nodes import (
+    Block,
+    Call,
+    Expr,
+    FieldAccess,
+    FuncDef,
+    LetDecl,
+    TypeApply,
+    VarRef,
+)
+from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import AglTypeError, CheckedModule, FunctionSignature, check_program
 from agm.agl.typecheck.env import OutputContractSpec
 from tests.agl.ir_harness import (
@@ -64,17 +77,51 @@ def _signature(checked: CheckedModule, name: str) -> FunctionSignature:
     return signature
 
 
-def _let_call(checked: CheckedModule, binding: str) -> int:
-    """Return the node id of the call initializing ``let <binding>``."""
+def _let_value(checked: CheckedModule, binding: str) -> Expr:
+    """Return the expression initializing ``let <binding>``."""
     items = list(checked.resolved.program.body.items)
     while items:
         item = items.pop()
         if isinstance(item, FuncDef) and isinstance(item.body, Block):
             items.extend(item.body.items)
         elif isinstance(item, LetDecl) and item.name == binding:
-            assert isinstance(item.value, Call)
-            return item.value.node_id
+            assert item.value is not None
+            return item.value
     raise AssertionError(f"no binding {binding!r}")
+
+
+def _let_call(checked: CheckedModule, binding: str) -> int:
+    """Return the node id of the call initializing ``let <binding>``."""
+    value = _let_value(checked, binding)
+    assert isinstance(value, Call)
+    return value.node_id
+
+
+def _let_reference(checked: CheckedModule, binding: str) -> int:
+    """Return the node id naming the extern referenced by ``let <binding>``."""
+    value = _let_value(checked, binding)
+    if isinstance(value, TypeApply):
+        value = value.expr
+    assert isinstance(value, (VarRef, FieldAccess))
+    return value.node_id
+
+
+def _references(checked: CheckedModule, name: str) -> list[int]:
+    """Return the node ids of every ``VarRef`` to *name*, in source order."""
+    found: list[int] = []
+
+    def visit(node: object) -> None:
+        if isinstance(node, VarRef) and node.name == name:
+            found.append(node.node_id)
+
+    walk(checked.resolved.program, visit)
+    return found
+
+
+def _only_targets(checked: CheckedModule) -> tuple[Type, ...]:
+    """Return the targets of the program's single recorded extern occurrence."""
+    ((_node_id, specs),) = checked.target_contract_specs.items()
+    return tuple(spec.target_type for spec in specs)
 
 
 def _targets(checked: CheckedModule, node_id: int) -> tuple[Type, ...]:
@@ -230,6 +277,129 @@ class TestMethodCallResolution:
         assert checked.target_contract_specs == {}
 
 
+class TestReferenceResolution:
+    _BOX = "record Box[E](value: E)\nextern def Box::convert[E, T](self) -> T\n"
+
+    def test_explicit_type_argument(self) -> None:
+        checked = _check(_QUERY + 'let ask-int = query::[int]\nask-int("q")')
+        assert _targets(checked, _let_reference(checked, "ask-int")) == (IntType(),)
+
+    def test_expected_function_type(self) -> None:
+        checked = _check(_QUERY + 'let ask-bool: (text) -> bool = query\nask-bool("q")')
+        assert _targets(checked, _let_reference(checked, "ask-bool")) == (BoolType(),)
+
+    def test_invocation_records_only_the_reference(self) -> None:
+        checked = _check(_QUERY + 'let ask-int = query::[int]\nask-int("q") + ask-int("r")')
+        assert list(checked.target_contract_specs) == [_let_reference(checked, "ask-int")]
+
+    def test_argument_position(self) -> None:
+        checked = _check(
+            _QUERY + 'def apply(ask-it: (text) -> text) -> text = ask-it("q")\napply(query)'
+        )
+        (argument,) = _references(checked, "query")
+        assert list(checked.target_contract_specs) == [argument]
+        assert _only_targets(checked) == (TextType(),)
+
+    def test_each_branch_occurrence_records(self) -> None:
+        checked = _check(
+            _QUERY + 'let ask-it = if true => query\n  | else => query::[int]\nask-it("q")'
+        )
+        first, second = _references(checked, "query")
+        assert sorted(checked.target_contract_specs) == sorted([first, second])
+        assert _targets(checked, first) == (IntType(),)
+        assert _targets(checked, second) == (IntType(),)
+
+    @pytest.mark.parametrize(
+        ("binding", "target"),
+        [("let f: (text) -> int = jev::ask", IntType()), ("let f = jev::ask::[bool]", BoolType())],
+    )
+    def test_imported_qualified_extern(self, tmp_path: Path, binding: str, target: Type) -> None:
+        write_companion_file(tmp_path / "root", "lib/jev", "def ask(question):\n    return 0\n")
+        checked = check_program(
+            resolve_program(
+                make_graph_from_files(
+                    tmp_path,
+                    {
+                        "entry": f'import lib/jev\n{binding}\nf("q")',
+                        "lib/jev": "extern def ask[T](question: text) -> T",
+                    },
+                )
+            ),
+            base_caps(),
+        )
+        entry = checked.modules[checked.entry_id]
+        assert _targets(entry, _let_reference(entry, "f")) == (target,)
+
+    def test_qualified_method_reference(self) -> None:
+        checked = _check(
+            self._BOX + "let convert-box: (Box[int]) -> text = Box::convert\n"
+            "convert-box(Box(value = 1))"
+        )
+        assert _targets(checked, _let_reference(checked, "convert-box")) == (TextType(),)
+
+    def test_bound_method_expected_type(self) -> None:
+        checked = _check(
+            self._BOX + "let box = Box(value = 1)\nlet converted: () -> bool = box.convert\n"
+            "converted()"
+        )
+        assert _targets(checked, _let_reference(checked, "converted")) == (BoolType(),)
+
+    def test_bound_method_explicit_type_argument(self) -> None:
+        checked = _check(
+            self._BOX + "let box = Box(value = 1)\nlet converted = box.convert::[text]\nconverted()"
+        )
+        assert _targets(checked, _let_reference(checked, "converted")) == (TextType(),)
+
+    def test_direct_method_call_records_only_the_call(self) -> None:
+        checked = _check(self._BOX + "let converted: text = Box(value = 1).convert()\nconverted")
+        assert list(checked.target_contract_specs) == [_let_call(checked, "converted")]
+
+    def test_value_bound_reference_records_no_contract(self) -> None:
+        checked = _check("extern def id[T](value: T) -> T\nlet same: (int) -> int = id\nsame(1)")
+        assert checked.target_contract_specs == {}
+
+
+class TestPartialApplicationResolution:
+    _CLASSIFY = "extern def classify[T](question: text, context: text) -> T\n"
+    _BOX = "record Box[E](value: E)\nextern def Box::rate[E, T](self, question: text) -> T\n"
+
+    def test_explicit_type_argument(self) -> None:
+        checked = _check(
+            self._CLASSIFY + 'let classify-q = classify::[int]("q", ?)\nclassify-q("c")'
+        )
+        assert _targets(checked, _let_call(checked, "classify-q")) == (IntType(),)
+
+    def test_expected_function_type(self) -> None:
+        checked = _check(
+            self._CLASSIFY + 'let classify-q: (text) -> bool = classify(?, "c")\nclassify-q("q")'
+        )
+        assert _targets(checked, _let_call(checked, "classify-q")) == (BoolType(),)
+
+    def test_invocation_records_only_the_partial(self) -> None:
+        checked = _check(
+            self._CLASSIFY + 'let classify-q = classify::[int]("q", ?)\nclassify-q("c")'
+        )
+        assert list(checked.target_contract_specs) == [_let_call(checked, "classify-q")]
+
+    def test_member_partial_records_at_the_method_reference(self) -> None:
+        checked = _check(
+            self._BOX + "let box = Box(value = 1)\nlet rate-box: (text) -> text = box.rate(?)\n"
+            'rate-box("q")'
+        )
+        call = _let_value(checked, "rate-box")
+        assert isinstance(call, Call)
+        assert list(checked.target_contract_specs) == [call.callee.node_id]
+        assert _targets(checked, call.callee.node_id) == (TextType(),)
+
+    def test_member_partial_explicit_type_argument(self) -> None:
+        checked = _check(
+            self._BOX + 'let box = Box(value = 1)\nlet rate-box = box.rate::[int](?)\nrate-box("q")'
+        )
+        call = _let_value(checked, "rate-box")
+        assert isinstance(call, Call)
+        assert _targets(checked, call.callee.node_id) == (IntType(),)
+
+
 class TestResolutionErrors:
     def test_no_default_target(self) -> None:
         _reject(_QUERY + 'let answer = query("q")\nanswer')
@@ -278,6 +448,69 @@ class TestResolutionErrors:
         _reject(
             "record Box(value: int)\nextern def Box::convert[T](self) -> T\n"
             "let converted: (int) -> int = Box(value = 1).convert()\n0"
+        )
+
+    def test_unresolved_reference(self) -> None:
+        _reject(_QUERY + "let ask-it = query\n0")
+
+    def test_unresolved_partial_application(self) -> None:
+        _reject(
+            "extern def classify[T](question: text, context: text) -> T\n"
+            'let classify-q = classify("q", ?)\n0'
+        )
+
+    def test_unresolved_bound_method_reference(self) -> None:
+        _reject(
+            "record Box(value: int)\nextern def Box::convert[T](self) -> T\n"
+            "let converted = Box(value = 1).convert\n0"
+        )
+
+    @pytest.mark.parametrize(
+        "occurrence",
+        [
+            "let ask-it: (text) -> U = query\n  ask-it(question)",
+            "let ask-it = query::[array[U]]\n  ask-it(question)[0]",
+            "let ask-it: (text) -> U = classify(question, ?)\n  ask-it(question)",
+            "let ask-it = classify::[U](?, question)\n  ask-it(question)",
+            "let ask-it: () -> U = Box(value = 1).convert\n  ask-it()",
+            "let ask-it: (text) -> U = Box(value = 1).rate(?)\n  ask-it(question)",
+        ],
+    )
+    def test_value_occurrence_type_variable_rejected(self, occurrence: str) -> None:
+        _reject(
+            _QUERY + "extern def classify[T](question: text, context: text) -> T\n"
+            "record Box(value: int)\nextern def Box::convert[T](self) -> T\n"
+            "extern def Box::rate[T](self, question: text) -> T\n"
+            f"def relay[U](question: text) -> U =\n  {occurrence}\n0"
+        )
+
+    @pytest.mark.parametrize(
+        "occurrence", ["query::[Perfect[int]]", 'classify::[Perfect[int]]("q", ?)']
+    )
+    def test_value_occurrence_without_finite_schema_rejected(self, occurrence: str) -> None:
+        err = _reject(
+            _QUERY + "extern def classify[T](question: text, context: text) -> T\n"
+            "record Pair[A, B](first: A, second: B)\n"
+            "enum Perfect[T]\n"
+            "  | Single(value: T)\n"
+            "  | Succ(next: Perfect[Pair[T, T]])\n"
+            f"let ask-it = {occurrence}\n0"
+        )
+        assert "finite json schema" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "occurrence",
+        [
+            "query::[(int) -> int]",
+            "query::[unit]",
+            'classify::[unit](?, "c")',
+            'classify::[array[(int) -> int]]("q", ?)',
+        ],
+    )
+    def test_value_occurrence_outside_the_json_contract_rejected(self, occurrence: str) -> None:
+        _reject(
+            _QUERY + "extern def classify[T](question: text, context: text) -> T\n"
+            f"let ask-it = {occurrence}\n0"
         )
 
     def test_json_target_accepted(self) -> None:

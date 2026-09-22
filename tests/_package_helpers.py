@@ -13,6 +13,8 @@ tests keep testing the rule rather than one release's literals.
 raw ZIP entries, so tests can graft tampered or hand-built content onto an
 otherwise valid archive.
 
+``package_info`` reads a package source's manifest into its ``PackageInfo``.
+
 ``install_directory`` and ``install_archive`` install a package and return only
 its ``PackageInfo``.
 
@@ -39,6 +41,7 @@ from agm.packages.activation import (
 )
 from agm.packages.install import install_archive_with_plan, install_directory_with_plan
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
 from agm.version import AGM_VERSION
@@ -117,6 +120,11 @@ def write_zip(path: Path, contents: list[tuple[str, bytes]]) -> None:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for name, content in contents:
             archive.writestr(package_archive._zip_info(name), content)
+
+
+def package_info(root: Path) -> PackageInfo:
+    """The package whose manifest is ``root/package.toml``."""
+    return PackageInfo(root, load_manifest(root / "package.toml"))
 
 
 def install_directory(

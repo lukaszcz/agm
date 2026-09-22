@@ -659,6 +659,10 @@ class ExternRegistry:
                 del self._resolved[key]
         self._by_module[module_id] = module
 
+    def loaded_companion(self, module_id: ModuleId) -> ModuleType | None:
+        """The companion module bound to *module_id*, or ``None`` when none is loaded."""
+        return self._by_module.get(module_id)
+
     def resolve(self, module_id: ModuleId, name: str) -> ExternCallable:
         """Return *module_id*'s companion callable named *name*.
 

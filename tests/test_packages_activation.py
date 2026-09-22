@@ -35,6 +35,7 @@ from agm.packages.manifest import CommandSpec, load_manifest
 from agm.packages.model import PackageInfo
 from agm.packages.record import write_record
 from agm.version import AGM_VERSION
+from tests._package_helpers import package_info
 
 
 def _write_package(
@@ -61,7 +62,7 @@ def _write_development_package(
         f'[package]\nname = "{name}"\nversion = "{version}"\n' + dependencies,
         encoding="utf-8",
     )
-    return PackageInfo(root, load_manifest(root / "package.toml"))
+    return package_info(root)
 
 
 def test_activation_index_round_trips_command_ownership_and_registration_order(
@@ -648,10 +649,7 @@ def test_development_package_shadows_an_active_package_with_the_same_name(tmp_pa
     (development_root / "package.toml").write_text(
         '[package]\nname = "alpha"\nversion = "2.0.0"\n', encoding="utf-8"
     )
-    from agm.packages.manifest import load_manifest
-    from agm.packages.model import PackageInfo
-
-    development = PackageInfo(development_root, load_manifest(development_root / "package.toml"))
+    development = package_info(development_root)
     env = {"AGM_HOME": str(home)}
     write_activation_index(
         ActivationIndex(packages={"alpha": ActivePackage(semver.Version.parse("1.0.0"))}),
@@ -802,10 +800,7 @@ def test_std_is_never_selected_as_a_package_root(tmp_path: Path) -> None:
     (development_root / "package.toml").write_text(
         '[package]\nname = "std"\nversion = "2.0.0"\n', encoding="utf-8"
     )
-    from agm.packages.manifest import load_manifest
-    from agm.packages.model import PackageInfo
-
-    development = PackageInfo(development_root, load_manifest(development_root / "package.toml"))
+    development = package_info(development_root)
     env = {"AGM_HOME": str(home)}
     write_activation_index(
         ActivationIndex(packages={"std": ActivePackage(semver.Version.parse("1.0.0"))}),

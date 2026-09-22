@@ -12,8 +12,7 @@ import semver
 
 from agm.core.env import agm_installation_prefix
 from agm.packages.activation import ActivePackage
-from agm.packages.manifest import DependencySpec, ManifestError, load_manifest
-from agm.packages.model import PackageInfo
+from agm.packages.manifest import DependencySpec, ManifestError
 from agm.packages.record import write_record
 from agm.packages.store import (
     StoreIdentityError,
@@ -28,6 +27,7 @@ from agm.packages.store import (
     satisfying_installed_package,
     store_root,
 )
+from tests._package_helpers import package_info
 
 
 def _write_store_package(home: Path, name: str, version: str) -> Path:
@@ -290,7 +290,7 @@ def test_satisfying_from_store_considers_candidates_outside_the_store(tmp_path: 
     offered as an extra candidate to be selectable at all."""
     home = tmp_path / "home"
     root = _write_store_package(home, "alpha", "1.0.0")
-    planned = PackageInfo(root, load_manifest(root / "package.toml"))
+    planned = package_info(root)
     requirement = DependencySpec(semver.Version.parse("1.0.0"))
 
     selected = satisfying_from_store([], "alpha", requirement, None, extra_candidates=[planned])

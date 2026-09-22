@@ -214,6 +214,18 @@ class TestExternRegistryLoadAndResolve:
         fn = registry.resolve(mid, "f")
         assert fn(1) == 2
 
+    def test_loaded_companion_returns_the_module_bound_to_a_module_id(self, tmp_path: Path) -> None:
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("SEAM = 'real'\n")
+        mid = ModuleId.from_path("lib/mod")
+        registry = ExternRegistry()
+
+        assert registry.loaded_companion(mid) is None
+        loaded = registry.load_companion(mid, py_path)
+
+        assert registry.loaded_companion(mid) is loaded
+        assert registry.loaded_companion(ModuleId.from_path("other/mod")) is None
+
     def test_import_writes_no_bytecode_cache_beside_the_companion(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

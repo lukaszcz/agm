@@ -13,6 +13,7 @@ from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, NoReturn
 
+import httpx2
 import pytest
 import requests
 
@@ -357,6 +358,26 @@ def refuse_real_http_requests(monkeypatch: pytest.MonkeyPatch) -> None:
         return session
 
     monkeypatch.setattr(core_http, "open_session", refused_session)
+
+
+@pytest.fixture(autouse=True)
+def refuse_real_httpx2_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail any real ``httpx2`` network send and strip the TypeSafe SDK's environment.
+
+    ``httpx2.HTTPTransport`` is the network transport an ``httpx2`` client (such
+    as the TypeSafe SDK's) uses unless given another; a scripted
+    ``httpx2.MockTransport`` (``tests/_jev_helpers.py``) is unaffected. Inherited
+    ``TYPESAFE_*`` variables would configure the SDK's key, URL, model, and
+    logging from the host.
+    """
+    for name in list(os.environ):
+        if name.startswith("TYPESAFE_"):
+            monkeypatch.delenv(name, raising=False)
+
+    def refused(self: httpx2.HTTPTransport, request: httpx2.Request) -> NoReturn:
+        pytest.fail(f"unscripted real network request: {request.method} {request.url}")
+
+    monkeypatch.setattr(httpx2.HTTPTransport, "handle_request", refused)
 
 
 @pytest.fixture()

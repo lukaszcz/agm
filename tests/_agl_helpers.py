@@ -52,8 +52,9 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
@@ -114,6 +115,9 @@ from agm.agl.type_schema import derive_schema_and_decode
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.agl.zones import ParamZone
+
+if TYPE_CHECKING:
+    from agm.packages.model import PackageInfo
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
 # ids (which start at 0) and from every reserved identity (<= -2, see
@@ -669,6 +673,19 @@ def repl_session_with_root(
     return session
 
 
+def package_roots(*packages: PackageInfo, cwd: Path, paths: Iterable[Path] = ()) -> RootSet:
+    """Roots mounting *packages* over the repository standard library, with CLI *paths*."""
+    return assemble_roots(
+        invocation_root=None,
+        stdlib_root=REPO_STDLIB_ROOT,
+        lib_root=None,
+        configured=[],
+        cli=(str(path) for path in paths),
+        cwd=cwd,
+        package_roots=packages,
+    )
+
+
 def agl_std_package_roots(*paths: Path) -> RootSet:
     """Assemble roots that also mount the repository standard library as a package.
 
@@ -677,16 +694,6 @@ def agl_std_package_roots(*paths: Path) -> RootSet:
     declares rather than anonymously.  A test that reaches such a file without
     mounting its package compiles a configuration production never runs.
     """
-    from agm.packages.manifest import load_manifest
-    from agm.packages.model import PackageInfo
+    from tests._package_helpers import package_info
 
-    std_package = PackageInfo(REPO_STDLIB_ROOT, load_manifest(REPO_STDLIB_ROOT / "package.toml"))
-    return assemble_roots(
-        invocation_root=None,
-        stdlib_root=REPO_STDLIB_ROOT,
-        lib_root=None,
-        configured=[],
-        cli=(str(path) for path in paths),
-        cwd=REPO_STDLIB_ROOT,
-        package_roots=(std_package,),
-    )
+    return package_roots(package_info(REPO_STDLIB_ROOT), cwd=REPO_STDLIB_ROOT, paths=paths)

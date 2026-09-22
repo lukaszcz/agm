@@ -25,9 +25,9 @@ from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import agl_roots, agl_std_package_roots
+from tests._package_helpers import package_info
 from tests._timeouts import fail_if_slow
 from tests.agl.module_graph import load_graph
 
@@ -70,7 +70,7 @@ def _package(tmp_path: Path, name: str, *, dependencies: tuple[str, ...] = ()) -
         + (f"\n[dependencies]\n{dependency_table}" if dependencies else "")
     )
     (root / MODULE_TREE_DIRNAME).mkdir()
-    return PackageInfo(root, load_manifest(root / "package.toml"))
+    return package_info(root)
 
 
 def _write_package_module(package: PackageInfo, module_path: str, source: str = _MINIMAL) -> Path:

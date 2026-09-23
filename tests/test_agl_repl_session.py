@@ -8554,3 +8554,32 @@ class TestDeferredStdlibResolution:
 
         assert s._roots is not None
         assert stdlib_root.resolve() in s._roots.stdlib_roots
+
+
+class TestExceptionRootAcrossEntries:
+    """An omitted ``extends`` names the standard library's own ``Exception``."""
+
+    def test_a_partial_entry_leaves_the_exception_root_resolvable(self) -> None:
+        # A failed entry rebuilds the session's type environment, and the
+        # published-identity map does not travel with it. Two mechanisms keep
+        # the root resolvable -- the next entry's check republishes it, and
+        # exception_root falls back to the registered declaration -- so this
+        # guards the outcome rather than either one: it fails only once both
+        # are gone, leaving the reserved id that stands in for a session with
+        # no standard library.
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.semantics.types import EXCEPTION_BASE
+
+        session = open_session()
+        failed = session.eval_entry('let v: int = raise Abort(message = "stop")')
+        assert not failed.ok
+
+        assert session.eval_entry("exception Plain(message: text)").ok
+
+        table = session._type_env.type_table
+        root = table.standard_builtin_declaration("Exception")
+        assert root is not None
+        plain = table.get(ENTRY_ID, "Plain")
+        assert plain is not None
+        assert plain.base == root.decl_node_id
+        assert plain.base != EXCEPTION_BASE.decl_id

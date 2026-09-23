@@ -308,7 +308,11 @@ class TypeTable:
         # published by its shell registration (see
         # :meth:`declare_standard_builtin_exception`). Not a cache of ``_defs``
         # and never invalidated from it: it records identities, which are known
-        # a whole phase earlier than the definitions they name.
+        # a whole phase earlier than the definitions they name. Scoped to the
+        # compile that publishes it and deliberately not carried by
+        # :meth:`merge_from`, so a table seeded from another one starts empty
+        # here; :meth:`exception_root`'s fallback over ``_defs`` answers with
+        # the same identity until the next check re-runs the shells.
         self._standard_builtin_exceptions: dict[str, ExceptionType] = {}
         # Whole-table indexes over the live standard-library builtin declarations.
         # Both answer questions about what the session declares as a whole, so

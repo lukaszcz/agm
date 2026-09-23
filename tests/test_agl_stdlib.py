@@ -485,6 +485,41 @@ def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:
     )
 
 
+def test_builtin_free_function_direct_call_checks_declared_bound() -> None:
+    """A ``builtin def``'s own constraint block is checked like any other
+    generic declaration's, at its direct-call instantiation site."""
+    with pytest.raises(AglTypeError):
+        _check(
+            "builtin def copy[T]{Eq T}(value: T) -> T\ndef f(x: int) -> int = x\ncopy(f)\n",
+            default_stdlib=False,
+        )
+
+
+def test_builtin_free_function_referenced_value_checks_declared_bound() -> None:
+    """A bare reference to a bounded builtin free function, fixed by its
+    let-annotated expected type, still checks the bound once resolved."""
+    with pytest.raises(AglTypeError):
+        _check(
+            "builtin def copy[T]{Eq T}(value: T) -> T\n"
+            "def f(x: int) -> int = x\n"
+            "let g: (int -> int) -> int -> int = copy\n"
+            "g(f)\n",
+            default_stdlib=False,
+        )
+
+
+def test_builtin_free_function_explicit_type_application_checks_declared_bound() -> None:
+    """An explicit ``copy::[T]`` value application also checks the declared bound."""
+    with pytest.raises(AglTypeError):
+        _check(
+            "builtin def copy[T]{Eq T}(value: T) -> T\n"
+            "def f(x: int) -> int = x\n"
+            "let g = copy::[int -> int]\n"
+            "g(f)\n",
+            default_stdlib=False,
+        )
+
+
 def test_builtin_named_value_call_is_not_classified_as_builtin() -> None:
     _check("enum E\n  | print\nlet x: E = print()\nx\n")
 

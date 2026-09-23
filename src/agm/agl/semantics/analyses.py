@@ -35,7 +35,7 @@ basis of ``=``/``!=`` and of JSON convertibility
 (:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_satisfies`).
 ``Hashable``'s policy flags one that is not deeply immutable data: it has an
 ``array``/``dict``/function/``unit``/``var`` field, transitively (see
-``semantics.type_table.satisfies_hashable``).
+``semantics.type_table.satisfies``).
 
 Finiteness (instantiation-closure) capability
 ----------------------------------------------

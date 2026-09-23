@@ -8,11 +8,13 @@ delegates the built-in dispatch branches to the public entry points.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import STD_ENV_ID, spell_declaration
@@ -156,6 +158,15 @@ class BuiltinCheckCtx(Protocol):
     def _type_is_wire_serializable(self, typ: Type) -> bool: ...
 
     def _register_builtin_obligation(self, obligation: PendingBuiltinObligation) -> None: ...
+
+    def _register_bound_obligation(
+        self,
+        bounds: ConstraintBounds,
+        type_args: Mapping[str, Type],
+        *,
+        span: SourceSpan,
+        subject: str,
+    ) -> None: ...
 
     def _active_inference_engine(self) -> InferenceEngine: ...
 
@@ -367,10 +378,28 @@ class BuiltinCallChecker:
         """
         explicit = self._resolve_explicit_target(node, name)
         if explicit is None:
-            return self._ctx._check_expr(arg_expr, expected=None)
-        arg_type = self._ctx._check_expr(arg_expr, expected=explicit)
-        self._ctx._assert_assignable_from(arg_type, explicit, arg_expr.span, arg_expr)
-        return explicit
+            result = self._ctx._check_expr(arg_expr, expected=None)
+        else:
+            arg_type = self._ctx._check_expr(arg_expr, expected=explicit)
+            self._ctx._assert_assignable_from(arg_type, explicit, arg_expr.span, arg_expr)
+            result = explicit
+        self._register_declared_bound(node, name, result)
+        return result
+
+    def _register_declared_bound(self, node: Call, name: str, target: Type) -> None:
+        """Check *name*'s declared ``{…}`` constraint block, if any, against *target*.
+
+        A direct call to a generic built-in free function resolves its own
+        declaration the same way a method call resolves the receiver's: by
+        ``node.callee``'s binding, never a copy of the declared signature.
+        """
+        assert isinstance(node.callee, VarRef)
+        ref = self._ctx._binding_for(node.callee.node_id)
+        sig = self._ctx._env.get_function_signature_by_node_id(ref.decl_node_id)
+        assert sig is not None
+        self._ctx._register_bound_obligation(
+            sig.bounds, {sig.type_params[0]: target}, span=node.span, subject=name
+        )
 
     # --- Session statics ---
 

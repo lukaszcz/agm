@@ -40,8 +40,7 @@ from agm.agl.semantics.type_table import (
     is_json_convertible,
     json_cast_hint,
     parse_classification,
-    satisfies_eq,
-    satisfies_hashable,
+    satisfies,
     source_enum_member_decl_id,
 )
 from agm.agl.semantics.types import (
@@ -2731,7 +2730,7 @@ class TestReplSeeding:
 
 
 # ---------------------------------------------------------------------------
-# comparable_types / satisfies_eq: table-aware record/enum walk
+# comparable_types / satisfies: table-aware record/enum walk
 # ---------------------------------------------------------------------------
 
 
@@ -2983,8 +2982,8 @@ class TestComparableTypesTableAware:
 
 
 # ---------------------------------------------------------------------------
-# satisfies_eq / satisfies_hashable: the structural predicates every
-# constraint check (and comparable_types, by delegation) is built on.
+# satisfies: the structural predicate every constraint check (and
+# comparable_types, by delegation) is built on.
 # ---------------------------------------------------------------------------
 
 
@@ -3006,45 +3005,46 @@ class TestSatisfiesEq:
     @pytest.mark.parametrize("typ", [TextType(), JsonType(), BoolType(), IntType(), DecimalType()])
     def test_scalars_satisfy_eq(self, typ: Type) -> None:
         table = TypeTable()
-        assert satisfies_eq(typ, table, {}) is True
+        assert satisfies(typ, ConstraintKind.EQ, table, {}) is True
 
     def test_array_of_scalars_satisfies_eq(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(ArrayType(IntType()), table, {}) is True
+        assert satisfies(ArrayType(IntType()), ConstraintKind.EQ, table, {}) is True
 
     def test_array_of_functions_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
         fn_type = FunctionType(params=(), result=IntType())
-        assert satisfies_eq(ArrayType(fn_type), table, {}) is False
+        assert satisfies(ArrayType(fn_type), ConstraintKind.EQ, table, {}) is False
 
     def test_dict_of_functions_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
         fn_type = FunctionType(params=(), result=IntType())
-        assert satisfies_eq(DictType(fn_type), table, {}) is False
+        assert satisfies(DictType(fn_type), ConstraintKind.EQ, table, {}) is False
 
     def test_function_type_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(FunctionType(params=(), result=IntType()), table, {}) is False
+        typ = FunctionType(params=(), result=IntType())
+        assert satisfies(typ, ConstraintKind.EQ, table, {}) is False
 
     def test_unit_type_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(UnitType(), table, {}) is False
+        assert satisfies(UnitType(), ConstraintKind.EQ, table, {}) is False
 
     def test_bottom_type_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(BottomType(), table, {}) is False
+        assert satisfies(BottomType(), ConstraintKind.EQ, table, {}) is False
 
     def test_bottom_type_satisfies_eq_in_open_world_mode(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(BottomType(), table, None) is True
+        assert satisfies(BottomType(), ConstraintKind.EQ, table, None) is True
 
     def test_inference_var_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(InferenceVarType(), table, {}) is False
+        assert satisfies(InferenceVarType(), ConstraintKind.EQ, table, {}) is False
 
     def test_inference_var_satisfies_eq_in_open_world_mode(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(InferenceVarType(), table, None) is True
+        assert satisfies(InferenceVarType(), ConstraintKind.EQ, table, None) is True
 
     def test_var_record_satisfies_eq(self) -> None:
         # Eq (unlike Hashable) does not exclude mutable fields.
@@ -3060,7 +3060,7 @@ class TestSatisfiesEq:
             )
         )
         handle = RecordType(name="Counter", module_id=ENTRY_ID, decl_id=700100)
-        assert satisfies_eq(handle, table, {}) is True
+        assert satisfies(handle, ConstraintKind.EQ, table, {}) is True
 
     def test_generic_nominal_satisfies_eq_only_for_eq_instantiation(self) -> None:
         table = TypeTable()
@@ -3072,49 +3072,50 @@ class TestSatisfiesEq:
             module_id=ENTRY_ID,
             decl_id=700101,
         )
-        assert satisfies_eq(int_box, table, {}) is True
-        assert satisfies_eq(fn_box, table, {}) is False
+        assert satisfies(int_box, ConstraintKind.EQ, table, {}) is True
+        assert satisfies(fn_box, ConstraintKind.EQ, table, {}) is False
 
     def test_unbounded_type_variable_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(TypeVarType("T"), table, {}) is False
+        assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, {}) is False
 
     def test_type_variable_bounded_eq_satisfies_eq(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(TypeVarType("T"), table, {"T": frozenset({ConstraintKind.EQ})}) is True
+        bounds = {"T": frozenset({ConstraintKind.EQ})}
+        assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, bounds) is True
 
     def test_type_variable_bounded_hashable_satisfies_eq(self) -> None:
         # Hashable implies Eq.
         table = TypeTable()
         bounds = {"T": frozenset({ConstraintKind.HASHABLE})}
-        assert satisfies_eq(TypeVarType("T"), table, bounds) is True
+        assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, bounds) is True
 
     def test_type_variable_bound_only_applies_to_its_own_name(self) -> None:
         table = TypeTable()
         bounds = {"U": frozenset({ConstraintKind.EQ})}
-        assert satisfies_eq(TypeVarType("T"), table, bounds) is False
+        assert satisfies(TypeVarType("T"), ConstraintKind.EQ, table, bounds) is False
 
     def test_array_of_unbounded_type_variable_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(ArrayType(TypeVarType("T")), table, {}) is False
+        assert satisfies(ArrayType(TypeVarType("T")), ConstraintKind.EQ, table, {}) is False
 
     def test_array_of_bounded_type_variable_satisfies_eq(self) -> None:
         table = TypeTable()
         bounds = {"T": frozenset({ConstraintKind.EQ})}
-        assert satisfies_eq(ArrayType(TypeVarType("T")), table, bounds) is True
+        assert satisfies(ArrayType(TypeVarType("T")), ConstraintKind.EQ, table, bounds) is True
 
     def test_array_of_unbounded_type_variable_satisfies_eq_in_open_world_mode(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(ArrayType(TypeVarType("T")), table, None) is True
+        assert satisfies(ArrayType(TypeVarType("T")), ConstraintKind.EQ, table, None) is True
 
     def test_dict_of_unbounded_type_variable_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
-        assert satisfies_eq(DictType(TypeVarType("T")), table, {}) is False
+        assert satisfies(DictType(TypeVarType("T")), ConstraintKind.EQ, table, {}) is False
 
     def test_dict_of_bounded_type_variable_satisfies_eq(self) -> None:
         table = TypeTable()
         bounds = {"T": frozenset({ConstraintKind.EQ})}
-        assert satisfies_eq(DictType(TypeVarType("T")), table, bounds) is True
+        assert satisfies(DictType(TypeVarType("T")), ConstraintKind.EQ, table, bounds) is True
 
     def test_generic_nominal_with_unbounded_type_variable_argument_does_not_satisfy_eq(
         self,
@@ -3126,9 +3127,9 @@ class TestSatisfiesEq:
         k_box = RecordType(
             name="Box", type_args=(TypeVarType("K"),), module_id=ENTRY_ID, decl_id=701000
         )
-        assert satisfies_eq(k_box, table, {}) is False
+        assert satisfies(k_box, ConstraintKind.EQ, table, {}) is False
         bounds = {"K": frozenset({ConstraintKind.EQ})}
-        assert satisfies_eq(k_box, table, bounds) is True
+        assert satisfies(k_box, ConstraintKind.EQ, table, bounds) is True
 
     def test_exception_extends_inherited_function_field_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
@@ -3148,7 +3149,7 @@ class TestSatisfiesEq:
             )
         )
         child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=701002)
-        assert satisfies_eq(child, table, {}) is False
+        assert satisfies(child, ConstraintKind.EQ, table, {}) is False
 
     def test_exception_extends_non_eq_descendant_flags_ancestor(self) -> None:
         table = TypeTable()
@@ -3173,12 +3174,12 @@ class TestSatisfiesEq:
             )
         )
         root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=701003)
-        assert satisfies_eq(root, table, {}) is False
+        assert satisfies(root, ConstraintKind.EQ, table, {}) is False
 
     def test_host_minted_declaration_does_not_satisfy_eq(self) -> None:
         table = create_seeded_type_table()
         session = BUILTIN_PRELUDE_TYPES["Session"]
-        assert satisfies_eq(session, table, {}) is False
+        assert satisfies(session, ConstraintKind.EQ, table, {}) is False
 
     def test_host_minted_declaration_does_not_satisfy_eq_on_unseeded_table(self) -> None:
         # A host-minted handle is flagged by declaration identity alone
@@ -3186,53 +3187,54 @@ class TestSatisfiesEq:
         # TypeDef is registered in this particular table.
         table = TypeTable()
         session = BUILTIN_PRELUDE_TYPES["Session"]
-        assert satisfies_eq(session, table, {}) is False
+        assert satisfies(session, ConstraintKind.EQ, table, {}) is False
 
 
 class TestSatisfiesHashable:
     @pytest.mark.parametrize("typ", [TextType(), JsonType(), BoolType(), IntType(), DecimalType()])
     def test_scalars_satisfy_hashable(self, typ: Type) -> None:
         table = TypeTable()
-        assert satisfies_hashable(typ, table, {}) is True
+        assert satisfies(typ, ConstraintKind.HASHABLE, table, {}) is True
 
     def test_array_never_satisfies_hashable(self) -> None:
         table = TypeTable()
-        assert satisfies_hashable(ArrayType(IntType()), table, {}) is False
+        assert satisfies(ArrayType(IntType()), ConstraintKind.HASHABLE, table, {}) is False
 
     def test_array_of_unbounded_type_variable_does_not_satisfy_hashable_in_open_world_mode(
         self,
     ) -> None:
         # array is never hashable regardless of content, open-world mode included.
         table = TypeTable()
-        assert satisfies_hashable(ArrayType(TypeVarType("T")), table, None) is False
+        assert satisfies(ArrayType(TypeVarType("T")), ConstraintKind.HASHABLE, table, None) is False
 
     def test_dict_never_satisfies_hashable(self) -> None:
         table = TypeTable()
-        assert satisfies_hashable(DictType(IntType()), table, {}) is False
+        assert satisfies(DictType(IntType()), ConstraintKind.HASHABLE, table, {}) is False
 
     def test_function_type_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
-        assert satisfies_hashable(FunctionType(params=(), result=IntType()), table, {}) is False
+        typ = FunctionType(params=(), result=IntType())
+        assert satisfies(typ, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_unit_type_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
-        assert satisfies_hashable(UnitType(), table, {}) is False
+        assert satisfies(UnitType(), ConstraintKind.HASHABLE, table, {}) is False
 
     def test_bottom_type_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
-        assert satisfies_hashable(BottomType(), table, {}) is False
+        assert satisfies(BottomType(), ConstraintKind.HASHABLE, table, {}) is False
 
     def test_bottom_type_satisfies_hashable_in_open_world_mode(self) -> None:
         table = TypeTable()
-        assert satisfies_hashable(BottomType(), table, None) is True
+        assert satisfies(BottomType(), ConstraintKind.HASHABLE, table, None) is True
 
     def test_inference_var_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
-        assert satisfies_hashable(InferenceVarType(), table, {}) is False
+        assert satisfies(InferenceVarType(), ConstraintKind.HASHABLE, table, {}) is False
 
     def test_inference_var_satisfies_hashable_in_open_world_mode(self) -> None:
         table = TypeTable()
-        assert satisfies_hashable(InferenceVarType(), table, None) is True
+        assert satisfies(InferenceVarType(), ConstraintKind.HASHABLE, table, None) is True
 
     def test_record_of_scalars_satisfies_hashable(self) -> None:
         table = TypeTable()
@@ -3246,7 +3248,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700102)
-        assert satisfies_hashable(handle, table, {}) is True
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
 
     def test_var_record_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
@@ -3261,7 +3263,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = RecordType(name="Counter", module_id=ENTRY_ID, decl_id=700103)
-        assert satisfies_hashable(handle, table, {}) is False
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_array_field_record_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
@@ -3275,7 +3277,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = RecordType(name="Items", module_id=ENTRY_ID, decl_id=701022)
-        assert satisfies_hashable(handle, table, {}) is False
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_dict_field_record_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
@@ -3289,7 +3291,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = RecordType(name="Mapping", module_id=ENTRY_ID, decl_id=701023)
-        assert satisfies_hashable(handle, table, {}) is False
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_exception_of_scalars_satisfies_hashable(self) -> None:
         table = TypeTable()
@@ -3303,7 +3305,7 @@ class TestSatisfiesHashable:
             )
         )
         exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700104)
-        assert satisfies_hashable(exc, table, {}) is True
+        assert satisfies(exc, ConstraintKind.HASHABLE, table, {}) is True
 
     def test_exception_with_function_field_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
@@ -3318,7 +3320,7 @@ class TestSatisfiesHashable:
             )
         )
         exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700105)
-        assert satisfies_hashable(exc, table, {}) is False
+        assert satisfies(exc, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_recursive_enum_of_scalars_satisfies_hashable(self) -> None:
         table = TypeTable()
@@ -3338,7 +3340,7 @@ class TestSatisfiesHashable:
             ),
         )
         handle = EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700106)
-        assert satisfies_hashable(handle, table, {}) is True
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
 
     def test_enum_member_with_var_field_does_not_satisfy_hashable(self) -> None:
         # A member's own `var` field disqualifies the enum, even though an
@@ -3367,7 +3369,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = EnumType(name="Holder", module_id=ENTRY_ID, decl_id=700107)
-        assert satisfies_hashable(handle, table, {}) is False
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_function_containing_record_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
@@ -3382,7 +3384,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = RecordType(name="Callback", module_id=ENTRY_ID, decl_id=700108)
-        assert satisfies_hashable(handle, table, {}) is False
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_generic_nominal_hashable_depends_on_instantiation(self) -> None:
         table = TypeTable()
@@ -3394,8 +3396,8 @@ class TestSatisfiesHashable:
             module_id=ENTRY_ID,
             decl_id=700109,
         )
-        assert satisfies_hashable(int_box, table, {}) is True
-        assert satisfies_hashable(array_box, table, {}) is False
+        assert satisfies(int_box, ConstraintKind.HASHABLE, table, {}) is True
+        assert satisfies(array_box, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_generic_nominal_satisfies_hashable_in_open_world_mode(self) -> None:
         # Box[T] itself, T free: no bound is in scope, so the field's own
@@ -3405,21 +3407,21 @@ class TestSatisfiesHashable:
         t_box = RecordType(
             name="Box", type_args=(TypeVarType("T"),), module_id=ENTRY_ID, decl_id=700111
         )
-        assert satisfies_hashable(t_box, table, None) is True
+        assert satisfies(t_box, ConstraintKind.HASHABLE, table, None) is True
 
     def test_unbounded_type_variable_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
-        assert satisfies_hashable(TypeVarType("T"), table, {}) is False
+        assert satisfies(TypeVarType("T"), ConstraintKind.HASHABLE, table, {}) is False
 
     def test_type_variable_bounded_hashable_satisfies_hashable(self) -> None:
         table = TypeTable()
         bounds = {"T": frozenset({ConstraintKind.HASHABLE})}
-        assert satisfies_hashable(TypeVarType("T"), table, bounds) is True
+        assert satisfies(TypeVarType("T"), ConstraintKind.HASHABLE, table, bounds) is True
 
     def test_type_variable_bounded_eq_only_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
         bounds = {"T": frozenset({ConstraintKind.EQ})}
-        assert satisfies_hashable(TypeVarType("T"), table, bounds) is False
+        assert satisfies(TypeVarType("T"), ConstraintKind.HASHABLE, table, bounds) is False
 
     def test_generic_nominal_hashable_with_bounded_type_variable_argument(self) -> None:
         # Box[K] where K is the caller's own bounded type variable: the
@@ -3429,9 +3431,9 @@ class TestSatisfiesHashable:
         k_box = RecordType(
             name="Box", type_args=(TypeVarType("K"),), module_id=ENTRY_ID, decl_id=700110
         )
-        assert satisfies_hashable(k_box, table, {}) is False
+        assert satisfies(k_box, ConstraintKind.HASHABLE, table, {}) is False
         bounds = {"K": frozenset({ConstraintKind.HASHABLE})}
-        assert satisfies_hashable(k_box, table, bounds) is True
+        assert satisfies(k_box, ConstraintKind.HASHABLE, table, bounds) is True
 
     def test_record_containing_hashable_exception_field_satisfies_hashable(self) -> None:
         table = TypeTable()
@@ -3455,7 +3457,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = RecordType(name="Report", module_id=ENTRY_ID, decl_id=700113)
-        assert satisfies_hashable(handle, table, {}) is True
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
 
     def test_record_containing_non_hashable_exception_field_does_not_satisfy_hashable(
         self,
@@ -3482,7 +3484,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = RecordType(name="Report", module_id=ENTRY_ID, decl_id=700115)
-        assert satisfies_hashable(handle, table, {}) is False
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_record_referencing_already_flagged_record_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
@@ -3506,7 +3508,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700117)
-        assert satisfies_hashable(handle, table, {}) is False
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_dangling_field_reference_defaults_to_hashable(self) -> None:
         table = TypeTable()
@@ -3520,7 +3522,7 @@ class TestSatisfiesHashable:
             )
         )
         handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700118)
-        assert satisfies_hashable(handle, table, {}) is True
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
 
     def test_exception_extends_inherited_function_field_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
@@ -3540,7 +3542,7 @@ class TestSatisfiesHashable:
             )
         )
         child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=701006)
-        assert satisfies_hashable(child, table, {}) is False
+        assert satisfies(child, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_exception_extends_non_hashable_descendant_flags_ancestor(self) -> None:
         table = TypeTable()
@@ -3565,12 +3567,12 @@ class TestSatisfiesHashable:
             )
         )
         root = ExceptionType(name="Root", module_id=ENTRY_ID, decl_id=701007)
-        assert satisfies_hashable(root, table, {}) is False
+        assert satisfies(root, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_host_minted_declaration_does_not_satisfy_hashable(self) -> None:
         table = create_seeded_type_table()
         session = BUILTIN_PRELUDE_TYPES["Session"]
-        assert satisfies_hashable(session, table, {}) is False
+        assert satisfies(session, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_generic_recursive_enum_hashable_depends_on_instantiation(self) -> None:
         table = TypeTable()
@@ -3598,8 +3600,8 @@ class TestSatisfiesHashable:
         array_list = EnumType(
             name="List", type_args=(ArrayType(IntType()),), module_id=ENTRY_ID, decl_id=701009
         )
-        assert satisfies_hashable(int_list, table, {}) is True
-        assert satisfies_hashable(array_list, table, {}) is False
+        assert satisfies(int_list, ConstraintKind.HASHABLE, table, {}) is True
+        assert satisfies(array_list, ConstraintKind.HASHABLE, table, {}) is False
 
     def test_phantom_type_parameter_does_not_affect_hashable(self) -> None:
         # T never appears in Phantom's own fields, so instantiating it with a
@@ -3621,7 +3623,7 @@ class TestSatisfiesHashable:
             module_id=ENTRY_ID,
             decl_id=701010,
         )
-        assert satisfies_hashable(handle, table, {}) is True
+        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
 
 
 class TestHashableImpliesEq:
@@ -3712,7 +3714,9 @@ class TestHashableImpliesEq:
         self, typ: Type, bounds: dict[str, frozenset[ConstraintKind]]
     ) -> None:
         table = self._table()
-        assert not satisfies_hashable(typ, table, bounds) or satisfies_eq(typ, table, bounds)
+        assert not satisfies(typ, ConstraintKind.HASHABLE, table, bounds) or satisfies(
+            typ, ConstraintKind.EQ, table, bounds
+        )
 
 
 # ---------------------------------------------------------------------------

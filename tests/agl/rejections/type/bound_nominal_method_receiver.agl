@@ -1,0 +1,11 @@
+record Box[T]
+  value: T
+
+def Box::same[T]{Eq T}(self, other: T) -> bool = self.value == other
+
+def double(n: int) -> int = n * 2
+def triple(n: int) -> int = n * 3
+
+program def main() -> unit =
+  let b: Box[(int) -> int] = Box(value = double)
+  print(b.same(triple))

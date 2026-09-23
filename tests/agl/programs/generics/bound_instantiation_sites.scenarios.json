@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "seed_zero",
+      "params": {
+        "seed": 0
+      },
+      "expect": {
+        "stdout": "false\nfalse\nfalse\nfalse\nfalse\nfalse\nfalse\ntrue\n1\ntrue\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "seed_five",
+      "params": {
+        "seed": 5
+      },
+      "expect": {
+        "stdout": "true\nfalse\ntrue\ntrue\ntrue\ntrue\nfalse\ntrue\n0\ntrue\ntrue\n",
+        "calls": {}
+      }
+    }
+  ]
+}

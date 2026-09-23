@@ -42,16 +42,15 @@ a JSON representation (:meth:`TypeTable.nominal_is_json_convertible`)? —
 which is why :meth:`TypeTable.nominal_satisfies` is named for the fact it
 computes rather than for either consumer.
 
-``satisfies_eq``/``satisfies_hashable`` check the ``Eq``/``Hashable``
-structural constraints (see ``agl.constraints``) against a type variable's
-in-scope bounds, or open-world mode (``bounds is None``, what
+:func:`satisfies` checks a structural constraint (``Eq``/``Hashable``, see
+``agl.constraints``) against a type variable's in-scope bounds, or open-world
+mode (``bounds is None``, what
 :meth:`TypeTable.nominal_reaches_non_data`/:meth:`TypeTable.nominal_is_json_convertible`
 use for their non-``Eq``/JSON-shape questions) where a type variable, the
 bottom type, and an unresolved inference variable all count as satisfied.
-Both delegate to :func:`satisfies`, whose nominal case consults the same
-per-kind declaration-flags fixpoint via :meth:`TypeTable.nominal_satisfies`.
-:func:`comparable_types` instead always takes the checker's real bound
-environment.
+Its nominal case consults the same per-kind declaration-flags fixpoint via
+:meth:`TypeTable.nominal_satisfies`. :func:`comparable_types` instead always
+takes the checker's real bound environment.
 
 :meth:`TypeTable.has_finite_schema` answers a related but distinct
 whole-type question: not "does this type
@@ -144,7 +143,10 @@ class MethodDef:
     ``Point`` DECLARATION's own identity (see :meth:`TypeTable.register_method`).
     ``signature`` is the method's ordinary function type, including its
     receiver as the first parameter. ``receiver_type_param_arity`` records how
-    many leading method type parameters belong to the receiver type.
+    many leading method type parameters belong to the receiver type. Its
+    constraint block lives on the method's own ``FunctionSignature``
+    (``TypeEnvironment.get_function_signature_by_node_id(decl_node_id)``), not
+    here.
     """
 
     module_id: ModuleId
@@ -1779,8 +1781,7 @@ def satisfies(
 ) -> bool:
     """Return ``True`` if a value of type ``t`` satisfies *kind*, given in-scope ``bounds``.
 
-    Structural, shared by :func:`satisfies_eq`/:func:`satisfies_hashable`:
-    every scalar satisfies both kinds; a function or ``unit`` type satisfies
+    Structural: every scalar satisfies both kinds; a function or ``unit`` type satisfies
     neither, transitively (a container/record/enum/exception that reaches one
     at any depth is itself disqualified — the nominal case defers to
     :meth:`TypeTable.nominal_satisfies`); ``array``/``dict`` satisfy only
@@ -1813,16 +1814,6 @@ def satisfies(
             assert_never(unreachable)
 
 
-def satisfies_eq(t: Type, table: TypeTable, bounds: ConstraintBounds | None) -> bool:
-    """Return ``True`` if a value of type ``t`` supports ``==``/``!=`` (see :func:`satisfies`)."""
-    return satisfies(t, ConstraintKind.EQ, table, bounds)
-
-
-def satisfies_hashable(t: Type, table: TypeTable, bounds: ConstraintBounds | None) -> bool:
-    """Return ``True`` if a value of type ``t`` is hashable (see :func:`satisfies`)."""
-    return satisfies(t, ConstraintKind.HASHABLE, table, bounds)
-
-
 def comparable_types(left: Type, right: Type, table: TypeTable, bounds: ConstraintBounds) -> bool:
     """Return ``True`` if ``left`` and ``right`` may be compared.
 
@@ -1833,16 +1824,16 @@ def comparable_types(left: Type, right: Type, table: TypeTable, bounds: Constrai
     non-``json`` type is a static error.  Records/enums/exceptions compare only
     with their own exact type.
 
-    Thin wrapper over :func:`satisfies_eq` plus the identity/numeric-pair rule.
-    A type variable — top-level or nested — is comparable only when its name
-    is bound ``Eq``/``Hashable`` in ``bounds``; the bottom type and an
-    inference variable are then never comparable (see :func:`satisfies`).
+    Thin wrapper over :func:`satisfies` (``Eq``) plus the identity/numeric-pair
+    rule. A type variable — top-level or nested — is comparable only when its
+    name is bound ``Eq``/``Hashable`` in ``bounds``; the bottom type and an
+    inference variable are then never comparable.
     Callers always supply the checker's real bound environment (possibly
     empty), never open-world mode.
     """
     return (
-        satisfies_eq(left, table, bounds)
-        and satisfies_eq(right, table, bounds)
+        satisfies(left, ConstraintKind.EQ, table, bounds)
+        and satisfies(right, ConstraintKind.EQ, table, bounds)
         and same_comparison_type(left, right)
     )
 

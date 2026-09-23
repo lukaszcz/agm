@@ -49,8 +49,6 @@ EXTERNALLY_USED = (
     "loaded_companion",
     # requests.Session hook, called by its own redirect handling
     "rebuild_auth",
-    # Hashable predicate, exercised directly by tests; no checker call site yet
-    "satisfies_hashable",
 )
 
 

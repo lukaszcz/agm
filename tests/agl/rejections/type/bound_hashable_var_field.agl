@@ -1,0 +1,7 @@
+record Box
+  var value: int
+
+def h[T]{Hashable T}(x: T) -> unit = ()
+
+program def main() -> unit =
+  h(Box(value = 1))

@@ -1,0 +1,1 @@
+{"diagnostic": {"line": 2, "message_contains": ["'uses-eq'", "needs", "'Eq'", "Add", "'{Eq T}'"]}}

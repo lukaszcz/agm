@@ -1,0 +1,5 @@
+def uses-eq[T]{Eq T}(a: T, b: T) -> bool = a == b
+def wrapper[T](a: T, b: T) = uses-eq(a, b)
+
+program def main() -> unit =
+  print(wrapper(1, 2))

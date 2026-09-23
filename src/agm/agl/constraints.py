@@ -3,7 +3,7 @@
 A constraint block (`{Hashable K}`, `{Eq T}`) names one of these kinds on a
 type parameter. Like ``zones``/``keywords``, this is a dependency-free leaf so
 both ``syntax`` (parsing the block) and ``semantics`` (interpreting it, see
-``semantics.type_table.satisfies_eq``/``satisfies_hashable``) can import it
+``semantics.type_table.satisfies``) can import it
 without importing each other.
 """
 
@@ -29,7 +29,7 @@ CONSTRAINT_SPELLINGS: Mapping[str, ConstraintKind] = MappingProxyType(
 )
 
 #: In-scope type variables' constraints, by name — what a bare type variable
-#: needs to satisfy ``semantics.type_table.satisfies_eq``/``satisfies_hashable``.
+#: needs to satisfy ``semantics.type_table.satisfies``.
 #: An absent name has no bound and satisfies neither; ``None`` in place of this
 #: mapping instead means open-world mode, where a type variable anywhere
 #: (along with the bottom and inference-variable types) counts as satisfied.

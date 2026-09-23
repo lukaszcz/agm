@@ -47,7 +47,7 @@ from types import MappingProxyType
 from typing import Literal, Protocol, TypeGuard, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.constraints import ConstraintBounds
+from agm.agl.constraints import ConstraintBounds, ConstraintKind
 from agm.agl.diagnostics import Diagnostic, dollar_spacing_hint, static_root_message
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, is_std_config_root, spell_declaration
@@ -83,7 +83,7 @@ from agm.agl.semantics.type_table import (
     json_cast_hint,
     qualified_decl_name,
     same_comparison_type,
-    satisfies_eq,
+    satisfies,
 )
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -295,6 +295,21 @@ def _variant_not_in_enum(variant: str, enum_type: EnumType, span: SourceSpan) ->
     )
 
 
+def _bound_failure_hint(typ: Type, kind: ConstraintKind) -> str:
+    """Suggest adding *kind* to the enclosing declaration when *typ* carries its own type variable.
+
+    A rigid type variable surviving to a zonked instantiation site can only be
+    one of the checked declaration's own type parameters, so the fix is
+    always to add it to that declaration's constraint block, never the
+    callee's.
+    """
+    names = sorted(free_type_vars(typ))
+    if not names:
+        return ""
+    constraints = ", ".join(f"{kind.value} {name}" for name in names)
+    return f" Add '{{{constraints}}}' to the enclosing declaration's constraint block."
+
+
 def _contract_targets(
     signature: FunctionSignature, instantiation: Mapping[str, Type]
 ) -> tuple[Type, ...]:
@@ -374,8 +389,33 @@ class PendingTargetContractObligation:
     span: SourceSpan
 
 
+@dataclass(frozen=True, slots=True)
+class PendingBoundObligation:
+    """A generic instantiation's constraint bounds awaiting region finalization.
+
+    The single checkpoint every instantiation site (inferred call, explicit
+    ``::[T]``, method receiver, first-class value, partial application, bound
+    method value) funnels through: type arguments may still be solver-owned
+    representatives when registered, so bounds are checked against their
+    final zonked type once the region resolves everything.
+    ``caller_bounds`` is the bound environment in force at the instantiation
+    site — a caller's own type variable satisfies a bound only if the caller
+    declares it too.
+    """
+
+    bounds: ConstraintBounds
+    type_arg_names: tuple[str, ...]
+    type_arg_values: tuple[Type, ...]
+    caller_bounds: ConstraintBounds
+    span: SourceSpan
+    subject: str
+
+
 _PendingFinalization = (
-    PendingBuiltinObligation | PendingExternCallObligation | PendingTargetContractObligation
+    PendingBuiltinObligation
+    | PendingExternCallObligation
+    | PendingTargetContractObligation
+    | PendingBoundObligation
 )
 
 
@@ -1974,6 +2014,8 @@ class _Checker:
                             result_type=region.engine.zonk(obligation.result_type),
                         )
                     )
+                elif isinstance(obligation, PendingBoundObligation):
+                    self._finalize_bound_obligation(region, obligation)
                 else:
                     contract_targets = tuple(
                         region.engine.zonk(target) for target in obligation.contract_targets
@@ -2037,6 +2079,68 @@ class _Checker:
         """Queue one built-in contract operation in source registration order."""
         assert self._inference_region is not None
         self._inference_region.finalization_obligations.append(obligation)
+
+    def _register_bound_obligation(
+        self,
+        bounds: ConstraintBounds,
+        type_args: Mapping[str, Type],
+        *,
+        span: SourceSpan,
+        subject: str,
+    ) -> None:
+        """Queue *bounds* to be checked against *type_args* once the region resolves them.
+
+        Every instantiation site calls this once its type arguments are
+        chosen, whether already concrete or still solver-owned
+        representatives. A still-unresolved representative is also registered
+        as a solve requirement here: ``_bound_method_type`` returns early for
+        a required-only, receiver-only method value (no method-owned type
+        parameter left to require-solve on its own), so this is the only
+        place a receiver's own unresolved type argument (e.g. an empty
+        array literal's element type) is ever required-solved. Without it,
+        such an instantiation would report a spurious bound failure instead
+        of "cannot infer".
+        """
+        if not bounds:
+            return
+        assert self._inference_region is not None
+        engine = self._inference_region.engine
+        values: list[Type] = []
+        for name in bounds:
+            typ = type_args[name]
+            if isinstance(typ, InferenceVarType):
+                engine.require_solved(
+                    typ,
+                    engine.origin(
+                        span, role=ConstraintRole.EXPECTED_RESULT, subject=subject, type_param=name
+                    ),
+                )
+            values.append(typ)
+        self._inference_region.finalization_obligations.append(
+            PendingBoundObligation(
+                bounds=bounds,
+                type_arg_names=tuple(bounds),
+                type_arg_values=tuple(values),
+                caller_bounds=self._current_bounds,
+                span=span,
+                subject=subject,
+            )
+        )
+
+    def _finalize_bound_obligation(
+        self, region: _InferenceRegion, obligation: PendingBoundObligation
+    ) -> None:
+        """Check one instantiation's bounds against its final, zonked type arguments."""
+        for name, typ in zip(obligation.type_arg_names, obligation.type_arg_values, strict=True):
+            zonked = region.engine.zonk(typ)
+            for kind in obligation.bounds[name]:
+                if not satisfies(zonked, kind, self._env.type_table, obligation.caller_bounds):
+                    raise AglTypeError(
+                        f"'{obligation.subject}' needs '{kind.value}' for type '{zonked!r}' "
+                        f"(type argument '{name}')."
+                        f"{_bound_failure_hint(zonked, kind)}",
+                        span=obligation.span,
+                    )
 
     def _register_extern_call_obligation(
         self,
@@ -2280,9 +2384,11 @@ class _Checker:
             if target is not None:
                 assert len(signature.type_params) == 1
                 concrete = substitute(template, {signature.type_params[0]: target})
+                type_args: Mapping[str, Type] = {signature.type_params[0]: target}
             else:
                 instantiation = engine.instantiate(signature.type_params, (template,))
                 concrete = instantiation.templates[0]
+                type_args = instantiation.variables
                 for type_param in signature.type_params:
                     variable = instantiation.variables[type_param]
                     if kind is BuiltinKind.ASK:
@@ -2298,6 +2404,9 @@ class _Checker:
                             type_param=type_param,
                         ),
                     )
+            self._register_bound_obligation(
+                signature.bounds, type_args, span=span, subject=ref.name
+            )
         else:
             concrete = template
         assert isinstance(concrete, FunctionType)
@@ -2383,6 +2492,9 @@ class _Checker:
                             type_param=type_param,
                         ),
                     )
+                self._register_bound_obligation(
+                    sig.bounds, instantiation.variables, span=node.span, subject=ref.name
+                )
                 if expected is not None:
                     engine.complete_from_context(
                         concrete,
@@ -2671,6 +2783,7 @@ class _Checker:
                 span=node.span,
             ),
         )
+        self._register_bound_obligation(sig.bounds, subst, span=node.span, subject=ref.name)
         self._record_node_type(node.expr.node_id, concrete)
         occurrence = self._extern_ref_targets(ref, concrete, subst)
         self._register_target_contract_obligation(node.expr.node_id, occurrence, node.span)
@@ -3751,6 +3864,7 @@ class _Checker:
                 result=substitute(sig.result, subst),
                 span=node.span,
             )
+            self._register_bound_obligation(sig.bounds, subst, span=node.span, subject=func_name)
             return (
                 self._finish_declared_call(node, params, result, binding, hole_indices),
                 subst,
@@ -3785,6 +3899,9 @@ class _Checker:
                     type_param=type_param,
                 ),
             )
+        self._register_bound_obligation(
+            sig.bounds, instantiation.variables, span=node.span, subject=func_name
+        )
 
         # Check every supplied argument before allowing expected-result context
         # to fill a still-unresolved variable. Exact constraints select the
@@ -4708,8 +4825,8 @@ class _Checker:
             # Defer while the element type is still unresolved; a concrete
             # element type must already satisfy 'Eq' to keep deferring, or
             # '_check_in_op' raises with a precise diagnostic now.
-            return contains_inference_var(right.elem) or satisfies_eq(
-                right.elem, self._env.type_table, self._current_bounds
+            return contains_inference_var(right.elem) or satisfies(
+                right.elem, ConstraintKind.EQ, self._env.type_table, self._current_bounds
             )
         if isinstance(right, (TextType, DictType)):
             return contains_inference_var(left) or isinstance(left, (TextType, BottomType))
@@ -4994,7 +5111,9 @@ class _Checker:
                     f"{json_cast_hint(left_type, right_type.elem, self._env.type_table)}",
                     span=span,
                 )
-            if not satisfies_eq(right_type.elem, self._env.type_table, self._current_bounds):
+            if not satisfies(
+                right_type.elem, ConstraintKind.EQ, self._env.type_table, self._current_bounds
+            ):
                 raise AglTypeError(
                     f"'in' needs 'Eq' (or 'Hashable') on the array element type "
                     f"'{right_type.elem!r}'.",
@@ -5364,12 +5483,16 @@ class _Checker:
             name: engine.fresh(name) for name in own_type_params
         }
         combined: dict[str, Type] = {**substitutions, **own_fresh}
+        declared_signature = self._env.get_function_signature_by_node_id(method.decl_node_id)
+        assert declared_signature is not None
+        self._register_bound_obligation(
+            declared_signature.bounds, combined, span=span, subject=method.name
+        )
         specialized: Type = substitute(method.signature, combined) if combined else method.signature
         assert isinstance(specialized, FunctionType)
         parameter_indices = tuple(range(1, len(specialized.params)))
         if required_only:
-            signature = self._env.get_function_signature_by_node_id(method.decl_node_id)
-            assert signature is not None
+            signature = declared_signature
             parameter_indices = tuple(
                 index for index in parameter_indices if not signature.params[index].has_default
             )

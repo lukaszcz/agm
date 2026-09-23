@@ -1,0 +1,4 @@
+def h[T]{Hashable T}(x: T) -> unit = ()
+
+program def main() -> unit =
+  h([1])

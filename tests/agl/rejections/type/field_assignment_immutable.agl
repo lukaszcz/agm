@@ -1,4 +1,6 @@
-record Pair(var current: int, fixed: int)
+record Pair
+  var current: int
+  fixed: int
 
 program def main() -> unit =
   let pair = Pair(current = 1, fixed = 2)

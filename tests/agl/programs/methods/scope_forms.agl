@@ -2,7 +2,8 @@
 # calls below cover records, generic receivers (including `_` slots), bound
 # values, enums, exceptions, multi-segment regions, and nested regions.
 
-record Plain(value: int)
+record Plain
+  value: int
 
 def Plain::path-add(self, amount: int) -> int = self.value + amount
 
@@ -10,8 +11,11 @@ scope Plain
   def region-add(self, amount: int) -> int = self.value + amount
 end Plain
 
-record Box[T](value: T)
-record Box::Entry[T](value: T)
+record Box[T]
+  value: T
+
+record Box::Entry[T]
+  value: T
 
 def Box::path-value[T](self) -> T = self.value
 def Box::path-size[_](self) -> int = 1
@@ -46,7 +50,8 @@ scope Notice
 end Notice
 
 scope A
-  record T(value: int)
+  record T
+    value: int
 end A
 
 def A::T::path-value(self) -> int = self.value

@@ -1,7 +1,11 @@
 # Mutable record fields update their shared record values through every ordinary
 # postfix receiver. Functional `with` updates still construct a new outer record.
-record Inner(var b: int)
-record Outer(var a: Inner, stable: int)
+record Inner
+  var b: int
+
+record Outer
+  var a: Inner
+  stable: int
 
 def set-value(value: Inner, next: int) -> unit =
   value.b := next

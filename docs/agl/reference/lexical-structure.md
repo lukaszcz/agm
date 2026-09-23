@@ -111,7 +111,8 @@ The layout rules:
    meaning:
 
    ```agl
-   record Box(value: int)
+   record Box
+     value: int
 
    def Box::scale(self, factor: int) -> Box = Box(value = self.value * factor)
 
@@ -220,7 +221,8 @@ Examples where they remain plain identifiers:
 let import = 1          # 'import' not at item-start → VAR_NAME
 let export = "hello"    # 'export' not at item-start → VAR_NAME
 let use = "hello"       # 'use' without a declaration form → VAR_NAME
-record R(end: int)            # 'end' is a field name, not a closer
+record R
+  end: int              # 'end' is a field name, not a closer
 ```
 
 ## Qualifier chains

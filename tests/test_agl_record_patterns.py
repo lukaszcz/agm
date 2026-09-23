@@ -59,7 +59,8 @@ def test_qualified_enum_constructor_patterns_validate_applied_owner_arguments(so
 
 def test_referenced_enum_member_aliases_match_in_patterns_and_is_tests() -> None:
     accept(
-        "record R(value: int)\n"
+        "record R\n"
+        "  value: int\n"
         "type Alias = R\n"
         "enum E = ::Alias\n"
         "let value: E = R(value = 1)\n"
@@ -71,7 +72,8 @@ def test_referenced_enum_member_aliases_match_in_patterns_and_is_tests() -> None
 
 def test_generic_referenced_enum_member_patterns_validate_the_applied_owner() -> None:
     accept(
-        "record R[T](value: T)\n"
+        "record R[T]\n"
+        "  value: T\n"
         "enum E[T] = ::R[T]\n"
         "let value: E[int] = R(value = 1)\n"
         "case value of | E[int]::R(value) => value"
@@ -80,7 +82,8 @@ def test_generic_referenced_enum_member_patterns_validate_the_applied_owner() ->
 
 def test_enum_alias_does_not_match_a_referenced_record_member() -> None:
     reject(
-        "record R(value: int)\n"
+        "record R\n"
+        "  value: int\n"
         "enum E = ::R\n"
         "type Alias = E\n"
         "let value: E = R(value = 1)\n"
@@ -153,7 +156,7 @@ def test_module_qualified_record_pattern_accepts_each_referencing_enum_owner(
     accept_graph(
         tmp_path,
         {
-            "lib": "record Shared(value: int)\nenum First = ::Shared\nenum Second = ::Shared\n",
+            "lib": "record Shared\n  value: int\nenum First = ::Shared\nenum Second = ::Shared\n",
             "entry": (
                 "import lib\n"
                 "let shared: lib::Shared = lib::Shared(value = 1)\n"
@@ -170,7 +173,8 @@ def test_module_qualified_record_pattern_rejects_an_unrelated_enum_owner(
         tmp_path,
         {
             "lib": (
-                "record Shared(value: int)\n"
+                "record Shared\n"
+                "  value: int\n"
                 "enum First = ::Shared\n"
                 "enum Second = ::Shared\n"
                 "enum Unrelated | Other\n"
@@ -217,7 +221,9 @@ def test_record_and_enum_constructor_spelling_collision_is_scrutinee_directed() 
         "record Box[T]\n  value: T\ntype IntBox = Box[int]\n"
         'let box: Box[text] = Box(value = "x")\n'
         'case box of | IntBox(value) => value | _ => ""',
-        'record R(@arg-pos x: int, @arg-named label: text)\nlet r = R(1, label = "x")\n'
+        "record R\n"
+        "  @arg-pos x: int\n"
+        '  @arg-named label: text\nlet r = R(1, label = "x")\n'
         "case r of | R(x = _, label = _) => 0 | _ => 1",
         "exception Boom\n  value: int\nlet b = Boom(value = 1)\n"
         "case b of | Boom(value) => value | _ => 0",
@@ -238,7 +244,9 @@ def test_unqualified_pattern_selects_a_nominal_declared_in_the_same_scope() -> N
     """
     checked = accept(
         "scope Config\n"
-        "  record Bounds(low: int, high: int)\n"
+        "  record Bounds\n"
+        "    low: int\n"
+        "    high: int\n"
         "  def pick(b: Bounds) -> int =\n"
         "    case b of\n"
         "    | Bounds(low, high) => low\n"

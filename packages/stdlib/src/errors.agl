@@ -29,7 +29,7 @@ exception KeyError extends Exception
   key: text
 
 builtin
-exception TypeError extends Exception()
+exception TypeError extends Exception
 
 builtin
 exception ArithmeticError extends Exception
@@ -45,7 +45,7 @@ exception ImmutableBindingError extends Exception
   operation: text
 
 builtin
-exception Abort extends Exception()
+exception Abort extends Exception
 
 builtin
 exception RecursionError extends Exception
@@ -62,10 +62,10 @@ exception JsonParseError extends Exception
   raw: text
 
 builtin
-exception RangeError extends Exception()
+exception RangeError extends Exception
 
 builtin
-exception CyclicValueError extends Exception()
+exception CyclicValueError extends Exception
 
 builtin
 exception ValueParseError extends Exception

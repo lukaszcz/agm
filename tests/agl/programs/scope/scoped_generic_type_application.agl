@@ -2,10 +2,14 @@
 # named scope as at the module root: the scope segments of `A::Pair::[int]` are
 # a scope route, not a type qualifier, so they neither block the application nor
 # move the type arguments onto the qualifier.
-record Pair[T](first: T, second: T)
+record Pair[T]
+  first: T
+  second: T
 
 scope A
-  record Pair[T](first: T, second: T)
+  record Pair[T]
+    first: T
+    second: T
 
   def make-local() -> Pair[text] =
     let build = Pair::[text]

@@ -20,7 +20,8 @@ enum Chain
   | End
   | Link(step: int, next: Chain)
 
-record Oracle(depth: int)
+record Oracle
+  depth: int
 
 extern def guess[T](depth: int) -> T
 extern def Oracle::divine[T](self) -> T

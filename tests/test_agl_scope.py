@@ -429,7 +429,7 @@ class TestScopeRegions:
                 5,
             ),
             ("scope Point\nend Point\n\ndef Point() -> int = 0", "Point", 4),
-            ("record Point()\ndef Point() -> int = 0", "Point", 2),
+            ("record Point\ndef Point() -> int = 0", "Point", 2),
             ("enum Point = one | one", "one", 1),
         ),
     )
@@ -517,7 +517,7 @@ class TestScopedBindings:
         (
             ("scope A\n  def f() -> int = 0\n  let f = 1\nend A\n\n()", "f"),
             ("scope A\n  let x = 1\n  let x = 2\nend A\n\n()", "x"),
-            ("scope A\n  record R()\n  let R = 1\nend A\n\n()", "R"),
+            ("scope A\n  record R\n  let R = 1\nend A\n\n()", "R"),
             ("scope A\n  var x = 1\n  var x = 2\nend A\n\n()", "x"),
         ),
         ids=("binding-vs-def", "binding-vs-binding", "binding-vs-type", "binding-vs-binding-var"),
@@ -1506,8 +1506,8 @@ class TestScopedBuiltinDeclarations:
                 "ParsePolicy",
             ),
             (
-                "scope A\n  builtin exception RangeError extends Exception()\n"
-                "  builtin exception RangeError extends Exception()\nend A\n\n()",
+                "scope A\n  builtin exception RangeError extends Exception\n"
+                "  builtin exception RangeError extends Exception\nend A\n\n()",
                 "RangeError",
             ),
         ),
@@ -1697,7 +1697,7 @@ class TestBuiltinCallClassification:
         self, method_name: str, builtin_call: str, builtin_kind: BuiltinKind
     ) -> None:
         r = parse_and_resolve(
-            "record P()\n"
+            "record P\n"
             f"def P::{method_name}(self) -> P = self\n"
             f"let builtin-value = {builtin_call}\n"
             f"let user-value = P::{method_name}(P())\n"
@@ -2025,9 +2025,9 @@ class TestMethodReceiverClassification:
     @pytest.mark.parametrize(
         ("declaration", "owner"),
         (
-            ("record RecordOwner()", "RecordOwner"),
+            ("record RecordOwner", "RecordOwner"),
             ("enum EnumOwner = value", "EnumOwner"),
-            ("exception ExceptionOwner()", "ExceptionOwner"),
+            ("exception ExceptionOwner", "ExceptionOwner"),
         ),
     )
     def test_receiver_in_each_nominal_type_scope_is_a_method(
@@ -2061,7 +2061,7 @@ class TestMethodReceiverClassification:
 
     def test_shorthand_and_region_methods_have_identical_classification(self) -> None:
         resolved = parse_and_resolve(
-            "record Point()\n"
+            "record Point\n"
             "def Point::shorthand(self) -> int = 1\n"
             "\n"
             "scope Point\n"
@@ -2091,7 +2091,7 @@ class TestMethodReceiverClassification:
         origin_path = tmp_path / "program.agl"
         if "extern" in source:
             origin_path.with_suffix(".py").write_text("")
-        resolved = parse_and_resolve(f"record Point()\n{source}\n()", origin_path=origin_path)
+        resolved = parse_and_resolve(f"record Point\n{source}\n()", origin_path=origin_path)
         name = "builtin-host" if "builtin" in source else "extern_host"
 
         assert resolved.method_declarations == {
@@ -2103,7 +2103,7 @@ class TestMethodReceiverClassification:
         (
             ("type Count = int\ndef Count::value(self) -> int = 1", "Count", "int"),
             (
-                "record Target()\ntype Alias = Target\ndef Alias::value(self) -> int = 1",
+                "record Target\ntype Alias = Target\ndef Alias::value(self) -> int = 1",
                 "Alias",
                 "Target",
             ),
@@ -2120,7 +2120,7 @@ class TestMethodReceiverClassification:
 
     def test_receiver_is_bound_in_method_body_and_nested_lambda(self) -> None:
         resolved = parse_and_resolve(
-            "record Point()\n"
+            "record Point\n"
             "def Point::identity(self) -> Point =\n"
             "  let delayed = fn() => self\n"
             "  delayed()\n"

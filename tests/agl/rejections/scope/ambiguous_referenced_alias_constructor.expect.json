@@ -1,6 +1,6 @@
 {
   "diagnostic": {
-    "line": 14,
+    "line": 16,
     "message_contains": [
       "Ambiguous"
     ]

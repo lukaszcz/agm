@@ -297,7 +297,7 @@ def test_path_names_text_without_the_standard_library() -> None:
 
 def test_a_declared_path_type_replaces_the_reserved_text_alias() -> None:
     with pytest.raises(AglTypeError):
-        _check('record path(value: int)\nlet p: path = "a"\n()\n', default_stdlib=False)
+        _check('record path\n  value: int\nlet p: path = "a"\n()\n', default_stdlib=False)
 
 
 def test_url_type_alias_is_bare_visible_through_the_prelude() -> None:
@@ -354,8 +354,9 @@ def test_builtin_optional_must_reference_option_members() -> None:
             "  | Some(value: T)\n"
             "\n"
             "scope Fake\n"
-            "  record None()\n"
-            "  record Some[T](value: T)\n"
+            "  record None\n"
+            "  record Some[T]\n"
+            "    value: T\n"
             "end Fake\n"
             "\n"
             "builtin enum Optional[T]\n"
@@ -392,7 +393,7 @@ def test_exception_base_must_be_exception_type() -> None:
 
 
 def test_implicit_exception_base_bypasses_lexical_shadowing() -> None:
-    _check("scope S\n  record Exception()\n  exception Foo()\nend S\n\n()\n")
+    _check("scope S\n  record Exception\n  exception Foo\nend S\n\n()\n")
 
 
 def test_exception_fields_cannot_duplicate_inherited_fields() -> None:

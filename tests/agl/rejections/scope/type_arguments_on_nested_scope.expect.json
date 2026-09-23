@@ -1,6 +1,6 @@
 {
   "diagnostic": {
-    "line": 5,
+    "line": 6,
     "message_contains": [
       "type arguments",
       "scope"

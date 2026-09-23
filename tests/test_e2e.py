@@ -9527,7 +9527,7 @@ class TestExecCommand:
     ) -> None:
         work = tmp_path / "work"
         work.mkdir()
-        (work / "geometry.agl").write_text("record Point(x: int, y: int)\n", encoding="utf-8")
+        (work / "geometry.agl").write_text("record Point\n  x: int\n  y: int\n", encoding="utf-8")
         (work / "metrics.agl").write_text(
             "import geometry::*\n"
             "def Point::shift(self, amount: int) -> Point = "

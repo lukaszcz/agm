@@ -1,7 +1,9 @@
 # Line continuation: a line break between an operator and its operand joins the
 # lines, whether the operator ends the line or opens a more indented one.
 
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int
 
 program def main(a: int, b: int, tag: text) -> unit =
   let values = [a, b, a + b]

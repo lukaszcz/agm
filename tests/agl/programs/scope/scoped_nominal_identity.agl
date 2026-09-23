@@ -1,12 +1,16 @@
 # Scoped nominals retain their declaration paths through checking, lowering,
 # schema generation, decoding, and enum case dispatch.
 
-record Token(value: int)
+record Token
+  value: int
 
 scope Left
-  record Token(value: int)
+  record Token
+    value: int
 
-  record Tree[T](value: T, children: array[Left::Tree[T]])
+  record Tree[T]
+    value: T
+    children: array[Left::Tree[T]]
 
   enum Flag
     | on
@@ -14,7 +18,8 @@ scope Left
 end Left
 
 scope Right
-  record Token(value: int)
+  record Token
+    value: int
 end Right
 
 program def main(expected: int) -> unit =

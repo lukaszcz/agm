@@ -171,7 +171,7 @@ class TestTargetParameterMarker:
         assert _signature(checked, "f").target_params == ("U", "T")
 
     def test_receiver_mentioned_type_parameters_are_not_targets(self) -> None:
-        checked = _check("record Box[E](value: E)\nextern def Box::convert[E, T](self) -> T\n0")
+        checked = _check("record Box[E]\n  value: E\nextern def Box::convert[E, T](self) -> T\n0")
         assert _signature(checked, "convert").target_params == ("T",)
 
     def test_non_extern_def_is_unmarked(self) -> None:
@@ -267,7 +267,7 @@ class TestDirectCallResolution:
 
 
 class TestMethodCallResolution:
-    _BOX = "record Box[E](value: E)\nextern def Box::convert[E, T](self) -> T\n"
+    _BOX = "record Box[E]\n  value: E\nextern def Box::convert[E, T](self) -> T\n"
 
     def test_explicit_type_argument(self) -> None:
         checked = _check(
@@ -289,14 +289,15 @@ class TestMethodCallResolution:
 
     def test_value_bound_method_records_no_contract(self) -> None:
         checked = _check(
-            "record Box[E](value: E)\nextern def Box::get[E](self) -> E\n"
+            "record Box[E]\n"
+            "  value: E\nextern def Box::get[E](self) -> E\n"
             "let got = Box(value = 1).get()\ngot"
         )
         assert checked.target_contract_specs == {}
 
 
 class TestReferenceResolution:
-    _BOX = "record Box[E](value: E)\nextern def Box::convert[E, T](self) -> T\n"
+    _BOX = "record Box[E]\n  value: E\nextern def Box::convert[E, T](self) -> T\n"
 
     def test_explicit_type_argument(self) -> None:
         checked = _check(_QUERY + 'let ask-int = query::[int]\nask-int("q")')
@@ -379,7 +380,7 @@ class TestReferenceResolution:
 
 class TestPartialApplicationResolution:
     _CLASSIFY = "extern def classify[T](question: text, context: text) -> T\n"
-    _BOX = "record Box[E](value: E)\nextern def Box::rate[E, T](self, question: text) -> T\n"
+    _BOX = "record Box[E]\n  value: E\nextern def Box::rate[E, T](self, question: text) -> T\n"
 
     def test_explicit_type_argument(self) -> None:
         checked = _check(
@@ -424,7 +425,8 @@ class TestResolutionErrors:
 
     def test_no_default_target_for_a_method(self) -> None:
         _reject(
-            "record Box(value: int)\nextern def Box::convert[T](self) -> T\n"
+            "record Box\n"
+            "  value: int\nextern def Box::convert[T](self) -> T\n"
             "let converted = Box(value = 1).convert()\nconverted"
         )
 
@@ -441,13 +443,14 @@ class TestResolutionErrors:
 
     def test_method_type_variable_rejected(self) -> None:
         _reject(
-            "record Box(value: int)\nextern def Box::convert[T](self) -> T\n"
+            "record Box\n"
+            "  value: int\nextern def Box::convert[T](self) -> T\n"
             "def relay[U](box: Box) -> U = box.convert()\n0"
         )
 
     def test_target_without_finite_schema_rejected(self) -> None:
         err = _reject(
-            _QUERY + "record Pair[A, B](first: A, second: B)\n"
+            _QUERY + "record Pair[A, B]\n  first: A\n  second: B\n"
             "enum Perfect[T]\n"
             "  | Single(value: T)\n"
             "  | Succ(next: Perfect[Pair[T, T]])\n"
@@ -460,11 +463,12 @@ class TestResolutionErrors:
         "target", ["(int) -> int", "array[(int) -> int]", "Oops", "dict[text, Oops]", "unit"]
     )
     def test_target_outside_the_json_contract_rejected(self, target: str) -> None:
-        _reject(_QUERY + f'exception Oops(detail: text)\nlet answer = query::[{target}]("q")\n0')
+        _reject(_QUERY + f'exception Oops\n  detail: text\nlet answer = query::[{target}]("q")\n0')
 
     def test_method_function_target_rejected(self) -> None:
         _reject(
-            "record Box(value: int)\nextern def Box::convert[T](self) -> T\n"
+            "record Box\n"
+            "  value: int\nextern def Box::convert[T](self) -> T\n"
             "let converted: (int) -> int = Box(value = 1).convert()\n0"
         )
 
@@ -479,7 +483,8 @@ class TestResolutionErrors:
 
     def test_unresolved_bound_method_reference(self) -> None:
         _reject(
-            "record Box(value: int)\nextern def Box::convert[T](self) -> T\n"
+            "record Box\n"
+            "  value: int\nextern def Box::convert[T](self) -> T\n"
             "let converted = Box(value = 1).convert\n0"
         )
 
@@ -497,7 +502,8 @@ class TestResolutionErrors:
     def test_value_occurrence_type_variable_rejected(self, occurrence: str) -> None:
         _reject(
             _QUERY + "extern def classify[T](question: text, context: text) -> T\n"
-            "record Box(value: int)\nextern def Box::convert[T](self) -> T\n"
+            "record Box\n"
+            "  value: int\nextern def Box::convert[T](self) -> T\n"
             "extern def Box::rate[T](self, question: text) -> T\n"
             f"def relay[U](question: text) -> U =\n  {occurrence}\n0"
         )
@@ -508,7 +514,9 @@ class TestResolutionErrors:
     def test_value_occurrence_without_finite_schema_rejected(self, occurrence: str) -> None:
         err = _reject(
             _QUERY + "extern def classify[T](question: text, context: text) -> T\n"
-            "record Pair[A, B](first: A, second: B)\n"
+            "record Pair[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
             "enum Perfect[T]\n"
             "  | Single(value: T)\n"
             "  | Succ(next: Perfect[Pair[T, T]])\n"
@@ -539,7 +547,7 @@ class TestResolutionErrors:
 class TestNestedGenericTargets:
     def test_generic_record_result_resolves_its_argument(self) -> None:
         checked = _check(
-            _TEAM + "record Choice[C](choice: C, confidence: decimal)\n"
+            _TEAM + "record Choice[C]\n  choice: C\n  confidence: decimal\n"
             "extern def choose[C](question: text) -> Choice[C]\n"
             'let chosen: Choice[Team] = choose("q")\n'
             "chosen"
@@ -549,7 +557,7 @@ class TestNestedGenericTargets:
 
     def test_generic_record_as_whole_target(self) -> None:
         checked = _check(
-            _QUERY + _TEAM + "record Choice[C](choice: C, confidence: decimal)\n"
+            _QUERY + _TEAM + "record Choice[C]\n  choice: C\n  confidence: decimal\n"
             'let chosen = query::[Choice[Team]]("q")\n'
             "chosen"
         )
@@ -615,7 +623,8 @@ _COMPANION = (
 )
 _CLASSIFY = "extern def classify[T](question: text, context: text) -> T\n"
 _BOX = (
-    "record Box(value: int)\n"
+    "record Box\n"
+    "  value: int\n"
     "extern def Box::convert[T](self) -> T\n"
     "extern def Box::rate[T](self, question: text) -> T\n"
     "let box = Box(value = 1)\n"
@@ -997,7 +1006,7 @@ class TestContractTypeTree:
 
     def test_generic_record_of_enum(self, tmp_path: Path) -> None:
         program = _lower(
-            _QUERY + _DOCUMENTED_TEAM + "record Choice[C](choice: C, confidence: decimal)\n"
+            _QUERY + _DOCUMENTED_TEAM + "record Choice[C]\n  choice: C\n  confidence: decimal\n"
             'let chosen = query::[Choice[Team]]("q")\n0',
             tmp_path,
         )

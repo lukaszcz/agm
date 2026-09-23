@@ -1,7 +1,9 @@
 # Record update on a recursive call whose return type is inferred: the
 # update's result type follows the target even before the recursion's
 # return type is solved.
-record Tally(count: int, last: int)
+record Tally
+  count: int
+  last: int
 
 def build(k: int)
   if k <= 0 =>

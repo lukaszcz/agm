@@ -2,7 +2,8 @@
 # container (dict[text, array[int]]); copy detaches every array field,
 # shallow-copy shares it. Both are identity on primitives.
 
-record Box(items: array[int])
+record Box
+  items: array[int]
 
 enum Bag
   | Full(items: array[int])

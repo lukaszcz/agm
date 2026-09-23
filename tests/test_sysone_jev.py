@@ -1149,11 +1149,15 @@ enum Tree
   | Leaf
   | Node(children: array[Tree])
 
-record Chain(finished: bool, next: Option[Chain])
+record Chain
+  finished: bool
+  next: Option[Chain]
 
-record Ticket(urgent: bool, note: text)
+record Ticket
+  urgent: bool
+  note: text
 
-record Blank()
+record Blank
 """
 _TEAM_OPTIONS = {"Billing": "Invoices and refunds.", "Technical": None, "acct": None}
 _LEVELS = ["Can wait.", "Medium", "Drop everything."]
@@ -1366,7 +1370,7 @@ let many = jev::ask-many::[Urgency](state)
 let many-per-call = jev::ask-many::[Urgency](state, noul-threshold = 0.6)
 print([many.urgent, many-per-call.urgent])
 """
-    declarations = _TARGETS + "record Urgency(urgent: bool)\n"
+    declarations = _TARGETS + "record Urgency\n  urgent: bool\n"
     result, mount = _run_jev(monkeypatch, outcomes, body, declarations=declarations)
 
     assert result.ok, result.error

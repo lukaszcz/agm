@@ -1,6 +1,7 @@
 # Typed questions to TypeSafe's System One model (Jev).
 #
-# The target type selects the question kind and converts the answer:
+# The target type of `jev::ask` selects the question kind and converts the
+# answer:
 #
 # - `bool` and `Noul` ask a noul (yes/no) question; `bool` is the noul
 #   probability thresholded by `noul-threshold`, as `Noul::value` does.
@@ -114,17 +115,17 @@ exception JevApiError extends JevError
   body: json
 
 # 401 or 403.
-exception JevAuthError extends JevApiError()
+exception JevAuthError extends JevApiError
 
 # 400, 404, or 422.
-exception JevRequestError extends JevApiError()
+exception JevRequestError extends JevApiError
 
 # 429.
 exception JevRateLimitError extends JevApiError
   retry-after-ms: Option[int]
 
 # 5xx.
-exception JevServerError extends JevApiError()
+exception JevServerError extends JevApiError
 
 # The request reached no response.
 exception JevConnectionError extends JevError

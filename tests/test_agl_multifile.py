@@ -941,7 +941,7 @@ class TestScopedModuleSelections:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """A module route onto a scoped generic is a route, not a type qualifier."""
-        (tmp_path / "boxes.agl").write_text("scope A\n  record Box[T](v: T)\nend A\n")
+        (tmp_path / "boxes.agl").write_text("scope A\n  record Box[T]\n    v: T\nend A\n")
 
         result = _run_program(
             "import boxes\nlet build = boxes::A::Box::[int]\nprint build(3).v\n",
@@ -1148,7 +1148,7 @@ class TestScopeUses:
     def test_imported_constructible_alias_use_supports_constructor_patterns(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        (tmp_path / "lib.agl").write_text("record R(value: int)\ntype A = R\n")
+        (tmp_path / "lib.agl").write_text("record R\n  value: int\ntype A = R\n")
 
         result = _run_program(
             "import lib\n"

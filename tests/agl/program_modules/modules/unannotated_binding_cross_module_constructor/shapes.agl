@@ -1,3 +1,5 @@
 # A library declaring a record type another module's unannotated binding
 # constructs.
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int

@@ -515,7 +515,9 @@ def test_check_searches_the_development_std_checkout_holding_the_entry(
 
 
 _CONSTRUCTOR_FORMS = """\
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int
 
 record Box[T]
   value: T

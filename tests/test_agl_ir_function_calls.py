@@ -121,7 +121,8 @@ def test_generic_explicit_arg_coercion_uses_instantiated_param_type() -> None:
 def test_generic_direct_method_call_coerces_against_selected_specialization() -> None:
     """A direct method call uses its concrete generic parameter type when lowered."""
     source = """\
-record Box[T](value: T)
+record Box[T]
+  value: T
 
 def Box::replace[T, U](self, value: U) -> U = value
 
@@ -189,7 +190,8 @@ def test_call_depth_guard_ir_only() -> None:
 
 def test_bound_method_can_be_called_later_and_passed_to_higher_order_function() -> None:
     source = """\
-record Meter(value: int)
+record Meter
+  value: int
 
 def Meter::add(self, amount: int) -> int = self.value + amount
 def apply(value: int, f: (int) -> int) -> int = f(value)

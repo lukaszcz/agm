@@ -2,7 +2,8 @@
 # `None` needs no annotation, since it is never reassigned; an annotated
 # `var` may freely narrow to `None` and widen back to `Some`; an unannotated
 # `var` of a record type is fine even when a field is itself an `Option`.
-record Holder(value: Option[int])
+record Holder
+  value: Option[int]
 
 let v = None
 

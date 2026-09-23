@@ -1,7 +1,10 @@
 # Functional record update with `with`: multi-field updates, chaining,
 # original-value preservation, updates in function bodies, assignments, loops,
 # and parenthesized use in argument and comparison positions.
-record Point(x: int, y: int, z: int)
+record Point
+  x: int
+  y: int
+  z: int
 
 record Issue
   title: text

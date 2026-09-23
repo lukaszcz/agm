@@ -582,8 +582,8 @@ def test_library_scope_regions_apply_entry_only_declaration_restrictions(tmp_pat
 @pytest.mark.parametrize(
     ("entry", "library"),
     (
-        ("import library::Point::distance\n()", "record Point()"),
-        ("export library hiding Point::distance\n()", "record Point()"),
+        ("import library::Point::distance\n()", "record Point"),
+        ("export library hiding Point::distance\n()", "record Point"),
         ("import library\n()", "import dependency::Point::distance\ndef value() -> int = 0"),
     ),
 )
@@ -594,7 +594,7 @@ def test_production_pipeline_validates_path_atoms_against_public_content(
     root.mkdir()
     write_module_file(root, "library", library)
     if "dependency" in library:
-        write_module_file(root, "dependency", "record Point()")
+        write_module_file(root, "dependency", "record Point")
 
     result = run_inline_command(
         PipelineDriver(),
@@ -619,7 +619,7 @@ def test_production_pipeline_validates_path_atoms_against_public_content(
         ("builtin def native() -> int", FuncDef),
         ("builtin\nrecord Payload\n  x: int", RecordDef),
         ("builtin\nenum Status\n  | ok", EnumDef),
-        ("builtin\nexception Failure(message: text)", ExceptionDef),
+        ("builtin\nexception Failure\n  message: text", ExceptionDef),
         ("builtin var setting: int", BuiltinVarDecl),
     ),
     ids=("def", "record", "enum", "exception", "var"),

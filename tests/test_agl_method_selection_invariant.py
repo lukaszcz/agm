@@ -152,7 +152,7 @@ def test_referenced_record_gains_a_foreign_owning_enums_method(tmp_path: Path) -
     explicit upcast to `Stored` picks `store`'s method unambiguously.
     """
     modules = {
-        "lib": 'record Saved(id: int)\ndef Saved::describe(self) -> text = "saved"\n',
+        "lib": 'record Saved\n  id: int\ndef Saved::describe(self) -> text = "saved"\n',
         "store": (
             "import lib\nenum Stored = lib::Saved | Fresh(value: int)\n"
             'def Stored::describe(self) -> text = "stored"\n'
@@ -241,7 +241,7 @@ def test_exception_chain_pair_selects_consistently_or_errors(tmp_path: Path) -> 
     """
     modules = {
         "errors": (
-            "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n"
+            "exception Base extends Exception\n  code: int\nexception Derived extends Base\n"
         ),
         "base_methods": "import errors::*\ndef Base::describe(self) -> int = self.code\n",
         "derived_methods": (
@@ -277,7 +277,7 @@ def test_inherited_only_exception_method_is_selected_from_both_levels(tmp_path: 
     """A method with no override anywhere in the chain: descendant and base agree."""
     modules = {
         "errors": (
-            "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n"
+            "exception Base extends Exception\n  code: int\nexception Derived extends Base\n"
         ),
         "methods": "import errors::*\ndef Base::status(self) -> int = self.code\n",
     }

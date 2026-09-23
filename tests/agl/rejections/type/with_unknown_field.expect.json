@@ -1,6 +1,6 @@
 {
   "diagnostic": {
-    "line": 5,
+    "line": 7,
     "message_contains": [
       "z",
       "field"

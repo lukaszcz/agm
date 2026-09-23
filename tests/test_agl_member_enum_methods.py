@@ -280,7 +280,7 @@ def test_exception_inherited_only_method_is_selected_from_the_descendant(
 ) -> None:
     modules = {
         "errors": (
-            "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n"
+            "exception Base extends Exception\n  code: int\nexception Derived extends Base\n"
         ),
         "methods": "import errors::*\ndef Base::status(self) -> int = self.code\n",
     }
@@ -343,7 +343,7 @@ def test_hiding_one_orphans_route_repairs_the_ambiguity(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 _LIB_STORE_MODULES = {
-    "lib": 'record Saved(id: int)\ndef Saved::describe(self) -> text = "saved"\n',
+    "lib": 'record Saved\n  id: int\ndef Saved::describe(self) -> text = "saved"\n',
     "store": (
         "import lib\nenum Stored = lib::Saved | Fresh(value: int)\n"
         'def Stored::describe(self) -> text = "stored"\n'

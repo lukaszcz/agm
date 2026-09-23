@@ -2271,7 +2271,7 @@ class TestExecFFI:
     def test_exec_calls_an_extern_backed_orphan_method(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        (tmp_path / "geometry.agl").write_text("record Point(x: int)\n", encoding="utf-8")
+        (tmp_path / "geometry.agl").write_text("record Point\n  x: int\n", encoding="utf-8")
         (tmp_path / "metrics.agl").write_text(
             "import geometry::*\nextern def Point::norm(self) -> int\n", encoding="utf-8"
         )

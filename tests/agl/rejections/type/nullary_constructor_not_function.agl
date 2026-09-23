@@ -1,4 +1,4 @@
-record R1()
+record R1
 
 def invoke(factory: () -> R1) -> R1 = factory()
 

@@ -16,8 +16,12 @@ enum Level
   | Medium
   | @doc("Drop everything.") High
 
-record Note(text: text)
-record Ticket(urgent: bool, note: text)
+record Note
+  text: text
+
+record Ticket
+  urgent: bool
+  note: text
 
 record Routing
   @doc("Is it spam?")

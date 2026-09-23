@@ -34,7 +34,8 @@ def Counter::bump(self) -> unit =
     | Tally(n) => (self as Counter::Tally).n := n + 1
     | Off => ()
 
-record Saved(id: int)
+record Saved
+  id: int
 
 enum Stored = ::Saved | Fresh(value: int)
 

@@ -1,9 +1,15 @@
 # Mutable record fields cross to Python as live record views, while immutable
 # records retain their snapshot boundary behavior.
 
-record Mutable(var value: int, fixed: text)
-record Snapshot(value: int)
-record Callbacks(var callback: (int) -> int)
+record Mutable
+  var value: int
+  fixed: text
+
+record Snapshot
+  value: int
+
+record Callbacks
+  var callback: (int) -> int
 
 enum Event
   | Changed(var value: int, fixed: text)

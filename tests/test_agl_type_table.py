@@ -365,7 +365,8 @@ def test_referenced_member_with_concrete_arguments_does_not_share_enum_membershi
 def test_mixed_referenced_members_with_concrete_arguments_raise_a_type_error() -> None:
     with pytest.raises(AglTypeError):
         _check(
-            "record Box[T](value: T)\n"
+            "record Box[T]\n"
+            "  value: T\n"
             "enum E = ::Box[int]\n"
             'let values = [Box(value = 1), Box(value = "text")]\n'
             "values"
@@ -388,10 +389,12 @@ def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespa
 
 def test_type_references_inside_a_scope_use_the_nearest_scoped_type() -> None:
     checked = _check(
-        "record T(value: text)\n"
+        "record T\n"
+        "  value: text\n"
         "\n"
         "scope A\n"
-        "  record T(value: int)\n"
+        "  record T\n"
+        "    value: int\n"
         "  def build(value: T) -> T = value\n"
         "end A\n"
         "\n"
@@ -412,10 +415,12 @@ def _check_program(tmp_path: Path, modules: dict[str, str]):
 def test_standalone_current_module_type_anchor_bypasses_nested_scope_during_lowering() -> None:
     assert (
         evaluate_ir_output(
-            "record T(value: int)\n"
+            "record T\n"
+            "  value: int\n"
             "\n"
             "scope A\n"
-            "  record T(value: text)\n"
+            "  record T\n"
+            "    value: text\n"
             "  def root(value: ::T) -> ::T = value\n"
             "end A\n"
             "\n"
@@ -429,7 +434,7 @@ def test_scoped_aliases_are_available_to_scoped_function_signatures() -> None:
     checked = _check(
         "scope A\n"
         "  type Count = int\n"
-        "  record Marker()\n"
+        "  record Marker\n"
         "  def keep(value: Count) -> Count = value\n"
         "end A\n"
         "\n"
@@ -448,7 +453,7 @@ def test_program_type_table_keys_keep_root_and_scoped_nominals_distinct(tmp_path
     checked = _check_program(
         tmp_path,
         {
-            "entry": "record A::Visible(value: int)\nrecord Visible(value: text)\n()",
+            "entry": "record A::Visible\n  value: int\nrecord Visible\n  value: text\n()",
         },
     )
 
@@ -461,7 +466,7 @@ def test_program_type_table_keys_keep_root_and_scoped_nominals_distinct(tmp_path
 
 
 def test_scoped_type_context_restores_after_a_type_error(tmp_path: Path) -> None:
-    source = "scope A\n  record Broken(value: Missing)\nend A"
+    source = "scope A\n  record Broken\n    value: Missing\nend A"
 
     with pytest.raises(AglTypeError):
         _check(source)
@@ -474,7 +479,8 @@ def test_scoped_generic_type_applications_resolve_in_module_and_program_contexts
 ) -> None:
     source = (
         "scope A\n"
-        "  record G[T](value: T)\n"
+        "  record G[T]\n"
+        "    value: T\n"
         "  def keep(value: A::G[int]) -> A::G[int] = value\n"
         "end A\n"
         "\n"
@@ -552,7 +558,8 @@ def test_inline_member_aliases_capture_only_resolved_parameters() -> None:
 
 def test_forward_inline_member_uses_arity_after_alias_erasure() -> None:
     checked = _check(
-        "record A(value: E::M)\n"
+        "record A\n"
+        "  value: E::M\n"
         "type Ignore[T] = int\n"
         "enum E[T] | M(value: Ignore[T])\n"
         "A(value = M(value = 1))"
@@ -566,7 +573,8 @@ def test_forward_inline_member_uses_arity_after_alias_erasure() -> None:
 def test_forward_inline_member_rejects_type_arguments_erased_by_alias() -> None:
     with pytest.raises(AglTypeError):
         _check(
-            "record A(value: E::M[int])\ntype Ignore[T] = int\nenum E[T] | M(value: Ignore[T])\n()"
+            "record A\n"
+            "  value: E::M[int]\ntype Ignore[T] = int\nenum E[T] | M(value: Ignore[T])\n()"
         )
 
 
@@ -1995,8 +2003,11 @@ class TestRecordMutableFields:
 
     def test_builder_registers_standalone_and_enum_member_mutability(self) -> None:
         checked = _check(
-            "record Standalone(var value: int, label: text)\n"
-            "record Referenced(var value: int)\n"
+            "record Standalone\n"
+            "  var value: int\n"
+            "  label: text\n"
+            "record Referenced\n"
+            "  var value: int\n"
             "enum Members\n"
             "  | Inline(var value: int)\n"
             "  | ::Referenced\n"
@@ -3566,7 +3577,7 @@ def _pair_def(name: str = "Pair") -> TypeDef:
 class TestInhabitationAnalysis:
     def test_referenced_uninhabitable_member_is_rejected_by_program_checking(self) -> None:
         with pytest.raises(AglTypeError):
-            _check("record Bad(next: Bad)\nenum E = ::Bad | Good\n()")
+            _check("record Bad\n  next: Bad\nenum E = ::Bad | Good\n()")
 
     def test_referenced_enum_member_still_requires_its_own_finite_value(self) -> None:
         table = TypeTable()
@@ -4898,7 +4909,7 @@ class TestDeclarationIdentity:
         """A field-less declaration written as a program's very first item owns
         the lowest AST node id there is, and still carries a real declaration
         identity rather than the "no declaration identity" value."""
-        checked = _check("record R()\nlet r = R()\n()")
+        checked = _check("record R\nlet r = R()\n()")
         record_def = next(
             item
             for item in checked.resolved.program.body.items

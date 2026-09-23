@@ -3,7 +3,9 @@
 # parameter but `name` and `loud` becomes standard, so the host accepts it
 # either positionally or by name.
 
-record Greeting(word: text, times: int)
+record Greeting
+  word: text
+  times: int
 
 def render-greeting(@arg-pos greeting: Greeting, @arg-named loud: bool) -> text =
   var line = greeting.word

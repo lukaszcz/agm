@@ -8,7 +8,9 @@ let fixed = 5
 let negative = -3
 let label-default = "idle"
 
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int
 
 let origin = Point(x = 0, y = 0)
 let tags = ["a", "b", "c"]

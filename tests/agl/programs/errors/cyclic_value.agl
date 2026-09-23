@@ -10,12 +10,17 @@
 # and confirms a shared (diamond) non-cyclic structure is NOT mistaken for a
 # cycle in either mode.
 
-record Node(children: array[Node])
+record Node
+  children: array[Node]
 
-record DNode(children: dict[text, DNode])
+record DNode
+  children: dict[text, DNode]
 
-record Level1(inner: array[Level2])
-record Level2(inner: array[Level1])
+record Level1
+  inner: array[Level2]
+
+record Level2
+  inner: array[Level1]
 
 program def main(close-cycle: bool) -> unit =
   var xs: array[Node] = [Node(children = [])]

@@ -138,8 +138,8 @@ class TestPersistence:
 
     def test_scoped_type_persists_with_a_same_named_root_type(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope A\n  record Token()\nend A").ok
-        assert s.eval_entry("record Token()").ok
+        assert s.eval_entry("scope A\n  record Token\nend A").ok
+        assert s.eval_entry("record Token").ok
 
         scoped = s.eval_entry("let token: A::Token = A::Token()")
         root = s.eval_entry("let token: Token = Token()")
@@ -185,7 +185,7 @@ class TestPersistence:
 
     def test_method_declared_after_its_type_is_callable_in_a_later_entry(self) -> None:
         session = open_session()
-        assert session.eval_entry("record Meter(value: int)").ok
+        assert session.eval_entry("record Meter\n  value: int").ok
         assert session.eval_entry(
             "def Meter::add(self, amount: int) -> int = self.value + amount"
         ).ok
@@ -197,7 +197,7 @@ class TestPersistence:
 
     def test_later_method_cannot_collide_with_a_retained_owner_field(self) -> None:
         session = open_session()
-        assert session.eval_entry("record Meter(value: int)").ok
+        assert session.eval_entry("record Meter\n  value: int").ok
 
         rejected = session.eval_entry("def Meter::value(self) -> int = 0")
 
@@ -209,7 +209,7 @@ class TestPersistence:
 
     def test_bound_method_binding_persists_across_entries(self) -> None:
         session = open_session()
-        assert session.eval_entry("record Meter(value: int)").ok
+        assert session.eval_entry("record Meter\n  value: int").ok
         assert session.eval_entry(
             "def Meter::add(self, amount: int) -> int = self.value + amount"
         ).ok
@@ -323,7 +323,7 @@ class TestPersistence:
 
     def test_generic_receiver_method_declared_in_a_later_entry_is_callable(self) -> None:
         session = open_session()
-        assert session.eval_entry("record Box[T](value: T)").ok
+        assert session.eval_entry("record Box[T]\n  value: T").ok
         assert session.eval_entry("def Box::get[T](self) -> T = self.value").ok
 
         result = session.eval_entry("Box(value = 42).get()")
@@ -356,7 +356,9 @@ class TestPersistence:
         assert current.value == TextValue("second")
 
     def test_imported_orphan_method_route_persists_and_can_be_hidden(self, tmp_path: Path) -> None:
-        (tmp_path / "geometry.agl").write_text("record Point(x: int, y: int)\n", encoding="utf-8")
+        (tmp_path / "geometry.agl").write_text(
+            "record Point\n  x: int\n  y: int\n", encoding="utf-8"
+        )
         (tmp_path / "metrics.agl").write_text(
             "import geometry::*\ndef Point::norm(self) -> int = self.x * self.x\n",
             encoding="utf-8",
@@ -377,7 +379,7 @@ class TestPersistence:
     def test_imported_orphan_methods_are_ambiguous_across_repl_entries(
         self, tmp_path: Path
     ) -> None:
-        (tmp_path / "geometry.agl").write_text("record Point(x: int)\n", encoding="utf-8")
+        (tmp_path / "geometry.agl").write_text("record Point\n  x: int\n", encoding="utf-8")
         for name in ("metrics", "fastmath"):
             (tmp_path / f"{name}.agl").write_text(
                 "import geometry::*\ndef Point::norm(self) -> int = self.x\n",
@@ -395,8 +397,8 @@ class TestPersistence:
     def test_redeclaring_method_path_for_different_receiver_replaces_old_member(
         self, tmp_path: Path
     ) -> None:
-        (tmp_path / "a.agl").write_text("record X()\n", encoding="utf-8")
-        (tmp_path / "b.agl").write_text("record X()\n", encoding="utf-8")
+        (tmp_path / "a.agl").write_text("record X\n", encoding="utf-8")
+        (tmp_path / "b.agl").write_text("record X\n", encoding="utf-8")
         session = ReplSession(cwd=tmp_path)
         assert not session.open()
         assert session.eval_entry("import a::{X}").ok
@@ -412,7 +414,7 @@ class TestPersistence:
 
     def test_redeclaring_a_method_replaces_its_prior_member_entry(self) -> None:
         session = open_session()
-        assert session.eval_entry("record Meter(value: int)").ok
+        assert session.eval_entry("record Meter\n  value: int").ok
         assert session.eval_entry("def Meter::read(self) -> int = self.value").ok
         assert session.eval_entry("def Meter::read(self) -> int = self.value + 1").ok
 
@@ -541,7 +543,7 @@ class TestPersistence:
 
     def test_type_of_scoped_record_displays_its_qualified_name(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope Geometry\n  record Point(x: int)\nend Geometry").ok
+        assert s.eval_entry("scope Geometry\n  record Point\n    x: int\nend Geometry").ok
 
         assert s.type_of("Geometry::Point(x = 1)") == "record Geometry::Point\n  x: int"
 
@@ -639,7 +641,7 @@ class TestPersistence:
         from agm.agl.repl.render import render_entry_result
 
         s = open_session()
-        assert s.eval_entry("record Node(children: array[Node])").ok
+        assert s.eval_entry("record Node\n  children: array[Node]").ok
         assert s.eval_entry("var xs: array[Node] = [Node(children = [])]").ok
         assert s.eval_entry("let n = Node(children = xs)").ok
         assert s.eval_entry("xs[0] := n").ok
@@ -1177,7 +1179,7 @@ class TestCrossEntryScopeCollision:
         """
         s = open_session()
         assert s.eval_entry("scope A\n\n  scope B\n    def q() -> int = 2\n  end B\nend A").ok
-        assert s.eval_entry("record A::B()").ok
+        assert s.eval_entry("record A::B").ok
 
         result = s.eval_entry("A::B::q()")
 
@@ -1190,7 +1192,7 @@ class TestCrossEntryScopeCollision:
         """A qualified reference into a retained type path for a name the type
         does not own must be a normal diagnostic, not an internal crash."""
         s = open_session()
-        assert s.eval_entry("record A::B()").ok
+        assert s.eval_entry("record A::B").ok
 
         result = s.eval_entry("A::B::x")
 
@@ -1210,7 +1212,7 @@ class TestBareConstructorVisibilityAcrossEntries:
 
     def test_record_in_a_named_scope_is_not_bare_across_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope S\n  record Inner(v: int)\nend S").ok
+        assert s.eval_entry("scope S\n  record Inner\n    v: int\nend S").ok
 
         bare = s.eval_entry("Inner(v = 1)")
         qualified = s.eval_entry("S::Inner(v = 1)")
@@ -1221,13 +1223,13 @@ class TestBareConstructorVisibilityAcrossEntries:
     def test_record_in_a_named_scope_is_not_bare_within_one_entry(self) -> None:
         s = open_session()
 
-        result = s.eval_entry("scope S\n  record Inner(v: int)\nend S\n\nInner(v = 1)")
+        result = s.eval_entry("scope S\n  record Inner\n    v: int\nend S\n\nInner(v = 1)")
 
         assert not result.ok
 
     def test_constructible_alias_in_a_named_scope_is_not_bare_across_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope S\n  record Inner(v: int)\n  type Wrap = Inner\nend S").ok
+        assert s.eval_entry("scope S\n  record Inner\n    v: int\n  type Wrap = Inner\nend S").ok
 
         bare = s.eval_entry("Wrap(v = 1)")
         qualified = s.eval_entry("S::Wrap(v = 1)")
@@ -1239,7 +1241,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         s = open_session()
 
         result = s.eval_entry(
-            "scope S\n  record Inner(v: int)\n  type Wrap = Inner\nend S\n\nWrap(v = 1)"
+            "scope S\n  record Inner\n    v: int\n  type Wrap = Inner\nend S\n\nWrap(v = 1)"
         )
 
         assert not result.ok
@@ -1265,7 +1267,9 @@ class TestBareConstructorVisibilityAcrossEntries:
 
     def test_root_enum_reference_to_a_scoped_record_stays_bare_across_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("scope M\n  record Go(amount: int)\nend M\n\nenum Step\n  | M::Go").ok
+        assert s.eval_entry(
+            "scope M\n  record Go\n    amount: int\nend M\n\nenum Step\n  | M::Go"
+        ).ok
 
         bare = s.eval_entry("Go(amount = 1)")
 
@@ -1277,7 +1281,7 @@ class TestBareConstructorVisibilityAcrossEntries:
         s = open_session()
 
         result = s.eval_entry(
-            "scope M\n  record Go(amount: int)\nend M\n\nenum Step\n  | M::Go\nGo(amount = 1)"
+            "scope M\n  record Go\n    amount: int\nend M\n\nenum Step\n  | M::Go\nGo(amount = 1)"
         )
 
         assert result.ok, result.diagnostics
@@ -1854,7 +1858,7 @@ class TestBuiltinIdentityAcrossEntries:
         s = open_session(default_stdlib=False)
         failed = s.eval_entry(
             'let stop: int = raise Abort(message = "stop")\n'
-            "builtin exception RangeError extends Exception()"
+            "builtin exception RangeError extends Exception"
         )
         assert not failed.ok
         # A RUNTIME (partial-promotion) failure, not a static rejection --
@@ -1893,7 +1897,7 @@ class TestBuiltinIdentityAcrossEntries:
             f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
             "builtin def exec(command: text) -> ExecResult\n"
             "builtin\nexception Exception\n  @arg-named message: text\n"
-            "builtin exception Abort extends Exception()\n"
+            "builtin exception Abort extends Exception\n"
         )
         assert declare.ok, declare.diagnostics
         original = s.eval_entry(
@@ -2036,7 +2040,7 @@ class TestBuiltinIdentityWithStandardLibrary:
         s = open_session()
         declare = s.eval_entry(
             "scope A\n"
-            "  builtin exception RangeError extends Exception()\n"
+            "  builtin exception RangeError extends Exception\n"
             "  def trigger(stride: int) -> unit =\n"
             "    try\n"
             "      for i in 1 to 5 step stride do\n"
@@ -2729,11 +2733,11 @@ enum Agent
     ) -> None:
         """A retained enum selects its member by handle, not its record's current name."""
         session = open_session()
-        assert session.eval_entry("record R(old: int)").ok
+        assert session.eval_entry("record R\n  old: int").ok
         assert session.eval_entry("type OldR = R").ok
         assert session.eval_entry("enum E = ::R").ok
         assert session.eval_entry("let old: E = R(old = 1)").ok
-        assert session.eval_entry("record R(fresh: text)").ok
+        assert session.eval_entry("record R\n  fresh: text").ok
 
         matched = session.eval_entry("case old of\n  | R(old) => old")
         tested = session.eval_entry("old is R")
@@ -2750,9 +2754,9 @@ enum Agent
 
     def test_referenced_enum_does_not_match_a_redeclared_record_member(self) -> None:
         session = open_session()
-        assert session.eval_entry("record R(old: int)").ok
+        assert session.eval_entry("record R\n  old: int").ok
         assert session.eval_entry("enum E = ::R").ok
-        assert session.eval_entry("record R(fresh: text)").ok
+        assert session.eval_entry("record R\n  fresh: text").ok
         assert session.eval_entry("enum F = ::R").ok
         assert session.eval_entry('let fresh = R(fresh = "new")').ok
 
@@ -2763,7 +2767,7 @@ enum Agent
     def test_referenced_generic_member_preserves_its_applied_field_for_json_casts(self) -> None:
         """A referenced member applies the enum's arguments to its own fields."""
         session = open_session()
-        assert session.eval_entry("record Box[A](value: A)").ok
+        assert session.eval_entry("record Box[A]\n  value: A").ok
         assert session.eval_entry("enum Result[T] = ::Box[T]").ok
         assert session.eval_entry("let box = Box(value = 1)").ok
         assert session.eval_entry("let result: Result[int] = box").ok
@@ -2878,7 +2882,7 @@ enum Agent
         variant-constructor path, which has no variant to build.
         """
         s = open_session()
-        assert s.eval_entry("record R(a: int)").ok
+        assert s.eval_entry("record R\n  a: int").ok
         assert s.eval_entry("enum R\n  | V(b: int)").ok
 
         stale = s.eval_entry("R(a = 3)")
@@ -2895,7 +2899,7 @@ enum Agent
     def test_redeclaring_an_enum_as_a_record_drops_stale_variants(self) -> None:
         session = open_session()
         assert session.eval_entry("enum Color | Red").ok
-        assert session.eval_entry("record Color(value: int)").ok
+        assert session.eval_entry("record Color\n  value: int").ok
 
         stale_use = session.eval_entry("use Color::{Red}")
         fresh = session.eval_entry("Color(value = 1)")
@@ -2921,7 +2925,7 @@ enum Agent
     def test_redeclaring_a_type_preserves_nested_constructor_members(self) -> None:
         session = open_session()
         assert session.eval_entry("enum Color | Old").ok
-        assert session.eval_entry("record Color::Meta(value: int)").ok
+        assert session.eval_entry("record Color::Meta\n  value: int").ok
         assert session.eval_entry("use Color::*").ok
         assert session.eval_entry("enum Color | New").ok
 
@@ -2935,7 +2939,7 @@ enum Agent
     def test_redeclaring_an_enum_retires_types_nested_under_an_old_member(self) -> None:
         session = open_session()
         assert session.eval_entry("enum Color | Old").ok
-        assert session.eval_entry("record Color::Old::Meta(value: int)").ok
+        assert session.eval_entry("record Color::Old::Meta\n  value: int").ok
 
         assert session.eval_entry("enum Color | New").ok
 
@@ -2965,12 +2969,12 @@ enum Agent
         all remain in effect exactly as before the failed entry.
         """
         session = open_session()
-        assert session.eval_entry("record R(value: int)").ok
+        assert session.eval_entry("record R\n  value: int").ok
         assert session.eval_entry("def R::get(self) -> int = self.value").ok
         assert session.eval_entry("let existing = R(value = 7)").ok
 
         failed = session.eval_entry(
-            'let stop: int = raise Abort(message = "stop")\nrecord R(value: text)'
+            'let stop: int = raise Abort(message = "stop")\nrecord R\n  value: text'
         )
 
         assert not failed.ok
@@ -2992,10 +2996,10 @@ enum Agent
         rolled-back declaration had is accepted and callable.
         """
         session = open_session()
-        assert session.eval_entry("record R(a: int)").ok
+        assert session.eval_entry("record R\n  a: int").ok
 
         failed = session.eval_entry(
-            'let stop: int = raise Abort(message = "stop")\nrecord R(b: int)'
+            'let stop: int = raise Abort(message = "stop")\nrecord R\n  b: int'
         )
 
         assert not failed.ok
@@ -3080,7 +3084,7 @@ class TestMemberEnumMethodSelectionAcrossEntries:
 
     def test_superseded_owning_enum_is_skipped_for_a_current_record(self) -> None:
         s = open_session()
-        assert s.eval_entry("record Saved(id: int)\nenum Stored = ::Saved | Fresh(value: int)").ok
+        assert s.eval_entry("record Saved\n  id: int\nenum Stored = ::Saved | Fresh(value: int)").ok
         assert s.eval_entry('def Stored::describe(self) -> text = "stored"').ok
         assert s.eval_entry("enum Stored = Fresh(value: int)").ok
 
@@ -3115,7 +3119,7 @@ class TestMemberEnumMethodSelectionAcrossEntries:
 
     def test_member_method_then_enum_method_pair_is_rejected_across_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("record Saved(id: int)\nenum Stored = ::Saved | Fresh(value: int)").ok
+        assert s.eval_entry("record Saved\n  id: int\nenum Stored = ::Saved | Fresh(value: int)").ok
         assert s.eval_entry('def Saved::describe(self) -> text = "one"').ok
 
         rejected = s.eval_entry('def Stored::describe(self) -> text = "two"')
@@ -3125,7 +3129,7 @@ class TestMemberEnumMethodSelectionAcrossEntries:
 
     def test_enum_method_then_member_method_pair_is_rejected_across_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("record Saved(id: int)\nenum Stored = ::Saved | Fresh(value: int)").ok
+        assert s.eval_entry("record Saved\n  id: int\nenum Stored = ::Saved | Fresh(value: int)").ok
         assert s.eval_entry('def Stored::describe(self) -> text = "two"').ok
 
         rejected = s.eval_entry('def Saved::describe(self) -> text = "one"')
@@ -3135,8 +3139,8 @@ class TestMemberEnumMethodSelectionAcrossEntries:
 
     def test_exception_base_and_descendant_method_pair_is_rejected_across_entries(self) -> None:
         s = open_session()
-        assert s.eval_entry("exception Base extends Exception()").ok
-        assert s.eval_entry("exception Derived extends Base()").ok
+        assert s.eval_entry("exception Base extends Exception").ok
+        assert s.eval_entry("exception Derived extends Base").ok
         assert s.eval_entry('def Base::describe(self) -> text = "base"').ok
 
         rejected = s.eval_entry('def Derived::describe(self) -> text = "derived"')
@@ -3155,7 +3159,7 @@ class TestMemberEnumMethodSelectionAcrossEntries:
         it reaches the owner that actually completes the pair this entry.
         """
         s = open_session()
-        assert s.eval_entry("record Saved(id: int)\nenum Stored = ::Saved | Fresh(value: int)").ok
+        assert s.eval_entry("record Saved\n  id: int\nenum Stored = ::Saved | Fresh(value: int)").ok
         assert s.eval_entry('def Saved::describe(self) -> text = "one"').ok
 
         rejected = s.eval_entry(
@@ -3171,8 +3175,8 @@ class TestMemberEnumMethodSelectionAcrossEntries:
         self,
     ) -> None:
         s = open_session()
-        assert s.eval_entry("exception Base extends Exception()").ok
-        assert s.eval_entry("exception Derived extends Base()").ok
+        assert s.eval_entry("exception Base extends Exception").ok
+        assert s.eval_entry("exception Derived extends Base").ok
         assert s.eval_entry('def Base::describe(self) -> text = "base"').ok
 
         rejected = s.eval_entry(
@@ -3192,10 +3196,10 @@ class TestMemberEnumMethodSelectionAcrossEntries:
         earlier ``describe`` method still pairs with a later ``Parent::describe``.
         """
         s = open_session()
-        assert s.eval_entry("exception Parent extends Exception()").ok
-        assert s.eval_entry("exception Derived extends Parent()").ok
+        assert s.eval_entry("exception Parent extends Exception").ok
+        assert s.eval_entry("exception Derived extends Parent").ok
         assert s.eval_entry('def Derived::describe(self) -> text = "derived"').ok
-        assert s.eval_entry("exception Derived extends Parent()").ok
+        assert s.eval_entry("exception Derived extends Parent").ok
 
         rejected = s.eval_entry('def Parent::describe(self) -> text = "parent"')
 
@@ -3288,10 +3292,10 @@ class TestRecursiveTypesAcrossEntries:
         self,
     ) -> None:
         s = open_session()
-        assert s.eval_entry("record R(value: int)").ok
+        assert s.eval_entry("record R\n  value: int").ok
         assert s.eval_entry("def R::get(self) -> int = self.value").ok
         assert s.eval_entry("let old = R(value = 1)").ok
-        assert s.eval_entry("record R(value: text)").ok
+        assert s.eval_entry("record R\n  value: text").ok
 
         old_method = s.eval_entry("old.get()")
         new_method = s.eval_entry('R(value = "x").get()')
@@ -3305,10 +3309,10 @@ class TestRecursiveTypesAcrossEntries:
         declarations, equality is a static type error even when both share
         one display name — the two are unrelated nominal types."""
         s = open_session()
-        assert s.eval_entry("record R(value: int)").ok
+        assert s.eval_entry("record R\n  value: int").ok
         assert s.eval_entry("let a = R(value = 1)").ok
         assert s.eval_entry("let b = R(value = 1)").ok
-        assert s.eval_entry("record R(value: int)").ok
+        assert s.eval_entry("record R\n  value: int").ok
         assert s.eval_entry("let c = R(value = 1)").ok
 
         same_old = s.eval_entry("a == b")
@@ -3320,12 +3324,12 @@ class TestRecursiveTypesAcrossEntries:
 
     def test_catch_clause_matches_the_declaration_in_scope_where_it_is_written(self) -> None:
         s = open_session()
-        assert s.eval_entry("exception E extends Exception()").ok
+        assert s.eval_entry("exception E extends Exception").ok
         assert s.eval_entry('let old-exc = E(message = "old")').ok
         assert s.eval_entry(
             'def catch-only-old() -> text = try raise old-exc catch E as e => "caught-old"'
         ).ok
-        assert s.eval_entry("exception E extends Exception()").ok
+        assert s.eval_entry("exception E extends Exception").ok
         assert s.eval_entry('let new-exc = E(message = "new")').ok
 
         # A ``catch E`` written after the redeclaration binds the new E: it
@@ -3422,12 +3426,12 @@ class TestRecursiveTypesAcrossEntries:
         readable through its own (old) field — after the redeclaration.
         """
         s = open_session()
-        assert s.eval_entry("scope A\n  record R(n: int)\nend A").ok
+        assert s.eval_entry("scope A\n  record R\n    n: int\nend A").ok
         assert s.eval_entry("scope A\n  def make() -> A::R = A::R(1)\nend A").ok
         call = s.eval_entry("A::make().n")
         assert call.ok
         assert call.value == IntValue(1)
-        assert s.eval_entry("scope A\n  record R(m: text)\nend A").ok
+        assert s.eval_entry("scope A\n  record R\n    m: text\nend A").ok
 
         still_old = s.eval_entry("A::make().n")
         missing_new_field = s.eval_entry("A::make().m")
@@ -3621,11 +3625,9 @@ class TestTypeOf:
 
     def test_type_of_scoped_nominal_displays_its_path(self) -> None:
         s = open_session()
-        assert s.eval_entry(
-            "scope Left\n  record Token()\nend Left\n\nlet token = Left::Token()"
-        ).ok
+        assert s.eval_entry("scope Left\n  record Token\nend Left\n\nlet token = Left::Token()").ok
 
-        assert s.type_of("token") == "record Left::Token()"
+        assert s.type_of("token") == "record Left::Token"
 
     def test_type_of_displays_enum_constructors(self) -> None:
         s = open_session()
@@ -3798,7 +3800,7 @@ class TestFailureEffects:
     def test_runtime_failure_excludes_function_with_unpromoted_method_dependency(
         self, tmp_path: Path
     ) -> None:
-        (tmp_path / "geometry.agl").write_text("record X()\n", encoding="utf-8")
+        (tmp_path / "geometry.agl").write_text("record X\n", encoding="utf-8")
         session = ReplSession(cwd=tmp_path)
         assert not session.open()
 
@@ -3816,7 +3818,7 @@ class TestFailureEffects:
 
     def test_runtime_failure_restores_replaced_nominal_receiver_method(self) -> None:
         session = open_session()
-        assert session.eval_entry("record R()").ok
+        assert session.eval_entry("record R").ok
         assert session.eval_entry("def R::m(self) -> int = 1").ok
 
         failed = session.eval_entry(
@@ -3928,14 +3930,16 @@ class TestFailureEffects:
 
         failed = session.eval_entry(
             "scope A\n"
-            "  record T(value: int)\n"
+            "  record T\n"
+            "    value: int\n"
             "end A\n"
             "\n"
             "def keep(value: A::T) -> A::T = value\n"
             'let stop: int = raise Abort(message = "stop")\n'
             "\n"
             "scope B\n"
-            "  record T(value: int)\n"
+            "  record T\n"
+            "    value: int\n"
             "end B"
         )
 
@@ -3992,7 +3996,7 @@ class TestFailureEffects:
     ) -> None:
         s = open_session()
 
-        failed = s.eval_entry("enum E = ::R\nlet z: decimal = 1 / 0\nrecord R()")
+        failed = s.eval_entry("enum E = ::R\nlet z: decimal = 1 / 0\nrecord R")
 
         assert not failed.ok
         assert "E" not in failed.installed
@@ -4003,7 +4007,7 @@ class TestFailureEffects:
         s = open_session()
 
         failed = s.eval_entry(
-            "enum E = ::R[Payload]\nlet z: decimal = 1 / 0\nrecord Payload()\nrecord R[T]()"
+            "enum E = ::R[Payload]\nlet z: decimal = 1 / 0\nrecord Payload\nrecord R[T]"
         )
 
         assert not failed.ok
@@ -5140,11 +5144,11 @@ class TestFuncDef:
         usable; a region after the failure never took effect.
         """
         s = open_session()
-        before = s.eval_entry("scope A\n  record Token()\nend A\n\n1 / 0")
+        before = s.eval_entry("scope A\n  record Token\nend A\n\n1 / 0")
         assert not before.ok
         assert s.eval_entry("A::Token()").ok
 
-        after = s.eval_entry("let z: decimal = 1 / 0\n\nscope B\n  record Later()\nend B")
+        after = s.eval_entry("let z: decimal = 1 / 0\n\nscope B\n  record Later\nend B")
         assert not after.ok
         assert not s.eval_entry("B::Later()").ok
 
@@ -6928,7 +6932,7 @@ class TestUnpromotedNominalDeclarationEffects:
             "let z: decimal = 1 / 0\n"
             "\n"
             "scope Failed\n"
-            "  builtin exception RangeError extends Exception()\n"
+            "  builtin exception RangeError extends Exception\n"
             "end Failed"
         )
         assert not failed.ok
@@ -6968,14 +6972,14 @@ class TestUnpromotedNominalDeclarationEffects:
         its own identity.
         """
         s = open_session(default_stdlib=False)
-        declared = s.eval_entry("builtin exception RangeError extends Exception()")
+        declared = s.eval_entry("builtin exception RangeError extends Exception")
         assert declared.ok, declared.diagnostics
 
         failed = s.eval_entry(
             "let z: decimal = 1 / 0\n"
             "\n"
             "scope Failed\n"
-            "  builtin exception RangeError extends Exception()\n"
+            "  builtin exception RangeError extends Exception\n"
             "end Failed"
         )
         assert not failed.ok
@@ -7406,7 +7410,7 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         session = open_session()
-        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T]\n    value: T\nend S").ok
         assert session.eval_entry("use S::*").ok
 
         result = session.eval_entry("Box")
@@ -7427,7 +7431,7 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         session = open_session()
-        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T]\n    value: T\nend S").ok
         assert session.eval_entry(use_decl).ok
 
         result = session.eval_entry(query)
@@ -7440,7 +7444,7 @@ class TestBareTypeEntry:
 
     def test_hidden_use_generic_record_name_does_not_echo_definition(self) -> None:
         session = open_session()
-        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T]\n    value: T\nend S").ok
         assert session.eval_entry("use S::* hiding Box").ok
 
         assert not session.eval_entry("Box").ok
@@ -7449,7 +7453,7 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         session = open_session()
-        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T]\n    value: T\nend S").ok
         assert session.eval_entry("use S as Alias").ok
 
         result = session.eval_entry("Alias::Box")
@@ -7461,7 +7465,7 @@ class TestBareTypeEntry:
 
     def test_use_alias_does_not_expose_another_qualifier(self) -> None:
         session = open_session()
-        assert session.eval_entry("scope S\n  record Box[T](value: T)\nend S").ok
+        assert session.eval_entry("scope S\n  record Box[T]\n    value: T\nend S").ok
         assert session.eval_entry("use S as Alias").ok
 
         assert not session.eval_entry("Other::Box").ok
@@ -7469,14 +7473,14 @@ class TestBareTypeEntry:
     @pytest.mark.parametrize(
         "local_route",
         (
-            "use S as a\n\nscope S\n  record Box[T](value: T)\nend S",
-            "scope a\n  record Box[T](value: T)\nend a",
+            "use S as a\n\nscope S\n  record Box[T]\n    value: T\nend S",
+            "scope a\n  record Box[T]\n    value: T\nend a",
         ),
     )
     def test_qualified_unapplied_generic_rejects_distinct_local_and_import_routes(
         self, tmp_path: Path, local_route: str
     ) -> None:
-        (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
+        (tmp_path / "a.agl").write_text("record Box[T]\n  value: T\n")
         session = open_session(
             cwd=tmp_path,
             stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
@@ -7492,7 +7496,7 @@ class TestBareTypeEntry:
     ) -> None:
         from agm.agl.repl.render import render_entry_result
 
-        (tmp_path / "a.agl").write_text("record Box[T](value: T)\n")
+        (tmp_path / "a.agl").write_text("record Box[T]\n  value: T\n")
         session = open_session(
             cwd=tmp_path,
             stdlib_root=Path(__file__).resolve().parents[1] / "packages" / "stdlib",
@@ -7508,7 +7512,7 @@ class TestBareTypeEntry:
     def test_use_alias_nested_generic_record_name_echoes_definition(self) -> None:
         session = open_session()
         assert session.eval_entry(
-            "scope S\n\n  scope Nested\n    record Box[T](value: T)\n  end Nested\nend S"
+            "scope S\n\n  scope Nested\n    record Box[T]\n      value: T\n  end Nested\nend S"
         ).ok
         assert session.eval_entry("use S as Alias").ok
 
@@ -7759,7 +7763,7 @@ class TestBareTypeEntry:
         from agm.agl.semantics.values import ConstructorValue
 
         s = open_session()
-        s.eval_entry("record Point(x: int, y: int)")
+        s.eval_entry("record Point\n  x: int\n  y: int")
         r = s.eval_entry("Point")
         assert r.ok
         assert r.kind == "expression"

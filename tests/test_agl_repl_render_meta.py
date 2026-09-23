@@ -561,7 +561,7 @@ class TestType:
         outcome = meta_mod.dispatch_meta(":type p", _session_ctx(s))
         assert outcome.text == "record Point\n  x: int\n  y: text"
 
-    def test_empty_record_type_display_uses_empty_constructor_form(self) -> None:
+    def test_empty_record_type_display_is_bare(self) -> None:
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.repl.type_display import format_type_for_repl
         from agm.agl.semantics.type_table import TypeDef, TypeTable
@@ -569,7 +569,7 @@ class TestType:
 
         table = TypeTable()
         table.register(TypeDef(kind="record", name="Empty", module_id=ENTRY_ID, decl_node_id=1))
-        assert format_type_for_repl(RecordType(name="Empty", decl_id=1), table) == "record Empty()"
+        assert format_type_for_repl(RecordType(name="Empty", decl_id=1), table) == "record Empty"
 
     def test_type_empty_arg_gives_usage(self) -> None:
         outcome = meta_mod.dispatch_meta(":type", _session_ctx())
@@ -1135,7 +1135,7 @@ class TestScopedDeclarationEcho:
     def test_scoped_shorthand_declaration_echoes_its_full_path(self) -> None:
         s = _open_session()
         func = s.eval_entry("def Tools::twice(x: int) -> int = x * 2")
-        rec = s.eval_entry("record Tools::Pair(left: int, right: int)")
+        rec = s.eval_entry("record Tools::Pair\n  left: int\n  right: int")
 
         assert func.ok, func.diagnostics
         assert rec.ok, rec.diagnostics
@@ -1144,7 +1144,7 @@ class TestScopedDeclarationEcho:
 
     def test_root_declaration_echo_stays_unqualified(self) -> None:
         s = _open_session()
-        r = s.eval_entry("record Pair(left: int, right: int)")
+        r = s.eval_entry("record Pair\n  left: int\n  right: int")
 
         assert r.ok, r.diagnostics
         assert render_mod.render_entry_result(r, echo=True) == "Pair declared"

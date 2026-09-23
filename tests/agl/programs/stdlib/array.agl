@@ -1,7 +1,9 @@
 # Array methods are ambient; free functions require this explicit import.
 import std/array
 
-record Entry(key: int, tag: text)
+record Entry
+  key: int
+  tag: text
 
 def by-order(left: int, right: int) -> int = left - right
 

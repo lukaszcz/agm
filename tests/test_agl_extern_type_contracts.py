@@ -201,7 +201,7 @@ class TestDeliveredContents:
     def test_root_label_is_the_target_spelling(self, probe: ModuleType, tmp_path: Path) -> None:
         contract = _only(
             probe,
-            _TEAM + "record Choice[C](choice: C, confidence: decimal)\n"
+            _TEAM + "record Choice[C]\n  choice: C\n  confidence: decimal\n"
             'let c = capture::[Choice[Team]]("q")\n0',
             tmp_path,
         )
@@ -317,7 +317,7 @@ class TestConstruction:
 
     def test_builds_recursive_generic_record(self, tmp_path: Path) -> None:
         bindings = _run(
-            _TREE + "record Choice[C](choice: C, confidence: decimal)\n"
+            _TREE + "record Choice[C]\n  choice: C\n  confidence: decimal\n"
             'let c: Choice[Tree] = build("q")\n'
             "let leaf: Tree = Tree::Leaf(value = 7)\n"
             "let expected = Choice(choice = leaf, confidence = 1.5)\n"

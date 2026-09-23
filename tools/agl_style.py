@@ -2,8 +2,13 @@
 
 AgL has significant indentation but no formatter, so the conventions that keep
 programs readable are enforced here instead. The rules are deliberately few and
-purely about vertical layout -- nothing reflows a line's contents:
+about layout alone -- none changes what a program means:
 
+``fields``
+    A record or exception declares its fields in the indented block form, one
+    per line with its attributes, and one with no fields of its own has no body
+    at all. Rewrites parenthesized, inline, and empty ``()`` field lists; the
+    modules in ``FIELDS_EXEMPT`` exercise those forms on purpose.
 ``indent``
     A scope region's items sit one level (two spaces) in from their ``scope``
     header, and the ``end`` closer returns to the header's own column.
@@ -24,13 +29,13 @@ AgL appears in three places, and all three are checked:
 * ```` ```agl ```` fenced blocks in Markdown documentation;
 * AgL program sources written as Python string literals in the test suite --
   either a triple-quoted block or a run of implicitly concatenated one-line
-  literals. Restyling those edits the literal in place, adding indentation
-  inside the quotes and whole lines between them.
+  literals. Restyling those edits the literal in place, re-encoding what it
+  inserts in the literal's own quoting.
 
-Structure comes from AgL's own lexer, so a ``scope`` in a comment, a string, or
-a `$` verbatim literal's payload is never mistaken for a region header. A file
-the lexer rejects -- the deliberate lexical-rejection fixtures -- carries no
-structure to check and is skipped.
+Structure comes from AgL's own lexer, so a ``scope`` or ``record`` in a comment,
+a string, or a `$` verbatim literal's payload is never mistaken for a
+declaration. A file the lexer rejects -- the deliberate lexical-rejection
+fixtures -- carries no structure to check and is skipped.
 
 Usage::
 
@@ -40,23 +45,43 @@ Usage::
 
 from __future__ import annotations
 
+import difflib
 import io
 import operator
 import re
 import sys
+import textwrap
 import token as token_module
 import tokenize as py_tokenize
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.agl.lexer import LexError, tokenize
+from lark.lexer import Token
+
+from agm.agl.diagnostics import AglError
+from agm.agl.lexer import LexError, lex_comment_spans, tokenize
+from agm.agl.parser.parser import parse_program_unresolved
+from agm.agl.syntax.nodes import Program
 
 INDENT_WIDTH = 2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DIRS = ("docs", "src", "packages/stdlib", "tests", "tools")
 SKIP_DIRS = frozenset({".git", ".venv", "__pycache__", "dist", "htmlcov", "node_modules"})
+# Modules exercising the parenthesized, inline, and empty `()` field-list forms
+# on purpose, which the `fields` rule would rewrite away.
+FIELDS_EXEMPT: frozenset[Path] = frozenset(
+    map(
+        Path,
+        (
+            "tests/agl/programs/types/bodyless_declarations.agl",
+            "tests/test_agl_lexer.py",
+            "tests/test_agl_parser.py",
+            "tests/test_agl_repl_loop.py",
+        ),
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -293,6 +318,270 @@ def _apply_blank_lines(lines: list[str], structure: Structure) -> list[Violation
 
 
 # ---------------------------------------------------------------------------
+# Field declarations
+# ---------------------------------------------------------------------------
+
+_DECLARATION_TYPES = frozenset({"record", "exception"})
+_OPENER_TYPES = frozenset(
+    {"LPAR", "LSQB", "INDEX_LSQB", "TYPEARG_LSQB", "DO_LSQB", "LBRACE", "CALL_LBRACE"}
+)
+_CLOSER_TYPES = frozenset({"RPAR", "RSQB", "RBRACE"})
+_LINE_END_TYPES = frozenset({"_NEWLINE", "_DEDENT"})
+_INLINE_END_TYPES = _LINE_END_TYPES | {"_INDENT", "SEMICOLON"}
+
+
+@dataclass(frozen=True)
+class FieldList:
+    """A record or exception declaration whose fields are not in the block form."""
+
+    keyword: int  # token index of `record`/`exception`
+    head_end: int  # token index of the head's last token
+    body_end: int  # token index of the list's last token
+    fields: tuple[tuple[int, int], ...]  # inclusive token-index span of each field
+    punctuation: frozenset[int]  # the `=`, parentheses, and separating commas
+    restylable: bool  # whether the declaration's line ends with the list
+
+
+def _start(tok: Token) -> int:
+    assert tok.start_pos is not None
+    return tok.start_pos
+
+
+def _end(tok: Token) -> int:
+    assert tok.end_pos is not None
+    return tok.end_pos
+
+
+def _start_line(tok: Token) -> int:
+    """*tok*'s 0-based line."""
+    assert tok.line is not None
+    return tok.line - 1
+
+
+def _after_group(tokens: Sequence[Token], index: int) -> int:
+    """The index just past the bracket group opening at *index*."""
+    depth = 0
+    while index < len(tokens):
+        kind = tokens[index].type
+        if kind in _OPENER_TYPES:
+            depth += 1
+        elif kind in _CLOSER_TYPES:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return index
+
+
+def _after_name(tokens: Sequence[Token], index: int) -> int:
+    """The index just past a possibly scope-qualified name starting at *index*."""
+    while index < len(tokens) and tokens[index].type == "MODQUAL":
+        index += 1
+    return index + 1
+
+
+def _field_list_at(tokens: Sequence[Token], keyword: int) -> FieldList | None:
+    """The non-block field list of the declaration at *keyword*, if it has one."""
+    index = _after_name(tokens, keyword + 1)
+    if index < len(tokens) and tokens[index].type in _OPENER_TYPES - {"LPAR"}:
+        index = _after_group(tokens, index)
+    if index < len(tokens) and tokens[index].type == "extends":
+        index = _after_name(tokens, index + 1)
+    head_end = index - 1
+    punctuation: set[int] = set()
+    if index < len(tokens) and tokens[index].type == "EQ":
+        punctuation.add(index)
+        index += 1
+    if index >= len(tokens) or tokens[index].type in _INLINE_END_TYPES:
+        return None  # the block form, or no body at all
+    parenthesized = tokens[index].type == "LPAR"
+    if parenthesized:
+        punctuation.add(index)
+        stop = _after_group(tokens, index) - 1
+        punctuation.add(stop)
+        index += 1
+        after = stop + 1
+    else:
+        stop = index
+        depth = 0
+        while stop < len(tokens) and (depth or tokens[stop].type not in _INLINE_END_TYPES):
+            if tokens[stop].type in _OPENER_TYPES:
+                depth += 1
+            elif tokens[stop].type in _CLOSER_TYPES:
+                depth -= 1
+            stop += 1
+        after = stop
+    fields: list[tuple[int, int]] = []
+    start = index
+    depth = 0
+    for position in range(index, stop + 1):
+        kind = tokens[position].type if position < stop else "COMMA"
+        if kind in _OPENER_TYPES:
+            depth += 1
+        elif kind in _CLOSER_TYPES:
+            depth -= 1
+        elif kind == "COMMA" and depth == 0:
+            if position < stop:
+                punctuation.add(position)
+            if position > start:
+                fields.append((start, position - 1))
+            start = position + 1
+    return FieldList(
+        keyword,
+        head_end,
+        after - 1,
+        tuple(fields),
+        frozenset(punctuation),
+        after >= len(tokens) or tokens[after].type in _LINE_END_TYPES,
+    )
+
+
+def _starts_item(tokens: Sequence[Token], index: int) -> bool:
+    """Whether the declaration keyword at *index* opens an item, past its prefix.
+
+    The prefix is a ``builtin`` modifier and the attributes before it.
+    """
+    index -= 1
+    if index >= 0 and tokens[index].type == "builtin":
+        index -= 1
+    while index >= 0:
+        if tokens[index].type == "RPAR":
+            depth = 0
+            while index >= 0:
+                depth += tokens[index].type in _CLOSER_TYPES
+                depth -= tokens[index].type in _OPENER_TYPES
+                index -= 1
+                if depth == 0:
+                    break
+        if index >= 1 and tokens[index].type == "NAME" and tokens[index - 1].type == "AT":
+            index -= 2
+        else:
+            break
+    return index < 0 or tokens[index].type in _ITEM_START_TYPES
+
+
+def field_lists(tokens: Sequence[Token]) -> list[FieldList]:
+    """Every record/exception declaration in *tokens* not in the block form."""
+    found = (
+        _field_list_at(tokens, index)
+        for index, tok in enumerate(tokens)
+        if tok.type in _DECLARATION_TYPES and _starts_item(tokens, index)
+    )
+    return [field_list for field_list in found if field_list is not None]
+
+
+def _field_text(source: str, tokens: Sequence[Token], span: tuple[int, int]) -> str | None:
+    """One field's tokens on a single line, or None if they cannot share one."""
+    parts: list[str] = []
+    for index in range(span[0], span[1] + 1):
+        tok = tokens[index]
+        text = source[_start(tok) : _end(tok)]
+        if "\n" in text:
+            return None
+        if index > span[0]:
+            gap = source[_end(tokens[index - 1]) : _start(tok)]
+            parts.append(" " if "\n" in gap else gap)
+        parts.append(text)
+    return "".join(parts)
+
+
+def _block_lines(
+    source: str,
+    tokens: Sequence[Token],
+    field_list: FieldList,
+    comments: Sequence[tuple[int, int]],
+) -> list[str] | None:
+    """*field_list*'s fields as block lines, keeping its comments, or None.
+
+    A comment trailing a field's line stays on that field's line; any other
+    comment in the list gets its own line ahead of the field that follows it.
+    """
+    texts: list[str] = []
+    for span in field_list.fields:
+        text = _field_text(source, tokens, span)
+        if text is None:
+            return None
+        texts.append(text)
+    leading: list[list[str]] = [[] for _ in range(len(texts) + 1)]
+    begin = _end(tokens[field_list.head_end])
+    end = _end(tokens[field_list.body_end])
+    for comment_start, comment_end in comments:
+        if not begin <= comment_start < end:
+            continue
+        comment = source[comment_start:comment_end]
+        if any(
+            _start(tokens[first]) < comment_start < _end(tokens[last])
+            for first, last in field_list.fields
+        ):
+            return None  # a comment splitting one field's tokens
+        previous = max(index for index, tok in enumerate(tokens) if _end(tok) <= comment_start)
+        before = sum(1 for first, _ in field_list.fields if first <= previous)
+        if before and "\n" not in source[_end(tokens[previous]) : comment_start]:
+            texts[before - 1] += " " + comment
+        else:
+            leading[before].append(comment)
+    lines: list[str] = []
+    for comments_ahead, text in zip(leading, [*texts, None]):
+        lines.extend(comments_ahead)
+        if text is not None:
+            lines.append(text)
+    return lines
+
+
+def _apply_fields(source: str, tokens: Sequence[Token]) -> tuple[str, list[Violation]]:
+    """Rewrite each non-block field list into the block form, or drop an empty one."""
+    lines = source.split("\n")
+    comments = lex_comment_spans(source)
+    violations: list[Violation] = []
+    edits: list[tuple[int, int, str]] = []
+    for field_list in field_lists(tokens):
+        line = _start_line(tokens[field_list.keyword])
+        block = _block_lines(source, tokens, field_list, comments)
+        if not field_list.restylable or block is None:
+            violations.append(
+                Violation(
+                    Path(),
+                    line + 1,
+                    "fields",
+                    "declare these fields in the indented block form by hand",
+                )
+            )
+            continue
+        margin = " " * (_indent_of(lines[line]) + INDENT_WIDTH)
+        violations.append(
+            Violation(
+                Path(),
+                line + 1,
+                "fields",
+                "fields belong in the indented block form, one per line"
+                if block
+                else "a declaration without fields has no `()`",
+            )
+        )
+        # A comment trailing the whole list describes the declaration: it stays
+        # on the declaration's own line.
+        end = _end(tokens[field_list.body_end])
+        trailing = next(
+            (
+                source[end:comment_end]
+                for comment_start, comment_end in comments
+                if comment_start >= end and source[end:comment_start].strip(" ") == ""
+            ),
+            "",
+        )
+        edits.append(
+            (
+                _end(tokens[field_list.head_end]),
+                end + len(trailing),
+                trailing + "".join(f"\n{margin}{text}" for text in block),
+            )
+        )
+    for start, end, text in reversed(edits):
+        source = source[:start] + text + source[end:]
+    return source, violations
+
+
+# ---------------------------------------------------------------------------
 # Restyling one AgL text
 # ---------------------------------------------------------------------------
 
@@ -300,43 +589,87 @@ def _apply_blank_lines(lines: list[str], structure: Structure) -> list[Violation
 _LAYOUT_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT"})
 
 
-def _meaning(source: str) -> list[tuple[str, str]] | None:
-    """The token stream *source* means, with the layout tokens style may move."""
+def _meaning(source: str) -> Program | list[tuple[str, str]] | None:
+    """What *source* means, blind to the layout and field-list forms style may change.
+
+    A source that parses means its syntax tree, which records neither. A
+    fragment that only lexes means its token stream less the layout tokens and
+    the punctuation of non-block field lists.
+    """
     try:
-        return [(tok.type, str(tok)) for tok in tokenize(source) if tok.type not in _LAYOUT_TYPES]
+        return parse_program_unresolved(source)
+    except AglError:
+        pass
+    try:
+        tokens = list(tokenize(source))
     except LexError:
         return None
+    punctuation = {index for field_list in field_lists(tokens) for index in field_list.punctuation}
+    return [
+        (tok.type, str(tok))
+        for index, tok in enumerate(tokens)
+        if tok.type not in _LAYOUT_TYPES and index not in punctuation
+    ]
 
 
-def restyle(source: str) -> tuple[str, list[Violation]]:
+def restyle(source: str, *, fields: bool = True) -> tuple[str, list[Violation]]:
     """Return *source* in the repository's AgL layout style, with what it broke.
 
     A text the lexer cannot read comes back untouched: without a token stream
     there is no way to tell a region header from the word ``scope`` in a string.
+    *fields* applies the ``fields`` rule.
 
-    Layout is the only thing that moves, so the result must mean exactly what it
-    meant before. Anything else -- a shifted line that turned out to be the
-    inside of a multi-line string, say -- is a bug in this tool rather than a
-    style fix, and the original is kept instead.
+    Only layout and field-list forms move, so the result must mean exactly what
+    it meant before and keep no field list the rule could rewrite. Anything
+    else -- a shifted line that turned out to be the inside of a multi-line
+    string, say -- is a bug in this tool rather than a style fix, and the
+    original is kept instead.
+
+    A margin common to every line, as a snippet indented with its Python code
+    has, is set aside while restyling.
     """
-    structure = structure_of(source)
-    if structure is None:
-        return source, []
     lines = source.split("\n")
-    violations = _apply_indent(lines, structure.regions)
-    # Indentation moves no lines, so the structure's line numbers still hold.
-    violations.extend(_apply_blank_lines(lines, structure))
-    styled = "\n".join(lines)
-    if violations and _meaning(styled) != _meaning(source):
+    width = min((_indent_of(line) for line in lines if not _is_blank(line)), default=0)
+    if width and all(line[:width].strip(" ") == "" for line in lines):
+        styled, violations = restyle("\n".join(line[width:] for line in lines), fields=fields)
+        margin = " " * width
+        return "\n".join(margin + line if line else line for line in styled.split("\n")), violations
+    try:
+        tokens = list(tokenize(source))
+    except LexError:
+        return source, []
+    styled, violations = _apply_fields(source, tokens) if fields else (source, [])
+    structure = structure_of(styled)
+    if structure is not None:
+        lines = styled.split("\n")
+        violations.extend(_apply_indent(lines, structure.regions))
+        # Indentation moves no lines, so the structure's line numbers still hold.
+        violations.extend(_apply_blank_lines(lines, structure))
+        styled = "\n".join(lines)
+    if styled != source and (
+        structure is None
+        or _meaning(styled) != _meaning(source)
+        or (fields and _rewritable(styled))
+    ):
         return source, [
             Violation(
                 Path(),
-                structure.regions[0].header + 1 if structure.regions else 1,
+                violations[0].line,
                 "manual",
                 "restyling this source would change what it means; fix it by hand",
             )
         ]
     return styled, violations
+
+
+def _rewritable(source: str) -> bool:
+    """Whether *source* still holds a field list the ``fields`` rule would rewrite."""
+    tokens = list(tokenize(source))
+    return any(
+        field_list.restylable
+        and _block_lines(source, tokens, field_list, lex_comment_spans(source)) is not None
+        for field_list in field_lists(tokens)
+    )
 
 
 def _relocate(violations: Iterable[Violation], path: Path, offset: int) -> list[Violation]:
@@ -354,10 +687,11 @@ def _relocate(violations: Iterable[Violation], path: Path, offset: int) -> list[
 _AGL_FENCE = re.compile(r"^([ \t]*)```agl\s*$")
 
 
-def restyle_markdown(source: str, path: Path) -> tuple[str, list[Violation]]:
+def restyle_markdown(source: str, path: Path, *, fields: bool) -> tuple[str, list[Violation]]:
     """Restyle every ```` ```agl ```` block in a Markdown document."""
     lines = source.split("\n")
     violations: list[Violation] = []
+    added = 0  # lines restyling has added so far, to report against the original
     index = 0
     while index < len(lines):
         match = _AGL_FENCE.match(lines[index])
@@ -374,11 +708,12 @@ def restyle_markdown(source: str, path: Path) -> tuple[str, list[Violation]]:
         if index >= len(lines):
             break
         block = "\n".join(line[len(margin) :] if line.startswith(margin) else line for line in body)
-        styled, found = restyle(block)
+        styled, found = restyle(block, fields=fields)
         if found:
-            violations.extend(_relocate(found, path, opening + 1))
+            violations.extend(_relocate(found, path, opening + 1 - added))
             replacement = [margin + line if line else line for line in styled.split("\n")]
             lines[opening + 1 : index] = replacement
+            added += len(replacement) - len(body)
             index = opening + 1 + len(replacement)
         index += 1
     return "\n".join(lines), violations
@@ -403,13 +738,27 @@ _ESCAPES = {
 }
 
 
-def _decode(literal: str, origin: int) -> tuple[str, list[int], bool] | None:
-    """Decode one Python string literal to its value, offsets, and quote width.
+@dataclass(frozen=True)
+class Literal:
+    """One Python string literal, decoded."""
 
-    *origin* is the literal's offset in the enclosing source, so the returned
-    offsets address that source directly; the flag reports whether the literal
-    is triple-quoted, and so may carry newlines of its own. Returns None for a
-    literal whose prefix (``f``, ``b``) makes it unusable as a plain AgL snippet.
+    value: str
+    offsets: list[int]  # source offset per decoded character, plus the closing quote's
+    opening: int  # source offset of the literal's first character, prefix included
+    prefix: str
+    quote: str
+    triple: bool
+
+    @property
+    def raw(self) -> bool:
+        return "r" in self.prefix.lower()
+
+
+def _decode(literal: str, origin: int) -> Literal | None:
+    """Decode one Python string literal at source offset *origin*.
+
+    Returns None for a literal whose prefix (``f``, ``b``) makes it unusable as
+    a plain AgL snippet.
     """
     index = 0
     while index < len(literal) and literal[index] not in "\"'":
@@ -461,7 +810,7 @@ def _decode(literal: str, origin: int) -> tuple[str, list[int], bool] | None:
             offsets.append(origin + position)
         position += span
     offsets.append(origin + body_end)
-    return "".join(value), offsets, width == 3
+    return Literal("".join(value), offsets, origin, literal[:index], quote, width == 3)
 
 
 @dataclass(frozen=True)
@@ -471,11 +820,17 @@ class LiteralRun:
     value: str
     offsets: list[int]  # per decoded character, plus a past-the-end entry
     start_line: int  # 1-based line of the run's first literal
-    triple_spans: tuple[tuple[int, int], ...]  # source spans of the run's triple-quoted parts
+    parts: tuple[tuple[int, Literal], ...]  # each literal, by its first index in `value`
 
     def spans_lines_at(self, offset: int) -> bool:
         """Whether *offset* sits in a literal whose quotes let it hold real newlines."""
-        return any(start <= offset < end for start, end in self.triple_spans)
+        return any(
+            part.triple and part.offsets[0] <= offset < part.offsets[-1] for _, part in self.parts
+        )
+
+    def part_at(self, index: int) -> tuple[int, Literal]:
+        """The literal holding `value[index]`, or the last one past the end."""
+        return next((start, part) for start, part in reversed(self.parts) if start <= index)
 
 
 def _literal_runs(source: str) -> Iterator[LiteralRun]:
@@ -492,15 +847,18 @@ def _literal_runs(source: str) -> Iterator[LiteralRun]:
         tokens = list(py_tokenize.generate_tokens(io.StringIO(source).readline))
     except (py_tokenize.TokenError, IndentationError, SyntaxError):  # pragma: no cover
         return
-    run: list[tuple[str, list[int], bool]] = []
+    run: list[Literal] = []
     run_line = 0
 
     def collect() -> LiteralRun:
+        starts = [0]
+        for part in run:
+            starts.append(starts[-1] + len(part.value))
         return LiteralRun(
-            "".join(value for value, _, _ in run),
-            [position for _, positions, _ in run for position in positions[:-1]] + [run[-1][1][-1]],
+            "".join(part.value for part in run),
+            [position for part in run for position in part.offsets[:-1]] + [run[-1].offsets[-1]],
             run_line,
-            tuple((positions[0], positions[-1]) for _, positions, triple in run if triple),
+            tuple(zip(starts, run)),
         )
 
     for tok in tokens:
@@ -526,8 +884,24 @@ _REGION = re.compile(r"^[ \t]*scope[ \t]+[^\n]*$", re.M)
 
 
 def _looks_like_agl(value: str) -> bool:
-    """Whether a string literal is an AgL snippet carrying a scope region."""
-    return "\n" in value and _REGION.search(value) is not None and structure_of(value) is not None
+    """Whether a string literal is an AgL snippet carrying a scope region or a declaration.
+
+    The text tests only prefilter; the lexer decides. A declaration only counts
+    where its keyword opens an item, and in a literal that parses as a program,
+    as prose mentioning a ``record`` does not.
+    """
+    if "\n" in value and _REGION.search(value) is not None:
+        return structure_of(value) is not None
+    if not any(keyword in value for keyword in _DECLARATION_TYPES):
+        return False
+    source = textwrap.dedent(value)
+    try:
+        if not field_lists(list(tokenize(source))):
+            return False
+        parse_program_unresolved(source)
+    except AglError:
+        return False
+    return True
 
 
 # Same-offset edits are applied highest rank first, and each insertion pushes
@@ -601,40 +975,140 @@ def _splice(source: str, run: LiteralRun, styled: str) -> str | None:
     return result
 
 
-def restyle_python(source: str, path: Path) -> tuple[str, list[Violation]]:
-    """Restyle every AgL snippet written as a string literal in a Python module."""
-    violations: list[Violation] = []
+def _owns_line(source: str, part: Literal) -> bool:
+    """Whether *part* opens its physical line, and so sits inside brackets."""
+    line_begin = source.rfind("\n", 0, part.opening) + 1
+    return source[line_begin : part.opening].strip() in {"", "("}
+
+
+def _encode(source: str, part: Literal, text: str, at_end: bool) -> str | None:
+    """*text* written inside *part*'s quotes, or None if its quoting cannot hold it.
+
+    A newline in a one-line literal that opens its own source line splits the
+    literal in two, the second opening the next source line; elsewhere it is
+    an escaped newline. *at_end* says whether the text lands at the literal's
+    closing quote, where a split would only leave an empty literal behind.
+    """
+    if part.raw:
+        if "\\" in text or part.quote in text or ("\n" in text and not part.triple):
+            return None
+        return text
+    split = not part.triple and _owns_line(source, part)
+    line_begin = source.rfind("\n", 0, part.opening) + 1
+    reopen = f"{part.quote}\n{' ' * (part.opening - line_begin)}{part.prefix}{part.quote}"
+    encoded: list[str] = []
+    for index, char in enumerate(text):
+        if char == "\\" or char == part.quote:
+            encoded.append("\\" + char)
+        elif char == "\n" and part.triple:
+            encoded.append(char)
+        elif char == "\n":
+            last = at_end and index == len(text) - 1
+            encoded.append("\\n" + reopen if split and not last else "\\n")
+        elif char == "\t":
+            encoded.append("\\t")
+        elif not char.isprintable():
+            return None
+        else:
+            encoded.append(char)
+    return "".join(encoded)
+
+
+def _splice_anywhere(source: str, run: LiteralRun, styled: str) -> str | None:
+    """Write *styled* back into *run* by its character diff, or None if it cannot.
+
+    Unlike :func:`_splice`, edits may fall anywhere in a line, as the ``fields``
+    rule's do; each lands in the literal holding it, re-encoded for its quotes.
+    """
+    edits: list[tuple[int, int, str]] = []  # source span replaced, in source order
+    matcher = difflib.SequenceMatcher(None, run.value, styled, autojunk=False)
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        position = old_start
+        text = styled[new_start:new_end]
+        while True:
+            part_start, part = run.part_at(position)
+            part_end = part_start + len(part.value)
+            stop = min(old_end, part_end)
+            end_offset = part.offsets[-1] if stop == part_end else run.offsets[stop]
+            encoded = _encode(source, part, text, stop == part_end) if text else ""
+            if encoded is None:
+                return None
+            edits.append((run.offsets[position], end_offset, encoded))
+            text = ""
+            position = stop
+            if position >= old_end:
+                break
     result = source
-    while True:
-        for run in _literal_runs(result):
-            if not _looks_like_agl(run.value):
-                continue
-            styled, found = restyle(run.value)
-            if not found:
-                continue
-            spliced = _splice(result, run, styled)
-            # Writing back through quotes and escapes is where this tool can
-            # get a literal subtly wrong, so confirm the snippet now reads
-            # exactly as intended rather than trusting the edit arithmetic.
-            if spliced is not None and not any(
-                other.value == styled for other in _literal_runs(spliced)
-            ):
+    for start, end, encoded in reversed(edits):
+        result = result[:start] + encoded + result[end:]
+    return result
+
+
+def restyle_python(source: str, path: Path, *, fields: bool) -> tuple[str, list[Violation]]:
+    """Restyle every AgL snippet written as a string literal in a Python module.
+
+    Writing back through quotes and escapes is where this tool can get a literal
+    subtly wrong, so every rewritten snippet must then read exactly as intended
+    rather than the edit arithmetic being trusted. One re-read of the module
+    confirms them all at once; should any be off, each is confirmed on its own
+    so that only the culprit is left for a manual fix.
+    """
+    result, violations, expected = _restyle_literals(source, path, fields, confirm_each=False)
+    runs = [run.value for run in _literal_runs(result)]
+    if all(index < len(runs) and runs[index] == value for index, value in expected.items()):
+        return result, violations
+    result, violations, _ = _restyle_literals(source, path, fields, confirm_each=True)
+    return result, violations
+
+
+def _restyle_literals(
+    source: str, path: Path, fields: bool, *, confirm_each: bool
+) -> tuple[str, list[Violation], dict[int, str]]:
+    """Restyle *source*'s snippets, with the value each rewritten run should read.
+
+    Snippets are rewritten last to first, so an edit never moves the source
+    offsets of a snippet still to come. An edit neither merges nor splits
+    runs, so a run keeps its index.
+    """
+    found_per_run: list[list[Violation]] = []
+    expected: dict[int, str] = {}
+    result = source
+    runs = list(_literal_runs(source))
+    for index in reversed(range(len(runs))):
+        run = runs[index]
+        if not _looks_like_agl(run.value):
+            continue
+        styled, found = restyle(run.value, fields=fields)
+        if not found:
+            continue
+        spliced = (
+            result
+            if styled == run.value
+            else _splice(result, run, styled) or _splice_anywhere(result, run, styled)
+        )
+        if spliced is not None and confirm_each:
+            confirmed = list(_literal_runs(spliced))
+            if index >= len(confirmed) or confirmed[index].value != styled:
                 spliced = None
-            if spliced is None:
-                violations.append(
+        if spliced is None:
+            found_per_run.append(
+                [
                     Violation(
                         path,
                         run.start_line,
                         "manual",
                         "an AgL snippet needs restyling that cannot be applied automatically",
                     )
-                )
-                continue
-            violations.extend(_relocate(found, path, run.start_line - 1))
-            result = spliced
-            break
-        else:
-            return result, violations
+                ]
+            )
+            continue
+        found_per_run.append(_relocate(found, path, run.start_line - 1))
+        expected[index] = styled
+        result = spliced
+    violations = [violation for found in reversed(found_per_run) for violation in found]
+    return result, violations, expected
 
 
 # ---------------------------------------------------------------------------
@@ -663,14 +1137,15 @@ def restyle_file(path: Path) -> tuple[str, list[Violation]] | None:
         source = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
         return None
+    fields = not (path.is_relative_to(REPO_ROOT) and path.relative_to(REPO_ROOT) in FIELDS_EXEMPT)
     if path.suffix == ".agl":
-        styled, violations = restyle(source)
+        styled, violations = restyle(source, fields=fields)
         return styled, _relocate(violations, path, 0)
     if path.suffix == ".md":
-        return restyle_markdown(source, path)
+        return restyle_markdown(source, path, fields=fields)
     if path.name == Path(__file__).name:
         return None
-    return restyle_python(source, path)
+    return restyle_python(source, path, fields=fields)
 
 
 USAGE = "usage: agl_style.py (--check | --fix) [path ...]"

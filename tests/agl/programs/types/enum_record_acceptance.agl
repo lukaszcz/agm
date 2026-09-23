@@ -1,6 +1,10 @@
 # Enum members are records, and existing records may be members of several enums.
-record R1(x: int, y: int)
-record R2(x: int)
+record R1
+  x: int
+  y: int
+
+record R2
+  x: int
 
 enum RR = ::R1 | ::R2 | R3(r: RR)
 enum RRPrime = ::R1 | RR::R3

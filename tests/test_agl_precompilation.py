@@ -173,7 +173,7 @@ def test_a_shared_cyclic_dependency_reattaches_to_fresh_resolved_modules_under_a
     ("declarations", "expression", "expected"),
     [
         (
-            "record Box(value: int)\ntype Alias = Box\ndef box() -> Alias = Box(21)\n",
+            "record Box\n  value: int\ntype Alias = Box\ndef box() -> Alias = Box(21)\n",
             "box().value",
             "21\n",
         ),
@@ -317,7 +317,9 @@ def test_precompiled_extern_target_contracts_round_trip(
     (tmp_path / "library.agl").write_text(
         "builtin def print[T](value: T) -> unit\n"
         "extern def query[T](question: text, context: text) -> T\n"
-        "record Pair(left: text, right: text)\n"
+        "record Pair\n"
+        "  left: text\n"
+        "  right: text\n"
         'def direct(question: text) -> text = query(question, "d")\n'
         "def by-reference() -> (text, text) -> text = query\n"
         'def by-partial() -> (text) -> text = query::[text]("p", ?)\n'

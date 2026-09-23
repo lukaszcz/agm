@@ -33,7 +33,7 @@ _CAPS = HostCapabilities(
 
 def test_record_and_enum_member_signatures_use_nominal_record_constructors() -> None:
     checked = resolve_and_check_inline_entry(
-        "record R(x: int)\nenum E\n  | A(x: int)\nlet e: E = A(x = 1)\ncase e of | A(x = _) => 0",
+        "record R\n  x: int\nenum E\n  | A(x: int)\nlet e: E = A(x = 1)\ncase e of | A(x = _) => 0",
         _CAPS,
     )
     cases: list[Case] = []

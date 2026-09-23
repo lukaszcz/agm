@@ -337,7 +337,7 @@ class TestMultiline:
 class TestLexer:
     def test_info_output_is_highlighted_as_agl(self) -> None:
         session = ReplSession()
-        assert session.eval_entry("record Issue()").ok
+        assert session.eval_entry("record Issue").ok
         text = "Issue is a record type.\nType:\n  record Issue"
         fragments = _highlighted_agl_fragments(
             text, session, ((0, len("Issue")), (len("Issue is a record type.\nType:\n"), len(text)))

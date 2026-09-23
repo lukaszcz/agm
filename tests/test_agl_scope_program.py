@@ -375,7 +375,7 @@ class TestGlobImport:
             tmp_path,
             {
                 "entry": "import mylib::{A::Token as T}\nlet t = T(n = 1)",
-                "mylib": "scope A\n  record Token(n: int)\nend A",
+                "mylib": "scope A\n  record Token\n    n: int\nend A",
             },
         )
         result = resolve_program(graph)
@@ -1523,7 +1523,7 @@ class TestScopedImportBareNarrowing:
                     "scope A\n  import mylib::*\n"
                     "  def make() -> Geo::Point = Geo::Point(x = 1)\nend A\n\nA::make()"
                 ),
-                "mylib": "scope Geo\n  record Point(x: int)\nend Geo",
+                "mylib": "scope Geo\n  record Point\n    x: int\nend Geo",
             },
         )
         result = resolve_program(graph)
@@ -1775,7 +1775,7 @@ class TestWildcardImports:
         clashing_route = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import lib as Color\nrecord Color()\nColor::make",
+                "entry": "import lib as Color\nrecord Color\nColor::make",
                 "lib": "def make() -> int = 1",
             },
         )
@@ -2152,7 +2152,7 @@ class TestMethodOrphanRule:
                 ),
                 "shapes": (
                     "enum Tree[E]\n  | Node(value: E)\n\n"
-                    "exception Failure()\n\n"
+                    "exception Failure\n\n"
                     "record Box[E]\n  value: E"
                 ),
             },
@@ -2243,8 +2243,8 @@ class TestMethodOrphanRule:
                     "import far::*\n\nscope A\n  import near::*\n\n"
                     "  def Point::tag(self) -> int = 1\nend A"
                 ),
-                "far": "record Point()",
-                "near": "record Point()",
+                "far": "record Point",
+                "near": "record Point",
             },
         )
 
@@ -2276,7 +2276,7 @@ class TestMethodOrphanRule:
             tmp_path,
             {
                 "entry": "import owners::*\nimport aliases::*\ndef Point::tag(self) -> int = 1",
-                "owners": "record Point()",
+                "owners": "record Point",
                 "aliases": "scope Geo\n  type Point = int\nend Geo",
             },
         )
@@ -2292,7 +2292,7 @@ class TestMethodOrphanRule:
             tmp_path,
             {
                 "entry": "import shapes::*\ndef Node::tag(self) -> int = 1",
-                "shapes": "record Node()\nenum Tree = Node",
+                "shapes": "record Node\nenum Tree = Node",
             },
         )
 
@@ -2323,7 +2323,7 @@ class TestMethodOrphanRule:
                 "entry": (
                     "type Point = int\n\n"
                     "scope A\n"
-                    "  record Point()\n\n"
+                    "  record Point\n\n"
                     "  scope B\n"
                     "    def Point::tag(self) -> int = 1\n"
                     "  end B\n"
@@ -2406,7 +2406,7 @@ class TestMethodOrphanRule:
             tmp_path,
             {
                 "entry": "import shapes\ndef Point::tag(self) -> int = 1",
-                "shapes": "record Point()",
+                "shapes": "record Point",
             },
         )
 
@@ -2418,8 +2418,8 @@ class TestMethodOrphanRule:
             tmp_path,
             {
                 "entry": "import first::*\nimport second::*\ndef Point::tag(self) -> int = 1",
-                "first": "record Point()",
-                "second": "record Point()",
+                "first": "record Point",
+                "second": "record Point",
             },
         )
 
@@ -2435,8 +2435,8 @@ class TestMethodOrphanRule:
                     "import second::{Point}\n"
                     "def Point::tag(self) -> int = 1"
                 ),
-                "first": "record Original()",
-                "second": "record Point()",
+                "first": "record Original",
+                "second": "record Point",
             },
         )
 
@@ -2448,7 +2448,7 @@ class TestMethodOrphanRule:
             tmp_path,
             {
                 "entry": "import shapes::*\ndef Point::tag(self) -> int = 1",
-                "shapes": "record Actual()\ntype Point = Actual",
+                "shapes": "record Actual\ntype Point = Actual",
             },
         )
 
@@ -2461,7 +2461,7 @@ class TestMethodOrphanRule:
             ("def Point() -> int = 1", "Point"),
             ("enum Tree = Node\ndef Tree::Point() -> int = 1", "Point"),
             ("enum Tree = Node", "Tree::Missing"),
-            ("record Point()", "Point::Nested"),
+            ("record Point", "Point::Nested"),
         ),
     )
     def test_invalid_foreign_receiver_paths_are_not_owners(
@@ -2677,7 +2677,7 @@ class TestExceptionDefInGraph:
             tmp_path,
             {
                 "entry": "import mylib::*\n()",
-                "mylib": "exception MyErr(msg: text)",
+                "mylib": "exception MyErr\n  msg: text",
             },
         )
         result = resolve_program(graph)
@@ -2690,7 +2690,7 @@ class TestExceptionDefInGraph:
             tmp_path,
             {
                 "entry": "import mylib::*\n()",
-                "mylib": "exception MyErr(msg: text)",
+                "mylib": "exception MyErr\n  msg: text",
             },
         )
         result = resolve_program(graph)
@@ -2703,7 +2703,7 @@ class TestExceptionDefInGraph:
             tmp_path,
             {
                 "entry": 'import mylib::*\nMyErr(msg = "oops")',
-                "mylib": "exception MyErr(msg: text)",
+                "mylib": "exception MyErr\n  msg: text",
             },
         )
         result = resolve_program(graph)
@@ -2727,7 +2727,7 @@ class TestExceptionDefInGraph:
             tmp_path,
             {
                 "entry": entry,
-                "mylib": "scope A\n  enum E | X | Y\nend A\n\nexception X extends Exception()",
+                "mylib": "scope A\n  enum E | X | Y\nend A\n\nexception X extends Exception",
             },
         )
 
@@ -2740,7 +2740,7 @@ class TestExceptionDefInGraph:
             tmp_path,
             {
                 "entry": ('import library\nuse library::A::*\nlet error = X(message = "boom")'),
-                "library": ("scope A\n  enum E | X | Y\n  exception X extends Exception()\nend A"),
+                "library": ("scope A\n  enum E | X | Y\n  exception X extends Exception\nend A"),
             },
         )
 
@@ -2755,7 +2755,7 @@ class TestExceptionDefInGraph:
                 "entry": (
                     'import library::{A::E as E, A::X as X}\nlet error = X(message = "boom")'
                 ),
-                "library": ("scope A\n  enum E | X | Y\n  exception X extends Exception()\nend A"),
+                "library": ("scope A\n  enum E | X | Y\n  exception X extends Exception\nend A"),
             },
         )
 
@@ -2777,7 +2777,7 @@ class TestExceptionDefInGraph:
             tmp_path,
             {
                 "entry": "import mylib::*\n()",
-                "mylib": ("enum Status\n  | Ok\n  | Conflict\nexception Conflict(msg: text)\n"),
+                "mylib": ("enum Status\n  | Ok\n  | Conflict\nexception Conflict\n  msg: text\n"),
             },
         )
         result = resolve_program(graph)
@@ -2811,7 +2811,7 @@ class TestReachableDeclarations:
                     "  def marker() -> int = 1\n"
                     "end Region\n"
                     "\n"
-                    "record Local()\n"
+                    "record Local\n"
                     "def Local::show(self) -> int = 1"
                 ),
                 "metrics": "scope Point\n  def norm() -> int = 1\nend Point",
@@ -3557,7 +3557,7 @@ class TestExportDecl:
                     "  def read() -> int = 1\n"
                     "end Public"
                 ),
-                "lib": "record Source(value: int)",
+                "lib": "record Source\n  value: int",
             },
             default_stdlib=False,
         )
@@ -3571,7 +3571,7 @@ class TestExportDecl:
                 "entry": (
                     "import facade\nlet value = facade::Public(value = 1)\nfacade::Public::read()"
                 ),
-                "facade": "export lib::{Source as Public}\nrecord Public(value: int)",
+                "facade": "export lib::{Source as Public}\nrecord Public\n  value: int",
                 "lib": "scope Source\n  def read() -> int = 1\nend Source",
             },
             default_stdlib=False,

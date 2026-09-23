@@ -2,7 +2,8 @@
 # record field name, a function parameter name, and a `program def`'s own
 # parameter name, all in the same program.
 
-record Config(param: int)
+record Config
+  param: int
 
 def scale(param: int) -> int = param * 2
 

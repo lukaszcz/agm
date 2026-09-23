@@ -4,7 +4,7 @@ exception Problem extends Exception
 exception Detailed extends Problem
   detail: text
 
-exception Sibling extends Problem()
+exception Sibling extends Problem
 
 program def main() -> unit =
   let d: Detailed = Detailed(message = "bad", code = 1, detail = "x")

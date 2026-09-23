@@ -181,7 +181,7 @@ def test_nested_imported_receiver_annotations_resolve(tmp_path: Path) -> None:
                 "self: Geo::Point, other: Geo::Point"
                 ") -> Geo::Point = other"
             ),
-            "shapes": "scope Geo\n  record Point()\nend Geo",
+            "shapes": "scope Geo\n  record Point\nend Geo",
         },
         default_stdlib=False,
     )
@@ -193,7 +193,7 @@ def test_foreign_method_receiver_annotation_must_match_its_owner(tmp_path: Path)
         tmp_path,
         {
             "entry": "import geometry\nimport metrics\n()",
-            "geometry": "record Point()\nrecord Other()",
+            "geometry": "record Point\nrecord Other",
             "metrics": "import geometry::*\ndef Point::tag(self: Other) -> int = 1",
         },
     )
@@ -1103,7 +1103,7 @@ def test_owner_applied_inline_member_rejects_a_second_type_application() -> None
 def test_owner_applied_inline_member_rejects_non_enum_owners_and_unknown_members() -> None:
     """Owner application uses the enum member namespace rather than a raw path."""
     with pytest.raises(AglTypeError, match="'Source'"):
-        _check("record Source[T](value: T)\ntype Invalid = Source[text]::Member\n()")
+        _check("record Source[T]\n  value: T\ntype Invalid = Source[text]::Member\n()")
     with pytest.raises(AglTypeError, match="'Source::Member'"):
         _check("enum Source[T]\n  | Known(value: T)\ntype Invalid = Source[text]::Member\n()")
 
@@ -1129,7 +1129,8 @@ def test_cross_module_owner_applied_inline_member_rejects_a_second_type_applicat
 def test_inline_member_records_resolve_in_local_type_positions() -> None:
     checked = _check(
         "scope Forest\n"
-        "  record Box[T](value: T)\n"
+        "  record Box[T]\n"
+        "    value: T\n"
         "  enum Outer[T] | Member\n"
         "  enum Tree[T]\n"
         "    | Leaf\n"
@@ -1159,7 +1160,7 @@ def test_importing_an_enum_scope_subtree_exposes_member_record_types(tmp_path: P
     checked = check_agl_program(
         tmp_path,
         {
-            "entry": "import lib::{Tree}\nrecord Holder(node: Tree::Node[int])\n()",
+            "entry": "import lib::{Tree}\nrecord Holder\n  node: Tree::Node[int]\n()",
             "lib": "enum Tree[T]\n  | Leaf\n  | Node(value: T)",
         },
     )
@@ -1226,7 +1227,7 @@ def test_used_alias_of_referenced_enum_member_selects_the_record_constructor(
         tmp_path,
         {
             "entry": ("import lib\nuse lib::{Alias}\nlet value = Alias::Shared(value = 1)\nvalue"),
-            "lib": "record Shared(value: int)\nenum E = ::Shared\ntype Alias = E",
+            "lib": "record Shared\n  value: int\nenum E = ::Shared\ntype Alias = E",
         },
         default_stdlib=False,
     )
@@ -1239,9 +1240,9 @@ def test_used_alias_of_referenced_enum_member_selects_the_record_constructor(
 @pytest.mark.parametrize(
     "library",
     (
-        "record Shared(value: int)\nenum E = ::Shared\ntype Alias = E",
+        "record Shared\n  value: int\nenum E = ::Shared\ntype Alias = E",
         "enum E = ::Missing\ntype Alias = E",
-        "record Shared(value: int)\ntype Alias = Shared",
+        "record Shared\n  value: int\ntype Alias = Shared",
     ),
 )
 def test_used_alias_of_referenced_enum_rejects_unknown_or_unresolved_members(
@@ -1308,7 +1309,7 @@ def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child(tmp_path: Pa
                     "value"
                 ),
                 "lib": (
-                    "enum Option\n  | some(value: int)\ntype Alias = Option\nrecord Alias::some()"
+                    "enum Option\n  | some(value: int)\ntype Alias = Option\nrecord Alias::some"
                 ),
             },
         )
@@ -1416,7 +1417,9 @@ def test_local_alias_of_record_remains_constructible(tmp_path: Path) -> None:
         tmp_path,
         {
             "entry": (
-                "record Point(x: int, y: int)\n\n"
+                "record Point\n"
+                "  x: int\n"
+                "  y: int\n\n"
                 "type Alias = Point\n\n"
                 "let p = Alias(x = 1, y = 2)\np"
             ),
@@ -2725,7 +2728,9 @@ def test_unannotated_binding_pre_pass_type_matches_the_authoritative_check(
     modules = {
         "entry": "import lib\nprint(lib::count)",
         "lib": (
-            "record Point(x: int, y: int)\n\n"
+            "record Point\n"
+            "  x: int\n"
+            "  y: int\n\n"
             "let count = 3\n"
             "let negated = -3\n"
             'let label = "hi"\n'
@@ -4128,7 +4133,7 @@ def test_builtin_def_result_type_ordinary_exception_is_rejected(tmp_path: Path) 
             {
                 "entry": (
                     "scope s\n"
-                    "  exception ValueParseError extends Exception()\n"
+                    "  exception ValueParseError extends Exception\n"
                     "  builtin def try-parse[T](value: text) -> Result[T, ValueParseError]\n"
                     "end s\n"
                     "\n"
@@ -4201,13 +4206,13 @@ def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final
         {
             "a": (
                 "import b\n"
-                "record A()\n"
+                "record A\n"
                 "def A::from-b(self, n: int) =\n"
                 "  if n == 0 => 1 else => b::B::from-a(b::B(), n - 1)\n"
             ),
             "b": (
                 "import a\n"
-                "record B()\n"
+                "record B\n"
                 "def B::from-a(self, n: int) =\n"
                 "  if n == 0 => 2 else => a::A::from-b(a::A(), n - 1)\n"
             ),
@@ -4366,7 +4371,7 @@ def test_qualified_is_test_resolves_root_exception_via_module_route(tmp_path: Pa
             "let ancestor = e is mod::Base\n"
             "ancestor"
         ),
-        "mod": "exception Base extends Exception\n  url: text\nexception Child extends Base()\n",
+        "mod": "exception Base extends Exception\n  url: text\nexception Child extends Base\n",
     }
     cg = check_agl_program(tmp_path, modules)
     for name in ("descendant", "excludes", "ancestor"):
@@ -4399,7 +4404,7 @@ def test_qualified_is_test_rejects_unrelated_root_exception_across_modules(
         ),
         "mod": (
             "exception Base extends Exception\n  url: text\n"
-            "exception Child extends Base()\n"
+            "exception Child extends Base\n"
             "exception Other extends Exception\n  code: int\n"
         ),
     }
@@ -4462,8 +4467,8 @@ def test_method_and_record_field_cannot_share_a_name_in_either_source_order(
         (
             "exception Base extends Exception\n"
             "  code: int\n"
-            "exception Middle extends Base()\n"
-            "exception Leaf extends Middle()\n"
+            "exception Middle extends Base\n"
+            "exception Leaf extends Middle\n"
             "def Leaf::code(self) -> int = self.code\n"
             "()",
             5,
@@ -4472,8 +4477,8 @@ def test_method_and_record_field_cannot_share_a_name_in_either_source_order(
             "def Leaf::code(self) -> int = 1\n"
             "exception Base extends Exception\n"
             "  code: int\n"
-            "exception Middle extends Base()\n"
-            "exception Leaf extends Middle()\n"
+            "exception Middle extends Base\n"
+            "exception Leaf extends Middle\n"
             "()",
             1,
         ),
@@ -4495,7 +4500,7 @@ def test_method_cannot_share_a_name_with_an_inherited_exception_field(
     (
         ("record Point\n  label: text\n", "Point", "label"),
         (
-            "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n",
+            "exception Base extends Exception\n  code: int\nexception Derived extends Base\n",
             "Derived",
             "code",
         ),
@@ -4529,8 +4534,8 @@ def test_sibling_exception_branches_may_reuse_a_method_name() -> None:
     _check(
         "exception Base extends Exception\n"
         "  code: int\n"
-        "exception BranchA extends Base()\n"
-        "exception BranchB extends Base()\n"
+        "exception BranchA extends Base\n"
+        "exception BranchB extends Base\n"
         'def BranchA::label(self) -> text = "a"\n'
         'def BranchB::label(self) -> text = "b"\n'
         "()"
@@ -4575,9 +4580,9 @@ def test_method_names_are_independent_between_unrelated_types(tmp_path: Path) ->
             "entry": (
                 "record WithField\n"
                 "  label: text\n"
-                "record First()\n"
+                "record First\n"
                 'def First::label(self) -> text = "first"\n'
-                "record Second()\n"
+                "record Second\n"
                 'def Second::label(self) -> text = "second"\n'
                 "[First().label(), Second().label()]"
             )
@@ -4659,7 +4664,7 @@ def test_option_member_selects_a_visible_enum_orphan_over_an_unreachable_direct_
 
 def test_non_agent_record_does_not_gain_agent_methods_without_stdlib() -> None:
     with pytest.raises(AglTypeError):
-        _check('record Worker()\nWorker().ask("hello")', default_stdlib=False)
+        _check('record Worker\nWorker().ask("hello")', default_stdlib=False)
 
 
 def test_agent_member_call_is_rejected_when_its_ask_route_is_hidden(tmp_path: Path) -> None:
@@ -4739,7 +4744,7 @@ def test_same_module_exception_pair_is_rejected_at_declaration() -> None:
             "exception Base extends Exception\n"
             "  code: int\n"
             'def Base::describe(self) -> text = "base"\n'
-            "exception Derived extends Base()\n"
+            "exception Derived extends Base\n"
             'def Derived::describe(self) -> text = "derived"\n'
             'Derived(message = "error", code = 1).describe()\n'
         )
@@ -4750,9 +4755,9 @@ def test_same_module_exception_pair_is_rejected_at_declaration() -> None:
 def test_same_module_exception_grandparent_pair_is_rejected_at_declaration() -> None:
     with pytest.raises(AglTypeError) as raised:
         _check(
-            "exception Root extends Exception()\n"
-            "exception Mid extends Root()\n"
-            "exception Leaf extends Mid()\n"
+            "exception Root extends Exception\n"
+            "exception Mid extends Root\n"
+            "exception Leaf extends Mid\n"
             'def Root::describe(self) -> text = "root"\n'
             'def Leaf::describe(self) -> text = "leaf"\n'
             "()"
@@ -4777,7 +4782,8 @@ def test_same_module_member_and_enum_method_pair_is_rejected_at_declaration() ->
 def test_same_module_referenced_record_enum_pair_is_rejected_at_declaration() -> None:
     with pytest.raises(AglTypeError) as raised:
         _check(
-            "record Saved(id: int)\n"
+            "record Saved\n"
+            "  id: int\n"
             'def Saved::describe(self) -> text = "one"\n'
             "enum Stored = ::Saved | Fresh(value: int)\n"
             'def Stored::describe(self) -> text = "two"\n'
@@ -4809,7 +4815,7 @@ def test_cross_module_member_and_enum_method_pair_is_accepted_at_declaration(
     checked = check_agl_program(
         tmp_path,
         {
-            "lib": 'record Saved(id: int)\ndef Saved::describe(self) -> text = "one"\n',
+            "lib": 'record Saved\n  id: int\ndef Saved::describe(self) -> text = "one"\n',
             "store": (
                 "import lib\n"
                 "enum Stored = lib::Saved | Fresh(value: int)\n"
@@ -4834,7 +4840,8 @@ def test_enum_method_named_like_a_member_field_is_legal_to_declare() -> None:
 
 def test_unrelated_owners_with_the_same_method_name_are_not_a_pair() -> None:
     checked = _check(
-        "record Meter(value: int)\n"
+        "record Meter\n"
+        "  value: int\n"
         "enum Color\n"
         "  | Red\n"
         "  | Blue\n"
@@ -4849,9 +4856,9 @@ def test_unrelated_owners_with_the_same_method_name_are_not_a_pair() -> None:
 
 def test_two_enums_each_owning_a_distinct_record_are_not_a_pair() -> None:
     checked = _check(
-        "record First()\n"
+        "record First\n"
         "enum A = ::First\n"
-        "record Second()\n"
+        "record Second\n"
         "enum B = ::Second\n"
         "def A::f(self) -> int = 1\n"
         "def B::f(self) -> int = 2\n"
@@ -4867,7 +4874,7 @@ def test_same_module_pair_between_two_third_module_orphans_is_rejected(tmp_path:
         check_agl_program(
             tmp_path,
             {
-                "lib": "record Saved(id: int)\n",
+                "lib": "record Saved\n  id: int\n",
                 "store": "import lib\nenum Stored = lib::Saved | Fresh(value: int)\n",
                 "ext": (
                     "import lib::*\n"
@@ -4887,7 +4894,7 @@ def test_same_module_orphan_and_home_enum_method_pair_is_rejected(tmp_path: Path
         check_agl_program(
             tmp_path,
             {
-                "lib": "record Saved(id: int)\n",
+                "lib": "record Saved\n  id: int\n",
                 "ext": (
                     "import lib::*\n"
                     "enum Stored = lib::Saved | Fresh(value: int)\n"
@@ -5022,7 +5029,7 @@ def test_exception_chain_pair_is_ambiguous_on_derived_receiver_but_not_base(
 ) -> None:
     modules = {
         "errors": (
-            "exception Base extends Exception\n  code: int\nexception Derived extends Base()\n"
+            "exception Base extends Exception\n  code: int\nexception Derived extends Base\n"
         ),
         "base_methods": "import errors::*\ndef Base::describe(self) -> int = self.code\n",
         "derived_methods": (
@@ -5134,7 +5141,7 @@ def test_orphan_method_cannot_collide_with_a_foreign_owner_field(tmp_path: Path)
                 "errors": (
                     "exception Base extends Exception\n"
                     "  describe: text\n"
-                    "exception Derived extends Base()\n"
+                    "exception Derived extends Base\n"
                 ),
                 "methods": 'import errors::*\ndef Base::describe(self) -> text = "method"\n',
                 "entry": (

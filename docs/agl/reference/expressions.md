@@ -306,7 +306,7 @@ position. This applies uniformly to a standalone record and an enum member,
 whether bare or qualified:
 
 ```agl
-record Marker()
+record Marker
 enum Status
   | Ready
   | Failed(reason: text)
@@ -321,7 +321,7 @@ construct the same values as the bare references above. A fieldless constructor 
 value. Supply an explicit function when one is required:
 
 ```agl
-record Marker()
+record Marker
 def invoke(factory: () -> Marker) -> Marker = factory()
 
 program def main() -> unit =
@@ -332,7 +332,7 @@ A generic fieldless constructor may obtain its type arguments from context or
 from `::[…]`:
 
 ```agl
-record Token[T]()
+record Token[T]
 let from-context: Token[int] = Token
 let explicit = Token::[int]
 ```

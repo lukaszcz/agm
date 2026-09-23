@@ -5,7 +5,8 @@ enum Tree[T]
 
 def identity(tree: Tree[int]) -> Tree[int] = tree
 
-record Box(tree: Tree[int])
+record Box
+  tree: Tree[int]
 
 enum Option[T]
   | none

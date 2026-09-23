@@ -346,8 +346,12 @@ def test_companion_repr_of_a_mutable_view_renders_a_nested_record_closure_and_ar
     signature, and its array field, all from the one program's descriptors.
     """
     source = (
-        "record Inner(a: int)\n"
-        "record Outer(var inner: Inner, var callback: (int) -> int, var items: array[int])\n"
+        "record Inner\n"
+        "  a: int\n"
+        "record Outer\n"
+        "  var inner: Inner\n"
+        "  var callback: (int) -> int\n"
+        "  var items: array[int]\n"
         "extern def show(outer: Outer) -> text\n"
         "let increment = fn(value: int) -> int => value + 1\n"
         "let result = show(Outer(inner = Inner(a = 1), callback = increment, items = [1, 2]))\n"
@@ -370,7 +374,7 @@ def test_companion_view_built_at_import_renders_after_the_import_returns(tmp_pat
     ``Item``'s display name when a later call ``repr``'s it -- regression
     coverage for the import running outside the program's descriptor view.
     """
-    source = "record Item(a: int)\nextern def show() -> text\nlet result = show()\nresult\n"
+    source = "record Item\n  a: int\nextern def show() -> text\nlet result = show()\nresult\n"
     companion = (
         "import agl\n"
         "\n"

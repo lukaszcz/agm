@@ -1,4 +1,5 @@
-record Cell(var value: int)
+record Cell
+  var value: int
 
 def store[T](target: T) -> unit =
   target.value := 1

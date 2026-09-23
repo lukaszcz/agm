@@ -1,4 +1,6 @@
-record P(x: int, y: int)
+record P
+  x: int
+  y: int
 
 program def main() -> unit =
   let p = P(1, 2)

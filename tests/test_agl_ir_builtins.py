@@ -225,7 +225,8 @@ def test_copy_of_diamond_preserves_sharing() -> None:
 def test_copy_of_cyclic_value_does_not_raise_but_print_of_copy_does() -> None:
     """copy(cyclic) succeeds (the memo makes it terminate); print(copy(...)) still raises."""
     source = textwrap.dedent("""\
-        record Node(children: array[Node])
+        record Node
+          children: array[Node]
         var xs: array[Node] = [Node(children = [])]
         let n = Node(children = xs)
         xs[0] := n
@@ -236,7 +237,7 @@ def test_copy_of_cyclic_value_does_not_raise_but_print_of_copy_does() -> None:
         catch CyclicValueError =>
           print("caught")
         ()
-    """)
+""")
     out = evaluate_ir_output(source)
     assert out == "copy ok\ncaught\n"
 
@@ -248,7 +249,9 @@ def test_copy_of_cyclic_value_produces_independent_isomorphic_cycle() -> None:
     tool used here to observe the copy's shape without ever rendering it.
     """
     source = textwrap.dedent("""\
-        record Node(children: array[Node], tag: array[int])
+        record Node
+          children: array[Node]
+          tag: array[int]
         var xs: array[Node] = [Node(children = [], tag = [0])]
         let n = Node(children = xs, tag = [0])
         xs[0] := n
@@ -257,7 +260,7 @@ def test_copy_of_cyclic_value_produces_independent_isomorphic_cycle() -> None:
         xs[0].tag[0] := 99
         print(xs == ys)
         ()
-    """)
+""")
     out = evaluate_ir_output(source)
     assert out == "true\nfalse\n"
 
@@ -283,7 +286,8 @@ def test_copy_and_shallow_copy_are_identity_on_primitives() -> None:
 def test_copy_through_record_detaches_field_shallow_copy_shares_it() -> None:
     """copy detaches a record's array field; shallow-copy shares it."""
     source = textwrap.dedent("""\
-        record Box(items: array[int])
+        record Box
+          items: array[int]
         var b = Box(items = [1, 2])
         let deep = copy(b)
         let shallow = shallow-copy(b)
@@ -293,7 +297,7 @@ def test_copy_through_record_detaches_field_shallow_copy_shares_it() -> None:
         print(deep.items)
         print(shallow.items)
         ()
-    """)
+""")
     out = evaluate_ir_output(source)
     assert out == "[-2, 2]\n[-1, 2]\n[-2, 2]\n"
 

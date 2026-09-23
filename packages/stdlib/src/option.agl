@@ -5,7 +5,7 @@ enum Option[T] =
   | None
   | Some(value: T)
 
-exception UnwrapError extends Exception()
+exception UnwrapError extends Exception
 
 def Option::map[T, U](self, f: (T) -> U) -> Option[U] =
   case self of

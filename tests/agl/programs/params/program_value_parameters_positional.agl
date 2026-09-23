@@ -8,7 +8,9 @@ enum Volume
   | Soft
   | Loud(times: int)
 
-record Announcement(message: text, volume: Volume)
+record Announcement
+  message: text
+  volume: Volume
 
 def shout(label: text, times: int) -> text =
   var line = label

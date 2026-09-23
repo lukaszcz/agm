@@ -1,4 +1,4 @@
-record Other()
+record Other
 
 enum Result
   | Ok

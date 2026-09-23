@@ -13,8 +13,13 @@ type url = text
 # (outside the RFC 3986 `pchar` set, fragment also keeping `/` and `?`; an
 # existing `%XX` escape is left intact); `query` pairs are percent-decoded,
 # so `render` form-encodes them back (`+` for space).
-record Url(scheme: text, host: text, port: Option[int], path: text,
-           query: array[Pair[text, text]], fragment: Option[text])
+record Url
+  scheme: text
+  host: text
+  port: Option[int]
+  path: text
+  query: array[Pair[text, text]]
+  fragment: Option[text]
 
 exception UrlParseError extends Exception
   raw: text

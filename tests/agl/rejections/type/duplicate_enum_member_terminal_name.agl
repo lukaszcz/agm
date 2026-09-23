@@ -1,4 +1,4 @@
-record R()
+record R
 
 enum Both = R | ::R
 

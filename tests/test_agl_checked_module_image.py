@@ -53,7 +53,8 @@ from tests.agl.ir_harness import (
 from tests.agl.module_graph import resolve_and_check_repl_entry
 
 _GENERICS_SRC = """\
-record Box[T](value: T)
+record Box[T]
+  value: T
 
 def make-box[T](value: T) -> Box[T] = Box(value = value)
 
@@ -81,7 +82,8 @@ def Signal::describe(self) -> text =
 
 def Signal::is-idle(self) -> bool = self is idle
 
-record SignalBox(signal: Signal)
+record SignalBox
+  signal: Signal
 
 def unbox-label(box: SignalBox) -> text =
   case box of
@@ -91,7 +93,8 @@ def unbox-label(box: SignalBox) -> text =
 
 _SCOPE_SRC = """\
 scope Region
-  record Marker(value: int)
+  record Marker
+    value: int
   def scoped-value(marker: Marker) -> int = marker.value
 end Region
 
@@ -117,7 +120,9 @@ _EXTERN_COMPANION_SRC = (
 )
 
 _METHODS_SRC = """\
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int
 
 def Point::sum(self) -> int = self.x + self.y
 

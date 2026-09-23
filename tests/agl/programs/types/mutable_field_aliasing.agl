@@ -1,8 +1,11 @@
 # Mutable fields share their record value through bindings, containers, record
 # fields, parameters, and enum-typed views. Pattern field bindings snapshot the
 # field slot while preserving aliases to the value that was bound.
-record Item(var amount: int)
-record Holder(var item: Item)
+record Item
+  var amount: int
+
+record Holder
+  var item: Item
 
 enum Choice
   | Empty

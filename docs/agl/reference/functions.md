@@ -391,7 +391,8 @@ A method may update a `var` field through `self`; `self` need not be a mutable
 binding because the assignment updates the record, not the receiver name:
 
 ```agl
-record Counter(var value: int)
+record Counter
+  var value: int
 
 def Counter::add(self, amount: int) -> unit =
   self.value := self.value + amount

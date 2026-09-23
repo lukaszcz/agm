@@ -1,4 +1,4 @@
 @name("boom")
-exception Boom extends Exception ()
+exception Boom extends Exception
 
 program def main() -> unit = ()

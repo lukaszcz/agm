@@ -1,6 +1,10 @@
 # Mutable fields are declaration metadata; construction remains unchanged.
-record Standalone(var value: int, label: text)
-record Referenced(var value: int)
+record Standalone
+  var value: int
+  label: text
+
+record Referenced
+  var value: int
 
 enum Members
   | Inline(var value: int)

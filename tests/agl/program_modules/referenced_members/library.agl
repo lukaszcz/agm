@@ -1,3 +1,4 @@
-record Shared(value: int)
+record Shared
+  value: int
 
 enum RefEnum = ::Shared

@@ -22,7 +22,7 @@ scope Stdlib
   exception Exception
     @arg-named message: text
 
-  builtin exception RangeError extends Exception()
+  builtin exception RangeError extends Exception
 
   builtin def print[T](value: T) -> unit
 

@@ -461,12 +461,12 @@ class TestPackageDiscipline:
     @pytest.mark.parametrize(
         ("declaration", "constructor"),
         (
-            ("record resource(value: text)", "resource"),
+            ("record resource\n  value: text", "resource"),
             ("enum Value | resource(value: text)", "resource"),
-            ("exception resource(value: text)", "resource"),
-            ("record resource-dir(value: text)", "resource-dir"),
+            ("exception resource\n  value: text", "resource"),
+            ("record resource-dir\n  value: text", "resource-dir"),
             ("enum Value | resource-dir(value: text)", "resource-dir"),
-            ("exception resource-dir(value: text)", "resource-dir"),
+            ("exception resource-dir\n  value: text", "resource-dir"),
         ),
     )
     def test_accepts_constructor_named_like_resource_builtin(

@@ -9,7 +9,9 @@ enum Mode
   | Quiet
   | Loud(volume: int)
 
-record Summary(mode: Mode, greeting: text)
+record Summary
+  mode: Mode
+  greeting: text
 
 def greet(label: text, on: bool) -> text =
   if on => "hello, %{label}!" else => "hi, %{label}."

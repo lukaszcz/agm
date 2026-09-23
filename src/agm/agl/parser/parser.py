@@ -255,10 +255,12 @@ def is_incomplete_source(text: str) -> bool:
     ``AglSyntaxError`` message, so it tracks the grammar exactly (this is the one
     place — alongside the rest of the parser package — permitted to import Lark):
 
-    - A clean parse → complete (not incomplete).
+    - A clean parse → complete, unless the source ends with a body-less
+      ``record``/``exception`` declaration, which can still take an indented
+      field block (a blank line submits it as declared).
     - ``UnexpectedToken`` at the **end of input** (token type ``$END``) → the
       parser ran out of tokens while still expecting more.  This covers every
-      unterminated block header (``record R``, ``enum E``, ``case x of``,
+      unterminated block header (``record R =``, ``enum E``, ``case x of``,
       ``try``, ``do agent``, ``if c =>``), a dangling binary operator
       (``1 +``), and an open ``let x =``.  All are treated as "needs more
       input".
@@ -284,8 +286,7 @@ def is_incomplete_source(text: str) -> bool:
         return _incomplete_cache[1]
 
     try:
-        _PARSER.parse(text)
-        result = False
+        result = _ends_with_bodyless_declaration(_PARSER.parse(text))
     except UnexpectedToken as exc:
         # The LALR parser reports a premature end of input as an unexpected
         # ``$END`` token (it never raises ``UnexpectedEOF``), so this single
@@ -308,6 +309,25 @@ def is_incomplete_source(text: str) -> bool:
 
     _incomplete_cache = (text, result)
     return result
+
+
+_BODYLESS_CAPABLE_DECLARATIONS = frozenset(
+    {"record_def", "builtin_record_def", "exception_def", "builtin_exception_def"}
+)
+
+
+def _ends_with_bodyless_declaration(tree: Tree) -> bool:
+    """Return ``True`` when the module's final child is a body-less record/exception."""
+    module_block = tree.children[0]
+    assert isinstance(module_block, Tree)
+    last = module_block.children[-1] if module_block.children else None
+    return (
+        isinstance(last, Tree)
+        and last.data in _BODYLESS_CAPABLE_DECLARATIONS
+        and not any(
+            isinstance(child, Tree) and str(child.data).endswith("_body") for child in last.children
+        )
+    )
 
 
 def parse_program_unresolved(

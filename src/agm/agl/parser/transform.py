@@ -742,7 +742,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
-        # Grammar: "record" name type_params? EQ? record_body
+        # Grammar: "record" name type_params? (EQ? record_body)?
         name, scope_path = self._declaration_head(args)
         type_params_val = _find_type_params(args)
         attributes = _find_attributes(args)
@@ -910,7 +910,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def exception_def(self, meta: Meta, args: _Args) -> syntax.ExceptionDef:
-        # Grammar: "exception" name exception_base? exception_body
+        # Grammar: "exception" name exception_base? exception_body?
         name, scope_path = self._declaration_head(args)
         base = next((a for a in args if type(a) is str), None)
         attributes = _find_attributes(args)
@@ -3340,10 +3340,8 @@ def _without_attributes(args: _Args) -> _Args:
 
 
 def _find_field_tuple(args: _Args) -> tuple[syntax.Param, ...]:
-    result = next((a for a in args if _is_field_tuple(a)), None)
-    if result is None:  # pragma: no cover
-        raise AssertionError(f"_find_field_tuple: no field tuple found in {args!r}")
-    return cast(tuple[syntax.Param, ...], result)
+    """Return the declaration's field tuple; a body-less declaration has none."""
+    return next((cast(tuple[syntax.Param, ...], a) for a in args if _is_field_tuple(a)), ())
 
 
 def _check_function_param_annotations(entries: tuple[syntax.Param, ...]) -> None:

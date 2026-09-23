@@ -193,13 +193,14 @@ attr_keyed_arg: attr_key EQ arg_expr
 // Type declarations
 // ---------------------------------------------------------------------------
 
-// record_def: indented block of field definitions, parenthesized field list, or inline field list.
+// record_def: indented block of field definitions, parenthesized field list,
+// inline field list, or no body at all (no fields). An `=` always needs a body.
 // The custom lexer emits _INDENT directly after the name (no _NEWLINE before _INDENT).
 record_def: attributes? _record_def_tail
 
 // The shared tail keeps `attributes?` at exactly one position per declaration:
 // an attribute precedes the `builtin` modifier, never the bare keyword after it.
-_record_def_tail: "record" decl_head type_params? EQ? record_body
+_record_def_tail: "record" decl_head type_params? (EQ? record_body)?
 
 record_body: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT -> record_indent_body
            | LPAR field_list? RPAR                                     -> record_paren_body
@@ -244,11 +245,11 @@ field_inline: attributes? VAR? field_name COLON type_expr
 // exception_def: record-like throwable nominal with an optional base exception.
 exception_def: attributes? _exception_def_tail
 
-_exception_def_tail: "exception" decl_head exception_base? exception_body
+_exception_def_tail: "exception" decl_head exception_base? exception_body?
 
 exception_base: "extends" name
 
-// exception_body mirrors record_body.
+// exception_body mirrors record_body, including the body-less form.
 exception_body: _INDENT field_def (_NEWLINE field_def)* _NEWLINE? _DEDENT -> exception_indent_body
               | LPAR field_list? RPAR                                     -> exception_paren_body
               | field_list                                                -> exception_inline_body

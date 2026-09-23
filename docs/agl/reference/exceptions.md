@@ -32,7 +32,16 @@ exception DeployError extends Exception
 
 An exception extends exactly one base exception type; omitting `extends` means
 `extends Exception`. Constructor fields include the inherited fields first,
-followed by fields declared on the subtype.
+followed by fields declared on the subtype. An exception that declares no fields
+of its own omits the body:
+
+```agl
+exception DeployError extends Exception
+  service: text
+
+exception RollbackError extends DeployError
+```
+
 `trace-id` is not reserved: a user-declared exception may use it as one of its
 own fields. Exception fields do not accept `var` and cannot be reassigned.
 `builtin exception` is the standard-library form for host-recognized exception

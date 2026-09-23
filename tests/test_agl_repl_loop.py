@@ -251,14 +251,35 @@ class TestIsIncomplete:
 
     @pytest.mark.parametrize(
         "source",
-        ["record R", "enum E", "case x of", "try", "do agent", "if x == 1 =>", "1 +"],
+        [
+            "record R",
+            "record R[T]",
+            "exception E extends B",
+            '@doc("d")\nbuiltin record R',
+            "scope S\n  let x = 1\nend S\n\nrecord R",
+            "enum E",
+            "case x of",
+            "try",
+            "do agent",
+            "if x == 1 =>",
+            "1 +",
+        ],
     )
     def test_incomplete_sources(self, source: str) -> None:
         assert is_incomplete(source) is True
 
     @pytest.mark.parametrize(
         "source",
-        ["1 + 2", "let x = 1", "let = 5", "x == y", "record R\n  x: int"],
+        [
+            "1 + 2",
+            "let x = 1",
+            "let = 5",
+            "x == y",
+            "record R\n  x: int",
+            "record R()",
+            "record R\nlet x = 1",
+            "scope S\n  record R\nend S",
+        ],
     )
     def test_complete_sources(self, source: str) -> None:
         assert is_incomplete(source) is False

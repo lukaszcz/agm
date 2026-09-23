@@ -248,13 +248,30 @@ class TestMultiline:
             assert echoed in output
 
     def test_incomplete_header_keeps_prompting(self) -> None:
-        # ``record R`` alone is incomplete, so the first Enter opens a
+        # ``enum E`` alone is incomplete, so the first Enter opens a
         # continuation rather than submitting.  A blank line then force-submits
         # the still-incomplete buffer, which surfaces a parse error (no
         # declaration is promoted).
-        output = drive("record R\r\r\x04")
+        output = drive("enum E\r\r\x04")
         assert "declared" not in output
         assert ": error:" in output.lower()
+
+    @pytest.mark.parametrize(
+        ("header", "probe"),
+        [
+            ("record R", "R == R()"),
+            ("exception R extends Exception", 'R(message = "m") is R'),
+        ],
+    )
+    def test_bare_declaration_header_submits_fieldless_on_blank_line(
+        self, header: str, probe: str
+    ) -> None:
+        # A bare header may still take an indented field block, so Enter keeps
+        # it open; a blank line submits it as a fieldless declaration.
+        output = drive(header + "\r\r" + probe + "\r\x04")
+        assert "R declared" in output
+        assert "true" in output
+        assert ": error:" not in output.lower()
 
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_triple_quoted_string_continues_through_blank_lines(self, quote: str) -> None:

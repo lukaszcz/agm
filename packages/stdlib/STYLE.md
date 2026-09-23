@@ -65,6 +65,13 @@ bind an argument.
     body: json
   ```
 
+- Omit the parentheses when a record or exception has no (new) fields:
+
+  ```agl
+  record Token
+  exception AuthError extends ApiError
+  ```
+
 ## Companion Python
 
 Python companions follow Python naming and formatting conventions, not the AgL style from this file.

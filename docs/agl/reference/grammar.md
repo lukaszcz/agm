@@ -243,7 +243,7 @@ attribute raises: [Attributes](attributes.md).
 ```ebnf
 decl_head        ::= [scope_path "::"] name
 record_def       ::= attributes? builtin_modifier? "record" decl_head type_params?
-                    "="? record_body
+                    ("="? record_body)?
 record_body      ::= NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
                    | "(" field_list? ")"
                    | field_list
@@ -262,7 +262,7 @@ field_list       ::= field_inline ("," field_inline)* ","?
 field_inline     ::= attributes? "var"? field_name ":" type_expr
 
 exception_def    ::= attributes? builtin_modifier? "exception" decl_head
-                    exception_base? exception_body
+                    exception_base? exception_body?
 exception_base   ::= "extends" name
 exception_body   ::= NEWLINE INDENT field_def (NEWLINE field_def)* NEWLINE? DEDENT
                    | "(" field_list? ")"
@@ -276,6 +276,9 @@ type_param       ::= name | "_"
 program_func_def ::= attributes? "program" NEWLINE? "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
 
 ```
+
+A `record` or `exception` declaration without a body declares no fields of its
+own, exactly like an empty `()` field list; `=` always requires a body.
 
 A zone attribute in front of a field puts that field in the zone it names; one
 in front of the declaration zones every field that carries none of its own. In

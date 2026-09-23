@@ -1,0 +1,57 @@
+# A record or exception declared without a body has no fields of its own and
+# behaves exactly like the empty parenthesized form: fieldless constructor
+# references, construction, equality, patterns, catching, and base fields.
+record Token
+record Paren()
+record Phantom[T]
+@doc("A bare attributed record.")
+record Marked
+record Box(value: int)
+
+exception ApiError
+  code: int
+exception AuthError extends ApiError
+exception Oops
+exception ParenOops()
+
+scope Api
+  record Handle
+  exception Denied extends ApiError
+end Api
+
+def classify(value: Token) -> text =
+  case value of
+    | Token => "token"
+
+def fail(mode: text) -> unit =
+  if
+    | mode == "auth" => raise AuthError(message = "denied", code = 401)
+    | mode == "oops" => raise Oops(message = "oops")
+    | mode == "scoped" => raise Api::Denied(message = "scoped", code = 403)
+    | else => raise ParenOops(message = "paren")
+
+program def main(mode: text) -> unit =
+  if
+    | mode == "records" =>
+        let token = Token
+        print(token == Token())
+        print(token)
+        print(Paren == Paren())
+        print(Phantom::[int])
+        print(Marked)
+        print(Api::Handle)
+        print(classify(token))
+        let make: () -> Token = fn() => Token
+        print(make())
+        print(Box(value = 1))
+    | else =>
+        try
+          fail(mode)
+        catch AuthError as e =>
+          print "auth %{e.code}: %{e.message}, api: %{e is ApiError}"
+        catch Oops as e =>
+          print "oops: %{e.message}"
+        catch ApiError as e =>
+          print "api %{e.code}: %{e.message}"
+        catch ParenOops as e =>
+          print "paren: %{e.message}"

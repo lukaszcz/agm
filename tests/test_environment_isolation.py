@@ -46,6 +46,10 @@ def test_project_and_shell_variables_are_not_inherited() -> None:
     assert not any(name.startswith("TYPESAFE_") for name in os.environ)
 
 
+def test_proxy_variables_are_not_inherited() -> None:
+    assert not any(name.lower().endswith("_proxy") for name in os.environ)
+
+
 def test_a_real_httpx2_send_fails_the_test_without_dialing_out() -> None:
     with httpx2.Client() as client, pytest.raises(pytest.fail.Exception):
         client.get("https://typesafe.invalid/v1/models")

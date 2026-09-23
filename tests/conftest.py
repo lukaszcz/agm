@@ -253,7 +253,8 @@ def isolate_host_environment(
     or fail depending on the machine.  Point ``HOME`` (and the XDG roots git
     consults) at a per-test directory, supply git identity explicitly so an
     empty home can still commit, and drop the project/terminal variables an agm
-    workspace shell exports.
+    workspace shell exports, and drop inherited proxy settings so HTTP clients
+    can initialize before their fake transport takes over.
 
     Tests that need a populated home build one and pass it explicitly, as
     ``home=`` or in an ``env`` mapping.  The home lives outside the test's own
@@ -268,6 +269,9 @@ def isolate_host_environment(
         monkeypatch.setenv(name, value)
     for name in _HOST_CONTEXT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
+    for name in tuple(os.environ):
+        if name.lower().endswith("_proxy"):
+            monkeypatch.delenv(name)
 
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parent.parent / "packages" / "stdlib"

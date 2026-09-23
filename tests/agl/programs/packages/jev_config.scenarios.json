@@ -1,0 +1,71 @@
+{
+  "scenarios": [
+    {
+      "name": "config_selects_the_model_and_a_threshold_the_answer_misses",
+      "params": {"question": "Is it urgent?"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "Refund me now.",
+              "model": "jev-configured",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 8, "output_tokens": 1}
+          }
+        }
+      ],
+      "expect": {"stdout": "false\n"}
+    },
+    {
+      "name": "config_selects_the_model_and_a_threshold_the_answer_reaches",
+      "params": {"question": "Is it a refund?"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "Refund me now.",
+              "model": "jev-configured",
+              "questions": {"question": {"type": "noul", "instructions": "Is it a refund?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.95}},
+            "usage": {"input_tokens": 8, "output_tokens": 1}
+          }
+        }
+      ],
+      "expect": {"stdout": "true\n"}
+    },
+    {
+      "name": "seeded_module_parameters_override_the_config",
+      "params": {"question": "Is it urgent?"},
+      "module_params": {
+        "sysone/jev::model": {"$case": "Some", "value": "jev-seeded"},
+        "sysone/jev::noul-threshold": 0.5
+      },
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "Refund me now.",
+              "model": "jev-seeded",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 8, "output_tokens": 1}
+          }
+        }
+      ],
+      "expect": {"stdout": "true\n"}
+    }
+  ]
+}

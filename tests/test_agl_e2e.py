@@ -40,7 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 
@@ -59,7 +59,8 @@ from tests._agl_helpers import (
     program_config_engine_seeds,
     run_inline_command,
 )
-from tests._http_helpers import FakeHttp, fake_session
+from tests._http_helpers import fake_session
+from tests._jev_helpers import install_jev_transport, jev_roots
 from tests._process_helpers import FakeShell
 
 AGL_DIR = Path(__file__).parent / "agl"
@@ -872,10 +873,16 @@ def test_inline_entry_with_its_own_program_def_follows_relaxed_binding_order(
     assert capsys.readouterr().out == "42\n"
 
 
+class _Script(Protocol):
+    def assert_complete(self) -> None: ...
+
+
 def _run_program(
-    source: str, scenario: dict[str, Any], program: Path
-) -> tuple[Any, dict[str, ScriptedAgent], FakeShell, FakeHttp]:
+    source: str, scenario: dict[str, Any], program: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Any, dict[str, ScriptedAgent], list[_Script]]:
+    """Run *program* under *scenario*; the scripts' fakes are returned for completion checks."""
     from agm.agl import PipelineDriver
+    from agm.agl.runtime.externs import ExternRegistry
 
     agents = {
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
@@ -899,10 +906,17 @@ def _run_program(
         runtime_options["agent_dispatcher"] = dispatch_agent
     if agents:
         runtime_options["session_host"] = _ScenarioSessionHost(agents)
-    runtime = PipelineDriver(**runtime_options)
+    registry = ExternRegistry()
+    runtime = PipelineDriver(extern_registry=registry, **runtime_options)
+    scripts: list[_Script] = [shell, http_adapter]
     default_stdlib = not scenario.get("no_stdlib", False)
     entry_path: Path | None = None
     roots = _fixture_roots(scenario)
+    if "jev" in scenario:
+        if "module_roots" in scenario:
+            pytest.fail("a scenario sets both `jev` and `module_roots`")
+        scripts.append(install_jev_transport(monkeypatch, runtime, registry, scenario["jev"]))
+        roots = jev_roots()
     if roots is None and (
         program.is_relative_to(EXTERNS_PROGRAMS_DIR)
         or program.is_relative_to(RESOURCE_PROGRAMS_DIR)
@@ -933,7 +947,7 @@ def _run_program(
             )
         except SystemExit as exc:
             result = exc
-    return result, agents, shell, http_adapter
+    return result, agents, scripts
 
 
 def _assert_host_error(result: Any, agents: dict[str, ScriptedAgent], spec: dict[str, Any]) -> None:
@@ -1603,32 +1617,28 @@ def test_program_scenario(
     scenario: dict[str, Any],
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scenario = _prepare_temp_filesystem(scenario, tmp_path)
-    result, agents, shell, http_adapter = _run_program(
-        program.read_text(encoding="utf-8"), scenario, program
+    result, agents, scripts = _run_program(
+        program.read_text(encoding="utf-8"), scenario, program, monkeypatch
     )
     out = capsys.readouterr().out
     expect = scenario["expect"]
     if "host_error" in expect:
         _assert_host_error(result, agents, expect["host_error"])
-        shell.assert_complete()
-        http_adapter.assert_complete()
-        return
-    if "exit_code" in expect:
+    elif "exit_code" in expect:
         assert isinstance(result, SystemExit)
         assert result.code == expect["exit_code"]
         _assert_output(out, expect)
         _assert_calls(agents, expect)
-        shell.assert_complete()
-        http_adapter.assert_complete()
-        return
-    _assert_outcome(result, expect)
-    _assert_output(out, expect)
-    _assert_calls(agents, expect)
-    _assert_sessions(agents, expect)
-    shell.assert_complete()
-    http_adapter.assert_complete()
+    else:
+        _assert_outcome(result, expect)
+        _assert_output(out, expect)
+        _assert_calls(agents, expect)
+        _assert_sessions(agents, expect)
+    for script in scripts:
+        script.assert_complete()
 
 
 @pytest.mark.parametrize("program", _rejection_params())

@@ -143,7 +143,13 @@ satisfiability without writing. `pkg create`
 checks that its distribution dependencies are portable, then writes a deterministic archive; it removes
 local dependency paths from the archived manifest without changing the source manifest. Archive installs
 verify the archive contents before atomically activating them. `--dry-run` reports package archive creation
-or installation without writing an archive, store tree, or activation index.
+or installation without writing an archive, store tree, or activation index. Installation also
+installs the third-party Python requirements a manifest declares under `[python]` into AGM's
+environment; `pkg sync` restores them for every active package.
+
+The repository's `packages/sysone` package (not shipped with AGM) asks TypeSafe's System One
+model typed questions from AgL through its `sysone/jev` module. Install it from a checkout with
+`agm pkg install packages/sysone`.
 
 ### `agm open`
 

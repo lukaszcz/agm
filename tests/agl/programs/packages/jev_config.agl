@@ -1,0 +1,8 @@
+# `sysone/jev` settings selected by the program's `@config`, which seeded
+# module parameters override.
+import sysone/jev
+
+@config(jev::model = Some("jev-configured"), jev::noul-threshold = 0.9)
+program def main(question: text) -> unit =
+  let urgent: bool = jev::ask(question, "Refund me now." as json)
+  print(urgent)

@@ -34,6 +34,7 @@ Layout:
 | `inline/` | Single-expression programs and host-wrapped `inline_entry` sources |
 | `methods/` | Record and enum methods: direct and bound calls, generic receivers, partial application, and scope use |
 | `modules/` | Multi-file module programs (via `module_roots`): imports combined with generics, casts, records/enums, pattern matching, and cross-module mutual recursion |
+| `packages/` | Repository packages mounted as installed, such as `sysone/jev` over a scripted TypeSafe transport |
 | `partial/` | Partial application placeholders for calls, constructors, generics, eager capture, and higher-order use |
 | `rendering/` | Console/value rendering: nesting, escaping, exception rendering |
 | `templates/` | Template interpolation |
@@ -68,6 +69,11 @@ Layout:
       "shell": [{"command": "printf done", "stdout": "done"}],
       "http": [{"expect": {"method": "GET", "url": "https://x/y"},
                 "status": 200, "body": "ok"}],
+      "jev": [{"expect": {"body": {"state": "text", "model": "jev-latest",
+                                   "questions": {"question": {"type": "noul",
+                                                              "instructions": "Urgent?"}}}},
+               "json": {"model": "jev-1", "answers": {"question": {"type": "noul", "noul": 0.9}},
+                        "usage": {"input_tokens": 12}}}],
       "runtime": {"default_call_depth_limit": 20, "default_strict_json": true},
       "filesystem": {"directories": ["work"]},
       "expect": {
@@ -156,6 +162,14 @@ Field notes:
   installs `FakeHttp` in place of `agm.core.http.open_session` and verifies the full script
   was used, so acceptance tests never touch the network; an absent key means no HTTP call
   is allowed.
+- `jev` — ordered scripted TypeSafe requests, in `tests/_jev_helpers.py`'s `JevTransport`
+  outcome shape: an optional `expect` (exact decoded `body`, exact `url`, a header subset,
+  `timeout` seconds) and a `status`, `json` or raw `content` body, and `headers` (such as
+  `x-typesafe-request-id` or `retry-after-ms`), or `fail: "connection" | "timeout"`. The key
+  mounts `packages/sysone` over the repository stdlib (it excludes `module_roots`), sets a
+  test API key, and swaps the companion's client seam for the scripted transport, verifying
+  the full script was used. Seed `"sysone/jev::max-retries": 0` through `module_params` when
+  a retryable failure is scripted, so the SDK never backs off.
 - `runtime` — optional `PipelineDriver` constructor overrides
   (`default_call_depth_limit`, `default_strict_json`).
 - `filesystem` — optional fixture in a test-created temporary root. It may declare

@@ -17,7 +17,8 @@ case-insensitive subset (a ``None`` value asserts absence); ``timeout`` the
 seconds every phase of the request's timeout carries (``None`` for none).
 A response carries ``status`` (default 200), ``json`` (the body; omitted for
 an empty one) or ``content`` (raw JSON body text), and ``headers``, such as a
-request id or ``retry-after``.
+request id or ``retry-after``. Decimal numbers are normalized to floats, as on
+the wire.
 ``fail: "connection" | "timeout"`` instead raises ``httpx2.ConnectError`` or
 ``httpx2.ReadTimeout``. An unexpected or mismatched request fails the test
 immediately through ``pytest.fail``, whose ``BaseException`` escapes the SDK's
@@ -61,7 +62,10 @@ class JevTransport(httpx2.MockTransport):
 
     def __init__(self, outcomes: Sequence[Mapping[str, Any]]) -> None:
         super().__init__(self._answer)
-        self._outcomes = list(outcomes)
+        # Decimals (such as from a `parse_float=Decimal` scenario load) become wire floats.
+        self._outcomes: list[Mapping[str, Any]] = json.loads(
+            json.dumps(list(outcomes), default=float)
+        )
         self.requests: list[httpx2.Request] = []
 
     def _answer(self, request: httpx2.Request) -> httpx2.Response:

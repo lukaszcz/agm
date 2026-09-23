@@ -18,9 +18,9 @@
 # levels) raises `JevResponseError`.
 #
 # Every request function takes the settings it uses as trailing parameters
-# defaulting to the module settings below. Requests go through the official `typesafe-sdk`,
-# which owns retries, backoff, `Retry-After`, request ids, and response
-# validation. One client is pooled per interpreter for each distinct
+# defaulting to the module settings below. Requests go through the official
+# `typesafe-sdk`, which owns retries, backoff, `Retry-After`, request ids, and
+# response validation. One client is pooled per interpreter for each distinct
 # combination of `api-key`, `base-url`, and `max-retries`, so a call's values
 # of these select or create a pooled client; its `model` and `timeout` apply
 # to that request only. A `None` setting is not passed to the SDK, so its own
@@ -105,10 +105,14 @@ exception JevConnectionError extends JevError(cause: text)
 # `timeout` is the timeout the SDK reported for the request, as duration
 # text in the `timeout` form above (such as `"10.0s"`).
 exception JevTimeoutError extends JevError(timeout: text)
-# A success response whose body is structurally invalid at `field-path`.
+# A success response whose body is structurally invalid at `field-path`, or
+# whose answer the target cannot hold: `answers.<question>.choice` for a label
+# outside it, `answers.<question>.probabilities` for keys other than exactly
+# its labels or level indices.
 exception JevResponseError extends JevError(field-path: text)
-# A target type no question kind maps; `target` is its printed name, or
-# `<record>.<field>` for an `ask-many` field.
+# A target type no question kind maps; `target` is its type label (such as
+# `Team` or `std/option::Option[Team]`), or `<record>.<field>` for an
+# `ask-many` field.
 exception JevTargetError extends JevError(target: text)
 
 # Asks `questions`, keyed by name, about `state` in one request.

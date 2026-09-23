@@ -1,0 +1,25 @@
+# Ticket triage through `sysone/jev`: a contextual `bool` target, an explicit
+# enum target, a score target, and an `ask-many` record target in one request.
+import sysone/jev
+
+enum Team = Billing | Technical | Sales
+enum Frustration = Calm | Frustrated | Furious
+
+record Triage
+  @doc("Does the message express urgency?")
+  urgent: bool
+  @doc("Which team should handle this?")
+  team: Team
+  frustration: jev::Score[Frustration]
+
+program def main(message: text) -> unit =
+  let state = message as json
+  let urgent: bool = jev::ask("Does this message express urgency?", state)
+  let team = jev::ask::[Team]("Which team should handle this?", state)
+  let mood = jev::ask-score::[Frustration]("How frustrated is the customer?", state)
+  print(urgent)
+  print(team)
+  print(mood.score)
+  print(mood.level)
+  let triage: Triage = jev::ask-many(state)
+  if triage.urgent and triage.team is Billing => print("escalate")

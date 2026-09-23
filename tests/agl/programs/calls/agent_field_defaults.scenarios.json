@@ -1,0 +1,51 @@
+{
+  "scenarios": [
+    {
+      "name": "role_omitted_defaults",
+      "agents": {
+        "profile_source": [
+          "{\"name\": \"Ada\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Ada\nmember\n",
+        "calls": {
+          "profile_source": 1
+        }
+      }
+    },
+    {
+      "name": "role_supplied_overrides_default",
+      "agents": {
+        "profile_source": [
+          "{\"name\": \"Grace\", \"role\": \"admin\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "Grace\nadmin\n",
+        "calls": {
+          "profile_source": 1
+        }
+      }
+    },
+    {
+      "name": "missing_required_name_still_fails",
+      "agents": {
+        "profile_source": [
+          "{\"role\": \"admin\"}"
+        ]
+      },
+      "expect": {
+        "calls": {
+          "profile_source": 1
+        },
+        "raises": {
+          "type": "AgentParseError",
+          "fields": {
+            "target-type": "Profile"
+          }
+        }
+      }
+    }
+  ]
+}

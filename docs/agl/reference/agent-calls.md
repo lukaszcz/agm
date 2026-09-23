@@ -435,21 +435,24 @@ rules:
    violations, strict parsing does not).
 3. Records are JSON objects with exactly the fields, each keyed by its
    effective JSON name (declared name unless overridden by
-   [`@name`/`@json-name`](attributes.md#name-and-json-name)).
+   [`@name`/`@json-name`](attributes.md#name-and-json-name)). A field with a
+   declared [default](types.md#record-types) may be omitted; it then fills
+   from that default.
 4. Enums are JSON objects with a reserved **`"$case"`** tag naming the
    member's effective JSON tag, plus that member record's fields, each keyed
-   by its effective JSON name. `"$case"` is reserved; `@json-name` rejects
-   `"$case"` as a field's JSON name, so a user field can never collide with
-   it. A record-typed slot for the same value is a plain object with no
-   `"$case"` tag.
+   by its effective JSON name, with the same default-omission rule as a
+   record field. `"$case"` is reserved; `@json-name` rejects `"$case"` as a
+   field's JSON name, so a user field can never collide with it. A
+   record-typed slot for the same value is a plain object with no `"$case"`
+   tag.
 5. Unknown fields are rejected.
-6. Missing required fields are rejected.
+6. Missing fields without a declared default are rejected.
 
 Example — for
 
 ```agl
 enum Review
-  | Pass
+  | Pass(note: text = "ok")
   | Fail(issues: array[text])
 ```
 
@@ -482,8 +485,8 @@ mechanically from the target type:
 | `json` | `{}` (any JSON value) |
 | `array[T]` | `{"type": "array", "items": <T>}` |
 | `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
-| record | object schema: `additionalProperties: false`, all fields `required`, per-field `properties` keyed by effective JSON name |
-| enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name, and `additionalProperties: false` |
+| record | object schema: `additionalProperties: false`, `required` lists every field without a declared default, per-field `properties` keyed by effective JSON name |
+| enum | `oneOf` of per-member-record schemas, each with the constructor's `@doc` as `description` when present, a `"$case"` `const` holding the member's effective JSON tag, record fields keyed by effective JSON name with the same `required` treatment as a record, and `additionalProperties: false` |
 
 A target type's schema uses standard JSON Schema `$defs`/`$ref` for any
 record/enum it would otherwise repeat. A reachable type gets one entry under a

@@ -8,6 +8,8 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import ArrayDecode, DecodeSchema, DictDecode, ScalarDecode, ScalarKind
+from agm.agl.ir.ids import NominalId
+from agm.agl.runtime.convert import decode_value
 from agm.agl.runtime.value_decode import (
     ValueDecodeError,
     host_text_to_json,
@@ -17,10 +19,11 @@ from agm.agl.runtime.value_decode import (
 )
 from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import BoolType, DecimalType, IntType, JsonType, TextType, Type
-from agm.agl.type_schema import build_param_decoder
+from agm.agl.semantics.values import IntValue, RecordValue
+from agm.agl.type_schema import build_param_decoder, derive_schema_and_decode
 from agm.agl.typecheck import CheckedModule
 from agm.agl.value_syntax.reader import read_value
-from tests._agl_helpers import build_decode_schema
+from tests._agl_helpers import build_decode_schema, record_type, type_table_for
 from tests.agl.module_graph import resolve_and_check_repl_entry
 
 # ---------------------------------------------------------------------------
@@ -56,6 +59,18 @@ def _last_expr_plan(source: str) -> tuple[DecodeSchema, dict[str, DecodeSchema]]
 def _scalar_plan(typ: Type) -> tuple[DecodeSchema, dict[str, DecodeSchema]]:
     decoder = build_param_decoder(typ, create_seeded_type_table())
     return decoder.decode, dict(decoder.defs)
+
+
+_RETRY_TYPE, _RETRY_TYPEDEF = record_type("Retry", {"count": IntType()}, field_has_default=(True,))
+_RETRY_NOMINAL = NominalId(_RETRY_TYPEDEF.decl_node_id)
+
+
+def _retry_plan() -> tuple[DecodeSchema, dict[str, DecodeSchema]]:
+    """``record Retry\\n  count: int = 3``'s decode plan: presence only, no folded value
+    (a default's value is resolved only at decode time, see
+    ``runtime.convert.decode_value``'s ``default_resolver``)."""
+    _, plan = derive_schema_and_decode(_RETRY_TYPE, type_table_for(_RETRY_TYPEDEF))
+    return plan.root, dict(plan.defs)
 
 
 _RECORD_SRC = (
@@ -327,6 +342,35 @@ class TestRecordDecode:
         schema, defs = _last_expr_plan(_STANDALONE_RECORD_SRC)
         with pytest.raises(ValueDecodeError):
             value_node_to_json(read_value("Foo::Point(x = 1)"), schema, defs)
+
+
+class TestConstructorFieldDefaults:
+    """An omitted defaulted field's key is simply left out -- the same shape a JSON
+    source that omits the key produces -- so it fills through
+    ``runtime.convert.decode_value``'s own ``default_resolver`` at the value
+    boundary, never a value folded by value-syntax conversion itself. A bare
+    constructor is legal once every field carries a declared default."""
+
+    def test_bare_spelling_produces_no_key_for_the_defaulted_field(self) -> None:
+        schema, defs = _retry_plan()
+        assert value_node_to_json(read_value("Retry"), schema, defs) == {}
+
+    def test_empty_call_produces_no_key_for_the_defaulted_field(self) -> None:
+        schema, defs = _retry_plan()
+        assert value_node_to_json(read_value("Retry()"), schema, defs) == {}
+
+    def test_explicit_argument_overrides_the_default(self) -> None:
+        schema, defs = _retry_plan()
+        assert value_node_to_json(read_value("Retry(count = 9)"), schema, defs) == {"count": 9}
+
+    def test_omitted_field_fills_via_decode_value_default_resolver(self) -> None:
+        """The omitted key composes with ``decode_value`` exactly like a JSON omission."""
+        schema, defs = _retry_plan()
+        json_native = value_node_to_json(read_value("Retry"), schema, defs)
+        value = decode_value(
+            schema, json_native, defs, default_resolver=lambda nominal, index: IntValue(3)
+        )
+        assert value == RecordValue(_RETRY_NOMINAL, {"count": IntValue(3)})
 
 
 # ---------------------------------------------------------------------------

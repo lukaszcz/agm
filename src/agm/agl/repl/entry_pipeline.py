@@ -646,7 +646,11 @@ class EntryPipeline:
         raw_param_values: Mapping["StaticBindingKey", object],
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
-        from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
+        from agm.agl.eval.ir_interpreter import (
+            HostConfigurationError,
+            IrInterpreter,
+            default_field_resolver,
+        )
         from agm.agl.ir.program import ValueDescriptors
         from agm.agl.lower import lower_repl_program
         from agm.agl.pipeline import _wire_extern_registry, exception_value_to_run_error
@@ -703,7 +707,9 @@ class EntryPipeline:
         }
         pending_raw_param_values.update(raw_param_values)
         decoded_param_seeds, param_diagnostics = bind_param_values(
-            lowered.program, pending_raw_param_values
+            lowered.program,
+            pending_raw_param_values,
+            default_resolver=default_field_resolver(lowered.program),
         )
         if param_diagnostics:
             self._ctx._link_image.restore_state(link_snapshot)

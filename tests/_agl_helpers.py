@@ -529,6 +529,7 @@ def record_type(
     module_id: ModuleId = ENTRY_ID,
     type_params: tuple[str, ...] = (),
     decl_id: int | None = None,
+    field_has_default: tuple[bool, ...] | None = None,
 ) -> tuple[RecordType, TypeDef]:
     """Build an ad-hoc ``RecordType`` handle and its matching ``TypeDef`` together.
 
@@ -540,6 +541,13 @@ def record_type(
     (from :func:`next_decl_id`) for a SELF-referential or mutually-recursive
     ad-hoc type, whose own *fields* must embed a reference carrying this same
     identity before the ``TypeDef``/handle pair exists to read it off of.
+
+    *field_has_default*, one flag per *fields* entry in order, marks which
+    fields declare a constant default (omitted: none do) -- the presence
+    flag a schema/decode-plan derivation reads (``TypeTable.field_has_default``).
+    A default's own VALUE is never carried here; it is resolved only at
+    decode time, against a real ``NominalDescriptor`` (see
+    ``runtime.convert.decode_value``'s ``default_resolver``).
     """
     typedef = TypeDef(
         kind="record",
@@ -549,6 +557,7 @@ def record_type(
         fields=tuple(fields.items()),
         field_kinds=(ParamZone.STANDARD,) * len(fields),
         decl_node_id=next_decl_id() if decl_id is None else decl_id,
+        field_has_default=field_has_default,
     )
     return typedef.handle(type_args), typedef
 

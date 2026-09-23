@@ -33,6 +33,7 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.runtime.convert import (
     _EMPTY_DEFS,
+    DefaultResolver,
     _clean_validation_message,
     agl_validator_class,
     decode_value,
@@ -595,6 +596,7 @@ def _parse_json_core(
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
     *,
     strict: bool,
+    default_resolver: DefaultResolver | None = None,
 ) -> ParseResult:
     """Shared JSON parse core used by ``JsonCodec`` and the IR evaluator.
 
@@ -602,14 +604,17 @@ def _parse_json_core(
     (a typeless ``DecodeSchema``) so the IR evaluator can call it with values
     already embedded in the ``ContractRequest`` without holding checker types.
     *defs* is *decode_schema*'s ``$defs`` table for a recursive target type
-    (empty for a non-recursive one).
+    (empty for a non-recursive one). *default_resolver*, when given, fills an
+    omitted defaulted field (see ``runtime.convert.decode_value``).
     """
     if strict:
         try:
             parsed_obj: object = loads_json(raw, parse_float=Decimal)
         except json.JSONDecodeError as exc:
             return ParseResult.failure(f"Strict JSON parse failed: {exc}")
-        return _validate_and_decode_core(raw.strip(), parsed_obj, schema_dict, decode_schema, defs)
+        return _validate_and_decode_core(
+            raw.strip(), parsed_obj, schema_dict, decode_schema, defs, default_resolver
+        )
 
     json_text = _extract_json_text(raw)
     if json_text is _AMBIGUOUS_MULTI_VALUE:
@@ -625,7 +630,9 @@ def _parse_json_core(
         parsed_obj = loads_json(json_text, parse_float=Decimal)
     except json.JSONDecodeError as exc:
         return ParseResult.failure(f"JSON parse failed after repair attempt: {exc}")
-    return _validate_and_decode_core(json_text, parsed_obj, schema_dict, decode_schema, defs)
+    return _validate_and_decode_core(
+        json_text, parsed_obj, schema_dict, decode_schema, defs, default_resolver
+    )
 
 
 def _validate_and_decode_core(
@@ -634,6 +641,7 @@ def _validate_and_decode_core(
     schema_dict: dict[str, object],
     decode_schema: DecodeSchema,
     defs: Mapping[str, DecodeSchema] = _EMPTY_DEFS,
+    default_resolver: DefaultResolver | None = None,
 ) -> ParseResult:
     """Validate *parsed_obj* against *schema_dict*, then decode to typed ``Value``."""
     validator = agl_validator_class()(schema_dict)
@@ -648,7 +656,7 @@ def _validate_and_decode_core(
             normalized_raw=json_text,
         )
     try:
-        value = decode_value(decode_schema, parsed_obj, defs)
+        value = decode_value(decode_schema, parsed_obj, defs, default_resolver=default_resolver)
     except ValueError as exc:
         return ParseResult.failure(f"Value conversion failed: {exc}", normalized_raw=json_text)
     return ParseResult.success(value, normalized_raw=json_text)
@@ -659,12 +667,14 @@ def _parse_contract_output(
     contract: ContractRequest,
     *,
     effective_strict: bool,
+    default_resolver: DefaultResolver | None = None,
 ) -> ParseResult:
     """Parse a raw agent/exec response per a built-in-codec ``ContractRequest``.
 
     Handles the ``text`` passthrough and the ``json`` parse path, including
     defensive checks for missing ``json_schema`` and ``decode`` fields.
     Called by ``IrInterpreter._parse_host_output`` for built-in codecs.
+    *default_resolver*, when given, fills an omitted defaulted field.
     """
     if contract.codec_name == "text":
         return ParseResult.success(TextValue(raw))
@@ -677,7 +687,12 @@ def _parse_contract_output(
     if contract.decode is None:
         return ParseResult.failure("ContractRequest has no decode schema for json codec")
     return _parse_json_core(
-        raw, schema_raw, contract.decode, dict(contract.defs), strict=effective_strict
+        raw,
+        schema_raw,
+        contract.decode,
+        dict(contract.defs),
+        strict=effective_strict,
+        default_resolver=default_resolver,
     )
 
 
@@ -802,6 +817,11 @@ class JsonCodec:
         routed through Python ``float``.
 
         :raises ValueError: if *schema* or *decode* is ``None``.
+
+        This method takes no ``default_resolver`` (the ``OutputCodec.parse``
+        protocol has none): a defaulted-but-omitted field always reports the
+        ordinary missing-field error here, even though the IR evaluator's own
+        built-in-codec path fills one (see ``_parse_contract_output``).
         """
         if schema is None or decode is None:
             raise ValueError(

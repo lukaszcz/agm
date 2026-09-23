@@ -1,0 +1,26 @@
+# Two independent derivation call sites for the same defaulted type -- a
+# fallible JSON cast target and an `ask` contract -- fill the omitted default
+# identically regardless of which one the lowering pass reaches first:
+# presence is a structural property of the type table, never a snapshot of
+# how much of the program has already been lowered.
+import std/json
+
+record Retry
+  count: int = 3
+
+program def main(mode: text, input: text) -> unit =
+  let worker: Agent = AgentCommand("worker")
+  if
+    | mode == "cast_then_ask" =>
+        let j = json::parse(input)
+        let cast_result: Retry = j as Retry
+        print cast_result.count
+        let asked: Retry = worker.ask("Report retry settings.")
+        print asked.count
+    | mode == "ask_then_cast" =>
+        let asked: Retry = worker.ask("Report retry settings.")
+        print asked.count
+        let j = json::parse(input)
+        let cast_result: Retry = j as Retry
+        print cast_result.count
+    | else => print "unknown mode"

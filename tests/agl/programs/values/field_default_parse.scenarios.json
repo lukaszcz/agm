@@ -1,0 +1,59 @@
+{
+  "scenarios": [
+    {
+      "name": "value_syntax_omit",
+      "params": {
+        "mode": "value_syntax_omit",
+        "input": "Config(verbose = true)"
+      },
+      "expect": {
+        "stdout": "3\ntrue\n"
+      }
+    },
+    {
+      "name": "value_syntax_bare_all_defaulted",
+      "params": {
+        "mode": "value_syntax_bare",
+        "input": "Retry"
+      },
+      "expect": {
+        "stdout": "3\n"
+      }
+    },
+    {
+      "name": "json_omit",
+      "params": {
+        "mode": "json_omit",
+        "input": "{\"verbose\": true}"
+      },
+      "expect": {
+        "stdout": "3\ntrue\n"
+      }
+    },
+    {
+      "name": "missing_required_field_still_errors",
+      "params": {
+        "mode": "missing_required",
+        "input": "Pair()"
+      },
+      "expect": {
+        "raises": {
+          "type": "ValueParseError",
+          "fields": {
+            "target-type": "Pair"
+          }
+        }
+      }
+    },
+    {
+      "name": "json_round_trip_always_carries_every_field",
+      "params": {
+        "mode": "json_round_trip",
+        "input": "{\"verbose\": true}"
+      },
+      "expect": {
+        "stdout": "true\n{\"retry\": {\"count\": 3}, \"verbose\": true}\n"
+      }
+    }
+  ]
+}

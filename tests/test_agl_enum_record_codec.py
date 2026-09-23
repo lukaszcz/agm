@@ -6,7 +6,9 @@ import json
 
 import pytest
 
+from agm.agl.ir.contracts import DecodeSchema
 from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.arguments import decode_param_value
 from agm.agl.runtime.convert import decode_value
 from agm.agl.runtime.serialize import dumps_exact, encode_value
@@ -28,7 +30,7 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
-from agm.agl.type_schema import build_encode_plan, build_param_decoder
+from agm.agl.type_schema import build_encode_plan, build_param_decoder, derive_schema_and_decode
 from agm.agl.zones import ParamZone
 from tests._agl_helpers import (
     build_decode_schema,
@@ -378,3 +380,121 @@ def test_mocked_agent_rejects_an_unknown_member_case() -> None:
 
     error = evaluate_ir_raises_with_agents(_AGENT_SOURCE, {"worker": [response]})
     assert error.type_name == "AgentParseError"
+
+
+# ---------------------------------------------------------------------------
+# Constructor field defaults at the JSON decode boundary (decode_value)
+# ---------------------------------------------------------------------------
+#
+# The decode plan never carries a default's VALUE (see type_schema.py); an
+# omitted defaulted field is filled by calling the caller-supplied
+# ``default_resolver(nominal, field_index)`` -- here a plain stub standing in
+# for ``IrInterpreter.default_for_field`` (exercised end-to-end, against a
+# real interpreter, by the e2e programs under tests/agl/programs/).
+
+
+def test_record_omitted_defaulted_field_fills_via_the_default_resolver() -> None:
+    typ, typedef = record_type(
+        "Pair", {"x": IntType(), "y": IntType()}, field_has_default=(False, True)
+    )
+    nominal = NominalId(typedef.decl_node_id)
+    table = type_table_for(typedef)
+    _, plan = derive_schema_and_decode(typ, table)
+
+    calls: list[tuple[NominalId, int]] = []
+
+    def resolver(field_nominal: NominalId, field_index: int) -> Value:
+        calls.append((field_nominal, field_index))
+        return IntValue(9)
+
+    value = decode_value(plan.root, {"x": 1}, dict(plan.defs), default_resolver=resolver)
+    assert value == RecordValue(nominal, {"x": IntValue(1), "y": IntValue(9)})
+    assert calls == [(nominal, 1)]
+
+
+def test_record_omitted_defaulted_field_without_a_resolver_still_raises() -> None:
+    """No ``default_resolver`` reachable (engine-config decode, schema preview): an omitted
+    defaulted field reports the ordinary missing-field error rather than silently degrading."""
+    typ, typedef = record_type(
+        "Pair", {"x": IntType(), "y": IntType()}, field_has_default=(False, True)
+    )
+    table = type_table_for(typedef)
+    _, plan = derive_schema_and_decode(typ, table)
+
+    with pytest.raises(ValueError, match="Missing field"):
+        decode_value(plan.root, {"x": 1}, dict(plan.defs))
+
+
+def test_record_missing_required_field_still_raises() -> None:
+    typ, typedef = record_type(
+        "Pair", {"x": IntType(), "y": IntType()}, field_has_default=(False, True)
+    )
+    table = type_table_for(typedef)
+    _, plan = derive_schema_and_decode(typ, table)
+
+    with pytest.raises(ValueError, match="Missing field"):
+        decode_value(
+            plan.root, {}, dict(plan.defs), default_resolver=lambda nominal, index: IntValue(9)
+        )
+
+
+def _outcome_plan_with_defaulted_member() -> tuple[
+    DecodeSchema, dict[str, DecodeSchema], NominalId
+]:
+    """``enum Outcome | Ok(tag: text = "ok")``, its member field's default left unresolved."""
+    enum_id = next_decl_id()
+    member_id = next_decl_id()
+    member = RecordType(name="Ok", module_id=ENTRY_ID, scope_path=("Outcome",), decl_id=member_id)
+    member_def = TypeDef(
+        kind="record",
+        name="Ok",
+        module_id=ENTRY_ID,
+        scope_path=("Outcome",),
+        fields=(("tag", TextType()),),
+        field_kinds=(ParamZone.STANDARD,),
+        field_has_default=(True,),
+        decl_node_id=member_id,
+    )
+    outcome_def = TypeDef(
+        kind="enum", name="Outcome", module_id=ENTRY_ID, members=(member,), decl_node_id=enum_id
+    )
+    typ = EnumType(name="Outcome", decl_id=enum_id)
+    table = type_table_for(member_def, outcome_def)
+    _, plan = derive_schema_and_decode(typ, table)
+    return plan.root, dict(plan.defs), NominalId(member_id)
+
+
+def test_enum_variant_omitted_defaulted_field_fills_via_the_default_resolver() -> None:
+    schema, defs, member_nominal = _outcome_plan_with_defaulted_member()
+
+    def resolver(field_nominal: NominalId, field_index: int) -> Value:
+        assert (field_nominal, field_index) == (member_nominal, 0)
+        return TextValue("ok")
+
+    value = decode_value(schema, {"$case": "Ok"}, defs, default_resolver=resolver)
+    assert isinstance(value, RecordValue)
+    assert value.fields == {"tag": TextValue("ok")}
+
+
+def test_enum_variant_missing_required_field_still_raises() -> None:
+    enum_id = next_decl_id()
+    member_id = next_decl_id()
+    member = RecordType(name="Item", module_id=ENTRY_ID, scope_path=("Outcome",), decl_id=member_id)
+    member_def = TypeDef(
+        kind="record",
+        name="Item",
+        module_id=ENTRY_ID,
+        scope_path=("Outcome",),
+        fields=(("value", IntType()),),
+        field_kinds=(ParamZone.STANDARD,),
+        decl_node_id=member_id,
+    )
+    outcome_def = TypeDef(
+        kind="enum", name="Outcome", module_id=ENTRY_ID, members=(member,), decl_node_id=enum_id
+    )
+    typ = EnumType(name="Outcome", decl_id=enum_id)
+    table = type_table_for(member_def, outcome_def)
+    _, plan = derive_schema_and_decode(typ, table)
+
+    with pytest.raises(ValueError, match="missing field"):
+        decode_value(plan.root, {"$case": "Item"}, dict(plan.defs))

@@ -143,6 +143,7 @@ from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
+from agm.agl.runtime.convert import DefaultResolver
 from agm.agl.runtime.engine_config import engine_default_settings, restamp_engine_setting
 from agm.agl.runtime.externs import (
     AglCallableProxy,
@@ -198,6 +199,9 @@ __all__ = [
     "HostConfigurationError",
     "MissingBuiltinVarSeedError",
     "IrInterpreter",
+    "default_field_resolver",
+    "lazy_interpreter",
+    "resolver_over_interpreter",
     "_apply_coercion",
     "_make_exc_value",
 ]
@@ -242,7 +246,13 @@ def _call_custom_codec_parse(
     effective_strict: bool,
     schema: dict[str, object] | None,
 ) -> ParseResult:
-    """Call a custom codec parse hook, accepting legacy signatures."""
+    """Call a custom codec parse hook, accepting legacy signatures.
+
+    Never passes a ``default_resolver``: the ``OutputCodec.parse`` protocol
+    has no such parameter, so a third-party codec registered under a
+    non-builtin name cannot fill a defaulted-but-omitted field. Nothing
+    shipped registers one.
+    """
     kwargs: dict[str, object] = {
         "strict_json": effective_strict,
         "schema": schema,
@@ -631,7 +641,12 @@ class IrInterpreter:
         contract = self._program.contracts[contract_id]
         host_contract = self._host_contracts.get(contract_id)
         if host_contract is None or contract.codec_name in {"text", "json"}:
-            return _parse_contract_output(raw, contract, effective_strict=effective_strict)
+            return _parse_contract_output(
+                raw,
+                contract,
+                effective_strict=effective_strict,
+                default_resolver=self.default_for_field,
+            )
         schema = host_contract.json_schema if isinstance(host_contract.json_schema, dict) else None
         return _call_custom_codec_parse(
             host_contract,
@@ -991,6 +1006,18 @@ class IrInterpreter:
             return self._eval_expr_in_frame(default, {})
         finally:
             self._exit_call(previous_module)
+
+    def default_for_field(self, nominal: NominalId, field_index: int) -> Value:
+        """Evaluate one constructor field's default via its declaring nominal's own descriptor.
+
+        The decode-time default-fill seam: ``runtime.convert.decode_value``'s
+        ``default_resolver`` calls this to fill a record/enum-variant field a
+        JSON or value-syntax decode source omitted, through the same per-field
+        default evaluation an omitted constructor slot uses
+        (:meth:`_eval_constructor_default`) against this program's real,
+        fully-linked ``NominalDescriptor`` table.
+        """
+        return self._eval_constructor_default(self._program.nominals[nominal], field_index, None)
 
     def _eval_constructor_fields(
         self,
@@ -1792,7 +1819,12 @@ class IrInterpreter:
             case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
                 source_value = self._eval(val_expr)
                 try:
-                    converted = run_recipe(recipe, source_value, self._descriptors)
+                    converted = run_recipe(
+                        recipe,
+                        source_value,
+                        self._descriptors,
+                        default_resolver=self.default_for_field,
+                    )
                 except AglCastConversion as exc:
                     return self._on_cast_failure(failure_mode, exc)
                 except AglCyclicValue:
@@ -2281,3 +2313,58 @@ class IrInterpreter:
         if self._synthetic_main_frame is not None:
             collect(self._synthetic_main_frame, module_only=False)
         return results
+
+
+def lazy_interpreter(executable: ExecutableProgram) -> Callable[[], "IrInterpreter"]:
+    """Return a callable that lazily builds, once, an ``IrInterpreter`` over *executable*.
+
+    Shared by every pre-execution throwaway-interpreter site: two callers
+    holding the SAME returned callable build at most one interpreter between
+    them (see :func:`resolver_over_interpreter` and
+    ``PipelineDriver._evaluate_program_config``, which share one over one
+    preflight).
+    """
+    interp: IrInterpreter | None = None
+
+    def get() -> IrInterpreter:
+        nonlocal interp
+        if interp is None:
+            interp = IrInterpreter(executable)
+        return interp
+
+    return get
+
+
+def resolver_over_interpreter(get_interp: Callable[[], "IrInterpreter"]) -> DefaultResolver:
+    """Build a field-default resolver that calls *get_interp* only on first actual use.
+
+    The throwaway ``IrInterpreter`` *get_interp* builds carries no
+    engine-setting seeds, no ``@param`` seeds, no process environment, the
+    default call depth, and a no-op trace — safe only because a field
+    default is a constant expression that cannot observe any of those.
+    Widening what a field default may contain must revisit this resolver,
+    since it would silently diverge from a real run's interpreter otherwise.
+    """
+
+    def resolve(nominal: NominalId, field_index: int) -> Value:
+        return get_interp().default_for_field(nominal, field_index)
+
+    return resolve
+
+
+def default_field_resolver(executable: ExecutableProgram) -> DefaultResolver:
+    """Build a field-default resolver over *executable*'s real, fully-linked nominal table.
+
+    Shared by every pre-execution binding site (program arguments, module
+    parameters) that must fill an omitted defaulted field before this run's
+    own ``IrInterpreter`` exists. A throwaway interpreter is constructed only
+    on first actual use (most binds touch no defaulted field at all) — the
+    same throwaway-interpreter-over-a-real-program pattern
+    ``PipelineDriver._evaluate_program_config`` uses for ``@config`` constant
+    expressions, applied here to per-field constructor defaults instead. A
+    caller that also needs that same throwaway interpreter for another
+    purpose within the same preflight should build its own
+    :func:`lazy_interpreter` and pass it to :func:`resolver_over_interpreter`
+    instead, so only one interpreter is ever built between them.
+    """
+    return resolver_over_interpreter(lazy_interpreter(executable))

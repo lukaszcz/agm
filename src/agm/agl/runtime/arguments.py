@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
     from agm.agl.ir.contracts import ParamDecoder
     from agm.agl.ir.program import ExecutableProgram, IrProgramParam
+    from agm.agl.runtime.convert import DefaultResolver
     from agm.agl.runtime.types import ProgramDeclInfo, ProgramParamInfo
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
@@ -195,7 +196,9 @@ class OptionSome:
     value: object
 
 
-def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
+def decode_param_value(
+    decoder: "ParamDecoder", raw: object, *, default_resolver: "DefaultResolver | None" = None
+) -> "Value":
     """Decode a raw host param value against *decoder* into a typed ``Value``.
 
     The single decode path shared by program-argument binding
@@ -208,6 +211,10 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     way (when textual) before being wrapped back into the optional enum's
     JSON shape. Every other value crosses the canonical JSON boundary (strict
     parse, JSON-Schema validation, then the typeless ``decode_value`` walk).
+    *default_resolver*, when given, fills an omitted defaulted field nested in
+    *raw* (see ``runtime.convert.decode_value``); omitted, such a field is an
+    ordinary missing-field error -- the host engine-config decode path never
+    supplies one, since no program (and so no evaluator) exists yet there.
 
     :raises ValueError: on a type/shape mismatch, schema-validation failure, or a raw
         string that is not valid Unicode (:class:`~agm.util.unicode.LoneSurrogateError`).
@@ -261,7 +268,7 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
     validation_errors = list(validator_for_schema(decoder.json_schema).iter_errors(obj))
     if validation_errors:
         raise ValueError(_clean_validation_message(validation_errors[0]))
-    return decode_value(decoder.decode, obj, defs)
+    return decode_value(decoder.decode, obj, defs, default_resolver=default_resolver)
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,7 +287,10 @@ class _Supplied:
 
 
 def bind_program_arguments(
-    signature: ProgramSignature, arguments: ProgramArguments
+    signature: ProgramSignature,
+    arguments: ProgramArguments,
+    *,
+    default_resolver: "DefaultResolver | None" = None,
 ) -> "tuple[tuple[Value | UseDefault, ...], tuple[Diagnostic, ...]]":
     """Bind and decode *arguments* against *signature*.
 
@@ -302,6 +312,8 @@ def bind_program_arguments(
     decode failure — one diagnostic for a structural violation, or one per
     parameter that is missing-and-required or failed to decode (both keep
     checking every parameter rather than stopping at the first).
+    *default_resolver*, when given, fills an omitted defaulted field nested in
+    a supplied argument's value (see :func:`decode_param_value`).
     """
     from agm.agl.runtime.convert import StrictJsonParseError
 
@@ -327,7 +339,9 @@ def bind_program_arguments(
                 )
             continue
         try:
-            values.append(decode_param_value(param.decoder, box.value))
+            values.append(
+                decode_param_value(param.decoder, box.value, default_resolver=default_resolver)
+            )
         except (StrictJsonParseError, ValueError) as exc:
             diagnostics.append(
                 diagnostic_from_span(
@@ -342,7 +356,11 @@ def bind_program_arguments(
 
 
 def bind_program_arguments_for(
-    executable: "ExecutableProgram", program: "ProgramDeclInfo", arguments: ProgramArguments
+    executable: "ExecutableProgram",
+    program: "ProgramDeclInfo",
+    arguments: ProgramArguments,
+    *,
+    default_resolver: "DefaultResolver | None" = None,
 ) -> "tuple[tuple[Value | UseDefault, ...], tuple[Diagnostic, ...]]":
     """Fuse *program*'s declaration info with *executable*'s signature, then bind *arguments*.
 
@@ -352,22 +370,29 @@ def bind_program_arguments_for(
     program, and both need a :class:`ProgramSignature` fused from them before
     calling :func:`bind_program_arguments` — this is the one place that
     fusing happens, so the two hosts can never pair the two descriptions
-    differently.
+    differently. *default_resolver*, when given, fills a defaulted field an
+    argument's value omits (built by the caller over *executable*'s own real
+    nominal table — this package never constructs an evaluator itself).
     """
     program_symbol = executable.program_symbols[program.node_id]
     signature = ProgramSignature.fuse(
         executable.program_signatures[program_symbol], program.parameters, program.span
     )
-    return bind_program_arguments(signature, arguments)
+    return bind_program_arguments(signature, arguments, default_resolver=default_resolver)
 
 
 def bind_param_values(
-    executable: "ExecutableProgram", raw: "Mapping[StaticBindingKey, object]"
+    executable: "ExecutableProgram",
+    raw: "Mapping[StaticBindingKey, object]",
+    *,
+    default_resolver: "DefaultResolver | None" = None,
 ) -> "tuple[Mapping[StaticBindingKey, Value], tuple[Diagnostic, ...]]":
     """Decode supplied module-parameter values against *executable*'s tables.
 
     Every supplied key is checked independently so an unknown parameter and
     all malformed values are returned together before the interpreter starts.
+    *default_resolver*, when given, fills a defaulted field a value omits
+    (built by the caller over *executable*'s own real nominal table).
     """
     from agm.agl.runtime.convert import StrictJsonParseError
 
@@ -388,7 +413,7 @@ def bind_param_values(
             )
             continue
         try:
-            values[key] = decode_param_value(decoder, value)
+            values[key] = decode_param_value(decoder, value, default_resolver=default_resolver)
         except (StrictJsonParseError, ValueError) as exc:
             module_id, scope_path, name = key
             declaration_path = "::".join((*scope_path, name))

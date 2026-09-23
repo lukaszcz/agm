@@ -646,6 +646,31 @@ def _check_nominal_fields(
         raise InvalidIrError(f"{owner} fields disagree with its nominal descriptor")
 
 
+def _check_field_decode_defaults(
+    fields: "tuple[FieldDecode, ...]", field_defaults: "tuple[object | None, ...]", owner: str
+) -> None:
+    """Require each ``FieldDecode.default_index`` to agree with its declaring descriptor.
+
+    Mirrors :func:`_validate_use_default_slot`'s construction-side check on the
+    decode side: a set ``default_index`` must equal the field's own position,
+    and the descriptor's ``field_defaults`` entry at that index must not be
+    ``None``.
+    """
+    for index, fdec in enumerate(fields):
+        if fdec.default_index is None:
+            continue
+        if fdec.default_index != index:
+            raise InvalidIrError(
+                f"{owner} field {fdec.name!r} has default_index={fdec.default_index}"
+                f" (must equal its position {index})"
+            )
+        if field_defaults[index] is None:
+            raise InvalidIrError(
+                f"{owner} field {fdec.name!r} has default_index set but its nominal"
+                " declares no default at that position"
+            )
+
+
 def _walk_decode_schema(
     decode: DecodeSchema, defs: "Mapping[str, DecodeSchema]", ctx: _Context
 ) -> None:
@@ -677,6 +702,7 @@ def _walk_decode_schema(
             if name != record.declared_name:
                 raise InvalidIrError(f"RecordDecode name disagrees with nominal {nominal!r}")
             _check_nominal_fields(fields, record.fields, "RecordDecode")
+            _check_field_decode_defaults(fields, record.field_defaults, "RecordDecode")
             for rdec in fields:
                 _walk_decode_schema(rdec.schema, defs, ctx)
         case EnumDecode(nominal=nominal, display_name=display_name, variants=variants, name=name):
@@ -707,6 +733,9 @@ def _walk_decode_schema(
                         f" member nominal {variant.nominal!r}"
                     )
                 _check_nominal_fields(variant.fields, expected.fields, "EnumDecode variant")
+                _check_field_decode_defaults(
+                    variant.fields, member.field_defaults, "EnumDecode variant"
+                )
                 for vdec in variant.fields:
                     _walk_decode_schema(vdec.schema, defs, ctx)
         case _ as unreachable:  # pragma: no cover

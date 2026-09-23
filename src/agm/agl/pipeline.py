@@ -27,6 +27,8 @@ from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.eval.ir_interpreter import (
     HostConfigurationError,
     IrInterpreter,
+    lazy_interpreter,
+    resolver_over_interpreter,
 )
 from agm.agl.ir.nodes import UseDefault
 from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
@@ -1308,8 +1310,12 @@ class PipelineDriver:
         if executable is None or not result.ok:
             return ArgumentPreflight(result=result, executable=executable)
 
-        bound, argument_diagnostics = bind_program_arguments_for(executable, program, arguments)
-        program_config = self._evaluate_program_config(executable, program)
+        get_interp = lazy_interpreter(executable)
+        default_resolver = resolver_over_interpreter(get_interp)
+        bound, argument_diagnostics = bind_program_arguments_for(
+            executable, program, arguments, default_resolver=default_resolver
+        )
+        program_config = self._evaluate_program_config(executable, program, get_interp)
         config_param_values = {
             key: value for key, value in program_config.items() if key in executable.param_bindings
         }
@@ -1319,8 +1325,12 @@ class PipelineDriver:
             for key, value in (param_values_lower or {}).items()
             if key not in upper and key not in config_param_values
         }
-        decoded_lower, lower_diagnostics = bind_param_values(executable, lower)
-        decoded_upper, upper_diagnostics = bind_param_values(executable, upper)
+        decoded_lower, lower_diagnostics = bind_param_values(
+            executable, lower, default_resolver=default_resolver
+        )
+        decoded_upper, upper_diagnostics = bind_param_values(
+            executable, upper, default_resolver=default_resolver
+        )
         param_seeds = {**decoded_lower, **config_param_values, **decoded_upper}
         diagnostics = (*argument_diagnostics, *lower_diagnostics, *upper_diagnostics)
         if diagnostics:
@@ -1343,20 +1353,25 @@ class PipelineDriver:
 
     @staticmethod
     def _evaluate_program_config(
-        executable: "ExecutableProgram", program: ProgramDeclInfo
+        executable: "ExecutableProgram",
+        program: ProgramDeclInfo,
+        get_interp: "Callable[[], IrInterpreter]",
     ) -> "Mapping[StaticBindingKey, Value]":
         """Evaluate *program*'s own ``@config`` entries, if it carries any.
 
-        A throwaway interpreter evaluates each checked constant value
-        expression; nothing is executed and no module initializer runs. Empty
-        when *program* declares no ``@config``, so an unconfigured program
-        never pays this construction cost.
+        *get_interp* lazily builds (or returns the already-built) throwaway
+        interpreter that evaluates each checked constant value expression;
+        nothing is executed and no module initializer runs. Empty when
+        *program* declares no ``@config``, so an unconfigured program never
+        pays this construction cost; *get_interp* is shared with the field-
+        default resolver built alongside it in :meth:`prepare_arguments`, so
+        at most one throwaway interpreter is ever built per preflight.
         """
         program_symbol = executable.program_symbols[program.node_id]
         entries = executable.program_configs.get(program_symbol, ())
         if not entries:
             return {}
-        interp = IrInterpreter(executable)
+        interp = get_interp()
         return {key: interp.evaluate_constant(value) for key, value in entries}
 
     def _run_program(

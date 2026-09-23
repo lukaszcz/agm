@@ -232,6 +232,13 @@ def with-named-default(x: int, @arg-named tag: text = "ok") -> text =
   "%{tag}: %{x}"   # tag is named-only; its default is unconstrained
 ```
 
+A [record field default](types.md#record-types) follows the same `= <constant
+expr>` shape and the same zone-ordering constraint, and is likewise omittable
+at a constructor call; see [Record types](types.md#record-types) for its
+constant-expression rule and [Value syntax](host-environment.md#value-syntax)
+for how an omitted defaulted field is filled outside AgL source (JSON, value
+syntax, agent output).
+
 ## Methods
 
 A `def` whose first parameter is `self` and whose enclosing scope resolves to

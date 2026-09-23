@@ -1,0 +1,21 @@
+{
+  "scenarios": [
+    {
+      "name": "all_inherited_omitted",
+      "params": { "mode": "all_inherited_omitted" },
+      "expect": { "stdout": "0\nn/a\nn\n" }
+    },
+    {
+      "name": "mid_level_overridden",
+      "params": { "mode": "mid_level_overridden" },
+      "expect": { "stdout": "0\nover\nn\n" }
+    },
+    {
+      "name": "record_default_crosses_boundary",
+      "params": { "mode": "record_default_crosses_boundary", "input": "{}" },
+      "expect": {
+        "stdout": "DeepErr(message = \"boom\", code = 0, detail = \"n/a\", note = \"n\")\nsnap\n"
+      }
+    }
+  ]
+}

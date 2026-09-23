@@ -1,0 +1,40 @@
+{
+  "scenarios": [
+    {
+      "name": "explicit_call_all_fields",
+      "params": {
+        "cfg": "Config(retry = Retry(count = 9), verbose = true)"
+      },
+      "expect": {
+        "stdout": "9\ntrue\n"
+      }
+    },
+    {
+      "name": "empty_call_all_omitted",
+      "params": {
+        "cfg": "Config()"
+      },
+      "expect": {
+        "stdout": "3\nfalse\n"
+      }
+    },
+    {
+      "name": "bare_all_defaulted_spelling",
+      "params": {
+        "cfg": "Config"
+      },
+      "expect": {
+        "stdout": "3\nfalse\n"
+      }
+    },
+    {
+      "name": "json_omits_defaulted_key",
+      "params": {
+        "cfg": "{\"verbose\": true}"
+      },
+      "expect": {
+        "stdout": "3\ntrue\n"
+      }
+    }
+  ]
+}

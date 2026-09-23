@@ -154,6 +154,27 @@ a heterogeneous (mixed-type) array or dict are legal only in a `json`-typed
 slot, read as plain data with no constructor calls, since a `json` value has
 no declared type to resolve one against.
 
+A constructor argument for a field with a declared
+[default](types.md#record-types) may be omitted; the field then fills from
+that default, exactly as an omitted argument does in AgL source. A
+constructor whose every field has a default may be spelled bare (`Name`) or
+with an empty call (`Name()`), constructing it with every default. For
+
+```agl
+record Retry
+  count: int = 3
+
+record Config
+  retry: Retry = Retry
+  verbose: bool = false
+```
+
+`Retry`, `Retry()`, `Config(verbose = true)`, and the bare `Config` all
+construct a value with `retry` filled from its default. The same rule governs
+strict JSON: an object may omit a key for a defaulted field, and the derived
+JSON Schema ([Agent calls](agent-calls.md#derived-json-schema)) excludes such
+a field from `"required"`.
+
 A parameter annotated [`path`](types.md#type-aliases) — directly, as
 `Option[path]` or `Optional[path]`, or through an alias — takes its value exactly as the
 corresponding `text` parameter does. A host presents that value as a

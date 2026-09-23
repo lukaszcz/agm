@@ -1,0 +1,50 @@
+# A defaulted field whose default is itself a nominal (record) value reaches
+# the JSON cast decode boundary with the REAL declared nominal identity, not
+# a lowering-time placeholder: the filled-in value renders and compares
+# exactly like the same value built by direct source-level construction, for
+# both an all-defaulted record and a record whose default field sits in the
+# positional zone.
+import std/json
+
+record Retry
+  count: int = 3
+
+record Config
+  retry: Retry = Retry
+  verbose: bool = false
+
+@arg-pos
+record Point
+  x: int = 1
+  y: int = 2
+
+record Line
+  start: Point = Point
+  label: text = "line"
+
+record Tag
+  n: int = 7
+
+record Holder
+  label: text = "tag=%{Tag}"
+  keep: bool = true
+
+program def main(mode: text, input: text) -> unit =
+  if
+    | mode == "all_defaulted" =>
+        let j = json::parse(input)
+        let cfg = j as Config
+        print "%{cfg.retry}"
+        print "%{cfg.retry == Retry}"
+    | mode == "positional_zone" =>
+        let j = json::parse(input)
+        let ln = j as Line
+        print "%{ln.start}"
+        print "%{ln.start == Point(1, 2)}"
+    | mode == "template_hole" =>
+        let j = json::parse(input)
+        let h = j as Holder
+        let source = Holder
+        print "%{h.label}"
+        print "%{h.label == source.label}"
+    | else => print "unknown mode"

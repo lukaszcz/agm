@@ -271,10 +271,19 @@ def _convert_enum(node: ValueNode, schema: EnumDecode, defs: DefsMap) -> dict[st
 def _convert_ctor_args(
     node: CtorNode, fields: "tuple[FieldDecode, ...]", type_label: str, defs: DefsMap
 ) -> dict[str, object]:
-    """Bind and convert one constructor call's arguments against *fields*."""
+    """Bind and convert one constructor call's arguments against *fields*.
+
+    A bare constructor (``node.args is None``) is legal when every field
+    carries a declared default: it reads exactly like an empty argument list.
+    An omitted argument for a defaulted field is simply left out of the
+    returned dict -- the same shape a JSON source that omits the key produces
+    -- so it fills through ``runtime.convert.decode_value``'s own
+    ``default_resolver`` at the value boundary.
+    """
     if node.args is None:
-        if fields:
-            names = ", ".join(f.name for f in fields)
+        missing = [f.name for f in fields if f.default_index is None]
+        if missing:
+            names = ", ".join(missing)
             raise ValueDecodeError(f"{type_label} requires arguments: {names}", node.start)
         return {}
     alias_map: dict[str, str] = {}
@@ -282,7 +291,9 @@ def _convert_ctor_args(
         alias_map[field.name] = field.name
         if field.alias is not None:
             alias_map[field.alias] = field.name
-    bind_params = [BindParam(name=f.name, kind=f.zone, has_default=False) for f in fields]
+    bind_params = [
+        BindParam(name=f.name, kind=f.zone, has_default=f.default_index is not None) for f in fields
+    ]
     positional = [arg for arg in node.args if arg.name is None]
     named: list[tuple[str, ValueArg]] = []
     for arg in node.args:
@@ -298,9 +309,8 @@ def _convert_ctor_args(
         raise _binding_error(exc, node, positional, named, type_label) from exc
     result: dict[str, object] = {}
     for field, bound_arg in zip(fields, bound, strict=True):
-        assert bound_arg is not None, (
-            "has_default=False: bind_arguments never defers a required field"
-        )
+        if bound_arg is None:
+            continue
         result[field.json_name] = value_node_to_json(bound_arg.value, field.schema, defs)
     return result
 

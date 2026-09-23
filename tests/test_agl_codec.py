@@ -639,6 +639,99 @@ class TestDeriveSchema:
 
 
 # ---------------------------------------------------------------------------
+# 1a2. Constructor field defaults at the schema/decode-plan boundary
+# ---------------------------------------------------------------------------
+
+
+class TestFieldDefaultsAtSchemaAndDecodeBoundary:
+    """A declared-defaulted field is dropped from ``required`` and marked in the decode plan.
+
+    Presence (``default_index``) comes straight off the ``TypeTable`` -- a
+    purely structural, declaration-order property -- never from a
+    lowering-run table. A default's VALUE is never emitted into the schema or
+    the decode plan; it is resolved only at decode time (see
+    ``runtime.convert.decode_value``'s ``default_resolver``), against the
+    real, fully-linked ``NominalDescriptor`` table.
+    """
+
+    def test_record_field_default_dropped_from_required_and_marked_in_plan(self) -> None:
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        typ, typedef = record_type("Retry", {"count": IntType()}, field_has_default=(True,))
+        schema, plan = derive_schema_and_decode(typ, type_table_for(typedef))
+        assert schema == {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [],
+            "properties": {"count": {"type": "integer"}},
+        }
+        assert isinstance(plan.root, RecordDecode)
+        assert plan.root.fields[0].default_index == 0
+
+    def test_record_mixed_required_and_defaulted_fields(self) -> None:
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        typ, typedef = record_type(
+            "Pair",
+            {"x": IntType(), "y": IntType()},
+            field_has_default=(False, True),
+        )
+        schema, plan = derive_schema_and_decode(typ, type_table_for(typedef))
+        assert schema["required"] == ["x"]
+        assert schema["properties"] == {
+            "x": {"type": "integer"},
+            "y": {"type": "integer"},
+        }
+        assert isinstance(plan.root, RecordDecode)
+        x_field, y_field = plan.root.fields
+        assert x_field.default_index is None
+        assert y_field.default_index == 1
+
+    def test_enum_member_field_default_dropped_from_required(self) -> None:
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        enum_id = next_decl_id()
+        member_id = next_decl_id()
+        member = RecordType(
+            name="Ok", module_id=ENTRY_ID, scope_path=("Outcome",), decl_id=member_id
+        )
+        member_def = TypeDef(
+            kind="record",
+            name="Ok",
+            module_id=ENTRY_ID,
+            scope_path=("Outcome",),
+            fields=(("tag", TextType()),),
+            field_kinds=(ParamZone.STANDARD,),
+            field_has_default=(True,),
+            decl_node_id=member_id,
+        )
+        outcome_def = TypeDef(
+            kind="enum", name="Outcome", module_id=ENTRY_ID, members=(member,), decl_node_id=enum_id
+        )
+        typ = EnumType(name="Outcome", decl_id=enum_id)
+        schema, plan = derive_schema_and_decode(typ, type_table_for(member_def, outcome_def))
+        variant_schema = _variant_schema_for_case(schema, "Ok")
+        assert variant_schema["required"] == ["$case"]
+        assert variant_schema["properties"]["tag"] == {"type": "string"}
+        assert isinstance(plan.root, EnumDecode)
+        variant = plan.root.variants[0]
+        assert variant.fields[0].default_index == 0
+
+    def test_derivation_order_does_not_affect_default_presence(self) -> None:
+        """Presence is structural, never a lowering-run snapshot: deriving before or after
+        another derivation site (or repeatedly) gives byte-identical results."""
+        from agm.agl.type_schema import derive_schema_and_decode
+
+        typ, typedef = record_type(
+            "Pair", {"x": IntType(), "y": IntType()}, field_has_default=(False, True)
+        )
+        table = type_table_for(typedef)
+        before = derive_schema_and_decode(typ, table)
+        after = derive_schema_and_decode(typ, table)
+        assert before == after
+
+
+# ---------------------------------------------------------------------------
 # 1b. Recursive `$defs`/`$ref` schema emission
 # ---------------------------------------------------------------------------
 
@@ -1130,7 +1223,13 @@ class TestRecursiveDecodeDerivation:
             display_name="Wrapper",
             name="Wrapper",
             fields=(
-                FieldDecode("root", "root", RefDecode("Tree"), zone=ParamZone.STANDARD, alias=None),
+                FieldDecode(
+                    "root",
+                    "root",
+                    RefDecode("Tree"),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                ),
                 FieldDecode(
                     "label",
                     "label",

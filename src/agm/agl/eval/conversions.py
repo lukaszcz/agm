@@ -29,6 +29,7 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.convert import (
+    DefaultResolver,
     _clean_validation_message,
     decode_value,
     validator_for_schema,
@@ -62,8 +63,18 @@ class AglCastConversion(Exception):
         self.raw = raw
 
 
-def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescriptors) -> Value:
-    """Execute *recipe* against *value*; raise ``AglCastConversion`` on failure."""
+def run_recipe(
+    recipe: ConversionRecipe,
+    value: Value,
+    descriptors: ValueDescriptors,
+    *,
+    default_resolver: DefaultResolver | None = None,
+) -> Value:
+    """Execute *recipe* against *value*; raise ``AglCastConversion`` on failure.
+
+    *default_resolver*, when given, fills an omitted defaulted field the
+    fallible-conversion branches decode (see :func:`_decode_from_json`).
+    """
     match recipe.strategy:
         case ConversionStrategy.NOOP:
             return value
@@ -86,7 +97,7 @@ def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescrip
                 raise AssertionError(  # pragma: no cover
                     f"NARROW_DECIMAL_TO_INT expected DecimalValue, got {type(value).__name__}"
                 )
-            return _decode_from_json(recipe, value.value, value, descriptors)
+            return _decode_from_json(recipe, value.value, value, descriptors, default_resolver)
         case ConversionStrategy.PARSE_TEXT_THEN_DECODE:
             if not isinstance(value, TextValue):
                 raise AssertionError(  # pragma: no cover
@@ -105,19 +116,23 @@ def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescrip
                     target_label=recipe.target_label,
                     raw=render_value(value, descriptors),
                 ) from exc
-            return _decode_from_json(recipe, parsed, value, descriptors)
+            return _decode_from_json(recipe, parsed, value, descriptors, default_resolver)
         case ConversionStrategy.DECODE_JSON:
             if not isinstance(value, JsonValue):
                 raise AssertionError(  # pragma: no cover
                     f"DECODE_JSON expected JsonValue, got {type(value).__name__}"
                 )
-            return _decode_from_json(recipe, value.raw, value, descriptors)
+            return _decode_from_json(recipe, value.raw, value, descriptors, default_resolver)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
 def _decode_from_json(
-    recipe: ConversionRecipe, obj: object, value: Value, descriptors: ValueDescriptors
+    recipe: ConversionRecipe,
+    obj: object,
+    value: Value,
+    descriptors: ValueDescriptors,
+    default_resolver: DefaultResolver | None,
 ) -> Value:
     """JSON-Schema validate → decode."""
     if recipe.json_schema is None:  # pragma: no cover
@@ -135,7 +150,9 @@ def _decode_from_json(
     if recipe.decode is None:  # pragma: no cover
         raise AssertionError("decode strategy requires a decode schema")
     try:
-        return decode_value(recipe.decode, obj, dict(recipe.defs))
+        return decode_value(
+            recipe.decode, obj, dict(recipe.defs), default_resolver=default_resolver
+        )
     except ValueError as exc:
         raise AglCastConversion(
             f"Value conversion failed: {exc}",

@@ -1511,6 +1511,189 @@ def test_validate_rejects_decode_variant_whose_name_disagrees_with_member_declar
         validate_ir(program, deep=True)
 
 
+def _default_expr():
+    from agm.agl.ir.ids import Location, SourceId
+    from agm.agl.ir.nodes import IrConstInt
+
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    return IrConstInt(loc, 0)
+
+
+def test_validate_accepts_record_decode_field_default_index_matching_declared_default() -> None:
+    """A FieldDecode.default_index matching the nominal's own defaulted position passes."""
+    from agm.agl.ir.validate import validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Record",
+        json_schema="{}",
+        decode=RecordDecode(
+            NominalId(10),
+            "Record",
+            (
+                FieldDecode(
+                    "value",
+                    "value",
+                    ScalarDecode(ScalarKind.INT),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                    default_index=0,
+                ),
+            ),
+            "Record",
+            alias=None,
+        ),
+    )
+    program = _convert_program(recipe)
+    program.nominals[NominalId(10)] = NominalDescriptor(
+        NominalId(10),
+        ENTRY_ID,
+        (),
+        "Record",
+        NominalKind.RECORD,
+        ("value",),
+        field_defaults=(_default_expr(),),
+    )
+    validate_ir(program, deep=True)  # no exception
+
+
+def test_validate_rejects_record_decode_field_default_index_out_of_position() -> None:
+    """A FieldDecode.default_index that disagrees with the field's own position is rejected."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Record",
+        json_schema="{}",
+        decode=RecordDecode(
+            NominalId(10),
+            "Record",
+            (
+                FieldDecode(
+                    "value",
+                    "value",
+                    ScalarDecode(ScalarKind.INT),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                    default_index=99,
+                ),
+            ),
+            "Record",
+            alias=None,
+        ),
+    )
+    program = _convert_program(recipe)
+    program.nominals[NominalId(10)] = NominalDescriptor(
+        NominalId(10),
+        ENTRY_ID,
+        (),
+        "Record",
+        NominalKind.RECORD,
+        ("value",),
+        field_defaults=(_default_expr(),),
+    )
+    with pytest.raises(InvalidIrError, match="default_index"):
+        validate_ir(program, deep=True)
+
+
+def test_validate_rejects_record_decode_default_index_for_field_with_no_declared_default() -> None:
+    """A FieldDecode.default_index set where the nominal declares no default is rejected."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Record",
+        json_schema="{}",
+        decode=RecordDecode(
+            NominalId(10),
+            "Record",
+            (
+                FieldDecode(
+                    "value",
+                    "value",
+                    ScalarDecode(ScalarKind.INT),
+                    zone=ParamZone.STANDARD,
+                    alias=None,
+                    default_index=0,
+                ),
+            ),
+            "Record",
+            alias=None,
+        ),
+    )
+    program = _convert_program(recipe)
+    program.nominals[NominalId(10)] = NominalDescriptor(
+        NominalId(10),
+        ENTRY_ID,
+        (),
+        "Record",
+        NominalKind.RECORD,
+        ("value",),
+        field_defaults=(None,),
+    )
+    with pytest.raises(InvalidIrError, match="no default"):
+        validate_ir(program, deep=True)
+
+
+def test_validate_rejects_enum_variant_decode_default_index_for_field_with_no_default() -> None:
+    """The same ``default_index`` invariant holds for an enum-variant field."""
+    from agm.agl.ir.validate import InvalidIrError, validate_ir
+
+    enum = NominalId(10)
+    member = NominalId(11)
+    variant = VariantDecode(
+        "Leaf",
+        "Leaf",
+        member,
+        "Tree::Leaf",
+        (
+            FieldDecode(
+                "value",
+                "value",
+                ScalarDecode(ScalarKind.INT),
+                zone=ParamZone.STANDARD,
+                alias=None,
+                default_index=0,
+            ),
+        ),
+        alias=None,
+    )
+    recipe = ConversionRecipe(
+        strategy=ConversionStrategy.DECODE_JSON,
+        source_label="json",
+        target_label="Tree",
+        json_schema="{}",
+        decode=EnumDecode(enum, "Tree", (variant,), "Tree", host_agent=False),
+    )
+    program = _convert_program(recipe)
+    program.nominals.update(
+        {
+            enum: NominalDescriptor(
+                enum,
+                ENTRY_ID,
+                (),
+                "Tree",
+                NominalKind.ENUM,
+                variants=(VariantDescriptor("Leaf", ("value",), member),),
+            ),
+            member: NominalDescriptor(
+                member,
+                ENTRY_ID,
+                ("Tree",),
+                "Leaf",
+                NominalKind.RECORD,
+                ("value",),
+                field_defaults=(None,),
+            ),
+        }
+    )
+    with pytest.raises(InvalidIrError, match="no default"):
+        validate_ir(program, deep=True)
+
+
 @pytest.mark.parametrize(
     ("enum_descriptor", "member_descriptor", "display_name", "decode_name"),
     (

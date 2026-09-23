@@ -105,7 +105,14 @@ class FieldDecode:
     only), for a value-syntax reader binding constructor arguments with the
     shared zone binder. ``alias`` is the field's ``@name`` spelling when it
     differs from ``name`` (an additional legal value-syntax spelling), or
-    ``None`` when the field carries no alias.
+    ``None`` when the field carries no alias. ``default_index`` is set exactly
+    when the field's declaration carries a constant default, to the field's
+    position in its declaring nominal's own
+    ``NominalDescriptor.fields``/``field_defaults`` -- the key a decode-time
+    default fill (``runtime.convert.decode_value``'s ``default_resolver``)
+    uses to evaluate the real default expression. A missing JSON key or an
+    omitted constructor argument is then legal rather than an error.
+    ``None`` for a field with no default.
     """
 
     name: str
@@ -113,6 +120,7 @@ class FieldDecode:
     schema: "DecodeSchema"
     zone: ParamZone
     alias: str | None
+    default_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

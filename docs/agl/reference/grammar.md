@@ -368,8 +368,10 @@ full zone semantics. No required
 positional-fillable (pos-only/standard) parameter may follow a defaulted one
 in the same zone. An optional `type_params` list after the function name makes
 the `def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
-A generic declaration may follow it with a `constraint_block` bounding one or
-more type parameters `Eq` or `Hashable`; see
+A `constraint_block` bounding one or more type parameters `Eq` or `Hashable`
+may follow — after the type parameters, or after the method name when there
+are none of its own (a builtin receiver: `array[E]::name{Eq E}`) — and may
+bound a receiver parameter as well as the declaration's own; see
 [Constraint blocks](generics.md#constraint-blocks).
 
 All three function declaration forms accept the same `func_decl_head` surface.

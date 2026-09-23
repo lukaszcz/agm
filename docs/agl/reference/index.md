@@ -81,7 +81,7 @@ program def main(spec: text) -> unit =
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
 | [Control flow](control-flow.md) | `if`, `case`, unified loops (`for`/`while`/`do`/`until`/`done`), `break`, `continue` |
 | [Pattern matching](pattern-matching.md) | Patterns, source priority, exhaustiveness, redundancy |
-| [Generics](generics.md) | Type parameters on `def`/`record`/`enum`/`type`, type application, inference and `::[…]` override, generic constructor values, strict parametricity, invariance, erasure |
+| [Generics](generics.md) | Type parameters on `def`/`record`/`enum`/`type`, type application, inference and `::[…]` override, generic constructor values, strict parametricity, constraint blocks (`Eq`/`Hashable`), invariance, erasure |
 | [Agent calls](agent-calls.md) | `ask`, agents as values, call options, output contracts, the JSON wire format, parse policies and retries |
 | [Shell execution](shell-execution.md) | `exec`, the `ExecResult` structured form vs the parsed form, `ExecError` |
 | [Exceptions](exceptions.md) | The exception model, `try`/`catch`/`raise`, the built-in exception catalog |

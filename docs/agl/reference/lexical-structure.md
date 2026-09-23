@@ -177,6 +177,12 @@ reserved for standard-library declarations that are implemented by the host.
 `extern` is reserved for declarations implemented by a companion Python file
 (see [Python FFI](ffi.md)).
 
+**`Eq` and `Hashable`** are likewise not reserved; they are recognized
+contextually as the constraint names inside a constraint block (`{Eq T}`,
+`{Hashable K}`), and remain ordinary identifiers everywhere else, including
+as a field, parameter, or function name; see
+[Constraint blocks](generics.md#constraint-blocks).
+
 Soft keywords are **not reserved**: each is promoted to its own token only
 inside a promotion window, and remains a valid identifier everywhere else.
 

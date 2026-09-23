@@ -11,8 +11,9 @@ higher-ranked type quantifiers.
 This page collects the whole generics story: declaring type parameters, type
 application, inference and the explicit `::[…]` override, generic constructors
 and constructor values, what may be done with a value of a type parameter,
-invariance, and the rules around names. Identifier capitalization classifies
-nothing — `Box` and `box` are equally valid names for a type or a value, though
+constraint blocks (`Eq`/`Hashable` bounds), invariance, and the rules around
+names. Identifier capitalization classifies nothing — `Box` and `box` are
+equally valid names for a type or a value, though
 they remain two distinct names; see [Lexical structure](lexical-structure.md).
 Examples here follow the standard library's convention of capitalized type and
 constructor names.
@@ -92,6 +93,26 @@ only to `U`, so `box.map::[text](...)` pins `U` to `text`. A bound generic
 method follows the same rule. A method on a generic receiver reached through a
 bare import uses these same positional receiver slots; only the receiver's
 resolution and the method declaration's visibility differ.
+
+A method's own `{…}` constraint block follows all of its type parameters —
+receiver-bound and its own alike — and may bound either kind. `has` and
+`same` below bound a receiver-bound parameter; `holds` bounds `U`, a
+parameter the method declares for itself:
+
+```agl
+record Box[T]
+  value: T
+
+def array[E]::has{Eq E}(self, value: E) -> bool = value in self
+def Box::same[E]{Eq E}(self, other: Box[E]) -> bool = self.value == other.value
+def Box::holds[E, U]{Eq U}(self, xs: array[U], x: U) -> bool = xs.contains(x)
+
+program def main() -> unit =
+  let box = Box(value = 3)
+  print([1, 2, 3].has(3))
+  print(box.same(Box(value = 3)))
+  print(box.holds([1, 2, 3], 2))
+```
 
 A `def` in a type scope without a `self` receiver is not a method and declares
 its type parameters in the ordinary way; it does not inherit or capture the
@@ -352,7 +373,10 @@ generic body knows nothing about it beyond that it exists. You may only
 **pass it, return it, and store it**. Every operation that would inspect its
 contents is a static error. You cannot:
 
-- compare it with `==`, `!=`, `<`, … (`x == x` on a `T` is rejected),
+- compare it with `==`, `!=`, `<`, `<=`, `>`, `>=` (`x == x` on a `T` is
+  rejected) — a `{Eq T}`/`{Hashable T}` bound lifts `==`/`!=`, and `in` over
+  `array[T]`; ordering never lifts, bound or not (see [Constraint
+  blocks](#constraint-blocks)),
 - do arithmetic on it,
 - access a field (`x.foo`) or index (`x[0]`) of it,
 - test it with `is` / `is not`.
@@ -366,9 +390,9 @@ This guarantees a generic definition behaves uniformly at every instantiation:
 the body cannot branch on the actual type. (Once a type parameter is *applied*
 inside a known constructor — e.g. a `Box[T]` value — the surrounding structure
 is usable for every operation except one that needs `Eq`/`Hashable` on the
-nested `T`, such as `==`/`!=`/`in`/literal-pattern matching over `array[T]`
-(see [Constraint blocks](#constraint-blocks)); only the bare `T` payload
-itself is opaque.)
+nested `T`, such as `==`/`!=`/`in` over `array[T]` (see
+[Constraint blocks](#constraint-blocks)); only the bare `T` payload itself is
+opaque.)
 
 This language-internal guarantee does not extend to a Python companion behind
 `extern def`. The FFI passes the ordinary runtime representation at a generic
@@ -380,8 +404,13 @@ type variable; see [Target type parameters](ffi.md#target-type-parameters).
 
 ### Constraint blocks
 
-A declaration with type parameters may follow the bracketed list with a
-`{…}` constraint block naming one or more of them `Eq` or `Hashable`:
+A generic function declaration — `def`, `extern def`, `builtin def`, or a
+method, including a builtin-receiver method — may follow its type parameters
+with a `{…}` constraint block naming one or more of them `Eq` or `Hashable`.
+Only a declaration of this kind carries one: a type declaration (`record`,
+`enum`, `exception`, `type`) carries no bounds, and `program def` cannot
+declare type parameters at all. A bound belongs to the operation that needs
+it, never to the type that carries the parameter.
 
 ```agl
 def same[T]{Eq T}(a: T, b: T) -> bool = a == b
@@ -389,14 +418,41 @@ def member[T]{Hashable T}(x: T, xs: array[T]) -> bool = x in xs
 ```
 
 `Hashable` implies `Eq`. A bound lifts the strict-parametricity restriction
-on `==`/`!=`, `in`, and literal-pattern matching for that parameter — and for
-any type that mentions it, such as `array[T]` or `Option[T]` — wherever it
-appears in the declaration's body, including its receiver's parameters for a
-method. Without a bound, those operations remain rejected on the parameter at
-any depth. A constraint names only a type parameter already in scope from the
+on `==`/`!=` and `in` for that parameter — and for any type that mentions
+it, such as `array[T]` or `Option[T]` — wherever it appears in the
+declaration's body, including its receiver's parameters for a method.
+Without a bound, those operations remain rejected on the parameter at any
+depth. A constraint names only a type parameter already in scope from the
 declaration or its receiver; naming the same parameter twice, or pairing it
 with both `Eq` and `Hashable`, is a static error. A block is rejected on a
 declaration with no type parameters.
+
+`Eq` is exactly the equality [Values and
+equality](types.md#values-and-equality) defines for concrete data. An opaque
+host type such as `Session` satisfies neither kind, the same way it has no
+equality; an exception ancestor is disqualified whenever a descendant adds a
+non-qualifying field, since a value statically typed as the ancestor may hold
+that descendant at runtime. `Hashable` is narrower — deeply immutable data:
+as `Eq`, but no field may be declared `var` at any depth, and an `array` or
+`dict` never qualifies, regardless of content. A generic nominal type
+satisfies either kind only where its own type arguments do, at the parameter
+positions its fields actually use.
+
+A bound is checked wherever the parameter it names is **instantiated** —
+an inferred call, an explicit `::[…]` type argument, a method's receiver
+type argument, a first-class function value fixed by its expected type, a
+partial application, or a bound method value — against the concrete type
+supplied there, or, when the caller's own argument is itself a bounded type
+parameter, against the caller's bound:
+
+```agl
+def same[T]{Eq T}(a: T, b: T) -> bool = a == b
+def relay[T]{Eq T}(a: T, b: T) -> bool = same(a, b)   # T's own 'Eq' bound covers the call
+```
+
+A caller's unbounded type parameter never satisfies a callee's bound. A
+caller's `Hashable` bound does satisfy a callee's `Eq` requirement, since
+`Hashable` implies `Eq`; the reverse does not.
 
 ## Invariance
 

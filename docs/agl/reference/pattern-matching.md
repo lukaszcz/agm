@@ -97,7 +97,11 @@ Restrictions:
 - The literal's type must be comparable with the scrutinee's static type
   (same type after `int → decimal` widening); an `int` pattern against a
   `text` scrutinee — or any scalar literal against a `json` scrutinee other
-  than `null` — is a static error, not a silently dead branch.
+  than `null` — is a static error, not a silently dead branch. A scrutinee
+  whose static type is a generic type parameter `T` (bare, or a field typed
+  `T`) never admits a literal pattern, bound or not ([Constraint
+  blocks](generics.md#constraint-blocks)): a literal's own type can never
+  structurally equal a type variable's.
 
 ### Constructor patterns
 

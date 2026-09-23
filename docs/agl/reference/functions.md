@@ -359,7 +359,9 @@ parameter; `text`, `json`, `int`, `decimal`, and `bool` are bare receivers. A
 builtin receiver must use its bare generic form, so `array[int]::name` and
 `dict[text, array[int]]::name` are invalid. As with a nominal generic receiver,
 `_` may occupy an unused receiver slot; it binds a private rigid parameter and
-cannot be named by the method body.
+cannot be named by the method body. A `{…}` constraint block may bound the
+receiver's element or value parameter the same way it bounds a nominal
+receiver's; see [Generic methods](generics.md#generic-methods).
 
 The prelude re-exports builtin receiver scopes, making standard-library methods
 reachable wherever the prelude is enabled. With `--no-stdlib`, import a route
@@ -710,28 +712,11 @@ where the arguments drive inference, needs no annotation.)
 ### Strict parametricity
 
 Inside a generic `def`, a value whose static type is a bare type variable
-`T` is **opaque**. The body knows nothing about `T` beyond the fact that
-values of it exist, so such a value can only be passed to other functions,
-returned, or stored. It may **not** be:
-
-- compared with `=`, `!=`, or the ordering operators,
-- used in arithmetic,
-- printed or interpolated in a template,
-- field- or index-accessed,
-- tested with `is` / `is not`.
-
-<!-- agl-check: error -->
-```agl
-def bad[T](x: T, y: T) -> bool = x == y   # static error: '==' on type variable T
-```
-
-Each of these is a static error. This *parametricity* guarantee means a
-generic function treats its type-variable values uniformly regardless of the
-concrete type they are instantiated at. (The restriction extends to any type
-that nests the bare type variable — `array[T]` still rejects `==`, `!=`, `in`,
-and literal-pattern matching unless the declaration bounds `T`; see
-[Constraint blocks](generics.md#constraint-blocks). Every other operation a
-composite type normally allows, such as indexing, remains unrestricted.)
+`T` is **opaque**: it can be passed, returned, and stored, but not compared,
+used in arithmetic, field- or index-accessed, or tested with `is`/`is not`.
+See [Strict parametricity](generics.md#strict-parametricity) for the full
+rule and what a `{…}` [constraint block](generics.md#constraint-blocks)
+relaxes.
 
 ## Calling functions
 

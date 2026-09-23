@@ -69,10 +69,11 @@ resource limits, selecting settings by the command's **first shell word** —
 `"make test"` selects settings named for `make`, never for `sh`, the shell
 `exec` itself runs the command under. A command whose first word cannot be
 determined (for example, an empty or unsplittable command) selects the
-unqualified default settings. Sandbox configuration is resolved from the
-host's own location, never from `cwd`: a command run against a directory
-supplied at the call site cannot supply the settings that confine it. A
-sandbox preparation failure raises `ExecError` exactly like a spawn failure.
+unqualified default settings. Sandbox configuration -- including an explicit
+but relative `settings` path -- always resolves from the host's own
+location, never from `cwd`: a command run against a directory supplied at
+the call site cannot supply the settings that confine it. A sandbox
+preparation failure raises `ExecError` exactly like a spawn failure.
 
 `Sandbox`'s `memory` and `swap` fields ([Types](types.md#sandbox)) are each
 `Optional[text]` with three states: `Default` (the field's own default)

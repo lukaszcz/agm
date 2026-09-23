@@ -66,12 +66,13 @@ class SandboxRequest:
     """Everything needed to prepare one sandboxed invocation.
 
     ``cwd`` and ``config_cwd`` answer two different questions: ``cwd`` is the
-    working directory the command runs in; ``config_cwd`` is the directory a
-    `.sandbox/<name>.json` settings candidate is searched under. They are the
-    same directory for `agm run`, but a caller with its own per-call working
-    directory (`exec`) keeps `config_cwd` pinned to its host `SandboxContext`
-    so the directory a command operates on can never supply the settings that
-    confine it.
+    working directory the command runs in; ``config_cwd`` is where sandbox
+    configuration resolves from -- the `.sandbox/<name>.json` candidate
+    search, an explicit but relative ``settings_file``, and the paths a
+    settings-resolution error names. They are the same directory for `agm
+    run`, but a caller with its own per-call working directory (`exec`) keeps
+    ``config_cwd`` pinned to its host `SandboxContext` so the directory a
+    command operates on can never supply the settings that confine it.
     """
 
     command: list[str]

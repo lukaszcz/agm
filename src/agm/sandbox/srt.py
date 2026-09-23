@@ -72,10 +72,11 @@ class SrtBackend:
             if spec.settings_file is not None:
                 selected = spec.settings_file
                 if not selected.is_absolute():
-                    selected = request.cwd / selected
+                    selected = request.config_cwd / selected
                 if not is_file(selected):
                     raise SandboxSettingsError(
-                        f"settings file not found: {display_path(selected, cwd=request.cwd)}",
+                        f"settings file not found: "
+                        f"{display_path(selected, cwd=request.config_cwd)}",
                         path=selected,
                     )
             else:
@@ -84,7 +85,9 @@ class SrtBackend:
                 if not found:
                     raise SandboxSettingsError(
                         "no sandbox settings file found. Checked: "
-                        + ", ".join(display_path(path, cwd=request.cwd) for path in candidates),
+                        + ", ".join(
+                            display_path(path, cwd=request.config_cwd) for path in candidates
+                        ),
                         candidates=tuple(candidates),
                     )
                 if len(found) == 1:

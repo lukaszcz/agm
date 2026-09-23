@@ -1076,11 +1076,41 @@ class TestSrtBackendDirect:
             "--",
         ]
 
-    def test_relative_settings_file_resolves_against_cwd(self, tmp_path: Path) -> None:
-        request = _request(tmp_path=tmp_path, settings_file=Path("relative.json"))
-        (request.cwd / "relative.json").write_text("{}", encoding="utf-8")
+    def test_relative_settings_file_resolves_against_config_cwd(self, tmp_path: Path) -> None:
+        """An explicit relative `settings_file` resolves against `config_cwd` --
+        the host's own config context -- never the per-call `cwd`, so a
+        directory a command merely runs in cannot supply the settings file a
+        program names."""
+        config_cwd = tmp_path / "context"
+        config_cwd.mkdir(parents=True)
+        request = _request(
+            tmp_path=tmp_path, settings_file=Path("relative.json"), config_cwd=config_cwd
+        )
+        (request.cwd / "relative.json").write_text(
+            json.dumps({"network": {"allowedDomains": ["evil.example"]}}), encoding="utf-8"
+        )
+        (config_cwd / "relative.json").write_text("{}", encoding="utf-8")
+
         resolved = SRT_BACKEND.resolve_settings(request)
-        assert resolved.path == request.cwd / "relative.json"
+
+        assert resolved.path == config_cwd / "relative.json"
+
+    def test_missing_relative_settings_file_is_checked_against_config_cwd(
+        self, tmp_path: Path
+    ) -> None:
+        """A relative `settings_file` that exists only at the per-call `cwd` is
+        still reported missing: only `config_cwd` is ever checked."""
+        config_cwd = tmp_path / "context"
+        config_cwd.mkdir(parents=True)
+        request = _request(
+            tmp_path=tmp_path, settings_file=Path("relative.json"), config_cwd=config_cwd
+        )
+        (request.cwd / "relative.json").write_text("{}", encoding="utf-8")
+
+        with pytest.raises(SandboxSettingsError) as excinfo:
+            SRT_BACKEND.resolve_settings(request)
+
+        assert excinfo.value.path == config_cwd / "relative.json"
 
     def test_no_profile_name_only_checks_default_json(self, tmp_path: Path) -> None:
         home = tmp_path / "home"

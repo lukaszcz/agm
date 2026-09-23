@@ -156,19 +156,26 @@ def _run_cleanup_command(
     )
 
 
-def _stop_process(
+def stop_process(
     process: subprocess.Popen[bytes],
     *,
     isolate_process_group: bool,
     interrupt_cleanup_cmd: list[str] | None,
     cwd: Path | None,
     env: dict[str, str] | None,
+    pgid: int | None = None,
 ) -> None:
+    """Run *interrupt_cleanup_cmd* (if any), then kill or terminate *process*.
+
+    Shared by every internal stop path and by a long-lived child a caller
+    owns directly (e.g. a persistent RPC session), so cleanup-command
+    semantics never diverge between them.
+    """
     try:
         _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
     finally:
         if isolate_process_group:
-            kill_process_group(process)
+            kill_process_group(process, pgid=pgid)
         else:
             terminate_process(process)
 
@@ -236,7 +243,7 @@ def _drain_process_streams(
                 stream_name, chunk = stream_queue.get()
         except queue.Empty:
             # Idle timeout: no output received within the deadline.
-            _stop_process(
+            stop_process(
                 process,
                 isolate_process_group=isolate_process_group,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
@@ -266,7 +273,7 @@ def _drain_process_streams(
         try:
             process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
-            _stop_process(
+            stop_process(
                 process,
                 isolate_process_group=isolate_process_group,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
@@ -423,7 +430,7 @@ def _start_process_with_readers(
         return process, readers, stream_queue, stdin_writer
     except BaseException:
         if process is not None:
-            _stop_process(
+            stop_process(
                 process,
                 isolate_process_group=isolate_process_group,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,
@@ -474,7 +481,7 @@ def _running_process(
         yield process, readers, stream_queue
     except BaseException:
         if process is not None:
-            _stop_process(
+            stop_process(
                 process,
                 isolate_process_group=isolate_process_group,
                 interrupt_cleanup_cmd=interrupt_cleanup_cmd,

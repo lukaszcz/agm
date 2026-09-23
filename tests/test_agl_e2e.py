@@ -50,6 +50,7 @@ from agm.agent.session import (
     SessionOperation,
     SessionService,
 )
+from agm.agent.spec import PermissionMode
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.sandbox.request import Default, SandboxLimits
 from tests._agl_helpers import (
@@ -102,7 +103,12 @@ def _fixture_roots(spec: dict[str, Any]) -> Any | None:
 
 @dataclass
 class _ScriptedSession:
-    """One deterministic session observation owned by a scripted agent."""
+    """One deterministic session observation owned by a scripted agent.
+
+    ``permission_mode``/``sandbox`` are the mode this session's backend was
+    opened under -- fixed then, for its whole lifetime, exactly like the
+    production host's own session entry.
+    """
 
     tag: str
     parent: str | None
@@ -112,6 +118,8 @@ class _ScriptedSession:
     closed: bool = False
     prompts: list[str] = field(default_factory=list)
     operations: list[tuple[str, str | None, str]] = field(default_factory=list)
+    permission_mode: str | None = None
+    sandbox: SandboxLimits | None = None
     backend: Any = field(init=False, repr=False)
 
 
@@ -246,7 +254,11 @@ class ScriptedAgent:
 
     def _fork_session(self, parent: _ScriptedSession) -> Any:
         session = _ScriptedSession(
-            tag=f"session-{len(self.sessions) + 1}", parent=parent.tag, opened=True
+            tag=f"session-{len(self.sessions) + 1}",
+            parent=parent.tag,
+            opened=True,
+            permission_mode=parent.permission_mode,
+            sandbox=parent.sandbox,
         )
         self.sessions.append(session)
         backend = parent.backend
@@ -314,14 +326,39 @@ class _ScriptedSessionService:
     def _backend_factory(self, agent: object, transport: str) -> Any:
         return self._agent._new_session_backend(agent, transport)
 
-    def open(self, agent: object, transport: str, *, name: str = "") -> str:
-        handle = self._service.open(agent, transport, name=name)
+    def open(
+        self,
+        agent: object,
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+    ) -> str:
+        handle = self._service.open(
+            agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+        )
         self._sessions[handle] = self._agent.sessions[-1]
         self._backends[handle] = self._agent.sessions[-1].backend
         return handle
 
-    def open_ephemeral(self, agent: object, transport: str, *, single_prompt: bool = False) -> str:
-        handle = self._service.open(agent, transport, ephemeral=True, single_prompt=single_prompt)
+    def open_ephemeral(
+        self,
+        agent: object,
+        transport: str,
+        *,
+        single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+    ) -> str:
+        handle = self._service.open(
+            agent,
+            transport,
+            ephemeral=True,
+            single_prompt=single_prompt,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+        )
         self._sessions[handle] = self._agent.sessions[-1]
         self._backends[handle] = self._agent.sessions[-1].backend
         self._ephemeral_handles.add(handle)
@@ -335,6 +372,8 @@ class _ScriptedSessionService:
         *,
         on_closed: Callable[[str], None] | None = None,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
     ) -> Any:
         def register(handle: str) -> Any:
             self._sessions[handle] = self._agent.sessions[-1]
@@ -348,11 +387,27 @@ class _ScriptedSessionService:
                 on_closed(handle)
 
         return self._service.with_ephemeral(
-            agent, transport, register, on_closed=retire, single_prompt=single_prompt
+            agent,
+            transport,
+            register,
+            on_closed=retire,
+            single_prompt=single_prompt,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
         )
 
-    def default(self, agent: object, transport: str, *, name: str = "") -> str:
-        handle = self._service.default(agent, transport, name=name)
+    def default(
+        self,
+        agent: object,
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+    ) -> str:
+        handle = self._service.default(
+            agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+        )
         if handle not in self._sessions:
             self._sessions[handle] = self._agent.sessions[-1]
             self._backends[handle] = self._agent.sessions[-1].backend
@@ -433,20 +488,48 @@ class _ScenarioSessionHost:
         self._snapshots: dict[str, tuple[Any, str]] = {}
         self._default_handle: str | None = None
 
-    def open(self, agent: Any, transport: str, *, name: str = "") -> str:
+    def open(
+        self,
+        agent: Any,
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+    ) -> str:
         service = self._service_for(agent)
         try:
-            handle = service.open(agent, transport.lower(), name=name)
+            handle = service.open(
+                agent,
+                transport.lower(),
+                name=name,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+            )
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
         self._snapshots[handle] = (agent, transport)
         return handle
 
-    def open_ephemeral(self, agent: Any, transport: str, *, single_prompt: bool = False) -> str:
+    def open_ephemeral(
+        self,
+        agent: Any,
+        transport: str,
+        *,
+        single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+    ) -> str:
         service = self._service_for(agent)
         try:
-            handle = service.open_ephemeral(agent, transport.lower(), single_prompt=single_prompt)
+            handle = service.open_ephemeral(
+                agent,
+                transport.lower(),
+                single_prompt=single_prompt,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+            )
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
@@ -460,6 +543,8 @@ class _ScenarioSessionHost:
         action: Callable[[str], Any],
         *,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
     ) -> Any:
         service = self._service_for(agent)
 
@@ -479,16 +564,32 @@ class _ScenarioSessionHost:
                 register,
                 on_closed=retire,
                 single_prompt=single_prompt,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
             )
         except SessionHostError as error:
             self._raise_host_error(error)
 
-    def default(self, agent: Any, transport: str, *, name: str = "") -> str:
+    def default(
+        self,
+        agent: Any,
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+    ) -> str:
         if self._default_handle is not None:
             return self._default_handle
         service = self._service_for(agent)
         try:
-            handle = service.default(agent, transport.lower(), name=name)
+            handle = service.default(
+                agent,
+                transport.lower(),
+                name=name,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+            )
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
@@ -661,13 +762,17 @@ class _ScriptedSessionBackend:
         self._session.transport = request.transport
         self._session.single_prompt = request.single_prompt
         self._session.opened = True
+        self._session.permission_mode = request.permission_mode.value
+        self._session.sandbox = request.sandbox
 
     def ask(self, request: Any) -> Any:
         from agm.agent.session import SessionAskError, SessionAskResponse
         from agm.agent.transport import AgentCallInfo
 
         self._session.prompts.append(request.prompt)
-        self._agent.prompt_events.append(_PromptEvent(request.prompt, None, None, None))
+        self._agent.prompt_events.append(
+            _PromptEvent(request.prompt, None, self._session.permission_mode, self._session.sandbox)
+        )
         outcome = self._agent._next_session_ask_outcome()
         if isinstance(outcome, dict):
             elapsed = float(outcome.get("elapsed", 0.0))

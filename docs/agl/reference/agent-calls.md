@@ -422,6 +422,14 @@ Selects the call's sandboxing mode, an `AgentSandbox` value
 naming resource limits. When omitted, it defaults to
 `std/config::default-sandbox`.
 
+- `Sandbox` (the default) — the agent process runs wrapped by the sandbox
+  runtime in an all-permissions mode; the wrapping process resolves and
+  applies the resource limits the record names.
+- `Native` — the agent process runs unwrapped, in the agent's own
+  don't-ask/auto-approve mode.
+- `Disabled` — the agent process runs unwrapped, with no permission flag
+  added at all.
+
 <!-- agl-check: fragment -->
 ```agl
 let r: Review = reviewer.ask("Review %{a}", sandbox = Native)
@@ -587,15 +595,16 @@ explicit-agent, and explicit-session forms.
 
 ## Transport and session failures
 
-A failed `ask` transport — for example a process spawn failure, nonzero exit,
-idle timeout, output that is not valid UTF-8, or a failed Pi RPC prompt —
-raises **`AgentCallError`**. Undecodable output surfaces as
-`cause = "protocol_failure"`, with the message giving the byte offset of the
-first invalid byte; the stderr tail in `metadata` is `""` if it is itself
-undecodable. It is catchable and is never retried by `on-parse-error`, with
-no opt-out: agent CLIs are specified to emit UTF-8. **`SessionError`** instead
-reports a session lifecycle, capability, or non-ask backend failure: opening or
-using a closed session, an unsupported operation or transport, and failed
+A failed `ask` transport — for example a process spawn failure, a sandbox
+preparation failure, nonzero exit, idle timeout, output that is not valid
+UTF-8, or a failed Pi RPC prompt — raises **`AgentCallError`**. Undecodable
+output surfaces as `cause = "protocol_failure"`, with the message giving the
+byte offset of the first invalid byte; the stderr tail in `metadata` is `""`
+if it is itself undecodable. It is catchable and is never retried by
+`on-parse-error`, with no opt-out: agent CLIs are specified to emit UTF-8.
+**`SessionError`** instead reports a session lifecycle, capability, or
+non-ask backend failure: opening or using a closed session, a sandbox
+preparation failure at open, an unsupported operation or transport, and failed
 compaction/fork/reset/name/stats operations. `SessionError.operation` names the
 operation. `AgentParseError` is only for output that arrived but could not meet
 the requested structured contract.

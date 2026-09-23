@@ -18,6 +18,7 @@ from agm.agent.session.cli_adapters import AgentCommandSessionBackend
 from agm.agent.spec import AgentCommand
 from agm.core.process import CapturedOutput, ProcessCaptureResult
 from agm.util.interp import InterpolationError
+from tests._agl_helpers import unavailable_sandbox_context
 
 
 def _open(backend: AgentCommandSessionBackend, command: str, *, name: str = "") -> None:
@@ -40,7 +41,7 @@ def _non_prompt_args(argv: list[str]) -> list[str]:
 
 
 def test_open_requires_an_agent_command() -> None:
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 
     with pytest.raises(SessionHostError) as raised:
         backend.open(SessionOpenRequest(agent=object(), transport="cli"))
@@ -49,7 +50,7 @@ def test_open_requires_an_agent_command() -> None:
 
 
 def test_open_requires_a_well_formed_command() -> None:
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 
     with pytest.raises(SessionHostError) as raised:
         _open(backend, 'runner "unterminated %{SESSION_ID}')
@@ -58,7 +59,7 @@ def test_open_requires_a_well_formed_command() -> None:
 
 
 def test_open_requires_a_session_id_placeholder() -> None:
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 
     with pytest.raises(SessionHostError) as raised:
         _open(backend, "runner --quiet")
@@ -76,7 +77,11 @@ def test_single_prompt_command_session_does_not_require_a_session_id_placeholder
         return _capture_result()
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    service = SessionService(lambda _agent, _transport: AgentCommandSessionBackend())
+    service = SessionService(
+        lambda _agent, _transport: AgentCommandSessionBackend(
+            get_sandbox_context=unavailable_sandbox_context
+        )
+    )
 
     response = service.with_ephemeral(
         AgentCommand("runner --quiet"),
@@ -90,7 +95,7 @@ def test_single_prompt_command_session_does_not_require_a_session_id_placeholder
 
 
 def test_open_converts_malformed_placeholder_to_an_open_error() -> None:
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 
     with pytest.raises(SessionHostError) as raised:
         _open(backend, "runner --session=%{SESSION_ID} --invalid=%{")
@@ -106,7 +111,7 @@ def test_command_session_target_check_adds_the_malformed_element_context() -> No
 
 
 def test_open_does_not_accept_an_escaped_session_id_placeholder() -> None:
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 
     with pytest.raises(SessionHostError) as raised:
         _open(backend, r"runner --session='\%{SESSION_ID}'")
@@ -118,7 +123,7 @@ def test_ask_preserves_interpolation_failures_as_ask_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("AGM_SESSION_TEST_MISSING", raising=False)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session=%{SESSION_ID} --option=%{AGM_SESSION_TEST_MISSING}")
 
     with pytest.raises(SessionAskError) as raised:
@@ -133,7 +138,7 @@ def test_ask_preserves_interpolation_failures_as_ask_failures(
 
 
 def test_open_rejects_a_backend_visible_name() -> None:
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 
     with pytest.raises(SessionHostError) as raised:
         _open(backend, "runner --session %{SESSION_ID}", name="named")
@@ -151,7 +156,7 @@ def test_asks_reuse_one_underlying_id_with_a_symmetric_command_shape(
         return _capture_result()
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     first = backend.ask(SessionAskRequest(prompt="first"))
@@ -174,7 +179,7 @@ def test_ask_interpolates_mixed_prompt_session_and_escaped_placeholders(
         return _capture_result()
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(
         backend,
         r"runner --session=%{SESSION_ID} --literal='\%{SESSION_ID}' "
@@ -217,7 +222,7 @@ def test_ask_preserves_failed_process_diagnostics(
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     with pytest.raises(SessionAskError) as raised:
@@ -252,7 +257,7 @@ def test_ask_preserves_failed_process_diagnostics_when_cleanup_fails(
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
     monkeypatch.setattr("agm.agent.session.cli_adapters.cleanup_temp_files", failing_cleanup)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     with pytest.raises(SessionAskError) as raised:
@@ -279,7 +284,7 @@ def test_ask_reports_protocol_failure_for_undecodable_stdout_on_an_otherwise_suc
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     with pytest.raises(SessionAskError) as raised:
@@ -302,7 +307,7 @@ def test_ask_undecodable_stderr_tail_gives_empty_text(monkeypatch: pytest.Monkey
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     with pytest.raises(SessionAskError) as raised:
@@ -323,7 +328,7 @@ def test_ask_preserves_an_interpolation_failure_when_cleanup_fails(
 
     monkeypatch.delenv("AGM_SESSION_TEST_MISSING", raising=False)
     monkeypatch.setattr("agm.agent.session.cli_adapters.cleanup_temp_files", failing_cleanup)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session=%{SESSION_ID} --option=%{AGM_SESSION_TEST_MISSING}")
 
     with pytest.raises(SessionAskError) as raised:
@@ -347,7 +352,7 @@ def test_ask_cleans_up_after_an_interrupt_without_masking_it(
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", interrupted_run_capture_result)
     monkeypatch.setattr("agm.agent.session.cli_adapters.cleanup_temp_files", failing_cleanup)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     with pytest.raises(KeyboardInterrupt):
@@ -367,7 +372,7 @@ def test_ask_surfaces_cleanup_failure_after_a_successful_process(
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
     monkeypatch.setattr("agm.agent.session.cli_adapters.cleanup_temp_files", failing_cleanup)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     with pytest.raises(OSError, match="cleanup failed"):
@@ -384,7 +389,7 @@ def test_reset_mints_a_new_underlying_id(
         return _capture_result()
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     backend.ask(SessionAskRequest(prompt="first"))
@@ -407,7 +412,7 @@ def test_unsupported_operations_are_rejected_by_the_session_service(
     operation: str,
     invoke: object,
 ) -> None:
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     service = SessionService(lambda agent, transport: backend)
     handle = service.open(AgentCommand("runner --session %{SESSION_ID}"), "cli")
 
@@ -433,7 +438,7 @@ def test_direct_unsupported_operations_raise_capability_errors(
     args: tuple[str, ...],
     operation: str,
 ) -> None:
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     with pytest.raises(SessionHostError) as raised:
@@ -443,7 +448,7 @@ def test_direct_unsupported_operations_raise_capability_errors(
 
 
 def test_close_drops_the_underlying_command_state() -> None:
-    backend = AgentCommandSessionBackend()
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     _open(backend, "runner --session %{SESSION_ID}")
 
     backend.close()

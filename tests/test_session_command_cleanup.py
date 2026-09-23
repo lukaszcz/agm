@@ -18,7 +18,9 @@ from agm.agent.session import (
     SessionService,
     SessionStats,
 )
+from agm.agent.spec import PermissionMode
 from agm.commands import exec_program
+from agm.sandbox.request import SandboxLimits
 from tests._agl_helpers import write_file_program
 from tests.test_exec_command import file_args
 
@@ -28,8 +30,16 @@ class _SessionHost:
         self.close_calls = 0
         self.close_error = close_error
 
-    def open(self, _agent: object, _transport: str, *, name: str = "") -> str:
-        del name
+    def open(
+        self,
+        _agent: object,
+        _transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+    ) -> str:
+        del name, permission_mode, sandbox
         return "session"
 
     def close_all(self) -> None:
@@ -124,9 +134,17 @@ class _RecordingSessionService(SessionService):
         name: str = "",
         ephemeral: bool = False,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
     ) -> str:
         handle = super().open(
-            agent, transport, name=name, ephemeral=ephemeral, single_prompt=single_prompt
+            agent,
+            transport,
+            name=name,
+            ephemeral=ephemeral,
+            single_prompt=single_prompt,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
         )
         self.opened_handle = handle
         return handle

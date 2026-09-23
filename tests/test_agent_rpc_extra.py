@@ -21,6 +21,7 @@ from agm.agent.session import (
     rpc,
 )
 from agm.agent.spec import AgentClaude, AgentPi
+from tests._agl_helpers import unavailable_sandbox_context
 from tests.test_agent_rpc import RpcStub, open_backend
 
 _PI = AgentPi(provider="provider", model="model", thinking="think")
@@ -438,11 +439,13 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(subprocess, "Popen", no_pipes)
     with pytest.raises(SessionHostError):
-        rpc.PiRpcSessionBackend().open(SessionOpenRequest(AgentPi("", "", ""), "rpc"))
+        rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context).open(
+            SessionOpenRequest(AgentPi("", "", ""), "rpc")
+        )
 
 
 def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
-    backend = rpc.PiRpcSessionBackend()
+    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     with pytest.raises(SessionHostError):
         backend.open(SessionOpenRequest(AgentClaude("model", "high"), "rpc"))
 
@@ -546,7 +549,9 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(subprocess, "Popen", fail_popen)
     with pytest.raises(SessionHostError):
-        rpc.PiRpcSessionBackend().open(SessionOpenRequest(AgentPi("", "", ""), "rpc"))
+        rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context).open(
+            SessionOpenRequest(AgentPi("", "", ""), "rpc")
+        )
 
     with pytest.raises(ValueError):
         rpc._parse_json_float("Infinity")
@@ -686,7 +691,7 @@ def test_fork_after_clone_failure_retains_replacement_parent(
         def wait(self, timeout: float | None = None) -> None:
             del timeout
 
-    backend = rpc.PiRpcSessionBackend()
+    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     source = _child(Process())
     replacement = _child(Process())
     backend._child = source
@@ -726,7 +731,7 @@ def test_fork_replacement_readiness_failure_leaves_source_unchanged(
         def wait(self, timeout: float | None = None) -> None:
             del timeout
 
-    backend = rpc.PiRpcSessionBackend()
+    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     source = _child(Process())
     replacement = _child(Process())
     backend._child = source
@@ -763,7 +768,7 @@ def test_fork_rejects_a_child_with_the_parent_session_id(
         def wait(self, timeout: float | None = None) -> None:
             del timeout
 
-    backend = rpc.PiRpcSessionBackend()
+    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     source = _child(Process())
     replacement = _child(Process())
     backend._child = source
@@ -874,7 +879,7 @@ def test_malformed_payload_reports_the_protocol_violation_not_the_child_exit(
 
 def test_malformed_payload_is_reported_when_no_child_remains() -> None:
     """A closed session still reports why the payload was rejected."""
-    backend = rpc.PiRpcSessionBackend()
+    backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 
     with pytest.raises(SessionHostError) as raised:
         backend._parse_operation_response({}, "get_session_stats", rpc._required_session_id)

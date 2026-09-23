@@ -1464,10 +1464,14 @@ class IrInterpreter:
     ) -> Value:
         try:
             if isinstance(node, IrSessionOpen):
-                return self._effects.eval_ir_session_open(node)
+                return self._effects.eval_ir_session_open(
+                    node, self._load_builtin_setting("default-sandbox")
+                )
             if isinstance(node, IrSessionDefault):
                 return self._effects.eval_ir_session_default(
-                    node, self._load_builtin_setting("default-agent")
+                    node,
+                    self._load_builtin_setting("default-agent"),
+                    self._load_builtin_setting("default-sandbox"),
                 )
             if isinstance(node, IrSessionAsk):
                 return self._effects.eval_ir_session_ask(node)

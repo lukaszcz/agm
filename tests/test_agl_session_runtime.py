@@ -13,6 +13,7 @@ from agm.agent.spec import (
     AgentCommand,
     AgentPi,
     AgentSpec,
+    PermissionMode,
     SessionTransport,
 )
 from agm.agl import PipelineDriver
@@ -34,6 +35,8 @@ from agm.agl.runtime.sessions import (
     default_session_transport,
     with_ephemeral_session,
 )
+from agm.sandbox.request import SandboxLimits
+from tests._agl_helpers import hermetic_config_context
 
 
 @dataclass
@@ -44,7 +47,16 @@ class _Host:
     closed: set[str] = field(default_factory=set)
     default_handle: str | None = None
 
-    def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+    def open(
+        self,
+        agent: AgentSpec,
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+    ) -> str:
+        del permission_mode, sandbox
         handle = f"s{len(self.handles) + 1}"
         self.handles[handle] = (agent, transport)
         self.prompts[handle] = []
@@ -52,14 +64,30 @@ class _Host:
         return handle
 
     def open_ephemeral(
-        self, agent: AgentSpec, transport: str, *, single_prompt: bool = False
+        self,
+        agent: AgentSpec,
+        transport: str,
+        *,
+        single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
     ) -> str:
         del single_prompt
-        return self.open(agent, transport)
+        return self.open(agent, transport, permission_mode=permission_mode, sandbox=sandbox)
 
-    def default(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+    def default(
+        self,
+        agent: AgentSpec,
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
+    ) -> str:
         if self.default_handle is None:
-            self.default_handle = self.open(agent, transport, name=name)
+            self.default_handle = self.open(
+                agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+            )
         return self.default_handle
 
     def ask(self, handle: str, prompt: str) -> str:
@@ -114,8 +142,16 @@ class _LifecycleHost(_Host):
     single_prompt_flags: list[bool] = field(default_factory=list)
 
     def with_ephemeral(
-        self, _agent: AgentSpec, _transport: str, action: object, *, single_prompt: bool = False
+        self,
+        _agent: AgentSpec,
+        _transport: str,
+        action: object,
+        *,
+        single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: SandboxLimits | None = None,
     ) -> object:
+        del permission_mode, sandbox
         self.single_prompt_flags.append(single_prompt)
         if not callable(action):
             raise AssertionError("expected callable action")
@@ -264,8 +300,16 @@ def test_session_open_maps_an_undecodable_agent_value_to_a_session_error(
 
 def test_session_failures_report_the_session_call_location() -> None:
     class FailingHost(_Host):
-        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
-            del agent, transport, name
+        def open(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+        ) -> str:
+            del agent, transport, name, permission_mode, sandbox
             raise SessionHostError("unavailable", "open")
 
     result = _run(
@@ -300,7 +344,16 @@ def test_session_operation_failures_report_the_operation_location() -> None:
 
 def test_agent_method_maps_session_agent_errors_to_agent_call_errors() -> None:
     class InvalidAgentHost(_Host):
-        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+        def open(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+        ) -> str:
+            del permission_mode, sandbox
             raise SessionAgentError("invalid agent", "open")
 
     result = _run(
@@ -346,8 +399,18 @@ def test_persistent_session_ask_maps_an_undecodable_agent_value_to_a_session_err
     from agm.agent import spec as agent_spec
 
     class DriftingHost(_Host):
-        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
-            handle = super().open(agent, transport, name=name)
+        def open(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+        ) -> str:
+            handle = super().open(
+                agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+            )
             catalog = dict(agent_spec.AGENT_SPECS)
             del catalog["AgentClaude"]
             monkeypatch.setattr(agent_spec, "AGENT_SPECS", catalog)
@@ -736,8 +799,16 @@ def test_a_missing_session_host_becomes_a_catchable_session_error(source: str) -
 
 def test_a_failing_default_becomes_a_catchable_session_error() -> None:
     class FailingDefaultHost(_Host):
-        def default(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
-            del agent, transport, name
+        def default(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+        ) -> str:
+            del agent, transport, name, permission_mode, sandbox
             raise SessionHostError("unavailable", "default")
 
     assert _run(_CLOSE_AFTER_DEFAULT, FailingDefaultHost()).ok
@@ -745,8 +816,16 @@ def test_a_failing_default_becomes_a_catchable_session_error() -> None:
 
 def test_a_failing_open_becomes_a_catchable_session_error() -> None:
     class FailingOpenHost(_Host):
-        def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
-            del agent, transport, name
+        def open(
+            self,
+            agent: AgentSpec,
+            transport: str,
+            *,
+            name: str = "",
+            permission_mode: PermissionMode = PermissionMode.NONE,
+            sandbox: SandboxLimits | None = None,
+        ) -> str:
+            del agent, transport, name, permission_mode, sandbox
             raise SessionHostError("unavailable", "open")
 
     assert _run(_CLOSE_AFTER_OPEN, FailingOpenHost()).ok
@@ -856,10 +935,12 @@ def test_production_session_host_carries_the_stream_decode_offset(
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    host = create_agl_session_host(idle_timeout=None)
+    host = create_agl_session_host(idle_timeout=None, context=hermetic_config_context())
+    # This test targets the decode-offset diagnostic, not sandbox preparation, so
+    # it seeds ``Disabled`` explicitly rather than exercising the default sandbox.
     result = PipelineDriver(session_host=host).run(
         "program def main() -> unit =\n"
-        '  let answer: text = ask("hello", agent = AgentCommand("runner"))\n'
+        '  let answer: text = ask("hello", agent = AgentCommand("runner"), sandbox = Disabled)\n'
         "  print(answer)\n"
     )
 

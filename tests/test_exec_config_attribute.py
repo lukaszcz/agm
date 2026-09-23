@@ -224,9 +224,9 @@ class TestConfigTimeoutReachesEveryTimeoutConsumer:
             captured["agent_idle_timeout"] = idle_timeout
             return real_factory(idle_timeout=idle_timeout, context=context)
 
-        def session_host_spy(*, idle_timeout: float | None) -> object:
+        def session_host_spy(*, idle_timeout: float | None, context: ConfigContext) -> object:
             captured["session_idle_timeout"] = idle_timeout
-            return real_session_host(idle_timeout=idle_timeout)
+            return real_session_host(idle_timeout=idle_timeout, context=context)
 
         monkeypatch.setattr(exec_engine, "value_driven_agent_factory", factory_spy)
         monkeypatch.setattr(exec_engine, "create_agl_session_host", session_host_spy)

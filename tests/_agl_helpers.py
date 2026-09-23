@@ -61,7 +61,7 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from agm.agl import PipelineDriver
@@ -124,6 +124,7 @@ from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.agl.zones import ParamZone
 from agm.config.context import ConfigContext
+from agm.sandbox.prepare import SandboxContext, lazy_sandbox_context
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
 # ids (which start at 0) and from every reserved identity (<= -2, see
@@ -659,6 +660,28 @@ def hermetic_config_context() -> ConfigContext:
     """
     home = Path(os.environ["HOME"])
     return ConfigContext(home=home, proj_dir=None, cwd=home)
+
+
+def unavailable_sandbox_context() -> SandboxContext:
+    """A ``get_sandbox_context`` stand-in for a session backend test that never
+    dispatches a sandboxed call.
+
+    Every session test that leaves ``permission_mode``/``sandbox`` at their
+    ``SessionOpenRequest``/``SessionAskRequest`` defaults never reaches this
+    (``sandbox_run_for`` only calls its ``get_context`` argument when a real
+    ``SandboxLimits`` is present), so raising here catches a test that
+    silently started exercising sandboxing without a real context.
+    """
+    raise AssertionError("sandbox context requested unexpectedly")
+
+
+def session_sandbox_context(home: Path) -> Callable[[], SandboxContext]:
+    """A real, lazily-built ``get_sandbox_context`` scoped to *home*.
+
+    For a session backend test that does exercise sandboxing: pair with
+    ``write_sandbox_home(home, ...)`` for a resolvable default settings file.
+    """
+    return lazy_sandbox_context(ConfigContext(home=home, proj_dir=None, cwd=home))
 
 
 def write_sandbox_home(

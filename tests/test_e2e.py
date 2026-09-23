@@ -37,7 +37,7 @@ import pytest
 from agm.packages.record import write_record
 from agm.project.workspace_shell import _sanitize_session_key
 from tests import _agm_zygote
-from tests._agl_helpers import write_file_program
+from tests._agl_helpers import write_file_program, write_sandbox_home
 from tests._command_coverage import record_invocation
 from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
 from tests._git_helpers import clone_with_fork_remote
@@ -9272,6 +9272,49 @@ def _write_development_package_pair(parent: Path) -> tuple[Path, Path]:
     return alpha, module
 
 
+def _install_transparent_sandbox_shims(
+    directory: Path, env: dict[str, str], *, log_dir: Path
+) -> None:
+    """Install ``systemd-run``/``srt`` fakes that skip their own flags and exec the wrapped command.
+
+    Unlike ``TestSandbox``'s diagnostic fakes (which print captured settings/command
+    for ``agm run`` assertions), these run silently, so a sandboxed agent call's real
+    stdout stays exactly what the wrapped agent command printed. Each touches
+    ``<log_dir>/<its name>`` before exec'ing onward, so a test can confirm both
+    wrapper binaries actually ran (not merely that the final command succeeded).
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    systemd_run = directory / "systemd-run"
+    systemd_run.write_text(
+        "#!/bin/bash\n"
+        f'touch "{log_dir}/systemd-run"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        "    --user|--scope|-q) shift ;;\n"
+        "    -p|--unit) shift 2 ;;\n"
+        '    --) shift; exec "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    systemd_run.chmod(systemd_run.stat().st_mode | stat.S_IEXEC)
+    srt = directory / "srt"
+    srt.write_text(
+        "#!/bin/bash\n"
+        f'touch "{log_dir}/srt"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        "    --settings) shift 2 ;;\n"
+        '    --) shift; exec "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    srt.chmod(srt.stat().st_mode | stat.S_IEXEC)
+    env["PATH"] = f"{directory}:{env['PATH']}"
+
+
 class TestExecCommand:
     """agm exec: run an AgL workflow program through the checkout CLI."""
 
@@ -9468,6 +9511,104 @@ class TestExecCommand:
 
         assert result.returncode == 0
         assert result.stdout.strip() == "pong"
+
+    def test_exec_default_sandboxed_agent_call_reaches_the_wrapped_agent_binary(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # No ``sandbox =`` override on this ``ask``: it exercises the
+        # ``default-sandbox`` engine setting, proving the whole wrapped
+        # systemd-run/srt chain reaches the real agent binary -- not just
+        # that sandboxed argv is constructed correctly, which the adapter
+        # unit tests already cover.
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "ask.agl"
+        write_file_program(
+            program,
+            'let r = AgentCommand("fake-sandboxed-agent").ask("hello")\nprint r\n',
+            encoding="utf-8",
+        )
+
+        shim_log = tmp_path / "shim-log"
+        _install_transparent_sandbox_shims(tmp_path / "shims", env, log_dir=shim_log)
+        write_sandbox_home(Path(env["HOME"]))
+
+        fake_agent = tmp_path / "bin" / "fake-sandboxed-agent"
+        fake_agent.parent.mkdir(parents=True)
+        env["FAKE_AGENT_LOG"] = str(tmp_path / "agent.log")
+        fake_agent.write_text('#!/bin/bash\necho "$@" >> "$FAKE_AGENT_LOG"\nprintf \'pong\'\n')
+        fake_agent.chmod(fake_agent.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_agent.parent}:{env['PATH']}"
+
+        trace_path = tmp_path / "trace.jsonl"
+        result = run_agm(
+            ["exec", "--trace-file", str(trace_path), str(program)], env=env, cwd=str(work)
+        )
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "pong"
+        # Both wrapper binaries actually ran, not just the final command.
+        assert (shim_log / "systemd-run").exists()
+        assert (shim_log / "srt").exists()
+        assert Path(env["FAKE_AGENT_LOG"]).exists()
+
+        records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+        responses = [record for record in records if record.get("kind") == "agent_response"]
+        assert responses
+        response = responses[-1]
+        assert response["sandboxed"] is True
+        assert response["argv"][0] == "systemd-run"
+        assert response["argv"][-2] == "fake-sandboxed-agent"
+
+    def test_exec_default_sandboxed_free_ask_reaches_the_wrapped_agent_binary(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # A free ``ask(...)`` (no receiver, no explicit ``agent =``) routes
+        # through the default session, opened lazily on first use: its
+        # sandboxing is fixed at that open, from the same ``default-sandbox``
+        # engine setting, and must reach the real agent binary exactly like an
+        # explicit-agent call's ephemeral session does.
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "ask.agl"
+        write_file_program(
+            program,
+            "import std/config\n"
+            'std/config::default-agent := AgentCommand("fake-free-agent \\%{SESSION_ID}")\n'
+            'let r = ask("hello")\n'
+            "print r\n",
+            encoding="utf-8",
+        )
+
+        shim_log = tmp_path / "shim-log"
+        _install_transparent_sandbox_shims(tmp_path / "shims", env, log_dir=shim_log)
+        write_sandbox_home(Path(env["HOME"]))
+
+        fake_agent = tmp_path / "bin" / "fake-free-agent"
+        fake_agent.parent.mkdir(parents=True)
+        env["FAKE_AGENT_LOG"] = str(tmp_path / "agent.log")
+        fake_agent.write_text('#!/bin/bash\necho "$@" >> "$FAKE_AGENT_LOG"\nprintf \'pong\'\n')
+        fake_agent.chmod(fake_agent.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_agent.parent}:{env['PATH']}"
+
+        trace_path = tmp_path / "trace.jsonl"
+        result = run_agm(
+            ["exec", "--trace-file", str(trace_path), str(program)], env=env, cwd=str(work)
+        )
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "pong"
+        # Both wrapper binaries actually ran, not just the final command.
+        assert (shim_log / "systemd-run").exists()
+        assert (shim_log / "srt").exists()
+        assert Path(env["FAKE_AGENT_LOG"]).exists()
+
+        records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+        responses = [record for record in records if record.get("kind") == "agent_response"]
+        assert responses
+        response = responses[-1]
+        assert response["sandboxed"] is True
+        assert response["argv"][0] == "systemd-run"
 
     def test_exec_runs_multi_agent_review_fix_workflow(
         self, tmp_path: Path, env: dict[str, str]

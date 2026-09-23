@@ -711,7 +711,7 @@ def run(
     )
 
     factory = value_driven_agent_factory(idle_timeout=resolved_timeout, context=ctx)
-    session_host = create_agl_session_host(idle_timeout=resolved_timeout)
+    session_host = create_agl_session_host(idle_timeout=resolved_timeout, context=ctx)
     runtime.configure_execution_services(
         default_strict_json=resolved_strict_json,
         agent_dispatcher=factory,

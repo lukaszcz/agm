@@ -1446,7 +1446,7 @@ class TestRunSubprocessBaseExceptionWithCapture:
 
         killed: list[bool] = []
 
-        def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
+        def tracking_kill(proc: subprocess.Popen[bytes], *, pgid: int | None = None) -> None:
             killed.append(True)
 
         monkeypatch.setattr(process_module, "kill_process_group", tracking_kill)
@@ -1479,7 +1479,7 @@ class TestRunSubprocessBaseExceptionIsolatedNoCapture:
 
         killed: list[bool] = []
 
-        def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
+        def tracking_kill(proc: subprocess.Popen[bytes], *, pgid: int | None = None) -> None:
             killed.append(True)
 
         monkeypatch.setattr(process_module, "kill_process_group", tracking_kill)
@@ -1718,7 +1718,7 @@ class TestTerminationSignalsReachCleanup:
         monkeypatch.setattr(
             process_module,
             "kill_process_group",
-            lambda _proc: cleaned_first.append(marker.exists()),
+            lambda _proc, *, pgid=None: cleaned_first.append(marker.exists()),
         )
         _patch_start_process(
             monkeypatch,

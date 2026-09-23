@@ -14,9 +14,10 @@ from __future__ import annotations
 import re
 import shutil
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from agm.config.general import RunConfig
@@ -38,6 +39,9 @@ from agm.sandbox.request import (
     SandboxSpec,
 )
 
+if TYPE_CHECKING:
+    from agm.config.context import ConfigContext
+
 __all__ = [
     "DEFAULT_MEMORY_LIMIT",
     "DEFAULT_SWAP_LIMIT",
@@ -52,9 +56,11 @@ __all__ = [
     "SandboxRun",
     "SandboxSpec",
     "dry_run_argv",
+    "lazy_sandbox_context",
     "prepare",
     "print_dry_run",
     "resolve_limits",
+    "sandbox_run_for",
     "settings_source",
 ]
 
@@ -115,6 +121,53 @@ class SandboxRun:
 
     spec: SandboxLimits
     context: SandboxContext
+
+
+def lazy_sandbox_context(context: "ConfigContext") -> Callable[[], SandboxContext]:
+    """Return a callable that builds and caches one `SandboxContext` from *context*.
+
+    Defers the config I/O (`load_run_config`, `[run.*]` sections) until the
+    first sandboxed call actually needs it, so a caller that never dispatches
+    a sandboxed call -- an agent-free program, or one whose every call runs
+    unsandboxed -- never pays for it. Shared by every host that builds a
+    `SandboxContext` from a `ConfigContext` (the value-driven agent dispatcher,
+    the session host).
+    """
+    from agm.config.general import load_run_config
+
+    built: list[SandboxContext] = []
+
+    def get() -> SandboxContext:
+        if not built:
+            run_config = load_run_config(
+                home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
+            )
+            built.append(
+                SandboxContext(
+                    home=context.home,
+                    proj_dir=context.proj_dir,
+                    cwd=context.cwd,
+                    run_config=run_config,
+                )
+            )
+        return built[0]
+
+    return get
+
+
+def sandbox_run_for(
+    spec: SandboxLimits | None, get_context: Callable[[], SandboxContext]
+) -> SandboxRun | None:
+    """Bind optional profile-independent *spec* to a lazily built `SandboxContext`.
+
+    Returns ``None`` without calling *get_context* when *spec* is ``None``, so
+    a caller that dispatches no sandboxed call never builds the context it
+    would need. The profile name is bound later, from the post-interpolation
+    argv, never here.
+    """
+    if spec is None:
+        return None
+    return SandboxRun(spec=spec, context=get_context())
 
 
 # The delegated cgroup lets a resource-limited scope's children join

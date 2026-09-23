@@ -22,11 +22,13 @@ from agm.agent.session import (
     SessionStats,
     create_agl_session_host,
 )
-from agm.agent.spec import AgentCommand, AgentPi
+from agm.agent.spec import AgentCommand, AgentPi, PermissionMode
 from agm.agent.transport import AgentCallInfo
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
 from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
+from agm.sandbox.request import SandboxLimits
+from tests._agl_helpers import hermetic_config_context
 
 
 @dataclass
@@ -156,7 +158,7 @@ def test_production_session_host_selects_and_rejects_transports(
     monkeypatch.setattr(
         PiRpcSessionBackend, "_start", lambda self, _agent, _operation, name="": None
     )
-    host = create_agl_session_host(idle_timeout=1.0)
+    host = create_agl_session_host(idle_timeout=1.0, context=hermetic_config_context())
     pi = AgentPi(provider="provider", model="model", thinking="think")
     handle = host.open(pi, "Rpc")
     host.close(handle)
@@ -623,6 +625,62 @@ def test_fork_returns_a_distinct_live_handle_and_reset_preserves_the_original_ha
     assert backend.reset_calls == 1
     assert service.ask(original, SessionAskRequest(prompt="original")).content == "answer"
     assert service.ask(forked, SessionAskRequest(prompt="forked")).content == "answer"
+
+
+def test_service_stores_and_forks_the_open_time_sandbox_mode() -> None:
+    """A session's permission mode and sandbox limits are fixed at ``open``,
+    reach the backend's own ``SessionOpenRequest``, and are copied forward to
+    a forked session's entry -- independent of whatever internal bookkeeping
+    the backend itself keeps for the same values."""
+    limits = SandboxLimits(memory="4G")
+    service, factory = _service()
+
+    handle = service.open(
+        AgentCommand("cat"),
+        "cli",
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=limits,
+    )
+
+    backend = factory.backends[0]
+    assert backend.open_requests[0].permission_mode == PermissionMode.UNRESTRICTED
+    assert backend.open_requests[0].sandbox == limits
+    assert service._entries[handle].permission_mode == PermissionMode.UNRESTRICTED
+    assert service._entries[handle].sandbox == limits
+
+    backend.fork_result = FakeBackend(capabilities=SessionCapabilities.all())
+    forked = service.fork(handle)
+
+    assert service._entries[forked].permission_mode == PermissionMode.UNRESTRICTED
+    assert service._entries[forked].sandbox == limits
+    # A session opened with no override keeps the "no sandbox" defaults.
+    default_handle = service.open(AgentCommand("cat"), "cli")
+    assert service._entries[default_handle].permission_mode == PermissionMode.NONE
+    assert service._entries[default_handle].sandbox is None
+
+
+def test_agl_session_host_snapshot_exposes_the_open_time_sandbox_mode() -> None:
+    """The AgL-facing snapshot carries the same fixed-at-open mode a fork inherits."""
+    limits = SandboxLimits(memory="4G")
+    service, factory = _service()
+    host = AglSessionHost(service)
+    agent = AgentCommand(command="worker")
+
+    handle = host.open(agent, "Cli", permission_mode=PermissionMode.UNRESTRICTED, sandbox=limits)
+    factory.backends[0].fork_result = FakeBackend(capabilities=SessionCapabilities.all())
+    forked = host.fork(handle)
+
+    snapshot = host.snapshot(handle)
+    forked_snapshot = host.snapshot(forked)
+
+    assert snapshot.permission_mode == PermissionMode.UNRESTRICTED
+    assert snapshot.sandbox == limits
+    assert forked_snapshot.permission_mode == PermissionMode.UNRESTRICTED
+    assert forked_snapshot.sandbox == limits
+
+    default_handle = host.open(agent, "Cli")
+    assert host.snapshot(default_handle).permission_mode == PermissionMode.NONE
+    assert host.snapshot(default_handle).sandbox is None
 
 
 def test_a_fork_of_an_ephemeral_session_outlives_its_own_close() -> None:

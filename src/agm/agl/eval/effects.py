@@ -340,10 +340,15 @@ class EffectHandlers:
 
     def _decode_sandbox(self, sandbox_expr: IrExpr) -> tuple[PermissionMode, SandboxLimits | None]:
         """Evaluate and decode an ask/ask-request call's ``sandbox`` operand."""
-        sandbox_val = self._ctx._eval(sandbox_expr)
+        return self._decode_sandbox_setting(self._ctx._eval(sandbox_expr))
+
+    def _decode_sandbox_setting(
+        self, sandbox_val: Value
+    ) -> tuple[PermissionMode, SandboxLimits | None]:
+        """Decode an already-evaluated ``AgentSandbox`` value, e.g. a builtin setting."""
         if not isinstance(sandbox_val, RecordValue):
             raise TypeError(
-                "IrAsk sandbox must evaluate to an AgentSandbox member record, "
+                "value must evaluate to an AgentSandbox member record, "
                 f"got {type(sandbox_val).__name__}"
             )
         return decode_agent_sandbox(sandbox_val, self._ctx._program.builtin_nominals)
@@ -459,27 +464,42 @@ class EffectHandlers:
             return default_session_transport(spec)
         return self._transport_name(cast(RecordValue, selected.fields["value"]))
 
-    def eval_ir_session_open(self, node: IrSessionOpen) -> Value:
-        """Open a host-backed session and mint its opaque AgL record."""
+    def eval_ir_session_open(self, node: IrSessionOpen, default_sandbox: Value) -> Value:
+        """Open a host-backed session and mint its opaque AgL record.
+
+        The session's sandboxing is fixed here, at open, to the current
+        ``default-sandbox`` engine setting -- for its whole lifetime. There is
+        no AgL surface to override this per session yet.
+        """
         agent = cast(RecordValue, self._ctx._eval(node.agent))
         transport_value = None if node.transport is None else self._ctx._eval(node.transport)
         name = self._text_of(self._ctx._eval(node.name))
+        permission_mode, sandbox = self._decode_sandbox_setting(default_sandbox)
         try:
             spec = self._decode_agent_spec(agent)
             transport = self._resolve_session_transport(spec, transport_value)
-            handle = self._ctx._session_host.open(spec, transport, name=name)
+            handle = self._ctx._session_host.open(
+                spec, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+            )
         except SessionHostError as error:
             self._session_error(error)
         return self._session_value(handle, agent, transport)
 
-    def eval_ir_session_default(self, _node: IrSessionDefault, default_agent: Value) -> Value:
-        """Lazily obtain the session whose agent is current at first use."""
+    def eval_ir_session_default(
+        self, _node: IrSessionDefault, default_agent: Value, default_sandbox: Value
+    ) -> Value:
+        """Lazily obtain the session whose agent is current at first use.
+
+        Its sandboxing is likewise fixed at this first use, to the
+        ``default-sandbox`` setting current then -- never per ask.
+        """
         agent = cast(RecordValue, default_agent)
+        permission_mode, sandbox = self._decode_sandbox_setting(default_sandbox)
         try:
             spec = self._decode_agent_spec(agent)
             transport = self._resolve_session_transport(spec, None)
             host = self._ctx._session_host
-            handle = host.default(spec, transport)
+            handle = host.default(spec, transport, permission_mode=permission_mode, sandbox=sandbox)
             snapshot = host.snapshot(handle)
         except SessionHostError as error:
             self._session_error(error)
@@ -617,6 +637,8 @@ class EffectHandlers:
                 transport,
                 ask_in_session,
                 single_prompt=max_attempts == 1,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
             )
         except SessionAgentError as error:
             self._invalid_agent_error(agent, error)

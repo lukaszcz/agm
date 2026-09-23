@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 from decimal import Decimal
@@ -14,6 +15,7 @@ from typing import cast
 import pytest
 
 from agm.agent.session import (
+    AglSessionHost,
     SessionAskError,
     SessionAskRequest,
     SessionHostError,
@@ -23,7 +25,13 @@ from agm.agent.session import (
     rpc,
 )
 from agm.agent.session.rpc import PiRpcSessionBackend
-from agm.agent.spec import AgentPi
+from agm.agent.spec import AgentPi, PermissionMode
+from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
+from tests._agl_helpers import (
+    session_sandbox_context,
+    unavailable_sandbox_context,
+    write_sandbox_home,
+)
 
 _STUB = r"""#!{python}
 import json, os, sys, time
@@ -99,6 +107,47 @@ for line in sys.stdin.buffer:
 """
 
 
+def _install_transparent_sandbox_shims(directory: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Install silent, flag-skipping ``systemd-run``/``srt`` fakes on the front of ``PATH``.
+
+    Each touches a marker file under the returned directory before exec'ing
+    onward, so a test can confirm the wrap chain actually ran, not merely
+    that the wrapped ``pi`` stub happened to start anyway.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    log_dir = directory / "log"
+    log_dir.mkdir()
+    systemd_run = directory / "systemd-run"
+    systemd_run.write_text(
+        "#!/bin/bash\n"
+        f'touch "{log_dir}/systemd-run"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        "    --user|--scope|-q) shift ;;\n"
+        "    -p|--unit) shift 2 ;;\n"
+        '    --) shift; exec "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    systemd_run.chmod(0o755)
+    srt = directory / "srt"
+    srt.write_text(
+        "#!/bin/bash\n"
+        f'touch "{log_dir}/srt"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        "    --settings) shift 2 ;;\n"
+        '    --) shift; exec "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    srt.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+    return log_dir
+
+
 class RpcStub:
     """A small stateful JSONL Pi child controlled through files in one tmp directory."""
 
@@ -153,7 +202,9 @@ class RpcStub:
 
 
 def open_backend(*, timeout: float | None = None) -> PiRpcSessionBackend:
-    backend = PiRpcSessionBackend(idle_timeout=timeout)
+    backend = PiRpcSessionBackend(
+        idle_timeout=timeout, get_sandbox_context=unavailable_sandbox_context
+    )
     backend.open(SessionOpenRequest(AgentPi("provider", "model", "high"), "rpc", "named"))
     return backend
 
@@ -643,7 +694,11 @@ def test_close_and_close_all_terminate_children(
     backend.close()
     backend.close()
     assert_exited(pid)
-    service = SessionService(lambda _agent, _transport: PiRpcSessionBackend())
+    service = SessionService(
+        lambda _agent, _transport: PiRpcSessionBackend(
+            get_sandbox_context=unavailable_sandbox_context
+        )
+    )
     handle = service.open(AgentPi("", "", ""), "rpc")
     child_pid = stub.wait_for("starts.jsonl", 2)[1]["pid"]
     service.close_all()
@@ -715,3 +770,211 @@ def test_stats_accepts_unavailable_context_and_rejects_invalid_values(
                     }
                 }
             )
+
+
+def test_open_spawns_the_rpc_child_wrapped_under_sandbox_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The persistent RPC child is prepared once, at spawn time, under the
+    session's fixed sandbox mode -- the whole systemd-run/srt chain reaches
+    the real ``pi`` process before any prompt is ever sent."""
+    log_dir = _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    stub = RpcStub(tmp_path, monkeypatch)
+
+    backend = PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home))
+    backend.open(
+        SessionOpenRequest(
+            AgentPi("provider", "model", "high"),
+            "rpc",
+            "named",
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+        )
+    )
+
+    stub.wait_for("starts.jsonl")
+    assert (log_dir / "systemd-run").exists()
+    assert (log_dir / "srt").exists()
+    backend.close()
+
+
+def test_ephemeral_host_ask_spawns_the_rpc_child_sandboxed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ephemeral, one-shot ask (the shape a free/explicit-agent ``ask`` opens)
+    reaches the real sandboxed spawn through the full ``AglSessionHost`` ->
+    ``SessionService`` -> backend chain -- not only when a test opens the
+    backend directly -- proving the mode a one-shot session opens under
+    actually governs its Pi RPC child."""
+    log_dir = _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    RpcStub(tmp_path, monkeypatch)
+
+    host = AglSessionHost(
+        SessionService(
+            lambda agent, transport: PiRpcSessionBackend(
+                get_sandbox_context=session_sandbox_context(home)
+            )
+        )
+    )
+
+    answer = host.with_ephemeral(
+        AgentPi("provider", "model", "high"),
+        "rpc",
+        lambda handle: host.ask(handle, "hi"),
+        single_prompt=True,
+        permission_mode=PermissionMode.UNRESTRICTED,
+        sandbox=SandboxLimits(),
+    )
+
+    assert answer == "answer"
+    assert (log_dir / "systemd-run").exists()
+    assert (log_dir / "srt").exists()
+
+
+def test_open_prepare_failure_becomes_a_session_host_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sandbox preparation failure at open -- no settings file resolvable --
+    is a session lifecycle failure, never a bare spawn of an unsandboxed child."""
+    RpcStub(tmp_path, monkeypatch)
+    home = tmp_path / "home"  # No `.agm/sandbox/default.json` written.
+
+    backend = PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home))
+
+    with pytest.raises(SessionHostError) as raised:
+        backend.open(
+            SessionOpenRequest(
+                AgentPi("provider", "model", "high"),
+                "rpc",
+                permission_mode=PermissionMode.UNRESTRICTED,
+                sandbox=SandboxLimits(),
+            )
+        )
+    assert raised.value.operation == "open"
+
+
+def test_close_and_fork_replacement_close_the_prepared_sandbox_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``close()`` releases the prepared command backing the child it stops, and
+    forking -- which spawns a freshly prepared replacement for the parent --
+    leaves its own prepared command open only until that replacement itself closes."""
+    _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    # No scripted "get_state"/"clone" actions: the stub's own default responses
+    # track its live ``session`` variable, which a fork must actually advance.
+    RpcStub(tmp_path, monkeypatch)
+
+    closed: list[bool] = []
+    original_close = PreparedSandboxCommand.close
+
+    def spy_close(self: PreparedSandboxCommand) -> None:
+        closed.append(self._closed)
+        original_close(self)
+
+    monkeypatch.setattr(PreparedSandboxCommand, "close", spy_close)
+
+    backend = PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home))
+    backend.open(
+        SessionOpenRequest(
+            AgentPi("provider", "model", "high"),
+            "rpc",
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+        )
+    )
+    assert closed == []  # Nothing closed yet: the child is still alive.
+
+    child = backend.fork()
+    # Forking spawned a freshly prepared replacement for the still-active
+    # parent conversation; the original prepared command transferred to
+    # ``child`` without being re-prepared or closed.
+    assert closed == []
+
+    backend.close()
+    assert closed == [False]  # The replacement's own prepared command closed.
+    child.close()
+    assert closed == [False, False]  # The transferred prepared command closed.
+
+
+def test_spawn_closes_the_prepared_command_when_popen_itself_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A spawn failure that happens after a successful sandbox preparation --
+    ``Popen`` itself raising -- still releases the prepared command, exactly
+    like a preparation failure does."""
+    _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+
+    closed: list[bool] = []
+    original_close = PreparedSandboxCommand.close
+
+    def spy_close(self: PreparedSandboxCommand) -> None:
+        closed.append(self._closed)
+        original_close(self)
+
+    monkeypatch.setattr(PreparedSandboxCommand, "close", spy_close)
+
+    def fail_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        raise OSError("no such file")
+
+    monkeypatch.setattr(subprocess, "Popen", fail_popen)
+
+    backend = PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home))
+
+    with pytest.raises(SessionHostError) as raised:
+        backend.open(
+            SessionOpenRequest(
+                AgentPi("provider", "model", "high"),
+                "rpc",
+                permission_mode=PermissionMode.UNRESTRICTED,
+                sandbox=SandboxLimits(),
+            )
+        )
+    assert raised.value.operation == "open"
+    assert closed == [False]
+
+
+def test_close_still_releases_the_prepared_command_when_stop_process_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``stop_process`` failure (e.g. a missing cleanup binary) must not leak
+    the prepared sandbox command's temp settings file or tracked artifacts."""
+    _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    RpcStub(tmp_path, monkeypatch)
+
+    closed: list[bool] = []
+    original_close = PreparedSandboxCommand.close
+
+    def spy_close(self: PreparedSandboxCommand) -> None:
+        closed.append(self._closed)
+        original_close(self)
+
+    monkeypatch.setattr(PreparedSandboxCommand, "close", spy_close)
+
+    def raising_stop_process(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("systemctl")
+
+    monkeypatch.setattr(rpc, "stop_process", raising_stop_process)
+
+    backend = PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home))
+    backend.open(
+        SessionOpenRequest(
+            AgentPi("provider", "model", "high"),
+            "rpc",
+            permission_mode=PermissionMode.UNRESTRICTED,
+            sandbox=SandboxLimits(),
+        )
+    )
+
+    with pytest.raises(FileNotFoundError):
+        backend.close()
+    assert closed == [False]

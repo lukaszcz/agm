@@ -7,7 +7,9 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
+from agm.agent.spec import PermissionMode
 from agm.agent.transport import AgentCallInfo, AgentTransportError
+from agm.sandbox.request import SandboxLimits
 
 
 class SessionOperation(StrEnum):
@@ -46,18 +48,28 @@ class SessionOpenRequest:
 
     ``single_prompt`` states that this session serves exactly one prompt, so a
     backend need not establish a conversation it will never continue. Handle
-    lifetime is owned separately by the session service.
+    lifetime is owned separately by the session service. ``permission_mode``/
+    ``sandbox`` fix the sandboxing every process this session spawns runs
+    under, for the session's whole lifetime; their defaults keep a caller that
+    does not decode a sandbox unaffected.
     """
 
     agent: object
     transport: str
     name: str = ""
     single_prompt: bool = False
+    permission_mode: PermissionMode = PermissionMode.NONE
+    sandbox: SandboxLimits | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class SessionAskRequest:
-    """A rendered prompt to send within an existing backend session."""
+    """A rendered prompt to send within an existing backend session.
+
+    Carries no sandboxing of its own: a session's ``permission_mode``/
+    ``sandbox`` are fixed once, at open (see ``SessionOpenRequest``), for its
+    whole lifetime -- there is no per-ask override.
+    """
 
     prompt: str
 

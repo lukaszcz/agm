@@ -31,6 +31,8 @@ _MODULES: dict[str, str] = {
         "export std/exec\n"
         "export std/agent\n"
         "export std/session\n"
+        "export std/optional\n"
+        "export std/sandbox\n"
     ),
     "errors.agl": (
         "builtin\n"
@@ -47,11 +49,21 @@ _MODULES: dict[str, str] = {
         "  length: int\n"
     ),
     "option.agl": ("builtin\nenum Option[T] =\n  | None\n  | Some(value: T)\n"),
+    "optional.agl": (
+        "import std/option::{Option}\n"
+        "\n"
+        "builtin\n"
+        "enum Optional[T]\n"
+        "  | Option::Some[T]\n"
+        "  | Option::None\n"
+        "  | Default\n"
+    ),
     "config.agl": (
-        "import std/agent::{Agent}\n"
+        "import std/agent::{Agent, AgentSandbox}\n"
         "import std/option::{Option}\n"
         "\n"
         'builtin var default-agent: Agent = AgentClaude("sonnet", "medium")\n'
+        "builtin var default-sandbox: AgentSandbox = Disabled\n"
         "builtin var strict-json: bool = false\n"
         "builtin var timeout: Option[text] = None\n"
         "builtin var trace: bool = false\n"
@@ -81,6 +93,7 @@ _MODULES: dict[str, str] = {
     "agent.agl": (
         "import std/errors::{Exception}\n"
         "import std/option::{Option}\n"
+        "import std/sandbox::Sandbox\n"
         "\n"
         "builtin\n"
         "enum Agent\n"
@@ -88,6 +101,12 @@ _MODULES: dict[str, str] = {
         "  | AgentClaude(model: text, thinking: text)\n"
         "  | AgentCodex(model: text, thinking: text)\n"
         "  | AgentPi(provider: text, model: text, thinking: text)\n"
+        "\n"
+        "builtin\n"
+        "enum AgentSandbox\n"
+        "  | Disabled\n"
+        "  | Native\n"
+        "  | std/sandbox::Sandbox\n"
         "\n"
         "builtin\n"
         "record AgentRequest\n"
@@ -119,6 +138,17 @@ _MODULES: dict[str, str] = {
         "  metadata: json\n"
         "\n"
         "builtin def ask(prompt: text) -> text\n"
+    ),
+    "sandbox.agl": (
+        "import std/option::{Option}\n"
+        "import std/optional::{Optional}\n"
+        "\n"
+        "builtin record Sandbox(\n"
+        "  memory: Optional[text] = Default,\n"
+        "  swap: Optional[text] = Default,\n"
+        "  settings: Option[text] = None,\n"
+        "  patch: bool = true,\n"
+        ")\n"
     ),
     "session.agl": (
         "import std/agent::{Agent}\n"

@@ -106,7 +106,7 @@ def run(args: ReplArgs) -> None:
 
     runner_agent = value_driven_agent_factory(idle_timeout=config.timeout, context=ctx)
 
-    session_host = create_agl_session_host(idle_timeout=config.timeout)
+    session_host = create_agl_session_host(idle_timeout=config.timeout, context=ctx)
 
     host_settings_policy = HostSettingsPolicy(
         resolve_trace_path=LiveTracePathResolver(command_name="repl", auto_path=trace_path),

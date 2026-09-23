@@ -34,7 +34,7 @@ from typer.main import get_command
 
 import agm.cli as cli
 import agm.commands.repl as repl_command
-from agm.agent.spec import AgentPi, AgentSpec
+from agm.agent.spec import AgentPi, AgentSpec, PermissionMode
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.repl import ReplSession
 from agm.agl.runtime.sessions import SessionSnapshot
@@ -42,6 +42,7 @@ from agm.agl.runtime.types import ParamBindingInfo
 from agm.cli_support.args import ReplArgs
 from agm.config.general import GeneralConfig
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.sandbox.request import SandboxLimits
 
 
 class RecordedArgs(Protocol):
@@ -305,17 +306,39 @@ class TestReplRun:
                 self.close_calls = 0
                 self.closed_handles: set[str] = set()
 
-            def open(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
-                del name
+            def open(
+                self,
+                agent: AgentSpec,
+                transport: str,
+                *,
+                name: str = "",
+                permission_mode: PermissionMode = PermissionMode.NONE,
+                sandbox: SandboxLimits | None = None,
+            ) -> str:
+                del name, permission_mode, sandbox
                 assert isinstance(agent, AgentPi)
                 handle = f"session-{len(self._sessions) + 1}"
                 self._sessions[handle] = (agent, transport)
                 self.opened.append(agent.provider)
                 return handle
 
-            def default(self, agent: AgentSpec, transport: str, *, name: str = "") -> str:
+            def default(
+                self,
+                agent: AgentSpec,
+                transport: str,
+                *,
+                name: str = "",
+                permission_mode: PermissionMode = PermissionMode.NONE,
+                sandbox: SandboxLimits | None = None,
+            ) -> str:
                 if self._default_handle is None:
-                    self._default_handle = self.open(agent, transport, name=name)
+                    self._default_handle = self.open(
+                        agent,
+                        transport,
+                        name=name,
+                        permission_mode=permission_mode,
+                        sandbox=sandbox,
+                    )
                 return self._default_handle
 
             def ask(self, handle: str, prompt: str) -> str:

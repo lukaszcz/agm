@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from agm.agent.runner import PromptDelivery
     from agm.agent.spec import AgentSpec
     from agm.config.context import ConfigContext
-    from agm.sandbox.prepare import SandboxContext, SandboxRun
+    from agm.sandbox.prepare import SandboxRun
 
 AgentFn = Callable[[AgentRequest], AgentResponse | str]
 
@@ -154,26 +154,13 @@ def value_driven_agent_factory(*, idle_timeout: float | None, context: "ConfigCo
     unsandboxed, never pays for that config I/O, while a sandboxed call
     still resolves it only once per factory.
     """
-    sandbox_context: "SandboxContext | None" = None
+    from agm.sandbox.prepare import lazy_sandbox_context
 
-    def get_sandbox_context() -> "SandboxContext":
-        nonlocal sandbox_context
-        if sandbox_context is None:
-            from agm.config.general import load_run_config
-            from agm.sandbox.prepare import SandboxContext
-
-            run_config = load_run_config(
-                home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
-            )
-            sandbox_context = SandboxContext(
-                home=context.home,
-                proj_dir=context.proj_dir,
-                cwd=context.cwd,
-                run_config=run_config,
-            )
-        return sandbox_context
+    get_sandbox_context = lazy_sandbox_context(context)
 
     def dispatch(request: AgentRequest) -> AgentResponse:
+        from agm.sandbox.prepare import sandbox_run_for
+
         spec = request.agent
         try:
             command = spec.argv(permission_mode=request.permission_mode)
@@ -181,31 +168,12 @@ def value_driven_agent_factory(*, idle_timeout: float | None, context: "ConfigCo
             raise AgentCallHostError(
                 cause="invalid_agent", exit_code=None, stderr_tail=str(exc), elapsed=0.0
             ) from exc
-        sandbox = _sandbox_run_for(request, get_sandbox_context)
+        sandbox = sandbox_run_for(request.sandbox, get_sandbox_context)
         return _run_request(
             request, command, idle_timeout, delivery=_spec_delivery(spec), sandbox=sandbox
         )
 
     return dispatch
-
-
-def _sandbox_run_for(
-    request: AgentRequest, get_context: Callable[[], "SandboxContext"]
-) -> "SandboxRun | None":
-    """Bind the request's decoded sandbox limits to a lazily built `SandboxContext`.
-
-    ``None`` when the request carries no ``SandboxLimits`` (``Disabled``/
-    ``Native`` decode to no limits, see ``sandbox_values.decode_agent_sandbox``)
-    -- *get_context* is then never called. The profile name is bound later,
-    from the post-interpolation argv, in
-    ``agm.agent.runner._prepare_sandboxed_argv``, never here and never from
-    ``[run.<name>].alias``.
-    """
-    if request.sandbox is None:
-        return None
-    from agm.sandbox.prepare import SandboxRun
-
-    return SandboxRun(spec=request.sandbox, context=get_context())
 
 
 def _spec_delivery(spec: AgentSpec) -> "PromptDelivery":

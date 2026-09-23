@@ -319,6 +319,12 @@ _TEST_DEFAULT_AGENT = RecordValue(
     nominal=NominalId(require_reserved_enum_member_id("Agent", "AgentCommand")),
     fields={"command": TextValue("unused")},
 )
+# Likewise seeds ``default-sandbox``: every ``Session::default``/``Session::open``
+# now reads it too, and this hand-built program never declares one either.
+_TEST_DEFAULT_SANDBOX = RecordValue(
+    nominal=NominalId(require_reserved_enum_member_id("AgentSandbox", "Disabled")),
+    fields={},
+)
 
 
 def _run_with_json_codec(
@@ -346,7 +352,10 @@ def _run_with_json_codec(
             agent_dispatcher=agent_dispatcher,
             strict_json=strict_json,
             host_contracts=contracts,
-            builtin_host_settings={"default-agent": _TEST_DEFAULT_AGENT},
+            builtin_host_settings={
+                "default-agent": _TEST_DEFAULT_AGENT,
+                "default-sandbox": _TEST_DEFAULT_SANDBOX,
+            },
         ).run()
     )
     bindings.descriptors = ValueDescriptors.from_program(executable)

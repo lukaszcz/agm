@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from agm.agl.runtime.request import AgentRequest, AgentResponse
     from agm.agl.runtime.sessions import SessionSnapshot
     from agm.agl.runtime.sessions import SessionStats as AglSessionStats
+    from agm.config.context import ConfigContext
+    from agm.sandbox.request import SandboxLimits
 
 from agm.agent.session.protocol import (
     SessionAgentError as AgentSessionAgentError,
@@ -26,6 +28,7 @@ from agm.agent.session.protocol import (
     SessionOperation,
     SessionStats,
 )
+from agm.agent.spec import PermissionMode
 from agm.core.cleanup import preserve_primary_error
 
 _T = TypeVar("_T")
@@ -40,6 +43,8 @@ class _HostSession:
     agent: "AgentSpec"
     transport: str
     ephemeral: bool = False
+    permission_mode: PermissionMode = PermissionMode.NONE
+    sandbox: "SandboxLimits | None" = None
 
 
 class AglSessionHost:
@@ -49,17 +54,44 @@ class AglSessionHost:
         self._service = service
         self._sessions: dict[str, _HostSession] = {}
 
-    def open(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str:
-        handle = self._open(agent, transport, name=name)
-        self._sessions[handle] = _HostSession(agent, transport)
+    def open(
+        self,
+        agent: "AgentSpec",
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+    ) -> str:
+        handle = self._open(
+            agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+        )
+        self._sessions[handle] = _HostSession(
+            agent, transport, permission_mode=permission_mode, sandbox=sandbox
+        )
         return handle
 
     def open_ephemeral(
-        self, agent: "AgentSpec", transport: str, *, single_prompt: bool = False
+        self,
+        agent: "AgentSpec",
+        transport: str,
+        *,
+        single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
     ) -> str:
         """Open one short-lived session for an AgL ask lifecycle."""
-        handle = self._open(agent, transport, ephemeral=True, single_prompt=single_prompt)
-        self._sessions[handle] = _HostSession(agent, transport, ephemeral=True)
+        handle = self._open(
+            agent,
+            transport,
+            ephemeral=True,
+            single_prompt=single_prompt,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+        )
+        self._sessions[handle] = _HostSession(
+            agent, transport, ephemeral=True, permission_mode=permission_mode, sandbox=sandbox
+        )
         return handle
 
     def with_ephemeral(
@@ -69,11 +101,19 @@ class AglSessionHost:
         action: Callable[[str], _T],
         *,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
     ) -> _T:
         """Run *action* in one ephemeral session and release it afterward."""
 
         def register(handle: str) -> _T:
-            self._sessions[handle] = _HostSession(agent, transport, ephemeral=True)
+            self._sessions[handle] = _HostSession(
+                agent,
+                transport,
+                ephemeral=True,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+            )
             return action(handle)
 
         return self._call_host(
@@ -83,6 +123,8 @@ class AglSessionHost:
                 register,
                 on_closed=self._retire_ephemeral,
                 single_prompt=single_prompt,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
             )
         )
 
@@ -94,6 +136,8 @@ class AglSessionHost:
         name: str = "",
         ephemeral: bool = False,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
     ) -> str:
         return self._call_host(
             lambda: self._service.open(
@@ -102,12 +146,33 @@ class AglSessionHost:
                 name=name,
                 ephemeral=ephemeral,
                 single_prompt=single_prompt,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
             )
         )
 
-    def default(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str:
-        handle = self._call_host(lambda: self._service.default(agent, transport.lower(), name=name))
-        self._sessions.setdefault(handle, _HostSession(agent, transport))
+    def default(
+        self,
+        agent: "AgentSpec",
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+    ) -> str:
+        handle = self._call_host(
+            lambda: self._service.default(
+                agent,
+                transport.lower(),
+                name=name,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+            )
+        )
+        self._sessions.setdefault(
+            handle,
+            _HostSession(agent, transport, permission_mode=permission_mode, sandbox=sandbox),
+        )
         return handle
 
     def ask(self, handle: str, prompt: str) -> str:
@@ -115,7 +180,14 @@ class AglSessionHost:
         return self._ask(handle, prompt).content
 
     def ask_request(self, handle: str, request: "AgentRequest") -> "AgentResponse":
-        """Preserve a session response's metadata across the AgL firewall."""
+        """Preserve a session response's metadata across the AgL firewall.
+
+        *request*'s decoded ``permission_mode``/``sandbox`` describe what the
+        call site asked for, but they never reach the backend here: a
+        session's sandboxing is fixed once, at ``open`` (or, for the
+        ephemeral session a one-shot ``ask``/``Agent::ask`` opens, when it is
+        opened), so this call sends only the prompt.
+        """
         from agm.agl.runtime.request import AgentResponse
 
         response = self._ask(handle, request.prompt)
@@ -162,7 +234,12 @@ class AglSessionHost:
         from agm.agl.runtime.sessions import SessionSnapshot
 
         session = self._session_for(handle, "snapshot")
-        return SessionSnapshot(agent=session.agent, transport=session.transport)
+        return SessionSnapshot(
+            agent=session.agent,
+            transport=session.transport,
+            permission_mode=session.permission_mode,
+            sandbox=session.sandbox,
+        )
 
     def close(self, handle: str) -> None:
         self._call_host(lambda: self._service.close(handle))
@@ -230,20 +307,35 @@ class AglSessionHost:
             AglSessionHost._raise_host_error(error)
 
 
-def create_agl_session_host(*, idle_timeout: float | None) -> AglSessionHost:
-    """Create the production AgL session host with transport-aware backends."""
+def create_agl_session_host(
+    *, idle_timeout: float | None, context: "ConfigContext"
+) -> AglSessionHost:
+    """Create the production AgL session host with transport-aware backends.
+
+    *context* builds the `SandboxContext` every session backend needs to
+    prepare a sandboxed process, lazily (see `sandbox.prepare.lazy_sandbox_context`)
+    so a run that opens no sandboxed session never pays for the `[run.*]`
+    config load.
+    """
     from agm.agent.session.cli_adapters import CLI_SESSION_BACKENDS
     from agm.agent.session.rpc import PiRpcSessionBackend
     from agm.agent.spec import AgentPi
+    from agm.sandbox.prepare import lazy_sandbox_context
+
+    get_sandbox_context = lazy_sandbox_context(context)
 
     def backend_for(agent: object, transport: str) -> SessionBackend:
         if transport == "rpc":
             if isinstance(agent, AgentPi):
-                return PiRpcSessionBackend(idle_timeout=idle_timeout)
+                return PiRpcSessionBackend(
+                    idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context
+                )
             raise SessionHostError("RPC transport is only supported by AgentPi", "open")
         if transport != "cli":
             raise SessionHostError(f"unsupported session transport {transport!r}", "open")
-        return CLI_SESSION_BACKENDS[type(agent).__name__](idle_timeout=idle_timeout)
+        return CLI_SESSION_BACKENDS[type(agent).__name__](
+            idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context
+        )
 
     return AglSessionHost(SessionService(backend_for))
 
@@ -256,6 +348,8 @@ class _SessionEntry:
     agent: object
     transport: str
     ephemeral: bool
+    permission_mode: PermissionMode = PermissionMode.NONE
+    sandbox: "SandboxLimits | None" = None
     closed: bool = False
 
 
@@ -275,12 +369,23 @@ class SessionService:
         name: str = "",
         ephemeral: bool = False,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
     ) -> str:
-        """Open a backend session and return its host-generated handle id."""
+        """Open a backend session and return its host-generated handle id.
+
+        *permission_mode*/*sandbox* fix the sandboxing this session's backend
+        runs every process under, for the session's whole lifetime.
+        """
         backend = self._backend_factory(agent, transport)
         backend.open(
             SessionOpenRequest(
-                agent=agent, transport=transport, name=name, single_prompt=single_prompt
+                agent=agent,
+                transport=transport,
+                name=name,
+                single_prompt=single_prompt,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
             )
         )
         handle = str(uuid4())
@@ -289,13 +394,25 @@ class SessionService:
             agent=agent,
             transport=transport,
             ephemeral=ephemeral,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
         )
         return handle
 
-    def default(self, agent: object, transport: str, *, name: str = "") -> str:
+    def default(
+        self,
+        agent: object,
+        transport: str,
+        *,
+        name: str = "",
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
+    ) -> str:
         """Return the lazily opened default session, snapshotting its first agent."""
         if self._default_handle is None:
-            self._default_handle = self.open(agent, transport, name=name)
+            self._default_handle = self.open(
+                agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+            )
         return self._default_handle
 
     def ask(self, handle: str, request: SessionAskRequest) -> SessionAskResponse:
@@ -326,6 +443,8 @@ class SessionService:
             agent=entry.agent,
             transport=entry.transport,
             ephemeral=False,
+            permission_mode=entry.permission_mode,
+            sandbox=entry.sandbox,
         )
         return forked_handle
 
@@ -403,9 +522,19 @@ class SessionService:
         name: str = "",
         on_closed: Callable[[str], None] | None = None,
         single_prompt: bool = False,
+        permission_mode: PermissionMode = PermissionMode.NONE,
+        sandbox: "SandboxLimits | None" = None,
     ) -> _T:
         """Run *action* in a short-lived session and release it afterward."""
-        handle = self.open(agent, transport, name=name, ephemeral=True, single_prompt=single_prompt)
+        handle = self.open(
+            agent,
+            transport,
+            name=name,
+            ephemeral=True,
+            single_prompt=single_prompt,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+        )
 
         def close() -> None:
             self.close(handle)

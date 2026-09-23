@@ -28,7 +28,12 @@ from agm.agent.session.protocol import (
 )
 from agm.agent.spec import AgentPi, PermissionMode
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
-from agm.core.process import kill_process_group
+from agm.core.env import clone_env
+from agm.core.process import stop_process
+from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
+from agm.sandbox.prepare import SandboxContext, sandbox_run_for
+from agm.sandbox.profile import profile_name
+from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
 from agm.util.unicode import loads_json
 
 _RpcOperation = Literal[
@@ -77,6 +82,7 @@ class _RpcChild:
     process_group: int
     agent: AgentPi
     command: list[str]
+    prepared: PreparedSandboxCommand | None = None
     stdout_buffer: bytearray = field(default_factory=bytearray)
     stdout: queue.Queue[bytes | None] = field(
         default_factory=lambda: queue.Queue(maxsize=_MAX_STDOUT_CHUNKS)
@@ -91,9 +97,20 @@ class PiRpcSessionBackend:
 
     capabilities = SessionCapabilities.all()
 
-    def __init__(self, *, idle_timeout: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        idle_timeout: float | None = None,
+        get_sandbox_context: Callable[[], SandboxContext],
+    ) -> None:
         self._idle_timeout = idle_timeout
+        self._get_sandbox_context = get_sandbox_context
         self._child: _RpcChild | None = None
+        # Fixed at open; the persistent child process is spawned under this
+        # mode once and every later native call (fork's replacement spawn)
+        # reuses it, since an RPC session has no per-call sandbox override.
+        self._permission_mode: PermissionMode = PermissionMode.NONE
+        self._sandbox: SandboxLimits | None = None
 
     def open(self, request: SessionOpenRequest) -> None:
         """Start Pi in RPC mode using the supplied Pi agent settings."""
@@ -101,6 +118,8 @@ class PiRpcSessionBackend:
             raise SessionHostError("Pi RPC session requires an AgentPi", "open")
         if self._child is not None:
             raise SessionHostError("Pi RPC session is already open", "open")
+        self._permission_mode = request.permission_mode
+        self._sandbox = request.sandbox
         self._start(request.agent, "open", name=request.name)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
@@ -120,8 +139,8 @@ class PiRpcSessionBackend:
                 prompt_via_stdin=True,
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
-                sandboxed=False,
-                permission_mode=PermissionMode.NONE.value,
+                sandboxed=child.prepared is not None,
+                permission_mode=self._permission_mode.value,
             ),
         )
 
@@ -147,9 +166,15 @@ class PiRpcSessionBackend:
         parent_state, _ = self._send("get_state", {})
         parent_id = self._parse_operation_response(parent_state, "get_state", _required_session_id)
         source = self._live_child("clone")
-        parent_command = source.agent.rpc_argv(session_id=parent_id)
+        parent_command = source.agent.rpc_argv(
+            session_id=parent_id, permission_mode=self._permission_mode
+        )
         replacement = self._spawn(source.agent, parent_command, SessionOperation.FORK.value)
-        replacement_backend = PiRpcSessionBackend(idle_timeout=self._idle_timeout)
+        replacement_backend = PiRpcSessionBackend(
+            idle_timeout=self._idle_timeout, get_sandbox_context=self._get_sandbox_context
+        )
+        replacement_backend._permission_mode = self._permission_mode
+        replacement_backend._sandbox = self._sandbox
         replacement_backend._child = replacement
         try:
             replacement_state, _ = replacement_backend._send("get_state", {})
@@ -183,7 +208,11 @@ class PiRpcSessionBackend:
                 replacement_backend.close()
             raise
 
-        child = PiRpcSessionBackend(idle_timeout=self._idle_timeout)
+        child = PiRpcSessionBackend(
+            idle_timeout=self._idle_timeout, get_sandbox_context=self._get_sandbox_context
+        )
+        child._permission_mode = self._permission_mode
+        child._sandbox = self._sandbox
         child._child = source
         self._child = replacement
         return child
@@ -207,26 +236,43 @@ class PiRpcSessionBackend:
             _terminate(child)
 
     def _start(self, agent: AgentPi, operation: str, *, name: str = "") -> None:
-        self._child = self._spawn(agent, agent.rpc_argv(name=name), operation)
+        self._child = self._spawn(
+            agent, agent.rpc_argv(name=name, permission_mode=self._permission_mode), operation
+        )
 
     def _spawn(self, agent: AgentPi, command: list[str], operation: str) -> _RpcChild:
+        env = clone_env()
+        sandbox_run = sandbox_run_for(self._sandbox, self._get_sandbox_context)
+        prepared: PreparedSandboxCommand | None = None
+        argv = command
+        if sandbox_run is not None:
+            spec = sandbox_run.spec.for_command(profile_name(command[0]) if command else None)
+            try:
+                prepared = sandbox_run.context.prepare(command, spec, env=env)
+            except (SandboxUnavailableError, SandboxSettingsError) as exc:
+                raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
+            argv = prepared.argv
         try:
             process: subprocess.Popen[bytes] = subprocess.Popen(
-                command,
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=False,
                 bufsize=0,
                 start_new_session=True,
+                env=prepared.env if prepared is not None else None,
+                cwd=prepared.cwd if prepared is not None else None,
             )
         except (OSError, ValueError) as exc:
+            if prepared is not None:
+                prepared.close()
             raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
         process_group = process.pid
         if process.stdin is None or process.stdout is None or process.stderr is None:
-            _terminate(_RpcChild(process, process_group, agent, command))
+            _terminate(_RpcChild(process, process_group, agent, argv, prepared=prepared))
             raise SessionHostError("could not create Pi RPC pipes", operation)
-        child = _RpcChild(process, process_group, agent, command)
+        child = _RpcChild(process, process_group, agent, argv, prepared=prepared)
         child.readers.extend(
             (
                 _start_reader(
@@ -502,8 +548,8 @@ class PiRpcSessionBackend:
                 prompt_via_stdin=True,
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
-                sandboxed=False,
-                permission_mode=PermissionMode.NONE.value,
+                sandboxed=child.prepared is not None,
+                permission_mode=self._permission_mode.value,
             ),
         )
 
@@ -588,12 +634,27 @@ def _terminate(child: _RpcChild) -> None:
             stdin.close()
         except OSError:
             pass
-    kill_process_group(process, pgid=child.process_group)
-    for reader in child.readers:
-        reader.join(timeout=1)
-    # The reader callbacks close over ``child``; dropping them breaks that
-    # cycle so the process, queued stdout, and stderr tail are freed at once.
-    child.readers.clear()
+    prepared = child.prepared
+    try:
+        stop_process(
+            process,
+            isolate_process_group=True,
+            interrupt_cleanup_cmd=prepared.interrupt_cleanup_cmd if prepared is not None else None,
+            cwd=prepared.cwd if prepared is not None else None,
+            env=prepared.env if prepared is not None else None,
+            pgid=child.process_group,
+        )
+    finally:
+        # ``stop_process`` can itself raise (e.g. a cleanup command whose
+        # binary is missing); the sandbox's tracked artifacts and reader
+        # threads must still be released rather than leaked.
+        if prepared is not None:
+            prepared.close()
+        for reader in child.readers:
+            reader.join(timeout=1)
+        # The reader callbacks close over ``child``; dropping them breaks that
+        # cycle so the process, queued stdout, and stderr tail are freed at once.
+        child.readers.clear()
 
 
 def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

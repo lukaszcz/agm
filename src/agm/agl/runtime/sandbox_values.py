@@ -207,14 +207,23 @@ def _limit_value(limit: LimitSpec, nominals: BuiltinNominals) -> RecordValue:
 
 
 def _decode_settings_file(value: Value, nominals: BuiltinNominals) -> Path | None:
-    """Decode an ``Option[text]`` settings-path field."""
+    """Decode an ``Option[text]`` settings-path field.
+
+    ``Path`` normalizes the text (trailing separators, ``./`` segments), so a
+    value later encoded from the result may differ textually from what was
+    written here while still naming the same file.
+    """
     assert isinstance(value, RecordValue)
     text = option_text(value, nominals=nominals)
     return None if text is None else Path(text)
 
 
 def _settings_value(path: Path | None, nominals: BuiltinNominals) -> RecordValue:
-    """Encode a settings-path field back into its ``Option[text]`` member value."""
+    """Encode a settings-path field back into its ``Option[text]`` member value.
+
+    The spelling is ``Path``'s normalized form, chosen deliberately over
+    memoizing the original operand text; see :func:`_decode_settings_file`.
+    """
     if path is None:
         return none_value(nominals=nominals)
     return some_value(TextValue(str(path)), nominals=nominals)

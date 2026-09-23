@@ -280,3 +280,24 @@ class TestSandboxLimitsValue:
         )
         value = sandbox_limits_value(limits, NO_BUILTIN_DECLARATIONS)
         assert decode_sandbox_record(value, NO_BUILTIN_DECLARATIONS) == limits
+
+    def test_a_non_canonical_settings_path_round_trips_to_its_normalized_spelling(self) -> None:
+        """See ``_decode_settings_file``: normalizes rather than round-tripping verbatim."""
+        for original, normalized in (("./conf/", "conf"), ("a/b/", "a/b")):
+            record = _sandbox_record(
+                NO_BUILTIN_DECLARATIONS,
+                memory=_optional_default(NO_BUILTIN_DECLARATIONS),
+                swap=_optional_default(NO_BUILTIN_DECLARATIONS),
+                settings=_option_some_text(NO_BUILTIN_DECLARATIONS, original),
+                patch=True,
+            )
+
+            limits = decode_sandbox_record(record, NO_BUILTIN_DECLARATIONS)
+            assert limits.settings_file == Path(normalized)
+
+            re_encoded = sandbox_limits_value(limits, NO_BUILTIN_DECLARATIONS)
+            settings_field = re_encoded.fields["settings"]
+            assert isinstance(settings_field, RecordValue)
+            text_field = settings_field.fields["value"]
+            assert isinstance(text_field, TextValue)
+            assert text_field.value == normalized

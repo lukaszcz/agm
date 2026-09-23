@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 
+from agm.agl.ir.builtin_vars import builtin_var_key
 from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
 from agm.agl.ir.ids import ContractId, Location, SourceId
 from agm.agl.ir.nodes import (
@@ -31,7 +32,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.lower.lowerer import _Lowerer
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID
 from agm.agl.semantics.type_table import MethodDef
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
@@ -72,20 +73,22 @@ def _program(
     )
 
 
-def _main_let_values(source: str) -> dict[str, object]:
-    program = lower_inline_ir(source)
+def _bound_values(program: ExecutableProgram) -> dict[str, object]:
     values: dict[str, object] = {}
     for initializer in inline_main_items(program):
-        if initializer.__class__.__name__ != "IrBind":
-            continue
-        symbol = program.symbols[initializer.symbol]
-        if symbol.public_name is not None:
-            values[symbol.public_name] = initializer.value
+        if isinstance(initializer, IrBind):
+            symbol = program.symbols[initializer.symbol]
+            if symbol.public_name is not None:
+                values[symbol.public_name] = initializer.value
     return values
 
 
+def _main_let_values(source: str) -> dict[str, object]:
+    return _bound_values(lower_inline_ir(source))
+
+
 def test_session_open_lowers_omitted_and_explicit_options() -> None:
-    values = _main_let_values(
+    program = lower_inline_ir(
         'let agent = AgentCommand("worker")\n'
         "let omitted = Session::open(agent)\n"
         "let explicit = Session::open(\n"
@@ -96,6 +99,7 @@ def test_session_open_lowers_omitted_and_explicit_options() -> None:
         ")\n"
         "()"
     )
+    values = _bound_values(program)
 
     omitted = values["omitted"]
     explicit = values["explicit"]
@@ -108,11 +112,19 @@ def test_session_open_lowers_omitted_and_explicit_options() -> None:
     # ``default-sandbox`` engine setting, read afresh at open, exactly like
     # ``ask``'s own omitted sandbox operand.
     assert isinstance(omitted.sandbox, IrBuiltinLoad)
+    assert omitted.sandbox.key == builtin_var_key(STD_CONFIG_ID, (), "default-sandbox")
     assert isinstance(explicit, IrSessionOpen)
     assert isinstance(explicit.transport, IrMakeRecord)
     assert isinstance(explicit.name, IrConstText)
     assert explicit.name.value == "review"
     assert isinstance(explicit.sandbox, IrMakeRecord)
+    # Pin the sandbox operand's own identity (the ``AgentSandbox::Native``
+    # member record), distinct from ``explicit.transport``'s (an
+    # ``Option::Some`` record) -- both are ``IrMakeRecord``, so only the
+    # nominal tells them apart; a transport/sandbox operand swap in the
+    # lowerer must fail this.
+    assert program.nominals[explicit.sandbox.nominal].declared_name == "Native"
+    assert program.nominals[explicit.transport.nominal].declared_name != "Native"
 
 
 def test_session_default_lowers_to_its_dedicated_node() -> None:

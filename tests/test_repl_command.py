@@ -300,6 +300,7 @@ class TestReplRun:
         class SessionHost:
             def __init__(self) -> None:
                 self._sessions: dict[str, tuple[AgentSpec, str]] = {}
+                self._sandboxing: dict[str, tuple[PermissionMode, SandboxLimits | None]] = {}
                 self._default_handle: str | None = None
                 self.opened: list[str] = []
                 self.prompts: list[tuple[str, str]] = []
@@ -315,10 +316,11 @@ class TestReplRun:
                 permission_mode: PermissionMode = PermissionMode.NONE,
                 sandbox: SandboxLimits | None = None,
             ) -> str:
-                del name, permission_mode, sandbox
+                del name
                 assert isinstance(agent, AgentPi)
                 handle = f"session-{len(self._sessions) + 1}"
                 self._sessions[handle] = (agent, transport)
+                self._sandboxing[handle] = (permission_mode, sandbox)
                 self.opened.append(agent.provider)
                 return handle
 
@@ -347,7 +349,8 @@ class TestReplRun:
 
             def snapshot(self, handle: str) -> SessionSnapshot:
                 agent, transport = self._sessions[handle]
-                return SessionSnapshot(agent, transport)
+                permission_mode, sandbox = self._sandboxing[handle]
+                return SessionSnapshot(agent, transport, permission_mode, sandbox)
 
             def close_all(self) -> None:
                 self.close_calls += 1

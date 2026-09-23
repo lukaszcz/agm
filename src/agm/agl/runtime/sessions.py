@@ -49,8 +49,8 @@ class SessionSnapshot:
 
     agent: "AgentSpec"
     transport: str
-    permission_mode: PermissionMode = PermissionMode.NONE
-    sandbox: "SandboxLimits | None" = None
+    permission_mode: PermissionMode
+    sandbox: "SandboxLimits | None"
 
 
 @dataclass(frozen=True, slots=True)

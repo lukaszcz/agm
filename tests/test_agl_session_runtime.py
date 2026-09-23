@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
 import pytest
@@ -42,6 +42,7 @@ from tests._agl_helpers import hermetic_config_context
 @dataclass
 class _Host:
     handles: dict[str, tuple[AgentSpec, str]] = field(default_factory=dict)
+    sandboxing: dict[str, tuple[PermissionMode, SandboxLimits | None]] = field(default_factory=dict)
     prompts: dict[str, list[str]] = field(default_factory=dict)
     operations: list[tuple[str, str, str]] = field(default_factory=list)
     closed: set[str] = field(default_factory=set)
@@ -56,9 +57,9 @@ class _Host:
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
     ) -> str:
-        del permission_mode, sandbox
         handle = f"s{len(self.handles) + 1}"
         self.handles[handle] = (agent, transport)
+        self.sandboxing[handle] = (permission_mode, sandbox)
         self.prompts[handle] = []
         self.operations.append((handle, "open", name))
         return handle
@@ -105,7 +106,8 @@ class _Host:
 
     def fork(self, handle: str) -> str:
         agent, transport = self._live(handle, "fork")
-        child = self.open(agent, transport)
+        permission_mode, sandbox = self.sandboxing[handle]
+        child = self.open(agent, transport, permission_mode=permission_mode, sandbox=sandbox)
         self.operations.append((handle, "fork", child))
         return child
 
@@ -119,7 +121,8 @@ class _Host:
 
     def snapshot(self, handle: str) -> SessionSnapshot:
         agent, transport = self.handles[handle]
-        return SessionSnapshot(agent, transport)
+        permission_mode, sandbox = self.sandboxing[handle]
+        return SessionSnapshot(agent, transport, permission_mode, sandbox)
 
     def close(self, handle: str) -> None:
         if handle not in self.handles:
@@ -180,18 +183,35 @@ def test_with_ephemeral_session_delegates_single_prompt_lifecycle_hosts() -> Non
 
 
 def test_dispatcher_session_host_snapshots_its_default_and_preserves_requests() -> None:
+    """Dispatched requests carry the session's fixed-at-open sandboxing, never their own."""
     requests: list[AgentRequest] = []
     host = AgentDispatcherSessionHost(
         lambda request: requests.append(request) or AgentResponse("answer", {"source": "test"})
     )
     agent = AgentCommand(command="worker")
-    handle = host.open_ephemeral(agent, "Cli")
+    session_sandbox = SandboxLimits(memory="8G")
+    handle = host.open_ephemeral(
+        agent, "Cli", permission_mode=PermissionMode.UNRESTRICTED, sandbox=session_sandbox
+    )
     request = AgentRequest(agent=agent, prompt="question", attempt=2)
 
     response = host.ask_request(handle, request)
 
     assert response == AgentResponse("answer", {"source": "test"})
-    assert requests == [request]
+    assert requests == [
+        replace(request, permission_mode=PermissionMode.UNRESTRICTED, sandbox=session_sandbox)
+    ]
+
+    overriding_request = AgentRequest(
+        agent=agent,
+        prompt="another question",
+        permission_mode=PermissionMode.NATIVE,
+        sandbox=None,
+    )
+    host.ask_request(handle, overriding_request)
+    assert requests[-1].permission_mode == PermissionMode.UNRESTRICTED
+    assert requests[-1].sandbox == session_sandbox
+
     assert host.ask(handle, "another question") == "answer"
     host.close(handle)
     with pytest.raises(SessionHostError):
@@ -458,6 +478,29 @@ def test_open_ask_copy_and_lifecycle_operations_reach_their_session() -> None:
         ("s3", "set-name", "child"),
     ]
     assert host.closed == {"s1", "s2", "s3"}
+
+
+def test_host_snapshot_and_fork_preserve_the_sessions_permission_mode_and_sandbox() -> None:
+    """A session's ``permission_mode``/``sandbox`` must survive both a direct
+    snapshot and a fork, matching what it was opened with."""
+    host = _Host()
+    limits = SandboxLimits(memory="8G")
+    result = _run(
+        "program def main() -> unit =\n"
+        '  let session = Session::open(AgentCommand("worker"), '
+        'sandbox = Sandbox(memory = Some("8G")))\n'
+        "  let child = session.fork()\n"
+        "  ()",
+        host,
+    )
+
+    assert result.ok
+    parent = host.snapshot("s1")
+    child = host.snapshot("s2")
+    assert parent.permission_mode == PermissionMode.UNRESTRICTED
+    assert parent.sandbox == limits
+    assert child.permission_mode == parent.permission_mode
+    assert child.sandbox == parent.sandbox
 
 
 def test_free_ask_uses_the_default_session_and_snapshots_its_agent() -> None:

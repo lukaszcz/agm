@@ -233,7 +233,9 @@ never changes for that session's lifetime — not on a later
 `std/config::default-sandbox` write, and not through `Session::ask`, which
 has no `sandbox` argument. `Session::default()` snapshots
 `std/config::default-sandbox` the same way it snapshots `default-agent`, on
-first use.
+first use. A `Sandbox`'s `settings` path is normalized (trailing separators
+and `./` segments collapse), so a session's `.sandbox` field may report an
+equivalent but textually different spelling than the one last written.
 
 When `transport` is omitted or `None`, `AgentPi` uses `Rpc`; every other
 agent uses `Cli`. `Rpc` is supported only for `AgentPi`; selecting it for

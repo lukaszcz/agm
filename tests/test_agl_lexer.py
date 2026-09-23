@@ -510,9 +510,8 @@ def test_malformed_environment_holes_keep_search_work_linear(quote: str, suffix:
 @pytest.mark.parametrize("name", ["HOME", "é", "ask-prompt", "a+b", "price$", 'foo"bar'])
 def test_environment_hole_after_malformed_literal(quote: str, prefix: str, name: str) -> None:
     tokens = tok(quote + prefix + "${" + name + "}" + quote)
-    assert [value for typ, value in tokens if typ == "STRING_FRAGMENT"] == [prefix, name, ""]
-    assert [value for typ, value in tokens if typ == "INTERP_START"] == ["%{"]
-    assert ("NAME", "getenv") in tokens
+    assert [value for typ, value in tokens if typ == "STRING_FRAGMENT"] == [prefix, ""]
+    assert [value for typ, value in tokens if typ == "ENV_HOLE"] == [name]
 
 
 @pytest.mark.parametrize("source", ['"${', '"""${'])

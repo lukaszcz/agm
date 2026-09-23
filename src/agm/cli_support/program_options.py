@@ -138,6 +138,7 @@ __all__ = [
     "option_none_raw",
     "option_value_map",
     "option_some_raw",
+    "param_spellings",
     "program_command_for",
     "program_help_requested",
     "protect_potential_program_values",
@@ -239,6 +240,11 @@ def _negative_dest(index: int) -> str:
     return f"_neg{index}"
 
 
+def _spelling_tuple(spelling: str | None) -> tuple[str, ...]:
+    """Return *spelling* as a tuple, empty when there is none."""
+    return () if spelling is None else (spelling,)
+
+
 class ValueForm(enum.Enum):
     """How a projected option's ``VALUE`` becomes a raw decode input."""
 
@@ -263,9 +269,10 @@ class ValueForm(enum.Enum):
 class ProjectedOption:
     """One type's CLI surface, as :func:`project_option` derives it.
 
-    ``value_form`` is the one stored discriminant: ``negative_flags`` and
+    ``value_form`` is the one stored discriminant: ``negative_flag`` and
     ``takes_value`` both follow from it, so :attr:`takes_value` is derived
-    rather than stored and cannot disagree with the form.
+    rather than stored and cannot disagree with the form. A form with no
+    negation spells no ``negative_flag`` at all.
 
     ``option_inner``/``option_inner_form`` are ``Option[T]`` or ``Optional[T]``'s
     own ``T`` and ``T``'s bare value form for either optional value form,
@@ -274,8 +281,8 @@ class ProjectedOption:
     builder and the metavar never have to re-classify ``T`` themselves.
     """
 
-    flags: tuple[str, ...]
-    negative_flags: tuple[str, ...]
+    flag: str
+    negative_flag: str | None
     value_form: ValueForm
     option_inner: "AglType | None" = None
     option_inner_form: ValueForm | None = None
@@ -334,8 +341,8 @@ def project_option(name: str, type_: "AglType") -> ProjectedOption:
         form = _bare_value_form(type_)
     negated = form is ValueForm.BOOL or _is_nullable_value_form(form)
     return ProjectedOption(
-        flags=(f"--{name}",),
-        negative_flags=(f"--no-{name}",) if negated else (),
+        flag=f"--{name}",
+        negative_flag=f"--no-{name}" if negated else None,
         value_form=form,
         option_inner=inner if _is_nullable_value_form(form) else None,
         option_inner_form=inner_form,
@@ -354,8 +361,7 @@ def engine_key_flags() -> frozenset[str]:
     flags: set[str] = set()
     for name, agl_type in ENGINE_KEY_TYPES.items():
         projected = project_option(name, agl_type)
-        flags.update(projected.flags)
-        flags.update(projected.negative_flags)
+        flags.update((projected.flag, *_spelling_tuple(projected.negative_flag)))
     return frozenset(flags)
 
 
@@ -833,25 +839,101 @@ def _reject_repetition(
     raise ValueError(f"Option {spelling!r} specified more than once")
 
 
+def _from_commandline(ctx: click.Context, dest: str) -> bool:
+    """Return whether *dest* was filled by a CLI token rather than the environment.
+
+    Click records where each parameter's value came from, which is the only
+    way to tell a token from an environment fallback: both arrive as an
+    ordinary parsed value.
+    """
+    return ctx.get_parameter_source(dest) is ParameterSource.COMMANDLINE
+
+
+def _from_environment(ctx: click.Context, dest: str) -> bool:
+    """Return whether *dest* was filled by its environment fallback."""
+    return ctx.get_parameter_source(dest) is ParameterSource.ENVIRONMENT
+
+
+# One parameter no CLI token and no ``@opt-env`` value supplied, which no
+# parsed value can be mistaken for.
+_NOT_SUPPLIED: object = object()
+
+
+def _supplied_value(
+    ctx: click.Context,
+    values: Mapping[str, object],
+    index: int,
+    projected: ProjectedOption,
+    *,
+    flag: str,
+    negative_flag: str,
+    paired_polarities: bool,
+    suppress_positive: bool,
+) -> object:
+    """Return one parsed option's raw value, or :data:`_NOT_SUPPLIED`.
+
+    The one reading of a projected option's two Click parameters, shared by
+    program and module parameters: a parameter supplied by more than one
+    token is rejected, and a negatable one given both polarities on the
+    command line is the contradiction. *paired_polarities* marks a ``bool``
+    whose two flags fill a single Click parameter, so its occurrences already
+    carry their own polarity and repetition alone can be diagnosed.
+    *suppress_positive* drops a positive value a higher-ranked source already
+    supplied; a negative one is a token and always stands.
+    """
+    positive = cast(tuple[object, ...], values.get(_positive_dest(index), ()))
+    bool_form = projected.value_form is ValueForm.BOOL
+    if bool_form and paired_polarities:
+        _reject_repetition(positive, flag, negative_flag)
+        return _NOT_SUPPLIED if suppress_positive or not positive else positive[0]
+    _reject_repetition(positive, flag)
+    if not bool_form and not _is_nullable_value_form(projected.value_form):
+        if suppress_positive or not positive:
+            return _NOT_SUPPLIED
+        return _positive_raw(projected, cast(str, positive[0]))
+    negative = cast(tuple[object, ...], values.get(_negative_dest(index), ()))
+    _reject_repetition(negative, negative_flag)
+    # Two Click parameters, so only their sources tell a supplied token from
+    # an ``@opt-env`` value. Both polarities typed together is the
+    # contradiction; a ``--no-x`` token against an environment-supplied
+    # positive is not, since a CLI token outranks the environment.
+    if _from_commandline(ctx, _positive_dest(index)) and _from_commandline(
+        ctx, _negative_dest(index)
+    ):
+        raise ValueError(f"Options {flag!r} and {negative_flag!r} cannot both be supplied")
+    if negative:
+        return False if bool_form else option_none_raw()
+    if suppress_positive or not positive:
+        return _NOT_SUPPLIED
+    return positive[0] if bool_form else _positive_raw(projected, cast(str, positive[0]))
+
+
 def _short_flag(param: "ProgramParamInfo | ParamBindingInfo") -> str | None:
     """Return *param*'s ``-x`` short spelling, or ``None`` when it declares none."""
     short = param.cli.short
     return None if short is None else f"-{short}"
 
 
-def _spellings(param: "ProgramParamInfo", projected: ProjectedOption) -> list[str]:
-    """Return every flag one parameter claims: its own, its negative, and its short.
+def param_spellings(
+    param: "ProgramParamInfo | ParamBindingInfo", *projections: ProjectedOption
+) -> list[str]:
+    """Return every flag one parameter claims: its positives, its negatives, and its short.
 
     The one enumeration of a parameter's CLI spellings, so the reservation
-    check (:func:`_check_reservation`) and completion
-    (:meth:`ProgramCommand.option_spellings`) can never disagree about what a
-    parameter occupies.
+    check (:func:`_check_reservation`), completion
+    (:meth:`ProgramCommand.option_spellings`) and the module-parameter surface
+    (``cli_support.param_surface``) can never disagree about what a parameter
+    occupies. A module parameter is projected once per qualified route it
+    answers to; every other parameter has the one projection of its own name.
     """
-    spellings = [*projected.flags, *projected.negative_flags]
-    short = _short_flag(param)
-    if short is not None:
-        spellings.append(short)
-    return spellings
+    return [
+        *(
+            flag
+            for projected in projections
+            for flag in (projected.flag, *_spelling_tuple(projected.negative_flag))
+        ),
+        *_spelling_tuple(_short_flag(param)),
+    ]
 
 
 class _ProgramOption(click.Option):
@@ -885,15 +967,18 @@ class _EnvironmentFallbackOption(_ProgramOption):
         del parser, ctx
 
 
+# The placeholder a bare (non-optional) value form announces; every form left
+# out reads one strict-JSON or AgL value-syntax token.
+_VALUE_FORM_METAVARS: dict[ValueForm, str] = {
+    ValueForm.TEXT: "TEXT",
+    ValueForm.AGENT: "AGENT",
+    ValueForm.JSON: "JSON",
+}
+
+
 def _value_form_metavar(form: ValueForm) -> str:
     """Return the placeholder for a bare (non-``Option``) value form."""
-    if form is ValueForm.TEXT:
-        return "TEXT"
-    if form is ValueForm.AGENT:
-        return "AGENT"
-    if form is ValueForm.JSON:
-        return "JSON"
-    return "VALUE"
+    return _VALUE_FORM_METAVARS.get(form, "VALUE")
 
 
 def _default_metavar(
@@ -914,12 +999,74 @@ def _default_metavar(
     return _value_form_metavar(projected.value_form)
 
 
-def _click_params(
+def _positive_option(
     index: int,
     param: "ProgramParamInfo | ParamBindingInfo",
     projected: ProjectedOption,
+    declarations: Sequence[str],
     *,
-    names: Sequence[str] | None = None,
+    environment_only: bool = False,
+) -> _ProgramOption:
+    """Build a parameter's positive-polarity option under *declarations*.
+
+    A ``bool`` form is a bare flag; every other form takes a ``VALUE``
+    announced by the parameter's ``@opt-metavar`` or by its type's
+    placeholder. Only this polarity carries the ``@opt-env`` fallback, so a
+    variable is read once, and only it carries the ``@doc``, which describes
+    the parameter rather than either polarity of its flag.
+    *environment_only* builds the synthetic declaration for a parameter left
+    with no positive spelling of its own, which carries neither help nor a
+    visible flag because only its variable can fill it.
+    """
+    spec = param.cli
+    flag_form = projected.value_form is ValueForm.BOOL
+    is_flag = True if flag_form else None
+    value_type = click.BOOL if flag_form else None
+    metavar = None if flag_form else spec.metavar or _default_metavar(param, projected)
+    if environment_only:
+        return _EnvironmentFallbackOption(
+            [_positive_dest(index), *declarations],
+            is_flag=is_flag,
+            type=value_type,
+            metavar=metavar,
+            default=None,
+            multiple=True,
+            envvar=spec.env,
+            hidden=True,
+        )
+    return _ProgramOption(
+        [_positive_dest(index), *declarations],
+        is_flag=is_flag,
+        type=value_type,
+        metavar=metavar,
+        default=None,
+        multiple=True,
+        envvar=spec.env,
+        help=spec.doc,
+        hidden=spec.hidden,
+    )
+
+
+def _negative_option(
+    index: int, param: "ProgramParamInfo | ParamBindingInfo", declarations: Sequence[str]
+) -> _ProgramOption:
+    """Build a parameter's independent ``--no-`` flag under *declarations*.
+
+    Carries neither help nor environment fallback: both belong to the
+    parameter's positive polarity.
+    """
+    return _ProgramOption(
+        [_negative_dest(index), *declarations],
+        is_flag=True,
+        type=click.BOOL,
+        default=None,
+        multiple=True,
+        hidden=param.cli.hidden,
+    )
+
+
+def _click_params(
+    index: int, param: "ProgramParamInfo", projected: ProjectedOption
 ) -> list[click.Parameter]:
     """Build the Click parameter(s) carrying one program parameter's CLI surface.
 
@@ -927,145 +1074,45 @@ def _click_params(
     occurrences carry their own polarity; an optional-enum parameter is a
     value-taking ``--x`` plus an independent ``--no-x`` flag, whose
     exclusivity :meth:`ProgramCommand.parse` checks once both are parsed;
-    every other form is one value-taking option. Only the positive option
-    carries the environment fallback, so a variable is read once, and only it
-    carries the parameter's ``@doc`` help, which describes the parameter
-    rather than either polarity of its flag.
+    every other form is one value-taking option.
     """
-    spec = param.cli
-    option_names = (param.cli.name,) if names is None else tuple(names)
-    positive_flags = tuple(f"--{name}" for name in option_names)
-    negative_flags = tuple(f"--no-{name}" for name in option_names)
-    short = _short_flag(param)
-    shorts: list[str] = [] if short is None else [short]
+    short = _spelling_tuple(_short_flag(param))
     if projected.value_form is ValueForm.BOOL:
-        return [
-            _ProgramOption(
-                [
-                    _positive_dest(index),
-                    *(
-                        f"{positive}/{negative}"
-                        for positive, negative in zip(positive_flags, negative_flags, strict=True)
-                    ),
-                    *shorts,
-                ],
-                type=click.BOOL,
-                default=None,
-                multiple=True,
-                envvar=spec.env,
-                help=spec.doc,
-                hidden=spec.hidden,
-            )
-        ]
-    positive = _ProgramOption(
-        [_positive_dest(index), *positive_flags, *shorts],
-        default=None,
-        multiple=True,
-        metavar=spec.metavar or _default_metavar(param, projected),
-        envvar=spec.env,
-        help=spec.doc,
-        hidden=spec.hidden,
-    )
-    if not _is_nullable_value_form(projected.value_form):
+        pair = f"{projected.flag}/{projected.negative_flag}"
+        return [_positive_option(index, param, projected, (pair, *short))]
+    positive = _positive_option(index, param, projected, (projected.flag, *short))
+    negative = _spelling_tuple(projected.negative_flag)
+    if not negative:
         return [positive]
-    negative = _ProgramOption(
-        [_negative_dest(index), *negative_flags],
-        is_flag=True,
-        type=click.BOOL,
-        default=None,
-        multiple=True,
-        hidden=spec.hidden,
-    )
-    return [positive, negative]
+    return [positive, _negative_option(index, param, negative)]
 
 
 def _module_click_params(
     index: int, entry: "ParamSurfaceEntry", projected: ProjectedOption
 ) -> list[click.Parameter]:
-    """Build one module parameter's Click options from its resolved flag table."""
-    spec = entry.param.cli
-    positive = (*entry.positive_option_spellings, *entry.short_option_spellings)
-    negative = entry.negative_option_spellings
-    if projected.value_form is ValueForm.BOOL:
-        result: list[click.Parameter] = []
-        if positive:
-            result.append(
-                _ProgramOption(
-                    [_positive_dest(index), *positive],
-                    is_flag=True,
-                    default=None,
-                    multiple=True,
-                    envvar=spec.env,
-                    help=spec.doc,
-                    hidden=spec.hidden,
-                )
-            )
-        elif spec.env is not None:
-            result.append(_module_environment_fallback(index, entry, projected))
-        if negative:
-            result.append(
-                _ProgramOption(
-                    [_negative_dest(index), *negative],
-                    is_flag=True,
-                    default=None,
-                    multiple=True,
-                    hidden=spec.hidden,
-                )
-            )
-        return result
-    result = []
+    """Build one module parameter's Click options from its resolved flag table.
+
+    A polarity every higher level already claimed contributes no option at
+    all; a parameter left with no positive spelling keeps its ``@opt-env``
+    fallback through a synthetic declaration.
+    """
+    positive = (*entry.positive_option_spellings, *_spelling_tuple(entry.short_option))
+    params: list[click.Parameter] = []
     if positive:
-        result.append(
-            _ProgramOption(
-                [_positive_dest(index), *positive],
-                default=None,
-                multiple=True,
-                metavar=spec.metavar or _default_metavar(entry.param, projected),
-                envvar=spec.env,
-                help=spec.doc,
-                hidden=spec.hidden,
+        params.append(_positive_option(index, entry.param, projected, positive))
+    elif entry.param.cli.env is not None:
+        params.append(
+            _positive_option(
+                index,
+                entry.param,
+                projected,
+                (f"--_module-env-{index}",),
+                environment_only=True,
             )
         )
-    elif spec.env is not None:
-        result.append(_module_environment_fallback(index, entry, projected))
-    if negative:
-        result.append(
-            _ProgramOption(
-                [_negative_dest(index), *negative],
-                is_flag=True,
-                type=click.BOOL,
-                default=None,
-                multiple=True,
-                hidden=spec.hidden,
-            )
-        )
-    return result
-
-
-def _module_environment_fallback(
-    index: int, entry: "ParamSurfaceEntry", projected: ProjectedOption
-) -> _EnvironmentFallbackOption:
-    """Build a module parameter's environment-only positive-polarity source."""
-    spec = entry.param.cli
-    assert spec.env is not None
-    declarations = [_positive_dest(index), f"--_module-env-{index}"]
-    if projected.value_form is ValueForm.BOOL:
-        return _EnvironmentFallbackOption(
-            declarations,
-            is_flag=True,
-            default=None,
-            multiple=True,
-            envvar=spec.env,
-            hidden=True,
-        )
-    return _EnvironmentFallbackOption(
-        declarations,
-        default=None,
-        multiple=True,
-        metavar=spec.metavar or _default_metavar(entry.param, projected),
-        envvar=spec.env,
-        hidden=True,
-    )
+    if entry.negative_option_spellings:
+        params.append(_negative_option(index, entry.param, entry.negative_option_spellings))
+    return params
 
 
 def _module_help_record(entry: "ParamSurfaceEntry", projected: ProjectedOption) -> tuple[str, str]:
@@ -1074,7 +1121,7 @@ def _module_help_record(entry: "ParamSurfaceEntry", projected: ProjectedOption) 
         iter(
             (
                 *entry.positive_option_spellings,
-                *entry.short_option_spellings,
+                *_spelling_tuple(entry.short_option),
                 *entry.negative_option_spellings,
             )
         )
@@ -1357,91 +1404,41 @@ class ProgramCommand:
 
         named: dict[str, object] = {}
         for index, (param, projected) in enumerate(self.options):
-            flag = projected.flags[0]
-            positive = cast(tuple[object, ...], values[_positive_dest(index)])
             # A STANDARD parameter can be filled by either its positional
             # slot or its name. A positional CLI token outranks an envvar
             # fallback just as a named CLI token does, but a named CLI token
             # remains a duplicate for the shared binder to reject.
-            positional_overrides_environment = (
-                param.name in positional_names
-                and self._from_environment(ctx, _positive_dest(index))
+            value = _supplied_value(
+                ctx,
+                values,
+                index,
+                projected,
+                flag=projected.flag,
+                negative_flag=projected.negative_flag or projected.flag,
+                paired_polarities=True,
+                suppress_positive=param.name in positional_names
+                and _from_environment(ctx, _positive_dest(index)),
             )
-            if projected.value_form is ValueForm.BOOL:
-                # Both polarities fill one Click parameter, so this single
-                # check covers same- and mixed-polarity repetition alike.
-                _reject_repetition(positive, flag, projected.negative_flags[0])
-                if positive and not positional_overrides_environment:
-                    named[param.name] = cast(bool, positive[0])
-                continue
-            _reject_repetition(positive, flag)
-            if not _is_nullable_value_form(projected.value_form):
-                if positive and not positional_overrides_environment:
-                    named[param.name] = _positive_raw(projected, cast(str, positive[0]))
-                continue
-            negative_flag = projected.negative_flags[0]
-            negative = cast(tuple[object, ...], values[_negative_dest(index)])
-            _reject_repetition(negative, negative_flag)
-            # An optional enum's two polarities are two Click parameters, so
-            # only their sources tell a supplied token from an ``@opt-env``
-            # value. Both polarities typed together is the contradiction; a
-            # ``--no-x`` token against an environment-supplied positive is
-            # not, since a CLI token outranks the environment.
-            if self._from_commandline(ctx, _positive_dest(index)) and self._from_commandline(
-                ctx, _negative_dest(index)
-            ):
-                raise ValueError(f"Options {flag!r} and {negative_flag!r} cannot both be supplied")
-            if negative:
-                named[param.name] = option_none_raw()
-            elif positive and not positional_overrides_environment:
-                named[param.name] = _positive_raw(projected, cast(str, positive[0]))
+            if value is not _NOT_SUPPLIED:
+                named[param.name] = value
         module_params: dict[StaticBindingKey, object] = {}
         for offset, (entry, projected) in enumerate(self.module_options, start=len(self.options)):
-            module_param = entry.param
-            positive_flag = _module_primary_flag(entry)
-            positive = cast(tuple[object, ...], values.get(_positive_dest(offset), ()))
-            if projected.value_form is ValueForm.BOOL:
-                _reject_repetition(positive, positive_flag)
-                negative = cast(tuple[object, ...], values.get(_negative_dest(offset), ()))
-                negative_flag = next(iter(entry.negative_option_spellings), positive_flag)
-                _reject_repetition(negative, negative_flag)
-                if (
-                    positive
-                    and negative
-                    and self._from_commandline(ctx, _positive_dest(offset))
-                    and self._from_commandline(ctx, _negative_dest(offset))
-                ):
-                    raise ValueError(
-                        f"Options {positive_flag!r} and {negative_flag!r} cannot both be supplied"
-                    )
-                if negative:
-                    module_params[module_param.key] = False
-                elif positive:
-                    module_params[module_param.key] = cast(bool, positive[0])
-                continue
-            _reject_repetition(positive, positive_flag)
-            if not _is_nullable_value_form(projected.value_form):
-                if positive:
-                    module_params[module_param.key] = _positive_raw(
-                        projected, cast(str, positive[0])
-                    )
-                continue
-            negative_flag = next(iter(entry.negative_option_spellings), positive_flag)
-            negative = cast(tuple[object, ...], values.get(_negative_dest(offset), ()))
-            _reject_repetition(negative, negative_flag)
-            if (
-                positive
-                and negative
-                and self._from_commandline(ctx, _positive_dest(offset))
-                and self._from_commandline(ctx, _negative_dest(offset))
-            ):
-                raise ValueError(
-                    f"Options {positive_flag!r} and {negative_flag!r} cannot both be supplied"
-                )
-            if negative:
-                module_params[module_param.key] = option_none_raw()
-            elif positive:
-                module_params[module_param.key] = _positive_raw(projected, cast(str, positive[0]))
+            # Every module spelling is resolved ahead of the parse, so a
+            # polarity whose spellings a higher level claimed has no Click
+            # parameter at all and the diagnostics fall back to the other.
+            flag = _module_primary_flag(entry)
+            value = _supplied_value(
+                ctx,
+                values,
+                offset,
+                projected,
+                flag=flag,
+                negative_flag=next(iter(entry.negative_option_spellings), flag),
+                paired_polarities=False,
+                suppress_positive=False,
+            )
+            if value is not _NOT_SUPPLIED:
+                module_params[entry.param.key] = value
         return ParsedTail(
             arguments=ProgramArguments(positional=positional, named=named), params=module_params
         )
@@ -1489,14 +1486,13 @@ class ProgramCommand:
         for param, projected in self.options:
             if not projected.takes_value:
                 continue
-            short = _short_flag(param)
-            result.append((param, (projected.flags[0], *(() if short is None else (short,)))))
+            result.append((param, (projected.flag, *_spelling_tuple(_short_flag(param)))))
         for entry, projected in self.module_options:
             if projected.takes_value:
                 result.append(
                     (
                         entry.param,
-                        (*entry.positive_option_spellings, *entry.short_option_spellings),
+                        (*entry.positive_option_spellings, *_spelling_tuple(entry.short_option)),
                     )
                 )
         return tuple(result)
@@ -1508,9 +1504,9 @@ class ProgramCommand:
         long_options: dict[str, bool] = {}
         short_options: dict[str, bool] = {}
         for param, projected in self.options:
-            long_options[projected.flags[0]] = projected.takes_value
-            for flag in projected.negative_flags:
-                long_options[flag] = False
+            long_options[projected.flag] = projected.takes_value
+            if projected.negative_flag is not None:
+                long_options[projected.negative_flag] = False
             short = _short_flag(param)
             if short is not None:
                 short_options[short] = projected.takes_value
@@ -1565,21 +1561,6 @@ class ProgramCommand:
             index += 1
         return frozenset(values), positional
 
-    @staticmethod
-    def _from_commandline(ctx: click.Context, dest: str) -> bool:
-        """Return whether *dest* was filled by a CLI token rather than the environment.
-
-        Click records where each parameter's value came from, which is the
-        only way to tell a token from an environment fallback: both arrive as
-        an ordinary parsed value.
-        """
-        return ctx.get_parameter_source(dest) is ParameterSource.COMMANDLINE
-
-    @staticmethod
-    def _from_environment(ctx: click.Context, dest: str) -> bool:
-        """Return whether *dest* was filled by its environment fallback."""
-        return ctx.get_parameter_source(dest) is ParameterSource.ENVIRONMENT
-
     def render_help(
         self,
         program_name: str,
@@ -1621,7 +1602,7 @@ class ProgramCommand:
         for param, projected in self.options:
             if param.cli.hidden:
                 continue
-            spellings.extend(_spellings(param, projected))
+            spellings.extend(param_spellings(param, projected))
         for entry, _projected in self.module_options:
             if not entry.hidden:
                 spellings.extend(entry.option_spellings)
@@ -1655,7 +1636,7 @@ def _check_reservation(
     """
     seen: dict[str, str] = {}
     for param, projected in options:
-        for flag in _spellings(param, projected):
+        for flag in param_spellings(param, projected):
             if flag in reserved_flags:
                 return ReservedFlagError(parameter=param.name, flag=flag)
             if flag in seen:

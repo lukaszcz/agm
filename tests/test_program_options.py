@@ -33,6 +33,7 @@ from agm.agl.type_schema import build_param_decoder
 from agm.agl.zones import ParamZone
 from agm.cli_support.program_options import (
     EXEC_RESERVED_FLAGS,
+    HELP_FLAGS,
     REGISTERED_RESERVED_FLAGS,
     DuplicateOptionFlagError,
     ExecTail,
@@ -198,24 +199,24 @@ class TestProjectOption:
     def test_bool_projects_a_flag_pair_with_no_value(self) -> None:
         projected = project_option("verbose", BoolType())
 
-        assert projected.flags == ("--verbose",)
-        assert projected.negative_flags == ("--no-verbose",)
+        assert projected.flag == "--verbose"
+        assert projected.negative_flag == "--no-verbose"
         assert projected.takes_value is False
         assert projected.value_form is ValueForm.BOOL
 
     def test_text_projects_a_verbatim_value_flag_with_no_negative(self) -> None:
         projected = project_option("name", TextType())
 
-        assert projected.flags == ("--name",)
-        assert projected.negative_flags == ()
+        assert projected.flag == "--name"
+        assert projected.negative_flag is None
         assert projected.takes_value is True
         assert projected.value_form is ValueForm.TEXT
 
     def test_option_projects_a_flag_pair_taking_a_value(self) -> None:
         projected = project_option("region", _option_type(TextType()))
 
-        assert projected.flags == ("--region",)
-        assert projected.negative_flags == ("--no-region",)
+        assert projected.flag == "--region"
+        assert projected.negative_flag == "--no-region"
         assert projected.takes_value is True
         assert projected.value_form is ValueForm.OPTION
 
@@ -223,34 +224,34 @@ class TestProjectOption:
         projected = project_option("flag", _option_type(BoolType()))
 
         assert projected.value_form is ValueForm.OPTION
-        assert projected.negative_flags == ("--no-flag",)
+        assert projected.negative_flag == "--no-flag"
 
     def test_optional_projects_a_default_aware_flag_pair(self) -> None:
         projected = project_option("file", _optional_type(TextType()))
 
-        assert projected.flags == ("--file",)
-        assert projected.negative_flags == ("--no-file",)
+        assert projected.flag == "--file"
+        assert projected.negative_flag == "--no-file"
         assert projected.takes_value is True
         assert projected.value_form is ValueForm.OPTIONAL
 
     def test_agent_projects_a_host_agent_value(self) -> None:
         projected = project_option("worker", BUILTIN_PRELUDE_TYPES["Agent"])
 
-        assert projected.negative_flags == ()
+        assert projected.negative_flag is None
         assert projected.takes_value is True
         assert projected.value_form is ValueForm.AGENT
 
     def test_every_other_type_projects_a_value_form_with_no_negative(self) -> None:
         for typ in (IntType(), ArrayType(elem=TextType())):
             projected = project_option("count", typ)
-            assert projected.negative_flags == ()
+            assert projected.negative_flag is None
             assert projected.takes_value is True
             assert projected.value_form is ValueForm.VALUE
 
     def test_json_type_projects_the_json_value_form(self) -> None:
         projected = project_option("payload", JsonType())
 
-        assert projected.negative_flags == ()
+        assert projected.negative_flag is None
         assert projected.takes_value is True
         assert projected.value_form is ValueForm.JSON
 
@@ -260,7 +261,7 @@ class TestProjectOption:
         assert project_option("worker", user_agent).value_form is ValueForm.VALUE
 
     def test_flag_spelling_preserves_the_name_verbatim(self) -> None:
-        assert project_option("my-flag", TextType()).flags == ("--my-flag",)
+        assert project_option("my-flag", TextType()).flag == "--my-flag"
 
     def test_entry_module_enum_named_option_projects_as_value_not_option(self) -> None:
         """A user-declared ``enum Option[T]`` in the entry module shares the
@@ -273,7 +274,7 @@ class TestProjectOption:
         projected = project_option("thing", user_option)
 
         assert projected.value_form is ValueForm.VALUE
-        assert projected.negative_flags == ()
+        assert projected.negative_flag is None
         assert projected.takes_value is True
 
     def test_entry_module_enum_named_optional_projects_as_an_ordinary_value(self) -> None:
@@ -284,7 +285,7 @@ class TestProjectOption:
         projected = project_option("thing", user_optional)
 
         assert projected.value_form is ValueForm.VALUE
-        assert projected.negative_flags == ()
+        assert projected.negative_flag is None
 
 
 # ---------------------------------------------------------------------------
@@ -311,10 +312,13 @@ class TestEngineKeyFlags:
     def test_exec_reserves_every_engine_key_flag(self) -> None:
         assert engine_key_flags() <= EXEC_RESERVED_FLAGS
 
-    def test_every_flag_the_exec_command_declares_is_reserved(self) -> None:
+    def test_exec_reserves_exactly_the_flags_the_exec_command_declares(self) -> None:
         """The reserved set is derived from ``agm exec``'s own declarations,
-        not restated: an unreserved host flag would silently shadow the
-        program parameter advertised under it.
+        not restated. An unreserved host flag would silently shadow the
+        program parameter advertised under it; a reserved one the command no
+        longer declares would reject a parameter that could now claim it.
+        ``agm exec`` recognizes the help flags itself instead of declaring
+        them to Click, so they are reserved without appearing there.
         """
         import typer.main
 
@@ -330,7 +334,10 @@ class TestEngineKeyFlags:
             for flag in (*param.opts, *param.secondary_opts)
         }
 
-        assert declared <= EXEC_RESERVED_FLAGS
+        engine_flags = engine_key_flags()
+        assert (declared - engine_flags) | frozenset(HELP_FLAGS) == (
+            EXEC_RESERVED_FLAGS - engine_flags
+        )
 
     def test_every_flag_a_registered_command_declares_is_reserved(self) -> None:
         """Derived from the registered command's own declarations, as for ``agm exec``."""
@@ -1716,6 +1723,9 @@ class TestModuleParameterOptions:
         monkeypatch.setenv("TOOL_FOO", "value")
 
         assert result.parse([]).params == {foo.key: "value"}
+        # The declaration standing for the variable is not one anyone can type.
+        with pytest.raises(ValueError):
+            result.parse(["--_module-env-0", "typed"])
 
     def test_module_env_applies_independently_despite_an_ambiguous_bare_spelling(
         self, monkeypatch: pytest.MonkeyPatch

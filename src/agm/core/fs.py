@@ -227,12 +227,20 @@ def copy_file(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
+def same_contents(left: Path, right: Path) -> bool:
+    """Report whether two files hold the same bytes, reading only on a size match."""
+
+    if left.stat().st_size != right.stat().st_size:
+        return False
+    return left.read_bytes() == right.read_bytes()
+
+
 def backup_file(path: Path) -> None:
     """Copy *path* to ``.bak``, preserving distinct backups recursively."""
 
     backup = path.with_name(f"{path.name}.bak")
     if backup.exists():
-        if backup.read_bytes() == path.read_bytes():
+        if same_contents(backup, path):
             return
         backup_file(backup)
     copy_file(path, backup)

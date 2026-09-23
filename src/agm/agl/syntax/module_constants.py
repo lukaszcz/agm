@@ -63,6 +63,7 @@ from agm.agl.syntax.nodes import (
     VarRef,
     static_items,
 )
+from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.value_syntax.lexical import scalar_text
 
@@ -223,23 +224,22 @@ class ModuleConstants:
     def _resolve(self, expr: VarRef, scope_path: tuple[str, ...]) -> _BindingKey | None:
         """Resolve one reference to a static binding of this module.
 
-        *expr* has already been screened for a module route, so its qualifier
-        is a scope path: relative to *scope_path* and every enclosing level, or
-        rooted when it is ``::``-anchored.
+        This is a deliberate AST-only approximation of the language's own
+        resolution of a same-module name, not a second resolver: an attribute
+        is folded before references are resolved, and package command discovery
+        scans sources it never compiles. *expr* has already been screened for a
+        module route, so its qualifier is a scope path: relative to
+        *scope_path* and every enclosing level, or rooted when it is
+        ``::``-anchored.
         """
         qualifier = expr.qualifier
         if qualifier is None:
             segments: tuple[str, ...] = ()
-            anchored = False
+            rooted = False
         else:
             segments = tuple(segment.name for segment in qualifier.segments)
-            anchored = qualifier.anchor is QualifierAnchor.CURRENT_MODULE
-        levels: tuple[tuple[str, ...], ...] = (
-            ((),)
-            if anchored
-            else tuple(scope_path[:depth] for depth in range(len(scope_path), -1, -1))
-        )
-        for base in levels:
+            rooted = qualifier.anchor is QualifierAnchor.CURRENT_MODULE
+        for base in enclosing_scope_bases(scope_path, rooted=rooted):
             key = ((*base, *segments), expr.name)
             if key in self._bindings:
                 return key
@@ -251,9 +251,8 @@ def _spelling(expr: VarRef) -> str:
     qualifier = expr.qualifier
     if qualifier is None:
         return expr.name
-    prefix = "/" if qualifier.anchored else ""
-    route = "/".join(qualifier.route_segments)
+    route = qualifier.render()
     if qualifier.anchored or "/" in route:
-        return f"{prefix}{route}::{expr.name}"
+        return f"{route}::{expr.name}"
     anchor = "::" if qualifier.anchor is QualifierAnchor.CURRENT_MODULE else ""
     return anchor + "::".join((*(segment.name for segment in qualifier.segments), expr.name))

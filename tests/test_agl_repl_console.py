@@ -24,6 +24,7 @@ from unittest.mock import patch
 
 import pytest
 from lark.lexer import Token
+from prompt_toolkit.application.current import create_app_session, get_app_session
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory, InMemoryHistory
@@ -372,6 +373,17 @@ class TestLexer:
         assert "count is a binding" in output
         assert "let count" in output
 
+    def test_info_output_survives_a_warmed_global_output(self) -> None:
+        # Left to itself prompt_toolkit resolves a process-global output that
+        # caches the stream it first saw, so an earlier console user in the
+        # same process could send :info to the real terminal instead of here.
+        with create_app_session():
+            get_app_session().output  # warm the cache against the real stdout
+            output = drive("let count = 1\r:info count\r\x04")
+
+        assert "count is a binding" in output
+        assert "let count" in output
+
     def test_styles_a_sample_line(self) -> None:
         lexer = AglPromptLexer()
         fragments = lexer.lex_document(Document("let x = 1 + foo"))(0)
@@ -413,6 +425,12 @@ class TestLexer:
         fragments = lexer.lex_document(Document('print "hello"'))(0)
         styles = {style for style, _text in fragments}
         assert "class:agl.string" in styles
+
+    def test_environment_hole_is_styled_as_part_of_its_string(self) -> None:
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document('print "${HOME}"'))(0)
+        assert ("class:agl.string", "${HOME}") in fragments
+        assert "".join(text for _style, text in fragments) == 'print "${HOME}"'
 
     def test_half_typed_dollar_verbatim_header_preserves_prefix_highlighting(self) -> None:
         # `ask $` with nothing typed after the `$` yet is a half-typed entry

@@ -22,8 +22,10 @@ from agm.project.dependency_checkout import main_dep_repo
 if TYPE_CHECKING:
     from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo, ProgramParamInfo
     from agm.cli_dispatch import RegisteredCommandResolution
-    from agm.cli_support.program_discovery import ExecProgramDiscovery, ProgramDiscoveryArtifacts
+    from agm.cli_support.program_discovery import ExecProgramDiscovery
     from agm.cli_support.program_options import ExecTail, OptionValueMap, ProgramCommand
+    from agm.config.context import ConfigContext
+    from agm.packages.activation import ActivationIndex
 
 from agm.project.layout import (
     current_workspace_or_project_root,
@@ -233,19 +235,44 @@ def complete_help_path(ctx: click.Context, incomplete: str) -> list[str]:
     params = cast(dict[str, object], ctx.params)
     help_command = tuple(_string_list(params.get("help_command")))
     static = _match(_HELP_TREE.get(help_command, []), incomplete)
-    registered = complete_registered_commands(help_command, incomplete)
+    registered = complete_registered_commands(help_command, incomplete, ctx)
     return sorted(set(static) | set(registered))
 
 
+_COMMAND_INDEX_META_KEY = "registered_command_index"
+
+
+def _registered_index(ctx: click.Context) -> "tuple[ConfigContext, ActivationIndex]":
+    """Return the active configuration context and its registered-command index.
+
+    Loading the index reads every active package's manifest, and one TAB asks
+    for it twice — once for the path segments, once for the selected
+    program's own flags — so *ctx*'s metadata keeps the single load for the
+    whole completion.
+    """
+    from agm.cli_dispatch import load_command_index
+
+    meta = cast(_ContextWithMetadata, ctx).meta
+    cached = meta.get(_COMMAND_INDEX_META_KEY)
+    if cached is not None:
+        return cast("tuple[ConfigContext, ActivationIndex]", cached)
+    context = current_config_context()
+    loaded = (
+        context,
+        load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd),
+    )
+    meta[_COMMAND_INDEX_META_KEY] = loaded
+    return loaded
+
+
 def registered_command_completion(
-    command_path: Sequence[str], incomplete: str
+    command_path: Sequence[str], incomplete: str, ctx: click.Context
 ) -> tuple[list[str], bool]:
     """Return next path segments and whether the path resolves to a registered command."""
     try:
-        from agm.cli_dispatch import load_command_index, resolve_registered_command
+        from agm.cli_dispatch import resolve_registered_command
 
-        context = current_config_context()
-        index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+        index = _registered_index(ctx)[1]
         prefix = tuple(command_path)
         candidates = {
             words[len(prefix)]
@@ -271,9 +298,8 @@ def _registered_program(
     ``None`` when no registered command path starts *command_path*. Resolved
     once per completion: *ctx*'s metadata keeps the answer for its path.
     """
-    from agm.cli_dispatch import load_command_index, resolve_registered_command
-    from agm.cli_support.program_options import REGISTERED_RESERVED_FLAGS, program_command_for
-    from agm.commands.exec_program import registered_program_declaration
+    from agm.cli_dispatch import resolve_registered_command
+    from agm.cli_support.program_discovery import registered_program_command
 
     meta = cast(_ContextWithMetadata, ctx).meta
     key = tuple(command_path)
@@ -284,26 +310,17 @@ def _registered_program(
     )
     if cached is not None and cached[0] == key:
         return cached[1]
-    context = current_config_context()
-    index = load_command_index(home=context.home, proj_dir=context.proj_dir, cwd=context.cwd)
+    context, index = _registered_index(ctx)
     resolution = resolve_registered_command(command_path, index.commands)
     result: tuple[RegisteredCommandResolution, ProgramCommand | None] | None = None
     if resolution is not None:
         program_command = None
         if resolution.registration.program is not None:
-            artifacts: list[ProgramDiscoveryArtifacts] = []
-            declaration = registered_program_declaration(
+            program_command = registered_program_command(
                 resolution.registration.program,
                 resolution.registration.package,
                 context=context,
-                artifact_sink=artifacts,
-            )
-            params = (
-                ()
-                if declaration is None or not artifacts
-                else artifacts[0].discovery.params_for(declaration)
-            )
-            program_command = program_command_for(declaration, REGISTERED_RESERVED_FLAGS, params)
+            )[1]
         result = (resolution, program_command)
     meta[_REGISTERED_PROGRAM_META_KEY] = (key, result)
     return result
@@ -379,9 +396,11 @@ def registered_command_param_completion(
     return [CompletionItem(flag) for flag in flags if flag.startswith(incomplete)]
 
 
-def complete_registered_commands(command_path: Sequence[str], incomplete: str) -> list[str]:
+def complete_registered_commands(
+    command_path: Sequence[str], incomplete: str, ctx: click.Context
+) -> list[str]:
     """Complete the next active registered-command path segment."""
-    return registered_command_completion(command_path, incomplete)[0]
+    return registered_command_completion(command_path, incomplete, ctx)[0]
 
 
 @_completes_quietly
@@ -487,7 +506,7 @@ def complete_run_command(ctx: click.Context, incomplete: str) -> list[str]:
     if run_config is not None:
         candidates.update(
             command_name
-            for command_name in run_config.aliases
+            for command_name in run_config.alias.overrides
             if command_name.startswith(incomplete)
         )
     return sorted(candidates)
@@ -673,24 +692,11 @@ def _exec_selection_inputs(ctx: click.Context) -> tuple[ExecProgramDiscovery, Ex
 
 def _exec_program_command(ctx: click.Context) -> tuple[ExecTail, ProgramCommand | None]:
     """Return ``agm exec``'s split tail and its selected program's command, once per completion."""
-    from agm.cli_support.program_options import EXEC_RESERVED_FLAGS, program_command_for
-
     meta = cast(_ContextWithMetadata, ctx).meta
     cached = cast("tuple[ExecTail, ProgramCommand | None] | None", meta.get(_EXEC_PROGRAM_META_KEY))
     if cached is None:
         discovery, tail = _exec_selection_inputs(ctx)
-        selected = discovery.selection(tail.file).selected
-        artifacts = discovery.cached_artifacts(tail.file)
-        cached = (
-            tail,
-            program_command_for(
-                selected,
-                EXEC_RESERVED_FLAGS,
-                ()
-                if selected is None or artifacts is None
-                else artifacts.discovery.params_for(selected),
-            ),
-        )
+        cached = (tail, discovery.command_for_file(tail.file))
         meta[_EXEC_PROGRAM_META_KEY] = cached
     return cached
 
@@ -750,9 +756,7 @@ class ExecCommand(TyperCommand):
         """
         from agm.cli_support.program_discovery import ExecProgramDiscovery
         from agm.cli_support.program_options import (
-            EXEC_RESERVED_FLAGS,
             option_value_map,
-            program_command_for,
             protect_host_option_values,
             protect_potential_program_values,
             retain_end_of_options,
@@ -794,18 +798,9 @@ class ExecCommand(TyperCommand):
                 None if isinstance(raw_command, str) else discovery.command_for_file
             ),
         )
-        if preview_args != args:
-            selected_program = discovery.selection(selected.file).selected
-            artifacts = discovery.cached_artifacts(selected.file)
-            program_command = program_command_for(
-                selected_program,
-                EXEC_RESERVED_FLAGS,
-                ()
-                if selected_program is None or artifacts is None
-                else artifacts.discovery.params_for(selected_program),
-            )
-        else:
-            program_command = None
+        program_command = (
+            discovery.command_for_file(selected.file) if preview_args != args else None
+        )
         protected, replacements = protect_host_option_values(args, program_command, host_options)
         remaining = super().parse_args(ctx, retain_end_of_options(protected, host_options))
         ctx.args[:] = [replacements.get(token, token) for token in ctx.args]
@@ -838,11 +833,10 @@ class ExecCommand(TyperCommand):
             selection = discovery.selection(tail.file)
             if selection.selected is None:
                 return base
-            artifacts = discovery.cached_artifacts(tail.file)
             extra = _program_argument_completion_items(
                 selection.selected,
                 incomplete,
-                () if artifacts is None else artifacts.discovery.params_for(selection.selected),
+                discovery.params_for(tail.file, selection.selected),
             )
             items_by_value: dict[str, CompletionItem] = {}
             for item in (*base, *extra):

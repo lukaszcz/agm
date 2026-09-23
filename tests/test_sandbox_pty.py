@@ -100,8 +100,8 @@ def test_copy_terminal_size_copies_dimensions(monkeypatch: pytest.MonkeyPatch) -
 def test_write_all_handles_partial_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     writes: list[bytes] = []
 
-    def fake_write(_fd: int, data: bytes) -> int:
-        writes.append(data)
+    def fake_write(_fd: int, data: memoryview) -> int:
+        writes.append(bytes(data))
         return min(2, len(data))
 
     monkeypatch.setattr(os, "write", fake_write)

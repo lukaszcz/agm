@@ -23,7 +23,15 @@ from agm.agent.session.cli_adapters import (
     CodexCliSessionBackend,
     PiCliSessionBackend,
 )
-from agm.agent.spec import AGENT_SPECS, AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
+from agm.agent.spec import (
+    AGENT_SPECS,
+    AgentClaude,
+    AgentCodex,
+    AgentCommand,
+    AgentPi,
+    AgentSpec,
+    payload_fields,
+)
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.core.process import CapturedOutput, ProcessCaptureResult
 
@@ -101,7 +109,7 @@ def test_agent_variant_spec_backend_catalogs_are_in_lockstep() -> None:
     assert set(declared) == set(expected) == set(AGENT_SPECS) == set(CLI_SESSION_BACKENDS)
     for variant, (fields, spec, backend, transport) in expected.items():
         assert tuple(name for name, _ in declared[variant]) == fields
-        assert spec.PAYLOAD_FIELDS == fields
+        assert payload_fields(spec) == fields
         assert AGENT_SPECS[variant] is spec
         assert CLI_SESSION_BACKENDS[variant] is backend
         assert spec.DEFAULT_SESSION_TRANSPORT == transport

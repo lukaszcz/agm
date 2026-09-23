@@ -1981,6 +1981,30 @@ def test_registered_declaration_ignores_a_program_owned_by_another_package(tmp_p
     assert registered_program_declaration("tools/main::main", "other", context=context) is None
 
 
+def test_registered_declaration_selects_the_active_packages_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Describing a registered command resolves its package once, not once per resolution step."""
+    import agm.cli_support.exec_target as exec_target
+    from agm.commands.exec_program import registered_program_declaration
+
+    write_installed_package(tmp_path, "tools")
+    context = ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path)
+    selections = 0
+    select = exec_target.select_active_packages
+
+    def counted(*, home: Path, proj_dir: Path | None, cwd: Path, **rest: object) -> object:
+        nonlocal selections
+        selections += 1
+        del rest
+        return select(home=home, proj_dir=proj_dir, cwd=cwd, fallback_to_manifest_commands=True)
+
+    monkeypatch.setattr(exec_target, "select_active_packages", counted)
+
+    assert registered_program_declaration("tools/main::main", "tools", context=context) is not None
+    assert selections == 1
+
+
 def test_registered_program_declaration_finds_the_referenced_program(tmp_path: Path) -> None:
     from agm.commands.exec_program import registered_program_declaration
 

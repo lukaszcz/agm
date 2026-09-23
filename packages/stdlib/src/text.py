@@ -1,14 +1,11 @@
 """``std/text`` companion operations, including runtime interpolation and text methods."""
 
-from agl import AglException, array, nominals, option_none, option_some
+from agl import array, nominals, option_none, option_some
 
+from agm.agl.runtime.boundary import raise_index_error
 from agm.util.interp import interp
 
 IndexError = nominals.std.errors.IndexError
-
-
-def _index_error(value: str) -> None:
-    raise AglException(IndexError(message="text substring not found", index=-1, length=len(value)))
 
 
 def _padding(length: int, fill: str) -> str:
@@ -76,7 +73,7 @@ def contains(value: str, substring: str) -> bool:
 def index_of(value: str, substring: str) -> int:
     index = value.find(substring)
     if index < 0:
-        _index_error(value)
+        raise_index_error(IndexError, "text substring not found", -1, len(value))
     return index
 
 

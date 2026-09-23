@@ -10,6 +10,25 @@
       }
     },
     {
+      "name": "environment_holes_stand_wherever_a_hole_stands",
+      "params": {"mode": 3},
+      "process_environment": {"FIRST": "one", "SECOND": "two"},
+      "expect": {
+        "stdout": "onetwo\n[one]two\nliteral ${FIRST}\nfirst=one\nsecond=two\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "a_missing_name_raises_at_its_own_hole",
+      "params": {"mode": 3},
+      "process_environment": {"FIRST": "one"},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "KeyError", "fields": {"key": "SECOND"}},
+        "calls": {}
+      }
+    },
+    {
       "name": "missing_environment_holes_raise_like_getenv",
       "params": {"mode": 2},
       "expect": {

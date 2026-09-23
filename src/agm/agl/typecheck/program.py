@@ -146,12 +146,12 @@ from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
     CheckedModuleImage,
-    ConstructorSignature,
     DeclaredHeaderSeed,
     EnvironmentFacts,
     FunctionSignature,
     GenericAliasDef,
     GenericTypeDef,
+    ModuleTypeInterface,
     PublishedModuleSurface,
     TypeEnvironment,
     _assert_checked_types_closed,
@@ -170,7 +170,6 @@ from agm.agl.typecheck.function_inference import (
     register_method_header,
     resolve_function_header,
 )
-from agm.agl.zones import ParamZone
 from agm.util.graph import GraphCycleError, toposort
 
 # ---------------------------------------------------------------------------
@@ -305,12 +304,6 @@ def _decl_key(module_id: ModuleId, item: RecordDef | EnumDef | ExceptionDef | Ty
     return (module_id, tuple(segment.name for segment in item.scope_path), item.name)
 
 
-def _is_exception_root_key(key: DeclKey) -> bool:
-    """Whether *key* names the standard library's own ``Exception`` declaration."""
-    module_id, scope_path, name = key
-    return name == "Exception" and not scope_path and module_id.is_standard_library
-
-
 def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
     """Run only phase 1 (shell registration) of ``_TypeBuilder.collect``.
 
@@ -321,39 +314,80 @@ def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
     builder.collect_shells_only(program)
 
 
+def _empty_program_tables() -> ModuleTypeInterface:
+    """Return the whole-program declaration tables, empty.
+
+    The tables a module publishes to its importers
+    (:class:`~agm.agl.typecheck.env.ModuleTypeInterface`) are the same five
+    tables the pre-passes build for the whole program, so one program-wide
+    record carries them together instead of five loose parameters.
+    ``definitions`` stays empty at program scope: every declaration is in the
+    shared ``TypeTable``, which the pre-passes already thread separately.
+    """
+    return ModuleTypeInterface(_DeclKeyDict(), {}, {}, {}, {}, ())
+
+
+@dataclass(frozen=True, slots=True)
+class _ModuleTypeSeeds:
+    """The program tables' type and generic entries, grouped by owning module.
+
+    Every module environment is seeded with its own declarations under their
+    bare names. Grouping the whole-program tables once makes each seeding
+    proportional to that module's own declarations instead of the program's,
+    the same way :func:`_declared_header_seed` does for declared headers.
+    """
+
+    types: Mapping[ModuleId, tuple[tuple[str, Type], ...]]
+    generics: Mapping[ModuleId, tuple[tuple[str, GenericTypeDef], ...]]
+
+    def seed(self, env: TypeEnvironment, mid: ModuleId) -> None:
+        """Register *mid*'s own types and generic types by bare name."""
+        for name, typ in self.types.get(mid, ()):
+            env.register_type(name, typ)
+        for name, gdef in self.generics.get(mid, ()):
+            env.register_generic_type(name, gdef)
+
+
+def _module_type_seeds(tables: ModuleTypeInterface) -> _ModuleTypeSeeds:
+    """Group the program type and generic tables by owning module."""
+    types: dict[ModuleId, list[tuple[str, Type]]] = {}
+    generics: dict[ModuleId, list[tuple[str, GenericTypeDef]]] = {}
+    for (mid, scope_path, name), typ in tables.types.items():
+        types.setdefault(mid, []).append(("::".join((*scope_path, name)), typ))
+    for (mid, scope_path, name), gdef in tables.generics.items():
+        generics.setdefault(mid, []).append(("::".join((*scope_path, name)), gdef))
+    return _ModuleTypeSeeds(
+        types={mid: tuple(entries) for mid, entries in types.items()},
+        generics={mid: tuple(entries) for mid, entries in generics.items()},
+    )
+
+
 def _sync_program_env_extensions(
     mid: ModuleId,
     env: TypeEnvironment,
-    program_type_table: dict[DeclKey, Type],
-    program_generic_table: dict[DeclKey, GenericTypeDef],
-    program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
-    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]],
+    tables: ModuleTypeInterface,
 ) -> None:
     """Copy reconciled type and constructor metadata into the program tables."""
     for _type_name, typ in env.non_builtin_type_items():
         assert isinstance(typ, (RecordType, EnumType, ExceptionType))
         key = (mid, typ.scope_path, typ.name)
-        program_type_table[key] = typ
-        program_generic_table.pop(key, None)
+        tables.types[key] = typ
+        tables.generics.pop(key, None)
     for _generic_name, gdef in env.all_generic_types().items():
         key = (mid, gdef.template.scope_path, gdef.template.name)
-        program_generic_table[key] = gdef
-        program_type_table.pop(key, None)
+        tables.generics[key] = gdef
+        tables.types.pop(key, None)
     for key, sig in env.all_constructor_sigs():
-        program_ctor_sig_table[key] = sig
+        tables.constructors[key] = sig
     for key, kinds in env.all_constructor_field_kinds():
-        program_ctor_field_kinds_table[key] = kinds
+        tables.field_kinds[key] = kinds
 
 
 def _resolve_body_for_one(
     mid: ModuleId,
     key: DeclKey,
     per_module_builders: dict[ModuleId, _TypeBuilder],
-    program_type_table: dict[DeclKey, Type],
-    program_generic_table: dict[DeclKey, GenericTypeDef],
-    program_alias_table: dict[DeclKey, GenericAliasDef],
-    program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
-    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]],
+    tables: ModuleTypeInterface,
     resolved: ResolvedProgram,
     cross_envs: dict[ModuleId, TypeEnvironment],
 ) -> None:
@@ -377,24 +411,24 @@ def _resolve_body_for_one(
             t = cross_env.get_type(display_name)
             if t is not None:
                 # Non-generic record: update the program table with the fully-built type.
-                program_type_table[key] = t
+                tables.types[key] = t
             # Generic record: body registered in _generic_types (no _types entry);
-            # program_type_table retains the handle from Step A.  Cross-module generic
-            # constructor calls use _program_generic_table / _program_ctor_sig_table instead.
+            # the type table retains the handle from Step A.  Cross-module generic
+            # constructor calls use the generic / constructor tables instead.
             break
         if isinstance(item, EnumDef) and _decl_key(mid, item) == key:
             with cross_env.type_scope(key[1]):
                 builder.build_enum(display_name)
             t = cross_env.get_type(display_name)
             if t is not None:
-                program_type_table[key] = t
+                tables.types[key] = t
             break
         if isinstance(item, ExceptionDef) and _decl_key(mid, item) == key:
             with cross_env.type_scope(key[1]):
                 builder.build_exception(display_name)
             typ = cross_env.get_type(display_name)
             assert typ is not None, f"Exception type {key[2]!r} not registered"
-            program_type_table[key] = typ
+            tables.types[key] = typ
             break
         if isinstance(item, TypeAlias) and _decl_key(mid, item) == key:
             with cross_env.type_scope(key[1]):
@@ -406,27 +440,20 @@ def _resolve_body_for_one(
                         span=item.span,
                         type_vars=frozenset(type_params),
                     )
-                    program_alias_table[key] = GenericAliasDef(
+                    tables.aliases[key] = GenericAliasDef(
                         type_params=type_params,
                         template=template,
                     )
                 else:
                     alias_type = cross_env.resolve_type_expr(item.type_expr, span=item.span)
-                    program_type_table[key] = alias_type
+                    tables.types[key] = alias_type
             break
     else:
         # Unreachable: called only for keys produced by _collect_all_type_keys,
         # which iterates the same program.body.items.
         raise AssertionError(f"type '{key[2]}' not found in module '{mid}'")  # pragma: no cover
 
-    _sync_program_env_extensions(
-        mid,
-        cross_env,
-        program_type_table,
-        program_generic_table,
-        program_ctor_sig_table,
-        program_ctor_field_kinds_table,
-    )
+    _sync_program_env_extensions(mid, cross_env, tables)
 
 
 def _collect_all_type_keys(
@@ -513,39 +540,38 @@ def _build_program_type_table(
     type_table: TypeTable | None = None,
     entry_seed_env: TypeEnvironment | None = None,
     cached_modules: Mapping[ModuleId, PublishedModuleSurface] | None = None,
-) -> tuple[
-    dict[DeclKey, Type],
-    dict[DeclKey, GenericTypeDef],
-    dict[DeclKey, GenericAliasDef],
-    dict[DeclKey, ConstructorSignature],
-    dict[DeclKey, tuple[tuple[str, ParamZone], ...]],
-]:
+) -> ModuleTypeInterface:
     """Phase 1: collect and resolve all public type declarations across all modules.
 
-    Returns a ``program_type_table`` mapping ``(ModuleId, scope_path, name)`` → the
+    Returns the whole-program declaration tables (see
+    :func:`_empty_program_tables`), whose ``types`` maps
+    ``(ModuleId, scope_path, name)`` → the
     ``RecordType``/``EnumType``/``ExceptionType`` handle or resolved-alias
     ``Type``.
 
     The pre-pass is genuinely whole-program two-phase:
 
     Step A: Register every declared name's handle for ALL modules.  Records,
-            enums, and exceptions get their handle entered into
-            ``program_type_table`` directly (a handle carries no field/variant
-            data, so there is nothing left to fill in later — forward
-            references within or across modules are valid immediately). Inline
-            member arity is provisional until its resolved fields reveal which
-            owner parameters survive transparent aliases.
+            enums, and exceptions get their handle entered into the type
+            table directly (a handle carries no field/variant data, so there
+            is nothing left to fill in later — forward references within or
+            across modules are valid immediately), and a standard-library
+            ``builtin exception``'s handle is also published as its identity
+            (:meth:`~agm.agl.semantics.type_table.TypeTable.declare_standard_builtin_exception`).
+            Inline member arity is provisional until its resolved fields
+            reveal which owner parameters survive transparent aliases.
             Type aliases are registered as lazy program alias keys (their target
             type is not known until the alias body is resolved, so they have
             no handle entry yet).
 
     Step B: Resolve every type body in a fixed deterministic order (sorted by
-            ``(ModuleId.segments, name)``), with no dependency-ordering
-            constraint — every nominal field/variant/element type reference is
-            a handle, valid regardless of whether the referenced declaration's
-            own body has been resolved yet. Transparent aliases are resolved
-            lazily when referenced so alias dependencies do not impose a body
-            ordering, while recursive aliases are still rejected.
+            ``(ModuleId.segments, scope_path, name)``) with no ordering
+            constraint — every nominal field/variant/element type reference,
+            and every exception base, is a handle, valid regardless of
+            whether the referenced declaration's own body has been resolved
+            yet. Transparent aliases are resolved lazily when referenced so
+            alias dependencies do not impose a body ordering, while recursive
+            aliases are still rejected.
 
     Step C: Once every body is resolved, run the inhabitation fixpoint
             (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) over the
@@ -579,8 +605,8 @@ def _build_program_type_table(
 
     # Step A: register every declared name's handle for all modules.
     # For records/enums: register the handle in both the per-module env AND
-    # program_type_table.  For aliases: register in the per-module env only
-    # (their entry is added to program_type_table in Step C, once resolved).
+    # the program tables.  For aliases: register in the per-module env only
+    # (their entry is added to the type table in Step C, once resolved).
     per_module_envs: dict[ModuleId, TypeEnvironment] = {}
 
     for mid, rmod in resolved.modules.items():
@@ -605,16 +631,16 @@ def _build_program_type_table(
     # Collect record/enum handles into the shared program type table.
     # Aliases are NOT added here — their entries will be written in Step C
     # after their target type is resolved.
-    program_type_table: _DeclKeyDict[Type] = _DeclKeyDict()
+    tables = _empty_program_tables()
     for mid, env in per_module_envs.items():
         for _name, t in env.non_builtin_type_items():
             assert isinstance(t, (RecordType, EnumType, ExceptionType))
-            program_type_table[(mid, t.scope_path, t.name)] = t
+            tables.types[(mid, t.scope_path, t.name)] = t
 
     # Cross-module generic type definitions carry no field shape (a GenericTypeDef
     # is just a type-parameter count plus a TypeVarType-stamped template — the
     # same "shell" data a non-generic handle carries), so — like
-    # program_type_table above — they are collected here in Step A rather than
+    # the type table above — they are collected here in Step A rather than
     # gated on that module's own body-resolution order in Step C: a qualified
     # generic application (e.g. ``lib::Box[int]``) inside a field of a type
     # declared in a module that sorts before ``lib`` in the fixed body-resolution
@@ -624,11 +650,9 @@ def _build_program_type_table(
     # them lazily; constructor signatures and constructor field kinds genuinely
     # need a resolved body (field/target types), so those remain filled as each
     # type body is resolved in Step C.
-    program_generic_table: dict[DeclKey, GenericTypeDef] = {}
     for mid, env in per_module_envs.items():
         for _name, gdef in env.all_generic_types().items():
-            program_generic_table[(mid, gdef.template.scope_path, gdef.template.name)] = gdef
-    program_alias_table: dict[DeclKey, GenericAliasDef] = {}
+            tables.generics[(mid, gdef.template.scope_path, gdef.template.name)] = gdef
     alias_decls: dict[DeclKey, TypeAlias] = {}
     for mid, rmod in resolved.modules.items():
         if mid in interfaces:
@@ -639,18 +663,16 @@ def _build_program_type_table(
             if isinstance(item, TypeAlias):
                 alias_decls[_decl_key(mid, item)] = item
     program_alias_keys = frozenset(alias_decls)
-    program_ctor_sig_table: dict[DeclKey, ConstructorSignature] = {}
-    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]] = {}
 
     for interface in interfaces.values():
-        program_type_table.update(interface.types)
-        program_generic_table.update(interface.generics)
-        program_alias_table.update(interface.aliases)
-        program_ctor_sig_table.update(interface.constructors)
-        program_ctor_field_kinds_table.update(interface.field_kinds)
+        tables.types.update(interface.types)
+        tables.generics.update(interface.generics)
+        tables.aliases.update(interface.aliases)
+        tables.constructors.update(interface.constructors)
+        tables.field_kinds.update(interface.field_kinds)
 
     # Build per-module cross-module-aware environments and builders for
-    # body resolution.  Each env knows the full program_type_table and its own
+    # body resolution.  Each env knows the full program tables and its own
     # module's ImportEnv so qualified and import-tail-exposed type refs resolve.
     cross_envs: dict[ModuleId, TypeEnvironment] = {}
     cross_builders: dict[ModuleId, _TypeBuilder] = {}
@@ -675,13 +697,13 @@ def _build_program_type_table(
                         span=item.span,
                         type_vars=frozenset(type_params),
                     )
-                    program_alias_table[key] = GenericAliasDef(
+                    tables.aliases[key] = GenericAliasDef(
                         type_params=type_params,
                         template=template,
                     )
                     return None
                 resolved = env.resolve_type_expr(item.type_expr, span=item.span)
-            program_type_table[key] = resolved
+            tables.types[key] = resolved
             return resolved
         finally:
             resolving_aliases.remove(key)
@@ -691,13 +713,13 @@ def _build_program_type_table(
             continue
         import_env = rmod.import_env
         cross_env = TypeEnvironment(
-            program_type_table=program_type_table,
-            program_generic_table=program_generic_table,
-            program_alias_table=program_alias_table,
+            program_type_table=tables.types,
+            program_generic_table=tables.generics,
+            program_alias_table=tables.aliases,
             program_alias_keys=program_alias_keys,
             program_alias_resolver=_resolve_program_alias,
-            program_ctor_sig_table=program_ctor_sig_table,
-            program_ctor_field_kinds_table=program_ctor_field_kinds_table,
+            program_ctor_sig_table=tables.constructors,
+            program_ctor_field_kinds_table=tables.field_kinds,
             import_env=import_env,
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,
@@ -722,18 +744,11 @@ def _build_program_type_table(
     # body, so a forward reference observes the same arity as a backward one.
     for mid, builder in cross_builders.items():
         builder.reconcile_inline_member_arities()
-        _sync_program_env_extensions(
-            mid,
-            cross_envs[mid],
-            program_type_table,
-            program_generic_table,
-            program_ctor_sig_table,
-            program_ctor_field_kinds_table,
-        )
+        _sync_program_env_extensions(mid, cross_envs[mid], tables)
 
     # Use the COMPLETE set of declared type keys (including aliases), NOT just
-    # the record/enum handles in program_type_table, as the fixed resolution
-    # order for Step B below.
+    # the record/enum handles already in the type table, as the fixed
+    # resolution order for Step B below.
     all_type_keys = {key for key in _collect_all_type_keys(resolved) if key[0] not in interfaces}
 
     def _resolve_one(key: DeclKey) -> None:
@@ -741,27 +756,19 @@ def _build_program_type_table(
             mid=key[0],
             key=key,
             per_module_builders=cross_builders,
-            program_type_table=program_type_table,
-            program_generic_table=program_generic_table,
-            program_alias_table=program_alias_table,
-            program_ctor_sig_table=program_ctor_sig_table,
-            program_ctor_field_kinds_table=program_ctor_field_kinds_table,
+            tables=tables,
             resolved=resolved,
             cross_envs=cross_envs,
         )
 
-    # Step B: resolve every type body in a fixed deterministic order — no
-    # dependency-ordering constraint of any kind, since every reference
-    # (including an exception's ``extends`` base) is a handle, valid whether
-    # or not the referenced declaration's own body has been resolved yet.
-    # The one exception is the canonical ``Exception`` itself: an exception
-    # that omits ``extends`` takes it as its base, and
-    # ``TypeTable.exception_root`` reads it from the registered standard-library
-    # declaration, so that declaration resolves before every other body.
-    def source_decl_sort_key(
-        key: DeclKey,
-    ) -> tuple[bool, tuple[str, ...], tuple[str, ...], str]:
-        return (not _is_exception_root_key(key), key[0].segments, key[1], key[2])
+    # Step B: resolve every type body in a fixed deterministic order, with no
+    # dependency-ordering constraint of any kind: every reference is a handle,
+    # valid whether or not the referenced declaration's own body has been
+    # resolved yet. That holds for an exception's ``extends`` base too,
+    # including the canonical ``Exception`` an omitted ``extends`` takes,
+    # whose identity Step A published (``TypeTable.exception_root``).
+    def source_decl_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+        return (key[0].segments, key[1], key[2])
 
     body_order = sorted(all_type_keys, key=source_decl_sort_key)
 
@@ -771,8 +778,13 @@ def _build_program_type_table(
     # Builtin contracts may inspect referenced enum-member record fields, so
     # validate only after every type body has been resolved.  This preserves
     # the order-free handle phase while making contract validation structural.
-    for builder in cross_builders.values():
-        builder.validate_builtin_contracts()
+    # The derived half runs only once every module's self-standing shapes have
+    # passed, so an invalid builtin is reported at the declaration that
+    # carries it whichever module declares it -- and in every module set the
+    # artifact cache leaves to check.
+    for derived in (False, True):
+        for builder in cross_builders.values():
+            builder.validate_builtin_contracts(derived=derived)
 
     # Step C: every body is now resolved, so the inhabitation fixpoint can
     # run over the whole shared table (this program's declarations plus the
@@ -783,13 +795,7 @@ def _build_program_type_table(
     if uninhabited:
         _raise_first_uninhabited(uninhabited, shared_type_table, resolved)
 
-    return (
-        program_type_table,
-        program_generic_table,
-        program_alias_table,
-        program_ctor_sig_table,
-        program_ctor_field_kinds_table,
-    )
+    return tables
 
 
 # ---------------------------------------------------------------------------
@@ -799,9 +805,8 @@ def _build_program_type_table(
 
 def _build_program_func_sig_table(
     resolved: ResolvedProgram,
-    program_type_table: dict[DeclKey, Type],
-    program_generic_table: dict[DeclKey, GenericTypeDef],
-    program_alias_table: dict[DeclKey, GenericAliasDef],
+    tables: ModuleTypeInterface,
+    module_seeds: _ModuleTypeSeeds,
     entry_seed_env: TypeEnvironment | None = None,
     cached_modules: Mapping[ModuleId, PublishedModuleSurface] | None = None,
 ) -> dict[int, FunctionSignatureRecord]:
@@ -812,7 +817,7 @@ def _build_program_func_sig_table(
     never exposes a provisional signature across a module boundary.
 
     The pre-pass uses temporary per-module environments seeded with the
-    program-wide type table and each module's ``ImportEnv``. It resolves only
+    program-wide type tables and each module's ``ImportEnv``. It resolves only
     header type expressions; no body is checked. The resulting node-id-keyed
     signatures can safely seed every module environment, making explicitly
     annotated cross-module recursion independent of module traversal order.
@@ -833,9 +838,9 @@ def _build_program_func_sig_table(
         # Build a cross-module-aware env for this module, seeded with its own
         # types so bare-name local type refs in param annotations resolve.
         env = TypeEnvironment(
-            program_type_table=program_type_table,
-            program_generic_table=program_generic_table,
-            program_alias_table=program_alias_table,
+            program_type_table=tables.types,
+            program_generic_table=tables.generics,
+            program_alias_table=tables.aliases,
             import_env=import_env,
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,
@@ -843,15 +848,10 @@ def _build_program_func_sig_table(
         )
         if mid == resolved.entry_id and entry_seed_env is not None:
             env.seed_from(entry_seed_env)
-        for (t_mid, scope_path, t_name), t in program_type_table.items():
-            if t_mid == mid:
-                env.register_type("::".join((*scope_path, t_name)), t)
-        # Also seed the module's own generic types so bare-name local generic
-        # refs in param/return annotations (e.g. `o: Option[T]`) resolve here —
-        # mirroring the register_type seeding above for non-generic types.
-        for (g_mid, scope_path, g_name), gdef in program_generic_table.items():
-            if g_mid == mid:
-                env.register_generic_type("::".join((*scope_path, g_name)), gdef)
+        # Seed the module's own types, and its own generic types so bare-name
+        # local generic refs in param/return annotations (e.g. `o: Option[T]`)
+        # resolve here too.
+        module_seeds.seed(env, mid)
 
         for item in static_function_items(program.body.items):
             if item.is_synthetic:
@@ -1123,13 +1123,10 @@ def _declared_header_seed(
 def _prepare_module_environment(
     mid: ModuleId,
     resolved: ModuleResolution,
-    program_type_table: dict[DeclKey, Type],
+    tables: ModuleTypeInterface,
+    module_seeds: _ModuleTypeSeeds,
     import_env_map: Mapping[ModuleId, object],
     declared_func_sig_table: dict[int, FunctionSignatureRecord],
-    program_generic_table: dict[DeclKey, GenericTypeDef],
-    program_alias_table: dict[DeclKey, GenericAliasDef],
-    program_ctor_sig_table: dict[DeclKey, ConstructorSignature],
-    program_ctor_field_kinds_table: dict[DeclKey, tuple[tuple[str, ParamZone], ...]],
     type_table: TypeTable,
     entry_seed_env: TypeEnvironment | None = None,
     declared_seed: DeclaredHeaderSeed | None = None,
@@ -1137,8 +1134,8 @@ def _prepare_module_environment(
     """Build one module's environment before program-wide candidate discovery.
 
     The env is seeded with:
-    - The module's own types (from ``program_type_table``).
-    - The program table + import env for cross-module lookups.
+    - The module's own types (from ``module_seeds``).
+    - The program tables + import env for cross-module lookups.
     - Explicitly declared function signatures from the whole-program pre-pass
       (``declared_func_sig_table``: ``program_func_sig_table`` filtered to
       ``FunctionReturnSource.DECLARED``), seeded before any body is checked.
@@ -1163,11 +1160,11 @@ def _prepare_module_environment(
     assert isinstance(import_env, ImportEnv)
 
     env = TypeEnvironment(
-        program_type_table=program_type_table,
-        program_generic_table=program_generic_table,
-        program_alias_table=program_alias_table,
-        program_ctor_sig_table=program_ctor_sig_table,
-        program_ctor_field_kinds_table=program_ctor_field_kinds_table,
+        program_type_table=tables.types,
+        program_generic_table=tables.generics,
+        program_alias_table=tables.aliases,
+        program_ctor_sig_table=tables.constructors,
+        program_ctor_field_kinds_table=tables.field_kinds,
         import_env=import_env,
         local_scope_paths=frozenset(resolved.scope_nodes),
         scope_nodes=resolved.scope_nodes,
@@ -1189,12 +1186,7 @@ def _prepare_module_environment(
 
     # Seed env with the module's own fully-resolved types so they're
     # accessible by bare name (no qualifier needed within the module).
-    for (t_mid, scope_path, t_name), t in program_type_table.items():
-        if t_mid == mid:
-            env.register_type("::".join((*scope_path, t_name)), t)
-    for (g_mid, scope_path, g_name), gdef in program_generic_table.items():
-        if g_mid == mid:
-            env.register_generic_type("::".join((*scope_path, g_name)), gdef)
+    module_seeds.seed(env, mid)
 
     # Seed explicit binding types from the whole-program header collection.
     # Only DECLARED records reach this loop (see ``declared_func_sig_table``
@@ -1339,27 +1331,23 @@ def _prepare_program(
     # with their owning module_id.  Also collects cross-module generic type defs,
     # parameterized aliases, constructor signatures, and constructor field kinds
     # from the per-module envs built during body resolution.
-    (
-        program_type_table,
-        program_generic_table,
-        program_alias_table,
-        program_ctor_sig_table,
-        program_ctor_field_kinds_table,
-    ) = _build_program_type_table(
+    tables = _build_program_type_table(
         resolved,
         type_table=shared_type_table,
         entry_seed_env=entry_seed_env,
         cached_modules=cached_checked_modules if entry_seed_env is None else None,
     )
+    # Grouped once here, for both the signature pre-pass and every module
+    # environment below.
+    module_seeds = _module_type_seeds(tables)
 
     # Phase 2: build the program-wide explicit function-signature table.
     # It resolves declared header type expressions without checking bodies;
     # unannotated functions are inferred inference SCC by inference SCC in Phase 3.
     program_func_sig_table = _build_program_func_sig_table(
         resolved,
-        program_type_table,
-        program_generic_table,
-        program_alias_table,
+        tables,
+        module_seeds,
         entry_seed_env=entry_seed_env,
         cached_modules=cached_checked_modules,
     )
@@ -1385,13 +1373,10 @@ def _prepare_program(
         module_envs[mid] = _prepare_module_environment(
             mid,
             resolved.modules[mid].resolved,
-            program_type_table,
+            tables,
+            module_seeds,
             import_env_map,
             declared_func_sig_table,
-            program_generic_table,
-            program_alias_table,
-            program_ctor_sig_table,
-            program_ctor_field_kinds_table,
             shared_type_table,
             entry_seed_env=entry_seed_env if mid == resolved.entry_id else None,
             declared_seed=(
@@ -1506,7 +1491,7 @@ def _prepare_program(
 
     return _PreparedProgram(
         module_envs=module_envs,
-        program_type_table=program_type_table,
+        program_type_table=tables.types,
         program_func_sig_table=program_func_sig_table,
         program_static_binding_table=program_static_binding_table,
         candidate_records=candidate_records,

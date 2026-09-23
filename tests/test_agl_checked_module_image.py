@@ -33,6 +33,7 @@ from agm.agl.syntax.nodes import (
     static_items,
     static_type_items,
 )
+from agm.agl.typecheck import env as env_module
 from agm.agl.typecheck.env import (
     ArgumentBindings,
     CheckedModule,
@@ -419,6 +420,59 @@ class TestImageFieldsAreNonVacuous:
             assert any(not _is_vacuous(getattr(image, image_field.name)) for image in images), (
                 image_field.name
             )
+
+
+class TestRecordsPickleByName:
+    """Every record this module persists restores through its field names."""
+
+    def test_every_record_declares_its_fields_as_match_args(self) -> None:
+        """``__match_args__`` is the state both pickling and ``image`` read.
+
+        A record whose fields it does not name -- one declared ``kw_only``,
+        or with an ``init=False`` field -- would silently lose that field on
+        a round trip, and one declared without ``_pickles_by_name`` would keep
+        the per-object field-tuple rebuild those hooks exist to avoid.
+        """
+        records = _env_records()
+        assert CheckedModuleImage in records
+        for record in records:
+            assert record.__match_args__ == tuple(f.name for f in dataclasses.fields(record)), (
+                record.__name__
+            )
+            assert record.__getstate__ is env_module._Record.__getstate__, record.__name__
+            assert record.__setstate__ is env_module._Record.__setstate__, record.__name__
+
+
+class TestImageMirrorsItsModule:
+    """``image``/``rehydrate`` move fields by name, so the names must line up."""
+
+    def test_every_image_field_names_a_member_of_the_checked_module(self) -> None:
+        for image_field in dataclasses.fields(CheckedModuleImage):
+            assert hasattr(CheckedModule, image_field.name) or image_field.name in {
+                f.name for f in dataclasses.fields(CheckedModule)
+            }, image_field.name
+
+    def test_the_module_fields_an_image_cannot_carry_are_the_live_ones(self) -> None:
+        """``rehydrate`` supplies exactly these from the current compilation."""
+        image_fields = {f.name for f in dataclasses.fields(CheckedModuleImage)}
+        module_fields = {f.name for f in dataclasses.fields(CheckedModule)}
+        assert module_fields - image_fields == {
+            "resolved",
+            "type_env",
+            "import_env",
+            "source_text",
+        }
+
+
+def _env_records() -> list[type[object]]:
+    """Every frozen data record ``typecheck.env`` declares."""
+    return [
+        value
+        for value in vars(env_module).values()
+        if isinstance(value, type)
+        and issubclass(value, env_module._Record)
+        and dataclasses.is_dataclass(value)
+    ]
 
 
 def _published_surface(

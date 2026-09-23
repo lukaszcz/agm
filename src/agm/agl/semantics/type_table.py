@@ -308,6 +308,16 @@ class TypeTable:
         # Memo for field_kinds's exception branch — same keying convention as
         # _exception_fields_cache above.
         self._exception_field_kinds_cache: dict[DeclId, tuple[tuple[str, ParamZone], ...]] = {}
+        # Bare name -> the handle of a standard-library ``builtin exception``,
+        # published by its shell registration (see
+        # :meth:`declare_standard_builtin_exception`). Not a cache of ``_defs``
+        # and never invalidated from it: it records identities, which are known
+        # a whole phase earlier than the definitions they name. Scoped to the
+        # compile that publishes it and deliberately not carried by
+        # :meth:`merge_from`, so a table seeded from another one starts empty
+        # here; :meth:`exception_root`'s fallback over ``_defs`` answers with
+        # the same identity until the next check re-runs the shells.
+        self._standard_builtin_exceptions: dict[str, ExceptionType] = {}
         # Whole-table indexes over the live standard-library builtin declarations.
         # Both answer questions about what the session declares as a whole, so
         # they are invalidated wholesale like the fixpoints below.
@@ -413,7 +423,7 @@ class TypeTable:
         """Record that *decl_id*'s declaration never took effect, and release its name.
 
         For a declaration an incremental entry failed before promoting (see
-        :meth:`~agm.agl.typecheck.env.TypeEnvironment.restore_type_names_from`).
+        :meth:`~agm.agl.typecheck.env.TypeEnvironment.rewind_from`).
         No value of one can exist — a later item of the same entry could not
         have promoted either — so nothing may resolve to it and no
         whole-table query about what the session declares may answer with it
@@ -495,8 +505,15 @@ class TypeTable:
             self._builtin_methods.setdefault(constructor, {}).setdefault(method.name, {}), method
         )
 
-    def restore_methods_from(self, previous: TypeTable, declaration_ids: Collection[int]) -> None:
-        """Restore methods replaced by unpromoted declarations from *previous*."""
+    def rewind_methods_from(self, previous: TypeTable, declaration_ids: Collection[int]) -> None:
+        """Undo the method registrations *declaration_ids* made, restoring *previous*'s.
+
+        The method-table half of
+        :meth:`~agm.agl.typecheck.env.TypeEnvironment.rewind_from`, which is
+        the only caller: methods are keyed by declaration identity here, so
+        the declarations an entry did not promote name their own
+        registrations directly.
+        """
         declaration_keys = {
             method.declaration_key
             for methods in self._methods.values()
@@ -1177,8 +1194,33 @@ class TypeTable:
         """
         return self.standard_builtin_declarations().get(name)
 
+    def declare_standard_builtin_exception(self, handle: ExceptionType) -> None:
+        """Publish a standard-library ``builtin exception``'s identity.
+
+        Registering a shell establishes a declaration's identity one whole
+        phase before its fields — and therefore its definition — can be
+        resolved. An exception is never generic, so its handle *is* that
+        identity in full, and a caller that needs nothing more
+        (:meth:`exception_root`) can be answered from here while bodies are
+        still resolving in any order. Definitions are unaffected: the
+        ``TypeDef`` this names is registered later, as usual.
+        """
+        self._standard_builtin_exceptions[handle.name] = handle
+
     def exception_root(self) -> ExceptionType:
-        """Return the built-in ``Exception``: loaded from the standard library, else reserved."""
+        """Return the built-in ``Exception``: loaded from the standard library, else reserved.
+
+        Prefers the identity published for the declaration being compiled
+        here, so an exception that omits ``extends`` names the same root
+        whether or not the root's own body has been resolved yet. A program
+        whose standard library was restored rather than read — its shells
+        never ran here — answers from the registered declaration instead, and
+        one loaded without a standard library falls back to the reserved
+        identity.
+        """
+        published = self._standard_builtin_exceptions.get("Exception")
+        if published is not None:
+            return published
         standard = self.standard_builtin_declaration("Exception")
         root = EXCEPTION_BASE if standard is None else standard.handle()
         assert isinstance(root, ExceptionType)

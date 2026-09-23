@@ -960,7 +960,7 @@ def resolve_program(
                     decl_span=item.span,
                     kind=BinderKind.function_binding,
                     is_builtin=item.is_builtin,
-                    is_method=bool(item.params) and item.params[0].name == "self",
+                    is_method=item.is_method,
                 )
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 key = (mid, _item_atom(item))

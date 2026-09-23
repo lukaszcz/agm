@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import builtins
 from functools import cmp_to_key
-from typing import Protocol
+from typing import NoReturn, Protocol
 
-from agl import AglException, array, nominals, option_none, option_some
+from agl import array, nominals, option, option_none, option_some
+
+from agm.agl.runtime.boundary import raise_index_error
 
 IndexError = nominals.std.errors.IndexError
 Pair = nominals.std.pair.Pair
@@ -16,8 +18,8 @@ class _Comparator(Protocol):
     def __call__(self, left: object, right: object, /) -> int: ...
 
 
-def _index_error(index: int, length: int, message: str = "array index out of range") -> None:
-    raise AglException(IndexError(message=message, index=index, length=length))
+def _index_error(index: int, length: int, message: str = "array index out of range") -> NoReturn:
+    raise_index_error(IndexError, message, index, length)
 
 
 def _element_at(values: object, index: int) -> object:
@@ -25,10 +27,6 @@ def _element_at(values: object, index: int) -> object:
     if not -length <= index < length:
         _index_error(index, length)
     return values[index]
-
-
-def _option(value: object | None, found: bool) -> object:
-    return option_some(value) if found else option_none()
 
 
 def size(values: object) -> int:
@@ -40,7 +38,7 @@ def first(values: object) -> object:
 
 
 def first_option(values: object) -> object:
-    return _option(values[0] if values else None, bool(values))
+    return option(values[0] if values else None, bool(values))
 
 
 def last(values: object) -> object:
@@ -48,7 +46,7 @@ def last(values: object) -> object:
 
 
 def last_option(values: object) -> object:
-    return _option(values[-1] if values else None, bool(values))
+    return option(values[-1] if values else None, bool(values))
 
 
 def push(values: object, value: object) -> None:
@@ -109,7 +107,7 @@ def index_of(values: object, value: object) -> int:
 
 def index_of_option(values: object, value: object) -> object:
     index = _search(values, value)
-    return _option(index, index >= 0)
+    return option(index, index >= 0)
 
 
 def count(values: object, predicate: object) -> int:

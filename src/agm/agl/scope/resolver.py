@@ -194,6 +194,7 @@ from agm.agl.syntax.nodes import (
     static_binding_name,
     static_binding_node_id,
 )
+from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, AppliedT, NameT, render_type_expr
 from agm.agl.syntax.visitor import walk
@@ -425,7 +426,9 @@ class _Resolver:
         self._cross_module_constructible_types = cross_module_constructible_types
         # Public nominal declarations and inline enum members establish scope
         # paths even when they have no separately public child members.
-        self._cross_module_type_owners = dict(cross_module_type_owners or {})
+        self._cross_module_type_owners: Mapping[QName, ReceiverOwner] = (
+            cross_module_type_owners or {}
+        )
         # Whole-program public-type table, used to follow a type alias's
         # target across an import when deciding whether the alias has a
         # variant-less constructor.
@@ -546,6 +549,9 @@ class _Resolver:
         # Structured method identity -> nominal receiver owner. This is
         # scope's single receiver classification artifact for later passes.
         self._method_declarations: dict[DeclarationKey, ReceiverOwner] = {}
+        # Alias scope paths a receiver may not claim, built on first use from
+        # the completed declaration pre-pass and shared by every method.
+        self._alias_receiver_targets: dict[ScopePath, str | TypeAlias] | None = None
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
@@ -865,9 +871,7 @@ class _Resolver:
             module_id=self._module_id,
             scope_path=path,
             is_builtin=isinstance(item, FuncDef) and item.is_builtin,
-            is_method=(
-                isinstance(item, FuncDef) and bool(item.params) and item.params[0].name == "self"
-            ),
+            is_method=isinstance(item, FuncDef) and item.is_method,
         )
         self._declaration_items[key] = item
         self._validate_type_params(item)
@@ -971,19 +975,9 @@ class _Resolver:
 
     def _classify_method_declaration(self, declaration: FuncDef) -> None:
         """Classify one receiver after preceding lexical contributions are visible."""
-        if not declaration.params or declaration.params[0].name != "self":
+        if not declaration.is_method:
             return
-        alias_targets: dict[ScopePath, str | TypeAlias] = {
-            path: target
-            for path, target in self._repl_session_type_paths.items()
-            if target is not None
-        }
-        for type_decl, path in self._type_declarations:
-            type_scope = path + (type_decl.name,)
-            if isinstance(type_decl, TypeAlias):
-                alias_targets[type_scope] = type_decl
-            else:
-                alias_targets.pop(type_scope, None)
+        alias_targets = self._alias_receiver_target_paths()
         receiver = declaration.params[0]
         owner_path = tuple(segment.name for segment in declaration.scope_path)
         region_path, type_path = self._receiver_region_and_type_path(owner_path)
@@ -1007,6 +1001,27 @@ class _Resolver:
             )
         key = (self._module_id, owner_path, declaration.name)
         self._method_declarations[key] = owner
+
+    def _alias_receiver_target_paths(self) -> Mapping[ScopePath, str | TypeAlias]:
+        """Return the alias scope paths of the module, computed once.
+
+        The declaration pre-pass fills ``_type_declarations`` before any
+        receiver is classified, so the table is the same for every method.
+        """
+        if self._alias_receiver_targets is None:
+            targets: dict[ScopePath, str | TypeAlias] = {
+                path: target
+                for path, target in self._repl_session_type_paths.items()
+                if target is not None
+            }
+            for type_decl, path in self._type_declarations:
+                type_scope = path + (type_decl.name,)
+                if isinstance(type_decl, TypeAlias):
+                    targets[type_scope] = type_decl
+                else:
+                    targets.pop(type_scope, None)
+            self._alias_receiver_targets = targets
+        return self._alias_receiver_targets
 
     def _raise_alias_receiver(self, name: str, target: str | TypeAlias, span: SourceSpan) -> None:
         """Reject a method receiver that names an alias."""
@@ -1049,8 +1064,8 @@ class _Resolver:
         span: SourceSpan,
     ) -> ReceiverOwner | None:
         """Resolve a local receiver from the nearest enclosing lexical region."""
-        for length in range(len(region_path), -1, -1):
-            candidate = (*region_path[:length], *type_path)
+        for base in enclosing_scope_bases(region_path):
+            candidate = (*base, *type_path)
             alias_target = alias_targets.get(candidate)
             if alias_target is not None:
                 self._raise_alias_receiver(candidate[-1], alias_target, span)
@@ -1779,7 +1794,7 @@ class _Resolver:
                 kind=BinderKind.function_binding,
                 module_id=self._module_id,
                 is_builtin=decl.is_builtin,
-                is_method=bool(decl.params) and decl.params[0].name == "self",
+                is_method=decl.is_method,
             )
             self._current_scope().define(name, ref)
 
@@ -4160,14 +4175,9 @@ class _Resolver:
             or bool(self._declaring_constructor_candidates(ref.name, ref))
         )
 
-    def _bare_contribution_candidates(
-        self, name: NameAtom, *, values_only: bool = False
-    ) -> set[BindingRef] | None:
-        """Return the nearest region's bare contributions in the requested namespace."""
-        nearest = self._nearest_bare_contribution_layer(
-            name,
-            binding_predicate=self._is_value_contribution if values_only else None,
-        )
+    def _bare_contribution_candidates(self, name: NameAtom) -> set[BindingRef] | None:
+        """Return the nearest region's bare contributions for *name*."""
+        nearest = self._nearest_bare_contribution_layer(name)
         return None if nearest is None else nearest[1]
 
     def _prefer_local_constructor_candidates(

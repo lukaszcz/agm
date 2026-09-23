@@ -29,18 +29,8 @@ import re
 from typing import TYPE_CHECKING, Sequence
 
 from agm.agl.diagnostics import AglError, dollar_spacing_hint, piping_hint
-from agm.agl.keywords import KW_FALSE, KW_NULL, KW_TRUE
-from agm.agl.lexer.tokens import (
-    DECIMAL,
-    INT,
-    NAME,
-    RBRACE,
-    RPAR,
-    RSQB,
-    TEMPLATE_END,
-    VERBATIM_END,
-    VERBATIM_START,
-)
+from agm.agl.lexer.operators import OPERAND_END_TYPES, scanner_token_type
+from agm.agl.lexer.tokens import NAME, VERBATIM_END, VERBATIM_START
 from agm.agl.syntax.spans import SourceSpan
 
 if TYPE_CHECKING:
@@ -333,26 +323,15 @@ def _dollar_spacing_hint(
     return ""
 
 
-# Token types that can END an operand: a name, a literal, or a closing
-# bracket. Used to recognize a `$` literal opener rejected as a further
-# juxtaposed argument (juxtaposition applies exactly one argument, so a THIRD
-# juxtaposed token — name or `$` literal alike — is always rejected the same
-# way).
-_OPERAND_ENDING_TOKEN_TYPES: frozenset[str] = frozenset(
-    {
-        NAME,
-        INT,
-        DECIMAL,
-        TEMPLATE_END,
-        VERBATIM_END,
-        RPAR,
-        RSQB,
-        RBRACE,
-        KW_TRUE.upper(),
-        KW_FALSE.upper(),
-        KW_NULL.upper(),
-    }
-)
+# Token types that can END an operand: the lexer's own inventory, plus
+# ``VERBATIM_END``.  A `$` literal runs to the end of its line, so nothing can
+# follow it in operator position and the lexer leaves it out; here it closes an
+# operand like any other literal.  Used to recognize a `$` literal opener
+# rejected as a further juxtaposed argument (juxtaposition applies exactly one
+# argument, so a THIRD juxtaposed token — name or `$` literal alike — is always
+# rejected the same way).  Membership is tested in scanner form, since these
+# tokens carry the grammar spellings of the reserved words.
+_OPERAND_ENDING_TOKEN_TYPES: frozenset[str] = OPERAND_END_TYPES | {VERBATIM_END}
 
 
 def _piping_hint(
@@ -381,8 +360,8 @@ def _piping_hint(
     if len(preceding) < 2:
         return ""
     if (
-        preceding[-1].type in _OPERAND_ENDING_TOKEN_TYPES
-        and preceding[-2].type in _OPERAND_ENDING_TOKEN_TYPES
+        scanner_token_type(preceding[-1].type) in _OPERAND_ENDING_TOKEN_TYPES
+        and scanner_token_type(preceding[-2].type) in _OPERAND_ENDING_TOKEN_TYPES
     ):
         return piping_hint()
     return ""

@@ -3,19 +3,19 @@
 Implements the build_repl_graph → resolve_program → check_program → match
 compilation → incremental link/exec pipeline for REPL entries that contain
 import declarations or have cached library modules from prior entries. Driven
-by ``ReplSession`` via the narrow ``EntryPipelineCtx`` Protocol. Must NOT import
-``session`` (no cycle).
+by ``ReplSession``, whose state it borrows. Must NOT import ``session`` at run
+time (no cycle) -- the session type is available under ``TYPE_CHECKING`` only.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ModuleId
-from agm.agl.repl.entry import EntryKind, EntryResult
+from agm.agl.repl.entry import EntryResult
 from agm.core.cleanup import notes_of
 
 if TYPE_CHECKING:
@@ -24,111 +24,20 @@ if TYPE_CHECKING:
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload
-    from agm.agl.ir.ids import SymbolId
     from agm.agl.ir.static_keys import StaticBindingKey
-    from agm.agl.lower import LinkImage
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
     from agm.agl.modules.roots import RootSet
     from agm.agl.pipeline import RunError
-    from agm.agl.runtime.host_settings import HostSettingsPolicy
+    from agm.agl.repl.session import ReplSession
     from agm.agl.runtime.trace import TraceStore
-    from agm.agl.runtime.types import HostEnvironment, ParamBindingInfo
-    from agm.agl.scope.program import ResolvedModule, ResolvedProgram
-    from agm.agl.scope.symbols import ConstructorRef, ScopeNode
-    from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import Frame, Value
+    from agm.agl.runtime.types import HostEnvironment
+    from agm.agl.scope.program import ResolvedProgram
+    from agm.agl.semantics.values import Value
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Item, Program, ScopeRegion
-    from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
+    from agm.agl.typecheck.env import CheckedModule
     from agm.agl.typecheck.program import CheckedProgram
-
-
-# ---------------------------------------------------------------------------
-# Narrow context Protocol
-# ---------------------------------------------------------------------------
-
-
-class EntryPipelineCtx(Protocol):
-    """The minimal ReplSession surface the program pipeline needs."""
-
-    _loaded_lib_modules: dict[ModuleId, LoadedModule]
-    _retained_resolved_modules: dict[ModuleId, ResolvedModule]
-    _retained_checked_modules: dict[ModuleId, CheckedModule]
-    _last_match_compilation: MatchCompiledProgram | None
-    _accumulated_imports: list[tuple[ImportDecl, ...]]
-    _accumulated_scoped_imports: list[tuple[ImportDecl | ScopeRegion, ...]]
-    _accumulated_infix: dict[str, tuple[int, InfixAssoc]]
-    _link_image: LinkImage
-    _ir_base_frame: Frame
-    _session_scope: ScopeNode
-    _session_scope_nodes: dict[tuple[str, ...], ScopeNode]
-    _session_type_paths: dict[tuple[str, ...], str | None]
-    _type_env: TypeEnvironment
-    _ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
-    _ambient_bare_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
-    _ambient_type_names: frozenset[str]
-    _trace_path: Path | None
-    _default_call_depth_limit: int
-    _default_stdlib: bool
-    _shell_exec_timeout: float | None
-    _process_environment: dict[str, str] | None
-    _builtin_var_seed: dict[BuiltinVarKey, Value]
-    _builtin_var_values: dict[BuiltinVarKey, Value]
-    _param_seed_resolver: (
-        Callable[[ModuleId, tuple[ParamBindingInfo, ...]], Mapping[StaticBindingKey, object]] | None
-    )
-    _param_seed_values: dict[StaticBindingKey, Value]
-    _pending_param_raw_values: dict[StaticBindingKey, object]
-    # The current-value register for the five engine keys with a ``Value``
-    # form (strict-json, timeout, trace, trace-file, default-agent); a key is
-    # present only once a host seed or a learned declared default has made it
-    # meaningful. See ``ReplSession._current``.
-    _current: dict[str, Value]
-    _host_settings_policy: HostSettingsPolicy | None
-
-    @property
-    def _default_strict_json(self) -> bool: ...
-
-    def _ensure_roots(self) -> RootSet: ...
-
-    def _fail(self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]) -> EntryResult: ...
-
-    def _build_check_only_result(
-        self, program: Program, checked: CheckedModule, warnings: list[Diagnostic]
-    ) -> EntryResult: ...
-
-    def _record_declared_engine_defaults(
-        self, declared_keys: frozenset[str], interp: IrInterpreter
-    ) -> None: ...
-
-    def _update_engine_settings(self, interp: IrInterpreter) -> None: ...
-
-    def _advance_node_ids(self, next_start_id: int) -> None: ...
-
-    def _promote_ir_state(
-        self,
-        *,
-        text: str,
-        program: Program,
-        checked: CheckedModule,
-        next_start_id: int,
-        partial: bool,
-        promoted_declaration_ids: frozenset[int],
-        promoted_scope_region_paths: frozenset[tuple[str, ...]],
-        promoted_use_declaration_ids: frozenset[int],
-        infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
-    ) -> tuple[str, ...]: ...
-
-    def _classify(self, program: Program) -> tuple[EntryKind, str | None]: ...
-
-    def frame_value(self, symbol: SymbolId | None) -> Value | None: ...
-
-    def _echo_data_ir(
-        self, program: Program, checked: CheckedModule, captured: Value | None
-    ) -> tuple[Value | None, Type | None]: ...
-
-    def _quote_strings_for_entry(self, program: Program) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,10 +63,10 @@ class EntryPipeline:
     """Program pipeline collaborator for ``ReplSession``.
 
     Instantiated once per ``ReplSession`` (``self._entry_pipeline``).  Holds
-    no state of its own — all session state is borrowed via ``EntryPipelineCtx``.
+    no state of its own — all session state is borrowed from the session.
     """
 
-    def __init__(self, ctx: EntryPipelineCtx) -> None:
+    def __init__(self, ctx: ReplSession) -> None:
         self._ctx = ctx
 
     def load_and_check_program(

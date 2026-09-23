@@ -1379,6 +1379,45 @@ class TestCompanionTraceHook:
         companion = cast(_EmitCompanion, ExternRegistry().load_companion(ENTRY_ID, companion_path))
         companion.emit()  # must not raise
 
+    @pytest.mark.parametrize("tracing_on", [True, False])
+    def test_companion_tracing_reports_whether_a_record_would_be_written(
+        self, tmp_path: Path, tracing_on: bool
+    ) -> None:
+        """``runtime.tracing()`` lets a companion skip building a payload ``trace`` would drop."""
+        flag_path = tmp_path / "flag.txt"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from pathlib import Path\n\nfrom agl import runtime\n\n"
+            "def emit():\n"
+            f"    Path({str(flag_path)!r}).write_text(str(runtime.tracing()))\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        result = run_inline_command(
+            PipelineDriver(),
+            source,
+            entry_path=entry_path,
+            trace_file=tmp_path / "trace.jsonl" if tracing_on else None,
+        )
+
+        assert result.ok
+        assert flag_path.read_text() == str(tracing_on)
+
+    def test_companion_tracing_is_false_outside_evaluation(self, tmp_path: Path) -> None:
+        """A direct host call has no active interpreter, so nothing would be recorded."""
+        flag_path = tmp_path / "flag.txt"
+        companion_path = write_companion_file(
+            tmp_path,
+            "entry",
+            "from pathlib import Path\n\nfrom agl import runtime\n\n"
+            "def emit():\n"
+            f"    Path({str(flag_path)!r}).write_text(str(runtime.tracing()))\n",
+        )
+        companion = cast(_EmitCompanion, ExternRegistry().load_companion(ENTRY_ID, companion_path))
+
+        companion.emit()
+
+        assert flag_path.read_text() == "False"
+
     def test_companion_trace_reserved_key_raises_a_value_error(self, tmp_path: Path) -> None:
         """A payload key colliding with the envelope is a companion programmer error."""
         trace_path = tmp_path / "trace.jsonl"

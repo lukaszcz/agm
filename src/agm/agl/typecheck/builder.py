@@ -116,6 +116,13 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = (
     | BUILTIN_PRELUDE_TYPE_NAMES
 )
 
+# Built-ins whose shape is checked against another built-in's declaration
+# rather than against their own members alone (see
+# ``_TypeBuilder._validate_builtin_shape``). They are validated last, so an
+# invalid referent is reported at the declaration the author actually wrote
+# instead of at the built-in downstream of it.
+_DERIVED_BUILTIN_SHAPES: frozenset[str] = frozenset({"Optional"})
+
 
 def _decl_identity(
     module_id: ModuleId, scope_path: tuple[str, ...], bare_name: str, node_id: int
@@ -301,7 +308,8 @@ class _TypeBuilder:
 
         self._finalize_exceptions()
         self._finalize_enums()
-        self.validate_builtin_contracts()
+        self.validate_builtin_contracts(derived=False)
+        self.validate_builtin_contracts(derived=True)
 
     def collect_shells_only(self, program: Program) -> None:
         """Register phase-1 declarations: names, handles, and alias targets.
@@ -353,15 +361,15 @@ class _TypeBuilder:
                 module_id = self._module_id
                 bare_name = _bare_name(item.name)
                 scope_path = tuple(segment.name for segment in item.scope_path)
-                self._env.register_type(
-                    item.name,
-                    ExceptionType(
-                        name=bare_name,
-                        module_id=module_id,
-                        scope_path=scope_path,
-                        decl_id=_decl_identity(module_id, scope_path, bare_name, item.node_id),
-                    ),
+                handle = ExceptionType(
+                    name=bare_name,
+                    module_id=module_id,
+                    scope_path=scope_path,
+                    decl_id=_decl_identity(module_id, scope_path, bare_name, item.node_id),
                 )
+                self._env.register_type(item.name, handle)
+                if item.is_builtin and module_id.is_standard_library:
+                    self._env.type_table.declare_standard_builtin_exception(handle)
                 self._exception_defs[item.name] = item
             else:
                 self._register_name(
@@ -510,8 +518,20 @@ class _TypeBuilder:
         """Resolve and register the named exception's body. See :meth:`build_record`."""
         self._build_exception(self._exception_defs[name])
 
-    def validate_builtin_contracts(self) -> None:
-        """Validate builtin shapes after every referenced type body is available."""
+    def validate_builtin_contracts(self, *, derived: bool) -> None:
+        """Validate builtin shapes after every referenced type body is available.
+
+        *derived* selects one half of the pass: the shapes that stand on
+        their own members, or those in :data:`_DERIVED_BUILTIN_SHAPES`, which
+        read another builtin's declaration. Callers run the halves in that
+        order, and a whole-program check runs each half across EVERY module
+        before starting the next. A derived shape is invalid whenever the
+        builtin it reads is, so reporting it first would name a declaration
+        the author never wrote — and would do so only in the runs where the
+        referent's module was parsed rather than restored from the artifact
+        cache. Builtin aliases stand on their own and belong to the first
+        half.
+        """
         declarations: tuple[
             tuple[
                 RecordDef | EnumDef | ExceptionDef,
@@ -525,6 +545,8 @@ class _TypeBuilder:
         )
         for stmt, expected_contracts in declarations:
             if not stmt.is_builtin:
+                continue
+            if (_bare_name(stmt.name) in _DERIVED_BUILTIN_SHAPES) != derived:
                 continue
             typedef = self._resolved_defs.get(stmt.name)
             assert typedef is not None, "compiler bug: builtin type is not registered"
@@ -541,6 +563,8 @@ class _TypeBuilder:
                 expected_contracts,
                 base_type=base_type,
             )
+        if derived:
+            return
         for alias in self._builtin_alias_defs.values():
             path = tuple(segment.name for segment in alias.scope_path)
             if not alias.type_params:
@@ -604,21 +628,64 @@ class _TypeBuilder:
         """
         return tuple((fd.name, self._attributes.param_zones[fd.node_id]) for fd in fields)
 
-    def _build_record(self, stmt: RecordDef) -> None:
-        if stmt.type_params:
-            self._build_generic_record(stmt)
-            return
-        fields: dict[str, Type] = {}
+    def _resolve_fields(
+        self,
+        fields: Sequence[Param],
+        *,
+        kind: str,
+        owner: str,
+        type_vars: frozenset[str] = frozenset(),
+        allow_mutable: bool = True,
+    ) -> dict[str, Type]:
+        """Resolve one declaration's own field types, rejecting duplicates.
+
+        *kind* and *owner* name the declaration in diagnostics ("record",
+        ``R``; "variant", ``E.V``; "exception", ``X``). ``allow_mutable`` is
+        false for an exception, the one declaration whose fields cannot be
+        ``var``; its check stays interleaved with the duplicate check, so a
+        field that is both reports the same error it always did.
+        """
+        resolved: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
-        for fd in stmt.fields:
+        for fd in fields:
+            if not allow_mutable and fd.mutable:
+                raise AglTypeError(
+                    f"Exception field '{fd.name}' in '{owner}' cannot be mutable.",
+                    span=fd.span,
+                )
             if fd.name in seen_fields:
                 raise AglTypeError(
-                    f"Duplicate field '{fd.name}' in record '{stmt.name}'.",
+                    f"Duplicate field '{fd.name}' in {kind} '{owner}'.",
                     span=fd.span,
                 )
             seen_fields[fd.name] = fd.span
-            fields[fd.name] = self._resolve_field_type(fd)
+            resolved[fd.name] = self._resolve_field_type(fd, type_vars=type_vars)
+        return resolved
+
+    def _build_record(self, stmt: RecordDef) -> None:
+        """Resolve a record's fields and register its ``TypeDef`` + constructor kinds.
+
+        A generic record's ``GenericTypeDef`` (name, type params, handle
+        template) was already registered in phase 1 so that forward references
+        to it resolve regardless of declaration order; its ``TypeDef`` reuses
+        that template's identity and it publishes a constructor signature over
+        the field templates. A plain record takes its identity from its own
+        declaration and needs neither.
+        """
+        type_params = stmt.type_params
+        fields = self._resolve_fields(
+            stmt.fields, kind="record", owner=stmt.name, type_vars=frozenset(type_params)
+        )
         self._check_field_external_names(stmt.fields, owner=stmt.name)
+        template: RecordType | None = None
+        if type_params:
+            gdef = self._env.get_generic_type(stmt.name)
+            assert gdef is not None, (
+                f"compiler bug: generic record {stmt.name!r} not pre-registered"
+            )
+            candidate = gdef.template
+            assert isinstance(candidate, RecordType)
+            template = candidate
         module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         bare_name = _bare_name(stmt.name)
@@ -628,11 +695,20 @@ class _TypeBuilder:
             name=bare_name,
             module_id=module_id,
             scope_path=scope_path,
+            type_params=type_params,
             fields=tuple(fields.items()),
             mutable_fields=_mutable_field_names(stmt.fields),
             field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
             is_builtin=stmt.is_builtin,
-            decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
+            # A generic record keeps the identity of the handle template
+            # registered in phase 1 (:meth:`_register_record_or_enum_handle`),
+            # so the TypeDef and every instantiated handle agree on which
+            # declaration they name.
+            decl_node_id=(
+                _decl_identity(module_id, scope_path, bare_name, stmt.node_id)
+                if template is None
+                else template.decl_id
+            ),
             external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
             field_external_names=self._field_external_names(stmt.fields),
             field_docs=self._field_docs(stmt.fields),
@@ -640,6 +716,16 @@ class _TypeBuilder:
         )
         self._resolved_defs[stmt.name] = typedef
         self._env.type_table.register(typedef)
+        if template is not None:
+            self._env.register_constructor_signature(
+                ConstructorSignature(
+                    owner_name=stmt.name,
+                    field_names=tuple(fields.keys()),
+                    field_templates=tuple(fields.values()),
+                    result_template=template,
+                    type_params=type_params,
+                )
+            )
         # Register field kinds for this record constructor, under the same
         # owning identity as the TypeDef just above (its declaring module,
         # like every other declaration — including a builtin one).
@@ -703,16 +789,12 @@ class _TypeBuilder:
                 member_spans.append(member.span)
                 continue
             vd = member
-            fields: dict[str, Type] = {}
-            seen_fields: dict[str, SourceSpan] = {}
-            for fd in vd.fields:
-                if fd.name in seen_fields:
-                    raise AglTypeError(
-                        f"Duplicate field '{fd.name}' in variant '{stmt.name}.{vd.name}'.",
-                        span=fd.span,
-                    )
-                seen_fields[fd.name] = fd.span
-                fields[fd.name] = self._resolve_field_type(fd, type_vars=type_vars)
+            fields = self._resolve_fields(
+                vd.fields,
+                kind="variant",
+                owner=f"{stmt.name}.{vd.name}",
+                type_vars=type_vars,
+            )
             self._check_field_external_names(vd.fields, owner=f"{stmt.name}.{vd.name}")
             captured_params = tuple(
                 param
@@ -812,21 +894,9 @@ class _TypeBuilder:
                     span=stmt.span,
                 )
             base_type = resolved_base
-        fields: dict[str, Type] = {}
-        seen_fields: dict[str, SourceSpan] = {}
-        for fd in stmt.fields:
-            if fd.mutable:
-                raise AglTypeError(
-                    f"Exception field '{fd.name}' in '{stmt.name}' cannot be mutable.",
-                    span=fd.span,
-                )
-            if fd.name in seen_fields:
-                raise AglTypeError(
-                    f"Duplicate field '{fd.name}' in exception '{stmt.name}'.",
-                    span=fd.span,
-                )
-            seen_fields[fd.name] = fd.span
-            fields[fd.name] = self._resolve_field_type(fd)
+        fields = self._resolve_fields(
+            stmt.fields, kind="exception", owner=stmt.name, allow_mutable=False
+        )
         # Own-field external-name collisions are checked once every exception
         # is registered, together with the inherited base chain (see
         # `_finalize_exceptions`), not here.
@@ -1008,74 +1078,6 @@ class _TypeBuilder:
         # A field is always annotated: the grammar's ``field_def`` requires it.
         assert fd.type_expr is not None
         return self._env.resolve_type_expr(fd.type_expr, span=fd.span, type_vars=type_vars)
-
-    def _build_generic_record(self, stmt: RecordDef) -> None:
-        """Resolve a generic record's fields and register its TypeDef + constructor.
-
-        The ``GenericTypeDef`` itself (name, type params, handle template)
-        was already registered in phase 1 so that forward references to
-        this generic type resolve regardless of declaration order.
-        """
-        type_params = stmt.type_params
-        type_vars = frozenset(type_params)
-        fields: dict[str, Type] = {}
-        seen_fields: dict[str, SourceSpan] = {}
-        for fd in stmt.fields:
-            if fd.name in seen_fields:
-                raise AglTypeError(
-                    f"Duplicate field '{fd.name}' in record '{stmt.name}'.", span=fd.span
-                )
-            seen_fields[fd.name] = fd.span
-            fields[fd.name] = self._resolve_field_type(fd, type_vars=type_vars)
-        self._check_field_external_names(stmt.fields, owner=stmt.name)
-        gdef = self._env.get_generic_type(stmt.name)
-        assert gdef is not None, f"compiler bug: generic record {stmt.name!r} not pre-registered"
-        template = gdef.template
-        assert isinstance(template, RecordType)
-        module_id = self._module_id
-        scope_path = tuple(segment.name for segment in stmt.scope_path)
-        bare_name = _bare_name(stmt.name)
-        field_kind_pairs = self._field_zones(stmt.fields)
-        typedef = TypeDef(
-            kind="record",
-            name=bare_name,
-            module_id=module_id,
-            scope_path=scope_path,
-            type_params=type_params,
-            fields=tuple(fields.items()),
-            mutable_fields=_mutable_field_names(stmt.fields),
-            field_kinds=tuple(zone for _fname, zone in field_kind_pairs),
-            is_builtin=stmt.is_builtin,
-            # Same identity as the handle template registered in phase 1
-            # (:meth:`_register_record_or_enum_handle`), so the TypeDef and
-            # every instantiated handle agree on which declaration they name.
-            decl_node_id=template.decl_id,
-            external_name=self._attributes.external_names.get(stmt.node_id, NO_EXTERNAL_NAME),
-            field_external_names=self._field_external_names(stmt.fields),
-            field_docs=self._field_docs(stmt.fields),
-            doc=self._attributes.docs.get(stmt.node_id),
-        )
-        self._resolved_defs[stmt.name] = typedef
-        self._env.type_table.register(typedef)
-        field_names = tuple(fields.keys())
-        field_templates = tuple(fields.values())
-        sig = ConstructorSignature(
-            owner_name=stmt.name,
-            field_names=field_names,
-            field_templates=field_templates,
-            result_template=template,
-            type_params=type_params,
-        )
-        self._env.register_constructor_signature(sig)
-        # Register field kinds for the generic record constructor, under the
-        # same owning identity as the TypeDef just above.
-        self._env.register_constructor_field_kinds(
-            bare_name,
-            field_kind_pairs,
-            scope_path=scope_path,
-            module_id=module_id,
-            decl_id=template.decl_id,
-        )
 
     def _build_generic_enum(self, stmt: EnumDef) -> None:
         """Resolve a generic enum's member-record definitions and constructors."""

@@ -33,6 +33,7 @@ from agm.agl.syntax import (
     VarRef,
 )
 from agm.agl.syntax.nodes import ConstructorPattern, ImportDecl, static_items
+from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.visitor import walk
 
@@ -915,3 +916,11 @@ def test_wildcard_import_tail_keeps_the_qualified_enum_owner_reachable() -> None
     assert resolve_qualified(env, ("lib",), ("Color", "Red")) == QualResolutionFound(
         module, (module, ("Color", "Red"))
     )
+
+
+def test_unanchored_qualifier_searches_enclosing_scopes_innermost_first() -> None:
+    assert enclosing_scope_bases(("outer", "inner")) == (("outer", "inner"), ("outer",), ())
+
+
+def test_module_rooted_qualifier_searches_the_module_root_only() -> None:
+    assert enclosing_scope_bases(("outer", "inner"), rooted=True) == ((),)

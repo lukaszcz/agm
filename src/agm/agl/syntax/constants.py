@@ -55,83 +55,38 @@ def is_constant_expression(
     must be called through a :class:`VarRef`; a type-directed member call
     cannot prove builtin provenance.
     """
-    if isinstance(expr, (BoolLit, DecimalLit, IntLit, NullLit, StringLit, UnitLit)):
-        return True
-    if isinstance(expr, ArrayLit):
-        return all(
-            is_constant_expression(
-                element,
-                is_constructor=is_constructor,
-                is_constant_builtin=is_constant_builtin,
-                is_module_constant=is_module_constant,
-            )
-            for element in expr.elements
-        )
-    if isinstance(expr, DictLit):
-        return all(
-            is_constant_expression(
-                entry.value,
-                is_constructor=is_constructor,
-                is_constant_builtin=is_constant_builtin,
-                is_module_constant=is_module_constant,
-            )
-            for entry in expr.entries
-        )
-    if isinstance(expr, (UnaryNeg, UnaryNot)):
+
+    def recur(sub_expr: Expr) -> bool:
         return is_constant_expression(
-            expr.operand,
+            sub_expr,
             is_constructor=is_constructor,
             is_constant_builtin=is_constant_builtin,
             is_module_constant=is_module_constant,
         )
+
+    if isinstance(expr, (BoolLit, DecimalLit, IntLit, NullLit, StringLit, UnitLit)):
+        return True
+    if isinstance(expr, ArrayLit):
+        return all(recur(element) for element in expr.elements)
+    if isinstance(expr, DictLit):
+        return all(recur(entry.value) for entry in expr.entries)
+    if isinstance(expr, (UnaryNeg, UnaryNot)):
+        return recur(expr.operand)
     if isinstance(expr, Template):
         return all(
-            is_constant_expression(
-                segment.expr,
-                is_constructor=is_constructor,
-                is_constant_builtin=is_constant_builtin,
-                is_module_constant=is_module_constant,
-            )
-            for segment in expr.segments
-            if isinstance(segment, InterpSegment)
+            recur(segment.expr) for segment in expr.segments if isinstance(segment, InterpSegment)
         )
     if isinstance(expr, VarRef):
         return is_constructor(expr.node_id) or is_module_constant(expr.node_id)
     if isinstance(expr, TypeApply):
-        return is_constant_expression(
-            expr.expr,
-            is_constructor=is_constructor,
-            is_constant_builtin=is_constant_builtin,
-            is_module_constant=is_module_constant,
-        )
+        return recur(expr.expr)
     if isinstance(expr, Call):
         # Builtin provenance is attached to calls speculatively for member
         # selection, so only a VarRef-rooted call can prove constancy here.
         is_root_builtin = isinstance(expr.callee, VarRef) and is_constant_builtin(expr.node_id)
         return is_root_builtin or (
-            is_constant_expression(
-                expr.callee,
-                is_constructor=is_constructor,
-                is_constant_builtin=is_constant_builtin,
-                is_module_constant=is_module_constant,
-            )
-            and all(
-                is_constant_expression(
-                    argument,
-                    is_constructor=is_constructor,
-                    is_constant_builtin=is_constant_builtin,
-                    is_module_constant=is_module_constant,
-                )
-                for argument in expr.args
-            )
-            and all(
-                is_constant_expression(
-                    argument.value,
-                    is_constructor=is_constructor,
-                    is_constant_builtin=is_constant_builtin,
-                    is_module_constant=is_module_constant,
-                )
-                for argument in expr.named_args
-            )
+            recur(expr.callee)
+            and all(recur(argument) for argument in expr.args)
+            and all(recur(argument.value) for argument in expr.named_args)
         )
     return False

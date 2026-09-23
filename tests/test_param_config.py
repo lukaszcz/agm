@@ -12,13 +12,9 @@ from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo, ProgramPara
 from agm.agl.semantics.types import BoolType, IntType, TextType, Type
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.zones import ParamZone
-from agm.cli_support.param_config import (
-    ParamValueTiers,
-    RouteReport,
-    _report_undeclared_config_keys,
-    resolve_param_values,
-)
+from agm.cli_support.param_config import ParamValueTiers, resolve_param_values
 from agm.cli_support.param_surface import ParamSurface, build_param_surface
+from agm.cli_support.program_options import EXEC_RESERVED_FLAGS
 from agm.config.general import GeneralConfig
 from agm.config.qualified_keys import QualifiedConfigLookupError
 from agm.core.toml import toml_dict
@@ -76,8 +72,12 @@ def _program(
     )
 
 
-def _surface(program: ProgramDeclInfo, bindings: tuple[ParamBindingInfo, ...]) -> ParamSurface:
-    return build_param_surface(frozenset(), program, bindings)
+def _surface(
+    program: ProgramDeclInfo,
+    bindings: tuple[ParamBindingInfo, ...],
+    reserved: frozenset[str] = frozenset(),
+) -> ParamSurface:
+    return build_param_surface(reserved, program, bindings)
 
 
 def _resolve(
@@ -85,23 +85,24 @@ def _resolve(
     program: ProgramDeclInfo,
     bindings: tuple[ParamBindingInfo, ...],
     params: Mapping[tuple[ModuleId, tuple[str, ...], str], object] = {},
-) -> tuple[dict[tuple[ModuleId, tuple[str, ...], str], object], list[RouteReport]]:
-    tiers, reports = resolve_param_values(
+    reserved: frozenset[str] = frozenset(),
+) -> dict[tuple[ModuleId, tuple[str, ...], str], object]:
+    tiers = resolve_param_values(
         config,
         program,
         params,
         entry_segments=("workflow",),
         command_paths=(),
-        surface=_surface(program, bindings),
+        surface=_surface(program, bindings, reserved),
     )
-    return {**tiers.lower, **tiers.upper}, reports
+    return {**tiers.lower, **tiers.upper}
 
 
 def test_resolves_a_module_route() -> None:
     binding = _binding("A/logging", "verbose")
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(_config({"A": {"logging": {"verbose": True}}}), program, (binding,))
+    values = _resolve(_config({"A": {"logging": {"verbose": True}}}), program, (binding,))
 
     assert values == {binding.key: True}
 
@@ -110,9 +111,7 @@ def test_resolves_a_scope_region_table() -> None:
     binding = _binding("A/logging", "trace", scope_path=("debug",))
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
-        _config({"A": {"logging": {"debug": {"trace": True}}}}), program, (binding,)
-    )
+    values = _resolve(_config({"A": {"logging": {"debug": {"trace": True}}}}), program, (binding,))
 
     assert values == {binding.key: True}
 
@@ -121,7 +120,7 @@ def test_program_route_overrides_a_module_route_from_any_layer() -> None:
     binding = _binding("A/logging", "verbose")
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config(
             {"A": {"logging": {"verbose": False}}},
             {"workflow": {"run": {"verbose": True}}},
@@ -137,7 +136,7 @@ def test_a_lower_layer_program_route_overrides_a_higher_layer_module_route() -> 
     binding = _binding("A/logging", "verbose")
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config(
             {"workflow": {"run": {"verbose": True}}},
             {"A": {"logging": {"verbose": False}}},
@@ -166,9 +165,7 @@ def test_distinct_module_and_program_tables_do_not_collide() -> None:
     own = _binding(ENTRY_ID, "verbose")
     program = _program(module=ENTRY_ID, closure=(ENTRY_ID, imported.module))
 
-    values, _reports = _resolve(
-        _config({"A": {"logging": {"verbose": False}}}), program, (imported, own)
-    )
+    values = _resolve(_config({"A": {"logging": {"verbose": False}}}), program, (imported, own))
 
     assert values == {imported.key: False}
 
@@ -177,7 +174,7 @@ def test_option_name_is_used_for_module_and_program_routes_but_keeps_the_declare
     binding = _binding("A/logging", "verbose", external="chatty")
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config(
             {"A": {"logging": {"chatty": False}}},
             {"workflow": {"run": {"chatty": True}}},
@@ -193,9 +190,7 @@ def test_resolves_a_quoted_module_anchor() -> None:
     binding = _binding("A/logging", "trace", scope_path=("debug",))
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
-        _config({"A/logging": {"debug": {"trace": True}}}), program, (binding,)
-    )
+    values = _resolve(_config({"A/logging": {"debug": {"trace": True}}}), program, (binding,))
 
     assert values == {binding.key: True}
 
@@ -231,7 +226,7 @@ def test_an_inactive_duplicate_external_name_in_one_module_route_does_not_error(
     second = _binding("A/logging", "detail", external="level")
     program = _program(closure=(ModuleId.from_path("app/main"), first.module))
 
-    values, _reports = _resolve(_config(), program, (first, second))
+    values = _resolve(_config(), program, (first, second))
 
     assert values == {}
 
@@ -241,7 +236,7 @@ def test_duplicate_external_names_at_distinct_module_scopes_remain_independent()
     scoped = _binding("A/logging", "detail", external="level", scope_path=("debug",))
     program = _program(closure=(ModuleId.from_path("app/main"), root.module))
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config({"A": {"logging": {"level": True, "debug": {"level": False}}}}),
         program,
         (root, scoped),
@@ -257,7 +252,7 @@ def test_an_inactive_ambiguous_program_leaf_does_not_prevent_resolution() -> Non
         closure=(ModuleId.from_path("app/main"), first.module, second.module),
     )
 
-    values, _reports = _resolve(_config(), program, (first, second))
+    values = _resolve(_config(), program, (first, second))
 
     assert values == {}
 
@@ -266,7 +261,7 @@ def test_program_route_accepts_a_qualified_leaf() -> None:
     binding = _binding("A/logging", "verbose")
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config({"workflow": {"run": {"logging.verbose": True}}}), program, (binding,)
     )
 
@@ -277,7 +272,7 @@ def test_program_route_accepts_the_longest_qualified_leaf() -> None:
     binding = _binding("A/logging", "trace", scope_path=("debug",))
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config({"workflow": {"run": {"A.logging.debug.trace": True}}}), program, (binding,)
     )
 
@@ -299,7 +294,7 @@ def test_a_qualified_leaf_reaches_a_param_whose_bare_name_a_signature_claims() -
         parameters=(signature,),
     )
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config({"workflow": {"run": {"logging.verbose": True}}}), program, (binding,)
     )
 
@@ -310,19 +305,27 @@ def test_a_qualified_leaf_reaches_a_param_named_after_an_engine_key() -> None:
     binding = _binding("A/logging", "timeout", TextType())
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
-        _config({"workflow": {"run": {"logging.timeout": "30s"}}}), program, (binding,)
+    values = _resolve(
+        _config({"workflow": {"run": {"logging.timeout": "30s"}}}),
+        program,
+        (binding,),
+        reserved=EXEC_RESERVED_FLAGS,
     )
 
     assert values == {binding.key: "30s"}
 
 
 def test_a_bare_engine_key_leaf_still_never_reaches_a_param() -> None:
+    """The host reserves every engine key's flag, so the parameter never wins
+    that bare name on the surface and the leaf stays the engine key's own."""
     binding = _binding("A/logging", "timeout", TextType())
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
-        _config({"workflow": {"run": {"timeout": "30s"}}}), program, (binding,)
+    values = _resolve(
+        _config({"workflow": {"run": {"timeout": "30s"}}}),
+        program,
+        (binding,),
+        reserved=EXEC_RESERVED_FLAGS,
     )
 
     assert values == {}
@@ -347,7 +350,7 @@ def test_a_later_layer_qualified_leaf_overrides_an_earlier_bare_leaf() -> None:
     binding = _binding("A/logging", "verbose")
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config(
             {"workflow": {"run": {"verbose": False}}},
             {"workflow": {"run": {"logging.verbose": True}}},
@@ -363,7 +366,7 @@ def test_a_qualified_program_leaf_beats_a_module_route() -> None:
     binding = _binding("A/logging", "verbose")
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config(
             {"workflow": {"run": {"logging.verbose": True}}},
             {"A": {"logging": {"verbose": False}}},
@@ -382,8 +385,7 @@ def test_a_qualified_program_leaf_is_declared_and_draws_no_warning(
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
     config = _config({"workflow": {"run": {"logging.verbose": True}}})
 
-    _values, reports = _resolve(config, program, (binding,))
-    _report_undeclared_config_keys(config, reports)
+    _resolve(config, program, (binding,))
 
     assert "logging.verbose" not in capsys.readouterr().err
 
@@ -392,9 +394,7 @@ def test_non_engine_key_leaf_forms_a_program_route_for_a_param() -> None:
     binding = _binding("A/logging", "max-iters", IntType())
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
-        _config({"workflow": {"run": {"max-iters": 4}}}), program, (binding,)
-    )
+    values = _resolve(_config({"workflow": {"run": {"max-iters": 4}}}), program, (binding,))
 
     assert values == {binding.key: 4}
 
@@ -403,7 +403,7 @@ def test_anonymous_entry_params_do_not_read_a_module_route() -> None:
     binding = _binding(ENTRY_ID, "verbose")
     program = _program(module=ENTRY_ID)
 
-    tiers, _reports = resolve_param_values(
+    tiers = resolve_param_values(
         _config({"workflow": {"run": {"verbose": True}}}),
         program,
         {},
@@ -419,7 +419,7 @@ def test_cli_or_environment_values_are_not_overwritten() -> None:
     binding = _binding("A/logging", "verbose")
     program = _program(closure=(ModuleId.from_path("app/main"), binding.module))
 
-    values, _reports = _resolve(
+    values = _resolve(
         _config({"A": {"logging": {"verbose": False}}}),
         program,
         (binding,),
@@ -429,7 +429,12 @@ def test_cli_or_environment_values_are_not_overwritten() -> None:
     assert values == {binding.key: True}
 
 
-def test_reports_each_module_route_and_the_program_route() -> None:
+def test_every_declared_leaf_of_each_module_and_program_route_draws_no_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A signature name, a module parameter's bare name and each of its
+    qualified spellings, and every engine key are declared on the program
+    route; each module route declares its own parameters."""
     own = _binding("app/main", "quiet")
     imported = _binding("A/logging", "verbose")
     signature = ProgramParamInfo(
@@ -440,55 +445,44 @@ def test_reports_each_module_route_and_the_program_route() -> None:
         span=_SPAN,
         cli=_option("label"),
     )
-    program = _program(
-        closure=(own.module, imported.module),
-        parameters=(signature,),
+    program = _program(closure=(own.module, imported.module), parameters=(signature,))
+
+    # One spelling of a parameter per layer: two in one layer conflict.
+    _resolve(
+        _config(
+            {"app": {"main": {"quiet": True}}},
+            {"A": {"logging": {"verbose": True}}},
+            {"workflow": {"run": {"label": "x", "quiet": True, "verbose": True, "timeout": "30s"}}},
+            {"workflow": {"run": {"main.quiet": True, "logging.verbose": True}}},
+            {"workflow": {"run": {"app.main.quiet": True, "A.logging.verbose": True}}},
+        ),
+        program,
+        (own, imported),
     )
 
-    _values, reports = _resolve(_config(), program, (own, imported))
-
-    assert reports == [
-        RouteReport(("app", "main"), (), (), frozenset({"quiet"}), frozenset()),
-        RouteReport(("A", "logging"), (), (), frozenset({"verbose"}), frozenset()),
-        RouteReport(
-            ("workflow",),
-            ("run",),
-            (),
-            frozenset(
-                {
-                    "label",
-                    "quiet",
-                    "main.quiet",
-                    "app.main.quiet",
-                    "verbose",
-                    "logging.verbose",
-                    "A.logging.verbose",
-                    "default-agent",
-                    "trace",
-                    "trace-file",
-                    "strict-json",
-                    "timeout",
-                }
-            ),
-            frozenset(),
-        ),
-    ]
+    assert capsys.readouterr().err == ""
 
 
-def test_reports_a_module_root_before_its_scope_routes_even_without_root_params() -> None:
+def test_a_module_root_is_reported_before_its_scope_routes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     scoped = _binding("A/logging", "trace", scope_path=("debug",))
     program = _program(closure=(ModuleId.from_path("app/main"), scoped.module))
 
-    _values, reports = _resolve(_config(), program, (scoped,))
+    _resolve(
+        _config({"A": {"logging": {"stray": True, "debug": {"trace": True, "typo": True}}}}),
+        program,
+        (scoped,),
+    )
 
-    assert reports[:3] == [
-        RouteReport(("app", "main"), (), (), frozenset(), frozenset()),
-        RouteReport(("A", "logging"), (), (), frozenset(), frozenset()),
-        RouteReport(("A", "logging"), ("debug",), (), frozenset({"trace"}), frozenset()),
-    ]
+    reported = capsys.readouterr().err
+    assert "trace" not in reported
+    assert reported.index("stray") < reported.index("typo")
 
 
-def test_program_report_marks_positional_only_signature_leaves() -> None:
+def test_a_positional_only_signature_leaf_gets_its_distinct_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     positional = ProgramParamInfo(
         name="input",
         kind=ParamZone.POSITIONAL_ONLY,
@@ -499,10 +493,11 @@ def test_program_report_marks_positional_only_signature_leaves() -> None:
     )
     program = _program(parameters=(positional,))
 
-    _values, reports = _resolve(_config(), program, ())
+    _resolve(_config({"workflow": {"run": {"input": "value"}}}), program, ())
 
-    assert reports[-1].positional_only == frozenset({"input"})
-    assert "input" in reports[-1].declared_leaves
+    reported = capsys.readouterr().err
+    assert "positional-only" in reported
+    assert "is not a declared" not in reported
 
 
 def test_undeclared_key_reporting_uses_every_returned_route(
@@ -516,8 +511,7 @@ def test_undeclared_key_reporting_uses_every_returned_route(
         {"workflow": {"run": {"unexpected": True}}},
     )
 
-    _values, reports = _resolve(config, program, (own, imported))
-    _report_undeclared_config_keys(config, reports)
+    _resolve(config, program, (own, imported))
 
     reported = capsys.readouterr().err
     assert "misspelled" in reported
@@ -542,8 +536,7 @@ def test_a_bare_leaf_a_signature_claims_draws_no_undeclared_warning(
     )
     config = _config({"workflow": {"run": {"verbose": True}}})
 
-    _values, reports = _resolve(config, program, (binding,))
-    _report_undeclared_config_keys(config, reports)
+    _resolve(config, program, (binding,))
 
     assert capsys.readouterr().err == ""
 
@@ -562,34 +555,19 @@ def test_rejects_an_ambiguous_qualified_program_leaf_when_configured() -> None:
     assert second.declaration_path in str(exc_info.value)
 
 
-def test_positional_only_route_leaf_gets_its_distinct_warning(
+def test_reports_surface_modules_missing_from_the_recorded_closure(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config = _config({"workflow": {"run": {"positional": "value"}}})
-
-    _report_undeclared_config_keys(
-        config,
-        (
-            RouteReport(
-                ("workflow",),
-                ("run",),
-                (),
-                frozenset({"positional"}),
-                frozenset({"positional"}),
-            ),
-        ),
-    )
-
-    assert "positional-only" in capsys.readouterr().err
-
-
-def test_reports_surface_modules_missing_from_the_recorded_closure() -> None:
     binding = _binding("A/logging", "verbose")
     program = _program(closure=(ModuleId.from_path("app/main"),))
 
-    _values, reports = _resolve(_config(), program, (binding,))
+    _resolve(
+        _config({"A": {"logging": {"verbose": True, "misspelled": True}}}), program, (binding,)
+    )
 
-    assert RouteReport(("A", "logging"), (), (), frozenset({"verbose"}), frozenset()) in reports
+    reported = capsys.readouterr().err
+    assert "misspelled" in reported
+    assert "'verbose'" not in reported
 
 
 def _resolve_tiers(
@@ -598,7 +576,7 @@ def _resolve_tiers(
     bindings: tuple[ParamBindingInfo, ...],
     params: Mapping[tuple[ModuleId, tuple[str, ...], str], object] = {},
 ) -> ParamValueTiers:
-    tiers, _reports = resolve_param_values(
+    return resolve_param_values(
         config,
         program,
         params,
@@ -606,7 +584,6 @@ def _resolve_tiers(
         command_paths=(),
         surface=_surface(program, bindings),
     )
-    return tiers
 
 
 def test_a_module_route_only_value_is_in_the_lower_tier() -> None:

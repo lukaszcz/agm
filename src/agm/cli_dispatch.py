@@ -196,20 +196,15 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
         return True
     if registration is None or registration.program is None:
         return False
-    from agm.cli_support.program_options import REGISTERED_RESERVED_FLAGS, program_command_for
-    from agm.commands.exec_program import registered_program_declaration
+    from agm.cli_support.program_discovery import registered_program_command
 
-    artifacts: list[ProgramDiscoveryArtifacts] = []
-    program = registered_program_declaration(
-        registration.program, registration.package, artifact_sink=artifacts
-    )
-    params = () if program is None or not artifacts else artifacts[0].discovery.params_for(program)
+    program, command = registered_program_command(registration.program, registration.package)
     print(
         registered_command_help(
             path_name,
             registration,
             program=program,
-            command=program_command_for(program, REGISTERED_RESERVED_FLAGS, params),
+            command=command,
             run_options=registered_run_options(click.get_current_context()),
         ),
         end="",
@@ -322,10 +317,9 @@ class RegisteredProgramCommand(TyperCommand):
         program — one ``--`` is the program's end-of-options marker, exactly
         as it is for ``agm exec``.
         """
+        from agm.cli_support.program_discovery import registered_command_for
         from agm.cli_support.program_options import (
-            REGISTERED_RESERVED_FLAGS,
             option_value_map,
-            program_command_for,
             protect_host_option_values,
             protect_potential_program_values,
             retain_end_of_options,
@@ -338,12 +332,7 @@ class RegisteredProgramCommand(TyperCommand):
         program, pipeline_cache = (
             self._discover_program_with_artifacts() if preview != args else (None, None)
         )
-        params = (
-            ()
-            if program is None or pipeline_cache is None
-            else pipeline_cache.discovery.params_for(program)
-        )
-        program_command = program_command_for(program, REGISTERED_RESERVED_FLAGS, params)
+        program_command = registered_command_for(program, pipeline_cache)
         protected, replacements = protect_host_option_values(args, program_command, host_options)
         remaining = super().parse_args(ctx, retain_end_of_options(protected, host_options))
         ctx.args[:] = [replacements.get(token, token) for token in ctx.args]
@@ -368,11 +357,10 @@ class RegisteredProgramCommand(TyperCommand):
         return program, artifacts[0] if artifacts else None
 
     def invoke(self, ctx: click.Context) -> None:
+        from agm.cli_support.program_discovery import registered_command_for
         from agm.cli_support.program_options import (
-            REGISTERED_RESERVED_FLAGS,
             ProgramHelpRequested,
             contains_help_flag,
-            program_command_for,
             program_help_requested,
         )
         from agm.cli_support.run_options import exec_option_conflict
@@ -393,12 +381,7 @@ class RegisteredProgramCommand(TyperCommand):
 
         def program_command() -> "tuple[ProgramDeclInfo | None, ProgramCommand | None]":
             declaration = discover()
-            params = (
-                ()
-                if declaration is None or cached_pipeline is None
-                else cached_pipeline.discovery.params_for(declaration)
-            )
-            return declaration, program_command_for(declaration, REGISTERED_RESERVED_FLAGS, params)
+            return declaration, registered_command_for(declaration, cached_pipeline)
 
         if contains_help_flag(ctx.args):
             # This is the first point at which an unknown command has been proven
@@ -508,7 +491,9 @@ class RegisteredCommandGroup(TyperGroup):
         from agm.completion import registered_command_completion
 
         command_path = _command_path(ctx)
-        registered_segments, is_registered = registered_command_completion(command_path, incomplete)
+        registered_segments, is_registered = registered_command_completion(
+            command_path, incomplete, ctx
+        )
         if command_path and is_registered:
             if incomplete.startswith("-"):
                 from agm.completion import registered_command_param_completion

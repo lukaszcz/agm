@@ -12,9 +12,15 @@ import tomlkit
 from tomlkit.exceptions import TOMLKitError
 
 from agm.command_catalog import invalid_command_path
-from agm.config.general import agm_home_dir, load_merged_config
+from agm.config.context import content_stamp, context_cached, invalidate_context_cache
+from agm.config.general import (
+    agm_home_dir,
+    config_file_candidates,
+    load_merged_config,
+)
 from agm.core.fs import mkdir, write_text_atomic
 from agm.core.toml import TomlDict, dumps_toml, empty_toml_doc, load_toml_file, toml_dict
+from agm.packages.layout import MODULE_TREE_DIRNAME
 from agm.packages.layout import activation_index_path as _resolved_activation_index_path
 from agm.packages.manifest import (
     ManifestError,
@@ -116,9 +122,21 @@ def activation_index_path(*, home: Path, env: Mapping[str, str] | None = None) -
 
 
 def load_activation_index(*, home: Path, env: Mapping[str, str] | None = None) -> ActivationIndex:
-    """Load the activation index, treating an absent index as no selections."""
+    """Load the activation index, treating an absent index as no selections.
+
+    Several independent entry points read the index within one invocation, so
+    the parse is memoized on the file's content.
+    """
 
     path = activation_index_path(home=home, env=env)
+    return context_cached(
+        ("activation-index", path),
+        content_stamp((path,)),
+        lambda: _read_activation_index(path),
+    )
+
+
+def _read_activation_index(path: Path) -> ActivationIndex:
     if not path.exists():
         return ActivationIndex()
     try:
@@ -182,6 +200,7 @@ def write_activation_index(
         raise PackageActivationError(
             f"cannot write package activation index {path}: {exc}"
         ) from exc
+    invalidate_context_cache()
     return path
 
 
@@ -236,6 +255,7 @@ def write_package_provenance(
         write_text_atomic(path, dumps_toml(doc))
     except OSError as exc:
         raise PackageActivationError(f"cannot write package provenance {path}: {exc}") from exc
+    invalidate_context_cache()
     return path
 
 
@@ -274,8 +294,28 @@ def load_package_pins(
 
     Only the ``[packages]`` section is interpreted here.  Other sections stay
     deliberately lenient during general configuration loading.
+
+    The config layers are parsed once per invocation and memoized on their
+    content; the pins themselves are returned as a fresh mapping.
     """
 
+    candidates = tuple(config_file_candidates(home=home, proj_dir=proj_dir, cwd=cwd, env=env))
+    return dict(
+        context_cached(
+            ("package-pins", candidates),
+            content_stamp(candidates),
+            lambda: _read_package_pins(home=home, proj_dir=proj_dir, cwd=cwd, env=env),
+        )
+    )
+
+
+def _read_package_pins(
+    *,
+    home: Path,
+    proj_dir: Path | None,
+    cwd: Path,
+    env: Mapping[str, str] | None,
+) -> dict[str, semver.Version]:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd, env=env)
     raw_pins = merged.get("packages")
     if raw_pins is None:
@@ -959,8 +999,77 @@ def resolve_indexed_packages(
     activation state, where an editable package's source failing discovery
     should fall back to its manifest's own commands instead of failing the
     caller. See :func:`resolve_active_package`.
+
+    Four independent entry points resolve the same selection within one
+    invocation, so the result is memoized on what it derives from — see
+    :func:`_selection_stamp`. A resolution standing in transient manifests for
+    an install in progress is not memoized: those selections are not on disk.
     """
 
+    if transient_packages is not None:
+        return _resolve_indexed_packages(
+            index,
+            home=home,
+            env=env,
+            transient_packages=transient_packages,
+            fallback_to_manifest_commands=fallback_to_manifest_commands,
+        )
+    return context_cached(
+        (
+            "indexed-packages",
+            agm_home_dir(home=home, env=env),
+            tuple(sorted(index.packages)),
+            fallback_to_manifest_commands,
+        ),
+        _selection_stamp(index),
+        lambda: _resolve_indexed_packages(
+            index,
+            home=home,
+            env=env,
+            transient_packages=None,
+            fallback_to_manifest_commands=fallback_to_manifest_commands,
+        ),
+    )
+
+
+def _selection_stamp(index: ActivationIndex) -> tuple[object, ...]:
+    """Return everything resolving *index* depends on beyond the immutable store.
+
+    A store tree never changes under the selection that names it, so the
+    selection pins its own resolution. An editable selection names live
+    source, so the content of its manifest and module tree belongs in the key
+    too: reading that source costs far less than rescanning it for the
+    commands its programs register.
+    """
+
+    return tuple(
+        (
+            name,
+            str(active.version),
+            active.editable,
+            active.shadow,
+            active.registration_order,
+            () if active.editable is None else _editable_stamp(active.editable),
+        )
+        for name, active in sorted(index.packages.items())
+    )
+
+
+def _editable_stamp(root: Path) -> tuple[bytes, ...]:
+    """Return a content stamp for a live package root's manifest and module tree."""
+
+    modules = sorted((root / MODULE_TREE_DIRNAME).rglob("*.agl"))
+    return content_stamp((root / "package.toml", *modules))
+
+
+def _resolve_indexed_packages(
+    index: ActivationIndex,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None,
+    transient_packages: Mapping[str, PackageInfo] | None,
+    fallback_to_manifest_commands: bool,
+) -> tuple[PackageInfo, ...]:
     packages: list[PackageInfo] = []
     for name, active in sorted(index.packages.items()):
         transient = None if transient_packages is None else transient_packages.get(name)

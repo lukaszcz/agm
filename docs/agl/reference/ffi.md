@@ -67,8 +67,10 @@ imports the program's nominal classes, value constructors, and exception carrier
 from agl import AglException, Box, Shape, array, dict, json
 ```
 
-`option_some(value)` and `option_none()` build the standard `Option`; they
-exist only when `std/option` is loaded.
+`option_some(value)` and `option_none()` build the standard `Option`, and
+`option(value, present)` picks between them; they exist only when `std/option`
+is loaded. `option` evaluates *value* eagerly, so a value that is well-defined
+only when present needs the conditional form.
 
 `agl` is available only for the companion import. The imported classes and
 constructors remain valid afterwards. The fixed module name means concurrent
@@ -140,6 +142,9 @@ Like `runtime.state`, this must be called during an extern invocation; a
 direct host call outside evaluation is a silent no-op. Nothing is written when
 tracing is off. A payload value with no JSON representation, including a
 reference cycle, is replaced by a marker rather than failing the call.
+
+`runtime.tracing()` reports whether a record would be written, so a companion
+can skip building a payload that tracing, off by default, would discard.
 
 The record is `{ts, run_id, kind, origin, site, line, col, ...payload}`: `ts`
 and `run_id` identify the record's moment and run like every other trace

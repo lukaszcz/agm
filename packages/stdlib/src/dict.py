@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from agl import AglException, array, nominals, option_none, option_some
+from typing import NoReturn
+
+from agl import array, nominals, option_none, option_some
 from agl import dict as agl_dict
+
+from agm.agl.runtime.boundary import raise_key_error
 
 KeyError = nominals.std.errors.KeyError
 Pair = nominals.std.pair.Pair
 
 
-def _key_error(key: str) -> None:
-    raise AglException(KeyError(message="dictionary key not found", key=key))
+def _key_error(key: str) -> NoReturn:
+    raise_key_error(KeyError, "dictionary key not found", key)
 
 
 def size(values: object) -> int:

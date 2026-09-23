@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "bound_builtin_result_reaches_the_shadowing_declaration",
+      "shell": [
+        {
+          "command": "first",
+          "stdout": "one"
+        },
+        {
+          "command": "second",
+          "stdout": "two"
+        }
+      ],
+      "expect": {
+        "stdout": "one/0\ntwo/0\n"
+      }
+    },
+    {
+      "name": "shadowing_declaration_also_carries_a_reported_exit_code",
+      "shell": [
+        {
+          "command": "first",
+          "stdout": "only"
+        },
+        {
+          "command": "second",
+          "stdout": "",
+          "returncode": 0
+        }
+      ],
+      "expect": {
+        "stdout": "only/0\n/0\n"
+      }
+    }
+  ]
+}

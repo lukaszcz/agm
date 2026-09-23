@@ -10,12 +10,10 @@ from typing import cast
 import tomlkit
 from agl import AglException, json, nominals
 
+from agm.agl.runtime.boundary import raise_parse_error
+
 TomlParseError = nominals.std.toml.TomlParseError
 TomlRenderError = nominals.std.toml.TomlRenderError
-
-
-def _parse_error(raw: str) -> None:
-    raise AglException(TomlParseError(message="Could not parse TOML.", raw=raw))
 
 
 def _render_error(message: str) -> None:
@@ -36,7 +34,7 @@ def parse(raw: str) -> object:
     try:
         parsed = cast(dict[str, object], tomllib.loads(raw, parse_float=Decimal))
     except tomllib.TOMLDecodeError:
-        _parse_error(raw)
+        raise_parse_error(TomlParseError, raw, "Could not parse TOML.")
     return json(_json_value(parsed))
 
 

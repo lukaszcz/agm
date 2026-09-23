@@ -1841,7 +1841,7 @@ class TestBuiltinIdentityAcrossEntries:
         must not steer a later ``catch`` clause or the host's raise identity
         -- the exception-shaped counterpart of
         ``TestRedefinition.test_unpromoted_builtin_declaration_does_not_type_a_later_host_call``.
-        Its own rollback path (``TypeEnvironment.restore_type_names_from``)
+        Its own rollback path (``TypeEnvironment.rewind_from``)
         must not skip a reserved name just because such a name is normally
         non-shadowable: it can appear among an entry's own unpromoted names
         only when that entry itself wrote the ``builtin`` declaration.
@@ -1850,7 +1850,7 @@ class TestBuiltinIdentityAcrossEntries:
         name always conflicts with the standard library's own root
         declaration once loaded (see
         ``TestBuiltinIdentityWithStandardLibrary``), and a SCOPED name is
-        never in ``restore_type_names_from``'s reserved-name set to begin
+        never in ``rewind_from``'s reserved-name set to begin
         with (it is keyed by the joined ``scope::name`` spelling, never the
         bare reserved one), so only a root declaration without the standard
         library actually exercises the skip this audit fixed.
@@ -1862,7 +1862,7 @@ class TestBuiltinIdentityAcrossEntries:
         )
         assert not failed.ok
         # A RUNTIME (partial-promotion) failure, not a static rejection --
-        # confirms this actually reached `restore_type_names_from` rather
+        # confirms this actually reached `rewind_from` rather
         # than failing before any declaration could even be checked.
         assert failed.error is not None
 
@@ -1887,7 +1887,7 @@ class TestBuiltinIdentityAcrossEntries:
         the session carry, so comparing an old value against a fresh one is
         still a comparison of one type against itself.
 
-        This is the rollback direction ``restore_type_names_from`` owns.
+        This is the rollback direction ``rewind_from`` owns.
         Skipping a reserved bare name there instead leaves the unpromoted
         redeclaration holding the name, and the session then reports two
         identically-spelled ``ExecResult`` types as incomparable.
@@ -4118,6 +4118,68 @@ class TestFailureEffects:
         # A valid entry afterwards still works (node-id counter not advanced).
         r2 = s.eval_entry("let ok = 1")
         assert r2.ok
+
+
+# ---------------------------------------------------------------------------
+# Unpromoted declarations reach no session table
+# ---------------------------------------------------------------------------
+
+
+class TestUnpromotedDeclarationTables:
+    """A failed entry's own declarations reach no session table.
+
+    Each test declares one kind of session-table state after the statement
+    that fails, then shows a later entry cannot reach it. The redeclaration
+    counterparts -- an unpromoted declaration leaving the previous owner of
+    a name in place -- live in :class:`TestRedefinition` and
+    :class:`TestFailureEffects`.
+    """
+
+    def test_unpromoted_method_on_a_nominal_receiver_is_unreachable(self) -> None:
+        session = open_session()
+        assert session.eval_entry("record R").ok
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\ndef R::fresh(self) -> int = value'
+        )
+
+        assert not failed.ok
+        assert not session.eval_entry("R().fresh()").ok
+
+    def test_unpromoted_method_on_a_builtin_receiver_is_unreachable(self) -> None:
+        session = open_session()
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\ndef int::fresh(self) -> int = value'
+        )
+
+        assert not failed.ok
+        assert not session.eval_entry("(0).fresh()").ok
+
+    def test_unpromoted_record_is_not_nameable_by_a_later_annotation(self) -> None:
+        session = open_session()
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\nrecord Box\n  item: int'
+        )
+
+        assert not failed.ok
+        assert "Box" not in session.type_names()
+        assert not session.eval_entry("Box(item = 1)").ok
+        # The name index alone is not enough: an annotation reads the type
+        # namespace, which the entry also wrote.
+        assert not session.eval_entry("def take(b: Box) -> int = 1").ok
+
+    def test_unpromoted_generic_alias_leaves_no_type_parameters(self) -> None:
+        session = open_session()
+
+        failed = session.eval_entry(
+            'let value: int = raise Abort(message = "stop")\ntype Pair[a] = array[a]'
+        )
+
+        assert not failed.ok
+        assert "Pair" not in session.type_names()
+        assert not session.eval_entry("def take(xs: Pair[int]) -> int = 1").ok
 
 
 # ---------------------------------------------------------------------------
@@ -8465,3 +8527,32 @@ class TestDeferredStdlibResolution:
 
         assert s._roots is not None
         assert stdlib_root.resolve() in s._roots.stdlib_roots
+
+
+class TestExceptionRootAcrossEntries:
+    """An omitted ``extends`` names the standard library's own ``Exception``."""
+
+    def test_a_partial_entry_leaves_the_exception_root_resolvable(self) -> None:
+        # A failed entry rebuilds the session's type environment, and the
+        # published-identity map does not travel with it. Two mechanisms keep
+        # the root resolvable -- the next entry's check republishes it, and
+        # exception_root falls back to the registered declaration -- so this
+        # guards the outcome rather than either one: it fails only once both
+        # are gone, leaving the reserved id that stands in for a session with
+        # no standard library.
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.semantics.types import EXCEPTION_BASE
+
+        session = open_session()
+        failed = session.eval_entry('let v: int = raise Abort(message = "stop")')
+        assert not failed.ok
+
+        assert session.eval_entry("exception Plain\n  message: text").ok
+
+        table = session._type_env.type_table
+        root = table.standard_builtin_declaration("Exception")
+        assert root is not None
+        plain = table.get(ENTRY_ID, "Plain")
+        assert plain is not None
+        assert plain.base == root.decl_node_id
+        assert plain.base != EXCEPTION_BASE.decl_id

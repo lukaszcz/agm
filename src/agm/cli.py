@@ -143,6 +143,67 @@ def _dry_run_option() -> bool:
     )
 
 
+def _strict_json_option() -> bool | None:
+    return typer.Option(
+        None,
+        "--strict-json/--no-strict-json",
+        help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
+    )
+
+
+def _max_call_depth_option() -> int | None:
+    return typer.Option(
+        None,
+        "--max-call-depth",
+        help="Override the maximum recursion call depth (CLI > config).",
+    )
+
+
+def _default_agent_option() -> str | None:
+    return typer.Option(
+        None,
+        "--default-agent",
+        metavar="AGENT",
+        help="Seed the free-ask default session from an Agent value or command.",
+    )
+
+
+def _trace_file_option() -> str | None:
+    return typer.Option(
+        None,
+        "--trace-file",
+        help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
+        autocompletion=completion.complete_path_argument,
+    )
+
+
+def _no_trace_option(help_text: str) -> bool:
+    return typer.Option(False, "--no-trace", help=help_text)
+
+
+def _trace_option(help_text: str) -> bool:
+    return typer.Option(False, "--trace", help=help_text)
+
+
+def _module_path_option() -> list[str]:
+    return typer.Option(
+        [],
+        "-I",
+        "--module-path",
+        metavar="DIR",
+        help=(
+            "Add DIR as an additional module search root (repeatable). "
+            "Resolved relative to the invocation working directory. "
+            "Joins the unordered root set; a module id found in two roots is an ambiguity error."
+        ),
+        autocompletion=completion.complete_dir_argument,
+    )
+
+
+def _no_stdlib_option(help_text: str) -> bool:
+    return typer.Option(False, "--no-stdlib", help=help_text)
+
+
 def _missing_arguments(command_path: Sequence[str], names: Sequence[str]) -> NoReturn:
     joined = ", ".join(names)
     exit_with_usage_error(command_path, f"error: the following arguments are required: {joined}")
@@ -899,10 +960,8 @@ def _exec_print_help(
     """
     from agm.cli_support.program_discovery import unmatched_program_message
     from agm.cli_support.program_options import (
-        EXEC_RESERVED_FLAGS,
         contains_help_flag,
         exec_program_help,
-        program_command_for,
         program_help_requested,
     )
 
@@ -912,14 +971,7 @@ def _exec_print_help(
         print_help_for_command_path(["exec"])
         return True
     selection = discovery.selection(file)
-    artifacts = discovery.cached_artifacts(file)
-    program_command = program_command_for(
-        selection.selected,
-        EXEC_RESERVED_FLAGS,
-        ()
-        if selection.selected is None or artifacts is None
-        else artifacts.discovery.params_for(selection.selected),
-    )
+    program_command = discovery.command_for_file(file)
     if not program_help_requested(tokens, program_command):
         return False
     if program_command is None:
@@ -963,61 +1015,22 @@ def exec_cmd(
         metavar="PATH",
         help="Select a program def by its declaration path.",
     ),
-    strict_json: bool | None = typer.Option(
-        None,
-        "--strict-json/--no-strict-json",
-        help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
+    strict_json: bool | None = _strict_json_option(),
+    max_call_depth: int | None = _max_call_depth_option(),
+    default_agent: str | None = _default_agent_option(),
+    trace_file: str | None = _trace_file_option(),
+    no_trace: bool = _no_trace_option(
+        "Disable trace logging (overrides [exec] trace = true in config.toml)."
     ),
-    max_call_depth: int | None = typer.Option(
-        None,
-        "--max-call-depth",
-        help="Override the maximum recursion call depth (CLI > config).",
+    trace: bool = _trace_option(
+        "Enable trace logging to an auto-named timestamped file under .agent-files/. "
+        "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
+        "config.toml opt in."
     ),
-    default_agent: str | None = typer.Option(
-        None,
-        "--default-agent",
-        metavar="AGENT",
-        help="Seed the free-ask default session from an Agent value or command.",
-    ),
-    trace_file: str | None = typer.Option(
-        None,
-        "--trace-file",
-        help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
-        autocompletion=completion.complete_path_argument,
-    ),
-    no_trace: bool = typer.Option(
-        False,
-        "--no-trace",
-        help="Disable trace logging (overrides [exec] trace = true in config.toml).",
-    ),
-    trace: bool = typer.Option(
-        False,
-        "--trace",
-        help=(
-            "Enable trace logging to an auto-named timestamped file under .agent-files/. "
-            "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
-            "config.toml opt in."
-        ),
-    ),
-    module_paths: list[str] = typer.Option(
-        [],
-        "-I",
-        "--module-path",
-        metavar="DIR",
-        help=(
-            "Add DIR as an additional module search root (repeatable). "
-            "Resolved relative to the invocation working directory. "
-            "Joins the unordered root set; a module id found in two roots is an ambiguity error."
-        ),
-        autocompletion=completion.complete_dir_argument,
-    ),
-    no_stdlib: bool = typer.Option(
-        False,
-        "--no-stdlib",
-        help=(
-            "Disable the automatic import std/prelude::* prelude throughout the loaded program "
-            "(entry and library modules)."
-        ),
+    module_paths: list[str] = _module_path_option(),
+    no_stdlib: bool = _no_stdlib_option(
+        "Disable the automatic import std/prelude::* prelude throughout the loaded program "
+        "(entry and library modules)."
     ),
     timeout: str | None = typer.Option(
         None,
@@ -1118,54 +1131,24 @@ def exec_cmd(
 
 @app.command(name="repl")
 def repl_cmd(
-    strict_json: bool | None = typer.Option(
-        None,
-        "--strict-json/--no-strict-json",
-        help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
-    ),
-    max_call_depth: int | None = typer.Option(
-        None,
-        "--max-call-depth",
-        help="Override the maximum recursion call depth (CLI > config).",
-    ),
-    default_agent: str | None = typer.Option(
-        None,
-        "--default-agent",
-        metavar="AGENT",
-        help="Seed the free-ask default session from an Agent value or command.",
-    ),
+    strict_json: bool | None = _strict_json_option(),
+    max_call_depth: int | None = _max_call_depth_option(),
+    default_agent: str | None = _default_agent_option(),
     quiet: bool = typer.Option(
         False,
         "--quiet",
         help="Suppress automatic echoing of entry results.",
     ),
-    trace_file: str | None = typer.Option(
-        None,
-        "--trace-file",
-        help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
-        autocompletion=completion.complete_path_argument,
+    trace_file: str | None = _trace_file_option(),
+    no_trace: bool = _no_trace_option("Disable trace logging."),
+    trace: bool = _trace_option(
+        "Enable trace logging to an auto-named timestamped file under .agent-files/. "
+        "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
+        "config.toml opt in. A std/config::trace write takes effect in the REPL too."
     ),
-    no_trace: bool = typer.Option(
-        False,
-        "--no-trace",
-        help="Disable trace logging.",
-    ),
-    trace: bool = typer.Option(
-        False,
-        "--trace",
-        help=(
-            "Enable trace logging to an auto-named timestamped file under .agent-files/. "
-            "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
-            "config.toml opt in. A std/config::trace write takes effect in the REPL too."
-        ),
-    ),
-    no_stdlib: bool = typer.Option(
-        False,
-        "--no-stdlib",
-        help=(
-            "Disable the automatic import std/prelude::* prelude for each loaded REPL program "
-            "(entries and library modules)."
-        ),
+    no_stdlib: bool = _no_stdlib_option(
+        "Disable the automatic import std/prelude::* prelude for each loaded REPL program "
+        "(entries and library modules)."
     ),
     plain: bool = typer.Option(
         False,
@@ -1209,25 +1192,10 @@ def check_cmd(
         metavar="FILE...",
         autocompletion=completion.complete_agl_file,
     ),
-    module_paths: list[str] = typer.Option(
-        [],
-        "-I",
-        "--module-path",
-        metavar="DIR",
-        help=(
-            "Add DIR as an additional module search root (repeatable). "
-            "Resolved relative to the invocation working directory. "
-            "Joins the unordered root set; a module id found in two roots is an ambiguity error."
-        ),
-        autocompletion=completion.complete_dir_argument,
-    ),
-    no_stdlib: bool = typer.Option(
-        False,
-        "--no-stdlib",
-        help=(
-            "Disable automatic std/prelude opening throughout each checked file "
-            "(entry and library modules)."
-        ),
+    module_paths: list[str] = _module_path_option(),
+    no_stdlib: bool = _no_stdlib_option(
+        "Disable automatic std/prelude opening throughout each checked file "
+        "(entry and library modules)."
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),

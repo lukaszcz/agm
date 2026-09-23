@@ -194,6 +194,14 @@ class ModuleGraph:
     _closures: dict[ModuleId, tuple[LoadedModule, ...]] = field(
         default_factory=dict, compare=False, repr=False, init=False
     )
+    # Memo for source_reachable_modules, held under the same terms as
+    # _closures. Filled one queried module at a time: a source closure is
+    # ordered by the walk that produced it, and such an order cannot be
+    # assembled from the closures of a module's neighbours, so entries a
+    # caller never asks for are never walked.
+    _source_closures: dict[ModuleId, tuple[ModuleId, ...]] = field(
+        default_factory=dict, compare=False, repr=False, init=False
+    )
 
     def dependency_closures(self) -> Mapping[ModuleId, tuple[LoadedModule, ...]]:
         """Return each loaded module's transitive dependencies, itself included.
@@ -238,8 +246,13 @@ class ModuleGraph:
         """Return modules reachable through source-authored import/export edges.
 
         ``source_adjacency`` records edge provenance at load time, excluding
-        loader-injected standard-library edges.
+        loader-injected standard-library edges. The walk is memoized per
+        module: the graph is frozen, so one module's closure is the same on
+        every later ask, however many programs it declares.
         """
+        closure = self._source_closures.get(module_id)
+        if closure is not None:
+            return closure
         adjacency = self.source_adjacency or self.adjacency
         reachable: list[ModuleId] = []
         seen: set[ModuleId] = set()
@@ -251,7 +264,9 @@ class ModuleGraph:
             seen.add(current)
             reachable.append(current)
             pending.extend(reversed(adjacency[current]))
-        return tuple(reachable)
+        closure = tuple(reachable)
+        self._source_closures[module_id] = closure
+        return closure
 
     def resource_root_for(self, module_id: ModuleId) -> Path | None:
         """Return the filesystem anchor used by a module's resource calls."""

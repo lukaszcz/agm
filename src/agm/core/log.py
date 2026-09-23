@@ -25,83 +25,28 @@ def default_agent_files_dir() -> Path:
 
 @dataclass(frozen=True)
 class TraceDecision:
-    """A run's initial trace-logging decision, resolved from the CLI and config layers.
+    """A run's initial trace-logging decision.
 
     ``enabled`` is the starting on/off state.  ``explicit_path`` is the resolved
     trace-file path when the user (or config) provided one explicitly; ``None``
     means use the auto-generated timestamped path inside ``.agent-files/``.
+
+    Resolved once per run by
+    :meth:`~agm.cli_support.engine_seeds.EngineSeedTiers.trace_decision`, from
+    the same tiers that seed the program's readable ``trace`` setting.
     """
 
     enabled: bool
     explicit_path: str | None  # None → auto timestamped path when enabled
 
 
-def resolve_trace_decision(
-    *,
-    cli_no_trace: bool,
-    cli_trace: bool,
-    cli_trace_file: str | None,
-    config_trace: bool,
-    config_trace_file: str | None,
-) -> TraceDecision:
-    """Resolve the trace decision a run STARTS with, from the two host layers.
-
-    Precedence (highest first): CLI > config file.
-
-    A program's own ``std/config::trace``/``trace-file`` write is deliberately
-    not a layer here.  It is not resolved at startup at all: it takes effect at
-    runtime, from its program point onward, through the host settings
-    reconfigurer, and it overrides whichever value this function chose.  So for
-    the setting as a whole the source wins — see
-    ``docs/agl/reference/host-environment.md`` for the full precedence chain.
-
-    CLI layer:
-      - ``--no-trace``        → enabled=False, path=None  (explicit disable)
-      - ``--trace-file PATH`` → enabled=True,  path=PATH
-      - ``--trace``           → enabled=True,  path=None
-      - (none)                → enabled=None   (unset; fall through)
-
-    Config layer:
-      - ``config_trace=True`` or ``config_trace_file`` → enabled=True
-      - ``config_trace=False`` (default) and no file → fall through as None
-      Note: config cannot express an explicit False distinctly from default;
-      use CLI ``--no-trace`` to force off when config has defaults.
-
-    Enabled resolution: first non-None of [cli, config], default False.
-    Path resolution:    first non-None of [cli.path, config.path].
-    """
-    # --- CLI layer ---
-    if cli_no_trace:
-        cli_enabled: bool | None = False
-    elif cli_trace_file is not None:
-        cli_enabled = True
-    elif cli_trace:
-        cli_enabled = True
-    else:
-        cli_enabled = None
-    cli_path = cli_trace_file  # None when --trace or --no-trace; explicit str otherwise
-
-    # --- Config layer ---
-    config_path = config_trace_file
-    config_enabled: bool | None = True if (config_trace or config_trace_file) else None
-
-    # --- Resolve enabled ---
-    resolved_enabled = next((v for v in [cli_enabled, config_enabled] if v is not None), False)
-
-    # --- Resolve path ---
-    resolved_path = next((p for p in [cli_path, config_path] if p is not None), None)
-
-    return TraceDecision(enabled=resolved_enabled, explicit_path=resolved_path)
-
-
 def prepare_trace_log_from_decision(decision: TraceDecision, *, command_name: str) -> Path | None:
     """Prepare the trace file for an already-resolved :class:`TraceDecision`.
 
-    The two commands that support the full
-    ``--trace``/``--no-trace``/``--trace-file`` + config precedence chain
-    (``agm exec`` and ``agm repl``) resolve the decision once — they also seed
-    their engine-setting registers from it — and then hand it here.  Callers
-    handle the ``--dry-run`` short-circuit before calling.
+    ``agm exec`` and ``agm repl`` take the decision from their engine seed
+    tiers — the same resolution that seeds their engine-setting registers — and
+    hand it here.  Callers handle the ``--dry-run`` short-circuit before
+    calling.
     """
     return prepare_trace_log(
         command_name=command_name,

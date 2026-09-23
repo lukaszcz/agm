@@ -8,7 +8,9 @@ import string
 from typing import NoReturn
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit
 
-from agl import AglException, array, nominals, option_none, option_some
+from agl import array, nominals, option, option_none, option_some
+
+from agm.agl.runtime.boundary import raise_parse_error
 
 Option = nominals.std.option.Option
 Pair = nominals.std.pair.Pair
@@ -41,7 +43,7 @@ _LOWERCASE_SCHEME_RE = re.compile(r"[a-z][a-z0-9+.\-]*\Z")
 
 
 def _parse_error(raw: str, reason: str) -> NoReturn:
-    raise AglException(UrlParseError(message=f"Could not parse URL: {reason}.", raw=raw))
+    raise_parse_error(UrlParseError, raw, f"Could not parse URL: {reason}.")
 
 
 def _pairs(values: object) -> list[tuple[str, str]]:
@@ -132,7 +134,7 @@ def parse(value: str) -> object:
     return Url(
         scheme=parts.scheme,
         host=host,
-        port=option_some(port) if port is not None else option_none(),
+        port=option(port, port is not None),
         path=_quote_component(parts.path, _PATH_SAFE),
         query=array([Pair(first=key, second=val) for key, val in query_pairs]),
         fragment=(

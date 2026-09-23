@@ -777,8 +777,13 @@ def _build_program_type_table(
     # Builtin contracts may inspect referenced enum-member record fields, so
     # validate only after every type body has been resolved.  This preserves
     # the order-free handle phase while making contract validation structural.
-    for builder in cross_builders.values():
-        builder.validate_builtin_contracts()
+    # The derived half runs only once every module's self-standing shapes have
+    # passed, so an invalid builtin is reported at the declaration that
+    # carries it whichever module declares it -- and in every module set the
+    # artifact cache leaves to check.
+    for derived in (False, True):
+        for builder in cross_builders.values():
+            builder.validate_builtin_contracts(derived=derived)
 
     # Step C: every body is now resolved, so the inhabitation fixpoint can
     # run over the whole shared table (this program's declarations plus the

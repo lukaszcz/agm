@@ -116,6 +116,13 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = (
     | BUILTIN_PRELUDE_TYPE_NAMES
 )
 
+# Built-ins whose shape is checked against another built-in's declaration
+# rather than against their own members alone (see
+# ``_TypeBuilder._validate_builtin_shape``). They are validated last, so an
+# invalid referent is reported at the declaration the author actually wrote
+# instead of at the built-in downstream of it.
+_DERIVED_BUILTIN_SHAPES: frozenset[str] = frozenset({"Optional"})
+
 
 def _decl_identity(
     module_id: ModuleId, scope_path: tuple[str, ...], bare_name: str, node_id: int
@@ -296,7 +303,8 @@ class _TypeBuilder:
 
         self._finalize_exceptions()
         self._finalize_enums()
-        self.validate_builtin_contracts()
+        self.validate_builtin_contracts(derived=False)
+        self.validate_builtin_contracts(derived=True)
 
     def collect_shells_only(self, program: Program) -> None:
         """Register phase-1 declarations: names, handles, and alias targets.
@@ -505,8 +513,20 @@ class _TypeBuilder:
         """Resolve and register the named exception's body. See :meth:`build_record`."""
         self._build_exception(self._exception_defs[name])
 
-    def validate_builtin_contracts(self) -> None:
-        """Validate builtin shapes after every referenced type body is available."""
+    def validate_builtin_contracts(self, *, derived: bool) -> None:
+        """Validate builtin shapes after every referenced type body is available.
+
+        *derived* selects one half of the pass: the shapes that stand on
+        their own members, or those in :data:`_DERIVED_BUILTIN_SHAPES`, which
+        read another builtin's declaration. Callers run the halves in that
+        order, and a whole-program check runs each half across EVERY module
+        before starting the next. A derived shape is invalid whenever the
+        builtin it reads is, so reporting it first would name a declaration
+        the author never wrote — and would do so only in the runs where the
+        referent's module was parsed rather than restored from the artifact
+        cache. Builtin aliases stand on their own and belong to the first
+        half.
+        """
         declarations: tuple[
             tuple[
                 RecordDef | EnumDef | ExceptionDef,
@@ -520,6 +540,8 @@ class _TypeBuilder:
         )
         for stmt, expected_contracts in declarations:
             if not stmt.is_builtin:
+                continue
+            if (_bare_name(stmt.name) in _DERIVED_BUILTIN_SHAPES) != derived:
                 continue
             typedef = self._resolved_defs.get(stmt.name)
             assert typedef is not None, "compiler bug: builtin type is not registered"
@@ -536,6 +558,8 @@ class _TypeBuilder:
                 expected_contracts,
                 base_type=base_type,
             )
+        if derived:
+            return
         for alias in self._builtin_alias_defs.values():
             path = tuple(segment.name for segment in alias.scope_path)
             if not alias.type_params:

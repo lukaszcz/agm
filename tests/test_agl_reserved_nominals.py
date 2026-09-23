@@ -82,6 +82,16 @@ class TestReservedEnumMemberIds:
         )
         assert ("AgentSandbox", "Sandbox") in RESERVED_ENUM_MEMBER_IDS
 
+    def test_optional_none_and_some_members_alias_the_option_enum(self) -> None:
+        """``Optional``'s declaration is ``Option::Some[T] | Option::None |
+        Default``: its ``None``/``Some`` members are referenced members and so
+        alias ``Option``'s own reserved ids, matching how the real
+        standard-library declaration unifies their identity."""
+        optional_none = require_reserved_enum_member_id("Optional", "None")
+        optional_some = require_reserved_enum_member_id("Optional", "Some")
+        assert optional_none == require_reserved_enum_member_id("Option", "None")
+        assert optional_some == require_reserved_enum_member_id("Option", "Some")
+
     def test_mismatched_pair_is_rejected_rather_than_aliased_by_bare_member_name(self) -> None:
         """No name-keyed fallback: a member name that happens to match some
         other reserved type name (here ``Session``) must not silently alias

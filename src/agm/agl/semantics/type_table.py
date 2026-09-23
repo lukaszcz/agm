@@ -2365,6 +2365,14 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                     standard_option_type(TextType()),
                 ),
                 ("metadata", JsonType()),
+                (
+                    "sandbox",
+                    EnumType(
+                        name="AgentSandbox",
+                        module_id=RESERVED_ID,
+                        decl_id=_reserved_id("AgentSandbox"),
+                    ),
+                ),
             )
         ),
         field_kinds=_standard(_fields),

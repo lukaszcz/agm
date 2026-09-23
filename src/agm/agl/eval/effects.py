@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import ContextManager, NoReturn, Protocol, assert_never, cast
 
-from agm.agent.spec import AgentSpec, SessionTransport
+from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
 from agm.agl.ir.builtin_nominals import resolve_standard_member_name
 from agm.agl.ir.ids import ContractId, Location
 from agm.agl.ir.nodes import (
@@ -51,6 +51,7 @@ from agm.agl.runtime.request import (
 from agm.agl.runtime.request import (
     ValidationError as ReqValidationError,
 )
+from agm.agl.runtime.sandbox_values import decode_agent_sandbox
 from agm.agl.runtime.sessions import (
     AgentDispatcherSessionHost,
     SessionAgentError,
@@ -80,6 +81,7 @@ from agm.agl.semantics.values import (
 )
 from agm.core.parse import parse_timeout
 from agm.core.process import CapturedOutput
+from agm.sandbox.request import SandboxLimits
 
 # ---------------------------------------------------------------------------
 # Narrow context Protocol
@@ -311,6 +313,7 @@ class EffectHandlers:
         prompt_expr: IrExpr,
         contract_id: ContractId,
         max_attempts: int,
+        sandbox_expr: IrExpr,
     ) -> Value:
         """Handle IrAsk: dispatch an Agent enum value and parse output."""
         agent_val = self._ctx._eval(agent_expr)
@@ -320,6 +323,7 @@ class EffectHandlers:
                 f"got {type(agent_val).__name__}"
             )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
+        permission_mode, sandbox = self._decode_sandbox(sandbox_expr)
 
         output_contract, json_schema = self._contract_carriers(contract_id)
         return self._eval_agent_method_ask(
@@ -330,7 +334,19 @@ class EffectHandlers:
             node=_node,
             output_contract=output_contract,
             json_schema=json_schema,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
         )
+
+    def _decode_sandbox(self, sandbox_expr: IrExpr) -> tuple[PermissionMode, SandboxLimits | None]:
+        """Evaluate and decode an ask/ask-request call's ``sandbox`` operand."""
+        sandbox_val = self._ctx._eval(sandbox_expr)
+        if not isinstance(sandbox_val, RecordValue):
+            raise TypeError(
+                "IrAsk sandbox must evaluate to an AgentSandbox member record, "
+                f"got {type(sandbox_val).__name__}"
+            )
+        return decode_agent_sandbox(sandbox_val, self._ctx._program.builtin_nominals)
 
     def _session_error(self, error: SessionHostError) -> NoReturn:
         """Map a host lifecycle failure to the catchable SessionError shape."""
@@ -554,6 +570,8 @@ class EffectHandlers:
         node: IrAsk,
         output_contract: OutputContract | TypelessOutputContract | None,
         json_schema: object | None,
+        permission_mode: PermissionMode,
+        sandbox: SandboxLimits | None,
     ) -> Value:
         """Run one ``Agent::ask`` call in a short-lived conversation.
 
@@ -577,6 +595,8 @@ class EffectHandlers:
                 max_attempts=max_attempts,
                 node=node,
                 output_contract=output_contract,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
                 dispatch=lambda request: self._dispatch_session_agent(
                     handle,
                     request,
@@ -621,6 +641,10 @@ class EffectHandlers:
             max_attempts=node.max_attempts,
             node=node,
             output_contract=output_contract,
+            # A session's sandbox mode is fixed at open, never per-ask: every
+            # session-routed request carries no sandboxing here.
+            permission_mode=PermissionMode.NONE,
+            sandbox=None,
             dispatch=lambda request: self._dispatch_session_agent(
                 handle,
                 request,
@@ -652,6 +676,8 @@ class EffectHandlers:
         node: IrAsk | IrSessionAsk,
         output_contract: OutputContract | TypelessOutputContract | None,
         dispatch: Callable[[AgentRequest], str],
+        permission_mode: PermissionMode,
+        sandbox: SandboxLimits | None,
     ) -> Value:
         """Run the session ask retry loop."""
         contract = self._ctx._program.contracts[contract_id]
@@ -670,6 +696,8 @@ class EffectHandlers:
                 previous_invalid_output=last_raw,
                 validation_errors=list(last_errors),
                 output_contract=output_contract,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
             )
             request.prompt = self._compose_session_prompt(request)
             raw = dispatch(request)
@@ -749,6 +777,7 @@ class EffectHandlers:
         prompt_expr: IrExpr,
         contract_id: ContractId,
         max_attempts: int,
+        sandbox_expr: IrExpr,
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
         agent_value = self._ctx._eval(agent_expr)
@@ -758,6 +787,10 @@ class EffectHandlers:
                 f"got {type(agent_value).__name__}"
             )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
+        # The AgL-visible request carries the raw evaluated AgentSandbox value
+        # verbatim, exactly as it carries the raw agent value: ask-request
+        # never dispatches, so nothing decodes it.
+        sandbox_value = self._ctx._eval(sandbox_expr)
 
         contract = self._ctx._program.contracts[contract_id]
         nominals = self._ctx._program.builtin_nominals
@@ -787,6 +820,7 @@ class EffectHandlers:
                         "max_attempts": max_attempts,
                     }
                 ),
+                "sandbox": sandbox_value,
             },
         )
 

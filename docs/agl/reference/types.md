@@ -475,13 +475,15 @@ record AgentRequest
   attempt:             int
   previous-error:      Option[text]
   metadata:            json
+  sandbox:             AgentSandbox
 ```
 
 `target-type`, `format-instructions`, and `json-schema` record the output
 contract selected by the call's type argument and parse-shaping options; the
 latter two are `None` whenever the contract has nothing to state, as for a
 `text` output. `previous-error` is `None` because it constructs only the
-first-attempt request.
+first-attempt request. `sandbox` is the call's `sandbox` argument, defaulting
+to `std/config::default-sandbox` exactly as it does for `ask`.
 
 ### `SessionTransport`
 

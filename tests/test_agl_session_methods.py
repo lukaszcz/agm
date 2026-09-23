@@ -80,6 +80,10 @@ def test_session_ask_rejects_an_explicit_agent() -> None:
     )
 
 
+def test_session_ask_rejects_an_explicit_sandbox() -> None:
+    _reject('let session = Session::default()\nsession.ask("summarize", sandbox = Native)')
+
+
 def test_agent_receiver_ask_rejects_a_conflicting_explicit_agent() -> None:
     _reject(
         'let worker = AgentCommand("worker")\n'

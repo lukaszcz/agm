@@ -118,6 +118,8 @@ def _literal_for_type(typ: Type) -> str:
         return 'AgentCommand("x")'
     if isinstance(typ, EnumType) and typ.name == "SessionTransport":
         return "SessionTransport::Cli"
+    if isinstance(typ, EnumType) and typ.name == "AgentSandbox":
+        return "Disabled"
     raise AssertionError(f"no test literal for {typ!r}")
 
 
@@ -1486,6 +1488,7 @@ _AGENT_REQUEST_FIELDS = (
     "  attempt: int\n"
     "  previous-error: Option[text]\n"
     "  metadata: json\n"
+    "  sandbox: AgentSandbox\n"
 )
 
 _PARSE_POLICY_VARIANTS = "  | Abort\n  | Retry(n: int)\n"
@@ -1509,6 +1512,7 @@ _ASK_REQUEST_OPTIONS = (
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
     "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_FREE_OPTIONS = (
     "  prompt: text,\n"
@@ -1516,6 +1520,7 @@ _ASK_REQUEST_FREE_OPTIONS = (
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
     "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_DECL = f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS}) -> AgentRequest\n"
 
@@ -6237,8 +6242,9 @@ class TestImports:
                 copyfile(source, std_dir / source.name)
         config = std_dir / "config.agl"
         config.write_text(
-            "import std/prelude::{Option, Agent}\n"
+            "import std/prelude::{Option, Agent, AgentSandbox}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
+            "builtin var default-sandbox: AgentSandbox = Disabled\n"
             'builtin var timeout: Option[text] = Some("not-a-timeout")\n',
             encoding="utf-8",
         )
@@ -6252,8 +6258,9 @@ class TestImports:
         assert next_node_id > 0
 
         config.write_text(
-            "import std/prelude::{Option, Agent}\n"
+            "import std/prelude::{Option, Agent, AgentSandbox}\n"
             'builtin var default-agent: Agent = AgentCommand("runner")\n'
+            "builtin var default-sandbox: AgentSandbox = Disabled\n"
             'builtin var timeout: Option[text] = Some("2s")\n',
             encoding="utf-8",
         )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -37,6 +37,7 @@ from agm.sandbox.request import (
     DRY_RUN_SETTINGS_PLACEHOLDER,
     Default,
     PreparedSandboxCommand,
+    SandboxLimits,
     SandboxRequest,
     SandboxSpec,
 )
@@ -149,6 +150,38 @@ class TestProfileName:
 
     def test_empty_argv0_returns_itself(self) -> None:
         assert profile_name("") == ""
+
+
+class TestSandboxLimits:
+    """``SandboxLimits`` carries the shape statable without naming a command."""
+
+    def test_a_spec_is_limits_plus_the_profile_the_limits_apply_to(self) -> None:
+        spec = SandboxSpec(
+            profile_name="claude",
+            memory="8G",
+            swap="1G",
+            settings_file=Path("/tmp/x"),
+            patch=False,
+        )
+
+        assert isinstance(spec, SandboxLimits)
+        assert (spec.memory, spec.swap, spec.settings_file, spec.patch) == (
+            "8G",
+            "1G",
+            Path("/tmp/x"),
+            False,
+        )
+
+    def test_limits_and_spec_share_their_defaults(self) -> None:
+        limits = SandboxLimits()
+        spec = SandboxSpec(profile_name=None)
+
+        for field_name in ("memory", "swap", "settings_file", "patch"):
+            assert getattr(limits, field_name) == getattr(spec, field_name)
+
+    def test_a_spec_is_frozen(self) -> None:
+        with pytest.raises(FrozenInstanceError):
+            setattr(SandboxSpec(profile_name="echo"), "profile_name", "other")
 
 
 # ---------------------------------------------------------------------------

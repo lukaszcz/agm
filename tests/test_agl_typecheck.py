@@ -2035,6 +2035,7 @@ class TestScopedBuiltinTypes:
             '    format: text = "",\n'
             "    strict-json: bool = false,\n"
             "    on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+            "    sandbox: AgentSandbox = Disabled,\n"
             "  ) -> T\n"
             "end A\n"
             "\n"
@@ -2046,7 +2047,7 @@ class TestScopedBuiltinTypes:
         method = next(item for item in region.items if isinstance(item, FuncDef))
         signature = r.type_env.get_binding_type(method.node_id)
         assert isinstance(signature, FunctionType)
-        receiver_type, _prompt, _format, _strict, policy_type = signature.params
+        receiver_type, _prompt, _format, _strict, policy_type, _sandbox = signature.params
         # Receiver and sibling default both keep the scoped identity locally,
         # even though the signature validates against the canonical contract.
         assert isinstance(receiver_type, EnumType)
@@ -9112,6 +9113,7 @@ _AGENT_REQUEST_FIELDS_TC = (
     "  attempt: int\n"
     "  previous-error: Option[text]\n"
     "  metadata: json\n"
+    "  sandbox: AgentSandbox\n"
 )
 
 _PARSE_POLICY_VARIANTS_TC = "  | Abort\n  | Retry(n: int)\n"
@@ -9125,6 +9127,7 @@ _ASK_REQUEST_OPTIONS_TC = (
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
     "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_FREE_OPTIONS_TC = (
     "  prompt: text,\n"
@@ -9132,6 +9135,7 @@ _ASK_REQUEST_FREE_OPTIONS_TC = (
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
     "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
 )
 _ASK_REQUEST_DECL_TC = (
     f"builtin def ask-request[T](\n{_ASK_REQUEST_FREE_OPTIONS_TC}) -> AgentRequest\n"
@@ -9147,6 +9151,7 @@ _ASK_REQUEST_NO_STDLIB_DECL_TC = (
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
     "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
     ") -> AgentRequest\n"
 )
 
@@ -9363,6 +9368,7 @@ class TestHostContractBuiltinIdentity:
             '  format: text = "",\n'
             "  strict-json: bool = false,\n"
             "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+            "  sandbox: AgentSandbox = Disabled,\n"
             ") -> T\n"
             'let g: Agent = Agent::AgentCommand("x")\n'
             'let r: text = g.ask("hi")\n'
@@ -10748,6 +10754,56 @@ class TestAskUnknownArgs:
             " strict-json = true, on-parse-error = Abort())\nn"
         )
         assert r.resolved.program is not None
+
+
+class TestAskSandboxArgument:
+    """``sandbox`` is accepted on every ask-like call except a session-routed ``ask``."""
+
+    def test_ask_accepts_disabled(self) -> None:
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = AgentSandbox::Disabled)')
+
+    def test_ask_accepts_native(self) -> None:
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = AgentSandbox::Native)')
+
+    def test_ask_accepts_bare_sandbox_all_defaults(self) -> None:
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = Sandbox)')
+
+    def test_ask_accepts_bare_sandbox_with_fields(self) -> None:
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = Sandbox(memory = Some("8G")))')
+
+    def test_ask_rejects_a_qualified_sandbox_member(self) -> None:
+        # ``AgentSandbox::Sandbox`` is a scope error: ``Sandbox`` is a
+        # referenced member, reachable only through its own bare spelling.
+        err = reject_type('ask("Q", agent = AgentCommand("a"), sandbox = AgentSandbox::Sandbox)')
+        assert "AgentSandbox" in str(err)
+
+    def test_ask_rejects_wrong_type_sandbox(self) -> None:
+        err = reject_type('ask("Q", agent = AgentCommand("a"), sandbox = "unrestricted")')
+        assert "AgentSandbox" in str(err)
+        assert "text" in str(err)
+
+    def test_ask_request_accepts_sandbox(self) -> None:
+        # ask-request never routes through a session, so it accepts sandbox
+        # even without an explicit agent.
+        accept_type('ask-request("Q", sandbox = AgentSandbox::Native)')
+
+    def test_agent_receiver_ask_accepts_sandbox(self) -> None:
+        accept_type('let a = AgentCommand("a")\na.ask("Q", sandbox = Sandbox)')
+
+    def test_agent_receiver_ask_request_accepts_sandbox(self) -> None:
+        accept_type('let a = AgentCommand("a")\na.ask-request("Q", sandbox = AgentSandbox::Native)')
+
+    def test_bare_ask_without_agent_rejects_an_explicit_sandbox(self) -> None:
+        # No explicit ``agent`` -> dispatches through the default session at
+        # lowering, which carries no per-call sandbox operand, exactly like
+        # ``Session.ask``.
+        err = reject_type('ask("Q", sandbox = AgentSandbox::Native)')
+        assert "sandbox" in str(err).lower()
+
+    def test_bare_ask_with_explicit_agent_accepts_sandbox(self) -> None:
+        # An explicit ``agent`` routes directly to the agent, not the default
+        # session, so ``sandbox`` is meaningful here.
+        accept_type('ask("Q", agent = AgentCommand("a"), sandbox = AgentSandbox::Native)')
 
 
 class TestExecUnknownArgs:

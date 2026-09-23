@@ -2060,10 +2060,11 @@ class IrInterpreter:
                 prompt=prompt_expr,
                 contract_id=contract_id,
                 max_attempts=max_attempts,
+                sandbox=sandbox_expr,
             ):
                 try:
                     return self._effects.eval_ir_ask(
-                        node, agent_expr, prompt_expr, contract_id, max_attempts
+                        node, agent_expr, prompt_expr, contract_id, max_attempts, sandbox_expr
                     )
                 except AglRaise as exc:
                     if exc.span is None:
@@ -2078,9 +2079,10 @@ class IrInterpreter:
                 prompt=prompt_expr,
                 contract_id=contract_id,
                 max_attempts=max_attempts,
+                sandbox=sandbox_expr,
             ):
                 return self._effects.eval_ir_ask_request(
-                    node, agent_expr, prompt_expr, contract_id, max_attempts
+                    node, agent_expr, prompt_expr, contract_id, max_attempts, sandbox_expr
                 )
 
             case IrExec(

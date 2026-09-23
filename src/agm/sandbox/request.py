@@ -25,14 +25,25 @@ LimitSpec = str | DefaultLimit | None
 
 
 @dataclass(frozen=True, slots=True)
-class SandboxSpec:
-    """The caller-facing sandbox shape: a profile name plus limits and overrides."""
+class SandboxLimits:
+    """The sandbox shape statable without naming the command it applies to.
 
-    profile_name: str | None
+    An AgL ``Sandbox`` record decodes directly to this shape: the profile
+    name is decided later, from context the decoded value itself never
+    carries (the agent's executable, or ``exec``'s first shell word).
+    """
+
     memory: LimitSpec = Default
     swap: LimitSpec = Default
     settings_file: Path | None = None
     patch: bool = True
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SandboxSpec(SandboxLimits):
+    """The caller-facing sandbox shape: a profile name plus limits and overrides."""
+
+    profile_name: str | None
 
 
 @dataclass(frozen=True, slots=True)

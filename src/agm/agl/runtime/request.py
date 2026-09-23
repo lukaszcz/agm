@@ -5,12 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from agm.agent.spec import PermissionMode
 from agm.agent.transport import AgentCallInfo
 from agm.agl.ir.ids import Location
 
 if TYPE_CHECKING:
     from agm.agent.spec import AgentSpec
     from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
+    from agm.sandbox.request import SandboxLimits
 
 ValidationErrorCategory = Literal[
     "missing_field", "unknown_field", "wrong_type", "bad_case", "invalid_json"
@@ -84,7 +86,10 @@ class AgentRequest:
 
     ``agent`` is already resolved to its host specification: the evaluator is
     the single seam that decodes an AgL ``Agent`` value, so no dispatcher ever
-    sees the value or its nominal identity.
+    sees the value or its nominal identity. ``permission_mode`` and
+    ``sandbox`` are the decoded form of the call's ``sandbox`` argument
+    (``agl.runtime.sandbox_values.decode_agent_sandbox``); their defaults keep
+    every caller that does not decode a sandbox unaffected.
     """
 
     agent: "AgentSpec"
@@ -94,6 +99,8 @@ class AgentRequest:
     validation_errors: list[ValidationError] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
     output_contract: "OutputContract | TypelessOutputContract | None" = None
+    permission_mode: PermissionMode = PermissionMode.NONE
+    sandbox: "SandboxLimits | None" = None
 
 
 @dataclass(slots=True)

@@ -1,0 +1,111 @@
+{
+  "scenarios": [
+    {
+      "name": "native_reaches_the_dispatched_request",
+      "params": {"mode": "native"},
+      "agents": {"impl": ["ok"]},
+      "expect": {
+        "stdout": "ok\n",
+        "calls": {"impl": 1},
+        "prompts": [
+          {"agent": "impl", "call": 0, "equals": "Do it.", "sandbox": "native"}
+        ]
+      }
+    },
+    {
+      "name": "disabled_reaches_the_dispatched_request",
+      "params": {"mode": "disabled"},
+      "agents": {"impl": ["ok"]},
+      "expect": {
+        "stdout": "ok\n",
+        "calls": {"impl": 1},
+        "prompts": [
+          {"agent": "impl", "call": 0, "equals": "Do it.", "sandbox": "none"}
+        ]
+      }
+    },
+    {
+      "name": "bare_sandbox_defaults_reach_unrestricted",
+      "params": {"mode": "sandbox-default-fields"},
+      "agents": {"impl": ["ok"]},
+      "expect": {
+        "stdout": "ok\n",
+        "calls": {"impl": 1},
+        "prompts": [
+          {
+            "agent": "impl",
+            "call": 0,
+            "equals": "Do it.",
+            "sandbox": {"mode": "unrestricted", "memory": "default", "swap": "default", "patch": true}
+          }
+        ]
+      }
+    },
+    {
+      "name": "sandbox_with_explicit_fields_reaches_unrestricted",
+      "params": {"mode": "sandbox-explicit-fields"},
+      "agents": {"impl": ["ok"]},
+      "expect": {
+        "stdout": "ok\n",
+        "calls": {"impl": 1},
+        "prompts": [
+          {
+            "agent": "impl",
+            "call": 0,
+            "equals": "Do it.",
+            "sandbox": {"mode": "unrestricted", "memory": "8G", "swap": "default", "patch": true}
+          }
+        ]
+      }
+    },
+    {
+      "name": "omitted_sandbox_uses_the_default_sandbox_setting",
+      "params": {"mode": "implicit-default"},
+      "agents": {"impl": ["ok"]},
+      "expect": {
+        "stdout": "ok\n",
+        "calls": {"impl": 1},
+        "prompts": [
+          {"agent": "impl", "call": 0, "equals": "Do it.", "sandbox": "unrestricted"}
+        ]
+      }
+    },
+    {
+      "name": "a_default_sandbox_write_changes_a_later_asks_mode",
+      "params": {"mode": "default-sandbox-write"},
+      "agents": {"impl": ["ok", "ok"]},
+      "expect": {
+        "stdout": "ok\nok\n",
+        "calls": {"impl": 2},
+        "prompts": [
+          {"agent": "impl", "call": 0, "equals": "Do it.", "sandbox": "unrestricted"},
+          {"agent": "impl", "call": 1, "equals": "Do it.", "sandbox": "none"}
+        ]
+      }
+    },
+    {
+      "name": "ask_request_exposes_an_explicit_member_without_dispatching",
+      "params": {"mode": "request-member"},
+      "expect": {
+        "stdout": "Prepare.\nnative\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "ask_request_exposes_the_widened_sandbox_record",
+      "params": {"mode": "request-widened"},
+      "expect": {
+        "stdout": "sandbox(Option::Some(value = \"8G\"), Optional::Default, Option::None, true)\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "ask_request_exposes_the_omitted_default_sandbox",
+      "params": {"mode": "default"},
+      "expect": {
+        "stdout": "sandbox(Optional::Default, Optional::Default, Option::None, true)\n",
+        "calls": {}
+      }
+    }
+  ]
+}

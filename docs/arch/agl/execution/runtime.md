@@ -4,7 +4,7 @@ The runtime package is the eval-free services layer: agent dispatch and session 
 
 ## Agents and Sessions
 
-`runtime/agents.py` decodes an `Agent` member record into a host spec from `agent/spec.py` and runs the spec's argv through the shared prompt and process seam. `runtime/sessions.py` bridges AgL `Session` values to the agent session service ([agents.md](../../agents.md)), resolves an agent's default transport from its spec, and supplies a dispatcher-backed host for embeddings without a session service. Agent prompts and shell commands are text rendering, not JSON serialization. The evaluator decodes an `Agent` value to its host `AgentSpec` exactly once; `AgentRequest`, `SessionHost`, and `SessionSnapshot` all carry the decoded spec rather than the raw AgL value.
+`runtime/agents.py` decodes an `Agent` member record into a host spec from `agent/spec.py` and runs the spec's argv through the shared prompt and process seam. `runtime/sessions.py` bridges AgL `Session` values to the agent session service ([agents.md](../../agents.md)), resolves an agent's default transport from its spec, and supplies a dispatcher-backed host for embeddings without a session service. Agent prompts and shell commands are text rendering, not JSON serialization. The evaluator decodes an `Agent` value to its host `AgentSpec` exactly once; `AgentRequest`, `SessionHost`, and `SessionSnapshot` all carry the decoded spec rather than the raw AgL value. `runtime/sandbox_values.py` mirrors that boundary for `ask`/`ask-request`'s `sandbox` operand: it decodes an `AgentSandbox` value into the `agent.spec.PermissionMode` dispatch understands plus an optional `sandbox.request.SandboxLimits`, through the same identity-based member resolution `agents.py` uses, never by reading a name off the value.
 
 ## Codecs
 
@@ -22,7 +22,7 @@ The typeless decode schema (`ir/contracts.py`) additionally carries each field's
 
 ## Code Entry Points
 
-- `src/agm/agl/runtime/agents.py`, `sessions.py`, `request.py` — agent dispatch, session bridging, request/response types.
+- `src/agm/agl/runtime/agents.py`, `sessions.py`, `request.py`, `sandbox_values.py` — agent dispatch, session bridging, request/response types, sandbox-operand decoding.
 - `src/agm/agl/runtime/codec.py`, `contract.py`, `convert.py`, `engine_config.py` — codecs, contracts, conversion, engine settings and host-value conversion.
 - `src/agm/agl/runtime/render.py`, `serialize.py` — rendering and JSON serialization.
 - `src/agm/agl/runtime/trace.py`, `host_settings.py`, `types.py`, `option.py` — tracing, live settings, host environment types, `Option` construction.

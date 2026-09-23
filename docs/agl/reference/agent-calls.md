@@ -22,7 +22,8 @@ reviewer.ask::[Review]("Review %{artifact}", on-parse-error = Retry(n = 2))
 ```text
 ask(prompt: text, agent: Agent = std/config::default-agent,
     format: text = "", strict-json: bool = false,
-    on-parse-error: ParsePolicy = ParsePolicy::Abort) -> T
+    on-parse-error: ParsePolicy = ParsePolicy::Abort,
+    sandbox: AgentSandbox = std/config::default-sandbox) -> T
 ```
 
 where `T` is the **target type** — determined from the calling context (see
@@ -33,7 +34,8 @@ An `Agent` value also provides the method form:
 ```text
 Agent::ask(self, prompt: text, format: text = "",
            strict-json: bool = false,
-           on-parse-error: ParsePolicy = ParsePolicy::Abort) -> T
+           on-parse-error: ParsePolicy = ParsePolicy::Abort,
+           sandbox: AgentSandbox = std/config::default-sandbox) -> T
 ```
 
 Free `ask` uses the snapshot default `Session` when `agent` is omitted; its
@@ -84,7 +86,9 @@ Session::ask[T](self, prompt: text, format: text = "",
 ```
 
 It sends the prompt through that live session, so the session's stored agent
-and transport select the backend; it has no `agent` argument. It uses the same
+and transport select the backend; it has no `agent` argument, and no `sandbox`
+argument either — a session's sandboxing mode is fixed when it opens, not
+chosen per call. It uses the same
 contextual or explicit `::[T]` target, concrete-target restriction, parse
 options, and output-contract checking as `ask`. `session.ask $ prompt` uses
 the same single-argument sugar as `reviewer.ask $ prompt`. Parse retries
@@ -411,6 +415,25 @@ let r: Review = reviewer.ask(
 A policy on a `text` target produces a static **warning** — text never
 fails parsing, so the policy can never fire.
 
+### `sandbox`
+
+Selects the call's sandboxing mode, an `AgentSandbox` value
+([Types](types.md#agentsandbox)): `Disabled`, `Native`, or a `Sandbox` record
+naming resource limits. When omitted, it defaults to
+`std/config::default-sandbox`.
+
+<!-- agl-check: fragment -->
+```agl
+let r: Review = reviewer.ask("Review %{a}", sandbox = Native)
+let r2: Review = reviewer.ask("Review %{a}", sandbox = Sandbox(memory = Some("8G")))
+```
+
+`sandbox` requires an explicit agent: a free `ask` call with no `agent`
+argument dispatches through the default session, whose sandboxing mode is
+fixed when that session opens (see `Session::ask` above), so an explicit
+`sandbox` on such a call is a static error. Pair `sandbox` with an explicit
+`agent` argument, or use the `reviewer.ask(...)` receiver form.
+
 ## The prompt
 
 The `prompt` argument is a template rendered using the uniform interpolation
@@ -610,6 +633,7 @@ ask-request[T](
   format: text = "",
   strict-json: bool = false,
   on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest
 ```
 
@@ -618,8 +642,11 @@ captures its receiver instead. The type argument and the parse-shaping options
 select the output contract exactly as they do for `ask`, and the target type
 comes from the type argument alone — never from context, whose expected type
 here is the request record rather than the output the request asks for. Without
-one, the request describes a `text` output, as `ask` does. The builder never
-dispatches, retries, parses, or emits trace events.
+one, the request describes a `text` output, as `ask` does. `sandbox` is
+recorded on the built request unchanged; since `ask-request` never dispatches,
+it accepts `sandbox` even without an explicit `agent` (unlike `ask`, it never
+routes through a session). The builder never dispatches, retries, parses, or
+emits trace events.
 
 <!-- agl-check: fragment -->
 ```agl

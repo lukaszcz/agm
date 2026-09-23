@@ -900,6 +900,7 @@ def test_validate_ir_ask_missing_contract(request_only: bool) -> None:
         prompt=IrConstText(location=dummy_loc, value="test"),
         contract_id=ContractId(999),
         max_attempts=1,
+        sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -944,6 +945,7 @@ def test_validate_ir_ask_max_attempts_zero(request_only: bool) -> None:
         prompt=IrConstText(location=dummy_loc, value="test"),
         contract_id=cid,
         max_attempts=0,  # invalid!
+        sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -2168,6 +2170,7 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
         prompt=IrConstText(location=dummy_loc, value="test"),
         contract_id=cid,
         max_attempts=1,
+        sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -2199,6 +2202,7 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
         prompt=IrConstText(location=dummy_loc, value="test"),
         contract_id=cid,
         max_attempts=1,
+        sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -2279,6 +2283,7 @@ def test_validate_ir_ask_shallow_does_not_check_contracts(request_only: bool) ->
         prompt=IrConstText(location=dummy_loc, value="test"),
         contract_id=bad_cid,
         max_attempts=1,
+        sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -2979,6 +2984,7 @@ def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
         prompt=IrConstText(location=location, value="prompt"),
         contract_id=contract_id,
         max_attempts=1,
+        sandbox=IrConstText(location=location, value="unused"),
     )
     contracts: dict[ContractId, ContractRequest] = {
         contract_id: ContractRequest(
@@ -3004,4 +3010,66 @@ def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
     )
 
     with pytest.raises(TypeError, match="Agent member record"):
+        IrInterpreter(program).run()
+
+
+def test_ir_ask_rejects_a_non_agent_sandbox_value() -> None:
+    """Malformed IR cannot decode a dispatched ``ask``'s ``sandbox`` operand
+    that is not a record. ``ask-request`` never dispatches, so its own
+    ``sandbox`` carries the raw evaluated value through unchecked -- this
+    guard exists only on the ``IrAsk`` (dispatching) path."""
+    from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.ids import ContractId, Location, NominalId, SourceId
+    from agm.agl.ir.nodes import IrAsk, IrConstInt, IrConstText, IrMakeRecord
+    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
+    from agm.agl.ir.reserved_nominals import require_reserved_enum_member_id
+    from agm.agl.modules.ids import ENTRY_ID
+
+    source_id = SourceId(0)
+    location = Location(
+        source_id=source_id,
+        start_offset=0,
+        end_offset=1,
+        start_line=1,
+        start_col=0,
+    )
+    contract_id = ContractId(0)
+    agent_node = IrMakeRecord(
+        location=location,
+        nominal=NominalId(require_reserved_enum_member_id("Agent", "AgentCommand")),
+        fields=(("command", IrConstText(location=location, value="worker")),),
+    )
+    node = IrAsk(
+        location=location,
+        agent=agent_node,
+        prompt=IrConstText(location=location, value="prompt"),
+        contract_id=contract_id,
+        max_attempts=1,
+        sandbox=IrConstInt(location=location, value=1),
+    )
+    contracts: dict[ContractId, ContractRequest] = {
+        contract_id: ContractRequest(
+            codec_name="text",
+            strict_json=None,
+            json_schema=None,
+            decode=None,
+            target_type_label="text",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=False,
+        )
+    }
+    program = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,)),
+        },
+        symbols={},
+        nominals={},
+        sources={source_id: SourceFile(display_name="<test>", normalized_text="test")},
+        contracts=contracts,
+    )
+
+    with pytest.raises(TypeError, match="AgentSandbox member record"):
         IrInterpreter(program).run()

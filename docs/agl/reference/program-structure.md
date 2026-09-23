@@ -238,6 +238,7 @@ The settings and their types are:
 | `trace-file` | `Option[path]` | Path to the trace log file. |
 | `strict-json` | `bool` | Parse agent JSON output strictly. |
 | `default-agent` | `Agent` | Default value for `ask` calls. |
+| `default-sandbox` | `AgentSandbox` | Default `sandbox` value for `ask`-like calls. |
 | `timeout` | `Option[text]` | Shell-exec timeout. |
 
 A write takes effect **positionally**, exactly like any `var` mutation: it

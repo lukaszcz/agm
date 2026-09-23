@@ -193,7 +193,7 @@ class BuiltinCallChecker:
     """
 
     _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"agent", "format", "strict-json", "on-parse-error"}
+        {"agent", "format", "strict-json", "on-parse-error", "sandbox"}
     )
 
     _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
@@ -367,9 +367,13 @@ class BuiltinCallChecker:
     # --- Session methods ---
 
     def check_session_ask(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type:
-        """Type-check ``Session.ask`` with its receiver-owned agent selection."""
-        if any(argument.name == "agent" for argument in node.named_args):
-            raise AglTypeError("Session.ask does not accept an explicit agent.", span=node.span)
+        """Type-check ``Session.ask`` with its receiver-owned agent and fixed sandbox mode."""
+        for forbidden, label in (
+            ("agent", "an explicit agent"),
+            ("sandbox", "an explicit sandbox mode"),
+        ):
+            if any(argument.name == forbidden for argument in node.named_args):
+                raise AglTypeError(f"Session.ask does not accept {label}.", span=node.span)
         return self.check_ask(node, expected=expected)
 
     def check_session_compact(
@@ -603,7 +607,25 @@ class BuiltinCallChecker:
     def check_ask(
         self, node: Call, *, expected: Type | None, receiver_type: Type | None = None
     ) -> Type:
-        """Type-check ``ask``. *receiver_type* is set only for ``x.ask(...)``."""
+        """Type-check ``ask``. *receiver_type* is set only for ``x.ask(...)``.
+
+        A bare call with no explicit ``agent`` dispatches through the default
+        session at lowering (see ``lower.lowerer``'s ``ASK`` case), which, like
+        any session ask, carries no per-call sandbox operand: an explicit
+        ``sandbox`` here would be silently ineffective, so it is rejected the
+        same way ``Session.ask`` rejects one.
+        """
+        if receiver_type is None and not any(
+            argument.name == "agent" for argument in node.named_args
+        ):
+            for argument in node.named_args:
+                if argument.name == "sandbox":
+                    raise AglTypeError(
+                        "ask does not accept an explicit sandbox mode without an explicit "
+                        "agent: without 'agent', ask dispatches through the default session, "
+                        "which fixes its sandbox mode at open.",
+                        span=node.span,
+                    )
         # Target type: explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
@@ -752,6 +774,18 @@ class BuiltinCallChecker:
                 expected_agent_type,
                 agent_na.value.span,
                 agent_na.value,
+            )
+        if "sandbox" in named:
+            sandbox_na = named["sandbox"]
+            expected_sandbox_type = self._ctx._env.type_table.record_fields(agent_request_type)[
+                "sandbox"
+            ]
+            sandbox_type = self._ctx._check_expr(sandbox_na.value, expected=expected_sandbox_type)
+            self._ctx._assert_assignable_from(
+                sandbox_type,
+                expected_sandbox_type,
+                sandbox_na.value.span,
+                sandbox_na.value,
             )
         return named
 

@@ -2318,6 +2318,7 @@ class _Lowerer:
                         is_request=False,
                         agent=None,
                         session=IrSessionDefault(location=loc),
+                        sandbox=None,
                         max_attempts=1,
                     )
                 case BuiltinKind.ASK_REQUEST:
@@ -2330,6 +2331,7 @@ class _Lowerer:
                         is_request=True,
                         agent=None,
                         session=None,
+                        sandbox=None,
                         max_attempts=1,
                     )
                 case BuiltinKind.EXEC:
@@ -2421,6 +2423,7 @@ class _Lowerer:
                 is_request=False,
                 agent=None if is_session else receiver,
                 session=receiver if is_session else None,
+                sandbox=None,
                 max_attempts=1,
             )
         if name == "ask-request":
@@ -2433,6 +2436,7 @@ class _Lowerer:
                 is_request=True,
                 agent=receiver,
                 session=None,
+                sandbox=None,
                 max_attempts=1,
             )
         argument = operands[0] if operands else None
@@ -3654,6 +3658,11 @@ class _Lowerer:
         if agent is None and named_agent is not None:
             agent = self.lower_expr(named_agent)
             session = None
+        named_sandbox = next(
+            (argument.value for argument in call_node.named_args if argument.name == "sandbox"),
+            None,
+        )
+        sandbox = None if named_sandbox is None else self.lower_expr(named_sandbox)
         target_type = (
             self._explicit_builtin_target_type(call_node) or TextType()
             if is_request
@@ -3668,6 +3677,7 @@ class _Lowerer:
             is_request=is_request,
             agent=agent,
             session=session,
+            sandbox=sandbox,
             max_attempts=self._extract_max_attempts(call_node),
         )
 
@@ -3682,6 +3692,7 @@ class _Lowerer:
         is_request: bool,
         agent: IrExpr | None,
         session: IrExpr | None,
+        sandbox: IrExpr | None,
         max_attempts: int,
     ) -> IrExpr:
         """Build an ask operation from already-lowered direct or closure operands."""
@@ -3719,6 +3730,12 @@ class _Lowerer:
             )
         contract_id = self._alloc_contract(contract_req)
 
+        def selected_sandbox() -> IrExpr:
+            return sandbox or IrBuiltinLoad(
+                location=loc,
+                key=builtin_var_key(STD_CONFIG_ID, (), "default-sandbox"),
+            )
+
         if is_request:
             selected_agent = agent or IrBuiltinLoad(
                 location=loc,
@@ -3730,8 +3747,11 @@ class _Lowerer:
                 prompt=prompt,
                 contract_id=contract_id,
                 max_attempts=max_attempts,
+                sandbox=selected_sandbox(),
             )
         if session is not None:
+            # Session asks carry no per-call sandbox operand: the session's
+            # mode is fixed at open, not chosen per ask.
             return IrSessionAsk(
                 location=loc,
                 session=session,
@@ -3746,6 +3766,7 @@ class _Lowerer:
             prompt=prompt,
             contract_id=contract_id,
             max_attempts=max_attempts,
+            sandbox=selected_sandbox(),
         )
 
     # ------------------------------------------------------------------

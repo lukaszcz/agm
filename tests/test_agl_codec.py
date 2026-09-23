@@ -156,6 +156,7 @@ def _ask_builtin_items() -> tuple[Item, ...]:
         '  format: text = "",\n'
         "  strict-json: bool = false,\n"
         "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+        "  sandbox: AgentSandbox = Disabled,\n"
         ") -> T\n",
         start_id=500_000,
     )

@@ -408,14 +408,23 @@ def _self_param(receiver_type: RecordType | EnumType) -> ParamSpec:
 
 
 def _as_builtin_method(
-    signature: FunctionSignature, receiver_type: RecordType | EnumType
+    signature: FunctionSignature,
+    receiver_type: RecordType | EnumType,
+    *,
+    exclude: frozenset[str] = frozenset({"agent"}),
 ) -> FunctionSignature:
-    """Rebind a root agent-taking signature as a receiver method."""
+    """Rebind a root agent-taking signature as a receiver method.
+
+    *exclude* drops the named root params the receiver already fixes:
+    every receiver drops ``agent`` (the receiver owns it); ``Session::ask``
+    also drops ``sandbox``, since a session's mode is fixed at open, not
+    chosen per ask.
+    """
     return replace(
         signature,
         params=(
             _self_param(receiver_type),
-            *(param for param in signature.params if param.name != "agent"),
+            *(param for param in signature.params if param.name not in exclude),
         ),
     )
 
@@ -477,7 +486,9 @@ def _builtin_function_signature(
             if name == "ask":
                 root = _builtin_function_signature(name)
                 assert root is not None
-                return _as_builtin_method(root, _SESSION_PRELUDE_TYPE)
+                return _as_builtin_method(
+                    root, _SESSION_PRELUDE_TYPE, exclude=frozenset({"agent", "sandbox"})
+                )
             session_self = _self_param(_SESSION_PRELUDE_TYPE)
             return {
                 "compact": FunctionSignature(
@@ -539,6 +550,11 @@ def _builtin_function_signature(
                         BUILTIN_PRELUDE_TYPES["ParsePolicy"],
                         has_default=True,
                     ),
+                    _std_param(
+                        "sandbox",
+                        BUILTIN_PRELUDE_TYPES["AgentSandbox"],
+                        has_default=True,
+                    ),
                 ),
                 result=t,
                 type_params=("T",),
@@ -553,6 +569,11 @@ def _builtin_function_signature(
                     _std_param(
                         "on-parse-error",
                         BUILTIN_PRELUDE_TYPES["ParsePolicy"],
+                        has_default=True,
+                    ),
+                    _std_param(
+                        "sandbox",
+                        BUILTIN_PRELUDE_TYPES["AgentSandbox"],
                         has_default=True,
                     ),
                 ),

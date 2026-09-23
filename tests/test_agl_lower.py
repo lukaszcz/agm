@@ -2821,6 +2821,102 @@ class TestHostOpLowering:
                 f"{type(node).__name__}.contract_id {node.contract_id} not in program.contracts"
             )
 
+    def test_ask_sandbox_lowers_the_explicit_operand(self) -> None:
+        """ask(..., sandbox = ...) lowers the operand rather than loading the default."""
+        from agm.agl.ir.nodes import IrBuiltinLoad, IrMakeRecord
+
+        source = (
+            'let impl = AgentCommand("impl")\n'
+            'let r: text = ask("prompt", agent = impl, sandbox = AgentSandbox::Native)\n()'
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        (ask_bind,) = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind)) and isinstance(_let_root_capture(n).value, IrAsk)
+        ]
+        ask = ask_bind.value
+        assert isinstance(ask, IrAsk)
+        assert not isinstance(ask.sandbox, IrBuiltinLoad)
+        assert isinstance(ask.sandbox, IrMakeRecord)
+
+    def test_ask_without_sandbox_lowers_the_default_sandbox_builtin_load(self) -> None:
+        """An agent-routed ask() without 'sandbox' loads std/config::default-sandbox."""
+        from agm.agl.ir.builtin_vars import builtin_var_key
+        from agm.agl.ir.nodes import IrBuiltinLoad
+        from agm.agl.modules.ids import STD_CONFIG_ID
+
+        source = 'let impl = AgentCommand("impl")\nlet r: text = ask("prompt", agent = impl)\n()'
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        (ask_bind,) = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind)) and isinstance(_let_root_capture(n).value, IrAsk)
+        ]
+        ask = ask_bind.value
+        assert isinstance(ask, IrAsk)
+        assert isinstance(ask.sandbox, IrBuiltinLoad)
+        assert ask.sandbox.key == builtin_var_key(STD_CONFIG_ID, (), "default-sandbox")
+
+    def test_ask_request_sandbox_lowers_the_explicit_operand(self) -> None:
+        """ask-request(..., sandbox = ...) lowers its own explicit operand, undecoded."""
+        from agm.agl.ir.nodes import IrAskRequest, IrBuiltinLoad, IrMakeRecord
+
+        source = 'let req = ask-request("prompt", sandbox = AgentSandbox::Disabled)\n()'
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        (req_bind,) = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrAskRequest)
+        ]
+        req = req_bind.value
+        assert isinstance(req, IrAskRequest)
+        assert not isinstance(req.sandbox, IrBuiltinLoad)
+        assert isinstance(req.sandbox, IrMakeRecord)
+
+    def test_ask_request_without_sandbox_lowers_the_default_sandbox_builtin_load(self) -> None:
+        """An ask-request() without 'sandbox' loads std/config::default-sandbox, like ask()."""
+        from agm.agl.ir.builtin_vars import builtin_var_key
+        from agm.agl.ir.nodes import IrAskRequest, IrBuiltinLoad
+        from agm.agl.modules.ids import STD_CONFIG_ID
+
+        source = (
+            'let worker = AgentCommand("worker")\n'
+            'let req = ask-request("prompt", agent = worker)\n()'
+        )
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        (req_bind,) = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrAskRequest)
+        ]
+        req = req_bind.value
+        assert isinstance(req, IrAskRequest)
+        assert isinstance(req.sandbox, IrBuiltinLoad)
+        assert req.sandbox.key == builtin_var_key(STD_CONFIG_ID, (), "default-sandbox")
+
+    def test_session_ask_lowers_with_no_sandbox_operand(self) -> None:
+        """Session::ask lowers to IrSessionAsk, which carries no sandbox field at all."""
+        from agm.agl.ir.nodes import IrSessionAsk
+
+        source = 'let s = Session::default()\nlet r: text = s.ask("prompt")\n()'
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        session_ask_binds = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrSessionAsk)
+        ]
+        assert len(session_ask_binds) == 1
+        assert not hasattr(session_ask_binds[0].value, "sandbox")
+
 
 # ---------------------------------------------------------------------------
 # Structural lowering: lambda capture positive path (non-empty captures)

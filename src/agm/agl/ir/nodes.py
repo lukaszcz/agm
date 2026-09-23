@@ -1055,13 +1055,15 @@ class IrCopyValue:
 
 @dataclass(frozen=True, slots=True)
 class IrAsk:
-    """IR host-op: ask(prompt, agent:, on_parse_error:) builtin call.
+    """IR host-op: ask(prompt, agent:, on_parse_error:, sandbox:) builtin call.
 
     Evaluates ``agent`` (an ``Agent`` enum value), ``prompt`` (text), dispatches
     through the value-driven agent runtime, parses the response via the contract,
     and returns the typed Value.
 
     ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
+    ``sandbox`` evaluates to an ``AgentSandbox`` value, decoded once and reused
+    across every retry attempt.
     """
 
     location: Location
@@ -1069,6 +1071,7 @@ class IrAsk:
     prompt: "IrExpr"
     contract_id: "ContractId"
     max_attempts: int
+    sandbox: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1145,6 +1148,8 @@ class IrAskRequest:
     Builds the AgentRequest record value describing the call that the matching
     ``ask`` would have dispatched: it carries the same output contract and the
     same retry budget, and evaluating it neither dispatches nor parses.
+    ``sandbox`` evaluates to the ``AgentSandbox`` value carried verbatim into
+    the built record's own ``sandbox`` field.
     """
 
     location: Location
@@ -1152,6 +1157,7 @@ class IrAskRequest:
     prompt: "IrExpr"
     contract_id: "ContractId"
     max_attempts: int
+    sandbox: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)

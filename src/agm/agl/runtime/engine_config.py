@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from agm.agent.spec import AGENT_SPECS
+from agm.agl.ir.reserved_nominals import AGENT_SANDBOX_MEMBERS
 from agm.agl.semantics.values import RecordValue
 from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind
 
@@ -32,7 +33,7 @@ def _engine_key_shape(kind: EngineKeyKind) -> tuple[str, tuple[str, ...]] | None
     if kind is EngineKeyKind.AGENT:
         return ("Agent", tuple(AGENT_SPECS))
     if kind is EngineKeyKind.AGENT_SANDBOX:
-        return ("AgentSandbox", ("Disabled", "Native", "Sandbox"))
+        return ("AgentSandbox", AGENT_SANDBOX_MEMBERS)
     if kind is EngineKeyKind.OPTION_TEXT:
         return ("Option", ("None", "Some"))
     return None

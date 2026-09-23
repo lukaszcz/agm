@@ -99,6 +99,7 @@ _MODULES: dict[str, str] = {
         "  attempt: int\n"
         "  previous-error: Option[text]\n"
         "  metadata: json\n"
+        "  sandbox: AgentSandbox\n"
         "\n"
         "builtin\n"
         "exception AgentCallError extends Exception\n"

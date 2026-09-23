@@ -59,10 +59,20 @@ def _copy_core_and_option(directory: Path) -> None:
         additions += "builtin var timeout: Option[text] = Option[text]::None\n"
     if "builtin var default-agent" not in config:
         additions += 'builtin var default-agent: Agent = AgentCommand("runner")\n'
+    if "builtin var default-sandbox" not in config:
+        additions += "builtin var default-sandbox: AgentSandbox = Disabled\n"
     if additions:
-        imports = (
-            "" if "std/prelude::{Option" in config else "import std/prelude::{Option, Agent}\n"
-        )
+        # An existing ``import std/prelude::{Option, ...}`` line may not yet
+        # name every symbol a freshly added default needs: extend it in place
+        # rather than adding a second, conflicting import of the same names.
+        if "std/prelude::{Option" in config:
+            config = config.replace(
+                "std/prelude::{Option, Agent}",
+                "std/prelude::{Option, Agent, AgentSandbox}",
+            )
+            imports = ""
+        else:
+            imports = "import std/prelude::{Option, Agent, AgentSandbox}\n"
         config_path.write_text(imports + config + additions, encoding="utf-8")
 
 

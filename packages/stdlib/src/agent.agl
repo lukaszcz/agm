@@ -31,6 +31,7 @@ record AgentRequest
   attempt: int
   previous-error: Option[text]
   metadata: json
+  sandbox: AgentSandbox
 
 builtin
 exception AgentCallError extends Exception
@@ -55,6 +56,7 @@ builtin def ask[T](
   format: text = "",
   strict-json: bool = false,
   on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> T
 builtin def Agent::ask[T](
   self,
@@ -62,6 +64,7 @@ builtin def Agent::ask[T](
   format: text = "",
   strict-json: bool = false,
   on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> T
 builtin def Agent::ask-request[T](
   self,
@@ -69,6 +72,7 @@ builtin def Agent::ask-request[T](
   format: text = "",
   strict-json: bool = false,
   on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest
 builtin def ask-request[T](
   prompt: text,
@@ -76,4 +80,5 @@ builtin def ask-request[T](
   format: text = "",
   strict-json: bool = false,
   on-parse-error: ParsePolicy = ParsePolicy::Abort,
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> AgentRequest

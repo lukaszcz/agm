@@ -1,0 +1,4 @@
+program def main() -> unit =
+
+  let response = ask("question", sandbox = AgentSandbox::Native)
+  print response

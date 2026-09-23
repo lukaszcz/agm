@@ -40,7 +40,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -51,6 +51,7 @@ from agm.agent.session import (
     SessionService,
 )
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.sandbox.request import Default, SandboxLimits
 from tests._agl_helpers import (
     REPO_STDLIB_ROOT,
     agl_roots,
@@ -121,6 +122,23 @@ def _outcome_name(outcome: Any) -> str:
     return str(outcome.get("outcome", "success")) if isinstance(outcome, dict) else str(outcome)
 
 
+class _PromptEvent(NamedTuple):
+    """One recorded prompt observation: everything a scenario's ``prompts[]`` entry checks.
+
+    ``sandbox_mode``/``sandbox_limits`` are the decoded ``PermissionMode``
+    value and ``SandboxLimits`` an ``ask``/``ask-request``-style call's
+    request carried; a plain session ask (``Session::ask``, no such request in
+    hand) records both as ``None``. Recording every field of one observation
+    in a single tuple, appended exactly once per call, makes a schema/mode
+    mismatch between two separately indexed lists structurally impossible.
+    """
+
+    prompt: str
+    schema: Any
+    sandbox_mode: str | None
+    sandbox_limits: SandboxLimits | None
+
+
 @dataclass
 class ScriptedAgent:
     """Replays scripted responses and records ordinary and session prompts.
@@ -128,8 +146,8 @@ class ScriptedAgent:
     ``schemas`` records, alongside each ordinary call's ``prompt``, the
     structured JSON Schema from the output contract for that same call. It is
     separate from ``prompts`` so existing literal-prompt assertions are
-    unaffected. Session observations use deterministic tags, letting scenarios
-    assert conversation identity without depending on host handles.
+    unaffected. Session observations use deterministic tags, letting
+    scenarios assert conversation identity without depending on host handles.
     """
 
     name: str
@@ -140,7 +158,7 @@ class ScriptedAgent:
     session_ask_outcomes: list[Any] | None = None
     prompts: list[str] = field(default_factory=list)
     schemas: list[Any] = field(default_factory=list)
-    prompt_events: list[tuple[str, Any]] = field(default_factory=list)
+    prompt_events: list[_PromptEvent] = field(default_factory=list)
     sessions: list[_ScriptedSession] = field(default_factory=list)
     overflowed: bool = False
     session_operations_overflowed: bool = False
@@ -160,7 +178,9 @@ class ScriptedAgent:
         contract = request.output_contract
         schema = contract.json_schema if contract is not None else None
         self.schemas.append(schema)
-        self.prompt_events.append((request.prompt, schema))
+        self.prompt_events.append(
+            _PromptEvent(request.prompt, schema, request.permission_mode.value, request.sandbox)
+        )
         return self._next_response()
 
     def session_service(self) -> Any:
@@ -505,7 +525,13 @@ class _ScenarioSessionHost:
         content = self.ask(handle, request.prompt)
         service = self._service_for_handle(handle, "ask")
         schema = None if request.output_contract is None else request.output_contract.json_schema
-        service._agent.prompt_events[-1] = (request.prompt, schema)
+        # The underlying session ask (above) recorded a bare prompt event with
+        # no schema/sandbox in hand; this call's full AgentRequest carries
+        # both, so replace that entry with the complete observation in one
+        # write rather than appending to a second, separately indexed list.
+        service._agent.prompt_events[-1] = _PromptEvent(
+            request.prompt, schema, request.permission_mode.value, request.sandbox
+        )
         return AgentResponse(content)
 
     def compact(self, handle: str, instructions: str = "") -> None:
@@ -641,7 +667,7 @@ class _ScriptedSessionBackend:
         from agm.agent.transport import AgentCallInfo
 
         self._session.prompts.append(request.prompt)
-        self._agent.prompt_events.append((request.prompt, None))
+        self._agent.prompt_events.append(_PromptEvent(request.prompt, None, None, None))
         outcome = self._agent._next_session_ask_outcome()
         if isinstance(outcome, dict):
             elapsed = float(outcome.get("elapsed", 0.0))
@@ -1088,16 +1114,64 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
             name = agent_spec
         assert isinstance(name, str)
         prompt_events = agents[name].prompt_events
-        prompts = [prompt for prompt, _schema in prompt_events]
+        prompts = [event.prompt for event in prompt_events]
         call = spec["call"]
         assert call < len(prompts), (
             f"agent {spec['agent']!r} made only {len(prompts)} calls, no call {call}"
         )
         _assert_prompt_text(prompts[call], spec)
-        schema = prompt_events[call][1]
+        event = prompt_events[call]
         for needle in spec.get("schema_contains", []):
-            assert _schema_contains(schema, needle), f"{needle!r} not in schema {schema!r}"
-        _assert_schema_paths(schema, spec.get("schema_paths", []))
+            assert _schema_contains(event.schema, needle), (
+                f"{needle!r} not in schema {event.schema!r}"
+            )
+        _assert_schema_paths(event.schema, spec.get("schema_paths", []))
+        if "sandbox" in spec:
+            _assert_sandbox_expectation(event, spec["sandbox"], name=name, call=call)
+
+
+def _assert_sandbox_expectation(
+    event: _PromptEvent, expected: Any, *, name: str, call: int
+) -> None:
+    """Check a ``prompts[]`` entry's ``sandbox`` expectation against one recorded event.
+
+    *expected* is either the bare permission-mode string (as decoded by
+    ``agent.spec.PermissionMode``), or an object whose ``mode`` key checks the
+    same thing and whose remaining keys (``memory``/``swap``/``patch``/
+    ``settings``) check the decoded ``SandboxLimits`` field by field --
+    ``Default`` compares equal to the JSON string ``"default"``, an absent
+    ``settings_file`` to ``None``, and a present one to its ``str()``.
+    """
+    if isinstance(expected, str):
+        assert event.sandbox_mode == expected, (
+            f"agent {name!r} call {call}: expected permission mode {expected!r}, "
+            f"got {event.sandbox_mode!r}"
+        )
+        return
+    if "mode" in expected:
+        assert event.sandbox_mode == expected["mode"], (
+            f"agent {name!r} call {call}: expected permission mode {expected['mode']!r}, "
+            f"got {event.sandbox_mode!r}"
+        )
+    limit_fields = {"memory", "swap", "patch"}.intersection(expected)
+    if limit_fields or "settings" in expected:
+        limits = event.sandbox_limits
+        assert limits is not None, (
+            f"agent {name!r} call {call}: expected decoded sandbox limits, got none"
+        )
+        for field_name in limit_fields:
+            actual = getattr(limits, field_name)
+            actual = "default" if actual is Default else actual
+            assert actual == expected[field_name], (
+                f"agent {name!r} call {call}: expected sandbox {field_name} "
+                f"{expected[field_name]!r}, got {actual!r}"
+            )
+        if "settings" in expected:
+            actual_settings = None if limits.settings_file is None else str(limits.settings_file)
+            assert actual_settings == expected["settings"], (
+                f"agent {name!r} call {call}: expected sandbox settings "
+                f"{expected['settings']!r}, got {actual_settings!r}"
+            )
 
 
 def _prepare_temp_filesystem(scenario: dict[str, Any], tmp_path: Path) -> dict[str, Any]:
@@ -1789,6 +1863,9 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
             source = source.replace(
                 "  agent: Agent = std/config::default-agent,\n",
                 '  agent: Agent = AgentCommand(command = ""),\n',
+            ).replace(
+                "  sandbox: AgentSandbox = std/config::default-sandbox,\n",
+                "  sandbox: AgentSandbox = Disabled,\n",
             )
         if name == "exec":
             source = source.replace(

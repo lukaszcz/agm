@@ -39,6 +39,7 @@ import types
 from collections.abc import Mapping
 
 __all__ = [
+    "AGENT_SANDBOX_MEMBERS",
     "NO_DECL_ID",
     "RESERVED_NOMINAL_NAMES",
     "RESERVED_NOMINAL_IDS",
@@ -111,12 +112,19 @@ RESERVED_NOMINAL_IDS: Mapping[str, int] = types.MappingProxyType(
     {name: NO_DECL_ID - (index + 1) for index, name in enumerate(RESERVED_NOMINAL_NAMES)}
 )
 
+#: ``AgentSandbox``'s member names, the single source both the engine-config
+#: enum-shape table (``runtime/engine_config.py``) and the value-decode
+#: boundary (``runtime/sandbox_values.py``) resolve members against, so
+#: neither spells the list out itself.
+AGENT_SANDBOX_MEMBERS: tuple[str, ...] = ("Disabled", "Native", "Sandbox")
+
 #: Stable fallback identities for members of host-known enums. This range is
 #: disjoint from parser node ids and the top-level reserved identities, except
-#: for a member that is itself a reference to a standalone reserved record
-#: (enum-record unification: the member's value IS that record's value) —
-#: such a member's entry deliberately aliases that record's own top-level id
-#: instead of minting a fresh one (see ``AgentSandbox``'s ``Sandbox`` below).
+#: for a referenced member — one whose value IS another reserved value's
+#: value, be it a standalone reserved record or another enum's member (enum-
+#: record unification) — whose entry deliberately aliases that other value's
+#: own id instead of minting a fresh one (see ``AgentSandbox``'s ``Sandbox``
+#: below).
 RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType(
     {
         ("ParsePolicy", "Abort"): -1000,
@@ -132,6 +140,13 @@ RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType
         ("SessionTransport", "Cli"): -1040,
         ("SessionTransport", "Rpc"): -1041,
         ("Optional", "Default"): -1050,
+        # Referenced members: ``Optional``'s declaration is
+        # ``Option::Some[T] | Option::None | Default``, so its ``None``/``Some``
+        # values ARE ``Option``'s own values -- alias ``Option``'s reserved ids
+        # rather than minting fresh ones (same rule as ``AgentSandbox::Sandbox``
+        # below).
+        ("Optional", "None"): -1030,
+        ("Optional", "Some"): -1031,
         ("AgentSandbox", "Disabled"): -1060,
         ("AgentSandbox", "Native"): -1061,
         # Referenced member: its value IS the standalone ``Sandbox`` record's
@@ -162,12 +177,14 @@ def require_reserved_enum_member_id(enum_name: str, member_name: str) -> int:
     """Return the stable fallback identity for a host-known enum member.
 
     Looked up by the exact ``(enum_name, member_name)`` pair only. A
-    referenced member (e.g. ``AgentSandbox``'s ``Sandbox``) carries no
-    identity of its own -- its value IS the referenced record's value -- so
-    :data:`RESERVED_ENUM_MEMBER_IDS` lists that one pair explicitly, aliasing
-    the referenced record's own reserved nominal id; there is no generic
+    referenced member (e.g. ``AgentSandbox``'s ``Sandbox``, or ``Optional``'s
+    ``None``/``Some``) carries no identity of its own -- its value IS a
+    standalone reserved record's value, or another enum's member's value --
+    so :data:`RESERVED_ENUM_MEMBER_IDS` lists that one pair explicitly,
+    aliasing the referenced value's own reserved id; there is no generic
     name-keyed fallback, since any *member_name* that happened to match some
-    other reserved type name would silently alias that unrelated type.
+    other reserved type or member name would silently alias that unrelated
+    value.
     """
     member_id = RESERVED_ENUM_MEMBER_IDS.get((enum_name, member_name))
     assert member_id is not None, (

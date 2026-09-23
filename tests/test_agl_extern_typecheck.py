@@ -90,6 +90,7 @@ _ASK_BUILTIN_SOURCE = (
     '  format: text = "",\n'
     "  strict-json: bool = false,\n"
     "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
+    "  sandbox: AgentSandbox = Disabled,\n"
     ") -> T\n"
 )
 

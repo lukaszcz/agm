@@ -3925,6 +3925,78 @@ class TestFuncDef:
     def test_direct_recursive_candidate_does_not_hide_concrete_body_errors(self) -> None:
         reject_type("def f(n: int) = if n == 0 => 0 else => f(n - 1) + true")
 
+    @pytest.mark.parametrize(
+        ("condition_position", "source"),
+        (
+            (
+                "if",
+                "def f[T](a: T, n: int) = if n == 0 => true else => g(a, n - 1)\n"
+                "def g[T](a: T, n: int) = "
+                "if n == 0 => true else => (if f(a, n - 1) => true else => false)\n"
+                "f(1, 3)",
+            ),
+            (
+                "while",
+                "def f[T](a: T, n: int) =\n"
+                "  var i = n\n"
+                "  while g(a, i) do\n"
+                "    i := i - 1\n"
+                "  done\n"
+                "  true\n"
+                "def g[T](a: T, n: int) = if n == 0 => true else => f(a, n - 1)\n"
+                "f(1, 3)",
+            ),
+            (
+                "until",
+                "def f[T](a: T, n: int) =\n"
+                "  var i = n\n"
+                "  do\n"
+                "    i := i - 1\n"
+                "  until g(a, i)\n"
+                "  true\n"
+                "def g[T](a: T, n: int) = if n == 0 => true else => f(a, n - 1)\n"
+                "f(1, 3)",
+            ),
+            (
+                "not",
+                "def f[T](a: T, n: int) = if n == 0 => true else => not g(a, n - 1)\n"
+                "def g[T](a: T, n: int) = if n == 0 => false else => not f(a, n - 1)\n"
+                "f(1, 3)",
+            ),
+            (
+                "and",
+                "def f[T](a: T, n: int) = if n == 0 => true else => (g(a, n - 1) and true)\n"
+                "def g[T](a: T, n: int) = if n == 0 => false else => (f(a, n - 1) and false)\n"
+                "f(1, 3)",
+            ),
+            (
+                "or",
+                "def f[T](a: T, n: int) = if n == 0 => true else => (g(a, n - 1) or false)\n"
+                "def g[T](a: T, n: int) = if n == 0 => false else => (f(a, n - 1) or true)\n"
+                "f(1, 3)",
+            ),
+        ),
+    )
+    def test_generic_mutual_recursion_condition_position_defers_during_candidate_inference(
+        self, condition_position: str, source: str
+    ) -> None:
+        """A bool-typed position consuming a still-unresolved candidate result
+        must defer like any other candidate operation, not reject the
+        inference variable outright."""
+        checked = accept_type(source)
+
+        assert checked.function_signatures["f"].result == BoolType()
+
+    def test_generic_mutual_recursion_if_condition_does_not_hide_concrete_type_errors(
+        self,
+    ) -> None:
+        reject_type(
+            "def f[T](a: T, n: int) = if n == 0 => 0 else => g(a, n - 1)\n"
+            "def g[T](a: T, n: int) = "
+            "if n == 0 => 0 else => (if f(a, n - 1) => 0 else => 1)\n"
+            "g"
+        )
+
     def test_candidate_artifacts_are_discarded_before_authoritative_publication(self) -> None:
         checked = accept_type(
             "def recurse(n: int) =\n"

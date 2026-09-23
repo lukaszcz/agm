@@ -1,0 +1,39 @@
+# Generic mutual/self recursion whose candidate return type is still an
+# unresolved inference variable when it is consumed directly by an `if`,
+# `while`, or `do...until` condition (not wrapped by `not`/`and`/`or`, which
+# already defer). Regression for the `if` shape: candidate inference used to
+# reject the inference variable outright instead of deferring like every
+# other bool-position operation.
+def is-even[T](a: T, n: int) = if n == 0 => true else => is-odd(a, n - 1)
+
+def is-odd[T](a: T, n: int) =
+  if n == 0 => false else => (if is-even(a, n - 1) => true else => false)
+
+# Self-recursive (probed guards against unbounded recursion): each calls
+# itself once with its own still-unresolved candidate result feeding the
+# loop condition directly.
+def is-positive[T](a: T, k: int, probed: bool) =
+  if probed => k > 0 else => is-positive(a, k, true)
+
+def is-nonpositive[T](a: T, k: int, probed: bool) =
+  if probed => k <= 0 else => is-nonpositive(a, k, true)
+
+def count-down-while-positive[T](a: T, n: int) =
+  var i = n
+  while is-positive(a, i, false) do
+    i := i - 1
+  done
+  i
+
+def count-up-until-nonpositive[T](a: T, target: int) =
+  var i = 0
+  do
+    i := i + 1
+  until is-nonpositive(a, target - i, false)
+  i
+
+program def main(mode: text, n: int) -> unit =
+  if
+    | mode == "if" => print(is-even(1, n))
+    | mode == "while" => print(count-down-while-positive(1, n))
+    | else => print(count-up-until-nonpositive(1, n))

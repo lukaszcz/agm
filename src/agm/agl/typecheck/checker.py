@@ -6653,6 +6653,8 @@ class _Checker:
     # ------------------------------------------------------------------
 
     def _require_bool_condition(self, cond_type: Type, span: SourceSpan, kw: str) -> None:
+        if self._candidate_operation_can_defer((cond_type,), (BoolType,)):
+            return
         if not self._is_type_or_bottom(cond_type, BoolType):
             raise AglTypeError(
                 f"'{kw}' condition must be bool; got '{cond_type!r}'.",

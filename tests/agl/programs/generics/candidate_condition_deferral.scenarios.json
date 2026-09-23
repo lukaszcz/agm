@@ -1,0 +1,81 @@
+{
+  "scenarios": [
+    {
+      "name": "if_condition_mutual_recursion_even",
+      "params": {
+        "mode": "if",
+        "n": 0
+      },
+      "expect": {
+        "stdout": "true\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "if_condition_mutual_recursion_odd",
+      "params": {
+        "mode": "if",
+        "n": 1
+      },
+      "expect": {
+        "stdout": "false\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "if_condition_mutual_recursion_even_deeper",
+      "params": {
+        "mode": "if",
+        "n": 4
+      },
+      "expect": {
+        "stdout": "true\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "while_condition_self_recursion_counts_down_to_zero",
+      "params": {
+        "mode": "while",
+        "n": 3
+      },
+      "expect": {
+        "stdout": "0\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "while_condition_self_recursion_negative_start_is_unchanged",
+      "params": {
+        "mode": "while",
+        "n": -3
+      },
+      "expect": {
+        "stdout": "-3\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "until_condition_self_recursion_counts_up_to_target",
+      "params": {
+        "mode": "until",
+        "n": 3
+      },
+      "expect": {
+        "stdout": "3\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "until_condition_self_recursion_nonpositive_target_floors_at_one",
+      "params": {
+        "mode": "until",
+        "n": -1
+      },
+      "expect": {
+        "stdout": "1\n",
+        "calls": {}
+      }
+    }
+  ]
+}

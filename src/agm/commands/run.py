@@ -162,6 +162,9 @@ def run(args: RunArgs) -> None:
     request = SandboxRequest(
         command=effective_run_command,
         cwd=current,
+        # `agm run` has no separate per-call working directory: the command
+        # runs in, and sandbox configuration resolves from, the same place.
+        config_cwd=current,
         env=resolved_env,
         home=context.home,
         proj_dir=context.proj_dir,

@@ -96,13 +96,17 @@ class SandboxContext:
         The one place a caller's `command`/`spec` maps onto this context's
         ambient fields and `run_config` threads through to `prepare()`, so a
         caller never hand-maps `SandboxRequest`'s fields itself. *cwd*
-        overrides this context's own `cwd` for the one call (`exec`'s
-        per-call working directory); omitted, the request runs in this
-        context's `cwd`.
+        overrides this context's own `cwd` for the one call -- the working
+        directory the command runs in (`exec`'s per-call `cwd` operand) --
+        but never the directory sandbox configuration resolves from: that
+        stays this context's own `cwd` (`SandboxRequest.config_cwd`)
+        regardless of *cwd*, so a per-call working directory can never supply
+        the settings that confine the command running in it.
         """
         request = SandboxRequest(
             command=command,
             cwd=self.cwd if cwd is None else cwd,
+            config_cwd=self.cwd,
             env=dict(env),
             home=self.home,
             proj_dir=self.proj_dir,

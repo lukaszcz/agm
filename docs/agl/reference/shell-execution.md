@@ -49,9 +49,10 @@ exec(
 `env` is the complete environment given to the shell; it replaces rather than
 merges with the AGM process environment. The default is the startup ambient
 `std/env::environ` snapshot. Use `environ.extended(overrides)` when a command
-needs an explicit overlay. `cwd` is an optional working directory and `timeout`
-is an optional idle timeout duration. The single-argument sugar below supplies
-only the command, so it uses all four defaults.
+needs an explicit overlay. `cwd` is an optional working directory the command
+runs in; it never affects which sandbox configuration applies (see `sandbox`
+below). `timeout` is an optional idle timeout duration. The single-argument
+sugar below supplies only the command, so it uses all four defaults.
 
 `sandbox` selects the command's sandboxing, a `Sandbox` record
 ([Types](types.md#sandbox)) naming resource limits, or `None` (the default)
@@ -68,8 +69,10 @@ resource limits, selecting settings by the command's **first shell word** —
 `"make test"` selects settings named for `make`, never for `sh`, the shell
 `exec` itself runs the command under. A command whose first word cannot be
 determined (for example, an empty or unsplittable command) selects the
-unqualified default settings. A sandbox preparation failure raises
-`ExecError` exactly like a spawn failure.
+unqualified default settings. Sandbox configuration is resolved from the
+host's own location, never from `cwd`: a command run against a directory
+supplied at the call site cannot supply the settings that confine it. A
+sandbox preparation failure raises `ExecError` exactly like a spawn failure.
 
 `Sandbox`'s `memory` and `swap` fields ([Types](types.md#sandbox)) are each
 `Optional[text]` with three states: `Default` (the field's own default)

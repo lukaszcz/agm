@@ -51,7 +51,7 @@ class SrtBackend:
 
     def settings_candidates(self, request: SandboxRequest) -> list[Path]:
         return sandbox_settings_candidates(
-            cwd=request.cwd,
+            cwd=request.config_cwd,
             home=request.home,
             proj_dir=request.proj_dir,
             command_name=request.spec.profile_name,

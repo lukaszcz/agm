@@ -713,14 +713,23 @@ def run(
         config_trace_file=config_trace_file,
     )
 
-    factory = value_driven_agent_factory(idle_timeout=resolved_timeout, context=ctx)
-    session_host = create_agl_session_host(idle_timeout=resolved_timeout, context=ctx)
+    # Built once and shared by every sandboxing consumer this invocation
+    # dispatches through -- the agent factory, the session host, and the
+    # execution services -- so they all resolve sandbox configuration from
+    # the same `SandboxContext` and the `[run.*]` config loads at most once.
+    get_sandbox_context = lazy_sandbox_context(ctx)
+    factory = value_driven_agent_factory(
+        idle_timeout=resolved_timeout, get_sandbox_context=get_sandbox_context
+    )
+    session_host = create_agl_session_host(
+        idle_timeout=resolved_timeout, get_sandbox_context=get_sandbox_context
+    )
     runtime.configure_execution_services(
         default_strict_json=resolved_strict_json,
         agent_dispatcher=factory,
         session_host=session_host,
         shell_exec_timeout=resolved_timeout,
-        get_sandbox_context=lazy_sandbox_context(ctx),
+        get_sandbox_context=get_sandbox_context,
     )
 
     # Resolve + validate the trace log file up front.  --dry-run is

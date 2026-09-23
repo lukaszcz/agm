@@ -559,9 +559,8 @@ class TestRetryRecords:
         sandbox change actually produces for the default (``Sandbox``) mode.
         """
         from agm.agl.runtime.agents import value_driven_agent_factory
-        from agm.config.context import ConfigContext
         from agm.core.process import CapturedOutput, ProcessCaptureResult
-        from tests._agl_helpers import write_sandbox_home
+        from tests._agl_helpers import session_sandbox_context, write_sandbox_home
 
         trace_path = tmp_path / "trace.jsonl"
         home = tmp_path / "home"
@@ -582,7 +581,7 @@ class TestRetryRecords:
 
         runtime = PipelineDriver(
             agent_dispatcher=value_driven_agent_factory(
-                idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+                idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
             ),
             get_sandbox_context=None,
         )
@@ -605,8 +604,8 @@ class TestRetryRecords:
         """Same real-dispatch proof, for ``AgentSandbox::Native``: unsandboxed,
         each agent's own don't-ask permission mode."""
         from agm.agl.runtime.agents import value_driven_agent_factory
-        from agm.config.context import ConfigContext
         from agm.core.process import CapturedOutput, ProcessCaptureResult
+        from tests._agl_helpers import session_sandbox_context
 
         trace_path = tmp_path / "trace.jsonl"
         home = tmp_path / "home"
@@ -625,7 +624,7 @@ class TestRetryRecords:
 
         runtime = PipelineDriver(
             agent_dispatcher=value_driven_agent_factory(
-                idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+                idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
             ),
             get_sandbox_context=None,
         )

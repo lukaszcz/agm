@@ -77,6 +77,7 @@ def _request(
     pty: bool = False,
     sandboxed: bool = True,
     proj_dir: Path | None = None,
+    config_cwd: Path | None = None,
 ) -> SandboxRequest:
     home = tmp_path / "home"
     cwd = tmp_path / "work"
@@ -85,6 +86,7 @@ def _request(
     return SandboxRequest(
         command=["echo", "hi"],
         cwd=cwd,
+        config_cwd=cwd if config_cwd is None else config_cwd,
         env={"HOME": str(home), "PATH": "/bin"},
         home=home,
         proj_dir=proj_dir,
@@ -894,6 +896,7 @@ class TestNodeUseEnvProxy:
         request = SandboxRequest(
             command=["echo", "hi"],
             cwd=cwd,
+            config_cwd=cwd,
             env={"HOME": str(home), "PATH": "/bin", "NODE_USE_ENV_PROXY": "0"},
             home=home,
             proj_dir=None,
@@ -1127,6 +1130,43 @@ class TestSrtBackendDirect:
 
         resolved = SRT_BACKEND.resolve_settings(request)
         assert resolved.path == candidates[-1]
+
+    def test_resolve_settings_uses_config_cwd_not_the_per_call_cwd(self, tmp_path: Path) -> None:
+        """A `.sandbox/<name>.json` at the per-call `cwd` is never a candidate,
+        and never merges into the resolved settings: only `config_cwd` -- the
+        host `SandboxContext`'s own directory -- is searched. Proves `cwd` and
+        `config_cwd` are independent: a directory a command merely runs in
+        cannot supply the settings that confine it."""
+        home = tmp_path / "home"
+        call_cwd = tmp_path / "data"
+        config_cwd = tmp_path / "context"
+        home.mkdir(parents=True)
+        call_cwd.mkdir(parents=True)
+        config_cwd.mkdir(parents=True)
+        (home / ".agm" / "sandbox").mkdir(parents=True)
+        (call_cwd / ".sandbox").mkdir()
+        (call_cwd / ".sandbox" / "echo.json").write_text(
+            json.dumps({"network": {"allowedDomains": ["evil.example"]}})
+        )
+        (config_cwd / ".sandbox").mkdir()
+        (config_cwd / ".sandbox" / "echo.json").write_text("{}", encoding="utf-8")
+
+        request = SandboxRequest(
+            command=["echo", "hi"],
+            cwd=call_cwd,
+            config_cwd=config_cwd,
+            env={"HOME": str(home), "PATH": "/bin"},
+            home=home,
+            proj_dir=None,
+            spec=SandboxSpec(profile_name="echo"),
+        )
+
+        candidates = SRT_BACKEND.settings_candidates(request)
+        assert call_cwd / ".sandbox" / "echo.json" not in candidates
+        assert candidates[-1] == config_cwd / ".sandbox" / "echo.json"
+
+        resolved = SRT_BACKEND.resolve_settings(request)
+        assert resolved.path == config_cwd / ".sandbox" / "echo.json"
 
 
 class TestAliasDrivenSettings:

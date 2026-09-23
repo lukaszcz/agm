@@ -28,7 +28,7 @@ from agm.agl.runtime.request import AgentRequest
 from agm.agl.runtime.sessions import SessionAskError as AglSessionAskError
 from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
 from agm.sandbox.request import SandboxLimits
-from tests._agl_helpers import hermetic_config_context
+from tests._agl_helpers import hermetic_get_sandbox_context
 
 
 @dataclass
@@ -158,7 +158,9 @@ def test_production_session_host_selects_and_rejects_transports(
     monkeypatch.setattr(
         PiRpcSessionBackend, "_start", lambda self, _agent, _operation, name="": None
     )
-    host = create_agl_session_host(idle_timeout=1.0, context=hermetic_config_context())
+    host = create_agl_session_host(
+        idle_timeout=1.0, get_sandbox_context=hermetic_get_sandbox_context()
+    )
     pi = AgentPi(provider="provider", model="model", thinking="think")
     handle = host.open(pi, "Rpc")
     host.close(handle)

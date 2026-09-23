@@ -662,6 +662,15 @@ def hermetic_config_context() -> ConfigContext:
     return ConfigContext(home=home, proj_dir=None, cwd=home)
 
 
+def hermetic_get_sandbox_context() -> Callable[[], SandboxContext]:
+    """A `get_sandbox_context` built from `hermetic_config_context()`.
+
+    For `value_driven_agent_factory`/`create_agl_session_host`, which take the
+    callable directly rather than a `ConfigContext`.
+    """
+    return lazy_sandbox_context(hermetic_config_context())
+
+
 def unavailable_sandbox_context() -> SandboxContext:
     """A ``get_sandbox_context`` stand-in for a session backend test that never
     dispatches a sandboxed call.

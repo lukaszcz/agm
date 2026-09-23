@@ -2015,6 +2015,81 @@ class TestExecConfigWiring:
         get_sandbox_context = cast("Callable[[], SandboxContext]", captured["get_sandbox_context"])
         assert isinstance(get_sandbox_context(), SandboxContext)
 
+    def test_run_shares_one_sandbox_context_across_agent_session_and_exec(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``exec_command.run`` builds exactly one ``get_sandbox_context`` callable
+        and passes the SAME one to ``value_driven_agent_factory``,
+        ``create_agl_session_host``, and ``configure_execution_services`` -- never
+        a separate one per consumer, so they agree on where sandbox
+        configuration resolves from and the `[run.*]` config loads at most once."""
+        from collections.abc import Callable
+
+        from agm.sandbox.prepare import SandboxContext
+
+        real_factory = exec_engine.value_driven_agent_factory
+        real_session_host = exec_engine.create_agl_session_host
+        captured: dict[str, object] = {}
+
+        def factory_spy(
+            *, idle_timeout: float | None, get_sandbox_context: Callable[[], SandboxContext]
+        ) -> object:
+            captured["agent"] = get_sandbox_context
+            return real_factory(idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context)
+
+        def session_host_spy(
+            *, idle_timeout: float | None, get_sandbox_context: Callable[[], SandboxContext]
+        ) -> object:
+            captured["session"] = get_sandbox_context
+            return real_session_host(
+                idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context
+            )
+
+        monkeypatch.setattr(exec_engine, "value_driven_agent_factory", factory_spy)
+        monkeypatch.setattr(exec_engine, "create_agl_session_host", session_host_spy)
+        runtime_captured = _spy_runtime(monkeypatch)
+
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+
+        args = ExecArgs(
+            file=str(agl_file),
+            argument_tokens=[],
+            strict_json=None,
+            no_trace=False,
+            trace_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert captured["agent"] is captured["session"] is runtime_captured["get_sandbox_context"]
+
+    def test_no_sandboxed_call_never_builds_the_shared_sandbox_context(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A program that dispatches no sandboxed agent, session, or ``exec``
+        call never invokes the ``get_sandbox_context`` shared across all three
+        consumers, so it performs no ``[run.*]`` config I/O -- the laziness
+        ``lazy_sandbox_context`` promises survives sharing one callable
+        across consumers instead of each building its own."""
+
+        def raising_get_sandbox_context() -> object:
+            raise AssertionError("sandbox context requested unexpectedly")
+
+        monkeypatch.setattr(
+            exec_engine, "lazy_sandbox_context", lambda _ctx: raising_get_sandbox_context
+        )
+
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+
+        args = ExecArgs(
+            file=str(agl_file),
+            argument_tokens=[],
+            strict_json=None,
+            no_trace=False,
+            trace_file=None,
+        )
+        assert exec_command.run(args) is None
+
     def test_cli_strict_json_overrides_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

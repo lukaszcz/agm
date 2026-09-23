@@ -16,6 +16,7 @@ real agent runs in these tests.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -25,8 +26,8 @@ import agm.commands.exec as exec_command
 from agm.cli_support.args import CheckArgs, ExecArgs
 from agm.commands import check as check_command
 from agm.commands import exec_program as exec_engine
-from agm.config.context import ConfigContext
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.sandbox.prepare import SandboxContext
 from tests._agl_helpers import write_file_program
 from tests._package_helpers import install_directory
 from tests.test_cli_registered_commands import invoke
@@ -220,13 +221,19 @@ class TestConfigTimeoutReachesEveryTimeoutConsumer:
         real_factory = exec_engine.value_driven_agent_factory
         real_session_host = exec_engine.create_agl_session_host
 
-        def factory_spy(*, idle_timeout: float | None, context: ConfigContext) -> object:
+        def factory_spy(
+            *, idle_timeout: float | None, get_sandbox_context: Callable[[], SandboxContext]
+        ) -> object:
             captured["agent_idle_timeout"] = idle_timeout
-            return real_factory(idle_timeout=idle_timeout, context=context)
+            return real_factory(idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context)
 
-        def session_host_spy(*, idle_timeout: float | None, context: ConfigContext) -> object:
+        def session_host_spy(
+            *, idle_timeout: float | None, get_sandbox_context: Callable[[], SandboxContext]
+        ) -> object:
             captured["session_idle_timeout"] = idle_timeout
-            return real_session_host(idle_timeout=idle_timeout, context=context)
+            return real_session_host(
+                idle_timeout=idle_timeout, get_sandbox_context=get_sandbox_context
+            )
 
         monkeypatch.setattr(exec_engine, "value_driven_agent_factory", factory_spy)
         monkeypatch.setattr(exec_engine, "create_agl_session_host", session_host_spy)

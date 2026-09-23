@@ -994,6 +994,52 @@ def test_sandboxed_exec_forwards_prepared_env_cwd_and_interrupt_cleanup_cmd(
     assert call.interrupt_cleanup_cmd == ["systemctl", "--user", "--no-block", "stop", unit_name]
 
 
+def test_sandboxed_exec_cwd_never_selects_sandbox_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``exec``'s ``cwd`` operand sets only the working directory the command
+    runs in. A ``.sandbox/<name>.json`` at that directory is never a settings
+    candidate -- only the host ``SandboxContext``'s own directory (here,
+    ``home``) is -- so the directory a call operates on can never supply the
+    settings that confine it."""
+    monkeypatch.chdir(tmp_path)
+    home = tmp_path / "home"
+    write_sandbox_home(home, extra_settings_files=("echo",))
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    call_site_sandbox = work_dir / ".sandbox"
+    call_site_sandbox.mkdir()
+    (call_site_sandbox / "echo.json").write_text("{}", encoding="utf-8")
+
+    source = (
+        'let result: text = exec("echo hi", '
+        f'cwd = Option[text]::Some(value = "{work_dir}"), '
+        "sandbox = Some(Sandbox()))\n"
+        "result"
+    )
+    commands = {"echo hi": _ok("hi\n")}
+    argv_log: list[list[str]] = []
+    call_log: list[ScriptedShellCall] = []
+    ir = evaluate_ir_with_shell(
+        source,
+        commands,
+        argv_log=argv_log,
+        call_log=call_log,
+        get_sandbox_context=session_sandbox_context(home),
+    )
+    from agm.agl.semantics.values import TextValue
+
+    assert ir["result"] == TextValue("hi")
+    argv = argv_log[0]
+    srt_index = argv.index("srt")
+    # Settings resolve from the host context's own directory (a single
+    # candidate found there, never merged with `work_dir/.sandbox/echo.json`)...
+    assert argv[srt_index + 2] == str(home / ".agm" / "sandbox" / "echo.json")
+    # ...while the command still runs in the per-call `cwd`.
+    assert call_log[0].cwd == work_dir
+
+
 def _spy_prepared_close(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     """Record every ``PreparedSandboxCommand.close()`` call across this test."""
     from agm.sandbox.request import PreparedSandboxCommand

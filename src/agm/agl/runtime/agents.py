@@ -16,8 +16,7 @@ from agm.sandbox.request import PreparedSandboxCommand
 if TYPE_CHECKING:
     from agm.agent.runner import PromptDelivery
     from agm.agent.spec import AgentSpec
-    from agm.config.context import ConfigContext
-    from agm.sandbox.prepare import SandboxRun
+    from agm.sandbox.prepare import SandboxContext, SandboxRun
 
 AgentFn = Callable[[AgentRequest], AgentResponse | str]
 
@@ -144,19 +143,18 @@ def _text_field(value: RecordValue, name: str) -> str:
     return field.value
 
 
-def value_driven_agent_factory(*, idle_timeout: float | None, context: "ConfigContext") -> AgentFn:
+def value_driven_agent_factory(
+    *, idle_timeout: float | None, get_sandbox_context: "Callable[[], SandboxContext]"
+) -> AgentFn:
     """Return a dispatcher which builds an invocation from ``request.agent``.
 
-    Builds one `SandboxContext` from *context* lazily -- on the first
-    dispatch that actually needs it (home, proj dir, cwd, and the loaded
-    `[run.*]` config) -- and reuses it for every later call this dispatcher
-    makes, so an agent-free program, or one whose every call runs
-    unsandboxed, never pays for that config I/O, while a sandboxed call
-    still resolves it only once per factory.
+    *get_sandbox_context* is a lazily-caching `SandboxContext` builder (see
+    `sandbox.prepare.lazy_sandbox_context`); the host passes in one shared
+    callable so this factory, `create_agl_session_host`, and the execution
+    services all resolve sandbox configuration from the same context, and an
+    agent-free program, or one whose every call runs unsandboxed, never pays
+    for that config I/O.
     """
-    from agm.sandbox.prepare import lazy_sandbox_context
-
-    get_sandbox_context = lazy_sandbox_context(context)
 
     def dispatch(request: AgentRequest) -> AgentResponse:
         from agm.sandbox.prepare import sandbox_run_for

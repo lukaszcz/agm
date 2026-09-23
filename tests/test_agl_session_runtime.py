@@ -36,7 +36,7 @@ from agm.agl.runtime.sessions import (
     with_ephemeral_session,
 )
 from agm.sandbox.request import SandboxLimits
-from tests._agl_helpers import hermetic_config_context
+from tests._agl_helpers import hermetic_get_sandbox_context
 
 
 @dataclass
@@ -978,7 +978,9 @@ def test_production_session_host_carries_the_stream_decode_offset(
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    host = create_agl_session_host(idle_timeout=None, context=hermetic_config_context())
+    host = create_agl_session_host(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
     # This test targets the decode-offset diagnostic, not sandbox preparation, so
     # it seeds ``Disabled`` explicitly rather than exercising the default sandbox.
     result = PipelineDriver(session_host=host, get_sandbox_context=None).run(

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.request import AgentRequest, AgentResponse
     from agm.agl.runtime.sessions import SessionSnapshot
     from agm.agl.runtime.sessions import SessionStats as AglSessionStats
-    from agm.config.context import ConfigContext
+    from agm.sandbox.prepare import SandboxContext
     from agm.sandbox.request import SandboxLimits
 
 from agm.agent.session.protocol import (
@@ -308,21 +308,19 @@ class AglSessionHost:
 
 
 def create_agl_session_host(
-    *, idle_timeout: float | None, context: "ConfigContext"
+    *, idle_timeout: float | None, get_sandbox_context: "Callable[[], SandboxContext]"
 ) -> AglSessionHost:
     """Create the production AgL session host with transport-aware backends.
 
-    *context* builds the `SandboxContext` every session backend needs to
-    prepare a sandboxed process, lazily (see `sandbox.prepare.lazy_sandbox_context`)
-    so a run that opens no sandboxed session never pays for the `[run.*]`
-    config load.
+    *get_sandbox_context* is the `SandboxContext` builder every session
+    backend needs to prepare a sandboxed process (see
+    `sandbox.prepare.lazy_sandbox_context`); the host passes in one shared
+    callable so this host, `value_driven_agent_factory`, and the execution
+    services all resolve sandbox configuration from the same context.
     """
     from agm.agent.session.cli_adapters import CLI_SESSION_BACKENDS
     from agm.agent.session.rpc import PiRpcSessionBackend
     from agm.agent.spec import AgentPi
-    from agm.sandbox.prepare import lazy_sandbox_context
-
-    get_sandbox_context = lazy_sandbox_context(context)
 
     def backend_for(agent: object, transport: str) -> SessionBackend:
         if transport == "rpc":

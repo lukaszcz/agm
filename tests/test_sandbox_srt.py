@@ -54,6 +54,7 @@ def test_prepare_merges_patches_and_cleans_tracked_artifacts(tmp_path: Path) -> 
     request = SandboxRequest(
         command=["echo", "hi"],
         cwd=work,
+        config_cwd=work,
         env={"HOME": str(home), "PATH": "/bin"},
         home=home,
         proj_dir=proj_dir,
@@ -99,6 +100,7 @@ def test_prepare_injects_node_use_env_proxy_when_absent(tmp_path: Path) -> None:
     request = SandboxRequest(
         command=["echo", "hi"],
         cwd=work,
+        config_cwd=work,
         env={"HOME": str(home), "PATH": "/bin"},
         home=home,
         proj_dir=None,
@@ -124,6 +126,7 @@ def test_prepare_preserves_existing_node_use_env_proxy(tmp_path: Path) -> None:
     request = SandboxRequest(
         command=["echo", "hi"],
         cwd=work,
+        config_cwd=work,
         env={"HOME": str(home), "PATH": "/bin", "NODE_USE_ENV_PROXY": "0"},
         home=home,
         proj_dir=None,

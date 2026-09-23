@@ -20,8 +20,9 @@ from agm.agl.semantics.types import TextType
 from agm.config.context import ConfigContext
 from tests._agl_helpers import (
     agent_value,
-    hermetic_config_context,
+    hermetic_get_sandbox_context,
     run_inline_command,
+    session_sandbox_context,
     write_sandbox_home,
 )
 from tests.conftest import FakeAgentTransport
@@ -111,7 +112,7 @@ def test_ask_dispatches_each_agent_value_under_disabled_sandbox(
     fake_agent_transport.queue(fake_agent_transport.success("ok"))
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -175,7 +176,7 @@ def test_ask_dispatches_each_agent_value_selects_each_spec_permission_flag(
     fake_agent_transport.queue(fake_agent_transport.success("ok"))
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -239,7 +240,7 @@ def test_disabled_and_native_sandbox_modes_never_wrap_the_argv(
 
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -298,7 +299,7 @@ def test_ask_dispatches_claude_and_codex_under_native_sandbox_mode(
     fake_agent_transport.queue(fake_agent_transport.success("ok"))
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -327,7 +328,7 @@ def test_agent_transport_failures_become_typed_errors(
     )
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -362,7 +363,7 @@ def test_undecodable_agent_stdout_becomes_a_protocol_failure(
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -394,7 +395,7 @@ def test_caught_agent_call_error_keeps_static_agent_encoding_when_raised_later(
     )
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -420,7 +421,7 @@ def test_user_exception_enum_field_keeps_slot_encoding_after_storage_and_reraise
     """User exception provenance is nominal-keyed, not reserved for host errors."""
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -451,7 +452,7 @@ def test_nonzero_exit_message_includes_the_exit_code(
     )
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -473,7 +474,9 @@ def test_composed_prompt_is_unchanged_when_no_output_contract(
     """No contract, no retry: the prompt sent is exactly the request's prompt."""
     from agm.agl.runtime.request import AgentRequest
 
-    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
     agent = AgentCommand(command="runner")
 
     dispatch(AgentRequest(agent=agent, prompt="Do X."))
@@ -487,7 +490,9 @@ def test_composed_prompt_appends_format_instructions_after_the_prompt(
     from agm.agl.runtime.contract import TypelessOutputContract
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
-    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
     agent = AgentCommand(command="runner")
     contract = TypelessOutputContract(
         target_type="int",
@@ -514,7 +519,9 @@ def test_composed_prompt_omits_format_instructions_when_the_contract_has_none(
     from agm.agl.runtime.contract import TypelessOutputContract
     from agm.agl.runtime.request import AgentRequest
 
-    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
     agent = AgentCommand(command="runner")
     contract = TypelessOutputContract(
         target_type="text",
@@ -535,7 +542,9 @@ def test_composed_prompt_includes_retry_feedback_on_a_retry_attempt(
     """A retry (attempt >= 1) appends the previous output and validation errors."""
     from agm.agl.runtime.request import AgentRequest, ValidationError, compose_agent_prompt
 
-    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
     agent = AgentCommand(command="runner")
 
     request = AgentRequest(
@@ -564,7 +573,9 @@ def test_composed_prompt_has_no_retry_feedback_on_the_first_attempt(
 ) -> None:
     from agm.agl.runtime.request import AgentRequest
 
-    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
     agent = AgentCommand(command="runner")
 
     dispatch(AgentRequest(agent=agent, prompt="Do X.", attempt=0))
@@ -580,7 +591,9 @@ def test_composed_prompt_orders_format_instructions_before_retry_feedback(
     from agm.agl.runtime.contract import TypelessOutputContract
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
-    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
     agent = AgentCommand(command="runner")
     contract = TypelessOutputContract(
         target_type="int",
@@ -629,7 +642,9 @@ def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.Monk
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
 
     agent = AgentCodex(model="o3", thinking="high")
-    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
 
     response = dispatch(AgentRequest(agent=agent, prompt="hello"))
 
@@ -672,7 +687,7 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
     result = run_inline_command(
         PipelineDriver(
             agent_dispatcher=value_driven_agent_factory(
-                idle_timeout=None, context=hermetic_config_context()
+                idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
             ),
             get_sandbox_context=None,
         ),
@@ -694,7 +709,9 @@ def test_unresolvable_command_hole_becomes_a_typed_error() -> None:
     from agm.agl.runtime.request import AgentRequest
 
     agent = AgentCommand(command="runner --flag=%{AGM_NO_SUCH_VARIABLE}")
-    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
+    )
 
     with pytest.raises(AgentCallHostError) as exc_info:
         dispatch(AgentRequest(agent=agent, prompt="hello"))
@@ -706,7 +723,7 @@ def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
     """`\\%{` in AgL source passes the hole through for the host to resolve."""
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -726,7 +743,7 @@ def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
 def test_invalid_agent_value_becomes_typed_error() -> None:
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=hermetic_config_context()
+            idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
         ),
         get_sandbox_context=None,
     )
@@ -839,7 +856,7 @@ def test_default_sandbox_mode_wraps_the_argv_and_honours_run_config_memory(
 
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+            idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
         ),
         get_sandbox_context=None,
     )
@@ -882,7 +899,7 @@ def test_interpolated_agent_command_sandboxes_under_the_real_executable(
 
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+            idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
         ),
         get_sandbox_context=None,
     )
@@ -922,7 +939,7 @@ def test_agent_call_info_argv_is_the_wrapped_argv(
     )
 
     dispatch = value_driven_agent_factory(
-        idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+        idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
     )
 
     response = dispatch(
@@ -941,13 +958,16 @@ def test_agent_call_info_argv_is_the_wrapped_argv(
     assert call_info.sandboxed is True
 
 
-def test_sandbox_context_is_built_at_most_once_per_factory(
+def test_sandbox_context_is_built_at_most_once_per_get_sandbox_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The `[run.*]` config load behind a factory's `SandboxContext` runs at
-    most once no matter how many sandboxed calls the factory dispatches, and
-    never runs at all for a factory that dispatches no agent call."""
+    """The `[run.*]` config load behind a `get_sandbox_context` callable runs
+    at most once no matter how many sandboxed calls dispatch through it --
+    including across every factory built from the same callable, the sharing
+    `agm exec`/`agm repl` rely on -- and never runs at all when nothing
+    dispatches through it."""
     from agm.config import general as config_general
+    from agm.sandbox.prepare import lazy_sandbox_context
 
     home = tmp_path / "home"
     write_sandbox_home(home)
@@ -963,14 +983,16 @@ def test_sandbox_context_is_built_at_most_once_per_factory(
 
     monkeypatch.setattr(config_general, "load_run_config", counting_load_run_config)
 
-    context = ConfigContext(home=home, proj_dir=None, cwd=home)
+    get_sandbox_context = lazy_sandbox_context(ConfigContext(home=home, proj_dir=None, cwd=home))
 
     # Built but never dispatched: the config load never runs.
-    value_driven_agent_factory(idle_timeout=None, context=context)
+    value_driven_agent_factory(idle_timeout=None, get_sandbox_context=get_sandbox_context)
     assert load_calls == []
 
     runtime = PipelineDriver(
-        agent_dispatcher=value_driven_agent_factory(idle_timeout=None, context=context),
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, get_sandbox_context=get_sandbox_context
+        ),
         get_sandbox_context=None,
     )
     result = run_inline_command(
@@ -1001,7 +1023,7 @@ def test_explicit_settings_file_selects_that_file_over_the_profile_candidate(
 
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+            idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
         ),
         get_sandbox_context=None,
     )
@@ -1037,7 +1059,7 @@ def test_missing_srt_becomes_an_agent_call_error_carrying_the_library_message(
 
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+            idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
         ),
         get_sandbox_context=None,
     )
@@ -1081,7 +1103,7 @@ def test_temp_settings_cleanup_runs_after_success_and_failure(
 
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
-            idle_timeout=None, context=ConfigContext(home=home, proj_dir=proj_dir, cwd=home)
+            idle_timeout=None, get_sandbox_context=session_sandbox_context(home, proj_dir=proj_dir)
         ),
         get_sandbox_context=None,
     )

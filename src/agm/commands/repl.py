@@ -105,10 +105,16 @@ def run(args: ReplArgs) -> None:
         else prepare_trace_log_from_decision(trace_decision, command_name="repl")
     )
 
-    runner_agent = value_driven_agent_factory(idle_timeout=config.timeout, context=ctx)
-
-    session_host = create_agl_session_host(idle_timeout=config.timeout, context=ctx)
+    # Built once and shared by every sandboxing consumer this session
+    # dispatches through, so they all resolve sandbox configuration from the
+    # same `SandboxContext` and the `[run.*]` config loads at most once.
     get_sandbox_context = lazy_sandbox_context(ctx)
+    runner_agent = value_driven_agent_factory(
+        idle_timeout=config.timeout, get_sandbox_context=get_sandbox_context
+    )
+    session_host = create_agl_session_host(
+        idle_timeout=config.timeout, get_sandbox_context=get_sandbox_context
+    )
 
     host_settings_policy = HostSettingsPolicy(
         resolve_trace_path=LiveTracePathResolver(command_name="repl", auto_path=trace_path),

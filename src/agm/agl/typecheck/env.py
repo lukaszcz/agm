@@ -3341,6 +3341,11 @@ class TypeEnvironment:
         back. Functions carry both forms because their convenient name-keyed
         signature table is not keyed by declaration id, while their methods
         are.
+
+        *previous* is read while this environment is written, so it must be a
+        separate environment with its own ``type_table`` -- the caller's
+        accumulated state itself, since a fresh environment already seeds
+        every reserved name and a copy of it would answer identically.
         """
         self._assert_mutable()
         for name in type_names:

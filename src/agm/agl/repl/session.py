@@ -1424,14 +1424,15 @@ class ReplSession:
             # directly instead of copying the accumulated session a second time.
             self._type_env = checked.type_env
         else:
-            previous_type_env = TypeEnvironment()
-            previous_type_env.seed_from(self._type_env)
             # Build the replacement env in a local so a mid-promotion failure
             # leaves the session's still-sealed ``self._type_env`` untouched.
+            # It carries its own fresh type table, so the rewind below reads
+            # the session's accumulated state directly without a copy standing
+            # between them.
             new_type_env = TypeEnvironment()
             new_type_env.seed_from(checked.type_env)
             new_type_env.rewind_from(
-                previous_type_env,
+                self._type_env,
                 type_names=unpromoted_type_names,
                 binding_node_ids=entry_binding_node_ids - promoted_binding_node_ids,
                 functions={

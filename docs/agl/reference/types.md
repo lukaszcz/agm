@@ -430,6 +430,36 @@ member record exposes its own fields and, through the member/enum method rule
 operation. Projecting either member produces a function value that captures
 that agent; see [Agent calls](agent-calls.md) for dispatch behavior.
 
+### `Sandbox`
+
+`Sandbox` is a built-in record naming a sandboxed run's resource limits:
+
+```text
+record Sandbox
+  memory:   Optional[text] = Default
+  swap:     Optional[text] = Default
+  settings: Option[path]   = None
+  patch:    bool           = true
+```
+
+Every field defaults, so the bare `Sandbox`, the empty call `Sandbox()`, and a
+partial call such as `Sandbox(memory = Some("8G"))` are all valid
+constructions (see [Fieldless and all-defaulted constructor
+references](expressions.md#fieldless-and-all-defaulted-constructor-references)).
+
+### `AgentSandbox`
+
+`AgentSandbox` is a built-in enum selecting a sandboxing mode: `Disabled`,
+`Native`, or a referenced `Sandbox` record ([Enum types](#enum-types)). Because
+the third member references `Sandbox` rather than declaring its own record, a
+`Sandbox` value widens into an `AgentSandbox`-typed slot with no rewrapping,
+and `is`/`case` reach it under its own name (`Sandbox`, not
+`AgentSandbox::Sandbox`) — see [Enum member
+construction](expressions.md#enum-member-construction) and `is`/`is not`
+([Expressions](expressions.md)). See
+[Engine settings](host-environment.md#engine-settings) for
+`std/config::default-sandbox`.
+
 ### `AgentRequest`
 
 `AgentRequest` is the first-attempt request that `ask-request` builds

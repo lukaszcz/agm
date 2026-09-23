@@ -672,6 +672,9 @@ class ExecConfig:
     # Raw TOML value (a string or a native table): exec/repl decode it as a
     # host Agent value through the shared host-value decoder.
     default_agent: object | None = None
+    # Raw TOML value (a string or a native table): exec/repl decode it as a
+    # host AgentSandbox value through the shared host-value decoder.
+    default_sandbox: object | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
 
@@ -710,11 +713,12 @@ def exec_config_from_merged(
 
     resolved_trace = _optional_bool(effective, "trace")
     resolved_trace_file = _optional_str(effective, "trace-file")
-    # Keep every explicitly supplied Agent value raw (a string or a native
-    # TOML table) so exec/repl can decode it through the shared host-value
-    # decoder at their AgL host boundary; other commands stay free of AgL
-    # imports.
+    # Keep every explicitly supplied Agent/AgentSandbox value raw (a string or
+    # a native TOML table) so exec/repl can decode it through the shared
+    # host-value decoder at their AgL host boundary; other commands stay free
+    # of AgL imports.
     resolved_default_agent = effective.get("default-agent")
+    resolved_default_sandbox = effective.get("default-sandbox")
 
     return ExecConfig(
         strict_json=resolved_strict_json,
@@ -723,6 +727,7 @@ def exec_config_from_merged(
         trace=resolved_trace,
         trace_file=resolved_trace_file,
         default_agent=resolved_default_agent,
+        default_sandbox=resolved_default_sandbox,
     )
 
 

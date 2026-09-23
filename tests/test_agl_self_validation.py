@@ -390,6 +390,89 @@ def test_enabled_validation_rejects_a_conflicting_set_nominals_re_registration()
         )
 
 
+def test_enabled_validation_rejects_a_re_registration_whose_field_gains_a_different_type() -> None:
+    """A field that itself changes runtime type (e.g. ``base`` gaining a parent) is still caught.
+
+    Exercises the shape comparison's own type-mismatch branch directly,
+    distinct from a same-typed-but-unequal field (covered above): this is
+    what actually differs between one exception declaration and its
+    ``extends`` clause being edited.
+    """
+    nominal = NominalId(8_100_004)
+    registry = ExternRegistry()
+    registry.set_nominals(
+        {
+            nominal: NominalDescriptor(
+                nominal=nominal,
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Oops",
+                kind=NominalKind.EXCEPTION,
+                base=None,
+            )
+        },
+    )
+
+    with pytest.raises(AssertionError, match="different shape"):
+        registry.set_nominals(
+            {
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Oops",
+                    kind=NominalKind.EXCEPTION,
+                    base=NominalId(1),
+                )
+            },
+        )
+
+
+def test_enabled_validation_rejects_a_re_registration_that_loses_a_field_default() -> None:
+    """A relink that drops a genuine field default (not just its expression) is caught.
+
+    ``_comparable_shape`` projects out each field default's lowered
+    ``IrExpr`` (rebuilt, with renumbered ids, on every relink) but must keep
+    *which* fields carry one: losing that from ``(None, expr)`` to
+    ``(None, None)`` is a real shape change, distinct from the identical
+    default expression simply being rebuilt with fresh ids.
+    """
+    from agm.agl.ir.ids import SourceId
+    from agm.agl.ir.nodes import IrConstInt, Location
+
+    loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
+    nominal = NominalId(8_100_005)
+    registry = ExternRegistry()
+    registry.set_nominals(
+        {
+            nominal: NominalDescriptor(
+                nominal=nominal,
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Point",
+                kind=NominalKind.RECORD,
+                fields=("x", "y"),
+                field_defaults=(None, IrConstInt(loc, 0)),
+            )
+        },
+    )
+
+    with pytest.raises(AssertionError, match="different shape"):
+        registry.set_nominals(
+            {
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Point",
+                    kind=NominalKind.RECORD,
+                    fields=("x", "y"),
+                    field_defaults=(None, None),
+                )
+            },
+        )
+
+
 def test_closed_output_covers_explicit_builtin_targets() -> None:
     """A leaked inference variable in ``explicit_builtin_targets`` is caught like any sibling.
 

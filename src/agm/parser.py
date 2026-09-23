@@ -571,7 +571,8 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "exec": textwrap.dedent("""\
         agm exec [--strict-json|--no-strict-json] [--max-call-depth N]
-                 [--default-agent AGENT] [--timeout DURATION|--no-timeout]
+                 [--default-agent AGENT] [--default-sandbox SANDBOX]
+                 [--timeout DURATION|--no-timeout]
                  [--dry-run]
                  [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
                  [--no-stdlib] [-I DIR]... [-p PATH]
@@ -627,6 +628,9 @@ _HELP_TEXTS: dict[str, str] = {
                                 (CLI > config).
           --default-agent AGENT Seed the free-ask default session from an Agent value
                                 or command.
+          --default-sandbox SANDBOX
+                                Seed std/config::default-sandbox from an AgentSandbox
+                                value.
           --timeout DURATION    Override initial shell-exec and agent idle timeouts;
                                 seed std/config::timeout to Some(DURATION). Mutually
                                 exclusive with --no-timeout.
@@ -663,7 +667,8 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-call-depth N]
-                 [--default-agent AGENT] [--dry-run] [--no-stdlib]
+                 [--default-agent AGENT] [--default-sandbox SANDBOX]
+                 [--dry-run] [--no-stdlib]
                  [--quiet] [--trace|--trace-file PATH|--no-trace] [--plain]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
@@ -698,6 +703,9 @@ _HELP_TEXTS: dict[str, str] = {
                                 (CLI > config; source pragmas are not applied in the REPL).
           --default-agent AGENT Seed the free-ask default session from an Agent value
                                 or command.
+          --default-sandbox SANDBOX
+                                Seed std/config::default-sandbox from an AgentSandbox
+                                value.
           --quiet               Suppress automatic echoing of entry results.
           --no-stdlib           Disable the automatic import std/prelude::* prelude for
                                 each loaded REPL program (entries and library modules).

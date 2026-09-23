@@ -1768,10 +1768,15 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
     scoped_sources = [
         "import std/option::Option\n",
         "import std/result::Result\n",
+        "import std/sandbox::Sandbox\n",
         "type path = text\n",
     ]
     scoped_sources.append("".join(line for line in fun_lines if not line.startswith("infix")))
     for name in _SCOPED_STDLIB_MODULES:
+        # ``std/sandbox`` stays a real top-level module (see below); its
+        # import is hoisted to the region's own leading imports above so
+        # imports stay first, while every per-module import is dropped in
+        # favor of the scoped Option/Result/Sandbox imports.
         source = "".join(line for line in module_lines(name) if not line.startswith("import "))
         if name == "session":
             source = source.replace(_SESSION_STATIC_DECLARATIONS, "")
@@ -1794,7 +1799,15 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
     (std_dir / "prelude.agl").write_text(
         f"{infix_declarations}\nscope Std\n{''.join(scoped_sources)}end Std\n", encoding="utf-8"
     )
-    for name in ("option.agl", "pair.agl", "either.agl", "result.agl"):
+    (std_dir / "path.agl").write_text("builtin type path = text\n", encoding="utf-8")
+    for name in (
+        "option.agl",
+        "optional.agl",
+        "pair.agl",
+        "either.agl",
+        "result.agl",
+        "sandbox.agl",
+    ):
         source = (STDLIB_MODULES_DIR / name).read_text(encoding="utf-8")
         if name == "result.agl":
             source = source.replace(

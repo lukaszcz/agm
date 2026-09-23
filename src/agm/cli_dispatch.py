@@ -129,6 +129,7 @@ class _RunOptionValues(TypedDict):
     strict_json: bool | None
     max_call_depth: int | None
     default_agent: str | None
+    default_sandbox: str | None
     trace_file: str | None
     no_trace: bool
     trace: bool

@@ -97,6 +97,9 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "ValueParseError",
     # Appended host-decoded std/optional::Optional.
     "Optional",
+    # Appended: the sandboxing mode engine setting and its plain-record shape.
+    "AgentSandbox",
+    "Sandbox",
 )
 
 #: Bare reserved name -> its stable, distinct identity. Derived from
@@ -109,7 +112,11 @@ RESERVED_NOMINAL_IDS: Mapping[str, int] = types.MappingProxyType(
 )
 
 #: Stable fallback identities for members of host-known enums. This range is
-#: disjoint from parser node ids and the top-level reserved identities.
+#: disjoint from parser node ids and the top-level reserved identities, except
+#: for a member that is itself a reference to a standalone reserved record
+#: (enum-record unification: the member's value IS that record's value) —
+#: such a member's entry deliberately aliases that record's own top-level id
+#: instead of minting a fresh one (see ``AgentSandbox``'s ``Sandbox`` below).
 RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType(
     {
         ("ParsePolicy", "Abort"): -1000,
@@ -125,6 +132,12 @@ RESERVED_ENUM_MEMBER_IDS: Mapping[tuple[str, str], int] = types.MappingProxyType
         ("SessionTransport", "Cli"): -1040,
         ("SessionTransport", "Rpc"): -1041,
         ("Optional", "Default"): -1050,
+        ("AgentSandbox", "Disabled"): -1060,
+        ("AgentSandbox", "Native"): -1061,
+        # Referenced member: its value IS the standalone ``Sandbox`` record's
+        # own value, so it aliases that record's own reserved nominal id
+        # rather than minting a fresh member id.
+        ("AgentSandbox", "Sandbox"): RESERVED_NOMINAL_IDS["Sandbox"],
     }
 )
 
@@ -146,7 +159,16 @@ def require_reserved_nominal_id(name: str) -> int:
 
 
 def require_reserved_enum_member_id(enum_name: str, member_name: str) -> int:
-    """Return the stable fallback identity for a host-known enum member."""
+    """Return the stable fallback identity for a host-known enum member.
+
+    Looked up by the exact ``(enum_name, member_name)`` pair only. A
+    referenced member (e.g. ``AgentSandbox``'s ``Sandbox``) carries no
+    identity of its own -- its value IS the referenced record's value -- so
+    :data:`RESERVED_ENUM_MEMBER_IDS` lists that one pair explicitly, aliasing
+    the referenced record's own reserved nominal id; there is no generic
+    name-keyed fallback, since any *member_name* that happened to match some
+    other reserved type name would silently alias that unrelated type.
+    """
     member_id = RESERVED_ENUM_MEMBER_IDS.get((enum_name, member_name))
     assert member_id is not None, (
         f"compiler bug: {enum_name!r}::{member_name!r} is not a reserved enum member"

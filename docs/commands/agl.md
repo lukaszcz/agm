@@ -8,7 +8,7 @@ the [AgL language reference](../agl/reference/index.md).
 
 ```text
 agm exec [--strict-json|--no-strict-json]
-         [--max-call-depth N] [--default-agent AGENT]
+         [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
          [--timeout DURATION|--no-timeout] [--dry-run]
          [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
          [--no-stdlib]
@@ -94,6 +94,10 @@ a direct `agm repl` entry is a static error.
   qualified program-table/`[exec]` config; effective whether or not the program loads
   `std/config` or `--no-stdlib` is given. An `AgentCommand(...)` command is shell-split and
   validated before execution; a malformed one (e.g. an unclosed quote) exits 1 with nothing run.
+- `--default-sandbox SANDBOX`: Seed `std/config::default-sandbox`, in [host AgentSandbox
+  syntax](#host-agentsandbox-syntax). Decoded before execution, overriding qualified
+  program-table/`[exec]` config; effective whether or not the program loads `std/config` or
+  `--no-stdlib` is given.
 - `--timeout DURATION` / `--no-timeout`: Override the initial shell-exec and agent idle
   timeouts, seeding `std/config::timeout` with `Some(DURATION)`, or remove configured ones,
   seeding `None`.
@@ -163,8 +167,8 @@ Also reported before any agent runs: a parameter supplied twice (two flags, or p
 `--x`), an unrecognized `--flag`, or more positionals than positional-capable parameters.
 
 **Reserved names.** Program arguments and engine settings share one flag and config namespace,
-so a name-addressable parameter named after an engine setting (`default-agent`, `strict-json`,
-`timeout`, `trace`, `trace-file`) is a static error even if never supplied, also
+so a name-addressable parameter named after an engine setting (`default-agent`, `default-sandbox`,
+`strict-json`, `timeout`, `trace`, `trace-file`) is a static error even if never supplied, also
 reported by `agm check`.
 A projected flag that collides with a reserved flag has no static check, only a host one: selecting that
 program for execution fails, while `--help` and shell completion silently fall back to
@@ -172,7 +176,7 @@ program for execution fails, while `--help` and shell completion silently fall b
 
 - its own options: `--help`/`-h`, `--program`/`-p`, `--command`/`-c`, `--module-path`/`-I`,
   `--max-call-depth`, `--no-stdlib`, `--dry-run`;
-- every engine-setting flag in both polarities: `--default-agent`,
+- every engine-setting flag in both polarities: `--default-agent`, `--default-sandbox`,
   `--strict-json`/`--no-strict-json`, `--timeout`/`--no-timeout`,
   `--trace`/`--no-trace`, `--trace-file`/`--no-trace-file` (so `no-trace: text` collides);
 - other parameters' projected flags (`cache: bool`'s `--no-cache` vs `no-cache: bool`).
@@ -270,6 +274,17 @@ an unclosed `AgentClaude(model = "x"`, an unknown field, a qualifier naming anyt
 is a host error, not a verbatim command. Whitespace-only text is always a host error, never a
 verbatim empty command.
 
+### Host AgentSandbox syntax
+
+Every CLI argument or TOML string of the standard `AgentSandbox` type — an `AgentSandbox`-typed
+program parameter, `--default-sandbox`, or the `default-sandbox` config key — is read as strict
+JSON or one [AgL value syntax](../agl/reference/host-environment.md#value-syntax) literal: a bare
+member name (`Native`, `Disabled`, `Sandbox`) or a member constructor call
+(`Sandbox(memory = Some("8G"))`). `Sandbox`'s fields all default, so an omitted field fills from
+its own declared default — `Sandbox` and `Sandbox()` construct the same value as one another.
+Unlike `Agent`, there is no compact shorthand and no verbatim-command fallback: text that fails to
+parse and validate is a host error.
+
 ### Agents
 
 `ask` takes a typed `Agent` value as `agent`. Without one it uses the lazy default session,
@@ -316,6 +331,7 @@ placeholder. Opening a session from a command without it raises `SessionError`. 
 ```toml
 [exec]
 default-agent = "claude/sonnet-medium" # native shorthand or custom command
+default-sandbox = "Native"  # bare member name or a Sandbox(...) constructor call
 strict-json = false         # lenient JSON recovery is the default
 timeout = "30m"             # initial shell-exec and agent idle timeout
 trace = false               # trace logging off by default; set true to enable
@@ -368,6 +384,7 @@ program def main(spec: text) -> unit =
   std/config::trace-file := Some("trace.jsonl")  # explicit trace path
   std/config::strict-json := true     # require bare JSON from agents
   std/config::default-agent := AgentClaude("sonnet", "medium")
+  std/config::default-sandbox := AgentSandbox::Native
   std/config::timeout := Some("30s")  # shell-exec idle timeout
 
   let result = ask "Process %{spec}"
@@ -378,7 +395,8 @@ A qualified target (`std/config::KEY := …`) always works; after `import std/co
 bare `KEY := …`. `timeout` (`Option[text]`) and `trace-file` (`Option[path]`) take `Some("…")`
 or `None`.
 
-Precedence for `default-agent`, `strict-json`, `timeout`, `trace`, and `trace-file` is
+Precedence for `default-agent`, `default-sandbox`, `strict-json`, `timeout`, `trace`, and
+`trace-file` is
 `source write > CLI > qualified program table > @config > [exec].X > engine default`, where
 `@config` is the selected program's own [`@config`](../agl/reference/attributes.md#config)
 entries. CLI, config, and `@config` supply the **initial** value; a source write overrides it
@@ -506,7 +524,7 @@ $ echo $?
 
 ```text
 agm repl [--strict-json|--no-strict-json]
-         [--max-call-depth N] [--default-agent AGENT]
+         [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
          [--quiet] [--dry-run] [--no-stdlib] [--trace|--trace-file PATH|--no-trace] [--plain]
 ```
 
@@ -529,10 +547,12 @@ Both front ends share session and evaluation behavior:
 Plain is used automatically when stdin or stdout is not a terminal, or `TERM=dumb`; `--plain`
 forces it on a terminal. No flag forces the console onto a non-terminal.
 
-The REPL reuses `[exec]` settings for `default-agent`, call depth, JSON strictness,
-and timeout. As in `agm exec`, each typed `Agent` value selects its own backend command,
-`--default-agent` and `[exec] default-agent` accept [host Agent syntax](#host-agent-syntax), and
-both are effective whether or not the session loads `std/config` or `--no-stdlib` is given.
+The REPL reuses `[exec]` settings for `default-agent`, `default-sandbox`, call depth, JSON
+strictness, and timeout. As in `agm exec`, each typed `Agent` value selects its own backend
+command, `--default-agent` and `[exec] default-agent` accept [host Agent
+syntax](#host-agent-syntax), `--default-sandbox` and `[exec] default-sandbox` accept [host
+AgentSandbox syntax](#host-agentsandbox-syntax), and all are effective whether or not the session
+loads `std/config` or `--no-stdlib` is given.
 
 Free `ask` lazily opens one default conversation, snapshotting `default-agent` at first use;
 later free calls reuse it even if the setting changes. Explicit `Session::open` sessions stay
@@ -609,7 +629,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 ### Options
 
 - `--strict-json` / `--no-strict-json`, `--max-call-depth N`,
-  `--default-agent AGENT`: As for `agm exec`.
+  `--default-agent AGENT`, `--default-sandbox SANDBOX`: As for `agm exec`.
 - `--quiet`: Do not echo entry results, for this session only (does not persist and overrides a
   saved `echo = true`).
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library
@@ -649,18 +669,19 @@ Per-entry errors are reported inline and never exit; the REPL fails only before 
 The exception is `std/process::exit(code)`, which ends the REPL with its `0..255` status after
 finalizing the entry's trace.
 
-`--default-agent`/`[exec] default-agent` is decoded before the loop, before the session is even
-built: a blank value, or text that opens a constructor call but fails to read or bind, exits with
-an error naming the flag or config key. Other text is custom command text, not an AgL parse error.
-An `AgentCommand(...)` whose command does not shell-split fails only when the first entry
-constructs the interpreter (session initialization constructs none); construction validates the
-winning value before any statement runs, so even an entry with no agent dispatch reports it inline
-without exiting.
+`--default-agent`/`[exec] default-agent` and `--default-sandbox`/`[exec] default-sandbox` are
+decoded before the loop, before the session is even built: a blank value, or text that fails to
+read or bind, exits with an error naming the flag or config key. For `default-agent`, other text
+is custom command text, not an AgL parse error; `default-sandbox` has no such fallback. An
+`AgentCommand(...)` whose command does not shell-split fails only when the first entry constructs
+the interpreter (session initialization constructs none); construction validates the winning value
+before any statement runs, so even an entry with no agent dispatch reports it inline without
+exiting.
 
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: a blank or invalid `[exec] default-agent` or `--default-agent`, or an unwritable `--trace-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: a blank or invalid `[exec] default-agent`/`--default-agent` or `[exec] default-sandbox`/`--default-sandbox`, or an unwritable `--trace-file` — reported before the prompt appears |
 
 ### Examples
 

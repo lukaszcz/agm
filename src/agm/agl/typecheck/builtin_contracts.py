@@ -67,6 +67,7 @@ class BuiltinTypeContract:
     abstract: bool
     base: ExceptionType | None
     field_kinds: tuple[ParamZone, ...]
+    field_has_default: tuple[bool, ...]
 
 
 def contract_for_typedef(
@@ -124,6 +125,10 @@ def contract_for_typedef(
     )
     normalized_base = None if base_type is None else normalize(base_type)
     assert normalized_base is None or isinstance(normalized_base, ExceptionType)
+    # Own fields only, like ``fields``/``field_kinds`` above — an exception's
+    # base-chain defaults are not part of its own contract, matching
+    # ``TypeDef.field_has_default``'s own-fields-only scope.
+    assert typedef.field_has_default is not None
     return BuiltinTypeContract(
         kind=typedef.kind,
         name=typedef.name,
@@ -134,6 +139,7 @@ def contract_for_typedef(
         abstract=typedef.abstract,
         base=normalized_base,
         field_kinds=typedef.field_kinds,
+        field_has_default=typedef.field_has_default,
     )
 
 

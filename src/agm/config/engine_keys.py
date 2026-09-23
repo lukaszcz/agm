@@ -24,6 +24,7 @@ class EngineKeyKind(Enum):
     TEXT = "text"
     OPTION_TEXT = "option_text"
     AGENT = "agent"
+    AGENT_SANDBOX = "agent_sandbox"
 
 
 class EngineKeyConsumer(Enum):
@@ -82,6 +83,13 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
         EngineKeyKind.AGENT,
         EngineKeyConsumer.HOST_CONSUMED,
         config_attr="default_agent",
+        has_default=False,
+    ),
+    EngineKeySpec(
+        "default-sandbox",
+        EngineKeyKind.AGENT_SANDBOX,
+        EngineKeyConsumer.HOST_CONSUMED,
+        config_attr="default_sandbox",
         has_default=False,
     ),
     EngineKeySpec(

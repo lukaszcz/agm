@@ -28,6 +28,7 @@ _TYPE_BY_KIND: dict[EngineKeyKind, Type] = {
     EngineKeyKind.TEXT: TextType(),
     EngineKeyKind.OPTION_TEXT: OPTION_TEXT_TYPE,
     EngineKeyKind.AGENT: BUILTIN_PRELUDE_TYPES["Agent"],
+    EngineKeyKind.AGENT_SANDBOX: BUILTIN_PRELUDE_TYPES["AgentSandbox"],
 }
 
 # Lookup: kebab key name → resolved AgL type. Built from the same

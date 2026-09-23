@@ -5,13 +5,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from agm.agent.spec import AGENT_SPECS
-from agm.agl.semantics.values import RecordValue
+from agm.agl.semantics.values import ArrayValue, DictValue, RecordValue
 from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from agm.agl.ir.builtin_nominals import BuiltinNominals
+    from agm.agl.ir.ids import NominalId
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.semantics.values import Value
@@ -30,6 +31,8 @@ def _engine_key_shape(kind: EngineKeyKind) -> tuple[str, tuple[str, ...]] | None
     """Return the ``(enum name, member names)`` an engine key *kind* restamps, if any."""
     if kind is EngineKeyKind.AGENT:
         return ("Agent", tuple(AGENT_SPECS))
+    if kind is EngineKeyKind.AGENT_SANDBOX:
+        return ("AgentSandbox", ("Disabled", "Native", "Sandbox"))
     if kind is EngineKeyKind.OPTION_TEXT:
         return ("Option", ("None", "Some"))
     return None
@@ -39,6 +42,51 @@ def _engine_key_shape(kind: EngineKeyKind) -> tuple[str, tuple[str, ...]] | None
 _ENGINE_KEY_ENUM_SHAPES: dict[str, tuple[str, tuple[str, ...]]] = {
     spec.name: shape for spec in ENGINE_KEYS if (shape := _engine_key_shape(spec.kind)) is not None
 }
+
+
+def _restamp_value_tree(
+    value: "Value", *, from_table: "BuiltinNominals", to_table: "BuiltinNominals"
+) -> "Value":
+    """Recursively restamp every nominal identity in *value* from *from_table* to *to_table*.
+
+    A restamped record can itself carry other host-known nominal values (e.g.
+    ``AgentSandbox``'s ``Sandbox`` member has ``Optional``/``Option``-typed
+    fields), so restamping the outer identity alone would leave a nested
+    value's identity unrecognized by *to_table*'s owner. An array/dict is
+    restamped element-wise, into a fresh container. A field/element this
+    table has no name for (an ordinary, non-host-known value) crosses
+    unchanged.
+    """
+    if isinstance(value, ArrayValue):
+        return ArrayValue(
+            elements=[
+                _restamp_value_tree(element, from_table=from_table, to_table=to_table)
+                for element in value.elements
+            ]
+        )
+    if isinstance(value, DictValue):
+        return DictValue(
+            entries={
+                key: _restamp_value_tree(entry, from_table=from_table, to_table=to_table)
+                for key, entry in value.entries.items()
+            }
+        )
+    if not isinstance(value, RecordValue):
+        return value
+    fields = {
+        name: _restamp_value_tree(field_value, from_table=from_table, to_table=to_table)
+        for name, field_value in value.fields.items()
+    }
+    located = from_table.reverse(value.nominal)
+    if located is None:
+        return RecordValue(nominal=value.nominal, fields=fields)
+    name, member_name = located
+    target = (
+        to_table.resolve(name)
+        if member_name is None
+        else to_table.resolve_standard_member(name, member_name)
+    )
+    return RecordValue(nominal=target.nominal, fields=fields)
 
 
 def _restamp_host_enum_member(
@@ -55,12 +103,16 @@ def _restamp_host_enum_member(
     identity) onto a program's own nominal table, and to persist a
     post-run engine-setting value (a program's own identity) back onto the
     reserved fallback table so it survives past that program's own lifetime.
+    Once membership is established, restamping the outer identity together
+    with its nested fields is exactly :func:`_restamp_value_tree`'s job, so
+    this delegates to it rather than rebuilding the fields dict itself.
     """
     for member_name in member_names:
         source = from_table.resolve_standard_member(enum_name, member_name)
         if value.nominal == source.nominal:
-            target = to_table.resolve_standard_member(enum_name, member_name)
-            return RecordValue(nominal=target.nominal, fields=value.fields)
+            restamped = _restamp_value_tree(value, from_table=from_table, to_table=to_table)
+            assert isinstance(restamped, RecordValue)
+            return restamped
     return value
 
 
@@ -158,6 +210,24 @@ def engine_default_settings() -> "dict[str, Value]":
     )
 
 
+def _reserved_default_resolver(nominal: "NominalId", field_index: int) -> "Value":
+    """Fill an omitted defaulted field of a reserved record with its host-side constant.
+
+    Passed to :func:`~agm.agl.runtime.arguments.decode_param_value` as the
+    ``default_resolver`` for every host engine-config decode
+    (:func:`convert_host_value`). No program — and so no evaluator — exists
+    yet at this boundary, unlike an ordinary program's own field default
+    (filled by ``IrInterpreter.default_for_field`` against the real, fully
+    linked ``NominalDescriptor`` table); a reserved record's default is
+    instead a plain constant the seeded ``TypeDef`` carries directly (see
+    :func:`~agm.agl.semantics.type_table.reserved_field_default`), which is
+    all ``Sandbox`` (the first engine-key type with defaulted fields) needs.
+    """
+    from agm.agl.semantics.type_table import reserved_field_default
+
+    return reserved_field_default(nominal.value, field_index)
+
+
 def convert_host_value(
     name: str, raw: object, type_obj: AglType, type_table: "TypeTable"
 ) -> "Value":
@@ -183,7 +253,8 @@ def convert_host_value(
     (unit/function/exception/…) are rejected up front; the builtin ``Agent``
     enum has an ordinary wire schema, dispatched through its own shorthand
     and constructor-call reading. *type_table* resolves record/enum
-    field/variant shapes for *type_obj*.
+    field/variant shapes for *type_obj*. An omitted defaulted field (e.g.
+    ``Sandbox``'s) fills through :func:`_reserved_default_resolver`.
     """
     from agm.agl.runtime.arguments import decode_param_value
     from agm.agl.runtime.convert import StrictJsonParseError
@@ -194,7 +265,7 @@ def convert_host_value(
     except TypeError as exc:
         raise ValueError(f"Setting {name!r} has unsupported type {type_obj!r}.") from exc
     try:
-        return decode_param_value(decoder, raw)
+        return decode_param_value(decoder, raw, default_resolver=_reserved_default_resolver)
     except (StrictJsonParseError, ValueError) as exc:
         raise ValueError(f"Setting {name!r}: could not parse as {type_obj!r}: {exc}") from exc
 

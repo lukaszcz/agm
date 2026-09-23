@@ -61,6 +61,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
+from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import (
     NO_DECL_ID,
     require_reserved_enum_member_id,
@@ -99,9 +100,11 @@ from agm.agl.semantics.types import (
     match_nominal_owner_template,
     spells_bare,
     standard_option_type,
+    standard_optional_type,
     substitute,
     type_children,
 )
+from agm.agl.semantics.values import BoolValue, RecordValue, Value
 from agm.agl.zones import ParamZone
 from agm.util.graph import bfs_first
 
@@ -2103,8 +2106,8 @@ def parse_classification(target: Type, table: TypeTable) -> CastKind:
 # These ``TypeDef`` literals are the canonical shapes for AgL's built-in
 # prelude types (``ExecResult``, ``ParsePolicy``, ``Agent``, ``OutputContract``,
 # ``OutputContractOption``, ``AgentRequest``, ``SessionTransport``, ``Session``,
-# ``SessionStats``, ``SessionError``) and the generic ``Option``
-# template.  ``create_seeded_type_table``, the scope resolver's builtin
+# ``SessionStats``, ``SessionError``, ``Sandbox``, ``AgentSandbox``) and the
+# generic ``Option`` template.  ``create_seeded_type_table``, the scope resolver's builtin
 # constructor-candidate seeding, ``TypeEnvironment`` init seeding, and builtin
 # shape validation in the type builder all read these same literals — there
 # is exactly one definition of each prelude shape.
@@ -2176,6 +2179,48 @@ _AGENT_DEF, _AGENT_MEMBER_DEFS = _builtin_enum_defs(
 )
 _SESSION_TRANSPORT_DEF, _SESSION_TRANSPORT_MEMBER_DEFS = _builtin_enum_defs(
     "SessionTransport", (("Cli", ()), ("Rpc", ()))
+)
+
+# ``AgentSandbox``'s ``Disabled``/``Native`` members are inline, fresh
+# records scoped under it, like every other builtin enum's members. Its third
+# member instead reuses the standalone ``Sandbox`` record's own identity
+# (mirroring how ``Optional`` reuses ``Option``'s ``Some``/``None``): the
+# value IS a ``Sandbox`` record, so a ``Sandbox`` constructed on its own
+# widens into an ``AgentSandbox`` slot with no rewrapping.
+_AGENT_SANDBOX_DISABLED_DEF = TypeDef(
+    kind="record",
+    name="Disabled",
+    module_id=RESERVED_ID,
+    scope_path=("AgentSandbox",),
+    decl_node_id=require_reserved_enum_member_id("AgentSandbox", "Disabled"),
+)
+_AGENT_SANDBOX_NATIVE_DEF = TypeDef(
+    kind="record",
+    name="Native",
+    module_id=RESERVED_ID,
+    scope_path=("AgentSandbox",),
+    decl_node_id=require_reserved_enum_member_id("AgentSandbox", "Native"),
+)
+_AGENT_SANDBOX_MEMBER_DEFS = (_AGENT_SANDBOX_DISABLED_DEF, _AGENT_SANDBOX_NATIVE_DEF)
+_AGENT_SANDBOX_DEF = TypeDef(
+    kind="enum",
+    name="AgentSandbox",
+    module_id=RESERVED_ID,
+    members=(
+        RecordType(
+            name="Disabled",
+            module_id=RESERVED_ID,
+            scope_path=("AgentSandbox",),
+            decl_id=require_reserved_enum_member_id("AgentSandbox", "Disabled"),
+        ),
+        RecordType(
+            name="Native",
+            module_id=RESERVED_ID,
+            scope_path=("AgentSandbox",),
+            decl_id=require_reserved_enum_member_id("AgentSandbox", "Native"),
+        ),
+        RecordType(name="Sandbox", module_id=RESERVED_ID, decl_id=_reserved_id("Sandbox")),
+    ),
 )
 
 _OUTPUT_CONTRACT_OPTION_DEF, _OUTPUT_CONTRACT_OPTION_MEMBER_DEFS = _builtin_enum_defs(
@@ -2370,6 +2415,22 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
         base=_reserved_id("Exception"),
         field_kinds=_standard(_fields),
     ),
+    "Sandbox": TypeDef(
+        kind="record",
+        name="Sandbox",
+        module_id=RESERVED_ID,
+        fields=(
+            _fields := (
+                ("memory", standard_optional_type(TextType())),
+                ("swap", standard_optional_type(TextType())),
+                ("settings", standard_option_type(TextType())),
+                ("patch", BoolType()),
+            )
+        ),
+        field_kinds=_standard(_fields),
+        field_has_default=(True, True, True, True),
+    ),
+    "AgentSandbox": _AGENT_SANDBOX_DEF,
 }
 
 BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = _with_reserved_ids(_PRELUDE_SHAPES)
@@ -2390,8 +2451,60 @@ BUILTIN_PRELUDE_MEMBER_TYPE_DEFS: Mapping[DeclId, TypeDef] = {
         *_SESSION_TRANSPORT_MEMBER_DEFS,
         *_OPTION_MEMBER_DEFS,
         _OPTIONAL_DEFAULT_DEF,
+        *_AGENT_SANDBOX_MEMBER_DEFS,
+        # ``AgentSandbox``'s ``Sandbox`` member reuses the standalone ``Sandbox``
+        # record's own identity (see above), so its member-lookup entry is that
+        # same record's own canonical ``TypeDef`` rather than a fresh one.
+        BUILTIN_PRELUDE_TYPE_DEFS["Sandbox"],
     )
 }
+
+# ---------------------------------------------------------------------------
+# Reserved-record field defaults, as host-side constants
+#
+# An ordinary program's own constructor field default is an ``IrExpr``,
+# evaluated once the program is fully linked
+# (``IrInterpreter.default_for_field`` against ``NominalDescriptor.field_defaults``
+# — see ``runtime.convert.decode_value``'s ``default_resolver``). A host
+# engine setting decodes from a CLI flag or config entry *before* any program
+# exists, so no evaluator is reachable there; ``Sandbox``'s defaults are
+# nevertheless plain constants (``Default``, ``None``, ``true``), so the
+# seeded ``TypeDef`` simply carries each one as the ``Value`` it would
+# evaluate to. Confined to this reserved/seeded boundary: an ordinary
+# program's own ``Sandbox`` construction (with stdlib loaded) always fills an
+# omitted field through the real evaluator instead, never this table.
+# ---------------------------------------------------------------------------
+
+RESERVED_FIELD_DEFAULT_VALUES: Mapping[DeclId, Mapping[int, Value]] = {
+    _reserved_id("Sandbox"): {
+        0: RecordValue(
+            nominal=NominalId(require_reserved_enum_member_id("Optional", "Default")), fields={}
+        ),
+        1: RecordValue(
+            nominal=NominalId(require_reserved_enum_member_id("Optional", "Default")), fields={}
+        ),
+        2: RecordValue(
+            nominal=NominalId(require_reserved_enum_member_id("Option", "None")), fields={}
+        ),
+        3: BoolValue(True),
+    },
+}
+
+
+def reserved_field_default(decl_id: DeclId, field_index: int) -> Value:
+    """Return one reserved record's *field_index*'th field's host-side constant default.
+
+    The decode-time default-fill seam for a host engine setting
+    (``runtime.engine_config.convert_host_value``'s ``default_resolver``);
+    see :data:`RESERVED_FIELD_DEFAULT_VALUES`. *decl_id* is expected to name a
+    reserved record with defaulted fields (``Sandbox`` today) — the only
+    shape this decode path can ever reach, since no other engine key's type
+    has a defaulted field yet. Keyed sparsely by field index, so a field with
+    no default is simply absent rather than representable as ``None``.
+    """
+    defaults = RESERVED_FIELD_DEFAULT_VALUES.get(decl_id)
+    assert defaults is not None, f"compiler bug: reserved decl {decl_id} has no field defaults"
+    return defaults[field_index]
 
 
 def source_nominal_decl_id(

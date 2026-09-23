@@ -613,6 +613,14 @@ class IrInterpreter:
             )
             self._builtin_host_settings["default-agent"] = default_agent
             self._check_default_agent_dispatchable(default_agent)
+        default_sandbox = self._builtin_host_settings.get("default-sandbox")
+        if isinstance(default_sandbox, RecordValue):
+            self._builtin_host_settings["default-sandbox"] = restamp_engine_setting(
+                "default-sandbox",
+                default_sandbox,
+                from_table=NO_BUILTIN_DECLARATIONS,
+                to_table=self._program.builtin_nominals,
+            )
         trace_file = self._builtin_host_settings.get("trace-file")
         # ``trace-file`` always has a declared default (unlike ``default-agent``),
         # so it is always present here.

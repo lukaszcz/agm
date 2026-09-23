@@ -9,8 +9,15 @@ from pathlib import Path
 import pytest
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+from agm.agl.ir.ids import NominalId
+from agm.agl.ir.reserved_nominals import (
+    require_reserved_enum_member_id,
+    require_reserved_nominal_id,
+)
 from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.runtime.agents import agent_member_name
+from agm.agl.runtime.engine_config import convert_host_value
+from agm.agl.semantics.type_table import RESERVED_FIELD_DEFAULT_VALUES, create_seeded_type_table
 from agm.agl.semantics.values import BoolValue, RecordValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
@@ -47,20 +54,40 @@ def _run(
     return result
 
 
-def _assert_agent_shape(actual: Value, is_variant: Value, expected: RecordValue) -> None:
-    """Verify *actual* is the expected ``Agent`` variant with the expected payload.
+def _shapes_match(actual: Value, expected: Value) -> bool:
+    """Compare two values structurally, ignoring ``RecordValue`` nominal identity.
+
+    A running program's own nominal identity for a builtin/reserved type
+    differs from the reserved-fallback identity a host-built expected value
+    carries (see :func:`_assert_shape`); a nested field (e.g. ``Sandbox``'s
+    ``Optional``/``Option``-valued fields) carries its own such identity too.
+    Recurses through ``RecordValue`` fields; every other value kind compares
+    by its own ``==``.
+    """
+    if isinstance(expected, RecordValue):
+        return (
+            isinstance(actual, RecordValue)
+            and actual.fields.keys() == expected.fields.keys()
+            and all(_shapes_match(actual.fields[k], v) for k, v in expected.fields.items())
+        )
+    return actual == expected
+
+
+def _assert_shape(actual: Value, is_variant: Value, expected: RecordValue) -> None:
+    """Verify *actual* is the expected enum member/record with the expected payload.
 
     *is_variant* is an ``is`` member test run inside the program's own
     source (bound alongside *actual*): the running program loads real stdlib,
-    so its own ``Agent`` enum carries that program's own nominal identity,
-    distinct from the reserved-fallback identity *expected* (built by the
-    shared ``agent_value`` test helper) carries. Only a cast evaluated inside
-    that same program can compare identity correctly; fields compare directly
-    since they carry no identity of their own.
+    so its own nominal enum/record carries that program's own nominal
+    identity, distinct from the reserved-fallback identity *expected* (built
+    by a test helper such as ``agent_value``) carries. Only a cast evaluated
+    inside that same program can compare identity correctly; fields compare
+    structurally instead, via :func:`_shapes_match`, since a nested field may
+    itself carry a host-known identity (e.g. ``Sandbox``'s ``Optional``/
+    ``Option``-valued fields).
     """
     assert is_variant == BoolValue(True)
-    assert isinstance(actual, RecordValue)
-    assert actual.fields == expected.fields
+    assert _shapes_match(actual, expected)
 
 
 def test_engine_key_uses_the_agent_nominal_type() -> None:
@@ -98,15 +125,66 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
     )
 
     assert result.ok
-    _assert_agent_shape(
+    _assert_shape(
         result.bindings["initial"],
         result.bindings["initial-is-claude"],
         agent_value("AgentClaude", model="sonnet", thinking="medium"),
     )
-    _assert_agent_shape(
+    _assert_shape(
         result.bindings["updated"],
         result.bindings["updated-is-command"],
         agent_value("AgentCommand", command="command"),
+    )
+
+
+def _sandbox_default_value() -> RecordValue:
+    """Build the reserved-fallback ``Sandbox`` value with its four declared defaults."""
+    optional_default = RecordValue(
+        nominal=NominalId(require_reserved_enum_member_id("Optional", "Default")), fields={}
+    )
+    option_none = RecordValue(
+        nominal=NominalId(require_reserved_enum_member_id("Option", "None")), fields={}
+    )
+    return RecordValue(
+        nominal=NominalId(require_reserved_nominal_id("Sandbox")),
+        fields={
+            "memory": optional_default,
+            "swap": optional_default,
+            "settings": option_none,
+            "patch": BoolValue(True),
+        },
+    )
+
+
+def _agent_sandbox_member_value(member_name: str) -> RecordValue:
+    """Build the reserved-fallback ``AgentSandbox`` inline member value for *member_name*."""
+    return RecordValue(
+        nominal=NominalId(require_reserved_enum_member_id("AgentSandbox", member_name)),
+        fields={},
+    )
+
+
+def test_default_sandbox_initializer_and_qualified_write_are_visible() -> None:
+    result = _run(
+        "import std/config\n"
+        "let initial = std/config::default-sandbox\n"
+        "let initial-is-sandbox = initial is Sandbox\n"
+        "std/config::default-sandbox := AgentSandbox::Native\n"
+        "let updated = std/config::default-sandbox\n"
+        "let updated-is-native = updated is AgentSandbox::Native\n"
+        "updated\n"
+    )
+
+    assert result.ok
+    _assert_shape(
+        result.bindings["initial"],
+        result.bindings["initial-is-sandbox"],
+        _sandbox_default_value(),
+    )
+    _assert_shape(
+        result.bindings["updated"],
+        result.bindings["updated-is-native"],
+        _agent_sandbox_member_value("Native"),
     )
 
 
@@ -191,12 +269,12 @@ def test_host_seed_overrides_initializer_until_source_write() -> None:
     )
 
     assert result.ok
-    _assert_agent_shape(
+    _assert_shape(
         result.bindings["seeded"],
         result.bindings["seeded-is-codex"],
         agent_value("AgentCodex", model="o3", thinking="medium"),
     )
-    _assert_agent_shape(
+    _assert_shape(
         result.bindings["written"],
         result.bindings["written-is-pi"],
         agent_value("AgentPi", provider="openai", model="gpt", thinking="high"),
@@ -638,3 +716,107 @@ def test_restamp_engine_setting_ignores_non_enum_backed_keys() -> None:
             )
             is stray
         )
+
+
+def test_restamp_engine_setting_leaves_an_unrecognized_nested_field_identity_alone() -> None:
+    """A nested field identity neither table recognizes crosses through unchanged.
+
+    ``Sandbox``'s own fields are always host-known (``Optional``/``Option``),
+    so this exercises the general fallback directly: any nested ``RecordValue``
+    field ``_restamp_value_tree`` cannot place in ``from_table`` keeps its
+    original nominal rather than being restamped.
+    """
+    from agm.agl.runtime.engine_config import restamp_engine_setting
+
+    sandbox_nominal = NO_BUILTIN_DECLARATIONS.resolve_standard_member(
+        "AgentSandbox", "Sandbox"
+    ).nominal
+    stray_field = RecordValue(nominal=NominalId(-999_999_999), fields={})
+    value = RecordValue(nominal=sandbox_nominal, fields={"memory": stray_field})
+
+    result = restamp_engine_setting(
+        "default-sandbox",
+        value,
+        from_table=NO_BUILTIN_DECLARATIONS,
+        to_table=NO_BUILTIN_DECLARATIONS,
+    )
+
+    assert isinstance(result, RecordValue)
+    assert result.fields["memory"] == stray_field
+
+
+@pytest.mark.parametrize("decl_id", sorted(RESERVED_FIELD_DEFAULT_VALUES))
+def test_reserved_field_defaults_match_the_stdlib_source(decl_id: int) -> None:
+    """A reserved record's host-side default constants must match its own AgL source.
+
+    ``RESERVED_FIELD_DEFAULT_VALUES`` hand-encodes each host-known record's
+    constructor field defaults for the pre-execution CLI/config decode
+    boundary (``runtime.engine_config.convert_host_value``'s
+    ``default_resolver``), since no evaluator is reachable there. Nothing
+    else compares those constants against the real stdlib source's own
+    declared defaults, so this runs the real stdlib's bare constructor
+    (through the ordinary evaluator) and the host's own bare value-syntax
+    decode of the same constructor side by side, and checks they agree field
+    by field. Parametrized over every reserved record carrying host-side
+    defaults, so a future one is covered automatically.
+    """
+    type_table = create_seeded_type_table()
+    typedef = type_table.get_by_id(decl_id)
+    assert typedef is not None
+    type_name = typedef.name
+
+    result = _run(f"let probe = {type_name}()\nprobe\n")
+    assert result.ok
+    program_value = result.bindings["probe"]
+
+    host_value = convert_host_value(type_name, f"{type_name}()", typedef.handle(), type_table)
+
+    assert _shapes_match(program_value, host_value)
+
+
+def test_restamp_value_tree_recurses_into_array_and_dict_elements() -> None:
+    """An array/dict payload carrying a host-known record restamps element-wise.
+
+    No real engine-key type contains a collection today, so this is not
+    reachable through :func:`restamp_engine_setting`; it exercises
+    ``_restamp_value_tree`` directly against its own contract (restamp every
+    nominal identity in the value, not just a top-level record's).
+    """
+    from agm.agl.ir.builtin_nominals import BuiltinNominals, DeclaredNominal
+    from agm.agl.runtime.engine_config import _restamp_value_tree
+    from agm.agl.semantics.values import ArrayValue, DictValue
+
+    source_nominal = NominalId(9_100_001)
+    target_nominal = NominalId(9_100_002)
+    from_table = BuiltinNominals(
+        declared={},
+        members={},
+        standard_members={
+            ("AgentSandbox", "Sandbox"): DeclaredNominal(
+                nominal=source_nominal, display_name="Sandbox"
+            )
+        },
+    )
+    to_table = BuiltinNominals(
+        declared={},
+        members={},
+        standard_members={
+            ("AgentSandbox", "Sandbox"): DeclaredNominal(
+                nominal=target_nominal, display_name="Sandbox"
+            )
+        },
+    )
+    record = RecordValue(nominal=source_nominal, fields={})
+    expected = RecordValue(nominal=target_nominal, fields={})
+
+    array_result = _restamp_value_tree(
+        ArrayValue(elements=[record]), from_table=from_table, to_table=to_table
+    )
+    assert isinstance(array_result, ArrayValue)
+    assert array_result.elements == [expected]
+
+    dict_result = _restamp_value_tree(
+        DictValue(entries={"a": record}), from_table=from_table, to_table=to_table
+    )
+    assert isinstance(dict_result, DictValue)
+    assert dict_result.entries == {"a": expected}

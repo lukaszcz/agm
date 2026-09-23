@@ -217,6 +217,41 @@ class TestBuiltinNominals:
 
         assert table.resolve_standard_member("Option", "Some") == standard
 
+    def test_reverse_finds_a_declared_name(self) -> None:
+        nominal = NominalId(1)
+        table = BuiltinNominals(
+            declared={"Foo": DeclaredNominal(nominal=nominal, display_name="Foo")}
+        )
+        assert table.reverse(nominal) == ("Foo", None)
+
+    def test_reverse_finds_a_standard_member(self) -> None:
+        nominal = NominalId(2)
+        table = BuiltinNominals(
+            declared={},
+            standard_members={
+                ("Option", "Some"): DeclaredNominal(nominal=nominal, display_name="X")
+            },
+        )
+        assert table.reverse(nominal) == ("Option", "Some")
+
+    def test_reverse_skips_standard_members_that_do_not_match(self) -> None:
+        wanted = NominalId(3)
+        table = BuiltinNominals(
+            declared={},
+            standard_members={
+                ("Option", "Some"): DeclaredNominal(nominal=NominalId(4), display_name="other"),
+                ("Result", "Ok"): DeclaredNominal(nominal=wanted, display_name="wanted"),
+            },
+        )
+        assert table.reverse(wanted) == ("Result", "Ok")
+
+    def test_reverse_falls_back_to_a_reserved_nominal_id(self) -> None:
+        nominal = NominalId(require_reserved_nominal_id("ExecResult"))
+        assert NO_BUILTIN_DECLARATIONS.reverse(nominal) == ("ExecResult", None)
+
+    def test_reverse_returns_none_for_an_unrecognized_identity(self) -> None:
+        assert NO_BUILTIN_DECLARATIONS.reverse(NominalId(999999999)) is None
+
     def test_no_builtin_declarations_answers_every_name_with_the_shipped_identity(self) -> None:
         assert NO_BUILTIN_DECLARATIONS.nominal("ExecResult") == NominalId(
             require_reserved_nominal_id("ExecResult")

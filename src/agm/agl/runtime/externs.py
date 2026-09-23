@@ -412,6 +412,28 @@ class ExternCallable(Protocol):
     def __call__(self, *args: object) -> object: ...
 
 
+def _comparable_shape(descriptor: NominalDescriptor) -> tuple[object, tuple[bool, ...]]:
+    """*descriptor*'s shape with its lowered field defaults projected onto presence only.
+
+    A builtin nominal's identity recurs across every REPL entry's freshly
+    linked program, each with its own linker-allocated ``SourceId``
+    numbering (``ir.ids.SourceId`` is unique within one
+    ``ExecutableProgram``, not across them). A field default's lowered
+    ``IrExpr`` is rebuilt from the same declaration on every relink,
+    identical but for that renumbering. The expressions cannot otherwise
+    differ for one identity -- a redeclaration mints a new one -- so only
+    *which* fields carry a default takes part in the comparison, not the
+    expressions themselves. ``field_defaults=()`` alone would not do: the
+    replaced descriptor's own ``__post_init__`` renormalizes an empty tuple
+    back to all-``None`` (mirroring ``TypeDef.field_has_default``), so the
+    presence pattern must be captured separately, before that happens.
+    """
+    return (
+        dataclasses.replace(descriptor, field_defaults=()),
+        tuple(default is not None for default in descriptor.field_defaults),
+    )
+
+
 class ExternRegistry:
     """Imports extern companions, resolves their callables, and invokes them.
 
@@ -469,7 +491,9 @@ class ExternRegistry:
         if self_validation_enabled():
             for nominal, descriptor in descriptors.items():
                 previous = self._nominal_by_id.get(nominal)
-                if previous is not None and previous != descriptor:
+                if previous is not None and _comparable_shape(previous) != _comparable_shape(
+                    descriptor
+                ):
                     raise AssertionError(
                         f"nominal {nominal!r} re-registered with a different shape: "
                         f"{previous!r} -> {descriptor!r}"

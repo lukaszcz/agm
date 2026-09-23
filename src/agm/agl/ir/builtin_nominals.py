@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import (
+    RESERVED_ENUM_MEMBER_IDS,
+    RESERVED_NOMINAL_IDS,
     require_reserved_enum_member_id,
     require_reserved_nominal_id,
 )
@@ -105,6 +107,33 @@ class BuiltinNominals:
             nominal=NominalId(require_reserved_enum_member_id(enum_name, member_name)),
             display_name=f"{enum_name}::{member_name}",
         )
+
+    def reverse(self, nominal: NominalId) -> tuple[str, str | None] | None:
+        """Return the name(s) whose :meth:`resolve`/:meth:`resolve_standard_member` mint *nominal*.
+
+        The inverse lookup: given an identity this table minted, returns the
+        same ``name`` (with ``member_name`` ``None``) or ``(enum_name,
+        member_name)`` pair another table's matching call would take, so a
+        value carrying this table's identity can be restamped onto another
+        table's (see :func:`~agm.agl.runtime.engine_config.restamp_engine_setting`).
+        Returns ``None`` for an identity this table has no name for at all.
+        """
+        for name, entry in self.declared.items():
+            if entry.nominal == nominal:
+                return (name, None)
+        for (enum_name, member_name), entry in self.members.items():
+            if entry.nominal == nominal:
+                return (enum_name, member_name)
+        for (enum_name, member_name), entry in self.standard_members.items():
+            if entry.nominal == nominal:
+                return (enum_name, member_name)
+        for name, reserved_id in RESERVED_NOMINAL_IDS.items():
+            if reserved_id == nominal.value:
+                return (name, None)
+        for (enum_name, member_name), reserved_id in RESERVED_ENUM_MEMBER_IDS.items():
+            if reserved_id == nominal.value:
+                return (enum_name, member_name)
+        return None
 
 
 #: The table for a program with no ``builtin`` declarations of its own: every

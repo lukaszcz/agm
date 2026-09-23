@@ -963,7 +963,10 @@ class _TypeBuilder:
         A builtin may live at any source path, but its enum members must be
         inline so host-minted values and source constructors share identities.
         ``Optional`` instead reuses its selected builtin ``Option``'s
-        ``Some``/``None`` members and declares ``Default`` inline. Nominal types
+        ``Some``/``None`` members and declares ``Default`` inline; likewise
+        ``AgentSandbox`` reuses the builtin ``Sandbox`` record as its
+        ``Sandbox`` member (enum-record unification: the value IS the
+        record), with ``Disabled``/``Native`` declared inline. Nominal types
         inside fields and an exception's base remain contract-bearing and are
         normalized by :func:`contract_for_typedef` relative to the declaration's
         own frame.
@@ -986,6 +989,24 @@ class _TypeBuilder:
                     for member in stmt.members
                 )
                 if not shares_option or not default_is_inline:
+                    raise AglTypeError(
+                        f"Builtin type '{stmt.name}' has an invalid definition.",
+                        span=stmt.span,
+                    )
+            elif bare_name == "AgentSandbox":
+                sandbox = self._env.type_table.builtin_declaration("Sandbox")
+                actual_members = {member.name: member for member in typedef.members}
+                shares_sandbox = (
+                    sandbox is not None
+                    and "Sandbox" in actual_members
+                    and actual_members["Sandbox"].decl_id == sandbox.decl_node_id
+                )
+                other_members_inline = all(
+                    isinstance(member, VariantDef)
+                    for member in stmt.members
+                    if not (isinstance(member, VariantRef) and member.chain.member == "Sandbox")
+                )
+                if not shares_sandbox or not other_members_inline:
                     raise AglTypeError(
                         f"Builtin type '{stmt.name}' has an invalid definition.",
                         span=stmt.span,

@@ -978,6 +978,12 @@ def exec_cmd(
         metavar="AGENT",
         help="Seed the free-ask default session from an Agent value or command.",
     ),
+    default_sandbox: str | None = typer.Option(
+        None,
+        "--default-sandbox",
+        metavar="SANDBOX",
+        help="Seed the default agent/exec sandboxing mode from an AgentSandbox value.",
+    ),
     trace_file: str | None = typer.Option(
         None,
         "--trace-file",
@@ -1097,6 +1103,7 @@ def exec_cmd(
         strict_json=strict_json,
         max_call_depth=max_call_depth,
         default_agent=default_agent,
+        default_sandbox=default_sandbox,
         no_trace=no_trace,
         trace_file=trace_file,
         trace=trace,
@@ -1132,6 +1139,12 @@ def repl_cmd(
         "--default-agent",
         metavar="AGENT",
         help="Seed the free-ask default session from an Agent value or command.",
+    ),
+    default_sandbox: str | None = typer.Option(
+        None,
+        "--default-sandbox",
+        metavar="SANDBOX",
+        help="Seed the default agent/exec sandboxing mode from an AgentSandbox value.",
     ),
     quiet: bool = typer.Option(
         False,
@@ -1191,6 +1204,7 @@ def repl_cmd(
             strict_json=strict_json,
             max_call_depth=max_call_depth,
             default_agent=default_agent,
+            default_sandbox=default_sandbox,
             quiet=quiet,
             no_trace=no_trace,
             trace_file=trace_file,

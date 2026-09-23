@@ -1,8 +1,10 @@
-import std/agent::Agent
+import std/agent::{Agent, AgentSandbox}
 import std/option::Option
 import std/path::path
+import std/sandbox::Sandbox
 
 builtin var default-agent: Agent = AgentClaude("sonnet", "medium")
+builtin var default-sandbox: AgentSandbox = Sandbox()
 builtin var strict-json: bool = false
 builtin var timeout: Option[text] = None
 builtin var trace: bool = false

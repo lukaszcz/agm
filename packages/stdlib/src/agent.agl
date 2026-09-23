@@ -1,6 +1,7 @@
 import std/config
 import std/errors::Exception
 import std/option::Option
+import std/sandbox::Sandbox
 
 builtin
 enum ParsePolicy =
@@ -13,6 +14,12 @@ enum Agent
   | AgentClaude(model: text, thinking: text)
   | AgentCodex(model: text, thinking: text)
   | AgentPi(provider: text, model: text, thinking: text)
+
+builtin
+enum AgentSandbox
+  | Disabled
+  | Native
+  | std/sandbox::Sandbox
 
 builtin
 record AgentRequest

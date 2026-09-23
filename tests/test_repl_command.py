@@ -239,6 +239,7 @@ def _args(
     trace: bool = False,
     trace_file: str | None = None,
     default_agent: str | None = None,
+    default_sandbox: str | None = None,
     no_stdlib: bool = False,
     plain: bool = True,
 ) -> ReplArgs:
@@ -256,6 +257,7 @@ def _args(
         trace=trace,
         trace_file=trace_file,
         default_agent=default_agent,
+        default_sandbox=default_sandbox,
         no_stdlib=no_stdlib,
         plain=plain,
     )
@@ -617,6 +619,27 @@ class TestReplRun:
         assert isinstance(result.value, RecordValue)
         assert "AgentClaude(" in render_value(result.value, session.descriptors())
         assert result.value.fields["model"] == TextValue("haiku")
+
+    def test_cli_sandbox_seed_is_readable_from_the_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.runtime.render import render_value
+        from agm.agl.semantics.values import RecordValue
+
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(default_sandbox='Sandbox(memory = Some("8G"))'))
+        session: ReplSession = fake_plain_console[0]["session"]
+
+        assert session.eval_entry("import std/config").ok
+        seeded = session.eval_entry("std/config::default-sandbox")
+        assert seeded.ok
+        assert isinstance(seeded.value, RecordValue)
+        rendered = render_value(seeded.value, session.descriptors())
+        assert "Sandbox(" in rendered
+        assert "8G" in rendered
 
     def test_cli_agent_override_still_applies_after_reset(
         self,

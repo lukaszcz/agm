@@ -4877,6 +4877,37 @@ class TestDefaultAgentHostSyntax:
         assert "echo hi" in rendered
 
 
+class TestDefaultSandboxHostSyntax:
+    """``--default-sandbox`` mirrors ``--default-agent``'s host-side decode."""
+
+    def test_bare_member_seeds_the_config_binding(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "import std/config\nprint std/config::default-sandbox\n")
+
+        assert exec_command.run(_exec_args_no_trace(agl_file, default_sandbox="Native")) is None
+
+        assert "Native" in capsys.readouterr().out
+
+    def test_referenced_sandbox_member_decodes_with_omitted_fields_defaulted(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "import std/config\nprint std/config::default-sandbox\n")
+
+        assert (
+            exec_command.run(
+                _exec_args_no_trace(agl_file, default_sandbox='Sandbox(memory = Some("8G"))')
+            )
+            is None
+        )
+
+        rendered = capsys.readouterr().out
+        assert "Sandbox" in rendered
+        assert "8G" in rendered
+
+
 class TestExecProcessEnvironment:
     """The command wires one process snapshot into ``std/env``."""
 

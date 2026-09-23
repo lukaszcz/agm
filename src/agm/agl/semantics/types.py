@@ -1008,6 +1008,21 @@ def standard_option_type(inner: Type) -> EnumType:
     )
 
 
+def standard_optional_type(inner: Type) -> EnumType:
+    """Return the standard library's ``Optional[inner]`` under the host's reserved identity.
+
+    The one constructor for a host-minted ``Optional``, mirroring
+    :func:`standard_option_type`. :func:`is_standard_optional_enum` is the
+    matching predicate.
+    """
+    return EnumType(
+        name="Optional",
+        type_args=(inner,),
+        module_id=RESERVED_ID,
+        decl_id=_reserved_id("Optional"),
+    )
+
+
 # The ``Option[text]`` type — the single source of truth shared with
 # engine_keys and any other module that needs this type.
 OPTION_TEXT_TYPE: EnumType = standard_option_type(TextType())
@@ -1084,6 +1099,14 @@ _SESSION_ERROR_TYPE = ExceptionType(
     name="SessionError", module_id=RESERVED_ID, decl_id=_reserved_id("SessionError")
 )
 
+# ``Sandbox`` — the sandboxing options record; ``AgentSandbox`` widens it (enum-record
+# unification: ``AgentSandbox::Sandbox`` IS a ``Sandbox`` value).
+_SANDBOX_TYPE = RecordType(name="Sandbox", module_id=RESERVED_ID, decl_id=_reserved_id("Sandbox"))
+
+_AGENT_SANDBOX_TYPE = EnumType(
+    name="AgentSandbox", module_id=RESERVED_ID, decl_id=_reserved_id("AgentSandbox")
+)
+
 # These records represent host resources rather than source-constructible data.
 HOST_MINTED_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset({"Session"})
 HOST_MINTED_PRELUDE_TYPE_IDS: frozenset[int] = frozenset(
@@ -1101,6 +1124,8 @@ BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "Session": _SESSION_TYPE,
     "SessionStats": _SESSION_STATS_TYPE,
     "SessionError": _SESSION_ERROR_TYPE,
+    "Sandbox": _SANDBOX_TYPE,
+    "AgentSandbox": _AGENT_SANDBOX_TYPE,
 }
 
 # Names of built-in prelude types (non-shadowable, like built-in exceptions).

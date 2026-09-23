@@ -221,11 +221,16 @@ def _clean_validation_message(error: JsonschemaValidationError) -> str:
 #: (no ``RefDecode`` node can occur, so no ``$defs`` table is needed).
 _EMPTY_DEFS: Mapping[str, DecodeSchema] = MappingProxyType({})
 
-#: Resolves one omitted defaulted field's value at decode time, from the
-#: declaring nominal's real, fully-linked descriptor (``IrInterpreter.default_for_field``
-#: is the canonical implementation). ``None`` where no evaluator is reachable
-#: (host engine-config decoding, a compile-time contract preview): a
-#: defaulted-but-omitted field then reports the ordinary "missing field"
+#: Resolves one omitted defaulted field's value at decode time. An ordinary
+#: program's own default resolves from the declaring nominal's real,
+#: fully-linked descriptor (``IrInterpreter.default_for_field`` is the
+#: canonical implementation). A reserved record decoded before any program
+#: exists (a host engine setting from a CLI flag or config entry) instead
+#: resolves from its seeded ``TypeDef``'s own host-side constant
+#: (``semantics.type_table.reserved_field_default``, wrapped by
+#: ``runtime.engine_config``'s own resolver) — no evaluator is reachable
+#: there. ``None`` (a compile-time contract preview, which decodes nothing):
+#: a defaulted-but-omitted field then reports the ordinary "missing field"
 #: error, same as an undefaulted one.
 DefaultResolver = Callable[[NominalId, int], Value]
 

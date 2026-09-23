@@ -5,15 +5,20 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+from agm.agl.ir.ids import NominalId
+from agm.agl.ir.reserved_nominals import (
+    require_reserved_enum_member_id,
+    require_reserved_nominal_id,
+)
 from agm.agl.runtime.engine_config import (
     build_engine_config_seeds,
     engine_default_settings,
     raw_option_str,
 )
 from agm.agl.runtime.option import option_text
-from agm.agl.semantics.values import BoolValue
+from agm.agl.semantics.values import BoolValue, RecordValue, TextValue
 from agm.cli_support.engine_seeds import build_host_engine_seeds
-from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, TRACE_ENGINE_KEYS
+from agm.config.engine_keys import ENGINE_KEY_NAMES, ENGINE_KEYS, TRACE_ENGINE_KEYS, EngineKeySpec
 from agm.config.general import ExecConfig, exec_config_from_merged
 from tests._agl_helpers import agent_value
 
@@ -21,6 +26,7 @@ _CONFIG_RAW_VALUES: dict[str, object] = {
     "trace": True,
     "strict-json": True,
     "default-agent": 'AgentCommand("configured")',
+    "default-sandbox": "Native",
     "trace-file": "configured.jsonl",
     "timeout": "12s",
 }
@@ -29,6 +35,7 @@ _CLI_VALUES: dict[str, object] = {
     "trace": False,
     "strict-json": False,
     "default-agent": 'AgentCommand("cli")',
+    "default-sandbox": "Disabled",
     "trace-file": "cli.jsonl",
     "timeout": "3s",
 }
@@ -43,7 +50,43 @@ def _config_for(key: str, configured: bool) -> ExecConfig:
         default_agent='AgentCommand("configured")'
         if configured and key == "default-agent"
         else None,
+        default_sandbox="Native" if configured and key == "default-sandbox" else None,
     )
+
+
+#: One raw ``[exec]`` TOML value per engine key, paired with the
+#: ``ExecConfig`` attribute value ``exec_config_from_merged`` must produce
+#: from it. Values are chosen so the hop is meaningful for every key's own
+#: parsing (``timeout`` parses a duration string; every other key here is a
+#: straight pass-through), never merely a coincidental identity.
+_RAW_AND_EXPECTED_BY_KEY: dict[str, tuple[object, object]] = {
+    "trace": (True, True),
+    "strict-json": (True, True),
+    "default-agent": ('AgentCommand("raw-agent")', 'AgentCommand("raw-agent")'),
+    "default-sandbox": ("Native", "Native"),
+    "trace-file": ("raw.jsonl", "raw.jsonl"),
+    "timeout": ("5s", 5.0),
+}
+
+
+@pytest.mark.parametrize("spec", ENGINE_KEYS, ids=lambda spec: spec.name)
+def test_exec_config_from_merged_reflects_every_engine_key_config_attr(
+    spec: EngineKeySpec,
+) -> None:
+    """Each ``[exec]`` TOML key reaches its own declared ``ExecConfig`` attribute.
+
+    ``ExecConfig(default_sandbox=...)`` built directly (as :func:`_config_for`
+    does) never runs ``exec_config_from_merged``'s own TOML-key lookup, so a
+    typo there (e.g. reading the wrong raw key string) would silently leave
+    an attribute at its default with nothing failing. Parametrized over the
+    whole catalog, so a future engine key is covered automatically.
+    """
+    assert spec.config_attr is not None
+    raw, expected = _RAW_AND_EXPECTED_BY_KEY[spec.name]
+
+    config = exec_config_from_merged({"exec": {spec.name: raw}})
+
+    assert getattr(config, spec.config_attr) == expected
 
 
 @pytest.mark.parametrize("key", [spec.name for spec in ENGINE_KEYS])
@@ -141,6 +184,66 @@ def test_config_table_default_agent_is_json_shaped_data() -> None:
     ).merged()
 
     assert seeds["default-agent"] == agent_value("AgentClaude", model="opus", thinking="high")
+
+
+def _optional_default() -> RecordValue:
+    return RecordValue(
+        nominal=NominalId(require_reserved_enum_member_id("Optional", "Default")), fields={}
+    )
+
+
+def _option_none() -> RecordValue:
+    return RecordValue(
+        nominal=NominalId(require_reserved_enum_member_id("Option", "None")), fields={}
+    )
+
+
+def test_bare_default_sandbox_cli_value_fills_every_omitted_field() -> None:
+    """A bare ``Sandbox`` fills all four defaulted fields from the host-side constant table.
+
+    No program exists yet at this pre-execution boundary, so the omitted
+    fields are filled by :func:`~agm.agl.semantics.type_table.reserved_field_default`
+    rather than any evaluator.
+    """
+    config = _config_for("default-sandbox", configured=False)
+
+    seeds = build_host_engine_seeds(
+        config=config, primary_table={}, cli_values={"default-sandbox": "Sandbox"}
+    ).merged()
+
+    assert seeds["default-sandbox"] == RecordValue(
+        nominal=NominalId(require_reserved_nominal_id("Sandbox")),
+        fields={
+            "memory": _optional_default(),
+            "swap": _optional_default(),
+            "settings": _option_none(),
+            "patch": BoolValue(True),
+        },
+    )
+
+
+def test_partial_default_sandbox_cli_value_keeps_its_explicit_field_and_defaults_the_rest() -> None:
+    """An explicit field decodes normally; every omitted field still defaults."""
+    config = _config_for("default-sandbox", configured=False)
+
+    seeds = build_host_engine_seeds(
+        config=config,
+        primary_table={},
+        cli_values={"default-sandbox": 'Sandbox(memory = Some("8G"))'},
+    ).merged()
+
+    assert seeds["default-sandbox"] == RecordValue(
+        nominal=NominalId(require_reserved_nominal_id("Sandbox")),
+        fields={
+            "memory": RecordValue(
+                nominal=NominalId(require_reserved_enum_member_id("Option", "Some")),
+                fields={"value": TextValue("8G")},
+            ),
+            "swap": _optional_default(),
+            "settings": _option_none(),
+            "patch": BoolValue(True),
+        },
+    )
 
 
 def test_invalid_default_agent_value_exits_before_anything_runs(

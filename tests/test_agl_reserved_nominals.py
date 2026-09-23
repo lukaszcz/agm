@@ -8,10 +8,14 @@ onto the module-level built-in handle constants and canonical seeded
 
 from __future__ import annotations
 
+import pytest
+
 from agm.agl.ir.reserved_nominals import (
     NO_DECL_ID,
+    RESERVED_ENUM_MEMBER_IDS,
     RESERVED_NOMINAL_IDS,
     RESERVED_NOMINAL_NAMES,
+    require_reserved_enum_member_id,
     reserved_nominal_id,
 )
 from agm.agl.semantics.type_table import (
@@ -63,6 +67,24 @@ class TestReservedNominalCatalog:
 
     def test_reserved_nominal_id_returns_none_for_an_unreserved_name(self) -> None:
         assert reserved_nominal_id("NotARealType") is None
+
+
+class TestReservedEnumMemberIds:
+    def test_agent_sandbox_sandbox_member_aliases_the_standalone_sandbox_record(self) -> None:
+        """A referenced member (enum-record unification) reuses the referenced
+        record's own reserved id -- the one intentional alias in the table."""
+        assert (
+            require_reserved_enum_member_id("AgentSandbox", "Sandbox")
+            == RESERVED_NOMINAL_IDS["Sandbox"]
+        )
+        assert ("AgentSandbox", "Sandbox") in RESERVED_ENUM_MEMBER_IDS
+
+    def test_mismatched_pair_is_rejected_rather_than_aliased_by_bare_member_name(self) -> None:
+        """No name-keyed fallback: a member name that happens to match some
+        other reserved type name (here ``Session``) must not silently alias
+        that unrelated type's identity."""
+        with pytest.raises(AssertionError, match="not a reserved enum member"):
+            require_reserved_enum_member_id("SessionTransport", "Session")
 
 
 class TestSessionNominalWiring:

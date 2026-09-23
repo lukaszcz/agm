@@ -259,6 +259,8 @@ class ExecArgs:
     no_trace_file: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
     default_agent: str | None = None
+    # An AgL ``AgentSandbox`` literal used to seed std/config::default-sandbox.
+    default_sandbox: str | None = None
     # Static artifacts produced only when CLI ambiguity required early discovery.
     pipeline_cache: object | None = field(default=None, repr=False, compare=False)
 
@@ -275,6 +277,8 @@ class ReplArgs:
     no_stdlib: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
     default_agent: str | None = None
+    # An AgL ``AgentSandbox`` literal used to seed std/config::default-sandbox.
+    default_sandbox: str | None = None
     # Force the plain, non-interactive line front end even on a tty; the
     # auto-detected default (non-tty stdin/stdout, or TERM=dumb) needs no flag.
     plain: bool = False

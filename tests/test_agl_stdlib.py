@@ -323,6 +323,21 @@ def test_builtin_type_shape_must_match() -> None:
         _check("builtin record ExecResult\n  stdout: text\n()\n")
 
 
+def test_builtin_record_shape_must_match_field_default_presence() -> None:
+    """A ``builtin`` declaration adding a default the host contract does not
+    have is a structural mismatch, distinct from a field type/name mismatch."""
+    with pytest.raises(AglTypeError, match="Builtin type 'SessionStats' has an invalid definition"):
+        _check(
+            "builtin record SessionStats(\n"
+            "  input-tokens: int,\n"
+            "  output-tokens: int,\n"
+            "  cost: decimal,\n"
+            "  context-percent: decimal = 0.0,\n"
+            ")\n()\n",
+            default_stdlib=False,
+        )
+
+
 def test_std_core_source_builtin_shape_is_not_masked_by_seed(
     tmp_path: Path,
 ) -> None:
@@ -364,6 +379,21 @@ def test_builtin_optional_must_reference_option_members() -> None:
             "  | Default\n"
             "()\n",
             default_stdlib=False,
+        )
+
+
+def test_builtin_agent_sandbox_must_reference_the_builtin_sandbox_record() -> None:
+    with pytest.raises(AglTypeError, match="Builtin type 'AgentSandbox' has an invalid definition"):
+        _check(
+            "scope Fake\n"
+            "  record Sandbox()\n"
+            "end Fake\n"
+            "\n"
+            "builtin enum AgentSandbox\n"
+            "  | Disabled\n"
+            "  | Native\n"
+            "  | Fake::Sandbox\n"
+            "()\n"
         )
 
 

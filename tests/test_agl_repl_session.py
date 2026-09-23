@@ -112,6 +112,8 @@ def _literal_for_type(typ: Type) -> str:
         return "{}"
     if isinstance(typ, EnumType) and typ.name == "Option":
         return "None"
+    if isinstance(typ, EnumType) and typ.name == "Optional":
+        return "Default"
     if isinstance(typ, EnumType) and typ.name == "Agent":
         return 'AgentCommand("x")'
     if isinstance(typ, EnumType) and typ.name == "SessionTransport":
@@ -1429,7 +1431,15 @@ class TestStdlib:
         for member in typedef.members:
             variant = member.name
             args = _constructor_args(dict(table.record_fields(member)))
-            call = f"{name}::{variant}({args})" if args else f"{name}::{variant}"
+            # A referenced member (docs/agl/reference/types.md, "Enum types")
+            # keeps its own declaration path rather than joining the enum's
+            # scope, so only an inline member is reachable qualified.
+            inline = member.module_id == typ.module_id and member.scope_path == (
+                *typ.scope_path,
+                variant,
+            )
+            prefix = f"{name}::" if inline else ""
+            call = f"{prefix}{variant}({args})" if args else f"{prefix}{variant}"
             result = s.eval_entry(call)
             assert result.ok, (name, variant, result.diagnostics)
             assert result.value_type is not None

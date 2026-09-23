@@ -213,8 +213,10 @@ def decode_param_value(
     parse, JSON-Schema validation, then the typeless ``decode_value`` walk).
     *default_resolver*, when given, fills an omitted defaulted field nested in
     *raw* (see ``runtime.convert.decode_value``); omitted, such a field is an
-    ordinary missing-field error -- the host engine-config decode path never
-    supplies one, since no program (and so no evaluator) exists yet there.
+    ordinary missing-field error. The host engine-config decode path supplies
+    its own resolver, reading a reserved record's field defaults as host-side
+    constants rather than evaluating IR (no program exists yet there) — see
+    ``runtime.engine_config.convert_host_value``.
 
     :raises ValueError: on a type/shape mismatch, schema-validation failure, or a raw
         string that is not valid Unicode (:class:`~agm.util.unicode.LoneSurrogateError`).

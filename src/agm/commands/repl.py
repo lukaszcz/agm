@@ -1,9 +1,9 @@
 """Implementation of the ``agm repl`` command.
 
 Launches an interactive read-eval-print loop for the AgL workflow language.
-The REPL shares ``agm exec``'s ``[exec]`` configuration (default-agent and
-timeout), so an interactive session evaluates entries with the same agent
-dispatch backing a batch ``agm exec`` run would use.
+The REPL shares ``agm exec``'s ``[exec]`` configuration (default-agent,
+default-sandbox, and timeout), so an interactive session evaluates entries
+with the same agent dispatch backing a batch ``agm exec`` run would use.
 
 The command itself is thin: it resolves configuration the same way ``exec``
 does, builds a value-driven dispatcher, constructs a :class:`ReplSession`,
@@ -144,6 +144,8 @@ def run(args: ReplArgs) -> None:
         cli_values["trace-file"] = args.trace_file
     if args.default_agent is not None:
         cli_values["default-agent"] = args.default_agent
+    if args.default_sandbox is not None:
+        cli_values["default-sandbox"] = args.default_sandbox
 
     engine_seeds = build_host_engine_seeds(
         config=config,

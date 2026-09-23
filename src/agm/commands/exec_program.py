@@ -31,6 +31,9 @@ Flag notes:
     - ``--default-agent AGENT`` seeds ``std/config::default-agent`` from host Agent
       syntax or a canonical constructor, taking precedence over the qualified program
       table/``[exec] default-agent``.
+    - ``--default-sandbox SANDBOX`` seeds ``std/config::default-sandbox`` from host
+      AgentSandbox syntax, taking precedence over the qualified program
+      table/``[exec] default-sandbox``.
     - A sole entry-module ``program def`` runs after initializers; when several
       are declared, ``-p``/``--program`` selects one by declaration path. A file
       must declare at least one program; inline ``-c`` statements are wrapped in
@@ -42,8 +45,8 @@ Flag notes:
       disables the automatic import throughout the loaded program. Ordinary imports are
       qualified by default; tails and ``use`` declarations make names bare.
     - A program reads and writes the engine settings (``strict-json``,
-      ``default-agent``, ``timeout``, ``trace``, ``trace-file``) through the
-      ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
+      ``default-agent``, ``default-sandbox``, ``timeout``, ``trace``, ``trace-file``)
+      through the ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
       from its program point onward and overrides the CLI flag, which overrides
       the config-file layer.  ``--max-call-depth`` remains a host/runtime
       recursion guard.
@@ -535,6 +538,8 @@ def run(
         cli_values["trace-file"] = None
     if args.default_agent is not None:
         cli_values["default-agent"] = args.default_agent
+    if args.default_sandbox is not None:
+        cli_values["default-sandbox"] = args.default_sandbox
 
     # strict-json/timeout/trace are resolved only after preflight, below, once a
     # selected program's own ``@config`` entries (ranked between the config
@@ -657,7 +662,8 @@ def run(
     # 1 — is what lets ``@config`` reach them without a second lowering pass
     # or a duplicated precedence rule. A ``@config`` value is decoded against
     # *executable*'s own nominal identity (see ``preflight_arguments``); an
-    # enum-backed value (``timeout``, ``trace-file``, ``default-agent``) is
+    # enum-backed value (``timeout``, ``trace-file``, ``default-agent``,
+    # ``default-sandbox``) is
     # restamped onto the standard identity every other engine tier already
     # uses, so it reads back through the same plain accessors.
     config_engine_values: dict[str, Value] = {}

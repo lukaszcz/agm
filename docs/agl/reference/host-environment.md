@@ -318,12 +318,22 @@ key:
 | `trace` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
 | `default-agent` | `Agent` | `AgentClaude("sonnet", "medium")` |
+| `default-sandbox` | `AgentSandbox` | `Sandbox` (every field defaulted) |
 | `trace-file` | `Option[path]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::strict-json`).
 `default-agent` is a typed `Agent` value — its selected member `RecordValue` at runtime — used by `ask` when its `agent` option is omitted. Host CLI and TOML values read the same [host Agent syntax](../../commands/agl.md#host-agent-syntax) as an `Agent`-typed parameter: compact shorthand, then a JSON object, then an `Agent` member constructor call, and otherwise a verbatim command. The optional settings (`trace-file`, `timeout`) take a `Some("…")` or `None` value.
+`default-sandbox` is a typed `AgentSandbox` value ([Types](types.md#agentsandbox)). Unlike
+`default-agent`, it is not an `Agent`, so its host CLI/TOML text decodes as
+strict JSON or one [value-syntax](#value-syntax) literal, exactly as any
+other non-`Agent`, non-`Option` engine setting or program argument does: a
+bare member name (`Native`, `Disabled`, `Sandbox`) or a member constructor
+call. An omitted field of a defaulted-field constructor — such as `Sandbox`'s
+`memory`, `swap`, `settings`, and `patch` — fills from that field's own
+declared default, so `Sandbox`, `Sandbox()`, and `Sandbox(memory =
+Some("8G"))` all decode.
 
 ### Precedence
 

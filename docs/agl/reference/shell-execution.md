@@ -40,7 +40,7 @@ is a static error.
 exec(
   command: text,
   env: Environ = std/env::environ,
-  cwd: Option[text] = Option[text]::None,
+  cwd: Option[path] = Option[path]::None,
   timeout: Option[text] = std/config::timeout,
   sandbox: Option[Sandbox] = Option[Sandbox]::None,
 ) -> ExecResult

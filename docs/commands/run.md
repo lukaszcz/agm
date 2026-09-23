@@ -22,6 +22,8 @@
 - `[run.<command>].pty`: per-command pseudo-terminal override
 - `[run.<command>].alias`: replace the invoked command name before execution
 
+`[run].memory`/`.swap` and `[run.<command>].memory`/`.swap` are shared with AgL: an agent call's `sandbox = Sandbox(...)` or `exec`'s `sandbox = Some(Sandbox(...))` (see [`sandbox`](../agl/reference/agent-calls.md#sandbox) and [Spawn parameters](../agl/reference/shell-execution.md)) resolves its limits from the same `[run.<name>]` → `[run]` → built-in-floor chain, keyed by the real command name (the agent's executable, or `exec`'s first shell word) — never a spec-name table, never `sh`. `[run.<command>].alias` and `.pty` are read only by `agm run` itself; an AgL sandboxed call never remaps its command through an alias and never allocates a pseudo-terminal.
+
 `agm run` options:
 
 - `--no-sandbox`: run directly without `srt`, skipping sandbox settings discovery and patching
@@ -44,5 +46,7 @@ Sandbox settings resolution:
 - `network` and `filesystem` are merged by key; their list-valued keys are appended and deduplicated in precedence order
 - later `network.deniedDomains` entries remove matching earlier `network.allowedDomains` entries; later `filesystem.denyRead` and `filesystem.denyWrite` entries remove matching earlier `filesystem.allowRead` and `filesystem.allowWrite` entries
 - `ignoreViolations` replaces the earlier value; `enabled` and `enableWeakerNestedSandbox` override when set
+
+An AgL agent call or sandboxed `exec` resolves settings through this same discovery and merge chain; it never has an alias to fall back to, so an unmatched name goes straight to `default.json`.
 
 The bundled `pi.json` profile sets `network.allowAllUnixSockets` so Pi extensions can create local IPC sockets. On Linux, SRT's seccomp filter cannot allow Unix sockets by path, so this permission is necessarily all-or-nothing; filesystem policy still controls which socket paths Pi can create or access.

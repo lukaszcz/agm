@@ -30,7 +30,7 @@ AGM is layered from a thin CLI down to reusable primitives, with AgL as a self-c
 - [config.md](config.md) — configuration loading, layering precedence, the AGM home, and standard-library location.
 - [workspaces.md](workspaces.md) — project layout, git worktrees, dependencies, sync, and tmux: the project-management half of AGM.
 - [packages.md](packages.md) — package manifests, identity, dependencies, validation, and registered commands; [package-store.md](package-store.md) — the store, activation, installation, and the managed `std` package.
-- [sandbox.md](sandbox.md) — `agm run`, the SRT sandbox, and resource limits.
+- [sandbox.md](sandbox.md) — the sandbox preparation library, `agm run`, the SRT backend, and resource limits.
 - [agents.md](agents.md) — the agent runner, sessions, and the loop/review/revise/refine workflows.
 - [agl/index.md](agl/index.md) — start here for any AgL language task; it links to the frontend, execution, module, hosting, and REPL documents.
 - [testing.md](testing.md) — tests, coverage, and the repository quality gates.

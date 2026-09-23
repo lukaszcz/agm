@@ -36,7 +36,7 @@ arguments use program routes; module parameters use both routes.
 
 ## Sandbox Configuration
 
-`agm run` sandbox settings follow their own discovery and merge chain across the same scopes, selecting a per-command settings file with a default fallback ([sandbox.md](sandbox.md)).
+Sandbox settings follow their own discovery and merge chain across the same scopes, selecting a per-command settings file with a default fallback; `agm run` and every AgL sandboxed call (agent dispatch, `exec`) share it ([sandbox.md](sandbox.md)).
 
 ## Code Entry Points
 

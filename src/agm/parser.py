@@ -671,17 +671,18 @@ _HELP_TEXTS: dict[str, str] = {
                  [--dry-run] [--no-stdlib]
                  [--quiet] [--trace|--trace-file PATH|--no-trace] [--plain]
 
-        Start an interactive read-eval-print loop for AgL.  Each entry is
-        parsed, type-checked, and evaluated once against a persistent session
-        that accumulates bindings, types, and declarations across entries, so
-        earlier results stay available and agent calls fire exactly once.  The
-        session reuses the [exec] configuration (default agent, call-depth
-        limit, JSON strictness, timeout). Like agm exec, it supplies an automatic
-        import std/prelude::* prelude to each loaded program, so standard-library
-        names are available unqualified. An explicit import whose expansion
-        includes std/prelude supplies the prelude contribution instead, so plain
-        import std/prelude leaves prelude names qualified-only. Other imports are
-        qualified by default; --no-stdlib disables the automatic prelude.
+        Start an interactive read-eval-print loop for AgL.  Each entry is parsed,
+        type-checked, and evaluated once against a persistent session that
+        accumulates bindings, types, and declarations across entries, so earlier
+        results stay available and agent calls fire exactly once.  The session
+        reuses the [exec] configuration (default agent, default sandbox,
+        call-depth limit, JSON strictness, timeout). Like agm exec, it supplies
+        an automatic import std/prelude::* prelude to each loaded program, so
+        standard-library names are available unqualified. An explicit import
+        whose expansion includes std/prelude supplies the prelude contribution
+        instead, so plain import std/prelude leaves prelude names qualified-only.
+        Other imports are qualified by default; --no-stdlib disables the
+        automatic prelude.
 
         The REPL has two front ends: an interactive prompt_toolkit console
         with syntax highlighting, completion, and history, and a plain

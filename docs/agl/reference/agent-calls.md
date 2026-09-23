@@ -441,6 +441,11 @@ naming resource limits. When omitted, it defaults to
 - `Disabled` — the agent process runs unwrapped, with no permission flag
   added at all.
 
+The all-permissions and don't-ask/auto-approve framing above applies only to
+`AgentClaude` and `AgentCodex`; for `AgentPi` and `AgentCommand` no permission
+flag is ever added, so `Native` and `Disabled` differ only in sandboxing, and
+`Sandbox` runs the agent under its own default permissions.
+
 <!-- agl-check: fragment -->
 ```agl
 let r: Review = reviewer.ask("Review %{a}", sandbox = Native)

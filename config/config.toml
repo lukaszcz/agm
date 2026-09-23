@@ -1,3 +1,8 @@
+# [run.<name>] keys apply by the real command name (never an alias): `memory`
+# and `swap` also limit AgL agent calls and sandboxed `exec` runs under that
+# same name, not only `agm run`. `alias` is read by `agm run` alone — it is
+# never applied to an AgL agent's or `exec`'s argv.
+
 [run.claude]
 alias = "claude --dangerously-skip-permissions"
 
@@ -15,6 +20,7 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 #
 # [exec]
 # default-agent = "claude/sonnet-medium" # native agent shorthand or custom command
+# default-sandbox = "Native"    # AgentSandbox: bare member or Sandbox(...) call (default: Sandbox)
 # strict-json = false           # require bare JSON from agents (default: lenient recovery)
 # max-call-depth = 256          # recursion call-depth limit (default: 256)
 # timeout = "30m"               # initial shell-exec and agent idle timeout

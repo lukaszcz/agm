@@ -982,7 +982,10 @@ def exec_cmd(
         None,
         "--default-sandbox",
         metavar="SANDBOX",
-        help="Seed the default agent/exec sandboxing mode from an AgentSandbox value.",
+        help=(
+            "Seed std/config::default-sandbox, the default agent sandboxing mode, "
+            "from an AgentSandbox value."
+        ),
     ),
     trace_file: str | None = typer.Option(
         None,
@@ -1144,7 +1147,10 @@ def repl_cmd(
         None,
         "--default-sandbox",
         metavar="SANDBOX",
-        help="Seed the default agent/exec sandboxing mode from an AgentSandbox value.",
+        help=(
+            "Seed std/config::default-sandbox, the default agent sandboxing mode, "
+            "from an AgentSandbox value."
+        ),
     ),
     quiet: bool = typer.Option(
         False,

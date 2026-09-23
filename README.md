@@ -235,9 +235,12 @@ user-defined functions (`def`/`fn`), functions implemented by a co-located Pytho
 structured JSON targets, do-loops with retry/abort policies, control flow (if/case/try), shell
 execution (`exec`), and typed `Agent` values. Free `ask` lazily opens a persistent default agent
 session from `std/config::default-agent`; use `agent.ask(...)` or `Session::open(...)` to select
-an explicit agent or conversation. The selected value determines the invoked command. Host
-`Agent` arguments accept compact forms such as `claude/sonnet-medium`,
-`codex/o3-high`, and `pi/openai/gpt-5-low`; other text is a custom command.
+an explicit agent or conversation. The selected value determines the invoked command. Agent calls
+run inside the `agm run` sandbox by default (see `agm run` below), and `sandbox = Native` or
+`sandbox = Disabled` opts one out (an explicit `sandbox` requires an explicit agent); `exec` runs
+unsandboxed unless given `sandbox = Some(Sandbox(...))`. Host `Agent` arguments accept compact
+forms such as `claude/sonnet-medium`, `codex/o3-high`, and `pi/openai/gpt-5-low`; other text is a
+custom command.
 
 A file workflow declares one or more `program def` entries: `agm exec` invokes the sole one after
 initialization, or selects one of several with `-p`/`--program PATH` (for example,

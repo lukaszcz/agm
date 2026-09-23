@@ -239,7 +239,7 @@ class PiRpcSessionBackend(SandboxFixture):
         prepared: PreparedSandboxCommand | None = None
         argv = command
         if sandbox_run is not None:
-            spec = sandbox_run.spec.for_command(profile_name(command[0]) if command else None)
+            spec = sandbox_run.limits.for_command(profile_name(command[0]) if command else None)
             try:
                 prepared = sandbox_run.context.prepare(command, spec, env=env)
             except (SandboxUnavailableError, SandboxSettingsError) as exc:

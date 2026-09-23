@@ -41,7 +41,7 @@ def _sandbox_context(
 def _sandbox_run(tmp_path: Path, *, profile_name: str = "claude") -> SandboxRun:
     """A `SandboxRun` pairing *profile_name* with a fresh `_sandbox_context`."""
     return SandboxRun(
-        spec=SandboxSpec(profile_name=profile_name), context=_sandbox_context(tmp_path)
+        limits=SandboxSpec(profile_name=profile_name), context=_sandbox_context(tmp_path)
     )
 
 

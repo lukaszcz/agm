@@ -602,7 +602,7 @@ def _prepare_sandboxed_argv(
     """
     if sandbox is None:
         return argv, None
-    spec = sandbox.spec.for_command(profile_name(argv[0]) if argv else None)
+    spec = sandbox.limits.for_command(profile_name(argv[0]) if argv else None)
     try:
         prepared = sandbox.context.prepare(argv, spec, env=env)
     except (SandboxUnavailableError, SandboxSettingsError) as exc:

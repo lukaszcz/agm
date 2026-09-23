@@ -53,20 +53,20 @@ def _child(process: object) -> rpc._RpcChild:
     """Build an ``_RpcChild`` around a fake *process* with a plausible argv.
 
     ``kill_process_group`` always targets ``process.pid`` now (the dead
-    ``pgid`` override was removed), so a fake process that doesn't already
-    carry one is stamped with a synthetic, always-above-
-    ``_FAKE_PROCESS_GROUP_FLOOR`` id here -- unique per call -- so the
-    ``killed_groups`` fixture recognizes and intercepts it instead of a real
-    ``os.killpg`` ever reaching a real process group. A bare ``object()``
-    (used only by tests that never reach termination) is left untouched: it
-    rejects arbitrary attributes.
+    ``pgid`` override was removed), so every fake process is stamped
+    unconditionally with a synthetic, always-above-
+    ``_FAKE_PROCESS_GROUP_FLOOR`` id here -- unique per call, overwriting any
+    pid the fake already carries -- so the ``killed_groups`` fixture always
+    recognizes and intercepts it instead of a real ``os.killpg`` ever
+    reaching a real process group. A bare ``object()`` (used only by tests
+    that never reach termination) is left untouched: it rejects arbitrary
+    attributes.
     """
     popen = cast(subprocess.Popen[bytes], process)
-    if not hasattr(popen, "pid"):
-        try:
-            popen.pid = next(_fake_process_groups)
-        except AttributeError:
-            pass
+    try:
+        popen.pid = next(_fake_process_groups)
+    except AttributeError:
+        pass
     return rpc._RpcChild(popen, _PI, ["pi", "--mode", "rpc"])
 
 

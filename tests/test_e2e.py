@@ -9584,11 +9584,12 @@ class TestExecCommand:
     ) -> None:
         # Codex is the only built-in spec that delivers its prompt on stdin
         # rather than a prompt file (``PromptDelivery.STDIN``): nothing else
-        # composes that delivery mode with a sandbox-wrapped command. This is
-        # a regression guard, not a bug fix -- verified on a real
-        # sandbox-capable box that stdin survives the full
+        # composes that delivery mode with a sandbox-wrapped command. The
+        # fake ``codex`` binary below is ``cat`` with no ``"$@"``, so it
+        # ignores argv entirely and can only reproduce the prompt by reading
+        # it off stdin -- proof stdin reaches it intact through the full
         # ``systemd-run ... -- bash -c <bootstrap> -- srt --settings ... --
-        # codex ... -`` wrapper chain intact.
+        # codex ... -`` wrapper chain.
         work = tmp_path / "work"
         work.mkdir()
         program = work / "ask.agl"
@@ -9603,10 +9604,6 @@ class TestExecCommand:
         _install_transparent_sandbox_shims(tmp_path / "shims", env, log_dir=shim_log)
         write_sandbox_home(Path(env["HOME"]))
 
-        # The fake ``codex`` binary never inspects its argv: it echoes
-        # whatever it reads on stdin, so the assertion below only passes if
-        # the rendered prompt text made it all the way through the wrapper
-        # chain to the agent's stdin, unmodified.
         fake_codex = tmp_path / "bin" / "codex"
         fake_codex.parent.mkdir(parents=True)
         fake_codex.write_text("#!/bin/bash\ncat\n")

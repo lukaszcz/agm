@@ -61,7 +61,6 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import os
-import stat
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -731,7 +730,7 @@ def write_transparent_sandbox_shims(directory: Path, *, log_dir: Path) -> None:
         "  esac\n"
         "done\n"
     )
-    systemd_run.chmod(systemd_run.stat().st_mode | stat.S_IEXEC)
+    systemd_run.chmod(0o755)
     srt = directory / "srt"
     srt.write_text(
         "#!/bin/bash\n"
@@ -744,7 +743,7 @@ def write_transparent_sandbox_shims(directory: Path, *, log_dir: Path) -> None:
         "  esac\n"
         "done\n"
     )
-    srt.chmod(srt.stat().st_mode | stat.S_IEXEC)
+    srt.chmod(0o755)
 
 
 REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"

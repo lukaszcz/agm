@@ -115,11 +115,11 @@ class SandboxRun:
 
     Replaces two independently-optional parameters (limits and a context)
     with one value, so a caller cannot supply one without the other.
-    ``spec`` carries no profile name yet -- it is bound later, from the
+    ``limits`` carries no profile name yet -- it is bound later, from the
     final (post-interpolation) argv, in ``agm.agent.runner._prepare_sandboxed_argv``.
     """
 
-    spec: SandboxLimits
+    limits: SandboxLimits
     context: SandboxContext
 
 
@@ -156,18 +156,18 @@ def lazy_sandbox_context(context: "ConfigContext") -> Callable[[], SandboxContex
 
 
 def sandbox_run_for(
-    spec: SandboxLimits | None, get_context: Callable[[], SandboxContext]
+    limits: SandboxLimits | None, get_context: Callable[[], SandboxContext]
 ) -> SandboxRun | None:
-    """Bind optional profile-independent *spec* to a lazily built `SandboxContext`.
+    """Bind optional profile-independent *limits* to a lazily built `SandboxContext`.
 
-    Returns ``None`` without calling *get_context* when *spec* is ``None``, so
+    Returns ``None`` without calling *get_context* when *limits* is ``None``, so
     a caller that dispatches no sandboxed call never builds the context it
     would need. The profile name is bound later, from the post-interpolation
     argv, never here.
     """
-    if spec is None:
+    if limits is None:
         return None
-    return SandboxRun(spec=spec, context=get_context())
+    return SandboxRun(limits=limits, context=get_context())
 
 
 # The delegated cgroup lets a resource-limited scope's children join

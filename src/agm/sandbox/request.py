@@ -38,6 +38,21 @@ class SandboxLimits:
     settings_file: Path | None = None
     patch: bool = True
 
+    def for_command(self, profile_name: str | None) -> "SandboxSpec":
+        """Bind these profile-independent limits to *profile_name* for one command.
+
+        *profile_name* is always the real executable (never a spec-name
+        table, never ``sh``, never an alias); ``None`` selects no name, so
+        the config layer falls through to the unqualified defaults.
+        """
+        return SandboxSpec(
+            memory=self.memory,
+            swap=self.swap,
+            settings_file=self.settings_file,
+            patch=self.patch,
+            profile_name=profile_name,
+        )
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SandboxSpec(SandboxLimits):

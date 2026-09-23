@@ -104,7 +104,7 @@ def run(args: ReplArgs) -> None:
         else prepare_trace_log_from_decision(trace_decision, command_name="repl")
     )
 
-    runner_agent = value_driven_agent_factory(idle_timeout=config.timeout)
+    runner_agent = value_driven_agent_factory(idle_timeout=config.timeout, context=ctx)
 
     session_host = create_agl_session_host(idle_timeout=config.timeout)
 

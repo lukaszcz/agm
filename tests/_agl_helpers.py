@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import os
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -122,6 +123,7 @@ from agm.agl.type_schema import derive_schema_and_decode
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.agl.zones import ParamZone
+from agm.config.context import ConfigContext
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
 # ids (which start at 0) and from every reserved identity (<= -2, see
@@ -644,6 +646,39 @@ def agent_value(variant: str, **fields: str) -> RecordValue:
         nominal=member_nominal,
         fields={name: TextValue(value) for name, value in fields.items()},
     )
+
+
+def hermetic_config_context() -> ConfigContext:
+    """A ``ConfigContext`` scoped to this test's isolated, empty home.
+
+    Reads ``HOME`` from the environment: the autouse ``isolate_host_environment``
+    fixture (``conftest.py``) points it at a fresh per-test directory before every
+    test runs, so a ``value_driven_agent_factory`` built from this context resolves
+    no ``[run.*]`` config and no project directory, regardless of the machine or
+    which other tests ran.
+    """
+    home = Path(os.environ["HOME"])
+    return ConfigContext(home=home, proj_dir=None, cwd=home)
+
+
+def write_sandbox_home(
+    home: Path, *, run_toml: str = "", extra_settings_files: tuple[str, ...] = ()
+) -> None:
+    """Set up *home* as an AGM home with a default sandbox settings candidate.
+
+    Writes ``[home]/.agm/sandbox/default.json`` so sandbox preparation
+    succeeds, *run_toml* as ``[home]/.agm/config.toml`` when given, and an
+    empty-object settings file named after each entry in
+    *extra_settings_files* (e.g. ``"not-claude"`` for a profile-name probe
+    that must never be reached).
+    """
+    sandbox_dir = home / ".agm" / "sandbox"
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
+    (sandbox_dir / "default.json").write_text("{}", encoding="utf-8")
+    for name in extra_settings_files:
+        (sandbox_dir / f"{name}.json").write_text("{}", encoding="utf-8")
+    if run_toml:
+        (home / ".agm" / "config.toml").write_text(run_toml, encoding="utf-8")
 
 
 REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"

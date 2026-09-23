@@ -18,11 +18,12 @@ from agm.agent.prompt import (
     preprocess_prompt_file,
     require_prompt_file,
 )
-from agm.agent.transport import AgentTransportFailureCause
+from agm.agent.transport import AgentTransportFailureCause, stderr_tail
 from agm.core import dry_run
 from agm.core.process import CapturedOutput, ProcessCaptureResult, run_capture, run_capture_result
 from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
 from agm.sandbox.prepare import SandboxRun
+from agm.sandbox.profile import profile_name
 from agm.sandbox.request import PreparedSandboxCommand
 from agm.util.interp import (
     Hole,
@@ -176,6 +177,17 @@ def prompt_run_result_error(result: PromptRunResult) -> PromptRunFailure | None:
     if stdout_note is not None:
         return PromptRunFailure("protocol_failure", result, stdout_note, detail=stdout_note)
     return None
+
+
+def result_stderr_tail(result: PromptRunResult) -> str:
+    """Return the bounded stderr diagnostic for a failed *result*.
+
+    A spawn failure (missing executable, unavailable sandbox backend) never
+    starts a process, so stderr is empty; falls back to the library/OS
+    message captured in ``spawn_error``. Shared by every caller that maps a
+    ``PromptRunResult`` onto its own typed failure.
+    """
+    return stderr_tail(result.stderr.text_or_note("stderr")[0] or result.spawn_error or "")
 
 
 def parse_command(command: str, *, kind: str) -> list[str]:
@@ -574,6 +586,14 @@ def _prepare_sandboxed_argv(
 ) -> tuple[list[str], PreparedSandboxCommand | SandboxPreparationFailure | None]:
     """Wrap *argv* under *sandbox*, when given.
 
+    The sandbox profile is bound here, from *argv*'s own first element --
+    the real executable, after any command-builder interpolation -- never
+    from a pre-interpolation runner argv a caller derived it from. This is
+    the only place the final argv is known, so it is the only place the
+    profile can be bound correctly: a template like ``AgentCommand("%{TOOL}/
+    bin/agent")`` must sandbox under the interpolated real command, not the
+    template fragment.
+
     Returns ``(argv, prepared)``: *argv* unchanged and ``prepared`` ``None``
     when *sandbox* is ``None``; the sandbox library's wrapped argv and its
     ``PreparedSandboxCommand`` on success; the original *argv* and a
@@ -582,8 +602,9 @@ def _prepare_sandboxed_argv(
     """
     if sandbox is None:
         return argv, None
+    spec = sandbox.spec.for_command(profile_name(argv[0]) if argv else None)
     try:
-        prepared = sandbox.context.prepare(argv, sandbox.spec, env=env)
+        prepared = sandbox.context.prepare(argv, spec, env=env)
     except (SandboxUnavailableError, SandboxSettingsError) as exc:
         return argv, SandboxPreparationFailure(str(exc))
     return prepared.argv, prepared

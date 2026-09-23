@@ -184,6 +184,38 @@ class TestSandboxLimits:
             setattr(SandboxSpec(profile_name="echo"), "profile_name", "other")
 
 
+class TestSandboxLimitsForCommand:
+    """``for_command`` binds profile-independent limits to one command's spec."""
+
+    def test_binds_the_given_profile_name(self) -> None:
+        limits = SandboxLimits()
+
+        spec = limits.for_command("claude")
+
+        assert spec == SandboxSpec(profile_name="claude")
+
+    def test_preserves_every_other_field(self) -> None:
+        limits = SandboxLimits(memory="8G", swap="1G", settings_file=Path("/tmp/x"), patch=False)
+
+        spec = limits.for_command("codex")
+
+        assert spec == SandboxSpec(
+            profile_name="codex", memory="8G", swap="1G", settings_file=Path("/tmp/x"), patch=False
+        )
+
+    def test_a_none_profile_name_selects_no_name(self) -> None:
+        """An unknown/unsplittable command falls through to the unqualified defaults."""
+        spec = SandboxLimits().for_command(None)
+
+        assert spec.profile_name is None
+
+    def test_default_limits_stay_the_default_sentinel(self) -> None:
+        spec = SandboxLimits().for_command("claude")
+
+        assert spec.memory is Default
+        assert spec.swap is Default
+
+
 # ---------------------------------------------------------------------------
 # prepare(): argv composition
 # ---------------------------------------------------------------------------

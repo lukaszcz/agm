@@ -9452,7 +9452,7 @@ class TestExecCommand:
         write_file_program(
             program,
             'let reviewer = AgentCommand("claude -p \\%{SESSION_ID}")\n'
-            'let r = reviewer.ask("ping")\n'
+            'let r = reviewer.ask("ping", sandbox = AgentSandbox::Disabled)\n'
             "print r\n",
             encoding="utf-8",
         )
@@ -9487,14 +9487,18 @@ class TestExecCommand:
             "program def main(task: text) -> unit =\n"
             '  let impl = AgentCommand("impl-runner \\%{SESSION_ID}")\n'
             '  let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
-            '  var artifact: text = impl.ask("Implement %{task}")\n'
+            "  var artifact: text = impl.ask(\n"
+            '    "Implement %{task}", sandbox = AgentSandbox::Disabled\n'
+            "  )\n"
             "  var review: Review = Pass\n"
             "  do[3]\n"
-            '    review := reviewer.ask("Review %{artifact}")\n'
+            '    review := reviewer.ask("Review %{artifact}", sandbox = AgentSandbox::Disabled)\n'
             "    case review of\n"
             "      | Pass() => ()\n"
             "      | Fail(issues) =>\n"
-            '          let fix: Fix = impl.ask("Fix %{issues} in %{artifact}")\n'
+            "          let fix: Fix = impl.ask(\n"
+            '            "Fix %{issues} in %{artifact}", sandbox = AgentSandbox::Disabled\n'
+            "          )\n"
             "          case fix of\n"
             "            | Complete(output) =>\n"
             "                artifact := output\n"
@@ -9553,7 +9557,7 @@ class TestExecCommand:
             "  | Pass\n"
             'let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
             'let review: Review = reviewer.ask("Review now", '
-            "on-parse-error = Retry(n = 1))\n"
+            "on-parse-error = Retry(n = 1), sandbox = AgentSandbox::Disabled)\n"
             "case review of\n"
             '  | Pass => print "accepted"\n',
             encoding="utf-8",

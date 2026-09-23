@@ -2643,7 +2643,7 @@ class TestExecAgentValues:
         write_file_program(
             agl_file,
             'let impl = AgentCommand("value-runner \\%{SESSION_ID}")\n'
-            'let x = impl.ask("do it")\n'
+            'let x = impl.ask("do it", sandbox = AgentSandbox::Disabled)\n'
             "print x\n",
         )
         result = self._run_agm_exec([str(agl_file), "--no-trace"], env=env, cwd=tmp_path)
@@ -2659,7 +2659,7 @@ class TestExecAgentValues:
         write_file_program(
             agl_file,
             'let impl = AgentCommand("value-runner --file=\\%{PROMPT_FILE} \\%{SESSION_ID}")\n'
-            'let x = impl.ask("do it")\nprint x\n',
+            'let x = impl.ask("do it", sandbox = AgentSandbox::Disabled)\nprint x\n',
         )
 
         result = self._run_agm_exec([str(agl_file), "--no-trace"], env=env, cwd=tmp_path)

@@ -451,6 +451,165 @@ class TestRetryRecords:
         assert response["elapsed"] == 1.5
         assert response["stderr_tail"] == "too slow"
 
+    def test_successful_response_carries_sandboxed_and_permission_mode(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agent.transport import AgentCallInfo
+
+        trace_path = tmp_path / "trace.jsonl"
+
+        def agent(_request: AgentRequest) -> AgentResponse:
+            return AgentResponse(
+                content="ok",
+                call_info=AgentCallInfo(
+                    argv=["claude", "-p", "--dangerously-skip-permissions"],
+                    prompt_via_stdin=False,
+                    elapsed=0.5,
+                    exit_code=0,
+                    sandboxed=True,
+                    permission_mode="unrestricted",
+                ),
+            )
+
+        result = run_inline_command(
+            _agent_runtime(agent),
+            'let a = AgentCommand("a")\nlet value: text = a.ask("work")\nvalue',
+            trace_file=trace_path,
+        )
+        assert result.ok
+        response = next(
+            record for record in _load_jsonl(trace_path) if record["kind"] == "agent_response"
+        )
+        assert response["sandboxed"] is True
+        assert response["permission_mode"] == "unrestricted"
+
+    def test_transport_failure_carries_sandboxed_and_permission_mode(self, tmp_path: Path) -> None:
+        from agm.agent.transport import AgentCallInfo
+        from agm.agl.runtime.request import AgentCallHostError
+
+        trace_path = tmp_path / "trace.jsonl"
+
+        def agent(_request: AgentRequest) -> AgentResponse:
+            raise AgentCallHostError(
+                cause="nonzero_exit",
+                exit_code=1,
+                stderr_tail="boom",
+                elapsed=1.0,
+                call_info=AgentCallInfo(
+                    argv=["claude", "-p", "--permission-mode", "auto"],
+                    prompt_via_stdin=False,
+                    elapsed=1.0,
+                    exit_code=1,
+                    sandboxed=False,
+                    permission_mode="native",
+                ),
+            )
+
+        result = run_inline_command(
+            _agent_runtime(agent),
+            'let a = AgentCommand("a")\nlet value: text = a.ask("work")\nvalue',
+            trace_file=trace_path,
+        )
+        assert not result.ok
+        response = next(
+            record for record in _load_jsonl(trace_path) if record["kind"] == "agent_response"
+        )
+        assert response["ok"] is False
+        assert response["sandboxed"] is False
+        assert response["permission_mode"] == "native"
+
+    def test_successful_response_through_real_dispatch_carries_sandboxed_and_permission_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A real dispatch through ``value_driven_agent_factory`` -- not a
+        hand-built ``AgentCallInfo`` inside a fake dispatcher -- proves the
+        trace's ``sandboxed``/``permission_mode`` fields reflect what the
+        sandbox change actually produces for the default (``Sandbox``) mode.
+        """
+        from agm.agl.runtime.agents import value_driven_agent_factory
+        from agm.config.context import ConfigContext
+        from agm.core.process import CapturedOutput, ProcessCaptureResult
+        from tests._agl_helpers import write_sandbox_home
+
+        trace_path = tmp_path / "trace.jsonl"
+        home = tmp_path / "home"
+        write_sandbox_home(home)
+        monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+        def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+            return ProcessCaptureResult(
+                returncode=0,
+                stdout=CapturedOutput(data=b"ok", truncated=False),
+                stderr=CapturedOutput(data=b"", truncated=False),
+                elapsed=0.1,
+                timed_out=False,
+                spawn_error=None,
+            )
+
+        monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+
+        runtime = PipelineDriver(
+            agent_dispatcher=value_driven_agent_factory(
+                idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+            )
+        )
+        result = run_inline_command(
+            runtime,
+            'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"))\nanswer',
+            trace_file=trace_path,
+        )
+
+        assert result.ok, result.diagnostics
+        response = next(
+            record for record in _load_jsonl(trace_path) if record["kind"] == "agent_response"
+        )
+        assert response["sandboxed"] is True
+        assert response["permission_mode"] == "unrestricted"
+
+    def test_transport_failure_through_real_dispatch_carries_native_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same real-dispatch proof, for ``AgentSandbox::Native``: unsandboxed,
+        each agent's own don't-ask permission mode."""
+        from agm.agl.runtime.agents import value_driven_agent_factory
+        from agm.config.context import ConfigContext
+        from agm.core.process import CapturedOutput, ProcessCaptureResult
+
+        trace_path = tmp_path / "trace.jsonl"
+        home = tmp_path / "home"
+
+        def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+            return ProcessCaptureResult(
+                returncode=1,
+                stdout=CapturedOutput(data=b"", truncated=False),
+                stderr=CapturedOutput(data=b"boom", truncated=False),
+                elapsed=0.2,
+                timed_out=False,
+                spawn_error=None,
+            )
+
+        monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+
+        runtime = PipelineDriver(
+            agent_dispatcher=value_driven_agent_factory(
+                idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+            )
+        )
+        result = run_inline_command(
+            runtime,
+            'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"), '
+            "sandbox = AgentSandbox::Native)\nanswer",
+            trace_file=trace_path,
+        )
+
+        assert not result.ok
+        response = next(
+            record for record in _load_jsonl(trace_path) if record["kind"] == "agent_response"
+        )
+        assert response["ok"] is False
+        assert response["sandboxed"] is False
+        assert response["permission_mode"] == "native"
+
 
 # ---------------------------------------------------------------------------
 # 4. Exception records

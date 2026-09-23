@@ -33,6 +33,7 @@ from agm.sandbox.request import (
     DefaultLimit,
     LimitSpec,
     PreparedSandboxCommand,
+    SandboxLimits,
     SandboxRequest,
     SandboxSpec,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "PreparedSandboxCommand",
     "ResolvedLimits",
     "SandboxContext",
+    "SandboxLimits",
     "SandboxRequest",
     "SandboxRun",
     "SandboxSpec",
@@ -103,13 +105,15 @@ class SandboxContext:
 
 @dataclass(frozen=True, slots=True)
 class SandboxRun:
-    """A sandbox spec paired with the context that prepares it.
+    """Profile-independent sandbox limits paired with the context that prepares them.
 
-    Replaces two independently-optional parameters (a spec and a context)
+    Replaces two independently-optional parameters (limits and a context)
     with one value, so a caller cannot supply one without the other.
+    ``spec`` carries no profile name yet -- it is bound later, from the
+    final (post-interpolation) argv, in ``agm.agent.runner._prepare_sandboxed_argv``.
     """
 
-    spec: SandboxSpec
+    spec: SandboxLimits
     context: SandboxContext
 
 

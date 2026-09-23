@@ -710,7 +710,7 @@ def run(
         config_trace_file=config_trace_file,
     )
 
-    factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
+    factory = value_driven_agent_factory(idle_timeout=resolved_timeout, context=ctx)
     session_host = create_agl_session_host(idle_timeout=resolved_timeout)
     runtime.configure_execution_services(
         default_strict_json=resolved_strict_json,

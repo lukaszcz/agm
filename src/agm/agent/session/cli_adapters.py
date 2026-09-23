@@ -17,6 +17,7 @@ from agm.agent.runner import (
     cleanup_temp_files,
     command_targets_session_id,
     prompt_run_result_error,
+    result_stderr_tail,
 )
 from agm.agent.session.protocol import (
     SessionAgentError,
@@ -34,6 +35,7 @@ from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, Permi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.cleanup import preserve_primary_error
 from agm.core.env import clone_env
+from agm.sandbox.request import PreparedSandboxCommand
 from agm.util.interp import InterpolationError
 from agm.util.unicode import loads_json
 
@@ -131,18 +133,18 @@ class _CliPromptBackend:
                 raise SessionAskError(
                     cause=failure.cause,
                     exit_code=failure.result.returncode,
-                    stderr_tail=stderr_tail(
-                        failure.result.stderr.text_or_note("stderr")[0]
-                        or failure.result.spawn_error
-                        or ""
-                    ),
+                    stderr_tail=result_stderr_tail(failure.result),
                     elapsed=failure.result.elapsed,
                     call_info=AgentCallInfo(
                         argv=(prepared.argv or []).copy(),
                         prompt_via_stdin=prepared.prompt_via_stdin,
                         elapsed=failure.result.elapsed,
                         exit_code=failure.result.returncode,
-                        sandboxed=prepared.sandbox is not None,
+                        # A prepared but never-started sandbox (preparation
+                        # failed) never actually ran the call under the
+                        # sandbox: this must reflect what happened, not
+                        # merely what was requested.
+                        sandboxed=isinstance(prepared.sandbox, PreparedSandboxCommand),
                         permission_mode=PermissionMode.NONE.value,
                     ),
                     detail=failure.detail,
@@ -155,7 +157,7 @@ class _CliPromptBackend:
                     prompt_via_stdin=prepared.prompt_via_stdin,
                     elapsed=result.elapsed,
                     exit_code=result.returncode,
-                    sandboxed=prepared.sandbox is not None,
+                    sandboxed=isinstance(prepared.sandbox, PreparedSandboxCommand),
                     permission_mode=PermissionMode.NONE.value,
                 ),
             )

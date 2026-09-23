@@ -6,15 +6,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agm.agent.transport import AgentCallInfo, stderr_tail
+from agm.agent.transport import AgentCallInfo
 from agm.agl.ir.builtin_nominals import BuiltinNominals, resolve_standard_member_name
 from agm.agl.runtime.request import AgentCallHostError, AgentRequest, AgentResponse
 from agm.agl.semantics.values import RecordValue, TextValue, Value
 from agm.core.env import clone_env
+from agm.sandbox.request import PreparedSandboxCommand
 
 if TYPE_CHECKING:
     from agm.agent.runner import PromptDelivery
     from agm.agent.spec import AgentSpec
+    from agm.config.context import ConfigContext
+    from agm.sandbox.prepare import SandboxContext, SandboxRun
 
 AgentFn = Callable[[AgentRequest], AgentResponse | str]
 
@@ -31,15 +34,16 @@ def _run_request(
     idle_timeout: float | None,
     *,
     delivery: "PromptDelivery",
+    sandbox: "SandboxRun | None" = None,
 ) -> AgentResponse:
     """Send the already-composed request prompt through the shared runner seam."""
     from agm.agent.runner import (
         cleanup_temp_files,
         prepare_rendered_prompt_run,
         prompt_run_result_error,
+        result_stderr_tail,
         run_prepared_prompt_result,
     )
-    from agm.agent.spec import PermissionMode
     from agm.util.interp import InterpolationError
 
     temp_files: list[Path] = []
@@ -50,6 +54,7 @@ def _run_request(
             temp_files=temp_files,
             env=clone_env(),
             delivery=delivery,
+            sandbox=sandbox,
         )
         result = run_prepared_prompt_result(prepared, idle_timeout=idle_timeout)
         call_info = AgentCallInfo(
@@ -57,8 +62,11 @@ def _run_request(
             prompt_via_stdin=prepared.prompt_via_stdin,
             elapsed=result.elapsed,
             exit_code=result.returncode,
-            sandboxed=prepared.sandbox is not None,
-            permission_mode=PermissionMode.NONE.value,
+            # A prepared but never-started sandbox (preparation failed) never
+            # actually ran the call under the sandbox, so this must reflect
+            # what happened, not merely what was requested.
+            sandboxed=isinstance(prepared.sandbox, PreparedSandboxCommand),
+            permission_mode=request.permission_mode.value,
         )
     except InterpolationError as exc:
         raise AgentCallHostError(
@@ -71,7 +79,7 @@ def _run_request(
         raise AgentCallHostError(
             cause=failure.cause,
             exit_code=result.returncode,
-            stderr_tail=stderr_tail(result.stderr.text_or_note("stderr")[0]),
+            stderr_tail=result_stderr_tail(result),
             elapsed=result.elapsed,
             call_info=call_info,
             detail=failure.detail,
@@ -136,20 +144,68 @@ def _text_field(value: RecordValue, name: str) -> str:
     return field.value
 
 
-def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
-    """Return a dispatcher which builds an invocation from ``request.agent``."""
+def value_driven_agent_factory(*, idle_timeout: float | None, context: "ConfigContext") -> AgentFn:
+    """Return a dispatcher which builds an invocation from ``request.agent``.
+
+    Builds one `SandboxContext` from *context* lazily -- on the first
+    dispatch that actually needs it (home, proj dir, cwd, and the loaded
+    `[run.*]` config) -- and reuses it for every later call this dispatcher
+    makes, so an agent-free program, or one whose every call runs
+    unsandboxed, never pays for that config I/O, while a sandboxed call
+    still resolves it only once per factory.
+    """
+    sandbox_context: "SandboxContext | None" = None
+
+    def get_sandbox_context() -> "SandboxContext":
+        nonlocal sandbox_context
+        if sandbox_context is None:
+            from agm.config.general import load_run_config
+            from agm.sandbox.prepare import SandboxContext
+
+            run_config = load_run_config(
+                home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
+            )
+            sandbox_context = SandboxContext(
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+                run_config=run_config,
+            )
+        return sandbox_context
 
     def dispatch(request: AgentRequest) -> AgentResponse:
         spec = request.agent
         try:
-            command = spec.argv()
+            command = spec.argv(permission_mode=request.permission_mode)
         except ValueError as exc:
             raise AgentCallHostError(
                 cause="invalid_agent", exit_code=None, stderr_tail=str(exc), elapsed=0.0
             ) from exc
-        return _run_request(request, command, idle_timeout, delivery=_spec_delivery(spec))
+        sandbox = _sandbox_run_for(request, get_sandbox_context)
+        return _run_request(
+            request, command, idle_timeout, delivery=_spec_delivery(spec), sandbox=sandbox
+        )
 
     return dispatch
+
+
+def _sandbox_run_for(
+    request: AgentRequest, get_context: Callable[[], "SandboxContext"]
+) -> "SandboxRun | None":
+    """Bind the request's decoded sandbox limits to a lazily built `SandboxContext`.
+
+    ``None`` when the request carries no ``SandboxLimits`` (``Disabled``/
+    ``Native`` decode to no limits, see ``sandbox_values.decode_agent_sandbox``)
+    -- *get_context* is then never called. The profile name is bound later,
+    from the post-interpolation argv, in
+    ``agm.agent.runner._prepare_sandboxed_argv``, never here and never from
+    ``[run.<name>].alias``.
+    """
+    if request.sandbox is None:
+        return None
+    from agm.sandbox.prepare import SandboxRun
+
+    return SandboxRun(spec=request.sandbox, context=get_context())
 
 
 def _spec_delivery(spec: AgentSpec) -> "PromptDelivery":

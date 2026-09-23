@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import fields
-from typing import get_type_hints
+from pathlib import Path
+from typing import TYPE_CHECKING, get_type_hints
 
 import pytest
 
@@ -15,8 +17,17 @@ from agm.agl.runtime.agents import agent_value as encode_agent_value
 from agm.agl.runtime.agents import decode_agent_value, value_driven_agent_factory
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import TextType
-from tests._agl_helpers import agent_value, run_inline_command
+from agm.config.context import ConfigContext
+from tests._agl_helpers import (
+    agent_value,
+    hermetic_config_context,
+    run_inline_command,
+    write_sandbox_home,
+)
 from tests.conftest import FakeAgentTransport
+
+if TYPE_CHECKING:
+    from agm.core.process import ProcessCaptureResult
 
 
 def _agent_member_fields() -> dict[str, dict[str, object]]:
@@ -93,14 +104,204 @@ def test_agent_value_encodes_the_inverse_of_decode_agent_value() -> None:
         ),
     ],
 )
-def test_ask_dispatches_each_agent_value(
+def test_ask_dispatches_each_agent_value_under_disabled_sandbox(
     fake_agent_transport: FakeAgentTransport, source: str, argv: list[str]
 ) -> None:
+    """``AgentSandbox::Disabled`` reproduces the un-sandboxed argv byte for byte."""
     fake_agent_transport.queue(fake_agent_transport.success("ok"))
-    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
+    result = run_inline_command(
+        runtime,
+        f'let answer: text = ask("hello", agent = {source}, sandbox = AgentSandbox::Disabled)\n'
+        "answer",
+    )
+
+    assert result.ok
+    assert fake_agent_transport.calls == [("hello", argv)]
+
+
+@pytest.mark.parametrize(
+    ("source", "argv"),
+    [
+        ('AgentCommand("runner --flag")', ["runner", "--flag"]),
+        (
+            'AgentClaude("sonnet", "medium")',
+            [
+                "claude",
+                "-p",
+                "--model",
+                "sonnet",
+                "--effort",
+                "medium",
+                "--dangerously-skip-permissions",
+            ],
+        ),
+        (
+            'AgentCodex("o3", "high")',
+            [
+                "codex",
+                "exec",
+                "--model",
+                "o3",
+                "-c",
+                "model_reasoning_effort=high",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "-",
+            ],
+        ),
+        (
+            'AgentPi("openai", "gpt", "low")',
+            ["pi", "-p", "--provider", "openai", "--model", "gpt", "--thinking", "low"],
+        ),
+    ],
+)
+def test_ask_dispatches_each_agent_value_selects_each_spec_permission_flag(
+    fake_agent_transport: FakeAgentTransport, source: str, argv: list[str]
+) -> None:
+    """No ``sandbox`` operand defaults to ``Sandbox``: an all-permissions flag per spec.
+
+    ``fake_agent_transport`` replaces ``prepare_rendered_prompt_run`` wholesale
+    and records the argv *before* sandbox wrapping, so this only proves which
+    permission flag each spec's argv carries under the default mode, never
+    that the call is actually wrapped by the sandbox library --
+    ``test_default_sandbox_mode_wraps_the_argv_and_honours_run_config_memory``
+    (below) proves the wrapping itself, driving the real seam.
+    """
+    fake_agent_transport.queue(fake_agent_transport.success("ok"))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
     result = run_inline_command(
         runtime,
         f'let answer: text = ask("hello", agent = {source})\nanswer',
+    )
+
+    assert result.ok
+    assert fake_agent_transport.calls == [("hello", argv)]
+
+
+@pytest.mark.parametrize(
+    ("sandbox_operand", "expected_argv"),
+    [
+        (
+            "AgentSandbox::Disabled",
+            ["claude", "-p", "--model", "sonnet", "--effort", "medium"],
+        ),
+        (
+            "AgentSandbox::Native",
+            [
+                "claude",
+                "-p",
+                "--model",
+                "sonnet",
+                "--effort",
+                "medium",
+                "--permission-mode",
+                "auto",
+            ],
+        ),
+    ],
+)
+def test_disabled_and_native_sandbox_modes_never_wrap_the_argv(
+    monkeypatch: pytest.MonkeyPatch, sandbox_operand: str, expected_argv: list[str]
+) -> None:
+    """``Disabled``/``Native`` never route through the sandbox library.
+
+    Drives the real ``prepare_rendered_prompt_run`` seam (only
+    ``run_capture_result`` is mocked, per ``tests/CLAUDE.md``), so the argv
+    reaching the process primitive is observed directly: it starts with the
+    agent binary itself, never ``systemd-run``/``srt``.
+    """
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
+
+    captured: dict[str, object] = {}
+
+    def fake_run_capture_result(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured["cmd"] = cmd
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout=CapturedOutput(data=b"ok", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+        )
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
+    result = run_inline_command(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"), '
+        f"sandbox = {sandbox_operand})\nanswer",
+    )
+
+    assert result.ok, result.diagnostics
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[0] == "claude"
+    assert "systemd-run" not in cmd
+    assert "srt" not in cmd
+    # The prompt file target is appended after the spec's own argv.
+    assert cmd[:-1] == expected_argv
+    assert cmd[-1].startswith("@")
+
+
+@pytest.mark.parametrize(
+    ("source", "argv"),
+    [
+        (
+            'AgentClaude("sonnet", "medium")',
+            [
+                "claude",
+                "-p",
+                "--model",
+                "sonnet",
+                "--effort",
+                "medium",
+                "--permission-mode",
+                "auto",
+            ],
+        ),
+        (
+            'AgentCodex("o3", "high")',
+            [
+                "codex",
+                "exec",
+                "--model",
+                "o3",
+                "-c",
+                "model_reasoning_effort=high",
+                "--approve-for-me",
+                "-",
+            ],
+        ),
+    ],
+)
+def test_ask_dispatches_claude_and_codex_under_native_sandbox_mode(
+    fake_agent_transport: FakeAgentTransport, source: str, argv: list[str]
+) -> None:
+    """``AgentSandbox::Native`` selects each agent's own all-permissions flag, unsandboxed."""
+    fake_agent_transport.queue(fake_agent_transport.success("ok"))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
+    result = run_inline_command(
+        runtime,
+        f'let answer: text = ask("hello", agent = {source}, sandbox = AgentSandbox::Native)\n'
+        "answer",
     )
 
     assert result.ok
@@ -120,7 +321,11 @@ def test_agent_transport_failures_become_typed_errors(
             elapsed=1.0,
         )
     )
-    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
 
     run = run_inline_command(
         runtime,
@@ -150,11 +355,20 @@ def test_undecodable_agent_stdout_becomes_a_protocol_failure(
         )
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
-    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
 
+    # Disabled: this test drives the real ``prepare_rendered_prompt_run`` seam
+    # (only ``run_capture_result`` is mocked), so a real sandbox mode would try
+    # to resolve ``srt`` on PATH -- irrelevant to the protocol-failure assertion.
     run = run_inline_command(
         runtime,
-        'let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer',
+        "let answer: text = "
+        'ask("hello", agent = AgentCommand("runner"), sandbox = AgentSandbox::Disabled)\n'
+        "answer",
     )
 
     assert not run.ok
@@ -172,7 +386,11 @@ def test_caught_agent_call_error_keeps_static_agent_encoding_when_raised_later(
     fake_agent_transport.queue(
         fake_agent_transport.failure(returncode=2, stderr="boom", elapsed=1.0)
     )
-    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
 
     run = run_inline_command(
         runtime,
@@ -193,7 +411,11 @@ def test_user_exception_enum_field_keeps_slot_encoding_after_storage_and_reraise
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
     """User exception provenance is nominal-keyed, not reserved for host errors."""
-    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
 
     run = run_inline_command(
         runtime,
@@ -219,7 +441,11 @@ def test_nonzero_exit_message_includes_the_exit_code(
     fake_agent_transport.queue(
         fake_agent_transport.failure(returncode=7, stderr="boom", elapsed=1.0)
     )
-    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
 
     run = run_inline_command(
         runtime,
@@ -238,7 +464,7 @@ def test_composed_prompt_is_unchanged_when_no_output_contract(
     """No contract, no retry: the prompt sent is exactly the request's prompt."""
     from agm.agl.runtime.request import AgentRequest
 
-    dispatch = value_driven_agent_factory(idle_timeout=None)
+    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
     agent = AgentCommand(command="runner")
 
     dispatch(AgentRequest(agent=agent, prompt="Do X."))
@@ -252,7 +478,7 @@ def test_composed_prompt_appends_format_instructions_after_the_prompt(
     from agm.agl.runtime.contract import TypelessOutputContract
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
-    dispatch = value_driven_agent_factory(idle_timeout=None)
+    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
     agent = AgentCommand(command="runner")
     contract = TypelessOutputContract(
         target_type="int",
@@ -279,7 +505,7 @@ def test_composed_prompt_omits_format_instructions_when_the_contract_has_none(
     from agm.agl.runtime.contract import TypelessOutputContract
     from agm.agl.runtime.request import AgentRequest
 
-    dispatch = value_driven_agent_factory(idle_timeout=None)
+    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
     agent = AgentCommand(command="runner")
     contract = TypelessOutputContract(
         target_type="text",
@@ -300,7 +526,7 @@ def test_composed_prompt_includes_retry_feedback_on_a_retry_attempt(
     """A retry (attempt >= 1) appends the previous output and validation errors."""
     from agm.agl.runtime.request import AgentRequest, ValidationError, compose_agent_prompt
 
-    dispatch = value_driven_agent_factory(idle_timeout=None)
+    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
     agent = AgentCommand(command="runner")
 
     request = AgentRequest(
@@ -329,7 +555,7 @@ def test_composed_prompt_has_no_retry_feedback_on_the_first_attempt(
 ) -> None:
     from agm.agl.runtime.request import AgentRequest
 
-    dispatch = value_driven_agent_factory(idle_timeout=None)
+    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
     agent = AgentCommand(command="runner")
 
     dispatch(AgentRequest(agent=agent, prompt="Do X.", attempt=0))
@@ -345,7 +571,7 @@ def test_composed_prompt_orders_format_instructions_before_retry_feedback(
     from agm.agl.runtime.contract import TypelessOutputContract
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
-    dispatch = value_driven_agent_factory(idle_timeout=None)
+    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
     agent = AgentCommand(command="runner")
     contract = TypelessOutputContract(
         target_type="int",
@@ -394,7 +620,7 @@ def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.Monk
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
 
     agent = AgentCodex(model="o3", thinking="high")
-    dispatch = value_driven_agent_factory(idle_timeout=None)
+    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
 
     response = dispatch(AgentRequest(agent=agent, prompt="hello"))
 
@@ -435,9 +661,15 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
 
     result = run_inline_command(
-        PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None)),
-        'let first: text = ask("one", agent = AgentCommand("runner"))\n'
-        'let second: text = ask("two", agent = AgentCommand("runner"))\n'
+        PipelineDriver(
+            agent_dispatcher=value_driven_agent_factory(
+                idle_timeout=None, context=hermetic_config_context()
+            )
+        ),
+        'let first: text = ask("one", agent = AgentCommand("runner"), '
+        "sandbox = AgentSandbox::Disabled)\n"
+        'let second: text = ask("two", agent = AgentCommand("runner"), '
+        "sandbox = AgentSandbox::Disabled)\n"
         "second",
     )
 
@@ -452,7 +684,7 @@ def test_unresolvable_command_hole_becomes_a_typed_error() -> None:
     from agm.agl.runtime.request import AgentRequest
 
     agent = AgentCommand(command="runner --flag=%{AGM_NO_SUCH_VARIABLE}")
-    dispatch = value_driven_agent_factory(idle_timeout=None)
+    dispatch = value_driven_agent_factory(idle_timeout=None, context=hermetic_config_context())
 
     with pytest.raises(AgentCallHostError) as exc_info:
         dispatch(AgentRequest(agent=agent, prompt="hello"))
@@ -462,7 +694,11 @@ def test_unresolvable_command_hole_becomes_a_typed_error() -> None:
 
 def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
     """`\\%{` in AgL source passes the hole through for the host to resolve."""
-    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
 
     run = run_inline_command(
         runtime,
@@ -477,7 +713,11 @@ def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
 
 
 def test_invalid_agent_value_becomes_typed_error() -> None:
-    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=hermetic_config_context()
+        )
+    )
 
     run = run_inline_command(
         runtime,
@@ -522,3 +762,324 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
         "AgentCommand",
         "AgentCommand",
     ]
+
+
+def _capturing_run_capture_result(
+    captured: dict[str, object], *, returncode: int = 0
+) -> Callable[..., "ProcessCaptureResult"]:
+    """A fake ``run_capture_result`` that records the argv it received and returns *returncode*."""
+    from agm.core.process import CapturedOutput, ProcessCaptureResult
+
+    def fake(cmd: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return ProcessCaptureResult(
+            returncode=returncode,
+            stdout=CapturedOutput(data=b"ok", truncated=False),
+            stderr=CapturedOutput(data=b"", truncated=False),
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
+        )
+
+    return fake
+
+
+@pytest.mark.parametrize(
+    ("source", "profile", "argv_prefix"),
+    [
+        ('AgentClaude("sonnet", "medium")', "claude", ["claude", "-p"]),
+        ('AgentCodex("o3", "high")', "codex", ["codex", "exec"]),
+        ('AgentPi("openai", "gpt", "low")', "pi", ["pi", "-p"]),
+        ('AgentCommand("/some/path/my-agent")', "my-agent", ["/some/path/my-agent"]),
+    ],
+)
+def test_default_sandbox_mode_wraps_the_argv_and_honours_run_config_memory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    profile: str,
+    argv_prefix: list[str],
+) -> None:
+    """The default ``Sandbox`` mode reaches the agent binary through the sandbox
+    library for every agent spec kind: ``[run.<profile>].memory`` is honoured
+    under the real profile name -- the spec's own executable, or an
+    ``AgentCommand``'s basename -- and ``.alias`` is never consulted for agent
+    argv (aliases apply only to ``agm run``). Also gives codex-under-sandbox
+    its first coverage: it delivers its prompt on stdin, which must still
+    pass through the wrapper prefix.
+    """
+    home = tmp_path / "home"
+    alias = f"not-{profile}"
+    write_sandbox_home(
+        home,
+        run_toml=f'[run.{profile}]\nmemory = "4G"\nalias = "{alias}"\n',
+        # A settings file matching the alias: if the alias were (wrongly)
+        # honoured, it would be selected over the unqualified default below.
+        extra_settings_files=(alias,),
+    )
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "agm.agent.runner.run_capture_result", _capturing_run_capture_result(captured)
+    )
+
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+        )
+    )
+    result = run_inline_command(
+        runtime,
+        f'let answer: text = ask("hello", agent = {source})\nanswer',
+    )
+
+    assert result.ok, result.diagnostics
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert cmd[:4] == ["systemd-run", "--user", "--scope", "-q"]
+    assert "MemoryMax=4G" in cmd
+    srt_index = cmd.index("srt")
+    assert cmd[srt_index + 2] == str(home / ".agm" / "sandbox" / "default.json")
+    tail = cmd[srt_index + 4 :]
+    assert tail[: len(argv_prefix)] == argv_prefix
+
+
+def test_interpolated_agent_command_sandboxes_under_the_real_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sandbox profile follows the post-interpolation argv, not the template.
+
+    ``AgentCommand("%{TOOL}/bin/agent")`` must sandbox under ``agent`` (the
+    real executable that runs), never under the literal ``%{TOOL}`` template
+    fragment: ``command_with_prompt_target`` interpolates the argv *after*
+    the spec's own ``argv()`` builds it, so the profile can only be known
+    correctly once that interpolation has happened.
+    """
+    home = tmp_path / "home"
+    write_sandbox_home(home, run_toml='[run.agent]\nmemory = "2G"\n')
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    monkeypatch.setenv("TOOL", str(tmp_path / "tools"))
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "agm.agent.runner.run_capture_result", _capturing_run_capture_result(captured)
+    )
+
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+        )
+    )
+    result = run_inline_command(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentCommand("\\%{TOOL}/bin/agent"))\nanswer',
+    )
+
+    assert result.ok, result.diagnostics
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    # The interpolated real executable's memory config was honoured...
+    assert "MemoryMax=2G" in cmd
+    srt_index = cmd.index("srt")
+    tail = cmd[srt_index + 4 :]
+    # ...and the settings-selection probe used the real basename, not the
+    # unresolved "%{TOOL}" template fragment.
+    assert tail[0] == str(tmp_path / "tools" / "bin" / "agent")
+
+
+def test_agent_call_info_argv_is_the_wrapped_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``AgentCallInfo.argv`` records what actually ran -- the sandboxed argv,
+    not the spec's own pre-wrap argv."""
+    from agm.agent.transport import AgentCallInfo
+    from agm.agl.runtime.request import AgentRequest
+    from agm.sandbox.request import SandboxLimits
+
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "agm.agent.runner.run_capture_result", _capturing_run_capture_result(captured)
+    )
+
+    dispatch = value_driven_agent_factory(
+        idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+    )
+
+    response = dispatch(
+        AgentRequest(
+            agent=AgentClaude("sonnet", "medium"),
+            prompt="hello",
+            sandbox=SandboxLimits(),
+        )
+    )
+
+    assert not isinstance(response, str)
+    call_info = response.call_info
+    assert isinstance(call_info, AgentCallInfo)
+    assert call_info.argv == captured["cmd"]
+    assert call_info.argv[0] == "systemd-run"
+    assert call_info.sandboxed is True
+
+
+def test_sandbox_context_is_built_at_most_once_per_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `[run.*]` config load behind a factory's `SandboxContext` runs at
+    most once no matter how many sandboxed calls the factory dispatches, and
+    never runs at all for a factory that dispatches no agent call."""
+    from agm.config import general as config_general
+
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", _capturing_run_capture_result({}))
+
+    load_calls: list[int] = []
+    real_load_run_config = config_general.load_run_config
+
+    def counting_load_run_config(**kwargs: object) -> object:
+        load_calls.append(1)
+        return real_load_run_config(**kwargs)
+
+    monkeypatch.setattr(config_general, "load_run_config", counting_load_run_config)
+
+    context = ConfigContext(home=home, proj_dir=None, cwd=home)
+
+    # Built but never dispatched: the config load never runs.
+    value_driven_agent_factory(idle_timeout=None, context=context)
+    assert load_calls == []
+
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(idle_timeout=None, context=context)
+    )
+    result = run_inline_command(
+        runtime,
+        'let a: text = ask("one", agent = AgentClaude("sonnet", "medium"))\n'
+        'let b: text = ask("two", agent = AgentClaude("sonnet", "medium"))\n'
+        "b",
+    )
+
+    assert result.ok, result.diagnostics
+    assert load_calls == [1]
+
+
+def test_explicit_settings_file_selects_that_file_over_the_profile_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``Sandbox(settings = Some(path))`` replaces the default settings-file chain."""
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    explicit_settings = tmp_path / "explicit.json"
+    explicit_settings.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "agm.agent.runner.run_capture_result", _capturing_run_capture_result(captured)
+    )
+
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+        )
+    )
+    result = run_inline_command(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"), '
+        f'sandbox = Sandbox(settings = Some("{explicit_settings.as_posix()}")))\nanswer',
+    )
+
+    assert result.ok, result.diagnostics
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    srt_index = cmd.index("srt")
+    assert cmd[srt_index : srt_index + 3] == ["srt", "--settings", str(explicit_settings)]
+
+
+def test_missing_srt_becomes_an_agent_call_error_carrying_the_library_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``srt`` absent from PATH surfaces as ``AgentCallError`` with the library text."""
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+
+    def fake_which(name: str, *args: object, **kwargs: object) -> str | None:
+        return "/usr/bin/systemd-run" if name == "systemd-run" else None
+
+    monkeypatch.setattr("shutil.which", fake_which)
+
+    def fail_run_capture_result(*args: object, **kwargs: object) -> None:
+        raise AssertionError("must not spawn a process when sandbox preparation failed")
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fail_run_capture_result)
+
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
+        )
+    )
+    result = run_inline_command(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"))\nanswer',
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "AgentCallError"
+    assert result.error.fields["cause"] == "spawn_failure"
+    metadata = result.error.fields["metadata"]
+    assert isinstance(metadata, dict)
+    assert "srt is not installed" in str(metadata["stderr_tail"])
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure"])
+def test_temp_settings_cleanup_runs_after_success_and_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    """A per-call temp settings file (written when patching for a project dir) is
+    removed whether the dispatched call succeeds or fails.
+
+    Mocks only the external boundary (``run_capture_result``, per
+    ``tests/CLAUDE.md``): the settings path under test is read back out of
+    the captured argv, rather than monkeypatching the sandbox library's own
+    private ``_write_json_temp`` helper.
+    """
+    home = tmp_path / "home"
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "agm.agent.runner.run_capture_result",
+        _capturing_run_capture_result(captured, returncode=0 if outcome == "success" else 1),
+    )
+
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, context=ConfigContext(home=home, proj_dir=proj_dir, cwd=home)
+        )
+    )
+    result = run_inline_command(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"))\nanswer',
+    )
+
+    assert result.ok is (outcome == "success")
+
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    srt_index = cmd.index("srt")
+    settings_path = Path(cmd[srt_index + 2])
+    # The project-dir patch step always writes a fresh temp settings file --
+    # never the home's own unqualified `default.json` -- so this is that
+    # per-call temp file.
+    assert settings_path != home / ".agm" / "sandbox" / "default.json"
+    assert not settings_path.exists()

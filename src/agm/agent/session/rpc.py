@@ -16,6 +16,7 @@ from typing import IO, Literal, TypeVar, cast
 from uuid import uuid4
 
 from agm.agent.session.protocol import (
+    SandboxFixture,
     SessionAskError,
     SessionAskRequest,
     SessionAskResponse,
@@ -26,14 +27,14 @@ from agm.agent.session.protocol import (
     SessionOperation,
     SessionStats,
 )
-from agm.agent.spec import AgentPi, PermissionMode
+from agm.agent.spec import AgentPi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.env import clone_env
 from agm.core.process import stop_process
 from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
 from agm.sandbox.prepare import SandboxContext, sandbox_run_for
 from agm.sandbox.profile import profile_name
-from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
+from agm.sandbox.request import PreparedSandboxCommand
 from agm.util.unicode import loads_json
 
 _RpcOperation = Literal[
@@ -79,7 +80,6 @@ class _RpcChild:
     """The process and bounded asynchronously drained streams for one Pi session."""
 
     process: subprocess.Popen[bytes]
-    process_group: int
     agent: AgentPi
     command: list[str]
     prepared: PreparedSandboxCommand | None = None
@@ -92,7 +92,7 @@ class _RpcChild:
     stopped: threading.Event = field(default_factory=threading.Event)
 
 
-class PiRpcSessionBackend:
+class PiRpcSessionBackend(SandboxFixture):
     """Keep one Pi RPC process alive for the lifetime of a session backend."""
 
     capabilities = SessionCapabilities.all()
@@ -103,14 +103,10 @@ class PiRpcSessionBackend:
         idle_timeout: float | None = None,
         get_sandbox_context: Callable[[], SandboxContext],
     ) -> None:
+        super().__init__()
         self._idle_timeout = idle_timeout
         self._get_sandbox_context = get_sandbox_context
         self._child: _RpcChild | None = None
-        # Fixed at open; the persistent child process is spawned under this
-        # mode once and every later native call (fork's replacement spawn)
-        # reuses it, since an RPC session has no per-call sandbox override.
-        self._permission_mode: PermissionMode = PermissionMode.NONE
-        self._sandbox: SandboxLimits | None = None
 
     def open(self, request: SessionOpenRequest) -> None:
         """Start Pi in RPC mode using the supplied Pi agent settings."""
@@ -118,8 +114,7 @@ class PiRpcSessionBackend:
             raise SessionHostError("Pi RPC session requires an AgentPi", "open")
         if self._child is not None:
             raise SessionHostError("Pi RPC session is already open", "open")
-        self._permission_mode = request.permission_mode
-        self._sandbox = request.sandbox
+        self._fix_sandbox(request)
         self._start(request.agent, "open", name=request.name)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
@@ -173,8 +168,7 @@ class PiRpcSessionBackend:
         replacement_backend = PiRpcSessionBackend(
             idle_timeout=self._idle_timeout, get_sandbox_context=self._get_sandbox_context
         )
-        replacement_backend._permission_mode = self._permission_mode
-        replacement_backend._sandbox = self._sandbox
+        replacement_backend._adopt_sandbox_from(self)
         replacement_backend._child = replacement
         try:
             replacement_state, _ = replacement_backend._send("get_state", {})
@@ -211,8 +205,7 @@ class PiRpcSessionBackend:
         child = PiRpcSessionBackend(
             idle_timeout=self._idle_timeout, get_sandbox_context=self._get_sandbox_context
         )
-        child._permission_mode = self._permission_mode
-        child._sandbox = self._sandbox
+        child._adopt_sandbox_from(self)
         child._child = source
         self._child = replacement
         return child
@@ -268,11 +261,10 @@ class PiRpcSessionBackend:
             if prepared is not None:
                 prepared.close()
             raise SessionHostError(f"could not start Pi RPC session: {exc}", operation) from exc
-        process_group = process.pid
         if process.stdin is None or process.stdout is None or process.stderr is None:
-            _terminate(_RpcChild(process, process_group, agent, argv, prepared=prepared))
+            _terminate(_RpcChild(process, agent, argv, prepared=prepared))
             raise SessionHostError("could not create Pi RPC pipes", operation)
-        child = _RpcChild(process, process_group, agent, argv, prepared=prepared)
+        child = _RpcChild(process, agent, argv, prepared=prepared)
         child.readers.extend(
             (
                 _start_reader(
@@ -642,7 +634,6 @@ def _terminate(child: _RpcChild) -> None:
             interrupt_cleanup_cmd=prepared.interrupt_cleanup_cmd if prepared is not None else None,
             cwd=prepared.cwd if prepared is not None else None,
             env=prepared.env if prepared is not None else None,
-            pgid=child.process_group,
         )
     finally:
         # ``stop_process`` can itself raise (e.g. a cleanup command whose

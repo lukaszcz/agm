@@ -20,6 +20,7 @@ from agm.agent.runner import (
     result_stderr_tail,
 )
 from agm.agent.session.protocol import (
+    SandboxFixture,
     SessionAgentError,
     SessionAskError,
     SessionAskRequest,
@@ -89,7 +90,7 @@ def _creation_not_launched(error: SessionAskError) -> bool:
     return error.cause in {"spawn_failure", "interpolation_failure"}
 
 
-class _CliPromptBackend:
+class _CliPromptBackend(SandboxFixture):
     """Shared prepared-runner boundary for CLI session implementations."""
 
     def __init__(
@@ -98,19 +99,9 @@ class _CliPromptBackend:
         idle_timeout: float | None = None,
         get_sandbox_context: Callable[[], SandboxContext],
     ) -> None:
+        super().__init__()
         self._idle_timeout = idle_timeout
         self._get_sandbox_context = get_sandbox_context
-        # Fixed at open (``_open_sandbox``) for this session's whole lifetime;
-        # every prompt this backend sends -- ``ask`` and every native
-        # lifecycle prompt (compaction, fork) alike -- reuses them. There is
-        # no per-call override.
-        self._permission_mode: PermissionMode = PermissionMode.NONE
-        self._sandbox: SandboxLimits | None = None
-
-    def _open_sandbox(self, request: SessionOpenRequest) -> None:
-        """Fix this backend's sandboxing for its whole session lifetime."""
-        self._permission_mode = request.permission_mode
-        self._sandbox = request.sandbox
 
     def _run_prompt(
         self,
@@ -245,7 +236,7 @@ class AgentCommandSessionBackend(_CliPromptBackend):
                 "use a single-attempt AgentCommand.ask instead",
                 "open",
             )
-        self._open_sandbox(request)
+        self._fix_sandbox(request)
         self._session = _CommandSession(command=command, session_id=str(uuid4()))
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
@@ -300,7 +291,7 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
                 f"{self._backend_name} CLI session requires an {self._agent_type.__name__}",
                 "open",
             )
-        self._open_sandbox(request)
+        self._fix_sandbox(request)
         self._session = _SessionIdCliState(agent, str(uuid4()), request.name, request.single_prompt)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
@@ -350,8 +341,7 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
         """Give a freshly created child the live state from a native fork."""
         session = self._session_for(SessionOperation.FORK.value)
         child._session = _SessionIdCliState(session.agent, session_id, "", False, started=True)
-        child._permission_mode = self._permission_mode
-        child._sandbox = self._sandbox
+        child._adopt_sandbox_from(self)
 
     def _initialize_unstarted_fork(self, child: _SessionIdCliBackend[_SessionAgentT]) -> None:
         """Fork deferred local state before either transcript exists natively."""
@@ -359,8 +349,7 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
         child._session = _SessionIdCliState(
             session.agent, str(uuid4()), "", session.single_prompt, started=False
         )
-        child._permission_mode = self._permission_mode
-        child._sandbox = self._sandbox
+        child._adopt_sandbox_from(self)
 
 
 class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
@@ -471,7 +460,7 @@ class CodexCliSessionBackend(_CliPromptBackend):
             raise SessionHostError("Codex CLI sessions do not support names", "open")
         if not isinstance(request.agent, AgentCodex):
             raise SessionHostError("Codex CLI session requires an AgentCodex", "open")
-        self._open_sandbox(request)
+        self._fix_sandbox(request)
         self._session = _CodexSession(request.agent, request.single_prompt)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:

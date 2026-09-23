@@ -378,27 +378,6 @@ class TestKillProcessGroup:
         # Should not raise
         kill_process_group(proc)
 
-    def test_signals_an_explicit_process_group_instead_of_the_pid(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A caller that isolated the child under its own group names it explicitly."""
-        groups: list[int] = []
-
-        class FakeProcess:
-            pid = 99999
-
-            def poll(self) -> int | None:
-                return None
-
-        def fake_killpg(pgid: int, sig: signal.Signals) -> None:
-            groups.append(pgid)
-            raise ProcessLookupError
-
-        monkeypatch.setattr(os, "killpg", fake_killpg)
-        kill_process_group(cast(subprocess.Popen[bytes], FakeProcess()), pgid=4242)
-
-        assert groups == [4242]
-
     def test_handles_process_lookup_error_on_killpg(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class FakeProcess:
             pid = 99999
@@ -1446,7 +1425,7 @@ class TestRunSubprocessBaseExceptionWithCapture:
 
         killed: list[bool] = []
 
-        def tracking_kill(proc: subprocess.Popen[bytes], *, pgid: int | None = None) -> None:
+        def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
             killed.append(True)
 
         monkeypatch.setattr(process_module, "kill_process_group", tracking_kill)
@@ -1479,7 +1458,7 @@ class TestRunSubprocessBaseExceptionIsolatedNoCapture:
 
         killed: list[bool] = []
 
-        def tracking_kill(proc: subprocess.Popen[bytes], *, pgid: int | None = None) -> None:
+        def tracking_kill(proc: subprocess.Popen[bytes]) -> None:
             killed.append(True)
 
         monkeypatch.setattr(process_module, "kill_process_group", tracking_kill)
@@ -1718,7 +1697,7 @@ class TestTerminationSignalsReachCleanup:
         monkeypatch.setattr(
             process_module,
             "kill_process_group",
-            lambda _proc, *, pgid=None: cleaned_first.append(marker.exists()),
+            lambda _proc: cleaned_first.append(marker.exists()),
         )
         _patch_start_process(
             monkeypatch,

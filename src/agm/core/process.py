@@ -56,13 +56,9 @@ def terminate_process(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-def kill_process_group(process: subprocess.Popen[bytes], *, pgid: int | None = None) -> None:
-    """Tear down *process* and every other member of its process group.
-
-    *pgid* names the group when the caller isolated the child under an id
-    other than its pid; it defaults to ``process.pid``.
-    """
-    group = process.pid if pgid is None else pgid
+def kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    """Tear down *process* and every other member of its process group."""
+    group = process.pid
     try:
         os.killpg(group, signal.SIGTERM)
     except ProcessLookupError:
@@ -163,7 +159,6 @@ def stop_process(
     interrupt_cleanup_cmd: list[str] | None,
     cwd: Path | None,
     env: dict[str, str] | None,
-    pgid: int | None = None,
 ) -> None:
     """Run *interrupt_cleanup_cmd* (if any), then kill or terminate *process*.
 
@@ -175,7 +170,7 @@ def stop_process(
         _run_cleanup_command(interrupt_cleanup_cmd, cwd=cwd, env=env)
     finally:
         if isolate_process_group:
-            kill_process_group(process, pgid=pgid)
+            kill_process_group(process)
         else:
             terminate_process(process)
 

@@ -61,6 +61,7 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import os
+import stat
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -702,6 +703,48 @@ def write_sandbox_home(
         (sandbox_dir / f"{name}.json").write_text("{}", encoding="utf-8")
     if run_toml:
         (home / ".agm" / "config.toml").write_text(run_toml, encoding="utf-8")
+
+
+def write_transparent_sandbox_shims(directory: Path, *, log_dir: Path) -> None:
+    """Write silent, flag-skipping ``systemd-run``/``srt`` fakes into *directory*.
+
+    Each exec's onward to the command it wraps after touching a marker file
+    under *log_dir* first, so a test can confirm the wrap chain actually ran,
+    not merely that the wrapped command happened to start anyway. Unlike
+    ``TestSandbox``'s diagnostic fakes (which print captured settings/command
+    for ``agm run`` assertions), these run silently, so a sandboxed call's
+    real stdout stays exactly what the wrapped command printed. The caller
+    adds *directory* to the front of ``PATH`` itself.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    systemd_run = directory / "systemd-run"
+    systemd_run.write_text(
+        "#!/bin/bash\n"
+        f'touch "{log_dir}/systemd-run"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        "    --user|--scope|-q) shift ;;\n"
+        "    -p|--unit) shift 2 ;;\n"
+        '    --) shift; exec "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    systemd_run.chmod(systemd_run.stat().st_mode | stat.S_IEXEC)
+    srt = directory / "srt"
+    srt.write_text(
+        "#!/bin/bash\n"
+        f'touch "{log_dir}/srt"\n'
+        "while [[ $# -gt 0 ]]; do\n"
+        '  case "$1" in\n'
+        "    --settings) shift 2 ;;\n"
+        '    --) shift; exec "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    srt.chmod(srt.stat().st_mode | stat.S_IEXEC)
 
 
 REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"

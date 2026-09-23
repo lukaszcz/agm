@@ -143,3 +143,28 @@ class SessionBackend(Protocol):
 
     def close(self) -> None:
         """Release the backend's resources."""
+
+
+class SandboxFixture:
+    """Sandboxing fixed once, at ``open``, for a session backend's whole lifetime.
+
+    Every process a session spawns -- its first prompt and every later native
+    call (fork's replacement, compaction, ...) -- reuses the same
+    ``permission_mode``/``sandbox``; there is no per-call override. Shared by
+    every session backend family (CLI, RPC) so "fix at open" and "carry into a
+    freshly spawned sibling" are each written once.
+    """
+
+    def __init__(self) -> None:
+        self._permission_mode: PermissionMode = PermissionMode.NONE
+        self._sandbox: SandboxLimits | None = None
+
+    def _fix_sandbox(self, request: SessionOpenRequest) -> None:
+        """Fix this backend's sandboxing for its whole session lifetime."""
+        self._permission_mode = request.permission_mode
+        self._sandbox = request.sandbox
+
+    def _adopt_sandbox_from(self, other: "SandboxFixture") -> None:
+        """Carry an already-fixed sandboxing into a freshly spawned sibling backend."""
+        self._permission_mode = other._permission_mode
+        self._sandbox = other._sandbox

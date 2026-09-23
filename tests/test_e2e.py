@@ -37,7 +37,11 @@ import pytest
 from agm.packages.record import write_record
 from agm.project.workspace_shell import _sanitize_session_key
 from tests import _agm_zygote
-from tests._agl_helpers import write_file_program, write_sandbox_home
+from tests._agl_helpers import (
+    write_file_program,
+    write_sandbox_home,
+    write_transparent_sandbox_shims,
+)
 from tests._command_coverage import record_invocation
 from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
 from tests._git_helpers import clone_with_fork_remote
@@ -9275,43 +9279,8 @@ def _write_development_package_pair(parent: Path) -> tuple[Path, Path]:
 def _install_transparent_sandbox_shims(
     directory: Path, env: dict[str, str], *, log_dir: Path
 ) -> None:
-    """Install ``systemd-run``/``srt`` fakes that skip their own flags and exec the wrapped command.
-
-    Unlike ``TestSandbox``'s diagnostic fakes (which print captured settings/command
-    for ``agm run`` assertions), these run silently, so a sandboxed agent call's real
-    stdout stays exactly what the wrapped agent command printed. Each touches
-    ``<log_dir>/<its name>`` before exec'ing onward, so a test can confirm both
-    wrapper binaries actually ran (not merely that the final command succeeded).
-    """
-    directory.mkdir(parents=True, exist_ok=True)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    systemd_run = directory / "systemd-run"
-    systemd_run.write_text(
-        "#!/bin/bash\n"
-        f'touch "{log_dir}/systemd-run"\n'
-        "while [[ $# -gt 0 ]]; do\n"
-        '  case "$1" in\n'
-        "    --user|--scope|-q) shift ;;\n"
-        "    -p|--unit) shift 2 ;;\n"
-        '    --) shift; exec "$@" ;;\n'
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
-    )
-    systemd_run.chmod(systemd_run.stat().st_mode | stat.S_IEXEC)
-    srt = directory / "srt"
-    srt.write_text(
-        "#!/bin/bash\n"
-        f'touch "{log_dir}/srt"\n'
-        "while [[ $# -gt 0 ]]; do\n"
-        '  case "$1" in\n'
-        "    --settings) shift 2 ;;\n"
-        '    --) shift; exec "$@" ;;\n'
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
-    )
-    srt.chmod(srt.stat().st_mode | stat.S_IEXEC)
+    """Install the shared transparent sandbox shims and prepend *directory* to ``PATH``."""
+    write_transparent_sandbox_shims(directory, log_dir=log_dir)
     env["PATH"] = f"{directory}:{env['PATH']}"
 
 
@@ -9609,6 +9578,48 @@ class TestExecCommand:
         response = responses[-1]
         assert response["sandboxed"] is True
         assert response["argv"][0] == "systemd-run"
+
+    def test_exec_sandboxed_stdin_delivered_prompt_reaches_the_agent_binary_intact(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # Codex is the only built-in spec that delivers its prompt on stdin
+        # rather than a prompt file (``PromptDelivery.STDIN``): nothing else
+        # composes that delivery mode with a sandbox-wrapped command. This is
+        # a regression guard, not a bug fix -- verified on a real
+        # sandbox-capable box that stdin survives the full
+        # ``systemd-run ... -- bash -c <bootstrap> -- srt --settings ... --
+        # codex ... -`` wrapper chain intact.
+        work = tmp_path / "work"
+        work.mkdir()
+        program = work / "ask.agl"
+        write_file_program(
+            program,
+            'let r = AgentCodex("fake-model", "high").ask("stdin survives the sandbox wrap")\n'
+            "print r\n",
+            encoding="utf-8",
+        )
+
+        shim_log = tmp_path / "shim-log"
+        _install_transparent_sandbox_shims(tmp_path / "shims", env, log_dir=shim_log)
+        write_sandbox_home(Path(env["HOME"]))
+
+        # The fake ``codex`` binary never inspects its argv: it echoes
+        # whatever it reads on stdin, so the assertion below only passes if
+        # the rendered prompt text made it all the way through the wrapper
+        # chain to the agent's stdin, unmodified.
+        fake_codex = tmp_path / "bin" / "codex"
+        fake_codex.parent.mkdir(parents=True)
+        fake_codex.write_text("#!/bin/bash\ncat\n")
+        fake_codex.chmod(fake_codex.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_codex.parent}:{env['PATH']}"
+
+        result = run_agm(["exec", str(program)], env=env, cwd=str(work))
+
+        assert result.returncode == 0
+        assert result.stdout.strip() == "stdin survives the sandbox wrap"
+        # Both wrapper binaries actually ran, not just the final command.
+        assert (shim_log / "systemd-run").exists()
+        assert (shim_log / "srt").exists()
 
     def test_exec_runs_multi_agent_review_fix_workflow(
         self, tmp_path: Path, env: dict[str, str]

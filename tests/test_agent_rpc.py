@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -31,6 +32,7 @@ from tests._agl_helpers import (
     session_sandbox_context,
     unavailable_sandbox_context,
     write_sandbox_home,
+    write_transparent_sandbox_shims,
 )
 
 _STUB = r"""#!{python}
@@ -108,42 +110,14 @@ for line in sys.stdin.buffer:
 
 
 def _install_transparent_sandbox_shims(directory: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Install silent, flag-skipping ``systemd-run``/``srt`` fakes on the front of ``PATH``.
+    """Install the shared transparent sandbox shims on the front of ``PATH``.
 
-    Each touches a marker file under the returned directory before exec'ing
-    onward, so a test can confirm the wrap chain actually ran, not merely
-    that the wrapped ``pi`` stub happened to start anyway.
+    Returns the directory their marker files land in, so a test can confirm
+    the wrap chain actually ran, not merely that the wrapped ``pi`` stub
+    happened to start anyway.
     """
-    directory.mkdir(parents=True, exist_ok=True)
     log_dir = directory / "log"
-    log_dir.mkdir()
-    systemd_run = directory / "systemd-run"
-    systemd_run.write_text(
-        "#!/bin/bash\n"
-        f'touch "{log_dir}/systemd-run"\n'
-        "while [[ $# -gt 0 ]]; do\n"
-        '  case "$1" in\n'
-        "    --user|--scope|-q) shift ;;\n"
-        "    -p|--unit) shift 2 ;;\n"
-        '    --) shift; exec "$@" ;;\n'
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
-    )
-    systemd_run.chmod(0o755)
-    srt = directory / "srt"
-    srt.write_text(
-        "#!/bin/bash\n"
-        f'touch "{log_dir}/srt"\n'
-        "while [[ $# -gt 0 ]]; do\n"
-        '  case "$1" in\n'
-        "    --settings) shift 2 ;;\n"
-        '    --) shift; exec "$@" ;;\n'
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
-    )
-    srt.chmod(0o755)
+    write_transparent_sandbox_shims(directory, log_dir=log_dir)
     monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
     return log_dir
 
@@ -835,11 +809,48 @@ def test_ephemeral_host_ask_spawns_the_rpc_child_sandboxed(
     assert (log_dir / "srt").exists()
 
 
-def test_open_prepare_failure_becomes_a_session_host_error(
+def test_open_prepare_failure_unavailable_becomes_a_session_host_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A sandbox preparation failure at open -- no settings file resolvable --
-    is a session lifecycle failure, never a bare spawn of an unsandboxed child."""
+    """A sandbox backend that cannot run at all -- no ``systemd-run``/``srt``
+    reachable -- is a session lifecycle failure, never a bare spawn of an
+    unsandboxed child.
+
+    ``shutil.which`` is patched directly (rather than relying on the test
+    machine's own ``PATH``) so this fails the same way whether or not those
+    binaries happen to be installed.
+    """
+    RpcStub(tmp_path, monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda *args, **kwargs: None)
+    home = tmp_path / "home"
+    write_sandbox_home(home)  # Settings would resolve if the backend were ever reached.
+
+    backend = PiRpcSessionBackend(get_sandbox_context=session_sandbox_context(home))
+
+    with pytest.raises(SessionHostError) as raised:
+        backend.open(
+            SessionOpenRequest(
+                AgentPi("provider", "model", "high"),
+                "rpc",
+                permission_mode=PermissionMode.UNRESTRICTED,
+                sandbox=SandboxLimits(),
+            )
+        )
+    assert raised.value.operation == "open"
+    assert "is not installed or not in PATH" in str(raised.value)
+
+
+def test_open_prepare_failure_no_settings_becomes_a_session_host_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sandbox backend that is available but has no resolvable settings file
+    is likewise a session lifecycle failure, never a bare spawn.
+
+    Installs the shared transparent shims so ``srt`` is deterministically
+    reachable regardless of the test machine's own ``PATH``, then leaves no
+    settings file for it to find.
+    """
+    _install_transparent_sandbox_shims(tmp_path / "shims", monkeypatch)
     RpcStub(tmp_path, monkeypatch)
     home = tmp_path / "home"  # No `.agm/sandbox/default.json` written.
 
@@ -855,6 +866,7 @@ def test_open_prepare_failure_becomes_a_session_host_error(
             )
         )
     assert raised.value.operation == "open"
+    assert "no sandbox settings file found" in str(raised.value)
 
 
 def test_close_and_fork_replacement_close_the_prepared_sandbox_command(

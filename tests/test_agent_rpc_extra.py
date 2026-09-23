@@ -50,13 +50,24 @@ def killed_groups(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
 
 def _child(process: object) -> rpc._RpcChild:
-    """Build an ``_RpcChild`` around a fake *process* with a plausible argv."""
-    return rpc._RpcChild(
-        cast(subprocess.Popen[bytes], process),
-        next(_fake_process_groups),
-        _PI,
-        ["pi", "--mode", "rpc"],
-    )
+    """Build an ``_RpcChild`` around a fake *process* with a plausible argv.
+
+    ``kill_process_group`` always targets ``process.pid`` now (the dead
+    ``pgid`` override was removed), so a fake process that doesn't already
+    carry one is stamped with a synthetic, always-above-
+    ``_FAKE_PROCESS_GROUP_FLOOR`` id here -- unique per call -- so the
+    ``killed_groups`` fixture recognizes and intercepts it instead of a real
+    ``os.killpg`` ever reaching a real process group. A bare ``object()``
+    (used only by tests that never reach termination) is left untouched: it
+    rejects arbitrary attributes.
+    """
+    popen = cast(subprocess.Popen[bytes], process)
+    if not hasattr(popen, "pid"):
+        try:
+            popen.pid = next(_fake_process_groups)
+        except AttributeError:
+            pass
+    return rpc._RpcChild(popen, _PI, ["pi", "--mode", "rpc"])
 
 
 def _reap_child_after_send(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -752,7 +763,7 @@ def test_fork_replacement_readiness_failure_leaves_source_unchanged(
     with pytest.raises(SessionHostError):
         backend.fork()
     assert backend._child is source
-    assert set(killed_groups) == {replacement.process_group}
+    assert set(killed_groups) == {replacement.process.pid}
     backend.close()
 
 
@@ -794,7 +805,7 @@ def test_fork_rejects_a_child_with_the_parent_session_id(
     assert [operation for _, operation in calls] == ["get_state", "get_state", "clone", "get_state"]
     assert calls[1][0] is not backend
     assert backend._child is replacement
-    assert set(killed_groups) == {source.process_group}
+    assert set(killed_groups) == {source.process.pid}
     backend.close()
 
 

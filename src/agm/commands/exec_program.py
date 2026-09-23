@@ -131,6 +131,7 @@ from agm.core.toml import toml_dict
 from agm.packages.activation import load_activation_index
 from agm.packages.manifest import command_paths_for_program
 from agm.packages.model import owning_package
+from agm.sandbox.prepare import lazy_sandbox_context
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -717,6 +718,7 @@ def run(
         agent_dispatcher=factory,
         session_host=session_host,
         shell_exec_timeout=resolved_timeout,
+        get_sandbox_context=lazy_sandbox_context(ctx),
     )
 
     # Resolve + validate the trace log file up front.  --dry-run is

@@ -1913,6 +1913,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             agent_dispatcher: Any | None,
             session_host: Any | None,
             shell_exec_timeout: float | None,
+            get_sandbox_context: Any | None = None,
         ) -> None:
             captured["default_strict_json"] = default_strict_json
             captured["shell_exec_timeout"] = shell_exec_timeout
@@ -1921,6 +1922,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
                 agent_dispatcher=agent_dispatcher,
                 session_host=session_host,
                 shell_exec_timeout=shell_exec_timeout,
+                get_sandbox_context=get_sandbox_context,
             )
 
     monkeypatch.setattr(exec_engine, "PipelineDriver", RecordingRuntime)

@@ -9,6 +9,7 @@ import time
 import unittest.mock
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
@@ -33,6 +34,9 @@ from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import agl_roots, run_inline_command
 from tests.agl.module_graph import build_module_graph, build_module_graph_from_program, load_graph
+
+if TYPE_CHECKING:
+    from agm.sandbox.prepare import SandboxContext
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "packages" / "stdlib"
 
@@ -268,6 +272,7 @@ def run_inline_ir(
     roots: RootSet | None = None,
     process_environment: dict[str, str] | None = None,
     shell_exec_timeout: float | None = None,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> tuple[RunResult, str]:
     """Run *source* as ``agm exec -c`` through :class:`PipelineDriver`, capturing stdout.
 
@@ -275,7 +280,9 @@ def run_inline_ir(
     agent call fails instead of reaching a real agent.
     """
     runtime = PipelineDriver(
-        agent_dispatcher=agent_dispatcher, shell_exec_timeout=shell_exec_timeout
+        agent_dispatcher=agent_dispatcher,
+        shell_exec_timeout=shell_exec_timeout,
+        get_sandbox_context=get_sandbox_context,
     )
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -553,7 +560,10 @@ def shell_caps() -> HostCapabilities:
 
 
 def _scripted_shell(
-    commands: dict[str, ProcessCaptureResult], *, cmd_log: list[str] | None = None
+    commands: dict[str, ProcessCaptureResult],
+    *,
+    cmd_log: list[str] | None = None,
+    argv_log: list[list[str]] | None = None,
 ) -> Callable[..., ProcessCaptureResult]:
     def run(
         args: list[str],
@@ -562,9 +572,16 @@ def _scripted_shell(
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del idle_timeout, cwd, env, isolate_process_group
-        command = args[2]
+        del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
+        if argv_log is not None:
+            argv_log.append(args)
+        # The command is always the final argv element, with "-c" right
+        # before it -- true whether or not a sandbox wrapper (with its own
+        # "-c"-taking bootstrap steps) prefixes the plain ``sh -c <cmd>`` tail.
+        assert args[-2] == "-c"
+        command = args[-1]
         if cmd_log is not None:
             cmd_log.append(command)
         return commands[command]
@@ -578,6 +595,7 @@ def run_inline_ir_with_shell(
     *,
     process_environment: dict[str, str] | None = None,
     shell_exec_timeout: float | None = None,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> tuple[RunResult, str]:
     """Run *source* like :func:`run_inline_ir` with every shell process faked by *shell_fake*."""
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell_fake):
@@ -585,6 +603,7 @@ def run_inline_ir_with_shell(
             source,
             process_environment=process_environment,
             shell_exec_timeout=shell_exec_timeout,
+            get_sandbox_context=get_sandbox_context,
         )
 
 
@@ -593,12 +612,23 @@ def evaluate_ir_with_shell(
     commands: dict[str, ProcessCaptureResult],
     *,
     cmd_log_ir: list[str] | None = None,
+    argv_log: list[list[str]] | None = None,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> dict[str, Value]:
-    shell = _scripted_shell(commands, cmd_log=cmd_log_ir)
-    return completed_bindings(run_inline_ir_with_shell(source, shell))
+    shell = _scripted_shell(commands, cmd_log=cmd_log_ir, argv_log=argv_log)
+    return completed_bindings(
+        run_inline_ir_with_shell(source, shell, get_sandbox_context=get_sandbox_context)
+    )
 
 
 def evaluate_ir_raises_with_shell(
-    source: str, commands: dict[str, ProcessCaptureResult]
+    source: str,
+    commands: dict[str, ProcessCaptureResult],
+    *,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> RunError:
-    return uncaught_error(run_inline_ir_with_shell(source, _scripted_shell(commands)))
+    return uncaught_error(
+        run_inline_ir_with_shell(
+            source, _scripted_shell(commands), get_sandbox_context=get_sandbox_context
+        )
+    )

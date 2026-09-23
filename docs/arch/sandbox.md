@@ -12,7 +12,7 @@ A command runs inside a sandbox with an explicit filesystem/network policy and o
 
 `backend.py` defines the `SandboxBackend` protocol (availability, settings resolution, argv wrapping, env adjustment) and a `default_backend()` registry seam for future methods. `srt.py::SrtBackend` is the shipped implementation, delegating isolation to the external `srt` tool: settings resolution/merging, git write-access patching, bwrap-artifact cleanup tracking, and a Node fetch-proxy env default.
 
-`profile.py::profile_name()` derives a sandbox profile name from an executable path, selecting both the per-command settings file and the `[run.<name>]` limit overrides; a `run`-only alias never affects it. The config layer takes a profile name only pre-normalized this way, never deriving one itself.
+`profile.py::profile_name()` derives a sandbox profile name from an executable path, selecting both the per-command settings file and the `[run.<name>]` limit overrides; a `run`-only alias never affects it. `profile_name_for_shell()` derives the same name from a shell command string's first word (via `shlex.split`), for a caller — `exec` — that only has the rendered command line, never a resolved executable path; an unsplittable or empty command selects no name, falling through to the unqualified default. The config layer takes a profile name only pre-normalized this way, never deriving one itself.
 
 ## Settings Resolution
 

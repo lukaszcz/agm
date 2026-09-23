@@ -72,6 +72,7 @@ if TYPE_CHECKING:
         TypeEnvironment,
     )
     from agm.packages.model import PackageInfo
+    from agm.sandbox.prepare import SandboxContext
 
 
 # Layout-only token types that carry no statement to evaluate.
@@ -232,6 +233,7 @@ class ReplSession:
         default_call_depth_limit: int | None = None,
         agent_dispatcher: "AgentFn | None" = None,
         session_host: "SessionHost | None" = None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         engine_base: "Mapping[str, Value] | None" = None,
@@ -350,6 +352,7 @@ class ReplSession:
             default_call_depth_limit=default_call_depth_limit,
             agent_dispatcher=agent_dispatcher,
             session_host=effective_session_host,
+            get_sandbox_context=get_sandbox_context,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
         # interpreters this session builds directly, so the canonical default

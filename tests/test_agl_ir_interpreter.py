@@ -2588,6 +2588,7 @@ class TestIrExec:
             env=_empty_environ(location),
             cwd=_none_option(location),
             timeout=_none_option(location),
+            sandbox=_none_option(location),
             contract_id=cid,
             max_attempts=max_attempts,
         )
@@ -2668,6 +2669,7 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2709,8 +2711,9 @@ class TestIrExec:
             cwd: pathlib.Path | None = None,
             env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
+            interrupt_cleanup_cmd: list[str] | None = None,
         ) -> ProcessCaptureResult:
-            del idle_timeout, cwd, env, isolate_process_group
+            del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
             call_count[0] += 1
             if call_count[0] == 1:
                 # First call: succeeds but returns invalid JSON (triggers retry)
@@ -2760,6 +2763,7 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
             max_attempts=2,
         )
@@ -2890,8 +2894,9 @@ class TestIrExec:
             cwd: pathlib.Path | None = None,
             env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
+            interrupt_cleanup_cmd: list[str] | None = None,
         ) -> ProcessCaptureResult:
-            del idle_timeout, cwd, env, isolate_process_group
+            del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
             call_count[0] += 1
             if call_count[0] == 1:
                 return ProcessCaptureResult(
@@ -2930,6 +2935,7 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
             max_attempts=2,
         )
@@ -2973,8 +2979,9 @@ class TestIrExec:
             cwd: pathlib.Path | None = None,
             env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
+            interrupt_cleanup_cmd: list[str] | None = None,
         ) -> ProcessCaptureResult:
-            del idle_timeout, cwd, env, isolate_process_group
+            del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
             call_count[0] += 1
             if call_count[0] == 1:
                 return ProcessCaptureResult(
@@ -3013,6 +3020,7 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
             max_attempts=2,
         )
@@ -3052,8 +3060,9 @@ class TestIrExec:
             cwd: pathlib.Path | None = None,
             env: dict[str, str] | None = None,
             isolate_process_group: bool = False,
+            interrupt_cleanup_cmd: list[str] | None = None,
         ) -> ProcessCaptureResult:
-            del idle_timeout, cwd, env, isolate_process_group
+            del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
             # Returns a valid JSON string (not int), so schema validation fails with errors
             return ProcessCaptureResult(
                 returncode=0,
@@ -3082,6 +3091,7 @@ class TestIrExec:
             env=_empty_environ(_LOC),
             cwd=_none_option(_LOC),
             timeout=_none_option(_LOC),
+            sandbox=_none_option(_LOC),
             contract_id=cid,
             max_attempts=1,
         )

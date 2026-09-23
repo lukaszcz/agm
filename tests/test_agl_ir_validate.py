@@ -2545,6 +2545,7 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2563,6 +2564,7 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2594,6 +2596,7 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2628,6 +2631,7 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2659,6 +2663,7 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2689,6 +2694,7 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2719,6 +2725,7 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
             max_attempts=1,
         )
@@ -2749,6 +2756,7 @@ class TestIrExecValidation:
             env=IrConstText(location=LOC, value="env"),
             cwd=IrConstText(location=LOC, value="cwd"),
             timeout=IrConstText(location=LOC, value="timeout"),
+            sandbox=IrConstText(location=LOC, value="sandbox"),
             contract_id=cid,
             max_attempts=0,  # invalid
         )

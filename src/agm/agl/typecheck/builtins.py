@@ -197,7 +197,7 @@ class BuiltinCallChecker:
     )
 
     _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
-        {"env", "cwd", "timeout", "format", "strict-json", "on-parse-error"}
+        {"env", "cwd", "timeout", "sandbox", "format", "strict-json", "on-parse-error"}
     )
 
     def __init__(self, ctx: BuiltinCheckCtx) -> None:
@@ -931,6 +931,14 @@ class BuiltinCallChecker:
             actual = self._ctx._check_expr(named[name].value, expected=option_text)
             self._ctx._assert_assignable_from(
                 actual, option_text, named[name].span, named[name].value
+            )
+        if "sandbox" in named:
+            sandbox_type = self._ctx._env.type_table.option_handle(
+                self.contract_type("Sandbox"), standard=True
+            )
+            actual = self._ctx._check_expr(named["sandbox"].value, expected=sandbox_type)
+            self._ctx._assert_assignable_from(
+                actual, sandbox_type, named["sandbox"].span, named["sandbox"].value
             )
 
     def _standard_option_text_type(self) -> EnumType:

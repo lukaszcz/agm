@@ -62,6 +62,7 @@ from agm.core.log import (
 from agm.core.toml import toml_dict
 from agm.packages.activation import select_package_roots
 from agm.packages.development import discover_development_packages
+from agm.sandbox.prepare import lazy_sandbox_context
 
 
 def run(args: ReplArgs) -> None:
@@ -107,6 +108,7 @@ def run(args: ReplArgs) -> None:
     runner_agent = value_driven_agent_factory(idle_timeout=config.timeout, context=ctx)
 
     session_host = create_agl_session_host(idle_timeout=config.timeout, context=ctx)
+    get_sandbox_context = lazy_sandbox_context(ctx)
 
     host_settings_policy = HostSettingsPolicy(
         resolve_trace_path=LiveTracePathResolver(command_name="repl", auto_path=trace_path),
@@ -160,6 +162,7 @@ def run(args: ReplArgs) -> None:
             default_call_depth_limit=call_depth_limit,
             agent_dispatcher=runner_agent,
             session_host=session_host,
+            get_sandbox_context=get_sandbox_context,
             shell_exec_timeout=config.timeout,
             trace_path=trace_path,
             engine_base=engine_seeds,

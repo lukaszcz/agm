@@ -1,0 +1,45 @@
+# Sandboxed exec: `sandbox: Option[Sandbox]` wraps the shell child under the
+# real systemd-run/srt chain, the profile chosen from the command's first
+# shell word (never `sh`); `None` stays exactly today's unsandboxed path; a
+# preparation failure surfaces as `ExecError`; a retried parse re-prepares
+# the sandbox on every attempt.
+
+program def main(mode: int, settings: path = "unused") -> unit =
+  case mode of
+    | 1 =>
+        let out: text = exec "echo hi"
+        print out
+    | 2 =>
+        let out: text = exec("echo hi", sandbox = Some(Sandbox()))
+        print out
+    | 3 =>
+        let out: text = exec(
+          "echo hi",
+          sandbox = Some(Sandbox(memory = Some("1G"), patch = false)),
+        )
+        print out
+    | 4 =>
+        let out: text = exec("echo hi", sandbox = Some(Sandbox(settings = Some(settings))))
+        print out
+    | 5 =>
+        let out: text = exec("'my tool' --x", sandbox = Some(Sandbox()))
+        print out
+    | 6 =>
+        let out: text = exec("echo 'oops", sandbox = Some(Sandbox()))
+        print out
+    | 7 =>
+        let out: text = exec("VAR=1 make", sandbox = Some(Sandbox()))
+        print out
+    | 8 =>
+        try
+          let out: text = exec("echo hi", sandbox = Some(Sandbox()))
+          print out
+        catch ExecError as e =>
+          print "failed code %{e.exit-code}"
+          print "stdout [%{e.stdout}]"
+          print "timed %{e.timed-out}"
+    | 9 =>
+        let n: int = exec("cmd", sandbox = Some(Sandbox()), on-parse-error = Retry(n = 1))
+        print n
+    | _ =>
+        print "unknown mode"

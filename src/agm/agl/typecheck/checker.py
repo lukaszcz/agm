@@ -109,6 +109,7 @@ from agm.agl.semantics.types import (
     free_type_vars,
     iter_type,
     reroot_type,
+    standard_option_type,
     substitute,
 )
 from agm.agl.syntax.nodes import (
@@ -588,6 +589,11 @@ def _builtin_function_signature(
                     _std_param("env", RecordType(name="Environ"), has_default=True),
                     _std_param("cwd", OPTION_TEXT_TYPE, has_default=True),
                     _std_param("timeout", OPTION_TEXT_TYPE, has_default=True),
+                    _std_param(
+                        "sandbox",
+                        standard_option_type(BUILTIN_PRELUDE_TYPES["Sandbox"]),
+                        has_default=True,
+                    ),
                 ),
                 result=BUILTIN_PRELUDE_TYPES["ExecResult"],
             )

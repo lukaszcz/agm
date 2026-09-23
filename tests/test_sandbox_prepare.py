@@ -32,7 +32,7 @@ from agm.sandbox.prepare import (
     resolve_limits,
     settings_source,
 )
-from agm.sandbox.profile import profile_name
+from agm.sandbox.profile import profile_name, profile_name_for_shell
 from agm.sandbox.request import (
     DRY_RUN_SETTINGS_PLACEHOLDER,
     Default,
@@ -150,6 +150,32 @@ class TestProfileName:
 
     def test_empty_argv0_returns_itself(self) -> None:
         assert profile_name("") == ""
+
+
+class TestProfileNameForShell:
+    """``profile_name_for_shell`` derives exec's profile from the first shell word."""
+
+    def test_plain_command(self) -> None:
+        assert profile_name_for_shell("make test") == "make"
+
+    def test_path_qualified_command(self) -> None:
+        assert profile_name_for_shell("/usr/bin/make test") == "make"
+
+    def test_quoted_first_word(self) -> None:
+        assert profile_name_for_shell("'my tool' --x") == "my tool"
+
+    def test_unsplittable_command_selects_no_name(self) -> None:
+        assert profile_name_for_shell("echo 'oops") is None
+
+    def test_empty_command_selects_no_name(self) -> None:
+        assert profile_name_for_shell("") is None
+
+    def test_assignment_prefix_is_an_unknown_name(self) -> None:
+        """``VAR=1 make`` is not special-cased: its first word is the profile name."""
+        assert profile_name_for_shell("VAR=1 make") == "VAR=1"
+
+    def test_leading_paren_is_an_unknown_name(self) -> None:
+        assert profile_name_for_shell("(cd sub && make)") == "(cd"
 
 
 class TestSandboxLimits:

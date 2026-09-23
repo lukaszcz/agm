@@ -3,6 +3,7 @@ import std/env::Environ
 import std/errors::Exception
 import std/option::Option
 import std/path::path
+import std/sandbox::Sandbox
 
 builtin
 record ExecResult
@@ -26,4 +27,5 @@ builtin def exec(
   env: Environ = std/env::environ,
   cwd: Option[path] = None,
   timeout: Option[text] = std/config::timeout,
+  sandbox: Option[Sandbox] = None,
 ) -> ExecResult

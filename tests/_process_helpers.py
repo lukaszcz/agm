@@ -42,6 +42,38 @@ def process_result(
     )
 
 
+def _assert_sandbox_wrapped_argv(args: list[str], expected: Mapping[str, Any]) -> None:
+    """Assert *args* carries the real ``systemd-run``/``srt`` sandbox wrap.
+
+    *expected* names the resolved settings file either by ``profile`` (its
+    ``<profile>.json`` candidate, or ``None`` for the ``default.json``
+    fallback an unknown/unsplittable first word takes) or by an exact
+    ``settings_suffix`` of the resolved settings path, plus optional
+    ``memory``/``swap`` systemd resource-limit values expected in the
+    ``-p MemoryMax=…``/``-p MemorySwapMax=…`` flags.
+    """
+    assert args[:4] == ["systemd-run", "--user", "--scope", "-q"], (
+        f"expected a sandboxed argv, got {args!r}"
+    )
+    assert "srt" in args, f"expected the srt wrapper in {args!r}"
+    srt_index = args.index("srt")
+    assert args[srt_index + 1] == "--settings"
+    settings = args[srt_index + 2]
+    assert args[srt_index + 3] == "--"
+    if "settings_suffix" in expected:
+        assert settings.endswith(expected["settings_suffix"]), (
+            f"expected settings ending {expected['settings_suffix']!r}, got {settings!r}"
+        )
+    elif "profile" in expected:
+        profile = expected["profile"]
+        suffix = "default.json" if profile is None else f"{profile}.json"
+        assert settings.endswith(suffix), f"expected settings ending {suffix!r}, got {settings!r}"
+    if "memory" in expected:
+        assert f"MemoryMax={expected['memory']}" in args, args
+    if "swap" in expected:
+        assert f"MemorySwapMax={expected['swap']}" in args, args
+
+
 @dataclass
 class FakeShell:
     """Fake ``sh -c`` boundary, in one of two modes.
@@ -58,6 +90,7 @@ class FakeShell:
     responses: Sequence[Mapping[str, Any]] | None = None
     stdout: str = ""
     commands: list[str] = field(default_factory=list)
+    argvs: list[list[str]] = field(default_factory=list)
 
     def __call__(
         self,
@@ -67,12 +100,17 @@ class FakeShell:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del isolate_process_group
-        assert args[:2] == ["sh", "-c"]
-        command = args[2]
+        del isolate_process_group, interrupt_cleanup_cmd
+        # The command is always the final argv element, with "-c" right
+        # before it -- true whether or not a sandbox wrapper (with its own
+        # "-c"-taking bootstrap steps) prefixes the plain ``sh -c <cmd>`` tail.
+        assert args[-2] == "-c"
+        command = args[-1]
         index = len(self.commands)
         self.commands.append(command)
+        self.argvs.append(list(args))
         if self.responses is None:
             return process_result(stdout=self.stdout)
         assert index < len(self.responses), f"unexpected shell command: {command!r}"
@@ -86,6 +124,10 @@ class FakeShell:
             assert cwd == (None if spec["cwd"] is None else Path(spec["cwd"]))
         if "idle_timeout" in spec:
             assert idle_timeout == spec["idle_timeout"]
+        if "sandbox_wrapped" in spec:
+            _assert_sandbox_wrapped_argv(args, spec["sandbox_wrapped"])
+        if spec.get("sandbox_unwrapped"):
+            assert args == ["sh", "-c", command], f"expected an unwrapped shell call, got {args!r}"
         stdout_hex = spec.get("stdout_hex")
         stderr_hex = spec.get("stderr_hex")
         return process_result(

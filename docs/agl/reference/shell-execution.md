@@ -42,6 +42,7 @@ exec(
   env: Environ = std/env::environ,
   cwd: Option[text] = Option[text]::None,
   timeout: Option[text] = std/config::timeout,
+  sandbox: Option[Sandbox] = Option[Sandbox]::None,
 ) -> ExecResult
 ```
 
@@ -50,7 +51,25 @@ merges with the AGM process environment. The default is the startup ambient
 `std/env::environ` snapshot. Use `environ.extended(overrides)` when a command
 needs an explicit overlay. `cwd` is an optional working directory and `timeout`
 is an optional idle timeout duration. The single-argument sugar below supplies
-only the command, so it uses all three defaults.
+only the command, so it uses all four defaults.
+
+`sandbox` selects the command's sandboxing, a `Sandbox` record
+([Types](types.md#sandbox)) naming resource limits, or `None` (the default)
+for an unsandboxed run:
+
+<!-- agl-check: fragment -->
+```agl
+let r: text = exec("make test", sandbox = Some(Sandbox()))
+let r2: text = exec("make test", sandbox = Some(Sandbox(memory = Some("8G"))))
+```
+
+When present, the wrapping process resolves and applies the record's
+resource limits, selecting settings by the command's **first shell word** —
+`"make test"` selects settings named for `make`, never for `sh`, the shell
+`exec` itself runs the command under. A command whose first word cannot be
+determined (for example, an empty or unsplittable command) selects the
+unqualified default settings. A sandbox preparation failure raises
+`ExecError` exactly like a spawn failure.
 
 ## Single-argument sugar
 
@@ -206,9 +225,10 @@ invalid for a `unit` target.
 
 ## Execution semantics
 
-1. The rendered command runs via the host shell (`sh -c` semantics),
-   un-sandboxed, with the user's privileges, using its `env`, `cwd`, and
-   `timeout` arguments.
+1. The rendered command runs via the host shell (`sh -c` semantics), with
+   the user's privileges, using its `env`, `cwd`, and `timeout` arguments.
+   With `sandbox = None` (the default) it runs unsandboxed; with a `Sandbox`
+   record it runs wrapped by the sandbox runtime instead.
 2. Standard output and standard error are captured.
 3. In the **parsed form**, on success (exit status 0), trailing newlines are
    stripped from stdout — as in `$(…)` command substitution — and the result

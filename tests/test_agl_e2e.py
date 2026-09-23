@@ -52,6 +52,7 @@ from agm.agent.session import (
 )
 from agm.agent.spec import PermissionMode
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from agm.sandbox.prepare import SandboxContext
 from agm.sandbox.request import Default, SandboxLimits
 from tests._agl_helpers import (
     REPO_STDLIB_ROOT,
@@ -60,6 +61,9 @@ from tests._agl_helpers import (
     prepare_inline_command,
     program_config_engine_seeds,
     run_inline_command,
+    session_sandbox_context,
+    write_sandbox_home,
+    write_transparent_sandbox_shims,
 )
 from tests._http_helpers import FakeHttp, fake_session
 from tests._process_helpers import FakeShell
@@ -1009,11 +1013,58 @@ def test_inline_entry_with_its_own_program_def_follows_relaxed_binding_order(
     assert capsys.readouterr().out == "42\n"
 
 
+def _apply_sandbox_home(
+    scenario: dict[str, Any], tmp_path: Path
+) -> tuple[dict[str, Any], Callable[[], SandboxContext] | None]:
+    """Materialize a scenario's ``sandbox_home`` fixture, when present.
+
+    Writes a real ``[home]/.agm/sandbox`` settings tree and, unless
+    ``unavailable`` is set, real (transparent, never-invoked) ``systemd-run``/
+    ``srt`` shims onto a ``PATH`` fed to the program's ``std/env::environ``
+    default -- so a sandboxed ``exec`` resolves backend availability and
+    settings through the real sandbox library, exactly as production does,
+    while ``run_capture_result`` stays mocked (the scripted ``shell`` sees the
+    wrapped argv; no shim ever actually runs). ``unavailable`` points at an
+    empty ``PATH`` instead, for a preparation-failure scenario. Returns the
+    scenario with ``process_environment``/``params`` filled in (a literal
+    ``$SANDBOX_SETTINGS_FILE`` param value becomes the real explicit-settings
+    path, mirroring `_prepare_temp_filesystem`'s ``$TEMP_ROOT``) and the
+    ``get_sandbox_context`` callable to thread into the runtime -- ``None``
+    when the scenario has no ``sandbox_home``, so an ordinary scenario never
+    builds one.
+    """
+    spec = scenario.get("sandbox_home")
+    if spec is None:
+        return scenario, None
+    home = tmp_path / "sandbox-home"
+    write_sandbox_home(
+        home,
+        run_toml=spec.get("run_toml", ""),
+        extra_settings_files=tuple(spec.get("extra_settings_files", ())),
+    )
+    explicit_settings = home / "explicit-settings.json"
+    explicit_settings.write_text("{}", encoding="utf-8")
+    process_environment = dict(scenario.get("process_environment") or {})
+    if spec.get("unavailable"):
+        process_environment.setdefault("PATH", str(tmp_path / "no-sandbox-binaries"))
+    else:
+        shim_dir = tmp_path / "sandbox-shims"
+        write_transparent_sandbox_shims(shim_dir, log_dir=tmp_path / "sandbox-shim-log")
+        process_environment.setdefault("PATH", str(shim_dir))
+    params = {
+        name: str(explicit_settings) if value == "$SANDBOX_SETTINGS_FILE" else value
+        for name, value in scenario.get("params", {}).items()
+    }
+    scenario = {**scenario, "process_environment": process_environment, "params": params}
+    return scenario, session_sandbox_context(home)
+
+
 def _run_program(
-    source: str, scenario: dict[str, Any], program: Path
+    source: str, scenario: dict[str, Any], program: Path, tmp_path: Path
 ) -> tuple[Any, dict[str, ScriptedAgent], FakeShell, FakeHttp]:
     from agm.agl import PipelineDriver
 
+    scenario, get_sandbox_context = _apply_sandbox_home(scenario, tmp_path)
     agents = {
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
     }
@@ -1036,6 +1087,8 @@ def _run_program(
         runtime_options["agent_dispatcher"] = dispatch_agent
     if agents:
         runtime_options["session_host"] = _ScenarioSessionHost(agents)
+    if get_sandbox_context is not None:
+        runtime_options["get_sandbox_context"] = get_sandbox_context
     runtime = PipelineDriver(**runtime_options)
     default_stdlib = not scenario.get("no_stdlib", False)
     entry_path: Path | None = None
@@ -1797,7 +1850,7 @@ def test_program_scenario(
 ) -> None:
     scenario = _prepare_temp_filesystem(scenario, tmp_path)
     result, agents, shell, http_adapter = _run_program(
-        program.read_text(encoding="utf-8"), scenario, program
+        program.read_text(encoding="utf-8"), scenario, program, tmp_path
     )
     out = capsys.readouterr().out
     expect = scenario["expect"]
@@ -1986,6 +2039,7 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
                 "  env: Environ = std/env::environ,\n"
                 "  cwd: Option[path] = None,\n"
                 "  timeout: Option[text] = std/config::timeout,\n"
+                "  sandbox: Option[Sandbox] = None,\n"
                 ") -> ExecResult\n",
                 "builtin def exec(command: text) -> ExecResult\n",
             )

@@ -75,6 +75,7 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.program import CheckedProgram
     from agm.packages.model import PackageInfo
+    from agm.sandbox.prepare import SandboxContext
 
 _ResultT = TypeVar("_ResultT")
 
@@ -342,6 +343,10 @@ class PipelineDriver:
         across one program invocation pass the same registry to each so
         companion module imports and Python module globals are shared. Each
         run still creates an interpreter with its own companion runtime state.
+    get_sandbox_context : callable or None
+        Lazily builds the `SandboxContext` a sandboxed ``exec`` call needs
+        (see `agm.sandbox.prepare.lazy_sandbox_context`). ``None`` when the
+        host wires no sandbox context.
     """
 
     def __init__(
@@ -353,11 +358,13 @@ class PipelineDriver:
         shell_exec_timeout: float | None = None,
         default_call_depth_limit: int | None = None,
         extern_registry: "ExternRegistry | None" = None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
     ) -> None:
         self._default_strict_json = default_strict_json
         self._agent_dispatcher = agent_dispatcher
         self._session_host = session_host
         self._shell_exec_timeout = shell_exec_timeout
+        self._get_sandbox_context = get_sandbox_context
         self._default_call_depth_limit = (
             default_call_depth_limit
             if default_call_depth_limit is not None
@@ -411,6 +418,7 @@ class PipelineDriver:
         agent_dispatcher: AgentFn | None,
         session_host: "SessionHost | None",
         shell_exec_timeout: float | None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
     ) -> None:
         """Replace this driver's execution-time services before ``run_prepared``.
 
@@ -430,6 +438,7 @@ class PipelineDriver:
         self._agent_dispatcher = agent_dispatcher
         self._session_host = session_host
         self._shell_exec_timeout = shell_exec_timeout
+        self._get_sandbox_context = get_sandbox_context
         self._host_env_cache = None
 
     def host_environment(self) -> HostEnvironment:
@@ -446,6 +455,7 @@ class PipelineDriver:
             session_host=self._session_host,
             extra_codecs=self._extra_codecs,
             extern_registry=self._extern_registry,
+            get_sandbox_context=self._get_sandbox_context,
         )
         return self._host_env_cache
 
@@ -639,6 +649,7 @@ class PipelineDriver:
                 executable,
                 agent_dispatcher=host_env.agent_dispatcher,
                 session_host=host_env.session_host,
+                get_sandbox_context=host_env.get_sandbox_context,
                 strict_json=self._default_strict_json,
                 shell_exec_timeout=self._shell_exec_timeout,
                 trace=trace,
@@ -2103,6 +2114,7 @@ def assemble_host_environment(
     session_host: "SessionHost | None",
     extra_codecs: dict[str, "OutputCodec"],
     extern_registry: "ExternRegistry | None" = None,
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> HostEnvironment:
     """Assemble the shared host runtime environment from registrations.
 
@@ -2135,6 +2147,7 @@ def assemble_host_environment(
         capabilities=capabilities,
         codecs=all_codecs,
         extern_registry=extern_registry if extern_registry is not None else ExternRegistry(),
+        get_sandbox_context=get_sandbox_context,
     )
 
 

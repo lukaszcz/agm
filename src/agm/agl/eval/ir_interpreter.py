@@ -194,6 +194,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.host_settings import HostSettingsReconfigurer
     from agm.agl.runtime.sessions import SessionHost
+    from agm.sandbox.prepare import SandboxContext
 
 __all__ = [
     "HostConfigurationError",
@@ -474,6 +475,7 @@ class IrInterpreter:
         max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
         agent_dispatcher: AgentFn | None = None,
         session_host: "SessionHost | None" = None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
         close_sessions: bool = True,
         strict_json: bool = False,
         shell_exec_timeout: float | None = None,
@@ -508,6 +510,7 @@ class IrInterpreter:
             if session_host is not None
             else AgentDispatcherSessionHost(agent_dispatcher)
         )
+        self._get_sandbox_context = get_sandbox_context
         self._close_sessions = close_sessions
         # Bootstrap the setting fields so declared defaults can be evaluated by
         # the ordinary, typeless evaluator. Constant defaults cannot read a
@@ -2094,6 +2097,7 @@ class IrInterpreter:
                 timeout=timeout_expr,
                 contract_id=contract_id,
                 max_attempts=max_attempts,
+                sandbox=sandbox_expr,
             ):
                 try:
                     return self._effects.eval_ir_exec(
@@ -2102,6 +2106,7 @@ class IrInterpreter:
                         env_expr,
                         cwd_expr,
                         timeout_expr,
+                        sandbox_expr,
                         contract_id,
                         max_attempts,
                     )

@@ -12,7 +12,13 @@ import pytest
 
 from agm.agl.semantics.exceptions import AglRaise
 from agm.core.process import CapturedOutput, ProcessCaptureResult
-from tests._agl_helpers import agl_roots, let_root_capture
+from tests._agl_helpers import (
+    agl_roots,
+    let_root_capture,
+    session_sandbox_context,
+    unavailable_sandbox_context,
+    write_sandbox_home,
+)
 from tests.agl.ir_harness import (
     completed_bindings,
     evaluate_ir_raises_with_shell,
@@ -218,8 +224,9 @@ def test_t7_retry_success() -> None:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del idle_timeout, cwd, env, isolate_process_group
+        del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
         call_count[0] += 1
         if call_count[0] == 1:
             return _ok("not_a_number\n")
@@ -245,8 +252,9 @@ def test_t7_retry_forwards_spawn_settings_on_every_attempt() -> None:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del args, isolate_process_group
+        del args, isolate_process_group, interrupt_cleanup_cmd
         calls.append((env, cwd, idle_timeout))
         return _ok("not-an-int\n" if len(calls) == 1 else "9\n")
 
@@ -299,8 +307,9 @@ def test_retry_reruns_the_shell_exactly_once_per_attempt(retries: int, expected_
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del idle_timeout, cwd, env, isolate_process_group
+        del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
         runs.append(" ".join(args))
         return _ok("not_a_number\n")
 
@@ -418,6 +427,11 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
             NominalId(require_reserved_enum_member_id("Option", "None")),
             (),
         ),
+        sandbox=IrMakeRecord(
+            loc,
+            NominalId(require_reserved_enum_member_id("Option", "None")),
+            (),
+        ),
         contract_id=cid,
         max_attempts=1,
     )
@@ -468,8 +482,9 @@ def test_exec_with_an_extended_environment_reaches_the_process_boundary() -> Non
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del args, idle_timeout, cwd, isolate_process_group
+        del args, idle_timeout, cwd, isolate_process_group, interrupt_cleanup_cmd
         calls.append(env)
         return _ok("ok\\n")
 
@@ -507,8 +522,9 @@ def test_exec_dollar_literal_uses_the_live_std_config_timeout_default() -> None:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del args, cwd, env, isolate_process_group
+        del args, cwd, env, isolate_process_group, interrupt_cleanup_cmd
         calls.append(idle_timeout)
         return _ok("ok\\n")
 
@@ -534,8 +550,9 @@ def test_t13_exec_spawn_parameters_and_defaults() -> None:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del args, isolate_process_group
+        del args, isolate_process_group, interrupt_cleanup_cmd
         calls.append((env, cwd, idle_timeout))
         return _ok("ok\\n")
 
@@ -579,8 +596,9 @@ def test_t12_retry_then_nonzero_exit() -> None:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del idle_timeout, cwd, env, isolate_process_group
+        del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
         call_count[0] += 1
         if call_count[0] == 1:
             return _ok("not_a_number\n")
@@ -653,8 +671,9 @@ def test_parsed_form_undecodable_stdout_raises_without_retrying() -> None:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del idle_timeout, cwd, env, isolate_process_group
+        del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
         runs.append(args[2])
         return ProcessCaptureResult(
             returncode=0,
@@ -734,3 +753,143 @@ def test_ask_in_a_generic_argument_slot_defaults_to_text() -> None:
     from agm.agl.semantics.values import TextValue
 
     assert ir["result"] == TextValue("hello")
+
+
+# ---------------------------------------------------------------------------
+# Sandboxed exec (``sandbox = Some(Sandbox(...))``)
+# ---------------------------------------------------------------------------
+
+
+def test_sandboxed_exec_wraps_argv_and_selects_profile_from_first_shell_word(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``sandbox = Some(Sandbox())`` wraps the shell child under the real
+    systemd-run/srt chain, selecting settings by the command's first shell
+    word -- never ``sh``, the wrapper's own executable."""
+    home = tmp_path / "home"
+    write_sandbox_home(home, extra_settings_files=("echo",))
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+    source = 'let result: text = exec("echo hi", sandbox = Some(Sandbox()))\nresult'
+    commands = {"echo hi": _ok("hi\n")}
+    argv_log: list[list[str]] = []
+    ir = evaluate_ir_with_shell(
+        source,
+        commands,
+        argv_log=argv_log,
+        get_sandbox_context=session_sandbox_context(home),
+    )
+    from agm.agl.semantics.values import TextValue
+
+    assert ir["result"] == TextValue("hi")
+    assert len(argv_log) == 1
+    argv = argv_log[0]
+    assert argv[:4] == ["systemd-run", "--user", "--scope", "-q"]
+    srt_index = argv.index("srt")
+    assert argv[srt_index + 1] == "--settings"
+    # The profile file chosen is the command's first shell word ("echo"),
+    # never "sh" -- the shell wrapper exec always runs the command under.
+    assert argv[srt_index + 2] == str(home / ".agm" / "sandbox" / "echo.json")
+    assert argv[srt_index + 3] == "--"
+
+
+def test_sandboxed_exec_honours_run_config_memory_for_the_selected_profile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``[run.<profile>].memory`` resolves the profile's own limit, proving the
+    resolved profile's *limits* actually apply -- not just that its name
+    reaches settings resolution (the previous test)."""
+    home = tmp_path / "home"
+    write_sandbox_home(home, run_toml='[run.make]\nmemory = "1G"\n', extra_settings_files=("make",))
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+    source = 'let result: text = exec("make test", sandbox = Some(Sandbox()))\nresult'
+    commands = {"make test": _ok("ok\n")}
+    argv_log: list[list[str]] = []
+    ir = evaluate_ir_with_shell(
+        source,
+        commands,
+        argv_log=argv_log,
+        get_sandbox_context=session_sandbox_context(home),
+    )
+    from agm.agl.semantics.values import TextValue
+
+    assert ir["result"] == TextValue("ok")
+    argv = argv_log[0]
+    assert "MemoryMax=1G" in argv
+    srt_index = argv.index("srt")
+    assert argv[srt_index + 2] == str(home / ".agm" / "sandbox" / "make.json")
+
+
+def test_unsandboxed_exec_never_requests_a_sandbox_context() -> None:
+    """``sandbox = None`` (the default) never builds a ``SandboxContext``: the
+    unsandboxed path stays exactly as cheap as before sandboxing existed."""
+    source = 'let result: text = exec("echo hi")\nresult'
+    commands = {"echo hi": _ok("hi\n")}
+    ir = evaluate_ir_with_shell(source, commands, get_sandbox_context=unavailable_sandbox_context)
+    from agm.agl.semantics.values import TextValue
+
+    assert ir["result"] == TextValue("hi")
+
+
+def test_sandboxed_exec_preparation_failure_raises_exec_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A sandbox preparation failure raises ``ExecError`` exactly like a spawn
+    failure: exit-code -1, empty stdout, the failure message as stderr, never
+    timed out -- no shell process is ever started."""
+    home = tmp_path / "home"
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: None)
+
+    source = 'exec("echo hi", sandbox = Some(Sandbox()))\n()'
+    ir_exc = evaluate_ir_raises_with_shell(
+        source, {}, get_sandbox_context=session_sandbox_context(home)
+    )
+    assert ir_exc.type_name == "ExecError"
+    assert ir_exc.fields["exit-code"] == -1
+    assert ir_exc.fields["stdout"] == ""
+    assert ir_exc.fields["stderr"]
+    assert ir_exc.fields["timed-out"] is False
+
+
+def test_sandboxed_exec_retry_reprepares_the_sandbox_on_every_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A retried sandboxed exec prepares (and cleans up) a fresh sandboxed
+    command per attempt, rather than reusing the first attempt's prepared argv."""
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+    source = 'let n: int = exec("cmd", sandbox = Some(Sandbox()), on-parse-error = Retry(n = 1))\nn'
+    call_count = [0]
+    argv_log: list[list[str]] = []
+
+    def fake_shell(
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        isolate_process_group: bool = False,
+        interrupt_cleanup_cmd: list[str] | None = None,
+    ) -> ProcessCaptureResult:
+        del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
+        argv_log.append(args)
+        assert args[-2] == "-c"
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return _ok("not_a_number\n")
+        return _ok("99\n")
+
+    ir = completed_bindings(
+        run_inline_ir_with_shell(
+            source, fake_shell, get_sandbox_context=session_sandbox_context(home)
+        )
+    )
+    from agm.agl.semantics.values import IntValue
+
+    assert ir["n"] == IntValue(99)
+    assert len(argv_log) == 2
+    for argv in argv_log:
+        assert argv[:4] == ["systemd-run", "--user", "--scope", "-q"]

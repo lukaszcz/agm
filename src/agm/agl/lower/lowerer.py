@@ -2335,7 +2335,7 @@ class _Lowerer:
                         max_attempts=1,
                     )
                 case BuiltinKind.EXEC:
-                    env, cwd, timeout = self._default_exec_operands(loc)
+                    env, cwd, timeout, sandbox = self._default_exec_operands(loc)
                     return self._lower_exec_operands(
                         node_id=node_id,
                         span=span,
@@ -2343,6 +2343,7 @@ class _Lowerer:
                         env=env,
                         cwd=cwd,
                         timeout=timeout,
+                        sandbox=sandbox,
                         max_attempts=1,
                     )
                 case BuiltinKind.RESOURCE_DIR:
@@ -3800,13 +3801,20 @@ class _Lowerer:
         # as ordinary IR operands so each call reads the current module binding.
         command_ir = self.lower_expr(call_node.args[0])
         named_map = {arg.name: arg for arg in call_node.named_args}
-        default_env, default_cwd, default_timeout = self._default_exec_operands(loc)
+        default_env, default_cwd, default_timeout, default_sandbox = self._default_exec_operands(
+            loc
+        )
         env_ir = self.lower_expr(named_map["env"].value) if "env" in named_map else default_env
         cwd_ir = self.lower_expr(named_map["cwd"].value) if "cwd" in named_map else default_cwd
         timeout_ir = (
             self.lower_expr(named_map["timeout"].value)
             if "timeout" in named_map
             else default_timeout
+        )
+        sandbox_ir = (
+            self.lower_expr(named_map["sandbox"].value)
+            if "sandbox" in named_map
+            else default_sandbox
         )
 
         return self._lower_exec_operands(
@@ -3816,11 +3824,12 @@ class _Lowerer:
             env=env_ir,
             cwd=cwd_ir,
             timeout=timeout_ir,
+            sandbox=sandbox_ir,
             max_attempts=self._extract_max_attempts(call_node),
         )
 
-    def _default_exec_operands(self, loc: Location) -> tuple[IrExpr, IrExpr, IrExpr]:
-        """Build exec's ambient environment, cwd, and timeout defaults."""
+    def _default_exec_operands(self, loc: Location) -> tuple[IrExpr, IrExpr, IrExpr, IrExpr]:
+        """Build exec's ambient environment, cwd, timeout, and sandbox defaults."""
         env: IrExpr = (
             IrBuiltinLoad(location=loc, key=builtin_var_key(STD_ENV_ID, (), "environ"))
             if self._has_std_env
@@ -3832,7 +3841,8 @@ class _Lowerer:
             location=loc,
             key=builtin_var_key(STD_CONFIG_ID, (), "timeout"),
         )
-        return env, cwd, timeout
+        sandbox = IrMakeRecord(location=loc, nominal=option_none.nominal, fields=())
+        return env, cwd, timeout, sandbox
 
     def _lower_exec_operands(
         self,
@@ -3843,6 +3853,7 @@ class _Lowerer:
         env: IrExpr,
         cwd: IrExpr,
         timeout: IrExpr,
+        sandbox: IrExpr,
         max_attempts: int,
     ) -> IrExec:
         """Build an exec operation from already-lowered direct or closure operands."""
@@ -3872,6 +3883,7 @@ class _Lowerer:
             timeout=timeout,
             contract_id=self._alloc_contract(contract_req),
             max_attempts=max_attempts,
+            sandbox=sandbox,
         )
 
     def _extract_max_attempts(self, call_node: "Call") -> int:

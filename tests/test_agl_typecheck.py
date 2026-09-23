@@ -10825,6 +10825,24 @@ class TestExecUnknownArgs:
         assert r.resolved.program is not None
 
 
+class TestExecSandbox:
+    def test_exec_accepts_an_absent_sandbox(self) -> None:
+        accept_type('exec("ls", sandbox = None)')
+
+    def test_exec_accepts_a_sandbox_option(self) -> None:
+        accept_type('exec("ls", sandbox = Some(Sandbox()))')
+
+    def test_exec_rejects_a_bare_sandbox_record(self) -> None:
+        # ``exec``'s ``sandbox`` is ``Option[Sandbox]``, never a bare
+        # ``Sandbox`` -- unlike ``ask``'s ``AgentSandbox``, which subsumes it.
+        err = reject_type('exec("ls", sandbox = Sandbox())')
+        assert "sandbox" in str(err).lower()
+
+    def test_exec_rejects_a_non_sandbox_value(self) -> None:
+        err = reject_type('exec("ls", sandbox = 1)')
+        assert "sandbox" in str(err).lower()
+
+
 # ---------------------------------------------------------------------------
 # Fix 3: structured exec rejects parse-shaping options + structured_exec flag
 # ---------------------------------------------------------------------------

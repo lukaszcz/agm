@@ -761,6 +761,7 @@ class EntryPipeline:
                 lowered.program,
                 agent_dispatcher=host_env.agent_dispatcher,
                 session_host=host_env.session_host,
+                get_sandbox_context=host_env.get_sandbox_context,
                 close_sessions=False,
                 strict_json=self._ctx._default_strict_json,
                 max_call_depth=self._ctx._default_call_depth_limit,

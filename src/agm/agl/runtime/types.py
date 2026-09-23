@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.types import Type as AglType
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.zones import ParamZone
+    from agm.sandbox.prepare import SandboxContext
 
 __all__ = [
     "CallSiteInfo",
@@ -38,6 +40,11 @@ class HostEnvironment:
         The value-driven host dispatcher for ``Agent`` enum values.
     ``session_host``
         The opaque lifecycle service used by persistent ``Session`` values.
+    ``get_sandbox_context``
+        Lazily builds the `SandboxContext` a sandboxed ``exec`` call needs
+        (see `agm.sandbox.prepare.lazy_sandbox_context`). ``None`` when the
+        host wires no sandbox context, in which case a sandboxed ``exec``
+        call cannot run.
     ``capabilities``
         The ``HostCapabilities`` static catalog derived from codecs — consumed
         by the type checker.
@@ -55,6 +62,7 @@ class HostEnvironment:
     capabilities: "HostCapabilities"
     codecs: dict[str, "OutputCodec"]
     extern_registry: "ExternRegistry"
+    get_sandbox_context: "Callable[[], SandboxContext] | None" = None
 
 
 @dataclass(frozen=True, slots=True)

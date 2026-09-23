@@ -1393,12 +1393,14 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             cwd=cwd_expr,
             timeout=timeout_expr,
             contract_id=contract_id,
+            sandbox=sandbox_expr,
         ):
             _validate_location(node.location, ctx)
             _validate_expr(command_expr, ctx)
             _validate_expr(env_expr, ctx)
             _validate_expr(cwd_expr, ctx)
             _validate_expr(timeout_expr, ctx)
+            _validate_expr(sandbox_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(

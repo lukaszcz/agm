@@ -1,0 +1,164 @@
+{
+  "scenarios": [
+    {
+      "name": "unsandboxed_command_runs_unwrapped",
+      "params": {
+        "mode": 1
+      },
+      "shell": [
+        {
+          "command": "echo hi",
+          "stdout": "hi\n",
+          "sandbox_unwrapped": true
+        }
+      ],
+      "expect": {
+        "stdout_contains": ["hi\n"]
+      }
+    },
+    {
+      "name": "bare_sandbox_wraps_and_selects_profile_from_first_word",
+      "params": {
+        "mode": 2
+      },
+      "sandbox_home": {
+        "extra_settings_files": ["echo"]
+      },
+      "shell": [
+        {
+          "command": "echo hi",
+          "stdout": "hi\n",
+          "sandbox_wrapped": {"profile": "echo"}
+        }
+      ],
+      "expect": {
+        "stdout_contains": ["hi\n"]
+      }
+    },
+    {
+      "name": "explicit_memory_and_patch_override_apply",
+      "params": {
+        "mode": 3
+      },
+      "sandbox_home": {
+        "extra_settings_files": ["echo"]
+      },
+      "shell": [
+        {
+          "command": "echo hi",
+          "stdout": "hi\n",
+          "sandbox_wrapped": {"profile": "echo", "memory": "1G"}
+        }
+      ],
+      "expect": {
+        "stdout_contains": ["hi\n"]
+      }
+    },
+    {
+      "name": "explicit_settings_path_bypasses_profile_resolution",
+      "params": {
+        "mode": 4,
+        "settings": "$SANDBOX_SETTINGS_FILE"
+      },
+      "sandbox_home": {},
+      "shell": [
+        {
+          "command": "echo hi",
+          "stdout": "hi\n",
+          "sandbox_wrapped": {"settings_suffix": "explicit-settings.json"}
+        }
+      ],
+      "expect": {
+        "stdout_contains": ["hi\n"]
+      }
+    },
+    {
+      "name": "quoted_first_word_selects_the_grouped_profile_name",
+      "params": {
+        "mode": 5
+      },
+      "sandbox_home": {
+        "extra_settings_files": ["my tool"]
+      },
+      "shell": [
+        {
+          "command": "'my tool' --x",
+          "stdout": "hi\n",
+          "sandbox_wrapped": {"profile": "my tool"}
+        }
+      ],
+      "expect": {
+        "stdout_contains": ["hi\n"]
+      }
+    },
+    {
+      "name": "unsplittable_command_falls_through_to_the_default_profile",
+      "params": {
+        "mode": 6
+      },
+      "sandbox_home": {},
+      "shell": [
+        {
+          "command": "echo 'oops",
+          "stdout": "hi\n",
+          "sandbox_wrapped": {"profile": null}
+        }
+      ],
+      "expect": {
+        "stdout_contains": ["hi\n"]
+      }
+    },
+    {
+      "name": "assignment_prefix_is_an_unknown_name_that_falls_through",
+      "params": {
+        "mode": 7
+      },
+      "sandbox_home": {},
+      "shell": [
+        {
+          "command": "VAR=1 make",
+          "stdout": "hi\n",
+          "sandbox_wrapped": {"profile": null}
+        }
+      ],
+      "expect": {
+        "stdout_contains": ["hi\n"]
+      }
+    },
+    {
+      "name": "preparation_failure_raises_exec_error",
+      "params": {
+        "mode": 8
+      },
+      "sandbox_home": {
+        "unavailable": true
+      },
+      "shell": [],
+      "expect": {
+        "stdout_contains": ["failed code -1\n", "stdout []\n", "timed false\n"]
+      }
+    },
+    {
+      "name": "retry_reprepares_the_sandbox_on_every_attempt",
+      "params": {
+        "mode": 9
+      },
+      "sandbox_home": {},
+      "shell": [
+        {
+          "command": "cmd",
+          "stdout": "not_a_number\n",
+          "sandbox_wrapped": {"profile": null}
+        },
+        {
+          "command": "cmd",
+          "stdout": "99\n",
+          "sandbox_wrapped": {"profile": null}
+        }
+      ],
+      "expect": {
+        "stdout_contains": ["99\n"]
+      }
+    }
+  ]
+}

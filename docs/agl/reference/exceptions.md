@@ -363,11 +363,14 @@ A shell command failed to run, exited nonzero, timed out, or produced output
 that is not valid UTF-8, in the **parsed or unit form** of `exec` ([Shell
 execution](shell-execution.md)). The structured form raises it on spawn
 failure, timeout, or undecodable output, but represents a nonzero exit as
-`ExecResult` data.
+`ExecResult` data. A `sandbox`-prepared command that fails to prepare (for
+example, unresolvable sandbox settings) raises it in every form, exactly like
+a spawn failure — no shell process is ever started.
 
 ```text
 command: text     # the rendered command
-exit-code: int    # -1 for spawn failure or timeout without an exit status
+exit-code: int    # -1 for spawn failure, sandbox preparation failure, or a
+                  # timeout without an exit status
 stdout: text      # "" if stdout was captured but is not valid UTF-8
 stderr: text      # "" if stderr was captured but is not valid UTF-8
 timed-out: bool

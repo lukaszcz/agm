@@ -1166,7 +1166,12 @@ class IrAskRequest:
 
 @dataclass(frozen=True, slots=True)
 class IrExec:
-    """IR host-op: exec(command, env:, cwd:, timeout:, ...) builtin call."""
+    """IR host-op: exec(command, env:, cwd:, timeout:, sandbox:, ...) builtin call.
+
+    ``sandbox`` evaluates to an ``Option[Sandbox]`` value: ``None`` runs
+    unsandboxed; ``Some(record)`` runs under the sandbox library with the
+    profile selected from the command's first shell word.
+    """
 
     location: Location
     command: "IrExpr"
@@ -1175,6 +1180,7 @@ class IrExec:
     timeout: "IrExpr"
     contract_id: "ContractId"
     max_attempts: int
+    sandbox: "IrExpr"
 
 
 # ---------------------------------------------------------------------------

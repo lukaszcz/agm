@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import ContextManager, NoReturn, Protocol, assert_never, cast
+from typing import TYPE_CHECKING, ContextManager, NoReturn, Protocol, assert_never, cast
 
 from agm.agent.spec import AgentSpec, PermissionMode, SessionTransport
 from agm.agl.ir.builtin_nominals import resolve_standard_member_name
@@ -55,6 +55,7 @@ from agm.agl.runtime.sandbox_values import (
     AgentSandboxMode,
     agent_sandbox_value,
     decode_agent_sandbox,
+    decode_exec_sandbox,
     permission_mode_and_limits,
     sandbox_mode_from_permission,
 )
@@ -87,7 +88,18 @@ from agm.agl.semantics.values import (
 )
 from agm.core.parse import parse_timeout
 from agm.core.process import CapturedOutput
-from agm.sandbox.request import SandboxLimits
+from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
+from agm.sandbox.prepare import prepare
+from agm.sandbox.profile import profile_name_for_shell
+from agm.sandbox.request import (
+    PreparedSandboxCommand,
+    SandboxLimits,
+    SandboxRequest,
+    SandboxSpec,
+)
+
+if TYPE_CHECKING:
+    from agm.sandbox.prepare import SandboxContext
 
 # ---------------------------------------------------------------------------
 # Narrow context Protocol
@@ -102,6 +114,7 @@ class EffectCtx(Protocol):
     _trace: TraceStore
     _agent_dispatcher: AgentFn | None
     _session_host: SessionHost
+    _get_sandbox_context: "Callable[[], SandboxContext] | None"
     _strict_json: bool
     _host_contracts: Mapping[ContractId, OutputContract]
     _extern_registry: ExternRegistry
@@ -956,31 +969,83 @@ class EffectHandlers:
             stderr=stderr_text,
         )
 
+    def _sandbox_context(self) -> "SandboxContext":
+        """Return this run's sandbox context, built lazily by the host on first use."""
+        get_context = self._ctx._get_sandbox_context
+        assert get_context is not None, "exec sandbox requires a host-provided sandbox context"
+        return get_context()
+
     def _run_exec_shell(
         self,
         cmd: str,
         env: dict[str, str],
         cwd: Path | None,
         timeout: float | None,
+        spec: SandboxSpec | None,
         location: Location,
     ) -> tuple[CapturedOutput, CapturedOutput, int | None]:
-        """Run *cmd* via the shell; raise ``ExecError`` on spawn failure or timeout.
+        """Run *cmd* via the shell; raise ``ExecError`` on spawn failure, sandbox
+        preparation failure, or timeout.
 
         Returns ``(stdout, stderr, returncode)`` — a non-zero exit code is NOT
         raised here so that the structured-exec path can treat it as data.
         Streams are returned undecoded: each caller decodes exactly the streams
-        it turns into an AgL value. Mirrors legacy ``_run_shell_capture``
-        (without the trace event).
+        it turns into an AgL value. When *spec* is given, the command runs
+        under the sandbox library: its prepared argv/env/cwd replace the plain
+        ``sh -c`` invocation, and the prepared command is closed in
+        ``finally``. A preparation failure is reported exactly like a spawn
+        failure — exit code -1, no process ever started.
         """
         from agm.core.process import run_capture_result
 
-        result = run_capture_result(
-            ["sh", "-c", cmd],
-            idle_timeout=timeout,
-            cwd=cwd,
-            env=env,
-            isolate_process_group=True,
-        )
+        argv = ["sh", "-c", cmd]
+        run_env = env
+        run_cwd = cwd
+        interrupt_cleanup_cmd: list[str] | None = None
+        prepared: PreparedSandboxCommand | None = None
+        if spec is not None:
+            context = self._sandbox_context()
+            request = SandboxRequest(
+                command=argv,
+                cwd=cwd or Path.cwd(),
+                env=env,
+                home=context.home,
+                proj_dir=context.proj_dir,
+                spec=spec,
+            )
+            try:
+                prepared = prepare(request, run_config=context.run_config)
+            except (SandboxUnavailableError, SandboxSettingsError) as exc:
+                message = str(exc)
+                self._ctx._trace.exec_command(
+                    command=cmd,
+                    exit_code=-1,
+                    duration=0.0,
+                    stdout="",
+                    stderr=message,
+                    timed_out=False,
+                    span=location,
+                )
+                self._raise_exec_error(
+                    message, command=cmd, exit_code=-1, stdout="", stderr=message
+                )
+            argv = prepared.argv
+            run_env = prepared.env
+            run_cwd = prepared.cwd
+            interrupt_cleanup_cmd = prepared.interrupt_cleanup_cmd
+
+        try:
+            result = run_capture_result(
+                argv,
+                idle_timeout=timeout,
+                cwd=run_cwd,
+                env=run_env,
+                isolate_process_group=True,
+                interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+            )
+        finally:
+            if prepared is not None:
+                prepared.close()
         if result.spawn_error is not None:
             spawn_error = str(result.spawn_error)
             self._ctx._trace.exec_command(
@@ -1038,6 +1103,7 @@ class EffectHandlers:
         env_expr: IrExpr,
         cwd_expr: IrExpr,
         timeout_expr: IrExpr,
+        sandbox_expr: IrExpr,
         contract_id: ContractId,
         max_attempts: int,
     ) -> Value:
@@ -1075,10 +1141,17 @@ class EffectHandlers:
                 ) from exc
         cwd = None if cwd_text is None else Path(cwd_text)
 
+        sandbox_value = self._ctx._eval(sandbox_expr)
+        assert isinstance(sandbox_value, RecordValue)
+        limits = decode_exec_sandbox(sandbox_value, nominals)
+        spec = None if limits is None else limits.for_command(profile_name_for_shell(cmd))
+
         contract = self._ctx._program.contracts[contract_id]
 
         # Run shell once (raises on spawn error or timeout).
-        stdout, stderr, returncode = self._run_exec_shell(cmd, env, cwd, timeout, _node.location)
+        stdout, stderr, returncode = self._run_exec_shell(
+            cmd, env, cwd, timeout, spec, _node.location
+        )
 
         # 3. Structured exec: return ExecResult regardless of exit code
         if contract.structured_exec:
@@ -1127,8 +1200,13 @@ class EffectHandlers:
 
         for attempt in range(max_attempts):
             if attempt > 0:
-                # Re-run shell on retry (raises on spawn error / timeout / non-zero exit)
-                stdout2, stderr2, rc2 = self._run_exec_shell(cmd, env, cwd, timeout, _node.location)
+                # Re-run shell on retry (raises on spawn error / timeout / non-zero exit).
+                # A sandboxed command re-prepares per attempt: a fresh
+                # ``PreparedSandboxCommand`` (temp settings, scope name) for
+                # each spawn, never reused across attempts.
+                stdout2, stderr2, rc2 = self._run_exec_shell(
+                    cmd, env, cwd, timeout, spec, _node.location
+                )
                 if rc2 is not None and rc2 != 0:
                     self._raise_nonzero_exit_error(cmd, rc2, stdout2, stderr2)
                 last_raw = self._decode_exec_stdout(cmd, rc2 if rc2 is not None else 0, stdout2)

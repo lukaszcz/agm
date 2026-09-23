@@ -37,6 +37,7 @@ __all__ = [
     "Sandboxed",
     "agent_sandbox_value",
     "decode_agent_sandbox",
+    "decode_exec_sandbox",
     "decode_sandbox_record",
     "permission_mode_and_limits",
     "sandbox_limits_value",
@@ -99,6 +100,21 @@ def decode_sandbox_record(value: RecordValue, nominals: BuiltinNominals) -> Sand
         settings_file=_decode_settings_file(value.fields["settings"], nominals),
         patch=_decode_bool(value.fields["patch"]),
     )
+
+
+def decode_exec_sandbox(value: RecordValue, nominals: BuiltinNominals) -> SandboxLimits | None:
+    """Decode ``exec``'s ``Option[Sandbox]`` operand into ``SandboxLimits | None``.
+
+    ``None`` for ``Option::None``; ``Option::Some(record)`` decodes the
+    ``Sandbox`` record through :func:`decode_sandbox_record`. The profile
+    name is not decided here: the caller binds it from the command's first
+    shell word.
+    """
+    if resolve_standard_member_name(value.nominal, "Option", ("Some",), nominals) is None:
+        return None
+    payload = value.fields["value"]
+    assert isinstance(payload, RecordValue)
+    return decode_sandbox_record(payload, nominals)
 
 
 def permission_mode_and_limits(

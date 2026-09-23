@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import TypeGuard
 
+from agm.agl.constraints import ConstraintKind
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, TypeExpr
 
@@ -476,13 +477,30 @@ class GenericDeclaration:
 
 
 @dataclass(frozen=True, slots=True)
+class Constraint:
+    """``Hashable K`` or ``Eq T`` inside a function declaration's ``{…}`` block.
+
+    ``kind`` and ``param`` name the structural bound and the constrained type
+    parameter. Well-formedness (``param`` names a type parameter in scope, no
+    duplicate or redundant pairing) is a scope concern, not a parser one.
+    """
+
+    kind: ConstraintKind
+    param: str
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class FuncDef(GenericDeclaration):
     """``def name(params) (-> RetType)? = body`` — a top-level function declaration.
 
     ``return_type`` is ``None`` when omitted and inferred from the body.
     ``body`` is an expression (which may be a ``Block`` for multi-step bodies).
     ``is_method`` records the leading ``self`` parameter that makes the
-    declaration a method.
+    declaration a method. ``constraints`` holds the declaration's optional
+    ``{Hashable K, Eq T}`` block, naming bounds on its own or receiver type
+    parameters.
     """
 
     name: str
@@ -500,6 +518,7 @@ class FuncDef(GenericDeclaration):
     scope_path: tuple[ScopeSegment, ...] = ()
     receiver_type: TypeExpr | None = None
     attributes: tuple[Attribute, ...] = ()
+    constraints: tuple[Constraint, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

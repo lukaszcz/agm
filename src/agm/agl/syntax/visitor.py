@@ -36,6 +36,7 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     Cast,
     CatchClause,
+    Constraint,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -254,12 +255,17 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         _walk_attributes(node.attributes, callback)
         for scope_segment in node.scope_path:
             walk(scope_segment, callback)
+        for constraint in node.constraints:
+            walk(constraint, callback)
         for param in node.params:
             walk(param, callback)
         if node.return_type is not None:
             walk(node.return_type, callback)
         if node.body is not None:
             walk(node.body, callback)
+
+    elif isinstance(node, Constraint):
+        pass  # leaf — kind and param are plain data, not nested nodes
 
     elif isinstance(node, BuiltinVarDecl):
         _walk_attributes(node.attributes, callback)

@@ -262,6 +262,14 @@ _type_alias_tail: "type" decl_head type_params? EQ type_expr
 type_params: type_lsqb type_param_list RSQB
 type_param_list: name (COMMA name)*
 
+// constraint_block: a function declaration's structural bounds, e.g.
+// `{Hashable K, Eq T}`. When written adjacent to the preceding type_params
+// `]` or the declaration name, the lexer retags the opening brace
+// CALL_LBRACE the same way an adjacent `[` becomes INDEX_LSQB; LBRACE
+// covers a spaced-out spelling.
+constraint_block: (LBRACE | CALL_LBRACE) constraint (COMMA constraint)* COMMA? RBRACE
+constraint: NAME name
+
 // infix declaration: user-defined symbolic binary operator associativity and priority.
 // Priority may be a literal integer or relative to an existing operator priority.
 infix_decl: "infixl" infix_op infix_priority? -> infixl_decl
@@ -284,18 +292,18 @@ priority_delta: PLUS INT  -> priority_delta_plus
 func_def: attributes? "def" _func_def_tail
 program_func_def: attributes? "program" _NEWLINE? "def" _func_def_tail
 
-_func_def_tail: func_decl_head type_params? LPAR param_list? RPAR (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
+_func_def_tail: func_decl_head type_params? constraint_block? LPAR param_list? RPAR (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
 
 // Host-implemented builtin function declaration. It has a signature but no body.
 // `builtin` is a decorator-style modifier: the `_NEWLINE?` makes the newline
 // after it insignificant, so the modifier may sit on its own line above the
 // declaration (`builtin\nenum …`) or on the same line (`builtin enum …`).
-builtin_func_def: attributes? "builtin" _NEWLINE? "def" func_decl_head type_params? LPAR param_list? RPAR THIN_ARROW type_expr
+builtin_func_def: attributes? "builtin" _NEWLINE? "def" func_decl_head type_params? constraint_block? LPAR param_list? RPAR THIN_ARROW type_expr
 
 // Python-implemented extern function declaration. Same body-less shape as
 // `builtin_func_def`: no body, mandatory return type. The `_NEWLINE?` lets
 // the modifier sit on its own line above the declaration.
-extern_func_def: attributes? "extern" _NEWLINE? "def" func_decl_head type_params? LPAR param_list? RPAR THIN_ARROW type_expr
+extern_func_def: attributes? "extern" _NEWLINE? "def" func_decl_head type_params? constraint_block? LPAR param_list? RPAR THIN_ARROW type_expr
 
 // Host-implemented builtin mutable-setting declaration. Its optional constant
 // initializer supplies the engine default. `builtin` is a decorator-style

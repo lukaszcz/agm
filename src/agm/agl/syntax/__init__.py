@@ -3,7 +3,10 @@
 This package is the *firewall* between the Lark-aware front-end (lexer +
 parser) and all downstream passes (scope, typecheck, match compilation,
 lowering, and evaluation). Nothing in this package imports Lark or any other
-AgL-internal module except ``spans``.
+AgL-internal module except dependency-free leaves: ``modules.ids``,
+``value_syntax``, and ``constraints`` (the ``Eq``/``Hashable`` constraint
+kinds, shared with ``semantics``) — see ``tests/test_agl_dependencies.py``
+for the enforced allowlist.
 
 Usage::
 
@@ -32,6 +35,7 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     Cast,
     CatchClause,
+    Constraint,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -159,6 +163,7 @@ __all__ = [
     # declarations
     "Attribute",
     "AttributeKeyedArg",
+    "Constraint",
     "FuncDef",
     "RecordDef",
     "RecordUpdate",

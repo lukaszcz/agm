@@ -1,0 +1,23 @@
+# A `{…}` constraint block on a generic function's type parameters parses
+# and is validated against the declaration's own and receiver type
+# parameters, but has no typing or runtime effect yet: every declaration
+# below behaves exactly like an unconstrained generic declaration at every
+# instantiation. Covers a free function, a builtin-receiver method, a
+# nominal-receiver method, and a static method with its own constrained
+# parameter.
+record Box[T]
+  value: T
+
+def first[T]{Eq T}(xs: array[T]) -> T = xs[0]
+def pair-first[K, V]{Hashable K, Eq V}(k: K, v: V) -> K = k
+def array[E]::head{Eq E}(self) -> E = self[0]
+def Box::get[E]{Eq E}(self) -> E = self.value
+def Box::wrap[E]{Eq E}(value: E) -> Box[E] = Box(value = value)
+
+program def main(seed: int) -> unit =
+  print(first([1, 2, 3]))
+  print(first(["a", "b"]))
+  print(pair-first(1, "x"))
+  print([seed, seed + 1, seed + 2].head())
+  print(Box(value = seed).get())
+  print(Box::wrap(seed).value)

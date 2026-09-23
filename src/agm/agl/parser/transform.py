@@ -34,6 +34,7 @@ from lark.lexer import Token
 from lark.tree import Meta
 
 import agm.agl.syntax as syntax
+from agm.agl.constraints import CONSTRAINT_SPELLINGS
 from agm.agl.diagnostics import dollar_spacing_hint
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.syntax.nodes import ELSE
@@ -604,11 +605,17 @@ class AstBuilder(Transformer):
         return name, self._scope_segments(_ScopePath(path.segments[:-1]))
 
     def _receiver_type_params(self, receiver: TypeExpr | None) -> tuple[str, ...]:
-        """Return the positional type-variable slots bound by a builtin receiver."""
+        """Return the positional type-variable slots bound by an applied receiver.
+
+        Any applied head (``Box[T]``) contributes its bare-name arguments;
+        whether it is a real builtin receiver is typecheck's concern.
+        """
         if isinstance(receiver, ArrayT) and isinstance(receiver.elem, NameT):
             return (receiver.elem.name,)
         if isinstance(receiver, DictT) and isinstance(receiver.value, NameT):
             return (receiver.value.name,)
+        if isinstance(receiver, AppliedT):
+            return tuple(arg.name for arg in receiver.args if isinstance(arg, NameT))
         return ()
 
     def _function_declaration_head(
@@ -993,6 +1000,7 @@ class AstBuilder(Transformer):
             scope_path=scope_path,
             receiver_type=receiver_type,
             attributes=_find_attributes(args),
+            constraints=_find_constraints(args),
         )
 
     def func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
@@ -1287,6 +1295,29 @@ class AstBuilder(Transformer):
         """type_param_list: name (COMMA name)*"""
         return tuple(str(a) for a in args if _is_name_token(a))
 
+    def constraint_block(self, meta: Meta, args: _Args) -> tuple[syntax.Constraint, ...]:
+        """constraint_block: (LBRACE | CALL_LBRACE) constraint (COMMA constraint)* COMMA? RBRACE"""
+        return tuple(a for a in args if isinstance(a, syntax.Constraint))
+
+    def constraint(self, meta: Meta, args: _Args) -> syntax.Constraint:
+        """constraint: NAME name — the first NAME must spell a known constraint kind."""
+        kind_tok, param_tok = args[0], args[1]
+        assert isinstance(kind_tok, Token) and isinstance(param_tok, Token)
+        kind_name = str(kind_tok)
+        kind = CONSTRAINT_SPELLINGS.get(kind_name)
+        if kind is None:
+            known = ", ".join(sorted(CONSTRAINT_SPELLINGS))
+            raise AglSyntaxError(
+                f"{kind_name!r} is not a recognized constraint; expected one of {known}.",
+                span=self._span_from_meta(meta),
+            )
+        return syntax.Constraint(
+            kind=kind,
+            param=str(param_tok),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
     def func_type(self, meta: Meta, args: _Args) -> FuncT:
         """LPAR type_list? RPAR THIN_ARROW type_expr — function type (A, B) -> C."""
         # All TypeExpr nodes in args; the last one is the result type.
@@ -1357,8 +1388,8 @@ class AstBuilder(Transformer):
         return_type: TypeExpr | None = None
         body: syntax.Expr | None = None
         for a in args:
-            if _is_str_tuple(a) or _is_attribute_tuple(a):
-                pass  # type_params / this declaration's attribute prefix — skip
+            if _is_str_tuple(a) or _is_attribute_tuple(a) or _is_constraint_tuple(a):
+                pass  # type_params / attribute prefix / constraint block — skip
             elif _is_field_tuple(a):
                 params = cast(tuple[syntax.Param, ...], a)
             elif isinstance(a, _ALL_TYPE_EXPRS):
@@ -3364,6 +3395,18 @@ def _find_type_params(args: _Args) -> tuple[str, ...]:
         if _is_str_tuple(a):
             slots = cast(tuple[str, ...], a)
     return slots
+
+
+def _is_constraint_tuple(a: object) -> bool:
+    """True iff *a* is a ``constraint_block`` result (always at least one constraint)."""
+    return isinstance(a, tuple) and len(a) > 0 and isinstance(a[0], syntax.Constraint)
+
+
+def _find_constraints(args: _Args) -> tuple[syntax.Constraint, ...]:
+    """Return a declaration's constraint block among its children, or none."""
+    return next(
+        (cast(tuple[syntax.Constraint, ...], a) for a in args if _is_constraint_tuple(a)), ()
+    )
 
 
 def _find_attributes(args: _Args) -> tuple[syntax.Attribute, ...]:

@@ -50,6 +50,7 @@ from functools import partial
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
+from agm.agl.constraints import ConstraintKind, close_constraints
 from agm.agl.diagnostics import static_root_message
 from agm.agl.modules.ids import RESERVED_ID, ModuleId, spell_declaration
 from agm.agl.scope.attributes import recognize_attributes
@@ -315,6 +316,11 @@ def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
 def _receiver_owner_sort_key(owner: ReceiverOwner) -> tuple[tuple[str, ...], ScopePath]:
     """Order resolved receiver owners by their declaration identity."""
     return (owner.module_id.segments, owner.scope_path)
+
+
+def _constraints_related(a: ConstraintKind, b: ConstraintKind) -> bool:
+    """True if *a* and *b* are the same kind or one implies the other."""
+    return a in close_constraints(frozenset({b})) or b in close_constraints(frozenset({a}))
 
 
 def _supersedes(candidate: ConstructorRef, cref: ConstructorRef) -> bool:
@@ -875,6 +881,8 @@ class _Resolver:
         )
         self._declaration_items[key] = item
         self._validate_type_params(item)
+        if isinstance(item, FuncDef):
+            self._validate_constraints(item)
         if not is_type:
             return
 
@@ -1390,6 +1398,41 @@ class _Resolver:
                     span=decl.span,
                 )
             seen.add(tp)
+
+    def _validate_constraints(self, decl: FuncDef) -> None:
+        """Raise AglScopeError for a malformed ``{…}`` constraint block on *decl*.
+
+        A constrained name must be one of *decl*'s type parameters
+        (``type_params``, which for a method already includes its receiver's,
+        see ``_receiver_type_params`` in the parser). Two constraints on the
+        same parameter are rejected whenever they are the same kind or one
+        implies the other (``close_constraints``), which also covers an exact
+        duplicate.
+        """
+        if not decl.constraints:
+            return
+        type_params = frozenset(decl.type_params)
+        if not type_params:
+            raise AglScopeError(
+                f"'{decl.name}' has no type parameters to constrain.",
+                span=decl.constraints[0].span,
+            )
+        seen: dict[str, set[ConstraintKind]] = {}
+        for constraint in decl.constraints:
+            if constraint.param not in type_params:
+                raise AglScopeError(
+                    f"'{constraint.param}' is not a type parameter of '{decl.name}'.",
+                    span=constraint.span,
+                )
+            prior_kinds = seen.setdefault(constraint.param, set())
+            if any(_constraints_related(constraint.kind, kind) for kind in prior_kinds):
+                raise AglScopeError(
+                    f"Constraint '{constraint.kind.value} {constraint.param}' on "
+                    f"'{decl.name}' is redundant with an existing constraint on "
+                    f"'{constraint.param}'.",
+                    span=constraint.span,
+                )
+            prior_kinds.add(constraint.kind)
 
     def _canonical_constructor_ref(self, ref: ConstructorRef) -> ConstructorRef:
         """Intern *ref* as its member declaration's canonical metadata."""

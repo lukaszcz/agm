@@ -39,6 +39,7 @@ _DATA_LEAVES = frozenset(
         "agm.agl.modules.ids",
         "agm.agl.modules.loader",
         "agm.agl.capabilities",
+        "agm.agl.constraints",
         "agm.agl.diagnostics",
         "agm.agl.attributes",
         "agm.agl.zones",

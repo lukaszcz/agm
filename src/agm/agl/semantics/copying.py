@@ -24,7 +24,8 @@ once on the container kind, builds an empty shell, hands it to a *register*
 callback, and only then fills each child. Filling takes an optional
 *transform*: ``None`` means "copy the children as-is", filled in bulk via
 ``list.extend``/``dict.update`` at C speed; a callback means a per-child
-copy, applied one element/entry at a time. ``shallow_copy_value`` passes
+copy, applied one element/field at a time. A dict fills through
+``DictValue.fill_from``, which owns its storage. ``shallow_copy_value`` passes
 ``transform=None`` — a shallow copy never recurses, so its children are
 copied as-is and it pays no per-element Python call. ``deep_copy_value``
 passes a *transform* that recurses and memoizes. Invoking *register* between
@@ -124,9 +125,9 @@ def _copy_container(
         _extend_array(array_shell, value.elements, transform)
         return array_shell
     if isinstance(value, DictValue):
-        dict_shell = DictValue(entries={})
+        dict_shell = DictValue()
         register(dict_shell)
-        _update_fields(dict_shell.entries, value.entries, transform)
+        dict_shell.fill_from(value, transform)
         return dict_shell
     if isinstance(value, RecordValue):
         record_shell = RecordValue(nominal=value.nominal, fields={})

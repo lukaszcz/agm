@@ -93,7 +93,7 @@ def test_dict_views_remain_live_without_a_call_scope() -> None:
     view = AglDictView(value, _NO_DESCRIPTORS)
     view["two"] = 2
 
-    assert value.entries == {"one": IntValue(1), "two": IntValue(2)}
+    assert value == DictValue({"one": IntValue(1), "two": IntValue(2)})
 
 
 def test_mutable_record_view_reads_current_values_and_writes_through() -> None:

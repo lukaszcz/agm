@@ -1892,7 +1892,7 @@ class TestTypedValueConstruction:
         result = _parse_typed(codec, '{"a": "hello"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DictValue)
-        assert result.value.entries == {"a": TextValue("hello")}
+        assert result.value == DictValue({"a": TextValue("hello")})
 
     def test_record_value(self) -> None:
         codec = JsonCodec()
@@ -2510,7 +2510,7 @@ class TestPipelineDriverWireUp:
         scope = _run_with_json_codec((let_d,), agent_dispatcher=lambda req: '{"k": "v"}')
         d = scope.snapshot()["d"]
         assert isinstance(d, DictValue)
-        assert d.entries == {"k": TextValue("v")}
+        assert d == DictValue({"k": TextValue("v")})
 
     def test_agent_receives_format_instructions_for_record(self) -> None:
         """Format instructions from the contract must be available in agent request."""

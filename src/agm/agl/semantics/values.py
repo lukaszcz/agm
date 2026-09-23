@@ -22,7 +22,7 @@ Design constraints
 from __future__ import annotations
 
 import decimal
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
@@ -200,25 +200,222 @@ class ArrayValue:
         return NotImplemented
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, slots=True, eq=False, init=False)
 class DictValue:
-    """A ``dict[text, V]`` value: a mutable reference to a mapping of str → Value.
+    """A ``dict[K, V]`` value: a mutable reference to entries, storage hidden behind an API.
 
-    Stored as a plain ``dict`` and mutated in place by indexed assignment;
-    that mutation is observed by every binding, field, capture, or iterator
-    that holds a reference to this ``DictValue``. Unhashable: the payload is
-    mutable, so a stable hash is impossible.
+    Two representations: a ``text``-keyed dict stores ``dict[str, Value]``
+    directly, with no per-key wrapper or token — the hot path, and the
+    default an empty dict starts in. A non-``text`` first insert fixes the
+    dict to token-keyed storage instead: ``dict[Hashable, tuple[Value,
+    Value]]`` keyed by :func:`key_token`, holding ``(original key, value)``.
+    So an empty dict is undetermined (``text``-keyed until proven otherwise)
+    and stays that way if every entry is later removed. Updating a key equal
+    to one already stored (e.g. ``1.5`` over stored ``1.50``) replaces only
+    the value — the originally inserted key is kept, so iteration is stable.
 
-    Equality delegates to :func:`values_equal` (cycle-safe, co-inductive) —
-    see :class:`ArrayValue`.
+    No code outside this class touches ``_text``/``_tokens``; every bulk
+    operation (equality, copying, text-keyed iteration) is a method here so
+    callers never need representation-specific storage access.
+
+    Mutation is observed by every binding, field, capture, or iterator that
+    holds a reference to this ``DictValue``, as for :class:`ArrayValue`.
+    Unhashable: the payload is mutable, so a stable hash is impossible.
+    Equality delegates to :func:`values_equal` (cycle-safe, co-inductive).
     """
 
-    entries: dict[str, Value] = field(default_factory=dict)
+    _text: dict[str, Value]
+    _tokens: dict[Hashable, tuple[Value, Value]] | None
+
+    def __init__(self, entries: dict[str, Value] | None = None) -> None:
+        """Construct a dict value, taking ownership of *entries* (no copy).
+
+        *entries* seeds a ``text``-keyed dict directly, for the common case
+        of a literal or decoded ``text``-keyed dict; the caller must not
+        keep mutating it afterwards, since this ``DictValue`` now owns it in
+        place. Omitted or empty, the dict is undetermined — exactly the same
+        state either way, since there is no key yet to fix a representation
+        from.
+        """
+        text: dict[str, Value] = {} if entries is None else entries
+        object.__setattr__(self, "_text", text)
+        object.__setattr__(self, "_tokens", None)
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, DictValue):
             return values_equal(self, other)
         return NotImplemented
+
+    def __repr__(self) -> str:
+        body = ", ".join(f"{key!r}: {value!r}" for key, value in self.items())
+        return f"DictValue({{{body}}})"
+
+    def __len__(self) -> int:
+        return len(self._text) if self._tokens is None else len(self._tokens)
+
+    def lookup(self, key: Value) -> Value | None:
+        """Return the value stored under *key*, or ``None`` if absent."""
+        if self._tokens is None:
+            if not isinstance(key, TextValue):
+                return None
+            return self._text.get(key.value)
+        pair = self._tokens.get(key_token(key))
+        return None if pair is None else pair[1]
+
+    def insert(self, key: Value, value: Value) -> bool:
+        """Store *value* under *key*; fixes the representation on the first insert.
+
+        Returns whether *key* was new (``False`` if it already existed — the
+        stored key value is then left unchanged, only its value replaced).
+        """
+        if self._tokens is None and isinstance(key, TextValue):
+            is_new = key.value not in self._text
+            self._text[key.value] = value
+            return is_new
+        tokens = self._tokens
+        if tokens is None:
+            tokens = {}
+            object.__setattr__(self, "_tokens", tokens)
+        token = key_token(key)
+        existing = tokens.get(token)
+        if existing is None:
+            tokens[token] = (key, value)
+            return True
+        tokens[token] = (existing[0], value)
+        return False
+
+    def update_existing(self, key: Value, value: Value) -> bool:
+        """Replace the value stored under *key* only if it already exists; report whether it did."""
+        if self._tokens is None:
+            if not isinstance(key, TextValue) or key.value not in self._text:
+                return False
+            self._text[key.value] = value
+            return True
+        token = key_token(key)
+        existing = self._tokens.get(token)
+        if existing is None:
+            return False
+        self._tokens[token] = (existing[0], value)
+        return True
+
+    def remove(self, key: Value) -> Value | None:
+        """Remove *key* and return its value, or ``None`` if absent."""
+        if self._tokens is None:
+            if not isinstance(key, TextValue):
+                return None
+            return self._text.pop(key.value, None)
+        pair = self._tokens.pop(key_token(key), None)
+        return None if pair is None else pair[1]
+
+    def pop_last(self) -> tuple[Value, Value] | None:
+        """Remove and return the most-recently-inserted ``(key, value)`` pair, or ``None`` if empty.
+
+        O(1): pops directly from the storage dict's own insertion order.
+        """
+        if self._tokens is None:
+            if not self._text:
+                return None
+            key_str, value = self._text.popitem()
+            return TextValue(key_str), value
+        if not self._tokens:
+            return None
+        _token, pair = self._tokens.popitem()
+        return pair
+
+    def clear(self) -> None:
+        """Remove every entry, keeping the fixed representation (if any)."""
+        if self._tokens is None:
+            self._text.clear()
+        else:
+            self._tokens.clear()
+
+    def items(self) -> Iterator[tuple[Value, Value]]:
+        """Iterate ``(key, value)`` pairs in insertion order, with original key values."""
+        if self._tokens is None:
+            for key_str, value in self._text.items():
+                yield TextValue(key_str), value
+        else:
+            yield from self._tokens.values()
+
+    def keys(self) -> Iterator[Value]:
+        """Iterate original key values in insertion order."""
+        if self._tokens is None:
+            return (TextValue(key_str) for key_str in self._text)
+        return (key for key, _value in self._tokens.values())
+
+    def values(self) -> Iterator[Value]:
+        """Iterate values in insertion order."""
+        if self._tokens is None:
+            return iter(self._text.values())
+        return (value for _key, value in self._tokens.values())
+
+    def text_items(self) -> Iterator[tuple[str, Value]]:
+        """Iterate ``(str, Value)`` pairs straight from ``text`` storage, unwrapped.
+
+        For callers statically restricted to ``text``-keyed dicts (JSON and
+        display encoders, the environment table, ``AglDictView``'s public
+        surface): they never see a token-keyed dict, so this skips the
+        per-key ``TextValue`` wrap/unwrap :meth:`items` pays.
+        """
+        return iter(self._text.items())
+
+    def fill_from(
+        self, source: "DictValue", transform: Callable[[Value], Value] | None = None
+    ) -> None:
+        """Fill this (empty) dict from *source*, adopting its representation.
+
+        Copies storage directly — a bulk ``dict.update`` when *transform* is
+        ``None``, a bulk comprehension applying *transform* to each value
+        otherwise — so this pays no per-key ``insert``/``key_token`` call.
+        Keys are immutable and shared either way; only values are
+        transformed. *source*'s representation (including an
+        emptied-but-token-determined dict) is preserved.
+        """
+        if source._tokens is None:
+            if transform is None:
+                self._text.update(source._text)
+            else:
+                for key_str, value in source._text.items():
+                    self._text[key_str] = transform(value)
+            return
+        tokens: dict[Hashable, tuple[Value, Value]]
+        if transform is None:
+            tokens = dict(source._tokens)
+        else:
+            tokens = {
+                token: (key, transform(value)) for token, (key, value) in source._tokens.items()
+            }
+        object.__setattr__(self, "_tokens", tokens)
+
+    def aligned_values(self, other: "DictValue") -> list[tuple[Value, Value]] | None:
+        """Pair this dict's values with *other*'s by key, or ``None`` if their key sets differ.
+
+        When both dicts share a representation, compares key sets directly
+        against storage (``_text.keys()``/``_tokens.keys()``) at C speed —
+        the common case. A representation mismatch (one ``text``-keyed, the
+        other token-keyed — e.g. one is undetermined-empty while the other
+        holds a ``text`` key under a token fixed by an earlier, since-removed
+        non-``text`` key) falls back to a per-key ``lookup`` on *other*.
+        """
+        if len(self) != len(other):
+            return None
+        if self._tokens is None and other._tokens is None:
+            if self._text.keys() != other._text.keys():
+                return None
+            return [(value, other._text[key_str]) for key_str, value in self._text.items()]
+        if self._tokens is not None and other._tokens is not None:
+            if self._tokens.keys() != other._tokens.keys():
+                return None
+            return [
+                (value, other._tokens[token][1]) for token, (_key, value) in self._tokens.items()
+            ]
+        pairs: list[tuple[Value, Value]] = []
+        for key, value in self.items():
+            matched = other.lookup(key)
+            if matched is None:
+                return None
+            pairs.append((value, matched))
+        return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +430,9 @@ class RecordValue:
     ``nominal`` is the opaque ``NominalId`` — the identity key; its display
     spelling for rendering and diagnostics is looked up from the program's
     descriptor table, never stored on the value.  ``fields`` holds the
-    record's field values.
+    record's field values, in declaration order (every construction path —
+    constructor call, ``with`` update — fills it in that order; :func:`key_token`
+    relies on this to token identically regardless of construction path).
 
     Equality is by ``(nominal, fields)``. Unhashable: ``fields`` may hold a
     mutable array or dict, so a stable hash is impossible. Delegates to
@@ -260,8 +459,10 @@ class ExceptionValue:
     uses that declaration's identity instead. Its display spelling (e.g.
     ``"AgentParseError"``) is looked up from the program's descriptor table,
     never stored on the value.
-    ``fields`` maps the exception's declared field names to their values.
-    The ``"message"`` field is always present (base ``Exception`` contract).
+    ``fields`` maps the exception's declared field names to their values, in
+    declaration order (see :class:`RecordValue`; the same ordering
+    guarantee holds here). The ``"message"`` field is always present (base
+    ``Exception`` contract).
 
     Equality is by ``(nominal, fields)``. Unhashable: ``fields`` may hold a
     mutable array or dict, so a stable hash is impossible. Delegates to
@@ -287,6 +488,26 @@ class ExceptionValue:
 #: iterators, ``unit``) is compared by its own ``__eq__``, so the common
 #: scalar comparison leaves :func:`values_equal` after a single check.
 _STRUCTURAL_KINDS = (ArrayValue, DictValue, RecordValue, ExceptionValue)
+
+
+def key_token(value: Value) -> Hashable:
+    """Canonical hashable token for *value*, used as a :class:`DictValue` non-``text`` key.
+
+    Values equal under AgL equality share a token, distinct values don't:
+    every scalar/``json`` ``Value`` is its own token, since their frozen
+    dataclass (or, for ``json``, ``_json_eq``/``_json_hash``-backed) equality
+    and hashing already follow AgL equality — distinct classes never compare
+    equal (``bool`` != ``int``), ``decimal`` widens (``1.5`` == ``1.50``, same
+    hash), and ``json`` bools tag apart from numbers. A record, enum member,
+    or exception tokens as its nominal identity paired with its fields'
+    tokens, in declaration order (see :class:`RecordValue`).
+    """
+    if isinstance(value, (RecordValue, ExceptionValue)):
+        return (
+            value.nominal,
+            tuple(key_token(field_value) for field_value in value.fields.values()),
+        )
+    return value
 
 
 def value_equal(left: Value, right: Value) -> bool:
@@ -341,9 +562,12 @@ def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None
             return False
         return _children_equal(a, b, _seen, zip(a.elements, b.elements))
     if isinstance(a, DictValue):
-        if not isinstance(b, DictValue) or a.entries.keys() != b.entries.keys():
+        if not isinstance(b, DictValue):
             return False
-        return _children_equal(a, b, _seen, ((v, b.entries[k]) for k, v in a.entries.items()))
+        pairs = a.aligned_values(b)
+        if pairs is None:
+            return False
+        return _children_equal(a, b, _seen, pairs)
     if isinstance(a, RecordValue):
         if not isinstance(b, RecordValue) or a.nominal != b.nominal:
             return False
@@ -523,6 +747,7 @@ __all__ = [
     "Value",
     "_json_eq",
     "_json_hash",
+    "key_token",
     "value_equal",
     "values_equal",
 ]

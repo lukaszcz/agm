@@ -974,9 +974,9 @@ class EffectHandlers:
             vars_value = environ.fields["vars"]
         assert isinstance(vars_value, DictValue)
         env: dict[str, str] = {}
-        for name, value in vars_value.entries.items():
+        for key, value in vars_value.text_items():
             assert isinstance(value, TextValue)
-            env[name] = value.value
+            env[key] = value.value
         nominals = self._ctx._program.builtin_nominals
         cwd_value = self._ctx._eval(cwd_expr)
         assert isinstance(cwd_value, RecordValue)

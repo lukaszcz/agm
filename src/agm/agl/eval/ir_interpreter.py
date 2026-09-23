@@ -744,10 +744,11 @@ class IrInterpreter:
                 return AglRaise(
                     _make_exc_value(
                         "KeyError",
-                        f"Dict key {err.key!r} is missing",
+                        f"Dict key {render_value(err.key, self._descriptors, quote_strings=True)}"
+                        " is missing",
                         nominals=self._program.builtin_nominals,
                         fields={
-                            "key": TextValue(err.key),
+                            "key": err.key,
                         },
                     ),
                 )
@@ -1428,16 +1429,11 @@ class IrInterpreter:
                 return ArrayValue([self._eval(item) for item in items])
 
             case IrMakeDict(entries=entries):
-                result: dict[str, Value] = {}
+                dict_value = DictValue()
                 for key_expr, val_expr in entries:
                     key_val = self._eval(key_expr)
-                    if not isinstance(key_val, TextValue):
-                        raise InvalidIrError(
-                            f"IrMakeDict key must evaluate to TextValue,"
-                            f" got {type(key_val).__name__}"
-                        )
-                    result[key_val.value] = self._eval(val_expr)
-                return DictValue(result)
+                    dict_value.insert(key_val, self._eval(val_expr))
+                return dict_value
 
             # `IrMakeJsonArray`/`IrMakeJsonObject`: every item/value here is already
             # scalar or `JsonValue` (never a raw array/dict): the checker requires an
@@ -1877,7 +1873,7 @@ class IrInterpreter:
                     # The key set is fixed for the collection's lifetime, so a
                     # one-time tuple of keys is sound even though the values
                     # behind those keys may still be mutated.
-                    return IteratorValue(elements=tuple(TextValue(k) for k in coll.entries))
+                    return IteratorValue(elements=tuple(coll.keys()))
                 if isinstance(coll, TextValue):
                     return IteratorValue(elements=coll.value)
                 raise InvalidIrError(  # pragma: no cover

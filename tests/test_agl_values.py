@@ -239,17 +239,17 @@ def test_values_equal_diamond_short_circuit_bounded_calls(
 
 def test_dict_value_eq_terminates_on_cyclic_dicts() -> None:
     """`==` on two separately-built cyclic dicts is co-inductive and terminates."""
-    from agm.agl.semantics.values import DictValue, IntValue
+    from agm.agl.semantics.values import DictValue, IntValue, TextValue
 
     d1 = DictValue(entries={"tag": IntValue(1)})
-    d1.entries["self"] = d1
+    d1.insert(TextValue("self"), d1)
     d2 = DictValue(entries={"tag": IntValue(1)})
-    d2.entries["self"] = d2
+    d2.insert(TextValue("self"), d2)
 
     assert d1 == d2
 
     d3 = DictValue(entries={"tag": IntValue(2)})
-    d3.entries["self"] = d3
+    d3.insert(TextValue("self"), d3)
     assert d1 != d3
 
 

@@ -481,10 +481,23 @@ def test_dict_view_getitem_returns_the_encoded_value() -> None:
     assert view["one"] == 1
 
 
+def test_dict_view_getitem_of_a_missing_key_raises_key_error() -> None:
+    view = AglDictView(DictValue(), _NO_DESCRIPTORS)
+
+    with pytest.raises(KeyError):
+        view["missing"]
+
+
 def test_dict_view_contains_checks_key_membership() -> None:
     view = AglDictView(DictValue({"two": IntValue(2)}), _NO_DESCRIPTORS)
 
     assert "two" in view
+
+
+def test_dict_view_contains_a_non_string_key_returns_false() -> None:
+    view = AglDictView(DictValue({"two": IntValue(2)}), _NO_DESCRIPTORS)
+
+    assert 2 not in view
 
 
 def test_dict_view_setitem_with_a_non_string_key_raises_type_error() -> None:
@@ -507,13 +520,27 @@ def test_dict_view_popitem_removes_and_returns_the_last_entry() -> None:
     assert view.popitem() == ("two", 2)
 
 
+def test_dict_view_popitem_on_an_empty_dict_raises_key_error() -> None:
+    view = AglDictView(DictValue(), _NO_DESCRIPTORS)
+
+    with pytest.raises(KeyError):
+        view.popitem()
+
+
 def test_dict_view_delitem_removes_an_entry() -> None:
     dict_value = DictValue({"one": IntValue(1), "two": IntValue(2)})
     view = AglDictView(dict_value, _NO_DESCRIPTORS)
 
     del view["one"]
 
-    assert dict_value.entries == {"two": IntValue(2)}
+    assert dict_value == DictValue({"two": IntValue(2)})
+
+
+def test_dict_view_delitem_of_a_missing_key_raises_key_error() -> None:
+    view = AglDictView(DictValue(), _NO_DESCRIPTORS)
+
+    with pytest.raises(KeyError):
+        del view["missing"]
 
 
 def test_dict_view_clear_empties_the_mapping() -> None:

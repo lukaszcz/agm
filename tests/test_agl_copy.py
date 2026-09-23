@@ -119,8 +119,9 @@ class TestShallowCopyOneLevel:
         copied = shallow_copy_value(original)
         assert isinstance(copied, DictValue)
         assert copied is not original
-        assert copied.entries is not original.entries
-        assert copied.entries["a"] is inner
+        assert copied.lookup(TextValue("a")) is inner
+        original.insert(TextValue("b"), IntValue(0))
+        assert copied.lookup(TextValue("b")) is None
 
     def test_record_fields_shared(self) -> None:
         inner = ArrayValue(elements=[IntValue(1)])
@@ -203,11 +204,11 @@ class TestDeepCopyFullDetachment:
         outer = DictValue(entries={"a": inner})
         copied = deep_copy_value(outer)
         assert isinstance(copied, DictValue)
-        copied_inner = copied.entries["a"]
+        copied_inner = copied.lookup(TextValue("a"))
         assert isinstance(copied_inner, DictValue)
         assert copied_inner is not inner
-        inner.entries["x"] = IntValue(99)
-        assert copied_inner.entries["x"] == IntValue(1)
+        inner.insert(TextValue("x"), IntValue(99))
+        assert copied_inner.lookup(TextValue("x")) == IntValue(1)
 
     def test_record_with_array_field_detached(self) -> None:
         inner = ArrayValue(elements=[IntValue(1)])
@@ -316,11 +317,11 @@ class TestDeepCopySharingAndCycles:
 
     def test_self_referential_dict_terminates_and_is_independent(self) -> None:
         cyclic = DictValue(entries={})
-        cyclic.entries["self"] = cyclic
+        cyclic.insert(TextValue("self"), cyclic)
         copied = deep_copy_value(cyclic)
         assert isinstance(copied, DictValue)
         assert copied is not cyclic
-        assert copied.entries["self"] is copied
+        assert copied.lookup(TextValue("self")) is copied
 
     def test_self_referential_record_terminates_and_is_independent(self) -> None:
         cyclic = _record({})

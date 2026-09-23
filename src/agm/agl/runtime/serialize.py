@@ -162,8 +162,8 @@ def _encode(
         active = enter_value(id(value), active)
         try:
             return {
-                name: _encode(schema.value, item, definitions, arguments, active)
-                for name, item in value.entries.items()
+                key: _encode(schema.value, item, definitions, arguments, active)
+                for key, item in value.text_items()
             }
         finally:
             active.discard(id(value))
@@ -334,7 +334,7 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     if isinstance(value, DictValue):
         active = enter_value(id(value), active)
         try:
-            return {k: value_to_json_obj(v, active) for k, v in value.entries.items()}
+            return {k: value_to_json_obj(v, active) for k, v in value.text_items()}
         finally:
             active.discard(id(value))
     if isinstance(value, (RecordValue, ExceptionValue)):

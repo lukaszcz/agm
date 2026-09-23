@@ -711,31 +711,42 @@ class AglDictView(MutableMapping[str, object]):
         self._descriptors = descriptors
 
     def __getitem__(self, key: str) -> object:
-        return encode_boundary_value(self._value.entries[key], self._descriptors)
+        found = self._value.lookup(TextValue(key))
+        if found is None:
+            raise KeyError(key)
+        return encode_boundary_value(found, self._descriptors)
 
     def __setitem__(self, key: str, value: object) -> None:
         if not isinstance(key, str):
             raise TypeError("AgL dict keys must be str")
-        self._value.entries[key] = _decode_written_value(value)
+        self._value.insert(TextValue(key), _decode_written_value(value))
 
     def __delitem__(self, key: str) -> None:
-        del self._value.entries[key]
+        if self._value.remove(TextValue(key)) is None:
+            raise KeyError(key)
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._value.entries)
+        for key, _value in self._value.text_items():
+            yield key
 
     def __len__(self) -> int:
-        return len(self._value.entries)
+        return len(self._value)
 
     def clear(self) -> None:
-        self._value.entries.clear()
+        self._value.clear()
 
     def popitem(self) -> tuple[str, object]:
-        key, value = self._value.entries.popitem()
-        return key, encode_boundary_value(value, self._descriptors)
+        pair = self._value.pop_last()
+        if pair is None:
+            raise KeyError("popitem(): dict is empty")
+        key, value = pair
+        assert isinstance(key, TextValue)
+        return key.value, encode_boundary_value(value, self._descriptors)
 
     def __contains__(self, key: object) -> bool:
-        return key in self._value.entries
+        if not isinstance(key, str):
+            return False
+        return self._value.lookup(TextValue(key)) is not None
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, AglDictView) and self._value is other._value

@@ -170,7 +170,7 @@ def _render(
         active = enter_value(id(value), active)
         try:
             items = []
-            for key, child in value.entries.items():
+            for key, child in value.text_items():
                 rendered = _render_child(
                     child, descriptors, pretty=pretty, level=level + 1, active=active
                 )

@@ -108,9 +108,7 @@ def contains(kind: ContainsKind, item: Value, container: Value) -> bool:
                 raise AssertionError(
                     f"contains DICT: expected DictValue, got {type(container).__name__}"
                 )
-            if isinstance(item, TextValue):
-                return item.value in container.entries
-            return False
+            return container.lookup(item) is not None
         case ContainsKind.TEXT:
             if not isinstance(container, TextValue) or not isinstance(item, TextValue):
                 raise AssertionError("contains TEXT: expected TextValue+TextValue")

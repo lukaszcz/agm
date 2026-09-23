@@ -764,10 +764,15 @@ class TestRunReturnValues:
 
 
 class TestDefensiveErrors:
-    def test_make_dict_non_text_key_raises(self) -> None:
-        """IrMakeDict key that evaluates to a non-TextValue raises InvalidIrError."""
+    def test_make_dict_non_text_key_builds_a_token_keyed_dict(self) -> None:
+        """IrMakeDict key that evaluates to a non-TextValue builds a token-keyed dict.
+
+        Frontend literal syntax still only emits `text`-typed keys, but the
+        evaluator itself no longer special-cases the key kind — it inserts
+        through the same `DictValue` API a general-key dict would use.
+        """
         sym, desc = _let_sym(0, "d")
-        prog = _make_program(
+        result = _run(
             (
                 IrBind(
                     _LOC,
@@ -780,8 +785,9 @@ class TestDefensiveErrors:
             ),
             {sym: desc},
         )
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(prog).run()
+        d = result["d"]
+        assert isinstance(d, DictValue)
+        assert d.lookup(IntValue(99)) == IntValue(1)
 
     def test_make_json_object_non_text_key_raises(self) -> None:
         """IrMakeJsonObject key that evaluates to a non-TextValue raises InvalidIrError."""

@@ -33,10 +33,10 @@ class AglIndexOutOfRange(Exception):
 
 
 class AglMissingKey(Exception):
-    """Sentinel: dict key missing."""
+    """Sentinel: dict key missing. *key* is the key ``Value``, not its rendering."""
 
-    def __init__(self, key: str) -> None:
-        super().__init__(f"Dict key {key!r} is missing")
+    def __init__(self, key: Value) -> None:
+        super().__init__("dict key is missing")
         self.key = key
 
 
@@ -78,13 +78,10 @@ def index_get(kind: IndexKind, container: Value, index: Value) -> Value:
                 raise AssertionError(
                     f"index_get DICT: expected DictValue, got {type(container).__name__}"
                 )
-            if not isinstance(index, TextValue):
-                raise AssertionError(
-                    f"index_get DICT: expected TextValue index, got {type(index).__name__}"
-                )
-            if index.value not in container.entries:
-                raise AglMissingKey(index.value)
-            return container.entries[index.value]
+            found = container.lookup(index)
+            if found is None:
+                raise AglMissingKey(index)
+            return found
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -118,12 +115,7 @@ def index_set(kind: IndexKind, container: Value, index: Value, value: Value) -> 
                 raise AssertionError(
                     f"index_set DICT: expected DictValue, got {type(container).__name__}"
                 )
-            if not isinstance(index, TextValue):
-                raise AssertionError(
-                    f"index_set DICT: expected TextValue index, got {type(index).__name__}"
-                )
-            if index.value not in container.entries:
-                raise AglMissingKey(index.value)
-            container.entries[index.value] = value
+            if not container.update_existing(index, value):
+                raise AglMissingKey(index)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

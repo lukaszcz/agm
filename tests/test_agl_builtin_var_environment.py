@@ -198,7 +198,7 @@ def test_std_env_default_is_empty_when_no_process_snapshot_is_supplied() -> None
     environ = _environment_value(result, "env")
     variables = environ.fields["vars"]
     assert isinstance(variables, DictValue)
-    assert variables.entries == {}
+    assert len(variables) == 0
 
 
 def test_repl_reuses_its_startup_environment_snapshot() -> None:

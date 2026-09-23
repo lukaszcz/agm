@@ -419,7 +419,7 @@ class TypeTable:
         """Record that *decl_id*'s declaration never took effect, and release its name.
 
         For a declaration an incremental entry failed before promoting (see
-        :meth:`~agm.agl.typecheck.env.TypeEnvironment.restore_type_names_from`).
+        :meth:`~agm.agl.typecheck.env.TypeEnvironment.rewind_from`).
         No value of one can exist — a later item of the same entry could not
         have promoted either — so nothing may resolve to it and no
         whole-table query about what the session declares may answer with it
@@ -501,8 +501,15 @@ class TypeTable:
             self._builtin_methods.setdefault(constructor, {}).setdefault(method.name, {}), method
         )
 
-    def restore_methods_from(self, previous: TypeTable, declaration_ids: Collection[int]) -> None:
-        """Restore methods replaced by unpromoted declarations from *previous*."""
+    def rewind_methods_from(self, previous: TypeTable, declaration_ids: Collection[int]) -> None:
+        """Undo the method registrations *declaration_ids* made, restoring *previous*'s.
+
+        The method-table half of
+        :meth:`~agm.agl.typecheck.env.TypeEnvironment.rewind_from`, which is
+        the only caller: methods are keyed by declaration identity here, so
+        the declarations an entry did not promote name their own
+        registrations directly.
+        """
         declaration_keys = {
             method.declaration_key
             for methods in self._methods.values()

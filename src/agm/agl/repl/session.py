@@ -1430,22 +1430,12 @@ class ReplSession:
             # leaves the session's still-sealed ``self._type_env`` untouched.
             new_type_env = TypeEnvironment()
             new_type_env.seed_from(checked.type_env)
-            if unpromoted_type_names:
-                new_type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
-            unpromoted_function_names = (
-                item.name
-                for item in entry_declarations
-                if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
-            )
-            new_type_env.restore_binding_metadata_from(
+            new_type_env.rewind_from(
                 previous_type_env,
-                entry_binding_node_ids - promoted_binding_node_ids,
-                unpromoted_function_names,
-            )
-            new_type_env.type_table.restore_methods_from(
-                previous_type_env.type_table,
-                {
-                    item.node_id
+                type_names=unpromoted_type_names,
+                binding_node_ids=entry_binding_node_ids - promoted_binding_node_ids,
+                functions={
+                    item.node_id: item.name
                     for item in entry_declarations
                     if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
                 },

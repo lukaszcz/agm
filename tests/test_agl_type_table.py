@@ -1481,7 +1481,7 @@ class TestMethodIndex:
         previous.register_method(point, kept)
         current.register_builtin_method("text", unpromoted)
 
-        current.restore_methods_from(previous, {unpromoted.decl_node_id})
+        current.rewind_methods_from(previous, {unpromoted.decl_node_id})
 
         assert current.method_candidates(TextType(), "show") == ()
         assert current.method_candidates(point, "show") == (kept,)
@@ -1510,7 +1510,7 @@ class TestMethodIndex:
         )
         current.register_method(point, method)
 
-        current.restore_methods_from(previous, {999})
+        current.rewind_methods_from(previous, {999})
 
         assert current.method_candidates(point, "show") == (method,)
 

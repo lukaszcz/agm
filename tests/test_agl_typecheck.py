@@ -33,6 +33,7 @@ from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, ScopeNode
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
+    MethodDef,
     TypeDef,
     TypeTable,
     comparable_types,
@@ -859,7 +860,7 @@ class TestTypeEnvironment:
         sigs = env.all_function_signatures()
         assert "g" in sigs
 
-    def test_restore_binding_metadata_restores_prior_signature(self) -> None:
+    def test_rewind_restores_prior_binding_metadata(self) -> None:
         previous = TypeEnvironment()
         signature = FunctionSignature(params=(), result=IntType())
         previous.set_binding_type(1, IntType())
@@ -874,23 +875,66 @@ class TestTypeEnvironment:
         )
         current.register_function_signature("f", FunctionSignature(params=(), result=TextType()))
         current.register_extern_node_id(1)
-        current.restore_binding_metadata_from(previous, (1,), ("f",))
+        current.rewind_from(previous, type_names=(), binding_node_ids=(1,), functions={1: "f"})
 
         assert current.get_binding_type(1) == IntType()
         assert current.get_function_signature_by_node_id(1) == signature
         assert current.all_function_signatures().get("f") == signature
         assert current.is_extern_node_id(1)
 
-    def test_restore_binding_metadata_discards_uncommitted_function_signature(self) -> None:
+    def test_rewind_discards_an_uncommitted_function_signature(self) -> None:
         previous = TypeEnvironment()
         current = TypeEnvironment()
         current.register_function_signature(
             "transient", FunctionSignature(params=(), result=IntType())
         )
 
-        current.restore_binding_metadata_from(previous, (), ("transient",))
+        current.rewind_from(
+            previous, type_names=(), binding_node_ids=(), functions={7: "transient"}
+        )
 
         assert current.all_function_signatures().get("transient") is None
+
+    def test_one_rewind_reaches_every_key_space(self) -> None:
+        """A single call rewinds type names, bindings, and functions with their methods.
+
+        The three live in different key spaces, so a rewind that dropped one
+        of them would still pass every test of the other two.
+        """
+        owner = RecordType(name="Owner", module_id=ENTRY_ID, decl_id=41)
+        typedef = TypeDef(kind="record", name="Owner", module_id=ENTRY_ID, decl_node_id=41)
+        kept_signature = FunctionSignature(params=(), result=IntType())
+        kept_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Owner",),
+            name="show",
+            decl_node_id=7,
+            signature=FunctionType(params=(owner,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        previous = TypeEnvironment()
+        previous.type_table.register(typedef)
+        previous.register_type("Owner", owner)
+        previous.set_binding_type(3, IntType())
+        previous.register_function_signature("f", kept_signature)
+        previous.type_table.register_method(owner, kept_method)
+
+        current = TypeEnvironment()
+        current.type_table.register(typedef)
+        current.register_type("Owner", TextType())
+        current.set_binding_type(3, TextType())
+        current.register_function_signature("f", FunctionSignature(params=(), result=TextType()))
+        current.type_table.register_builtin_method("text", replace(kept_method, decl_node_id=8))
+
+        current.rewind_from(
+            previous, type_names=("Owner",), binding_node_ids=(3,), functions={8: "f"}
+        )
+
+        assert current.get_type("Owner") == owner
+        assert current.get_binding_type(3) == IntType()
+        assert current.all_function_signatures().get("f") == kept_signature
+        assert current.type_table.method_candidates(TextType(), "show") == ()
+        assert current.type_table.method_candidates(owner, "show") == (kept_method,)
 
     def test_seed_rejects_an_environment_with_a_flexible_variable(self) -> None:
         source = TypeEnvironment()
@@ -959,7 +1003,7 @@ class TestTypeEnvironment:
         env2.seed_from(env1)
         assert env2.get_type("Abort") is not None
 
-    def test_restore_type_names_from_restores_all_type_metadata(self) -> None:
+    def test_rewind_restores_all_type_metadata(self) -> None:
         previous = TypeEnvironment()
         restored = RecordType(name="Restored")
         previous.type_table.register(
@@ -1005,7 +1049,12 @@ class TestTypeEnvironment:
 
         current = TypeEnvironment()
         current.register_type("Restored", TextType())
-        current.restore_type_names_from(previous, ("Abort", "Restored", "Alias"))
+        current.rewind_from(
+            previous,
+            type_names=("Abort", "Restored", "Alias"),
+            binding_node_ids=(),
+            functions={},
+        )
 
         assert current.type_table.get(ENTRY_ID, "Restored") == previous.type_table.get(
             ENTRY_ID, "Restored"

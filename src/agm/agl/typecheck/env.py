@@ -1201,9 +1201,9 @@ class TypeEnvironment:
         self._sealed = False
         # Mutation journal, active from begin_facts() until end_facts() takes
         # it; seal() leaves it in place, where no further mutator can reach it,
-        # so own_facts() keeps answering from it. restore_*,
-        # remove_binding_types and seed_from never run in either window; not
-        # journaled.
+        # so own_facts() keeps answering from it. rewind_from,
+        # restore_binding_types, remove_binding_types and seed_from never run
+        # in either window; not journaled.
         # ``_resolve_name_type`` does write ``_resolved_aliases`` directly (a memo
         # re-derivable from ``_alias_targets``) on a query path, but every declared
         # alias is frozen during header preparation, so that write is unreachable
@@ -1940,39 +1940,6 @@ class TypeEnvironment:
             self._binding_types.pop(node_id, None)
             self._function_signatures_by_node_id.pop(node_id, None)
             self._extern_node_ids.discard(node_id)
-
-    def restore_binding_metadata_from(
-        self,
-        other: "TypeEnvironment",
-        node_ids: Iterable[int],
-        function_names: Iterable[str],
-    ) -> None:
-        """Restore selected binding/signature metadata from an earlier environment.
-
-        Incremental hosts may check a whole entry before a runtime failure
-        determines which declarations were actually installed.  This removes
-        metadata for declarations that did not commit, then restores any
-        pre-existing entries (normally none because declaration ids are
-        globally unique).  Function names need separate handling because their
-        convenient name-keyed signature table is not keyed by declaration id.
-        """
-        self._assert_mutable()
-        node_id_set = set(node_ids)
-        self.remove_binding_types(node_id_set)
-        for node_id in node_id_set:
-            binding_type = other._binding_types.get(node_id)
-            if binding_type is not None:
-                self._binding_types[node_id] = binding_type
-            signature = other._function_signatures_by_node_id.get(node_id)
-            if signature is not None:
-                self._function_signatures_by_node_id[node_id] = signature
-            if node_id in other._extern_node_ids:
-                self._extern_node_ids.add(node_id)
-        for name in function_names:
-            self._function_signatures.pop(name, None)
-            signature = other._function_signatures.get(name)
-            if signature is not None:
-                self._function_signatures[name] = signature
 
     def assert_closed(self) -> None:
         """Assert that this env's module-local metadata has no solver variables.
@@ -3327,42 +3294,56 @@ class TypeEnvironment:
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)
         self._extern_node_ids.update(other._extern_node_ids)
 
-    def restore_type_names_from(self, other: TypeEnvironment, names: Iterable[str]) -> None:
-        """Restore selected type-namespace names from *other*.
+    def rewind_from(
+        self,
+        previous: TypeEnvironment,
+        *,
+        type_names: Iterable[str],
+        binding_node_ids: Iterable[int],
+        functions: Mapping[int, str],
+    ) -> None:
+        """Undo what an incremental entry's UNPROMOTED declarations wrote, restoring *previous*.
 
-        Used by the REPL after partial runtime failure: checking an entry builds
-        metadata for every declaration in the entry, but only declarations before
-        the failure are promoted. For each unpromoted type name, remove the
-        checked-entry metadata and restore the previous session definition when
-        one existed.
+        Checking an entry builds metadata for every declaration in it, but a
+        runtime failure promotes only the declarations before the failure.
+        This takes the three forms a declaration reaches this environment
+        under — a type name, a value binding's node id, and a function's
+        node id and name — and, for each, drops what the checked entry
+        registered and puts back the definition *previous* held. The
+        seed-forward counterpart is :meth:`seed_from`; a table added here
+        later is rewound only once this method rewinds it.
 
-        *names* normally comes from this entry's OWN declarations (see the
-        REPL's promotion bookkeeping). A failed enum redeclaration also adds
-        previously retained inline-member names whose namespace metadata the
-        new enum cleared, so those survivors are restored in the same staged
-        pass. A reserved built-in exception/prelude name can appear only when
-        this entry itself wrote a ``builtin`` declaration of that name — the
-        reserved names are non-shadowable other than by one. That declaration
-        is rolled back exactly like any other unpromoted one below: no
-        special-casing is needed, and none is applied, unlike :meth:`seed_from`,
-        which instead has to tell a program's own carried-forward declaration
-        apart from the canonical default it must not clobber.
+        *type_names* normally comes from the entry's OWN declarations. A
+        failed enum redeclaration also adds previously retained inline-member
+        names whose namespace metadata the new enum cleared, so those
+        survivors are restored in the same pass. A reserved built-in
+        exception/prelude name can appear only when this entry itself wrote a
+        ``builtin`` declaration of that name — the reserved names are
+        non-shadowable other than by one — and is rolled back like any other
+        unpromoted declaration, unlike in :meth:`seed_from`, which instead has
+        to tell a program's own carried-forward declaration apart from the
+        canonical default it must not clobber.
 
         The shared ``type_table`` is keyed by declaration identity, not name,
-        so the unpromoted declaration stays registered under its own identity
+        so an unpromoted declaration stays registered under its own identity
         exactly as a superseded one does — the link image derives its nominal
         descriptors from this table on every lowering and needs the entry to
-        correct the descriptor the failed entry already linked. What does
-        need saying is that the declaration never took effect
+        correct the descriptor the failed entry already linked. What does need
+        saying is that the declaration never took effect
         (:meth:`TypeTable.orphan`): unlike a superseded declaration, whose
         surviving values keep its members meaningful, an unpromoted one must
         answer no whole-table query about what the session declares. The
         previous declaration's own identity, methods, and base chain were
         never touched by the redeclaration, so restoring it is just
         ``register`` below reclaiming its name.
+
+        Node ids are globally unique, so a binding normally has nothing to put
+        back. Functions carry both forms because their convenient name-keyed
+        signature table is not keyed by declaration id, while their methods
+        are.
         """
         self._assert_mutable()
-        for name in names:
+        for name in type_names:
             self.unregister_name(name)
             scope_path, declared_name = _split_scoped_type_name(name)
             # Read the unpromoted declaration before ``register`` repoints the
@@ -3370,7 +3351,7 @@ class TypeEnvironment:
             # to the checked entry's own declaration, which is the one being
             # rolled back.
             unpromoted = self._type_table.get(self._module_id, declared_name, scope_path)
-            typedef = other._type_table.get(other._module_id, declared_name, scope_path)
+            typedef = previous._type_table.get(previous._module_id, declared_name, scope_path)
             if typedef is not None:
                 self._type_table.register(typedef)
             # A failed enum redeclaration can clear a prior inline member's
@@ -3381,19 +3362,37 @@ class TypeEnvironment:
                 typedef is None or unpromoted.decl_node_id != typedef.decl_node_id
             ):
                 self._type_table.orphan(unpromoted.decl_node_id)
-            if name in other._types:
-                self._types[name] = other._types[name]
-            if name in other._alias_targets:
-                self._alias_targets[name] = other._alias_targets[name]
-            if name in other._resolved_aliases:
-                self._resolved_aliases[name] = other._resolved_aliases[name]
-            if name in other._generic_types:
-                self._generic_types[name] = other._generic_types[name]
-            if name in other._alias_type_params:
-                self._alias_type_params[name] = other._alias_type_params[name]
-            for key, sig in other._constructor_sigs.items():
-                if key == (other._module_id, scope_path, declared_name):
-                    self._constructor_sigs[key] = sig
-            for key, kinds in other._constructor_field_kinds.items():
-                if key == (other._module_id, scope_path, declared_name):
-                    self._constructor_field_kinds[key] = kinds
+            if name in previous._types:
+                self._types[name] = previous._types[name]
+            if name in previous._alias_targets:
+                self._alias_targets[name] = previous._alias_targets[name]
+            if name in previous._resolved_aliases:
+                self._resolved_aliases[name] = previous._resolved_aliases[name]
+            if name in previous._generic_types:
+                self._generic_types[name] = previous._generic_types[name]
+            if name in previous._alias_type_params:
+                self._alias_type_params[name] = previous._alias_type_params[name]
+            declaration_key = (previous._module_id, scope_path, declared_name)
+            sig = previous._constructor_sigs.get(declaration_key)
+            if sig is not None:
+                self._constructor_sigs[declaration_key] = sig
+            kinds = previous._constructor_field_kinds.get(declaration_key)
+            if kinds is not None:
+                self._constructor_field_kinds[declaration_key] = kinds
+        node_id_set = set(binding_node_ids)
+        self.remove_binding_types(node_id_set)
+        for node_id in node_id_set:
+            binding_type = previous._binding_types.get(node_id)
+            if binding_type is not None:
+                self._binding_types[node_id] = binding_type
+            signature = previous._function_signatures_by_node_id.get(node_id)
+            if signature is not None:
+                self._function_signatures_by_node_id[node_id] = signature
+            if node_id in previous._extern_node_ids:
+                self._extern_node_ids.add(node_id)
+        for function_name in functions.values():
+            self._function_signatures.pop(function_name, None)
+            function_signature = previous._function_signatures.get(function_name)
+            if function_signature is not None:
+                self._function_signatures[function_name] = function_signature
+        self._type_table.rewind_methods_from(previous._type_table, functions.keys())

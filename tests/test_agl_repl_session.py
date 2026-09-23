@@ -1860,7 +1860,7 @@ class TestBuiltinIdentityAcrossEntries:
         must not steer a later ``catch`` clause or the host's raise identity
         -- the exception-shaped counterpart of
         ``TestRedefinition.test_unpromoted_builtin_declaration_does_not_type_a_later_host_call``.
-        Its own rollback path (``TypeEnvironment.restore_type_names_from``)
+        Its own rollback path (``TypeEnvironment.rewind_from``)
         must not skip a reserved name just because such a name is normally
         non-shadowable: it can appear among an entry's own unpromoted names
         only when that entry itself wrote the ``builtin`` declaration.
@@ -1869,7 +1869,7 @@ class TestBuiltinIdentityAcrossEntries:
         name always conflicts with the standard library's own root
         declaration once loaded (see
         ``TestBuiltinIdentityWithStandardLibrary``), and a SCOPED name is
-        never in ``restore_type_names_from``'s reserved-name set to begin
+        never in ``rewind_from``'s reserved-name set to begin
         with (it is keyed by the joined ``scope::name`` spelling, never the
         bare reserved one), so only a root declaration without the standard
         library actually exercises the skip this audit fixed.
@@ -1881,7 +1881,7 @@ class TestBuiltinIdentityAcrossEntries:
         )
         assert not failed.ok
         # A RUNTIME (partial-promotion) failure, not a static rejection --
-        # confirms this actually reached `restore_type_names_from` rather
+        # confirms this actually reached `rewind_from` rather
         # than failing before any declaration could even be checked.
         assert failed.error is not None
 
@@ -1906,7 +1906,7 @@ class TestBuiltinIdentityAcrossEntries:
         the session carry, so comparing an old value against a fresh one is
         still a comparison of one type against itself.
 
-        This is the rollback direction ``restore_type_names_from`` owns.
+        This is the rollback direction ``rewind_from`` owns.
         Skipping a reserved bare name there instead leaves the unpromoted
         redeclaration holding the name, and the session then reports two
         identically-spelled ``ExecResult`` types as incomparable.

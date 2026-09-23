@@ -139,6 +139,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         (
             "semantics",
             (
+                "agm.agl.constraints",
                 "agm.agl.ir",
                 "agm.agl.modules.ids",
                 "agm.agl.self_validation",
@@ -220,6 +221,7 @@ def _agm_imports_of_file(path: Path) -> list[str]:
         ("attributes.py", ("agm.agl.keywords", "agm.agl.zones", "agm.command_catalog")),
         ("artifact_storage.py", ()),
         ("keywords.py", ("agm.util.ident",)),
+        ("constraints.py", ()),
     ],
 )
 def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...]) -> None:

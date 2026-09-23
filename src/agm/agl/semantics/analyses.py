@@ -6,13 +6,13 @@ reference itself or another declaration directly or indirectly, so any
 whole-type question ("does every value of this type terminate?", "can a
 non-data value hide inside this type?") must be answered over the finite
 *declaration graph* rather than by walking an individual type tree, which may
-be cyclic.  Both analyses below share that shape: start from a conservative
-default, and grow
-a set of facts to a least fixpoint by repeatedly re-examining every
-declaration's own field/variant templates until nothing changes. Because
-there are finitely many declarations, this always terminates, and because
-each fact only ever flips from "not yet established" to "established" (never
-back), the fixpoint is independent of iteration order.
+be cyclic. Inhabitation, non-data reachability, and hashability below share
+that shape: start from a conservative default, and grow a set of facts to a
+least fixpoint by repeatedly re-examining every declaration's own
+field/variant templates until nothing changes. Because there are finitely
+many declarations, this always terminates, and because each fact only ever
+flips from "not yet established" to "established" (never back), the fixpoint
+is independent of iteration order.
 
 Inhabitation
 ------------
@@ -24,22 +24,18 @@ without needing another value of the same (or a mutually recursive)
 declaration. :func:`compute_uninhabited` returns the declarations that never
 reach that bottom.
 
-Non-data reachability
----------------------
-The *non-data* types are exactly ``unit`` and function types. Two
-independent language rules turn on
-whether one of them is reachable from a type — ``=``/``!=`` are undefined for
-such a value (and for anything that transitively contains one), and there is
-no JSON representation for one either — so the underlying fact is computed
-once, here. :func:`compute_non_data_reachability` replaces a walk of each
-concrete instantiation's substituted fields (which cannot terminate once
-field types may reference cyclic declarations) with two per-declaration
-fixpoint facts: whether the declaration's body unconditionally reaches a
-non-data type, and which of its own type parameters actually affect the
-answer for a concrete instantiation ("relevant" parameters) — see
-:func:`compute_non_data_reachability` for the full definition and
-:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_reaches_non_data` for
-how a concrete handle's answer is derived from them.
+Non-data reachability and hashability
+--------------------------------------
+Both facts are one shared declaration-level fixpoint
+(:func:`compute_declaration_flags` — see its own docstring for the growth
+rule), parameterised per :class:`~agm.agl.constraints.ConstraintKind` by a
+:class:`LeafPolicy` (:data:`LEAF_POLICIES`). ``Eq``'s policy flags a
+declaration that unconditionally reaches ``unit`` or a function type — the
+basis of ``=``/``!=`` and of JSON convertibility
+(:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_satisfies`).
+``Hashable``'s policy flags one that is not deeply immutable data: it has an
+``array``/``dict``/function/``unit``/``var`` field, transitively (see
+``semantics.type_table.satisfies_hashable``).
 
 Finiteness (instantiation-closure) capability
 ----------------------------------------------
@@ -78,8 +74,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import assert_never
 
+from agm.agl.constraints import ConstraintKind
 from agm.agl.semantics.type_table import (
     DeclId,
     TypeDef,
@@ -291,57 +289,82 @@ def uninhabitable_message(kind: TypeDefKind, name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Non-data reachability flags
+# Shared declaration-level "bad" fixpoint
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
-class NonDataReachability:
-    """Whole-table non-data-reachability fixpoint result.
+class LeafPolicy:
+    """What counts as "bad" evidence for one declaration-level fixpoint.
 
-    ``reaches_non_data`` — declarations that unconditionally reach a non-data
-    type (their body contains a function/unit type, or reaches a
-    declaration that does, outside of a type-variable position).
-    ``relevant_params`` — for every declaration, the subset of its own type
-    parameters whose instantiation can affect that answer (see
-    :func:`compute_non_data_reachability`).
+    ``recurse_containers`` — ``True`` to recurse into an ``array``/``dict``'s
+    element/value type; ``False`` to flag the container outright.
+    ``var_fields_bad`` — whether a declaration's own ``var`` field (or, for
+    an enum, one of its members' own) is itself bad.
     """
 
-    reaches_non_data: frozenset[DeclId]
+    recurse_containers: bool
+    var_fields_bad: bool
+
+
+#: Kind -> the policy computing its declaration-level "does not satisfy" set
+#: (see :func:`compute_declaration_flags`): EQ flags a declaration that
+#: unconditionally reaches ``unit``/a function type, recursing into
+#: ``array``/``dict``; HASHABLE flags one that is not deeply immutable data —
+#: a function/unit/``var`` field, or an ``array``/``dict`` outright (never
+#: recursed into).
+LEAF_POLICIES: Mapping[ConstraintKind, LeafPolicy] = MappingProxyType(
+    {
+        ConstraintKind.EQ: LeafPolicy(recurse_containers=True, var_fields_bad=False),
+        ConstraintKind.HASHABLE: LeafPolicy(recurse_containers=False, var_fields_bad=True),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DeclarationFlags:
+    """Whole-table "bad" fixpoint result (see :func:`compute_declaration_flags`).
+
+    ``flagged`` — declarations struck by the policy's evidence.
+    ``relevant_params`` — for every declaration, the subset of its own type
+    parameters whose instantiation can affect a concrete reference's answer:
+    a parameter is relevant if it appears directly in a field (including
+    nested in ``array``/``dict``/function-parameter/result position), or is
+    passed to another reference's parameter that is ITSELF relevant for that
+    reference's declaration — transitively. Unused ("phantom") parameters are
+    therefore never relevant, matching the substitute-then-walk semantics
+    this replaces: instantiating a phantom parameter with bad evidence cannot
+    flag a declaration because the field template never actually mentions it.
+    """
+
+    flagged: frozenset[DeclId]
     relevant_params: Mapping[DeclId, frozenset[str]]
 
 
-def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
-    """Compute the declaration-level non-data-reachability fixpoint over *table*.
+def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> DeclarationFlags:
+    """Compute the shared declaration-level "bad" fixpoint over *table*.
 
-    Two facts are grown together to a least fixpoint, per declaration:
+    Least fixpoint: every declaration starts unflagged, and flagging only
+    grows — never retracts — as evidence accumulates: a bad leaf anywhere in
+    the declaration's own field/variant templates (per *policy*, at any
+    depth, via :func:`field_templates`), a bad ``var`` field, a reference to
+    an already-flagged declaration, or (seeded up front) host-minted origin
+    (:meth:`~agm.agl.semantics.type_table.TypeTable.host_minted_declaration_ids`).
+    A bare type variable is never itself bad — deferred to the concrete
+    instantiation — which is what lets a self-referential declaration (a
+    reference to its own, still-unflagged, identity) go unflagged by the
+    cycle alone.
 
-    - ``reaches_non_data`` (an unconditional, argument-independent fact): true
-      iff some field/variant-field template contains a function/unit
-      type, or references a declaration whose own ``reaches_non_data`` is
-      already true — at any depth, but never through a bare type-variable
-      position (a parameter standing for "whatever the caller instantiates" is
-      not itself a problem). For exceptions this also accounts for subtyping:
-      inherited field problems flow from base to child, while an affected
-      child also affects each catchable ancestor, because a value statically
-      typed as that ancestor may hold the child at runtime.
-    - ``relevant_params``: the subset of a declaration's OWN type parameters
-      whose concrete instantiation can flip a reference to it from
-      non-data-free to not. A parameter is relevant if it appears directly in
-      a field (including nested in ``array``/``dict``/function-parameter/
-      result position), or is passed to another reference's parameter that
-      is ITSELF relevant for that reference's declaration — transitively.
-      Unused ("phantom") parameters are therefore never relevant, matching
-      the substitute-then-walk semantics this replaces: instantiating a
-      phantom parameter with a non-data type cannot poison a declaration
-      because the field template never actually mentions it.
+    Exception ``extends``: ``field_flagged`` is the exact-value/inherited-field
+    fact — an inherited field flows base -> child. ``flagged`` additionally
+    includes affected descendants, so a flagged descendant also flags every
+    catchable ancestor (a value statically typed as the ancestor may hold the
+    descendant at runtime), without flowing back down to siblings.
 
-    A concrete handle's answer
-    (:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_reaches_non_data`)
-    is then: its declaration's ``reaches_non_data`` flag, OR its declaration
-    reaches a non-data type for some ``type_args[i]`` whose parameter is in
-    ``relevant_params`` — reproducing the substitute-then-walk answer exactly,
-    without ever expanding an instantiation.
+    A concrete handle's answer is then: its declaration's flag, OR its
+    declaration reaches bad evidence for some ``type_args[i]`` whose
+    parameter is in ``relevant_params`` — reproducing the substitute-then-walk
+    answer exactly, without ever expanding an instantiation.
     """
     defs = table.defs
     exception_children: dict[DeclId, set[DeclId]] = {decl_id: set() for decl_id in defs}
@@ -349,12 +372,8 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
         if typedef.kind == "exception" and typedef.base in exception_children:
             exception_children[typedef.base].add(decl_id)
 
-    # ``field_non_data`` is the exact-value/inherited-field fact for
-    # exceptions. ``non_data`` additionally includes affected descendants,
-    # which should poison ancestor catch/base types but must not flow back
-    # down to siblings.
-    field_non_data = set(table.host_minted_declaration_ids())
-    non_data = set(field_non_data)
+    field_flagged = set(table.host_minted_declaration_ids())
+    flagged = set(field_flagged)
     relevant: dict[DeclId, set[str]] = {decl_id: set() for decl_id in defs}
     changed = True
     while changed:
@@ -362,25 +381,32 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
         for decl_id, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
             templates = tuple(t for _fname, t in field_templates(typedef, defs))
-            template_bad = any(
-                _template_reaches_non_data(t, non_data, relevant, defs) for t in templates
+            own_var_field_bad = policy.var_fields_bad and (
+                bool(typedef.mutable_fields)
+                or (
+                    typedef.kind == "enum"
+                    and any(defs[member.decl_id].mutable_fields for member in typedef.members)
+                )
+            )
+            template_bad = own_var_field_bad or any(
+                _template_is_flagged(t, policy, flagged, relevant, defs) for t in templates
             )
             inherited_field_bad = (
                 typedef.kind == "exception"
                 and typedef.base is not None
-                and typedef.base in field_non_data
+                and typedef.base in field_flagged
             )
-            exact_bad = decl_id in field_non_data or template_bad or inherited_field_bad
-            if exact_bad and decl_id not in field_non_data:
-                field_non_data.add(decl_id)
+            exact_bad = decl_id in field_flagged or template_bad or inherited_field_bad
+            if exact_bad and decl_id not in field_flagged:
+                field_flagged.add(decl_id)
                 changed = True
 
             descendant_bad = typedef.kind == "exception" and any(
-                child_id in non_data for child_id in exception_children[decl_id]
+                child_id in flagged for child_id in exception_children[decl_id]
             )
-            bad = exact_bad or descendant_bad
-            if bad and decl_id not in non_data:
-                non_data.add(decl_id)
+            new_bad = exact_bad or descendant_bad
+            if new_bad and decl_id not in flagged:
+                flagged.add(decl_id)
                 changed = True
 
             gained: set[str] = set()
@@ -389,8 +415,8 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
             if not gained <= relevant[decl_id]:
                 relevant[decl_id] |= gained
                 changed = True
-    return NonDataReachability(
-        reaches_non_data=frozenset(non_data),
+    return DeclarationFlags(
+        flagged=frozenset(flagged),
         relevant_params={decl_id: frozenset(params) for decl_id, params in relevant.items()},
     )
 
@@ -424,31 +450,37 @@ def field_templates(typedef: TypeDef, defs: Mapping[DeclId, TypeDef]) -> list[tu
     return list(typedef.fields)
 
 
-def _template_reaches_non_data(
+def _template_is_flagged(
     t: Type,
-    non_data: set[DeclId],
+    policy: LeafPolicy,
+    flagged: set[DeclId],
     relevant: Mapping[DeclId, set[str]],
     defs: Mapping[DeclId, TypeDef],
 ) -> bool:
+    """Return whether *t* is, or transitively reaches, bad evidence under *policy*."""
     match t:
         case FunctionType() | UnitType():
             return True
         case ArrayType():
-            return _template_reaches_non_data(t.elem, non_data, relevant, defs)
+            if not policy.recurse_containers:
+                return True
+            return _template_is_flagged(t.elem, policy, flagged, relevant, defs)
         case DictType():
-            return _template_reaches_non_data(t.value, non_data, relevant, defs)
+            if not policy.recurse_containers:
+                return True
+            return _template_is_flagged(t.value, policy, flagged, relevant, defs)
         case ExceptionType():
-            return t.decl_id in non_data
+            return t.decl_id in flagged
         case RecordType() | EnumType():
             decl_id = t.decl_id
-            if decl_id in non_data:
+            if decl_id in flagged:
                 return True
             target = defs.get(decl_id)
             if target is None:
                 return False
             own_relevant = relevant.get(decl_id, set())
             return any(
-                _template_reaches_non_data(arg, non_data, relevant, defs)
+                _template_is_flagged(arg, policy, flagged, relevant, defs)
                 for pname, arg in zip(target.type_params, t.type_args)
                 if pname in own_relevant
             )

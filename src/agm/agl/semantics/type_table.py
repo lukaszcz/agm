@@ -29,17 +29,26 @@ declaration sharing an owner and name as one flat selection level: an
 exception's own methods plus its ancestors', and a record's own methods plus
 its counted owning enums' (:meth:`TypeTable.owning_enums_for_selection`).
 
-``comparable_types``/``_reaches_non_data`` live here rather than in
-``semantics.types`` because their record/enum/exception arms consult the
-table's declaration-level non-data-reachability flags instead of walking
-embedded fields; ``semantics.types`` cannot import this module without a
-circular import. The flags themselves are a fixpoint over the whole table
-(``semantics.analyses.compute_non_data_reachability``, cycle-safe by
+``comparable_types``/``satisfies`` live here rather than in ``semantics.types``
+because their record/enum/exception arms consult the table's declaration-level
+constraint flags instead of walking embedded fields; ``semantics.types``
+cannot import this module without a circular import. Those flags are one
+fixpoint per :class:`~agm.agl.constraints.ConstraintKind`
+(``semantics.analyses.compute_declaration_flags``, cycle-safe by
 construction), cached on :class:`TypeTable` and invalidated whenever the
-table's declarations change. That one fact answers two separate language
+table's declarations change. The ``Eq`` flag answers two separate language
 questions — may ``=``/``!=`` be applied (``comparable_types``)? and is there
 a JSON representation (:meth:`TypeTable.nominal_is_json_convertible`)? —
-which is why it is named for the fact rather than for either consumer.
+which is why :meth:`TypeTable.nominal_satisfies` is named for the fact it
+computes rather than for either consumer.
+
+``satisfies_eq``/``satisfies_hashable`` check the ``Eq``/``Hashable``
+structural constraints (see ``agl.constraints``) against a type variable's
+in-scope bounds, or open-world mode (``bounds is None``, what
+:func:`comparable_types` uses) where a type variable, the bottom type, and
+an unresolved inference variable all count as satisfied. Both delegate to
+:func:`satisfies`, whose nominal case consults the same per-kind
+declaration-flags fixpoint via :meth:`TypeTable.nominal_satisfies`.
 
 :meth:`TypeTable.has_finite_schema` answers a related but distinct
 whole-type question: not "does this type
@@ -48,7 +57,7 @@ support ``=``?" but "is this type's reachable *instantiation closure* finite
 reference itself at ever-larger arguments (polymorphic recursion), which
 never blocks construction/matching/equality but does mean no finite schema
 exists. Backed by ``semantics.analyses.compute_finite_closure``, cached and
-invalidated the same way as the non-data-reachability fixpoint.
+invalidated the same way as the declaration-flags fixpoints above.
 :meth:`TypeTable.first_infinite_declaration`/:meth:`TypeTable.no_finite_schema_message`
 build on the same query to name the culprit declaration for a use-site
 diagnostic (agent output target, cast target, parameter type).
@@ -61,6 +70,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
+from agm.agl.constraints import ConstraintBounds, ConstraintKind, close_constraints
 from agm.agl.ir.reserved_nominals import (
     NO_DECL_ID,
     require_reserved_enum_member_id,
@@ -106,7 +116,7 @@ from agm.agl.zones import ParamZone
 from agm.util.graph import bfs_first
 
 if TYPE_CHECKING:
-    from agm.agl.semantics.analyses import FiniteClosure, NonDataReachability
+    from agm.agl.semantics.analyses import DeclarationFlags, FiniteClosure
 
 TypeDefKind = Literal["record", "enum", "exception"]
 #: A declaration's name path — ``(module_id, scope_path, name)``. Used only
@@ -333,17 +343,17 @@ class TypeTable:
         # occupies exactly one map and supersession is a lookup rather than a
         # walk of every receiver's methods.
         self._method_sites: dict[DeclKey, dict[DeclKey, MethodDef]] = {}
-        # Whole-table non-data-reachability fixpoint (see
-        # :meth:`nominal_reaches_non_data`), computed lazily on first use and
-        # invalidated (set back to ``None``) whenever a declaration is added,
-        # removed, or overwritten.
-        self._non_data_caps: NonDataReachability | None = None
+        # Whole-table declaration-flags fixpoint (see :meth:`nominal_satisfies`),
+        # one result per constraint kind, computed lazily on first use and
+        # invalidated (cleared) whenever a declaration is added, removed, or
+        # overwritten.
+        self._declaration_flags_cache: dict[ConstraintKind, DeclarationFlags] = {}
         # Member declaration id -> the enums declaring or referencing it, in
         # registration order. A referenced member belongs to several enums, so
         # this is multi-valued. Whole-table, rebuilt on any registration change.
         self._member_enum_owners: dict[DeclId, tuple[DeclId, ...]] | None = None
         # Whole-table finiteness fixpoint (see :meth:`has_finite_schema`),
-        # cached and invalidated the same way as ``_non_data_caps``.
+        # cached and invalidated the same way as ``_declaration_flags_cache``.
         self._finite_closure: FiniteClosure | None = None
         # Exception declaration id -> its direct children's ids, built in one
         # pass over ``_defs``. Whole-table, rebuilt on any registration
@@ -392,7 +402,7 @@ class TypeTable:
             self._defs[decl_id] = typedef
             self._standard_builtins = None
             self._host_minted_ids = None
-            self._non_data_caps = None
+            self._declaration_flags_cache = {}
             self._member_enum_owners = None
             self._finite_closure = None
             self._exception_children = None
@@ -693,13 +703,13 @@ class TypeTable:
         # maintain a reverse-inheritance index.
         self._exception_fields_cache.clear()
         self._exception_field_kinds_cache.clear()
-        # The non-data-reachability and finiteness fixpoints are whole-table
-        # (any declaration's flag can in principle depend on any other's), so
-        # a single changed identity invalidates the whole cached result rather
+        # The declaration-flags and finiteness fixpoints are whole-table (any
+        # declaration's flag can in principle depend on any other's), so a
+        # single changed identity invalidates the whole cached result rather
         # than just this one.
         self._standard_builtins = None
         self._host_minted_ids = None
-        self._non_data_caps = None
+        self._declaration_flags_cache = {}
         self._member_enum_owners = None
         self._finite_closure = None
         self._exception_children = None
@@ -1293,51 +1303,67 @@ class TypeTable:
             self._host_minted_ids = cached
         return cached
 
-    def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
-        """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
+    def nominal_satisfies(
+        self,
+        handle: RecordType | EnumType | ExceptionType,
+        kind: ConstraintKind,
+        bounds: ConstraintBounds | None,
+    ) -> bool:
+        """Return ``True`` if *handle* satisfies *kind* (cycle-safe; see :func:`satisfies`).
 
-        The non-data types are ``unit``, ``agent``, and function types.
-        Declaration-level: *handle*'s declaration reaches one unconditionally
-        (``NonDataReachability.reaches_non_data``), or one of its concrete
-        ``type_args`` at a relevant parameter position does — see
-        :func:`~agm.agl.semantics.analyses.compute_non_data_reachability` for
-        why this reproduces the substitute-then-walk answer without ever
-        expanding *handle*'s own fields (so it never re-enters a cycle).
-        Exceptions carry no ``type_args``, so only the declaration flag
-        applies to them.
+        Declaration-level: *handle*'s declaration must not be flagged
+        (:meth:`_declaration_flags`, one fixpoint per *kind*, checked first
+        so a flag applying by declaration identity alone — e.g. host-minted
+        origin — still applies before any ``TypeDef`` is registered), and,
+        when registered, each concrete ``type_args`` entry at a relevant
+        parameter position must itself satisfy *kind* (:func:`satisfies`, so
+        a bare type-variable argument consults *bounds*, including
+        open-world mode when *bounds* is ``None``); an exception carries no
+        ``type_args``, so only its declaration flag applies.
         """
-        caps = self._non_data_reachability()
-        decl_id = handle.decl_id
-        if decl_id in caps.reaches_non_data:
+        flags = self._declaration_flags(kind)
+        if handle.decl_id in flags.flagged:
+            return False
+        typedef = self._defs.get(handle.decl_id)
+        if typedef is None:
             return True
         if isinstance(handle, ExceptionType):
-            return False
-        typedef = self._defs.get(decl_id)
-        if typedef is None:
-            return False
-        relevant = caps.relevant_params.get(decl_id, frozenset())
-        return any(
-            _reaches_non_data(arg, self)
+            return True
+        relevant = flags.relevant_params.get(handle.decl_id, frozenset())
+        return all(
+            satisfies(arg, kind, self, bounds)
             for pname, arg in zip(typedef.type_params, handle.type_args)
             if pname in relevant
         )
+
+    def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
+        """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
+
+        The non-data types are ``unit`` and function types. Exactly
+        :meth:`nominal_satisfies` for ``Eq``, in open-world mode, negated —
+        every type variable *handle* mentions is assumed to satisfy ``Eq``
+        since none is in scope here.
+        """
+        return not self.nominal_satisfies(handle, ConstraintKind.EQ, None)
 
     def nominal_is_json_convertible(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if *handle* has a JSON representation.
 
         A record and an exception convert to a JSON object of their fields, an
         enum to ``{"$case": variant, …fields}``, so the only obstacle is a
-        non-data leaf somewhere inside — exactly
-        :meth:`nominal_reaches_non_data`, negated.
+        non-data leaf somewhere inside — exactly :meth:`nominal_satisfies` for
+        ``Eq``, in open-world mode.
         """
-        return not self.nominal_reaches_non_data(handle)
+        return self.nominal_satisfies(handle, ConstraintKind.EQ, None)
 
-    def _non_data_reachability(self) -> "NonDataReachability":
-        if self._non_data_caps is None:
-            from agm.agl.semantics.analyses import compute_non_data_reachability
+    def _declaration_flags(self, kind: ConstraintKind) -> "DeclarationFlags":
+        cached = self._declaration_flags_cache.get(kind)
+        if cached is None:
+            from agm.agl.semantics.analyses import LEAF_POLICIES, compute_declaration_flags
 
-            self._non_data_caps = compute_non_data_reachability(self)
-        return self._non_data_caps
+            cached = compute_declaration_flags(self, LEAF_POLICIES[kind])
+            self._declaration_flags_cache[kind] = cached
+        return cached
 
     def has_finite_schema(self, t: Type) -> bool:
         """Return ``True`` if every declaration reachable from *t* has a finite closure.
@@ -1609,7 +1635,7 @@ class TypeTable:
         """
         from agm.agl.semantics.analyses import field_templates, nominal_references
 
-        flags = self._non_data_reachability().reaches_non_data
+        flags = self._declaration_flags(ConstraintKind.EQ).flagged
         result: set[DeclId] = set()
         for _field_name, template in field_templates(typedef, self._defs):
             for ref in nominal_references(template):
@@ -1745,42 +1771,53 @@ def _first_non_data_leaf(t: Type) -> Type | None:
     return None
 
 
-def _reaches_non_data(t: Type, table: TypeTable) -> bool:
-    """True if ``t`` is, or transitively contains, a non-data type.
+def satisfies(
+    t: Type, kind: ConstraintKind, table: TypeTable, bounds: ConstraintBounds | None
+) -> bool:
+    """Return ``True`` if a value of type ``t`` satisfies *kind*, given in-scope ``bounds``.
 
-    The non-data types are function and ``unit``: function and agent
-    values are opaque / identity-only, and ``unit`` has a single value carrying
-    nothing.  An array, dict, record, enum, or exception that transitively
-    holds one is therefore itself affected.  ``t`` is always a finite tree
-    (array/dict wrapping is structural, not nominal), so recursing through
-    ``ArrayType``/``DictType`` always terminates; a record/enum/exception
-    handle instead defers to :meth:`TypeTable.nominal_reaches_non_data`, which
-    consults a precomputed declaration-level fixpoint rather than re-walking
-    the handle's own fields — the type declarations themselves may be
-    recursive, but this function never re-enters them.
+    Structural, shared by :func:`satisfies_eq`/:func:`satisfies_hashable`:
+    every scalar satisfies both kinds; a function or ``unit`` type satisfies
+    neither, transitively (a container/record/enum/exception that reaches one
+    at any depth is itself disqualified — the nominal case defers to
+    :meth:`TypeTable.nominal_satisfies`); ``array``/``dict`` satisfy only
+    ``Eq``, recursing into the element/value type (never ``Hashable``,
+    regardless of content).
+
+    A bare type variable, the bottom type, and an unresolved inference
+    variable — anywhere, including nested inside an array/dict/nominal
+    argument — satisfy *kind* when ``bounds`` is ``None`` (open-world mode:
+    the bound is deferred to wherever the type is actually instantiated),
+    and otherwise only a type variable does, and only when ``bounds`` states
+    *kind* (or, for ``Eq``, ``Hashable``, which implies it) for its name.
     """
     match t:
+        case TypeVarType():
+            return bounds is None or kind in close_constraints(bounds.get(t.name, frozenset()))
+        case BottomType() | InferenceVarType():
+            return bounds is None
         case FunctionType() | UnitType():
-            return True
-        case ArrayType():
-            return _reaches_non_data(t.elem, table)
-        case DictType():
-            return _reaches_non_data(t.value, table)
-        case RecordType() | EnumType() | ExceptionType():
-            return table.nominal_reaches_non_data(t)
-        case (
-            TextType()
-            | JsonType()
-            | BoolType()
-            | IntType()
-            | DecimalType()
-            | BottomType()
-            | TypeVarType()
-            | InferenceVarType()
-        ):
             return False
+        case ArrayType():
+            return kind is ConstraintKind.EQ and satisfies(t.elem, kind, table, bounds)
+        case DictType():
+            return kind is ConstraintKind.EQ and satisfies(t.value, kind, table, bounds)
+        case RecordType() | EnumType() | ExceptionType():
+            return table.nominal_satisfies(t, kind, bounds)
+        case TextType() | JsonType() | BoolType() | IntType() | DecimalType():
+            return True
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def satisfies_eq(t: Type, table: TypeTable, bounds: ConstraintBounds | None) -> bool:
+    """Return ``True`` if a value of type ``t`` supports ``==``/``!=`` (see :func:`satisfies`)."""
+    return satisfies(t, ConstraintKind.EQ, table, bounds)
+
+
+def satisfies_hashable(t: Type, table: TypeTable, bounds: ConstraintBounds | None) -> bool:
+    """Return ``True`` if a value of type ``t`` is hashable (see :func:`satisfies`)."""
+    return satisfies(t, ConstraintKind.HASHABLE, table, bounds)
 
 
 def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
@@ -1793,19 +1830,14 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     non-``json`` type is a static error.  Records/enums/exceptions compare only
     with their own exact type.
 
-    ``FunctionType`` and ``UnitType`` operands are
-    NON-comparable — using ``=``/``!=``/``<`` on them is a static error.
-    This rule is **transitive**: an ``array``, ``dict``, ``record``, ``enum``, or
-    ``exception`` that (at any depth) contains a function or ``unit``
-    value likewise has no equality and cannot be compared with ``=``/``!=``.
-    ``table`` resolves record/enum field shapes for that transitive walk.
+    Thin wrapper over :func:`satisfies_eq` in open-world mode (``bounds=None``
+    — a nested type variable is assumed comparable since no bound is ever in
+    scope here) plus the identity/numeric-pair rule. A bare TOP-LEVEL type
+    variable, the bottom type, or an inference variable is never comparable
+    (the checker additionally rejects a bare type variable explicitly there).
     """
-    # Function/unit values — and any container/record/enum that transitively
-    # holds one — have no value equality.
-    if _reaches_non_data(left, table) or _reaches_non_data(right, table):
+    if not (satisfies_eq(left, table, None) and satisfies_eq(right, table, None)):
         return False
-    # Bare type variables and the bottom type are never comparable here (the
-    # checker additionally rejects bare type variables at the comparison site).
     if isinstance(left, (BottomType, TypeVarType, InferenceVarType)) or isinstance(
         right, (BottomType, TypeVarType, InferenceVarType)
     ):
@@ -1831,12 +1863,12 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
     to ``{"$case": variant, …fields}``, so a nominal converts iff no non-data
     type is reachable from its declaration
     (:meth:`TypeTable.nominal_is_json_convertible`). The non-data types —
-    ``unit``, ``agent``, and function types — have no representation at all.
+    ``unit`` and function types — have no representation at all.
 
     A free type variable is never convertible, its own arm here and, for a
     nominal, in its type arguments: casts are compiled once and type arguments
-    are erased, so a ``T`` later instantiated with ``agent`` would otherwise
-    reach the conversion at runtime. Note the deliberate asymmetry with the
+    are erased, so a ``T`` later instantiated with a function type would
+    otherwise reach the conversion at runtime. Note the deliberate asymmetry with the
     declaration-level fixpoint, which correctly treats a type variable in a
     field template as *not* a problem — that is what its relevant-parameter
     analysis is for.

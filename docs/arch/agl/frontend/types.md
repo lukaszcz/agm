@@ -10,7 +10,7 @@ An enum is a closed nominal union of member record declarations: a value of enum
 
 ## Whole-Table Analyses
 
-Recursive types make some questions global. `semantics/analyses.py` answers them over the whole table, cached: **inhabitation** (a declaration that can never produce a finite value is rejected), **non-data reachability** (whether `unit`, a function, or an opaque host resource is reachable — the basis of equality applicability and JSON convertibility), and **finite-schema closure** (whether a type admits a finite JSON schema, consulted only where a schema is needed: agent and `exec` output targets, fallible casts, params, extern signatures, type-directed extern targets). Each names the culprit declaration in its diagnostic.
+Recursive types make some questions global. `semantics/analyses.py` answers them over the whole table, cached: **inhabitation** (a declaration that can never produce a finite value is rejected; names the culprit declaration in its diagnostic), **non-data reachability** (whether `unit`, a function, or an opaque host resource is reachable — the basis of equality/`Eq` applicability and JSON convertibility; names the culprit declaration in its diagnostic), **hashability** (whether a declaration is deeply immutable data — the basis of `Hashable`; its diagnostic does not name a culprit), and **finite-schema closure** (whether a type admits a finite JSON schema, consulted only where a schema is needed: agent and `exec` output targets, fallible casts, params, extern signatures, type-directed extern targets; names the culprit declaration in its diagnostic). Non-data reachability and hashability share one parameterised fixpoint (`compute_declaration_flags`).
 
 ## The Typecheck Pass
 

@@ -553,6 +553,30 @@ class TestComparableTypes:
             DictType(value=TextType()), DictType(value=TextType()), _EMPTY_TABLE
         )
 
+    def test_array_of_unbounded_type_variable_comparable(self) -> None:
+        # Regression: comparable_types is open-world for a NESTED type
+        # variable (the checker rejects only a bare TOP-LEVEL one, separately)
+        # — a generic function comparing its own array[T] parameter to itself
+        # must typecheck without an Eq bound in scope.
+        tv = TypeVarType("T")
+        assert comparable_types(ArrayType(elem=tv), ArrayType(elem=tv), _EMPTY_TABLE)
+
+
+class TestGenericEqualityOnUnboundedTypeVariable:
+    """Regression: comparing a generic parameter's own value to itself.
+
+    A bare top-level type variable is still rejected (checked separately from
+    ``comparable_types``), but a type variable nested inside a structural or
+    generic-nominal type — unconstrained by any ``Eq``/``Hashable`` bound —
+    must still typecheck, matching every other data type's ``==``.
+    """
+
+    def test_array_of_generic_parameter_self_equality(self) -> None:
+        accept_type("def f[T](xs: array[T]) -> bool = xs == xs")
+
+    def test_option_of_generic_parameter_self_equality(self) -> None:
+        accept_type("def g[T](xs: Option[T]) -> bool = xs == xs")
+
 
 class TestIsAssignable:
     def test_same_type(self) -> None:

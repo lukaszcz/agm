@@ -157,8 +157,8 @@ def test_nested_ctor_arguments() -> None:
 
 
 def test_dict_without_trailing_comma() -> None:
-    node = read_value("{a: 1}")
-    assert node == DictNode((DictEntry("a", IntNode(1, 4, 5), 1, 5),), 0, 6)
+    node = read_value('{"a": 1}')
+    assert node == DictNode((DictEntry("a", IntNode(1, 6, 7), 1, 7),), 0, 8)
 
 
 def test_dollar_brace_not_followed_by_a_name_is_literal_text() -> None:
@@ -217,7 +217,7 @@ def test_raw_carriage_return_inside_text_is_an_error() -> None:
 
 
 def test_unterminated_dict_after_trailing_comma_has_in_range_offsets() -> None:
-    source = "{a: 1,"
+    source = '{"a": 1,'
     with pytest.raises(ValueSyntaxError) as exc_info:
         read_value(source)
     error = exc_info.value
@@ -249,12 +249,12 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         "-",
         "-x",
         "[1 2]",
-        "{a: 1 b: 2}",
+        '{"a": 1 "b": 2}',
         "1 2",
         "Shape::",
         "",
         "[1, 2",
-        "{a: 1",
+        '{"a": 1',
         "Circle(1",
         '"\\',
         '"\\u12',
@@ -266,7 +266,7 @@ def test_deeply_nested_array_raises_value_syntax_error_not_recursion_error() -> 
         '"\\uD800"',
         "@",
         "{1: 2}",
-        "{a 1}",
+        '{"a" 1}',
         "Shape::if",
         "Circle(1 2)",
         "Circle(if = 1)",

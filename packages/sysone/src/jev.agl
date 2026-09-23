@@ -13,7 +13,9 @@
 #
 # A choice or score target must be an enum of at least two members, every
 # member fieldless, and a rubric has 2-10 levels; any other target raises
-# `JevTargetError` before a request is sent.
+# `JevTargetError` before a request is sent. An answer the target cannot hold
+# (a label outside it, or probabilities not keyed by exactly its labels or
+# levels) raises `JevResponseError`.
 #
 # Every request function takes the settings it uses as trailing parameters
 # defaulting to the module settings below. Requests go through the official `typesafe-sdk`,
@@ -105,7 +107,8 @@ exception JevConnectionError extends JevError(cause: text)
 exception JevTimeoutError extends JevError(timeout: text)
 # A success response whose body is structurally invalid at `field-path`.
 exception JevResponseError extends JevError(field-path: text)
-# A target type no question kind maps; `target` is its printed name.
+# A target type no question kind maps; `target` is its printed name, or
+# `<record>.<field>` for an `ask-many` field.
 exception JevTargetError extends JevError(target: text)
 
 # Asks `questions`, keyed by name, about `state` in one request.
@@ -159,7 +162,8 @@ extern def ask[T](instructions: text, state: json, model: Option[text] = ::model
 # Asks one question per field of the record target in one request, keyed by
 # the field's JSON name. A field is `bool`, `Noul`, a fieldless enum,
 # `Choice[E]`, or `Score[L]`; its instructions are its `@doc`, else its name.
-# Any other field raises `JevTargetError` naming it.
+# A record without fields, or any other field, raises `JevTargetError`; for a
+# field, its `target` is `<record>.<field>`.
 @extern-name("ask_many")
 extern def ask-many[T](state: json, model: Option[text] = ::model,
                        timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,

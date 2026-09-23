@@ -257,8 +257,7 @@ _PROGRAM_HEADER = """\
 import sysone/jev
 import sysone/jev::{JevError, JevApiError, JevAuthError, JevRequestError, JevRateLimitError}
 import sysone/jev::{JevServerError, JevConnectionError, JevTimeoutError, JevResponseError}
-
-program def main() -> unit =
+import sysone/jev::{JevTargetError}
 """
 _NO_RETRIES = {"sysone/jev::max-retries": 0}
 _BILLING_QUESTION = {"billing": {"type": "noul", "instructions": "Is this about billing?"}}
@@ -269,29 +268,50 @@ let billing: dict[text, jev::Question] = {
 """
 
 
-def _noul_response(
-    noul: float = 0.9, request_id: str = "req-1", name: str = "billing"
-) -> dict[str, object]:
-    return {
-        "json": {
-            "model": "jev-1",
-            "answers": {name: {"type": "noul", "noul": noul}},
-            "usage": {"input_tokens": 12, "output_tokens": 1},
-        },
-        "headers": {"x-typesafe-request-id": request_id},
-    }
+_STATE = "I was charged twice."
 
 
 def _body(
     questions: dict[str, object] = _BILLING_QUESTION,
-    state: object = "I was charged twice.",
+    state: object = _STATE,
     model: str = "jev-latest",
 ) -> dict[str, object]:
     return {"state": state, "model": model, "questions": questions}
 
 
-def _program(body: str) -> str:
-    return _PROGRAM_HEADER + textwrap.indent(body, "  ")
+def _noul(noul: float) -> dict[str, object]:
+    return {"type": "noul", "noul": noul}
+
+
+def _answered(
+    answers: dict[str, object],
+    questions: dict[str, object] | None = None,
+    *,
+    state: object = _STATE,
+    request_id: str = "req-1",
+) -> dict[str, object]:
+    """One scripted exchange answering *answers*; given *questions*, it expects them about
+    *state*."""
+    exchange: dict[str, object] = {
+        "json": {
+            "model": "jev-1",
+            "answers": answers,
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        },
+        "headers": {"x-typesafe-request-id": request_id},
+    }
+    if questions is not None:
+        exchange["expect"] = {"body": _body(questions, state=state)}
+    return exchange
+
+
+_BILLING_ANSWER = {"billing": _noul(0.9)}
+
+
+def _program(body: str, declarations: str = "") -> str:
+    """A program whose ``main`` runs *body* after module-level *declarations*."""
+    main = "program def main() -> unit =\n" + textwrap.indent(body, "  ")
+    return "\n".join((_PROGRAM_HEADER, declarations, main))
 
 
 def _run_jev(
@@ -300,13 +320,15 @@ def _run_jev(
     body: str,
     *,
     module_params: Mapping[str, object] | None = None,
+    declarations: str = "",
     **run_kwargs: object,
 ) -> tuple[RunResult, JevMount]:
-    """Run *body* as ``main``'s body against scripted *outcomes*, retries off by default."""
+    """Run *body* as ``main``'s body after *declarations* against scripted *outcomes*,
+    retries off by default."""
     mount = mount_jev(monkeypatch, outcomes)
     result = run_inline_command(
         mount.driver,
-        _program(body),
+        _program(body, declarations),
         roots=jev_roots(),
         module_params={**_NO_RETRIES, **(module_params or {})},
         **run_kwargs,
@@ -521,7 +543,7 @@ def test_settings_reach_the_request_and_per_call_values_override_them(
 ) -> None:
     def exchange(model: str, url: str, key: str, timeout: float) -> dict[str, object]:
         return {
-            **_noul_response(),
+            **_answered(_BILLING_ANSWER),
             "expect": {
                 "body": _body(model=model),
                 "url": f"{url}/v1/systemone",
@@ -563,7 +585,7 @@ let _ = jev::system-one(state, billing, api-key = Some("call-key"),
 def test_module_parameters_seed_the_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     outcomes = [
         {
-            **_noul_response(),
+            **_answered(_BILLING_ANSWER),
             "expect": {
                 "body": _body(model="jev-seeded"),
                 "url": "https://seeded.example/v1/systemone",
@@ -586,7 +608,7 @@ def test_module_parameters_seed_the_settings(monkeypatch: pytest.MonkeyPatch) ->
 def test_none_settings_leave_the_sdk_environment_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     outcomes = [
         {
-            **_noul_response(),
+            **_answered(_BILLING_ANSWER),
             "expect": {
                 "body": _body(model="jev-env"),
                 "url": "https://env.example/v1/systemone",
@@ -626,7 +648,9 @@ def _cli_module_params(driver: PipelineDriver, source: str, tokens: list[str]) -
 def test_the_api_key_option_falls_back_to_its_environment_variable(
     monkeypatch: pytest.MonkeyPatch, tokens: list[str], key: str
 ) -> None:
-    outcomes = [{**_noul_response(), "expect": {"headers": {"authorization": f"Bearer {key}"}}}]
+    outcomes = [
+        {**_answered(_BILLING_ANSWER), "expect": {"headers": {"authorization": f"Bearer {key}"}}}
+    ]
     mount = mount_jev(monkeypatch, outcomes)
     source = _program(
         _BILLING_CALL + 'let _ = jev::system-one("I was charged twice." as json, billing)\n'
@@ -670,7 +694,7 @@ _RETRYABLE_503 = {"status": 503, "headers": {"retry-after-ms": "0"}}
 @pytest.mark.parametrize(
     ("retries", "outcomes", "type_name"),
     (
-        (1, [_RETRYABLE_503, _noul_response()], None),
+        (1, [_RETRYABLE_503, _answered(_BILLING_ANSWER)], None),
         (0, [_RETRYABLE_503], "JevServerError"),
     ),
 )
@@ -727,7 +751,7 @@ def test_one_client_is_pooled_per_settings_and_closed_when_the_run_ends(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     outcomes = [
-        _noul_response(name=name) for name in ["billing"] * 2 + ["question"] + ["billing"] * 4
+        _answered({name: _noul(0.9)}) for name in ["billing"] * 2 + ["question"] + ["billing"] * 4
     ]
     body = (
         _BILLING_CALL
@@ -766,7 +790,7 @@ let _ = jev::system-one(state, billing, base-url = Some("https://api.typesafe.ai
 def test_pooled_clients_close_when_the_run_fails_and_each_run_opens_its_own(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mount = mount_jev(monkeypatch, [_noul_response(), {"status": 401}])
+    mount = mount_jev(monkeypatch, [_answered(_BILLING_ANSWER), {"status": 401}])
     log = _log_clients(monkeypatch, mount.companion)
     source = _program(
         _BILLING_CALL + 'let _ = jev::system-one("I was charged twice." as json, billing)\n'
@@ -1006,7 +1030,10 @@ let noul = jev::try-ask-noul("Billing?", null, max-retries = 3)
 print(noul.unwrap() == jev::Noul(0.6))
 """
     )
-    outcomes = [{**_noul_response(), "expect": {"body": _body(model="jev-5")}}, noul_outcome]
+    outcomes = [
+        {**_answered(_BILLING_ANSWER), "expect": {"body": _body(model="jev-5")}},
+        noul_outcome,
+    ]
     result, mount = _run_jev(monkeypatch, outcomes, body)
 
     assert result.ok, result.error
@@ -1031,7 +1058,10 @@ def test_requests_responses_and_failures_are_traced_without_the_api_key(
 ) -> None:
     trace_path = tmp_path / "trace.jsonl"
     outcomes = [
-        {**_noul_response(0.5, "req-11"), "expect": {"body": _body(model="jev-8")}},
+        {
+            **_answered({"billing": _noul(0.5)}, request_id="req-11"),
+            "expect": {"body": _body(model="jev-8")},
+        },
         {"status": 429, "headers": {"x-typesafe-request-id": "req-12"}},
         {"fail": "connection"},
     ]
@@ -1076,3 +1106,443 @@ let _ = jev::try-ask-noul("Billing?", state)
     assert disconnected["error_type"] == "JevConnectionError"
     assert disconnected["status"] is None
     assert disconnected["request_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# Type-directed questions: `ask`, `ask-choice`, `ask-score`, `ask-many`
+# ---------------------------------------------------------------------------
+
+_TARGETS = """\
+enum Team
+  | @doc("Invoices and refunds.") Billing
+  | Technical
+  | @json-name("acct") Account
+
+enum Level
+  | @doc("Can wait.") Low
+  | Medium
+  | @json-name("hi") @doc("Drop everything.") High
+
+record Triage
+  @doc("Is it urgent?")
+  urgent: bool
+  spam: jev::Noul
+  @json-name("owner")
+  team: Team
+  routed: jev::Choice[Team]
+  @doc("How severe is it?") @json-name("sev")
+  severity: jev::Score[Level]
+
+enum Shape
+  | Square(side: int)
+  | Circle
+
+enum Solo = Only
+
+enum Duo = Left | Right
+
+enum Ten = T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8 | T9 | T10
+
+enum Wide = W1 | W2 | W3 | W4 | W5 | W6 | W7 | W8 | W9 | W10 | W11
+
+enum Tree
+  | Leaf
+  | Node(children: array[Tree])
+
+record Chain(finished: bool, next: Option[Chain])
+
+record Ticket(urgent: bool, note: text)
+
+record Blank()
+"""
+_TEAM_OPTIONS = {"Billing": "Invoices and refunds.", "Technical": None, "acct": None}
+_LEVELS = ["Can wait.", "Medium", "Drop everything."]
+
+
+def _question(
+    kind: str, instructions: str | None = "Which?", **criteria: object
+) -> dict[str, object]:
+    question: dict[str, object] = {"type": kind, **criteria}
+    if instructions is not None:
+        question["instructions"] = instructions
+    return question
+
+
+_NOUL_Q = _question("noul")
+_CHOICE_Q = _question("choice", criteria=_TEAM_OPTIONS)
+_SCORE_Q = _question("score", criteria=_LEVELS)
+
+
+def _choice(choice: str, probabilities: dict[str, float]) -> dict[str, object]:
+    return {
+        "type": "choice",
+        "choice": choice,
+        "confidence": 0.7,
+        "probabilities": probabilities,
+    }
+
+
+def _score(
+    score: float, probabilities: dict[str, float], levels: Sequence[str] = _LEVELS
+) -> dict[str, object]:
+    legend = {str(index): level for index, level in enumerate(levels)}
+    return {
+        "type": "score",
+        "score": score,
+        "confidence": 0.4,
+        "legend": legend,
+        "probabilities": probabilities,
+    }
+
+
+def _single(question: dict[str, object], answer: dict[str, object]) -> dict[str, object]:
+    return _answered({"question": answer}, {"question": question})
+
+
+_EVEN_TIE = {"0": 0.2, "1": 0.4, "2": 0.4}
+_ACCOUNT_ODDS = {"Billing": 0.1, "Technical": 0.2, "acct": 0.7}
+_BILLING_ODDS = {"Billing": 0.7, "Technical": 0.2, "acct": 0.1}
+_TECHNICAL_ODDS = {"Billing": 0.2, "Technical": 0.7, "acct": 0.1}
+
+
+@pytest.mark.parametrize(
+    ("target", "question", "answer", "expected"),
+    (
+        ("bool", _NOUL_Q, _noul(0.5), "true"),
+        ("bool", _NOUL_Q, _noul(0.49), "false"),
+        ("jev::Noul", _NOUL_Q, _noul(0.3), "jev::Noul(0.3)"),
+        ("Team", _CHOICE_Q, _choice("acct", _ACCOUNT_ODDS), "Team::Account"),
+        ("Team", _CHOICE_Q, _choice("Billing", _BILLING_ODDS), "Team::Billing"),
+        (
+            "jev::Choice[Team]",
+            _CHOICE_Q,
+            _choice("Technical", {"Billing": 0.1, "Technical": 0.7, "acct": 0.2}),
+            "jev::Choice(Team::Technical as Team, 0.7,"
+            ' {"Billing": 0.1, "Technical": 0.7, "acct": 0.2})',
+        ),
+        # A tie between the two most probable levels selects the lower one.
+        (
+            "jev::Score[Level]",
+            _SCORE_Q,
+            _score(1.2, _EVEN_TIE),
+            "jev::Score(Level::Medium as Level, 1.2, 0.4, [0.2, 0.4, 0.4])",
+        ),
+        (
+            "jev::Score[Level]",
+            _SCORE_Q,
+            _score(1.9, {"2": 0.9, "0": 0.05, "1": 0.05}),
+            "jev::Score(Level::High as Level, 1.9, 0.4, [0.05, 0.05, 0.9])",
+        ),
+    ),
+)
+def test_ask_asks_the_question_its_target_selects_and_builds_the_target(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+    question: dict[str, object],
+    answer: dict[str, object],
+    expected: str,
+) -> None:
+    body = f"""\
+let state = "{_STATE}" as json
+let explicit = jev::ask::[{target}]("Which?", state)
+let contextual: {target} = jev::ask("Which?", state)
+let expected: {target} = {expected}
+print(explicit == expected)
+print(contextual == expected)
+"""
+    outcomes = [_single(question, answer)] * 2
+    result, mount = _run_jev(monkeypatch, outcomes, body, declarations=_TARGETS)
+
+    assert result.ok, result.error
+    mount.transport.assert_complete()
+    assert _printed(capsys) == ["true", "true"]
+
+
+def test_ask_choice_and_ask_score_wrap_their_member_type(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    choice = _choice("acct", {"Billing": 0.1, "Technical": 0.1, "acct": 0.8})
+    score = _score(0.3, {"0": 0.7, "1": 0.3, "2": 0.0})
+    outcomes = [
+        _single(_CHOICE_Q, choice),
+        _single(_CHOICE_Q, choice),
+        _single(_SCORE_Q, score),
+        _single(_SCORE_Q, score),
+    ]
+    body = f"""\
+let state = "{_STATE}" as json
+let probabilities = {{"Billing": 0.1, "Technical": 0.1, "acct": 0.8}}
+let chosen: jev::Choice[Team] = jev::Choice(Team::Account as Team, 0.7, probabilities)
+print(jev::ask-choice::[Team]("Which?", state) == chosen)
+let contextual-choice: jev::Choice[Team] = jev::ask-choice("Which?", state)
+print(contextual-choice == chosen)
+let scored: jev::Score[Level] = jev::Score(Level::Low as Level, 0.3, 0.4, [0.7, 0.3, 0.0])
+print(jev::ask-score::[Level]("Which?", state) == scored)
+let contextual-score: jev::Score[Level] = jev::ask-score("Which?", state)
+print(contextual-score == scored)
+"""
+    result, mount = _run_jev(monkeypatch, outcomes, body, declarations=_TARGETS)
+
+    assert result.ok, result.error
+    mount.transport.assert_complete()
+    assert _printed(capsys) == ["true"] * 4
+
+
+_TRIAGE_QUESTIONS = {
+    "urgent": _question("noul", "Is it urgent?"),
+    "spam": _question("noul", "spam"),
+    "owner": _question("choice", "team", criteria=_TEAM_OPTIONS),
+    "routed": _question("choice", "routed", criteria=_TEAM_OPTIONS),
+    "sev": _question("score", "How severe is it?", criteria=_LEVELS),
+}
+
+
+@pytest.mark.parametrize(
+    ("answers", "expected"),
+    (
+        (
+            {
+                "urgent": _noul(0.8),
+                "spam": _noul(0.1),
+                "owner": _choice("Billing", _BILLING_ODDS),
+                "routed": _choice("acct", _ACCOUNT_ODDS),
+                "sev": _score(1.2, _EVEN_TIE),
+            },
+            "Triage(true, jev::Noul(0.1), Team::Billing,"
+            ' jev::Choice(Team::Account as Team, 0.7, {"Billing": 0.1, "Technical": 0.2,'
+            ' "acct": 0.7}),'
+            " jev::Score(Level::Medium as Level, 1.2, 0.4, [0.2, 0.4, 0.4]))",
+        ),
+        (
+            {
+                "sev": _score(0.0, {"0": 1.0, "1": 0.0, "2": 0.0}),
+                "routed": _choice("Technical", _TECHNICAL_ODDS),
+                "owner": _choice("acct", _ACCOUNT_ODDS),
+                "spam": _noul(0.9),
+                "urgent": _noul(0.2),
+            },
+            "Triage(false, jev::Noul(0.9), Team::Account,"
+            ' jev::Choice(Team::Technical as Team, 0.7, {"Billing": 0.2, "Technical": 0.7,'
+            ' "acct": 0.1}),'
+            " jev::Score(Level::Low as Level, 0.0, 0.4, [1.0, 0.0, 0.0]))",
+        ),
+    ),
+)
+def test_ask_many_asks_one_question_per_field_in_one_request(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    answers: dict[str, object],
+    expected: str,
+) -> None:
+    body = f"""\
+let state = {{"ticket": "{_STATE}" as json}} as json
+print(jev::ask-many::[Triage](state) == {expected})
+let contextual: Triage = jev::ask-many(state)
+print(contextual == {expected})
+"""
+    outcomes = [_answered(answers, _TRIAGE_QUESTIONS, state={"ticket": _STATE})] * 2
+    result, mount = _run_jev(monkeypatch, outcomes, body, declarations=_TARGETS)
+
+    assert result.ok, result.error
+    mount.transport.assert_complete()
+    assert _printed(capsys) == ["true", "true"]
+
+
+def test_the_noul_threshold_setting_decides_bool_targets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    outcomes = [_single(_NOUL_Q, _noul(0.7))] * 3 + [
+        _answered({"urgent": _noul(0.7)}, {"urgent": _question("noul", "urgent")})
+    ] * 2
+    body = f"""\
+let state = "{_STATE}" as json
+let default: bool = jev::ask("Which?", state)
+jev::noul-threshold := 0.8
+let raised: bool = jev::ask("Which?", state)
+let per-call: bool = jev::ask("Which?", state, noul-threshold = 0.7)
+print([default, raised, per-call])
+let many = jev::ask-many::[Urgency](state)
+let many-per-call = jev::ask-many::[Urgency](state, noul-threshold = 0.6)
+print([many.urgent, many-per-call.urgent])
+"""
+    declarations = _TARGETS + "record Urgency(urgent: bool)\n"
+    result, mount = _run_jev(monkeypatch, outcomes, body, declarations=declarations)
+
+    assert result.ok, result.error
+    mount.transport.assert_complete()
+    assert _printed(capsys) == ["[true, false, true]", "[false, true]"]
+
+
+@pytest.mark.parametrize(
+    ("call", "target"),
+    (
+        ('jev::ask::[text]("Which?", null)', "text"),
+        ('jev::ask::[decimal]("Which?", null)', "decimal"),
+        ('jev::ask::[array[bool]]("Which?", null)', "array[bool]"),
+        ('jev::ask::[Ticket]("Which?", null)', "Ticket"),
+        ('jev::ask::[Option[Team]]("Which?", null)', "std/option::Option[Team]"),
+        ('jev::ask::[Shape]("Which?", null)', "Shape"),
+        ('jev::ask::[Solo]("Which?", null)', "Solo"),
+        ('jev::ask::[Tree]("Which?", null)', "Tree"),
+        ('jev::ask::[Chain]("Which?", null)', "Chain"),
+        ('jev::ask::[jev::Choice[Shape]]("Which?", null)', "sysone/jev::Choice[Shape]"),
+        ('jev::ask::[jev::Score[Wide]]("Which?", null)', "sysone/jev::Score[Wide]"),
+        ('jev::ask-choice::[Solo]("Which?", null)', "Solo"),
+        ('jev::ask-choice::[text]("Which?", null)', "text"),
+        ('jev::ask-score::[Shape]("Which?", null)', "Shape"),
+        ('jev::ask-score::[Wide]("Which?", null)', "Wide"),
+        ('jev::ask-score::[Solo]("Which?", null)', "Solo"),
+        ('jev::ask-score::[text]("Which?", null)', "text"),
+        ("jev::ask-many::[Team](null)", "Team"),
+        ("jev::ask-many::[bool](null)", "bool"),
+        ("jev::ask-many::[Blank](null)", "Blank"),
+    ),
+)
+def test_an_unsupported_target_raises_jev_target_error_before_any_request(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], call: str, target: str
+) -> None:
+    body = f"""\
+let outcome = try
+  let _ = {call}
+  "none"
+catch JevTargetError as e => e.target
+print(outcome)
+"""
+    result, mount = _run_jev(monkeypatch, [], body, declarations=_TARGETS)
+
+    assert result.ok, result.error
+    assert mount.transport.requests == []
+    assert _printed(capsys) == [target]
+
+
+@pytest.mark.parametrize(("record", "target"), (("Ticket", "Ticket.note"), ("Chain", "Chain.next")))
+def test_an_unsupported_ask_many_field_raises_jev_target_error_locating_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], record: str, target: str
+) -> None:
+    body = f"""\
+let outcome = try
+  let _ = jev::ask-many::[{record}](null)
+  "none"
+catch JevTargetError as e => e.target
+print(outcome == "{target}")
+"""
+    result, mount = _run_jev(monkeypatch, [], body, declarations=_TARGETS)
+
+    assert result.ok, result.error
+    assert mount.transport.requests == []
+    assert _printed(capsys) == ["true"]
+
+
+def test_a_jev_target_error_is_traced_without_a_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    body = 'let _ = try jev::ask::[text]("Which?", null) catch JevTargetError as e => ""\n'
+    result, mount = _run_jev(monkeypatch, [], body, declarations=_TARGETS, trace_file=trace_path)
+
+    assert result.ok, result.error
+    assert mount.transport.requests == []
+    records = [r for r in _trace_records(trace_path) if str(r["kind"]).startswith("jev_")]
+    assert [(r["kind"], r["error_type"]) for r in records] == [("jev_failure", "JevTargetError")]
+
+
+def test_the_smallest_choice_and_the_largest_rubric_are_targets(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ten = [f"T{level}" for level in range(1, 11)]
+    odds = {str(index): 0.1 for index in range(10)} | {"9": 0.2, "0": 0.0}
+    outcomes = [
+        _single(
+            _question("choice", criteria={"Left": None, "Right": None}),
+            _choice("Right", {"Left": 0.3, "Right": 0.7}),
+        ),
+        _single(_question("score", criteria=ten), _score(6.3, odds, ten)),
+    ]
+    body = f"""\
+let state = "{_STATE}" as json
+print(jev::ask::[Duo]("Which?", state))
+print(jev::ask-score::[Ten]("Which?", state).level)
+"""
+    result, mount = _run_jev(monkeypatch, outcomes, body, declarations=_TARGETS)
+
+    assert result.ok, result.error
+    mount.transport.assert_complete()
+    assert _printed(capsys) == ["Duo::Right", "Ten::T10"]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    (
+        {"status": 401},
+        _single(_CHOICE_Q, _noul(0.5)),
+        _single(_CHOICE_Q, _choice("Unknown", {"Unknown": 1.0})),
+    ),
+)
+def test_a_type_directed_failure_is_caught_as_jev_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    outcome: dict[str, object],
+) -> None:
+    body = f"""\
+let state = "{_STATE}" as json
+let team: Team = try jev::ask::[Team]("Which?", state) catch JevError as e => Team::Account
+print(team)
+let solo: Solo = try jev::ask::[Solo]("Which?", state) catch JevError as e => Solo::Only
+print(solo)
+"""
+    result, mount = _run_jev(monkeypatch, [outcome], body, declarations=_TARGETS)
+
+    assert result.ok, result.error
+    mount.transport.assert_complete()
+    assert _printed(capsys) == ["Team::Account", "Solo::Only"]
+
+
+@pytest.mark.parametrize(
+    ("target", "question", "answer", "field_path"),
+    (
+        ("Team", _CHOICE_Q, _choice("Other", {"Other": 1.0}), "answers.question.choice"),
+        ("jev::Score[Level]", _SCORE_Q, _score(3.0, {"3": 1.0}), "answers.question.probabilities"),
+        ("jev::Score[Level]", _SCORE_Q, _score(0.0, {}), "answers.question.probabilities"),
+        # A level without a probability.
+        (
+            "jev::Score[Level]",
+            _SCORE_Q,
+            _score(1.0, {"0": 0.5, "2": 0.5}),
+            "answers.question.probabilities",
+        ),
+        # A probability for a level outside the rubric.
+        (
+            "jev::Score[Level]",
+            _SCORE_Q,
+            _score(1.0, {**_EVEN_TIE, "3": 0.0}),
+            "answers.question.probabilities",
+        ),
+        # A label without a probability.
+        ("Team", _CHOICE_Q, _choice("acct", {"acct": 1.0}), "answers.question.probabilities"),
+        # A probability for a label outside the choice.
+        (
+            "jev::Choice[Team]",
+            _CHOICE_Q,
+            _choice("acct", {**_ACCOUNT_ODDS, "Other": 0.0}),
+            "answers.question.probabilities",
+        ),
+        ("bool", _NOUL_Q, _choice("Billing", {"Billing": 1.0}), "answers.question"),
+    ),
+)
+def test_an_answer_outside_the_target_raises_jev_response_error(
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    question: dict[str, object],
+    answer: dict[str, object],
+    field_path: str,
+) -> None:
+    outcome = _answered({"question": answer}, {"question": question}, request_id="req-5")
+    body = f'let answer = jev::ask::[{target}]("Which?", "{_STATE}" as json)\n'
+    result, mount = _run_jev(monkeypatch, [outcome], body, declarations=_TARGETS)
+
+    assert result.error is not None
+    assert result.error.type_name == "JevResponseError"
+    assert result.error.fields["field-path"] == field_path
+    assert result.error.fields["request-id"] == _some("req-5")
+    mount.transport.assert_complete()

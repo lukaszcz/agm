@@ -53,9 +53,13 @@ Option = nominals.std.option.Option
 TypeError = nominals.std.errors.TypeError
 
 _POOL_KEY = "sysone/jev/client"
-# The one question `ask-noul` sends.
+# The one question a single-question call sends.
 _QUESTION = "question"
 _REQUEST_ID_HEADER = "x-typesafe-request-id"
+# The most levels a score rubric has.
+_MAX_LEVELS = 10
+# A noul question's absent criteria.
+_NO_CRITERIA = option_none()
 
 
 @dataclass(frozen=True)
@@ -178,21 +182,26 @@ def _wire_question(question: Any) -> QuestionModel:
 # --- Answers ---------------------------------------------------------------
 
 
+def _graded(answer: ChoiceAnswer | ScoreAnswer) -> dict[str, object]:
+    """The AgL ``confidence`` and ``probabilities`` of *answer*, and a score's ``score``."""
+    if isinstance(answer, ChoiceAnswer):
+        probabilities = {label: _decimal(p) for label, p in answer.probabilities.items()}
+        return {"confidence": _decimal(answer.confidence), "probabilities": agl_dict(probabilities)}
+    return {
+        "score": _decimal(answer.score),
+        "confidence": _decimal(answer.confidence),
+        "probabilities": array([_decimal(p) for _, p in sorted(answer.probabilities.items())]),
+    }
+
+
 def _answer(answer: NoulAnswer | ChoiceAnswer | ScoreAnswer) -> object:
     """An SDK answer as an AgL ``Answer``."""
     if isinstance(answer, NoulAnswer):
         return _jev.Answer.NoulAnswer(noul=_decimal(answer.noul))
     if isinstance(answer, ChoiceAnswer):
-        probabilities = {label: _decimal(p) for label, p in answer.probabilities.items()}
-        return _jev.Answer.ChoiceAnswer(
-            choice=answer.choice,
-            confidence=_decimal(answer.confidence),
-            probabilities=agl_dict(probabilities),
-        )
+        return _jev.Answer.ChoiceAnswer(choice=answer.choice, **_graded(answer))
     return _jev.Answer.ScoreAnswer(
-        score=_decimal(answer.score),
-        confidence=_decimal(answer.confidence),
-        probabilities=array([_decimal(p) for _, p in sorted(answer.probabilities.items())]),
+        **_graded(answer),
         legend=array([_from_wire(text) for _, text in sorted(answer.legend.items())]),
     )
 
@@ -205,13 +214,16 @@ def _answer_named[A](response: SystemOneResponse, name: str, kind: type[A]) -> A
     """The answer to question *name*; a missing or mistyped one raises ``JevResponseError``."""
     answer = response.answers.get(name)
     if not isinstance(answer, kind):
-        raise _jev_error(
-            "JevResponseError",
-            f"The response has no {kind.__name__} for question {name!r}.",
-            _request_id(response),
-            {"field-path": f"answers.{name}"},
-        )
+        message = f"The response has no {kind.__name__} for question {name!r}."
+        raise _invalid_response(response, f"answers.{name}", message)
     return answer
+
+
+def _invalid_response(response: SystemOneResponse, field_path: str, message: str) -> AglException:
+    """A traced ``JevResponseError`` at *field_path* of *response*."""
+    return _jev_error(
+        "JevResponseError", message, _request_id(response), {"field-path": field_path}
+    )
 
 
 def _response(response: SystemOneResponse) -> object:
@@ -348,6 +360,190 @@ def _send(
     return response
 
 
+# --- Typed targets ---------------------------------------------------------
+
+
+class _Unsupported(Exception):
+    """A target type no question kind maps, and why; *target* locates it when it is not the
+    call's target (an ``ask-many`` field)."""
+
+    def __init__(self, why: str, target: str | None = None) -> None:
+        super().__init__(why)
+        self.target = target
+
+
+class _Outside(Exception):
+    """An answer field outside the target type; the argument is the field's name."""
+
+
+@dataclass(frozen=True)
+class _Typed:
+    """The question a target type asks and the builder of a target value from its answer.
+
+    ``value`` raises ``_Outside`` for an answer the target cannot hold.
+    """
+
+    question: Callable[[JSONContent | None], QuestionModel]
+    answer: type[NoulAnswer] | type[ChoiceAnswer] | type[ScoreAnswer]
+    value: Callable[[Any], object]
+
+
+def _classify[R](target: TypeContract, classify: Callable[[TypeContract], R]) -> R:
+    """``classify(target)``; an unsupported target raises a traced ``JevTargetError``."""
+    try:
+        return classify(target)
+    except _Unsupported as why:
+        located = why.target or target.label
+        message = f"{located} is not a Jev target: {why}"
+        raise _jev_error("JevTargetError", message, None, {"target": located}) from None
+
+
+def _build(contract: TypeContract, **fields: object) -> object:
+    """A value of *contract*'s record or member class from its declared-name *fields*."""
+    nominal: Any = contract.nominal
+    return nominal(**fields)
+
+
+def _typed(target: TypeContract, threshold: Decimal) -> _Typed:
+    """The question *target* selects; ``bool`` is the noul probability reaching *threshold*."""
+    if target.kind == "bool":
+        return _noul(lambda probability: probability >= threshold)
+    if target.nominal is _jev.Noul:
+        return _noul(_noul_record)
+    if target.nominal is _jev.Choice:
+        return _choice(target.fields["choice"].contract, wrap=True)
+    if target.nominal is _jev.Score:
+        return _score(target.fields["level"].contract)
+    if target.kind == "enum":
+        return _choice(target, wrap=False)
+    raise _Unsupported("not bool, Noul, a fieldless enum, Choice, or Score")
+
+
+def _noul(value: Callable[[Decimal], object], criteria: object = _NO_CRITERIA) -> _Typed:
+    """A noul question with AgL ``Option[NoulCriteria]`` *criteria*; *value* maps the
+    probability."""
+    return _Typed(
+        lambda instructions: _noul_question(instructions, criteria),
+        NoulAnswer,
+        lambda answer: value(_decimal(answer.noul)),
+    )
+
+
+def _noul_record(probability: Decimal) -> object:
+    return _jev.Noul(probability=probability)
+
+
+def _members(enum: TypeContract) -> Mapping[str, TypeContract]:
+    """*enum*'s members by tag, when it has at least two, all fieldless."""
+    if enum.kind != "enum":
+        raise _Unsupported(f"{enum.label} is not an enum")
+    if len(enum.members) < 2:
+        raise _Unsupported(f"{enum.label} has fewer than two members")
+    members: Mapping[str, TypeContract] = enum.members
+    for tag, member in members.items():
+        if member.fields:
+            raise _Unsupported(f"member {tag!r} of {enum.label} has fields")
+    return members
+
+
+def _choice(enum: TypeContract, *, wrap: bool) -> _Typed:
+    """A choice over *enum*'s members; *wrap* answers a ``Choice`` rather than the member."""
+    members = _members(enum)
+    options = {tag: member.doc for tag, member in members.items()}
+
+    def value(answer: ChoiceAnswer) -> object:
+        member = members.get(answer.choice)
+        if member is None:
+            raise _Outside("choice")
+        # The API gives every label a probability.
+        if answer.probabilities.keys() != members.keys():
+            raise _Outside("probabilities")
+        chosen = _build(member)
+        return _jev.Choice(choice=chosen, **_graded(answer)) if wrap else chosen
+
+    return _Typed(lambda instructions: _choice_question(instructions, options), ChoiceAnswer, value)
+
+
+def _score(enum: TypeContract) -> _Typed:
+    """A score whose rubric is *enum*'s members in declaration order."""
+    members = _members(enum)
+    if len(members) > _MAX_LEVELS:
+        raise _Unsupported(f"{enum.label} has more than {_MAX_LEVELS} levels")
+    levels = [member.doc or tag for tag, member in members.items()]
+    rubric = list(members.values())
+
+    def value(answer: ScoreAnswer) -> object:
+        # The API gives every level a probability.
+        indices = range(len(rubric))
+        if answer.probabilities.keys() != set(indices):
+            raise _Outside("probabilities")
+        # The most probable level; `max` keeps the first, so the lowest index on a tie.
+        best = max(indices, key=answer.probabilities.__getitem__)
+        return _jev.Score(level=_build(rubric[best]), **_graded(answer))
+
+    return _Typed(lambda instructions: _score_question(instructions, levels), ScoreAnswer, value)
+
+
+def _record_fields(
+    record: TypeContract, threshold: Decimal
+) -> tuple[dict[str, tuple[_Typed, str]], dict[str, str]]:
+    """*record*'s typed questions with their instructions (the field's ``@doc``, else its
+    name), and its declared field names, both by field JSON name."""
+    if record.kind != "record":
+        raise _Unsupported("ask-many needs a record")
+    if not record.fields:
+        raise _Unsupported("ask-many needs at least one field")
+    questions = {}
+    for key, field_ in record.fields.items():
+        try:
+            typed = _typed(field_.contract, threshold)
+        except _Unsupported as why:
+            raise _Unsupported(str(why), f"{record.label}.{field_.name}") from None
+        questions[key] = (typed, field_.doc or field_.name)
+    names = {key: field_.name for key, field_ in record.fields.items()}
+    return questions, names
+
+
+def _ask_typed(
+    state: object,
+    questions: Mapping[str, tuple[_Typed, JSONContent | None]],
+    model: object,
+    timeout: object,
+    api_key: object,
+    base_url: object,
+    max_retries: int,
+) -> dict[str, object]:
+    """Ask typed *questions*, each with its instructions, in one request; target values by
+    question name."""
+    wire = {name: typed.question(instructions) for name, (typed, instructions) in questions.items()}
+    response = _send(state, wire, model, timeout, api_key, base_url, max_retries)
+    values = {}
+    for name, (typed, _) in questions.items():
+        answer = _answer_named(response, name, typed.answer)
+        try:
+            values[name] = typed.value(answer)
+        except _Outside as outside:
+            path = f"answers.{name}.{outside}"
+            raise _invalid_response(response, path, f"{path} is outside the target") from None
+    return values
+
+
+def _ask_one(
+    typed: _Typed,
+    instructions: str,
+    state: object,
+    model: object,
+    timeout: object,
+    api_key: object,
+    base_url: object,
+    max_retries: int,
+) -> object:
+    """Ask one typed question; its target value."""
+    questions = {_QUESTION: (typed, instructions)}
+    values = _ask_typed(state, questions, model, timeout, api_key, base_url, max_retries)
+    return values[_QUESTION]
+
+
 def system_one(
     state: object,
     questions: Mapping[str, object],
@@ -373,9 +569,8 @@ def ask_noul(
     max_retries: int,
 ) -> object:
     """Ask one noul question."""
-    questions = {_QUESTION: _noul_question(instructions, criteria)}
-    response = _send(state, questions, model, timeout, api_key, base_url, max_retries)
-    return _jev.Noul(probability=_decimal(_answer_named(response, _QUESTION, NoulAnswer).noul))
+    typed = _noul(_noul_record, criteria)
+    return _ask_one(typed, instructions, state, model, timeout, api_key, base_url, max_retries)
 
 
 def ask_choice(
@@ -389,7 +584,8 @@ def ask_choice(
     max_retries: int,
 ) -> object:
     """Ask one choice question over the members of *target*'s choice type."""
-    raise NotImplementedError("sysone/jev::ask-choice")
+    typed = _classify(target, lambda enum: _choice(enum, wrap=True))
+    return _ask_one(typed, instructions, state, model, timeout, api_key, base_url, max_retries)
 
 
 def ask_score(
@@ -403,7 +599,8 @@ def ask_score(
     max_retries: int,
 ) -> object:
     """Ask one score question over the rubric of *target*'s level type."""
-    raise NotImplementedError("sysone/jev::ask-score")
+    typed = _classify(target, _score)
+    return _ask_one(typed, instructions, state, model, timeout, api_key, base_url, max_retries)
 
 
 def ask(
@@ -418,7 +615,8 @@ def ask(
     noul_threshold: Decimal,
 ) -> object:
     """Ask one question whose kind *target* selects."""
-    raise NotImplementedError("sysone/jev::ask")
+    typed = _classify(target, lambda contract: _typed(contract, noul_threshold))
+    return _ask_one(typed, instructions, state, model, timeout, api_key, base_url, max_retries)
 
 
 def ask_many(
@@ -432,4 +630,6 @@ def ask_many(
     noul_threshold: Decimal,
 ) -> object:
     """Ask one question per field of the record *target* in one request."""
-    raise NotImplementedError("sysone/jev::ask-many")
+    questions, names = _classify(target, lambda record: _record_fields(record, noul_threshold))
+    values = _ask_typed(state, questions, model, timeout, api_key, base_url, max_retries)
+    return _build(target, **{names[key]: value for key, value in values.items()})

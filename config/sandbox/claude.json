@@ -16,7 +16,8 @@
       "gitlab.com",
       "bitbucket.org"
     ],
-    "deniedDomains": []
+    "deniedDomains": [],
+    "allowAllUnixSockets": true
   },
   "filesystem": {
     "denyRead": [

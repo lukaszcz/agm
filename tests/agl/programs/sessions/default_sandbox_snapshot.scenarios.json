@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "a_later_default_sandbox_write_never_reaches_the_snapshotted_default_session",
+      "params": {},
+      "agents": {"writer": []},
+      "expect": {
+        "stdout": "native\nnative\n",
+        "calls": {"writer": 0},
+        "sessions": [
+          {"agent": "writer", "tag": "session-1", "opened": true, "parent": null, "sandbox": "native"}
+        ]
+      }
+    }
+  ]
+}

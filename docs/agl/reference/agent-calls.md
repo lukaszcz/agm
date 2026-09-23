@@ -216,15 +216,24 @@ session.close()
 branch.close()
 ```
 
-`Session::open(agent, transport = None, name = "")` opens a session;
-`Session::default()` returns the same lazy default session used by free `ask`.
-`compact(instructions = "")`, `reset()`, `fork()`, `stats()`,
-`set-name(name)`, and `close()` are session operations. `reset` keeps the
-AgL session value but starts a fresh backend conversation; `fork` returns a
-new session whose history begins from the parent; `close` is idempotent, but
-later use of that session raises `SessionError`. Backend support for the other
-operations is runtime-dependent; an unsupported operation raises
-`SessionError`.
+`Session::open(agent, transport = None, name = "", sandbox =
+std/config::default-sandbox)` opens a session; `Session::default()` returns
+the same lazy default session used by free `ask`. `compact(instructions =
+"")`, `reset()`, `fork()`, `stats()`, `set-name(name)`, and `close()` are
+session operations. `reset` keeps the AgL session value but starts a fresh
+backend conversation; `fork` returns a new session whose history begins from
+the parent and whose `sandbox` is inherited from it unchanged; `close` is
+idempotent, but later use of that session raises `SessionError`. Backend
+support for the other operations is runtime-dependent; an unsupported
+operation raises `SessionError`.
+
+`sandbox` selects the session's sandboxing mode once, at open, exactly as it
+does for `ask`; the opened session's `.sandbox` field reports it, and it
+never changes for that session's lifetime — not on a later
+`std/config::default-sandbox` write, and not through `Session::ask`, which
+has no `sandbox` argument. `Session::default()` snapshots
+`std/config::default-sandbox` the same way it snapshots `default-agent`, on
+first use.
 
 When `transport` is omitted or `None`, `AgentPi` uses `Rpc`; every other
 agent uses `Cli`. `Rpc` is supported only for `AgentPi`; selecting it for

@@ -1080,13 +1080,17 @@ class IrSessionOpen:
 
     ``transport`` is absent when the source omits its optional transport
     argument. ``name`` always holds an expression, including the empty-text
-    default, so the host receives a concrete session name.
+    default, so the host receives a concrete session name. ``sandbox``
+    likewise always holds an expression -- the operand, or a
+    ``default-sandbox`` load when omitted -- and fixes this session's
+    sandboxing for its whole lifetime.
     """
 
     location: Location
     agent: "IrExpr"
     transport: "IrExpr | None"
     name: "IrExpr"
+    sandbox: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)

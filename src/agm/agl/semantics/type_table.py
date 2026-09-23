@@ -2397,6 +2397,14 @@ _PRELUDE_SHAPES: Mapping[str, TypeDef] = {
                         decl_id=_reserved_id("SessionTransport"),
                     ),
                 ),
+                (
+                    "sandbox",
+                    EnumType(
+                        name="AgentSandbox",
+                        module_id=RESERVED_ID,
+                        decl_id=_reserved_id("AgentSandbox"),
+                    ),
+                ),
             )
         ),
         field_kinds=_standard(_fields),

@@ -218,6 +218,7 @@ def test_redeclared_session_builtin_method_is_not_a_host_method() -> None:
         "    id: text\n"
         "    agent: Agent\n"
         "    transport: SessionTransport\n"
+        "    sandbox: AgentSandbox\n"
         '  builtin def Session::compact(self, instructions: text = "") -> unit\n'
         "end User"
     )

@@ -1,4 +1,5 @@
-import std/agent::{Agent, ParsePolicy}
+import std/agent::{Agent, AgentSandbox, ParsePolicy}
+import std/config
 import std/errors::Exception
 import std/option::Option
 
@@ -7,7 +8,7 @@ enum SessionTransport
   | Cli
   | Rpc
 
-builtin record Session(id: text, agent: Agent, transport: SessionTransport)
+builtin record Session(id: text, agent: Agent, transport: SessionTransport, sandbox: AgentSandbox)
 
 builtin record SessionStats(
   input-tokens: int,
@@ -22,6 +23,7 @@ builtin def Session::open(
   agent: Agent,
   transport: Option[SessionTransport] = None,
   name: text = "",
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> Session
 builtin def Session::default() -> Session
 builtin def Session::ask[T](

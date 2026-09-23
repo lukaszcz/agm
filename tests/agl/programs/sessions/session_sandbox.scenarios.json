@@ -1,0 +1,119 @@
+{
+  "scenarios": [
+    {
+      "name": "native_operand_reaches_the_session_and_its_field",
+      "params": {"mode": "native"},
+      "agents": {"impl": []},
+      "expect": {
+        "stdout": "native\n",
+        "calls": {"impl": 0},
+        "sessions": [
+          {"agent": "impl", "tag": "session-1", "opened": true, "parent": null, "sandbox": "native"}
+        ]
+      }
+    },
+    {
+      "name": "disabled_operand_reaches_the_session_and_its_field",
+      "params": {"mode": "disabled"},
+      "agents": {"impl": []},
+      "expect": {
+        "stdout": "disabled\n",
+        "calls": {"impl": 0},
+        "sessions": [
+          {"agent": "impl", "tag": "session-1", "opened": true, "parent": null, "sandbox": "none"}
+        ]
+      }
+    },
+    {
+      "name": "bare_sandbox_defaults_reach_the_session_and_its_field",
+      "params": {"mode": "sandbox-default-fields"},
+      "agents": {"impl": []},
+      "expect": {
+        "stdout": "sandbox(Optional::Default, Optional::Default, Option::None, true)\n",
+        "calls": {"impl": 0},
+        "sessions": [
+          {
+            "agent": "impl",
+            "tag": "session-1",
+            "opened": true,
+            "parent": null,
+            "sandbox": {"mode": "unrestricted", "memory": "default", "swap": "default", "patch": true}
+          }
+        ]
+      }
+    },
+    {
+      "name": "sandbox_with_explicit_fields_reaches_the_session_and_its_field",
+      "params": {"mode": "sandbox-explicit-fields"},
+      "agents": {"impl": []},
+      "expect": {
+        "stdout": "sandbox(Option::Some(value = \"8G\"), Optional::Default, Option::None, true)\n",
+        "calls": {"impl": 0},
+        "sessions": [
+          {
+            "agent": "impl",
+            "tag": "session-1",
+            "opened": true,
+            "parent": null,
+            "sandbox": {"mode": "unrestricted", "memory": "8G", "swap": "default", "patch": true}
+          }
+        ]
+      }
+    },
+    {
+      "name": "the_sandbox_operand_survives_a_later_default_sandbox_write",
+      "params": {"mode": "operand-survives-a-later-default-write"},
+      "agents": {"impl": []},
+      "expect": {
+        "stdout": "native\n",
+        "calls": {"impl": 0},
+        "sessions": [
+          {"agent": "impl", "tag": "session-1", "opened": true, "parent": null, "sandbox": "native"}
+        ]
+      }
+    },
+    {
+      "name": "a_fork_inherits_the_parents_sandbox_exactly",
+      "params": {"mode": "fork-inherits"},
+      "agents": {"ask": []},
+      "expect": {
+        "stdout": "sandbox(Option::Some(value = \"4G\"), Optional::Default, Option::None, true)\nsandbox(Option::Some(value = \"4G\"), Optional::Default, Option::None, true)\n",
+        "calls": {"ask": 0},
+        "sessions": [
+          {
+            "agent": "ask",
+            "tag": "session-1",
+            "opened": true,
+            "parent": null,
+            "sandbox": {"mode": "unrestricted", "memory": "4G", "swap": "default", "patch": true}
+          },
+          {
+            "agent": "ask",
+            "tag": "session-2",
+            "opened": true,
+            "parent": "session-1",
+            "sandbox": {"mode": "unrestricted", "memory": "4G", "swap": "default", "patch": true}
+          }
+        ]
+      }
+    },
+    {
+      "name": "an_omitted_sandbox_uses_the_default_sandbox_setting",
+      "params": {"mode": "implicit-default"},
+      "agents": {"impl": []},
+      "expect": {
+        "stdout": "sandbox(Optional::Default, Optional::Default, Option::None, true)\n",
+        "calls": {"impl": 0},
+        "sessions": [
+          {
+            "agent": "impl",
+            "tag": "session-1",
+            "opened": true,
+            "parent": null,
+            "sandbox": {"mode": "unrestricted", "memory": "default", "swap": "default", "patch": true}
+          }
+        ]
+      }
+    }
+  ]
+}

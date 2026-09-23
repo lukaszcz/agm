@@ -11,6 +11,7 @@ from agm.agl.ir.ids import ContractId, Location, SourceId
 from agm.agl.ir.nodes import (
     IrBind,
     IrBlock,
+    IrBuiltinLoad,
     IrConstText,
     IrExpr,
     IrLoad,
@@ -91,6 +92,7 @@ def test_session_open_lowers_omitted_and_explicit_options() -> None:
         "  agent,\n"
         "  transport = Option[SessionTransport]::Some(SessionTransport::Rpc),\n"
         '  name = "review",\n'
+        "  sandbox = AgentSandbox::Native,\n"
         ")\n"
         "()"
     )
@@ -102,10 +104,15 @@ def test_session_open_lowers_omitted_and_explicit_options() -> None:
     assert omitted.transport is None
     assert isinstance(omitted.name, IrConstText)
     assert omitted.name.value == ""
+    # An omitted sandbox operand falls through to the current
+    # ``default-sandbox`` engine setting, read afresh at open, exactly like
+    # ``ask``'s own omitted sandbox operand.
+    assert isinstance(omitted.sandbox, IrBuiltinLoad)
     assert isinstance(explicit, IrSessionOpen)
     assert isinstance(explicit.transport, IrMakeRecord)
     assert isinstance(explicit.name, IrConstText)
     assert explicit.name.value == "review"
+    assert isinstance(explicit.sandbox, IrMakeRecord)
 
 
 def test_session_default_lowers_to_its_dedicated_node() -> None:
@@ -328,6 +335,7 @@ def test_well_formed_session_nodes_pass_deep_validation() -> None:
             agent=IrConstText(location=_LOC, value="agent"),
             transport=IrConstText(location=_LOC, value="transport"),
             name=IrConstText(location=_LOC, value="name"),
+            sandbox=IrConstText(location=_LOC, value="sandbox"),
         ),
         IrSessionDefault(location=_LOC),
         IrSessionAsk(

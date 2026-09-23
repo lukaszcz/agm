@@ -456,6 +456,7 @@ def _session_static_signature(kind: BuiltinStaticKind) -> FunctionSignature:
                     has_default=True,
                 ),
                 _std_param("name", TextType(), has_default=True),
+                _std_param("sandbox", BUILTIN_PRELUDE_TYPES["AgentSandbox"], has_default=True),
             ),
             result=BUILTIN_PRELUDE_TYPES["Session"],
         )

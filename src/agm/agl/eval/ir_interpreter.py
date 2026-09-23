@@ -1464,9 +1464,7 @@ class IrInterpreter:
     ) -> Value:
         try:
             if isinstance(node, IrSessionOpen):
-                return self._effects.eval_ir_session_open(
-                    node, self._load_builtin_setting("default-sandbox")
-                )
+                return self._effects.eval_ir_session_open(node)
             if isinstance(node, IrSessionDefault):
                 return self._effects.eval_ir_session_default(
                     node,

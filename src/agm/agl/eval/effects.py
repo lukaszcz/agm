@@ -51,7 +51,13 @@ from agm.agl.runtime.request import (
 from agm.agl.runtime.request import (
     ValidationError as ReqValidationError,
 )
-from agm.agl.runtime.sandbox_values import decode_agent_sandbox
+from agm.agl.runtime.sandbox_values import (
+    AgentSandboxMode,
+    agent_sandbox_value,
+    decode_agent_sandbox,
+    permission_mode_and_limits,
+    sandbox_mode_from_permission,
+)
 from agm.agl.runtime.sessions import (
     AgentDispatcherSessionHost,
     SessionAgentError,
@@ -346,6 +352,10 @@ class EffectHandlers:
         self, sandbox_val: Value
     ) -> tuple[PermissionMode, SandboxLimits | None]:
         """Decode an already-evaluated ``AgentSandbox`` value, e.g. a builtin setting."""
+        return permission_mode_and_limits(self._decode_sandbox_mode(sandbox_val))
+
+    def _decode_sandbox_mode(self, sandbox_val: Value) -> AgentSandboxMode:
+        """Decode an already-evaluated ``AgentSandbox`` value into its canonical union."""
         if not isinstance(sandbox_val, RecordValue):
             raise TypeError(
                 "value must evaluate to an AgentSandbox member record, "
@@ -411,7 +421,9 @@ class EffectHandlers:
         assert name is not None
         return name
 
-    def _session_value(self, handle: str, agent: RecordValue, transport: str) -> RecordValue:
+    def _session_value(
+        self, handle: str, agent: RecordValue, transport: str, sandbox: Value
+    ) -> RecordValue:
         nominals = self._ctx._program.builtin_nominals
         declared = nominals.resolve("Session")
         return RecordValue(
@@ -423,16 +435,18 @@ class EffectHandlers:
                     nominal=nominals.resolve_standard_member("SessionTransport", transport).nominal,
                     fields={},
                 ),
+                "sandbox": sandbox,
             },
         )
 
-    def _session_parts(self, value: Value) -> tuple[str, RecordValue, str]:
+    def _session_parts(self, value: Value) -> tuple[str, RecordValue, str, Value]:
         """Extract the statically guaranteed fields from a ``Session`` record."""
         session = cast(RecordValue, value)
         return (
             cast(TextValue, session.fields["id"]).value,
             cast(RecordValue, session.fields["agent"]),
             self._transport_name(cast(RecordValue, session.fields["transport"])),
+            session.fields["sandbox"],
         )
 
     def _decode_agent_spec(self, agent: RecordValue) -> AgentSpec:
@@ -464,17 +478,20 @@ class EffectHandlers:
             return default_session_transport(spec)
         return self._transport_name(cast(RecordValue, selected.fields["value"]))
 
-    def eval_ir_session_open(self, node: IrSessionOpen, default_sandbox: Value) -> Value:
+    def eval_ir_session_open(self, node: IrSessionOpen) -> Value:
         """Open a host-backed session and mint its opaque AgL record.
 
-        The session's sandboxing is fixed here, at open, to the current
-        ``default-sandbox`` engine setting -- for its whole lifetime. There is
-        no AgL surface to override this per session yet.
+        The session's sandboxing is fixed here, at open, to ``node.sandbox``
+        (the call's own operand, or a ``default-sandbox`` load when omitted)
+        -- for its whole lifetime. The evaluated operand is reused verbatim
+        as the returned record's own ``sandbox`` field, so it reports exactly
+        what the call was opened with.
         """
         agent = cast(RecordValue, self._ctx._eval(node.agent))
         transport_value = None if node.transport is None else self._ctx._eval(node.transport)
         name = self._text_of(self._ctx._eval(node.name))
-        permission_mode, sandbox = self._decode_sandbox_setting(default_sandbox)
+        sandbox_value = self._ctx._eval(node.sandbox)
+        permission_mode, sandbox = self._decode_sandbox_setting(sandbox_value)
         try:
             spec = self._decode_agent_spec(agent)
             transport = self._resolve_session_transport(spec, transport_value)
@@ -483,7 +500,7 @@ class EffectHandlers:
             )
         except SessionHostError as error:
             self._session_error(error)
-        return self._session_value(handle, agent, transport)
+        return self._session_value(handle, agent, transport, sandbox_value)
 
     def eval_ir_session_default(
         self, _node: IrSessionDefault, default_agent: Value, default_sandbox: Value
@@ -491,7 +508,10 @@ class EffectHandlers:
         """Lazily obtain the session whose agent is current at first use.
 
         Its sandboxing is likewise fixed at this first use, to the
-        ``default-sandbox`` setting current then -- never per ask.
+        ``default-sandbox`` setting current then -- never per ask. A later
+        call reads the mode fixed at that first open back from the host's own
+        snapshot, so the returned record's ``sandbox`` field stays stable
+        even after a later write to ``default-sandbox``.
         """
         agent = cast(RecordValue, default_agent)
         permission_mode, sandbox = self._decode_sandbox_setting(default_sandbox)
@@ -504,8 +524,11 @@ class EffectHandlers:
         except SessionHostError as error:
             self._session_error(error)
         nominals = self._ctx._program.builtin_nominals
+        sandbox_value = agent_sandbox_value(
+            sandbox_mode_from_permission(snapshot.permission_mode, snapshot.sandbox), nominals
+        )
         return self._session_value(
-            handle, encode_agent_value(snapshot.agent, nominals), snapshot.transport
+            handle, encode_agent_value(snapshot.agent, nominals), snapshot.transport, sandbox_value
         )
 
     def _dispatch_session_agent(
@@ -647,7 +670,7 @@ class EffectHandlers:
 
     def eval_ir_session_ask(self, node: IrSessionAsk) -> Value:
         """Send a prompt through a session and run its shared retry engine."""
-        handle, agent, _transport = self._session_parts(self._ctx._eval(node.session))
+        handle, agent, _transport, _sandbox = self._session_parts(self._ctx._eval(node.session))
         prompt = self._text_of(self._ctx._eval(node.prompt))
         contract = self._ctx._program.contracts[node.contract_id]
         output_contract, json_schema = self._contract_carriers(node.contract_id)
@@ -759,7 +782,7 @@ class EffectHandlers:
 
     def eval_ir_session_op(self, node: IrSessionOp) -> Value:
         """Dispatch one lifecycle operation through the session host."""
-        handle, agent, transport = self._session_parts(self._ctx._eval(node.session))
+        handle, agent, transport, sandbox = self._session_parts(self._ctx._eval(node.session))
         argument = self._text_of(self._ctx._eval(node.arg)) if node.arg is not None else ""
         host = self._ctx._session_host
         try:
@@ -773,7 +796,9 @@ class EffectHandlers:
                 case IrSessionOpKind.CLOSE:
                     host.close(handle)
                 case IrSessionOpKind.FORK:
-                    return self._session_value(host.fork(handle), agent, transport)
+                    # Fork inherits the parent's already-embedded sandbox
+                    # value verbatim: no decode/re-encode round trip needed.
+                    return self._session_value(host.fork(handle), agent, transport, sandbox)
                 case IrSessionOpKind.STATS:
                     stats = host.stats(handle)
                     declared = self._ctx._program.builtin_nominals.resolve("SessionStats")

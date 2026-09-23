@@ -151,7 +151,8 @@ _MODULES: dict[str, str] = {
         ")\n"
     ),
     "session.agl": (
-        "import std/agent::{Agent}\n"
+        "import std/agent::{Agent, AgentSandbox}\n"
+        "import std/config\n"
         "import std/errors::{Exception}\n"
         "import std/option::{Option}\n"
         "\n"
@@ -160,7 +161,12 @@ _MODULES: dict[str, str] = {
         "  | Cli\n"
         "  | Rpc\n"
         "\n"
-        "builtin record Session(id: text, agent: Agent, transport: SessionTransport)\n"
+        "builtin record Session(\n"
+        "  id: text,\n"
+        "  agent: Agent,\n"
+        "  transport: SessionTransport,\n"
+        "  sandbox: AgentSandbox,\n"
+        ")\n"
         "\n"
         "builtin record SessionStats(\n"
         "  input-tokens: int,\n"
@@ -175,6 +181,7 @@ _MODULES: dict[str, str] = {
         "  agent: Agent,\n"
         "  transport: Option[SessionTransport] = Option[SessionTransport]::None,\n"
         '  name: text = "",\n'
+        "  sandbox: AgentSandbox = std/config::default-sandbox,\n"
         ") -> Session\n"
         "builtin def Session::default() -> Session\n"
         "builtin def Session::close(self) -> unit\n"

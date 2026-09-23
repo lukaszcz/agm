@@ -325,7 +325,7 @@ class BuiltinCallChecker:
     # --- Session statics ---
 
     def check_session_open(self, node: Call) -> Type:
-        """Type-check ``Session::open(agent, transport?, name?)``."""
+        """Type-check ``Session::open(agent, transport?, name?, sandbox?)``."""
         session_transport = self.contract_type("SessionTransport")
         assert isinstance(session_transport, EnumType)
         transport = self._ctx._env.type_table.option_handle(session_transport)
@@ -348,6 +348,12 @@ class BuiltinCallChecker:
                 ParamSpec(
                     name="name",
                     type=TextType(),
+                    kind=ParamZone.STANDARD,
+                    has_default=True,
+                ),
+                ParamSpec(
+                    name="sandbox",
+                    type=self.contract_type("AgentSandbox"),
                     kind=ParamZone.STANDARD,
                     has_default=True,
                 ),

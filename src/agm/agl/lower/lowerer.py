@@ -2384,6 +2384,7 @@ class _Lowerer:
                     agent=operands[0],
                     transport=None,
                     name=IrConstText(location=loc, value=""),
+                    sandbox=self._default_sandbox_operand(loc),
                 )
             case BuiltinStaticKind.SESSION_DEFAULT:
                 return IrSessionDefault(location=loc)
@@ -2656,6 +2657,9 @@ class _Lowerer:
                     call_node.args[1] if len(call_node.args) > 1 else named_args.get("transport")
                 )
                 name = call_node.args[2] if len(call_node.args) > 2 else named_args.get("name")
+                sandbox = (
+                    call_node.args[3] if len(call_node.args) > 3 else named_args.get("sandbox")
+                )
                 return IrSessionOpen(
                     location=loc,
                     agent=self.lower_expr(agent),
@@ -2663,6 +2667,9 @@ class _Lowerer:
                     name=IrConstText(location=loc, value="")
                     if name is None
                     else self.lower_expr(name),
+                    sandbox=self._default_sandbox_operand(loc)
+                    if sandbox is None
+                    else self.lower_expr(sandbox),
                 )
             case BuiltinStaticKind.SESSION_DEFAULT:
                 return IrSessionDefault(location=loc)
@@ -3681,6 +3688,17 @@ class _Lowerer:
             max_attempts=self._extract_max_attempts(call_node),
         )
 
+    def _default_sandbox_operand(self, loc: Location) -> IrExpr:
+        """Build the ``std/config::default-sandbox`` load an omitted sandbox operand uses.
+
+        Shared by every call/open site that defaults its ``sandbox`` operand
+        to the current engine setting, so the key is built in one place.
+        """
+        return IrBuiltinLoad(
+            location=loc,
+            key=builtin_var_key(STD_CONFIG_ID, (), "default-sandbox"),
+        )
+
     def _lower_ask_operands(
         self,
         *,
@@ -3731,10 +3749,7 @@ class _Lowerer:
         contract_id = self._alloc_contract(contract_req)
 
         def selected_sandbox() -> IrExpr:
-            return sandbox or IrBuiltinLoad(
-                location=loc,
-                key=builtin_var_key(STD_CONFIG_ID, (), "default-sandbox"),
-            )
+            return sandbox or self._default_sandbox_operand(loc)
 
         if is_request:
             selected_agent = agent or IrBuiltinLoad(

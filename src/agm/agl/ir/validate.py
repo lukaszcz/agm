@@ -1326,12 +1326,15 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                         f"IrAsk has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
-        case IrSessionOpen(agent=agent_expr, transport=transport_expr, name=name_expr):
+        case IrSessionOpen(
+            agent=agent_expr, transport=transport_expr, name=name_expr, sandbox=sandbox_expr
+        ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             if transport_expr is not None:
                 _validate_expr(transport_expr, ctx)
             _validate_expr(name_expr, ctx)
+            _validate_expr(sandbox_expr, ctx)
 
         case IrSessionDefault():
             _validate_location(node.location, ctx)

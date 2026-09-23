@@ -75,6 +75,7 @@ builtin def Session::open(
   agent: Agent,
   transport: Option[SessionTransport] = None,
   name: text = "",
+  sandbox: AgentSandbox = std/config::default-sandbox,
 ) -> Session
 builtin def Session::default() -> Session
 """
@@ -485,7 +486,7 @@ class _ScenarioSessionHost:
     def __init__(self, agents: dict[str, ScriptedAgent]) -> None:
         self._services = {name: agent.session_service() for name, agent in agents.items()}
         self._handles: dict[str, _ScriptedSessionService] = {}
-        self._snapshots: dict[str, tuple[Any, str]] = {}
+        self._snapshots: dict[str, tuple[Any, str, PermissionMode, SandboxLimits | None]] = {}
         self._default_handle: str | None = None
 
     def open(
@@ -509,7 +510,7 @@ class _ScenarioSessionHost:
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
-        self._snapshots[handle] = (agent, transport)
+        self._snapshots[handle] = (agent, transport, permission_mode, sandbox)
         return handle
 
     def open_ephemeral(
@@ -533,7 +534,7 @@ class _ScenarioSessionHost:
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
-        self._snapshots[handle] = (agent, transport)
+        self._snapshots[handle] = (agent, transport, permission_mode, sandbox)
         return handle
 
     def with_ephemeral(
@@ -550,7 +551,7 @@ class _ScenarioSessionHost:
 
         def register(handle: str) -> Any:
             self._handles[handle] = service
-            self._snapshots[handle] = (agent, transport)
+            self._snapshots[handle] = (agent, transport, permission_mode, sandbox)
             return action(handle)
 
         def retire(handle: str) -> None:
@@ -593,7 +594,7 @@ class _ScenarioSessionHost:
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
-        self._snapshots[handle] = (agent, transport)
+        self._snapshots[handle] = (agent, transport, permission_mode, sandbox)
         self._default_handle = handle
         return handle
 
@@ -665,10 +666,10 @@ class _ScenarioSessionHost:
         from agm.agl.runtime.sessions import SessionSnapshot
 
         try:
-            agent, transport = self._snapshots[handle]
+            agent, transport, permission_mode, sandbox = self._snapshots[handle]
         except KeyError:
             raise AglSessionHostError("unknown session", "snapshot") from None
-        return SessionSnapshot(agent, transport)
+        return SessionSnapshot(agent, transport, permission_mode, sandbox)
 
     def close(self, handle: str) -> None:
         service = self._service_for_handle(handle, "close")
@@ -1232,50 +1233,49 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
             )
         _assert_schema_paths(event.schema, spec.get("schema_paths", []))
         if "sandbox" in spec:
-            _assert_sandbox_expectation(event, spec["sandbox"], name=name, call=call)
+            _assert_sandbox_expectation(
+                event.sandbox_mode,
+                event.sandbox_limits,
+                spec["sandbox"],
+                context=f"agent {name!r} call {call}",
+            )
 
 
 def _assert_sandbox_expectation(
-    event: _PromptEvent, expected: Any, *, name: str, call: int
+    mode: str | None, limits: SandboxLimits | None, expected: Any, *, context: str
 ) -> None:
-    """Check a ``prompts[]`` entry's ``sandbox`` expectation against one recorded event.
+    """Check one recorded ``(permission_mode, limits)`` pair against a scenario's expectation.
 
     *expected* is either the bare permission-mode string (as decoded by
     ``agent.spec.PermissionMode``), or an object whose ``mode`` key checks the
     same thing and whose remaining keys (``memory``/``swap``/``patch``/
     ``settings``) check the decoded ``SandboxLimits`` field by field --
     ``Default`` compares equal to the JSON string ``"default"``, an absent
-    ``settings_file`` to ``None``, and a present one to its ``str()``.
+    ``settings_file`` to ``None``, and a present one to its ``str()``. Shared
+    by a ``prompts[]`` entry's per-call check and a ``sessions[]`` entry's
+    open-time check -- one recorded pair, one expectation shape, either way.
     """
     if isinstance(expected, str):
-        assert event.sandbox_mode == expected, (
-            f"agent {name!r} call {call}: expected permission mode {expected!r}, "
-            f"got {event.sandbox_mode!r}"
-        )
+        assert mode == expected, f"{context}: expected permission mode {expected!r}, got {mode!r}"
         return
     if "mode" in expected:
-        assert event.sandbox_mode == expected["mode"], (
-            f"agent {name!r} call {call}: expected permission mode {expected['mode']!r}, "
-            f"got {event.sandbox_mode!r}"
+        assert mode == expected["mode"], (
+            f"{context}: expected permission mode {expected['mode']!r}, got {mode!r}"
         )
     limit_fields = {"memory", "swap", "patch"}.intersection(expected)
     if limit_fields or "settings" in expected:
-        limits = event.sandbox_limits
-        assert limits is not None, (
-            f"agent {name!r} call {call}: expected decoded sandbox limits, got none"
-        )
+        assert limits is not None, f"{context}: expected decoded sandbox limits, got none"
         for field_name in limit_fields:
             actual = getattr(limits, field_name)
             actual = "default" if actual is Default else actual
             assert actual == expected[field_name], (
-                f"agent {name!r} call {call}: expected sandbox {field_name} "
-                f"{expected[field_name]!r}, got {actual!r}"
+                f"{context}: expected sandbox {field_name} {expected[field_name]!r}, got {actual!r}"
             )
         if "settings" in expected:
             actual_settings = None if limits.settings_file is None else str(limits.settings_file)
             assert actual_settings == expected["settings"], (
-                f"agent {name!r} call {call}: expected sandbox settings "
-                f"{expected['settings']!r}, got {actual_settings!r}"
+                f"{context}: expected sandbox settings {expected['settings']!r}, "
+                f"got {actual_settings!r}"
             )
 
 
@@ -1382,6 +1382,13 @@ def _assert_sessions(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -
                     f"session {session.tag!r} {key}: expected {spec[key]!r}, "
                     f"got {getattr(session, key)!r}"
                 )
+        if "sandbox" in spec:
+            _assert_sandbox_expectation(
+                session.permission_mode,
+                session.sandbox,
+                spec["sandbox"],
+                context=f"session {session.tag!r}",
+            )
 
     prompt_specs: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for spec in expect.get("session_prompts", []):

@@ -39,6 +39,7 @@ def _run_request(
         prompt_run_result_error,
         run_prepared_prompt_result,
     )
+    from agm.agent.spec import PermissionMode
     from agm.util.interp import InterpolationError
 
     temp_files: list[Path] = []
@@ -56,6 +57,8 @@ def _run_request(
             prompt_via_stdin=prepared.prompt_via_stdin,
             elapsed=result.elapsed,
             exit_code=result.returncode,
+            sandboxed=prepared.sandbox is not None,
+            permission_mode=PermissionMode.NONE.value,
         )
     except InterpolationError as exc:
         raise AgentCallHostError(

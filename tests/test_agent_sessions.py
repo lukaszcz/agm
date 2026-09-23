@@ -197,6 +197,8 @@ def test_agl_session_host_preserves_success_response_metadata_and_call_info() ->
                 prompt_via_stdin=True,
                 elapsed=1.5,
                 exit_code=0,
+                sandboxed=False,
+                permission_mode="none",
             ),
         ),
     )
@@ -214,6 +216,8 @@ def test_agl_session_host_preserves_success_response_metadata_and_call_info() ->
         "prompt_via_stdin": True,
         "elapsed": 1.5,
         "exit_code": 0,
+        "sandboxed": False,
+        "permission_mode": "none",
     }
 
 
@@ -230,7 +234,14 @@ def test_agl_session_host_translates_host_and_ask_failures() -> None:
         exit_code=2,
         stderr_tail="tail",
         elapsed=1.5,
-        call_info=AgentCallInfo(argv=("worker",), prompt_via_stdin=True, elapsed=1.5, exit_code=2),
+        call_info=AgentCallInfo(
+            argv=("worker",),
+            prompt_via_stdin=True,
+            elapsed=1.5,
+            exit_code=2,
+            sandboxed=False,
+            permission_mode="none",
+        ),
     )
     with pytest.raises(AglSessionAskError) as ask_error:
         host.ask(handle, "hello")
@@ -544,7 +555,14 @@ def test_ephemeral_ask_preserves_an_ask_error_when_close_also_fails() -> None:
         exit_code=1,
         stderr_tail="agent failed",
         elapsed=0.1,
-        call_info=AgentCallInfo(argv=["runner"], prompt_via_stdin=False, elapsed=0.1, exit_code=1),
+        call_info=AgentCallInfo(
+            argv=["runner"],
+            prompt_via_stdin=False,
+            elapsed=0.1,
+            exit_code=1,
+            sandboxed=False,
+            permission_mode="none",
+        ),
     )
 
     def make_failing_backend(agent: object, transport: str) -> SessionBackend:
@@ -567,6 +585,8 @@ def test_ephemeral_ask_preserves_an_ask_error_when_close_also_fails() -> None:
         "prompt_via_stdin": False,
         "elapsed": 0.1,
         "exit_code": 1,
+        "sandboxed": False,
+        "permission_mode": "none",
     }
     assert factory.backends[0].close_calls == 1
 

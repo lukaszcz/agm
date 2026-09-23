@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import shutil
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -44,7 +45,9 @@ __all__ = [
     "LimitSpec",
     "PreparedSandboxCommand",
     "ResolvedLimits",
+    "SandboxContext",
     "SandboxRequest",
+    "SandboxRun",
     "SandboxSpec",
     "dry_run_argv",
     "prepare",
@@ -55,6 +58,60 @@ __all__ = [
 
 DEFAULT_MEMORY_LIMIT = "32G"
 DEFAULT_SWAP_LIMIT = "0"
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxContext:
+    """Ambient inputs a `SandboxRequest` needs that a caller does not otherwise carry.
+
+    Built once by a host from its own config context and reused across the
+    sandboxed calls it makes (agent runs, `exec`).
+    """
+
+    home: Path
+    proj_dir: Path | None
+    cwd: Path
+    run_config: RunConfig
+
+    def prepare(
+        self,
+        command: list[str],
+        spec: SandboxSpec,
+        *,
+        env: Mapping[str, str],
+        pty: bool = False,
+        alias_name: str | None = None,
+    ) -> PreparedSandboxCommand:
+        """Build a `SandboxRequest` from this context and prepare it.
+
+        The one place a caller's `command`/`spec` maps onto this context's
+        ambient fields and `run_config` threads through to `prepare()`, so a
+        caller never hand-maps `SandboxRequest`'s fields itself.
+        """
+        request = SandboxRequest(
+            command=command,
+            cwd=self.cwd,
+            env=dict(env),
+            home=self.home,
+            proj_dir=self.proj_dir,
+            spec=spec,
+            alias_name=alias_name,
+            pty=pty,
+        )
+        return prepare(request, run_config=self.run_config)
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxRun:
+    """A sandbox spec paired with the context that prepares it.
+
+    Replaces two independently-optional parameters (a spec and a context)
+    with one value, so a caller cannot supply one without the other.
+    """
+
+    spec: SandboxSpec
+    context: SandboxContext
+
 
 # The delegated cgroup lets a resource-limited scope's children join
 # `systemd-run`'s scope cgroup so their memory/swap usage is accounted

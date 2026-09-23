@@ -12,12 +12,20 @@ AgentTransportFailureCause: TypeAlias = Literal[
 
 @dataclass(frozen=True, slots=True)
 class AgentCallInfo:
-    """Process details from one agent invocation, when a process was prepared."""
+    """Process details from one agent invocation, when a process was prepared.
+
+    ``sandboxed``/``permission_mode`` record whether the call ran under the
+    sandbox library and which :class:`~agm.agent.spec.PermissionMode` its argv
+    was built with, as that mode's plain string value — this module never
+    imports ``agent.spec``, so callers pass ``PermissionMode.X.value``.
+    """
 
     argv: list[str]
     prompt_via_stdin: bool
     elapsed: float
     exit_code: int | None
+    sandboxed: bool
+    permission_mode: str
 
     def to_trace(self) -> dict[str, object]:
         """Return the host-neutral call details in trace-record form."""
@@ -26,6 +34,8 @@ class AgentCallInfo:
             "prompt_via_stdin": self.prompt_via_stdin,
             "elapsed": self.elapsed,
             "exit_code": self.exit_code,
+            "sandboxed": self.sandboxed,
+            "permission_mode": self.permission_mode,
         }
 
 

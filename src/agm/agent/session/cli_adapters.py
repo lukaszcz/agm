@@ -30,7 +30,7 @@ from agm.agent.session.protocol import (
     SessionOperation,
     SessionStats,
 )
-from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
+from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, PermissionMode
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.cleanup import preserve_primary_error
 from agm.core.env import clone_env
@@ -123,6 +123,8 @@ class _CliPromptBackend:
                         prompt_via_stdin=delivery is PromptDelivery.STDIN,
                         elapsed=0.0,
                         exit_code=None,
+                        sandboxed=False,
+                        permission_mode=PermissionMode.NONE.value,
                     ),
                 ) from exc
             if failure := prompt_run_result_error(result):
@@ -140,6 +142,8 @@ class _CliPromptBackend:
                         prompt_via_stdin=prepared.prompt_via_stdin,
                         elapsed=failure.result.elapsed,
                         exit_code=failure.result.returncode,
+                        sandboxed=prepared.sandbox is not None,
+                        permission_mode=PermissionMode.NONE.value,
                     ),
                     detail=failure.detail,
                 ) from failure
@@ -151,6 +155,8 @@ class _CliPromptBackend:
                     prompt_via_stdin=prepared.prompt_via_stdin,
                     elapsed=result.elapsed,
                     exit_code=result.returncode,
+                    sandboxed=prepared.sandbox is not None,
+                    permission_mode=PermissionMode.NONE.value,
                 ),
             )
 

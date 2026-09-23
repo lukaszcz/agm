@@ -21,6 +21,9 @@ from agm.agent.prompt import (
 from agm.agent.transport import AgentTransportFailureCause
 from agm.core import dry_run
 from agm.core.process import CapturedOutput, ProcessCaptureResult, run_capture, run_capture_result
+from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
+from agm.sandbox.prepare import SandboxRun
+from agm.sandbox.request import PreparedSandboxCommand
 from agm.util.interp import (
     Hole,
     InterpolationError,
@@ -67,6 +70,17 @@ class PromptDelivery(StrEnum):
     NONE = "none"
 
 
+@dataclass(frozen=True, slots=True)
+class SandboxPreparationFailure:
+    """A sandbox library failure, carried on a run rather than raised.
+
+    Lets `run_prepared_prompt_result` represent it as an ordinary
+    `PromptRunResult` (`spawn_error` set), like any other spawn failure.
+    """
+
+    message: str
+
+
 @dataclass(slots=True)
 class PreparedPromptRun:
     """Prepared agent argv and any temporary prompt files.
@@ -85,6 +99,7 @@ class PreparedPromptRun:
     stdin_prompt: str | None = None
     argv: list[str] | None = None
     delivery: PromptDelivery = PromptDelivery.FILE
+    sandbox: PreparedSandboxCommand | SandboxPreparationFailure | None = None
 
     @property
     def prompt_via_stdin(self) -> bool:
@@ -506,7 +521,13 @@ def run_prepared_prompt(
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
 ) -> str:
-    """Run a prepared prompt invocation."""
+    """Run a prepared prompt invocation.
+
+    Never prepared with a sandbox: its only callers (``review``/``revise``)
+    build ``prepared`` through ``prepare_prompt_run``, which never sets
+    ``sandbox``, and AgL's own ``--dry-run`` stops before execution, so
+    neither reaches this function with one.
+    """
 
     append_target = prepared.delivery is PromptDelivery.FILE
     if dry_run.enabled():
@@ -545,6 +566,29 @@ def cleanup_temp_files(temp_files: list[Path]) -> None:
             pass
 
 
+def _prepare_sandboxed_argv(
+    argv: list[str],
+    env: MutableMapping[str, str],
+    *,
+    sandbox: SandboxRun | None,
+) -> tuple[list[str], PreparedSandboxCommand | SandboxPreparationFailure | None]:
+    """Wrap *argv* under *sandbox*, when given.
+
+    Returns ``(argv, prepared)``: *argv* unchanged and ``prepared`` ``None``
+    when *sandbox* is ``None``; the sandbox library's wrapped argv and its
+    ``PreparedSandboxCommand`` on success; the original *argv* and a
+    ``SandboxPreparationFailure`` (never raised) when preparation fails, so
+    the caller can represent it as an ordinary run outcome.
+    """
+    if sandbox is None:
+        return argv, None
+    try:
+        prepared = sandbox.context.prepare(argv, sandbox.spec, env=env)
+    except (SandboxUnavailableError, SandboxSettingsError) as exc:
+        return argv, SandboxPreparationFailure(str(exc))
+    return prepared.argv, prepared
+
+
 def prepare_rendered_prompt_run(
     rendered_prompt: str,
     *,
@@ -553,6 +597,7 @@ def prepare_rendered_prompt_run(
     env: dict[str, str],
     delivery: PromptDelivery = PromptDelivery.FILE,
     session_id: str | None = None,
+    sandbox: SandboxRun | None = None,
 ) -> PreparedPromptRun:
     """Prepare a runner invocation for an already-rendered AgL prompt.
 
@@ -573,6 +618,12 @@ def prepare_rendered_prompt_run(
     *delivery* selects how the prompt reaches the agent, so literal and
     promptless lifecycle commands share this same subprocess boundary without
     making prompt files.
+
+    When *sandbox* is given, the prompt-bearing argv is wrapped through the
+    sandbox library before becoming ``PreparedPromptRun.argv``. A library
+    failure is never raised here: it is carried on ``PreparedPromptRun.sandbox``
+    as a ``SandboxPreparationFailure`` for ``run_prepared_prompt_result`` to
+    represent as an ordinary spawn failure.
     """
     command = runner.copy()
     child_env = env if env else os.environ
@@ -588,6 +639,7 @@ def prepare_rendered_prompt_run(
             append_target=True,
             session_id=session_id,
         )
+        argv, prepared_sandbox = _prepare_sandboxed_argv(argv, child_env, sandbox=sandbox)
         return PreparedPromptRun(
             command=command,
             effective_file=effective_file,
@@ -595,6 +647,7 @@ def prepare_rendered_prompt_run(
             temp_files=temp_files,
             argv=argv,
             delivery=delivery,
+            sandbox=prepared_sandbox,
         )
 
     effective_file = Path(os.devnull)
@@ -607,6 +660,7 @@ def prepare_rendered_prompt_run(
     )
     if delivery is PromptDelivery.LITERAL:
         argv.append(rendered_prompt)
+    argv, prepared_sandbox = _prepare_sandboxed_argv(argv, child_env, sandbox=sandbox)
     return PreparedPromptRun(
         command=command,
         effective_file=effective_file,
@@ -615,6 +669,7 @@ def prepare_rendered_prompt_run(
         stdin_prompt=rendered_prompt if delivery is PromptDelivery.STDIN else None,
         argv=argv,
         delivery=delivery,
+        sandbox=prepared_sandbox,
     )
 
 
@@ -633,7 +688,25 @@ def run_prepared_prompt_result(
     instead of being attached via placeholder or ``@<path>`` — it is
     delivered directly from the already-rendered text rather than read back
     off disk.
+
+    When ``prepared.sandbox`` is a ``PreparedSandboxCommand``, the subprocess
+    primitive receives its ``env``, ``cwd``, and ``interrupt_cleanup_cmd``, and
+    the sandbox is closed in ``finally`` — on success, on failure, and when
+    this call is interrupted. When it is a ``SandboxPreparationFailure``, that
+    is represented here as a spawn failure, exactly like a missing executable,
+    without ever starting a process.
     """
+    sandbox = prepared.sandbox
+    if isinstance(sandbox, SandboxPreparationFailure):
+        empty = CapturedOutput(data=b"", truncated=False)
+        return PromptRunResult(
+            returncode=None,
+            stdout=empty,
+            stderr=empty,
+            elapsed=0.0,
+            timed_out=False,
+            spawn_error=sandbox.message,
+        )
     # An empty ``prepared.env`` means the child inherits ``os.environ`` (see the
     # ``env=None`` passed to ``run_capture_result`` below); interpolate argv
     # holes against the same effective mapping so both agree on variable values.
@@ -644,13 +717,27 @@ def run_prepared_prompt_result(
         child_env,
         append_target=not prepared.prompt_via_stdin,
     )
-    capture: ProcessCaptureResult = run_capture_result(
-        argv,
-        env=prepared.env if prepared.env else None,
-        stdin_text=_prepared_stdin_text(prepared),
-        idle_timeout=idle_timeout,
-        isolate_process_group=True,
-    )
+    if sandbox is not None:
+        env_for_run: dict[str, str] | None = sandbox.env
+        cwd_for_run: Path | None = sandbox.cwd
+        interrupt_cleanup_cmd = sandbox.interrupt_cleanup_cmd
+    else:
+        env_for_run = prepared.env if prepared.env else None
+        cwd_for_run = None
+        interrupt_cleanup_cmd = None
+    try:
+        capture: ProcessCaptureResult = run_capture_result(
+            argv,
+            env=env_for_run,
+            cwd=cwd_for_run,
+            stdin_text=_prepared_stdin_text(prepared),
+            idle_timeout=idle_timeout,
+            isolate_process_group=True,
+            interrupt_cleanup_cmd=interrupt_cleanup_cmd,
+        )
+    finally:
+        if sandbox is not None:
+            sandbox.close()
     return PromptRunResult(
         returncode=capture.returncode,
         stdout=capture.stdout,

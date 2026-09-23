@@ -654,7 +654,12 @@ class _ScriptedSessionBackend:
                 stderr_tail=str(outcome.get("stderr_tail", "")),
                 elapsed=elapsed,
                 call_info=AgentCallInfo(
-                    argv=[], prompt_via_stdin=False, elapsed=elapsed, exit_code=exit_code
+                    argv=[],
+                    prompt_via_stdin=False,
+                    elapsed=elapsed,
+                    exit_code=exit_code,
+                    sandboxed=False,
+                    permission_mode="none",
                 ),
             )
         if outcome != "success":

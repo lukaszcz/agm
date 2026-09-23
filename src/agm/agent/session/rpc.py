@@ -26,7 +26,7 @@ from agm.agent.session.protocol import (
     SessionOperation,
     SessionStats,
 )
-from agm.agent.spec import AgentPi
+from agm.agent.spec import AgentPi, PermissionMode
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.process import kill_process_group
 from agm.util.unicode import loads_json
@@ -120,6 +120,8 @@ class PiRpcSessionBackend:
                 prompt_via_stdin=True,
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
+                sandboxed=False,
+                permission_mode=PermissionMode.NONE.value,
             ),
         )
 
@@ -500,6 +502,8 @@ class PiRpcSessionBackend:
                 prompt_via_stdin=True,
                 elapsed=elapsed,
                 exit_code=child.process.poll(),
+                sandboxed=False,
+                permission_mode=PermissionMode.NONE.value,
             ),
         )
 

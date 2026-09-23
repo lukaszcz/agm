@@ -545,7 +545,14 @@ def test_session_ask_retries_with_corrective_follow_ups() -> None:
     "call_info",
     [
         pytest.param(
-            AgentCallInfo(argv=("worker",), prompt_via_stdin=True, elapsed=1.0, exit_code=2),
+            AgentCallInfo(
+                argv=("worker",),
+                prompt_via_stdin=True,
+                elapsed=1.0,
+                exit_code=2,
+                sandboxed=False,
+                permission_mode="none",
+            ),
             id="with-call-info",
         ),
         pytest.param(None, id="without-call-info"),

@@ -8699,7 +8699,7 @@ class TestProvisionalContainerLiterals:
         checked = accept_type(
             "def choose[T](left: T, right: T) -> T = right\n"
             "let xs = choose([], [1])\n"
-            "let values = choose({}, {answer: 1})\n"
+            'let values = choose({}, {"answer": 1})\n'
             "values"
         )
         xs, values = checked.resolved.program.body.items[1:3]
@@ -8745,7 +8745,7 @@ class TestProvisionalContainerLiterals:
         checked = accept_type(
             "let choose-empty: bool = true\n"
             "let xs = if choose-empty => [] else => [1]\n"
-            "let values = if choose-empty => {} else => {answer: 1}\n"
+            'let values = if choose-empty => {} else => {"answer": 1}\n'
             "values"
         )
         xs, values = checked.resolved.program.body.items[1:3]
@@ -8798,7 +8798,7 @@ class TestProvisionalContainerLiterals:
             "  | none\n"
             "  | some(value: T)\n"
             "let xs: array[Option[int]] = [none, some(value = 1)]\n"
-            "let values: dict[text, Option[int]] = {first: none, second: some(value = 1)}\n"
+            'let values: dict[text, Option[int]] = {"first": none, "second": some(value = 1)}\n'
             "values"
         )
         xs, values = checked.resolved.program.body.items[1:3]
@@ -8944,7 +8944,9 @@ class TestTypeDeclarations:
         reject_type('type Wrap[A] = array[A]\nlet w: Wrap[int] = ["a"]\nw')
 
     def test_parameterized_alias_unused_params(self) -> None:
-        r = accept_type("type Loose[A, B] = dict[text, json]\nlet p: Loose[int, text] = {a: 1}\np")
+        r = accept_type(
+            'type Loose[A, B] = dict[text, json]\nlet p: Loose[int, text] = {"a": 1}\np'
+        )
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
         assert r.type_env.get_binding_type(decl.node_id) == DictType(value=JsonType())

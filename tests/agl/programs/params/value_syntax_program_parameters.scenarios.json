@@ -41,7 +41,7 @@
         "shape": "Circle(radius = 1)",
         "count": "42",
         "tag": "Some(7)",
-        "meta": "{a: 1, b: 2}"
+        "meta": "{\"a\": 1, \"b\": 2}"
       },
       "expect": {
         "stdout": "m\n1,1\ncircle 1\n42\ntag 7\n{\"a\": 1, \"b\": 2}\n0\n\n"

@@ -17,7 +17,7 @@ def id[T](value: T) -> T = value
 
 program def main(prefer-empty: bool) -> unit =
   let from-array-sibling = choose([], [7])
-  let from-dict-sibling = choose({}, {answer: 8})
+  let from-dict-sibling = choose({}, {"answer": 8})
   let from-result: array[int] = id([])
   let from-fields = Bundle(values = [], metadata = {}, value = 9)
   let options: array[Option[int]] = [none, some(value = 10)]

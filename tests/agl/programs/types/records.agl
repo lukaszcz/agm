@@ -19,7 +19,7 @@ program def main(min-severity: int) -> unit =
     severity = 3,
     weight = 0.5,
     tags = ["tests", "coverage"],
-    extra = {origin: "static", retries: null},
+    extra = {"origin": "static", "retries": null},
     author = Author(name = "Ada", active = true),
   )
 

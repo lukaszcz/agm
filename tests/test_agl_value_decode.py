@@ -190,7 +190,7 @@ class TestScalarDecode:
 class TestJsonScalarDecode:
     def test_accepts_heterogeneous_data(self) -> None:
         schema, defs = _scalar_plan(JsonType())
-        result = value_node_to_json(read_value('[1, "a", null, true, 2.5, {x: 1}]'), schema, defs)
+        result = value_node_to_json(read_value('[1, "a", null, true, 2.5, {"x": 1}]'), schema, defs)
         assert result == [1, "a", None, True, Decimal("2.5"), {"x": 1}]
 
     def test_rejects_a_constructor(self) -> None:
@@ -201,7 +201,7 @@ class TestJsonScalarDecode:
     def test_rejects_a_duplicate_dict_key(self) -> None:
         schema, defs = _scalar_plan(JsonType())
         with pytest.raises(ValueDecodeError):
-            value_node_to_json(read_value("{x: 1, x: 2}"), schema, defs)
+            value_node_to_json(read_value('{"x": 1, "x": 2}'), schema, defs)
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ class TestArrayDictDecode:
 
     def test_dict_of_text(self) -> None:
         schema = DictDecode(value=ScalarDecode(kind=ScalarKind.TEXT))
-        result = value_node_to_json(read_value('{a: "x", b: "y"}'), schema)
+        result = value_node_to_json(read_value('{"a": "x", "b": "y"}'), schema)
         assert result == {"a": "x", "b": "y"}
 
     def test_dict_rejects_non_dict(self) -> None:
@@ -232,7 +232,7 @@ class TestArrayDictDecode:
     def test_dict_rejects_duplicate_key(self) -> None:
         schema = DictDecode(value=ScalarDecode(kind=ScalarKind.INT))
         with pytest.raises(ValueDecodeError):
-            value_node_to_json(read_value("{a: 1, a: 2}"), schema)
+            value_node_to_json(read_value('{"a": 1, "a": 2}'), schema)
 
     def test_array_mismatch_names_a_boolean_node(self) -> None:
         schema = ArrayDecode(elem=ScalarDecode(kind=ScalarKind.INT))
@@ -247,7 +247,7 @@ class TestArrayDictDecode:
     def test_array_mismatch_names_a_dict_node(self) -> None:
         schema = ArrayDecode(elem=ScalarDecode(kind=ScalarKind.INT))
         with pytest.raises(ValueDecodeError):
-            value_node_to_json(read_value("{a: 1}"), schema)
+            value_node_to_json(read_value('{"a": 1}'), schema)
 
 
 # ---------------------------------------------------------------------------

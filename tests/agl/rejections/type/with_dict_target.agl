@@ -1,4 +1,4 @@
 program def main() -> unit =
-  let d = {a: 1, b: 2}
+  let d = {"a": 1, "b": 2}
   let e = d with a = 3
   print "done"

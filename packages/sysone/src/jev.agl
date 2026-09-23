@@ -49,21 +49,31 @@ var max-retries: int = 2
 var noul-threshold: decimal = 0.5
 
 # A noul answer: the probability of yes.
-record Noul(probability: decimal)
+record Noul
+  probability: decimal
 
 # `true` when `probability` reaches `threshold`.
 def Noul::value(self, threshold: decimal = ::noul-threshold) -> bool =
   self.probability >= threshold
 
 # `probabilities` is keyed by member tag.
-record Choice[C](choice: C, confidence: decimal, probabilities: dict[text, decimal])
+record Choice[C]
+  choice: C
+  confidence: decimal
+  probabilities: dict[text, decimal]
 
 # `level` is the most probable member, the lowest-index one on a tie; `score`
 # is the probability-weighted level index; `probabilities` is by level index.
-record Score[L](level: L, score: decimal, confidence: decimal, probabilities: array[decimal])
+record Score[L]
+  level: L
+  score: decimal
+  confidence: decimal
+  probabilities: array[decimal]
 
 # Descriptions of the yes and no outcomes.
-record NoulCriteria(when-true: json, when-false: json)
+record NoulCriteria
+  when-true: json
+  when-false: json
 
 # The raw API shape. Instructions and descriptions accept structured JSON as
 # the API does.
@@ -80,40 +90,63 @@ enum Answer
   | ScoreAnswer(score: decimal, confidence: decimal, probabilities: array[decimal],
                 legend: array[json])
 
-record Usage(input-tokens: Option[int], output-tokens: Option[int])
+record Usage
+  input-tokens: Option[int]
+  output-tokens: Option[int]
 
 # `answers` is keyed by question name.
-record Response(model: text, answers: dict[text, Answer], usage: Usage, request-id: Option[text])
+record Response
+  model: text
+  answers: dict[text, Answer]
+  usage: Usage
+  request-id: Option[text]
 
 # `message` is the SDK's message. An SDK error with no more specific class
 # below (a missing API key, an invalid retry policy, no questions), including
 # one raised while building the client, is a plain `JevError` whose
 # `request-id` is `None`.
-exception JevError extends Exception(request-id: Option[text])
+exception JevError extends Exception
+  request-id: Option[text]
+
 # An unsuccessful HTTP response after the SDK's retries.
-exception JevApiError extends JevError(status: int, body: json)
+exception JevApiError extends JevError
+  status: int
+  body: json
+
 # 401 or 403.
 exception JevAuthError extends JevApiError()
+
 # 400, 404, or 422.
 exception JevRequestError extends JevApiError()
+
 # 429.
-exception JevRateLimitError extends JevApiError(retry-after-ms: Option[int])
+exception JevRateLimitError extends JevApiError
+  retry-after-ms: Option[int]
+
 # 5xx.
 exception JevServerError extends JevApiError()
+
 # The request reached no response.
-exception JevConnectionError extends JevError(cause: text)
+exception JevConnectionError extends JevError
+  cause: text
+
 # `timeout` is the timeout the SDK reported for the request, as duration
 # text in the `timeout` form above (such as `"10.0s"`).
-exception JevTimeoutError extends JevError(timeout: text)
+exception JevTimeoutError extends JevError
+  timeout: text
+
 # A success response whose body is structurally invalid at `field-path`, or
 # whose answer the target cannot hold: `answers.<question>.choice` for a label
 # outside it, `answers.<question>.probabilities` for keys other than exactly
 # its labels or level indices.
-exception JevResponseError extends JevError(field-path: text)
+exception JevResponseError extends JevError
+  field-path: text
+
 # A target type no question kind maps; `target` is its type label (such as
 # `Team` or `std/option::Option[Team]`), or `<record>.<field>` for an
 # `ask-many` field.
-exception JevTargetError extends JevError(target: text)
+exception JevTargetError extends JevError
+  target: text
 
 # Asks `questions`, keyed by name, about `state` in one request.
 @extern-name("system_one")
@@ -130,12 +163,12 @@ def try-system-one(state: json, questions: dict[text, Question], model: Option[t
   catch JevError as e => Err(e)
 
 @extern-name("ask_noul")
-extern def ask-noul(instructions: text, state: json, criteria: Option[NoulCriteria] = None,
+extern def ask-noul(instructions: text, state: json = "", criteria: Option[NoulCriteria] = None,
                     model: Option[text] = ::model, timeout: Option[text] = ::timeout,
                     api-key: Option[text] = ::api-key, base-url: Option[text] = ::base-url,
                     max-retries: int = ::max-retries) -> Noul
 
-def try-ask-noul(instructions: text, state: json, criteria: Option[NoulCriteria] = None,
+def try-ask-noul(instructions: text, state: json = "", criteria: Option[NoulCriteria] = None,
                  model: Option[text] = ::model, timeout: Option[text] = ::timeout,
                  api-key: Option[text] = ::api-key, base-url: Option[text] = ::base-url,
                  max-retries: int = ::max-retries) -> Result[Noul, JevError] =
@@ -146,19 +179,19 @@ def try-ask-noul(instructions: text, state: json, criteria: Option[NoulCriteria]
 # `try-` twins; catch `JevError` instead.
 
 @extern-name("ask_choice")
-extern def ask-choice[C](instructions: text, state: json, model: Option[text] = ::model,
+extern def ask-choice[C](instructions: text, state: json = "", model: Option[text] = ::model,
                          timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
                          base-url: Option[text] = ::base-url,
                          max-retries: int = ::max-retries) -> Choice[C]
 
 @extern-name("ask_score")
-extern def ask-score[L](instructions: text, state: json, model: Option[text] = ::model,
+extern def ask-score[L](instructions: text, state: json = "", model: Option[text] = ::model,
                         timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
                         base-url: Option[text] = ::base-url,
                         max-retries: int = ::max-retries) -> Score[L]
 
 # Asks one question typed by the target.
-extern def ask[T](instructions: text, state: json, model: Option[text] = ::model,
+extern def ask[T](instructions: text, state: json = "", model: Option[text] = ::model,
                   timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
                   base-url: Option[text] = ::base-url, max-retries: int = ::max-retries,
                   noul-threshold: decimal = ::noul-threshold) -> T

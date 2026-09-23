@@ -378,9 +378,10 @@ class TestConfigDefaultAgent:
     def test_config_default_agent_is_seeded(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``default-agent`` is the other enum-backed engine key (``AGENT``
-        kind): a ``@config`` value for it goes through the same executable ->
-        standard identity restamp as ``timeout``/``trace-file`` (``OPTION_TEXT``)."""
+        """``default-agent`` is one of the enum-backed engine keys (``AGENT``
+        kind, alongside ``default-sandbox``'s ``AGENT_SANDBOX``): a ``@config``
+        value for it goes through the same executable -> standard identity
+        restamp as ``timeout``/``trace-file`` (``OPTION_TEXT``)."""
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
@@ -390,6 +391,25 @@ class TestConfigDefaultAgent:
         )
         exec_command.run(_exec_args_no_trace(agl_file))
         assert "config-agent" in capsys.readouterr().out
+
+
+class TestConfigDefaultSandbox:
+    def test_config_default_sandbox_is_seeded(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``default-sandbox`` is the ``AGENT_SANDBOX`` engine key: a ``@config`` value
+        for it goes through the same executable -> standard identity restamp as
+        ``default-agent``, but for the ``AgentSandbox`` reserved enum."""
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(
+            agl_file,
+            "import std/config\n\n"
+            "@config(config::default-sandbox = AgentSandbox::Native)\n"
+            "program def main() -> unit = "
+            "print(config::default-sandbox is AgentSandbox::Native)\n",
+        )
+        exec_command.run(_exec_args_no_trace(agl_file))
+        assert capsys.readouterr().out == "true\n"
 
 
 class TestConfigStrictJson:

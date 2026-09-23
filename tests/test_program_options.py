@@ -459,7 +459,9 @@ class TestBuildProgramCommand:
 
         assert isinstance(result, ProgramCommand)
 
-    @pytest.mark.parametrize("flag", ["max-call-depth", "trace-file", "no-timeout"])
+    @pytest.mark.parametrize(
+        "flag", ["max-call-depth", "trace-file", "no-timeout", "default-sandbox"]
+    )
     def test_run_time_exec_flags_are_reserved_on_a_registered_command(self, flag: str) -> None:
         result = build_program_command(
             _program(_param("value", TextType(), external=flag)), REGISTERED_RESERVED_FLAGS

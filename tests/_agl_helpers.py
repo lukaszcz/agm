@@ -46,6 +46,14 @@ supply one but don't assert on its content.
 ``agm.commands.exec_program`` makes; ``run_inline_command`` uses it so an
 inline scenario's ``@config`` engine settings reach the interpreter the same
 way the real host applies them.
+
+``run_program``/``shapes_match``/``assert_shape`` and the REPL helpers
+``eval_ok``/``read_config_result``/``repl_session``/``unopened_repl_session``/
+``record_variant`` are shared by the engine-setting test suites
+(``default-agent``, ``default-sandbox``, the generic restamp tests, the REPL
+builtin-settings tests): running inline source or a REPL entry, and comparing
+or reading back a resulting ``std/config`` engine-setting value structurally
+regardless of which nominal table stamped it.
 """
 
 from __future__ import annotations
@@ -62,13 +70,14 @@ from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
 from agm.agl.ir.contracts import DecodePlan
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
-from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
+from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors, VariantDescriptor
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import ArgumentPreflight, PreparedProgram, ProgramDiscovery, RunResult
+from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.engine_config import restamp_engine_setting
 from agm.agl.runtime.types import ProgramDeclInfo
@@ -88,7 +97,7 @@ from agm.agl.semantics.types import (
     free_type_vars,
     transform_type,
 )
-from agm.agl.semantics.values import RecordValue, TextValue, Value
+from agm.agl.semantics.values import BoolValue, RecordValue, TextValue, Value
 from agm.agl.syntax import (
     AssignStmt,
     Block,
@@ -679,3 +688,110 @@ def agl_std_package_roots(*paths: Path) -> RootSet:
         cwd=REPO_STDLIB_ROOT,
         package_roots=(std_package,),
     )
+
+
+def run_program(
+    source: str,
+    *,
+    seed: "dict[str, Value] | None" = None,
+    host_settings_policy: object | None = None,
+) -> RunResult:
+    """Run inline *source* through the shared inline-entry transform.
+
+    Asserts the result is a full :class:`RunResult` (not an argument-preflight
+    failure). Shared by the engine-setting test suites (``default-agent``,
+    ``default-sandbox``, the generic restamp tests).
+    """
+    result = run_inline_command(
+        PipelineDriver(),
+        source,
+        roots=agl_roots(),
+        builtin_host_settings=seed,
+        host_settings_policy=host_settings_policy,
+    )
+    assert isinstance(result, RunResult)
+    return result
+
+
+def shapes_match(actual: Value, expected: Value) -> bool:
+    """Compare two values structurally, ignoring ``RecordValue`` nominal identity.
+
+    A running program's own nominal identity for a builtin/reserved type
+    differs from the reserved-fallback identity a host-built expected value
+    carries (see :func:`assert_shape`); a nested field (e.g. ``Sandbox``'s
+    ``Optional``/``Option``-valued fields) carries its own such identity too.
+    Recurses through ``RecordValue`` fields; every other value kind compares
+    by its own ``==``.
+    """
+    if isinstance(expected, RecordValue):
+        return (
+            isinstance(actual, RecordValue)
+            and actual.fields.keys() == expected.fields.keys()
+            and all(shapes_match(actual.fields[k], v) for k, v in expected.fields.items())
+        )
+    return actual == expected
+
+
+def assert_shape(actual: Value, is_variant: Value, expected: RecordValue) -> None:
+    """Verify *actual* is the expected enum member/record with the expected payload.
+
+    *is_variant* is an ``is`` member test run inside the program's own
+    source (bound alongside *actual*): the running program loads real stdlib,
+    so its own nominal enum/record carries that program's own nominal
+    identity, distinct from the reserved-fallback identity *expected* (built
+    by a test helper such as ``agent_value``) carries. Only a cast evaluated
+    inside that same program can compare identity correctly; fields compare
+    structurally instead, via :func:`shapes_match`, since a nested field may
+    itself carry a host-known identity (e.g. ``Sandbox``'s ``Optional``/
+    ``Option``-valued fields).
+    """
+    assert is_variant == BoolValue(True)
+    assert shapes_match(actual, expected)
+
+
+def unopened_repl_session(**kwargs: object) -> ReplSession:
+    """Build a session over the repository standard library, left unopened.
+
+    For a test that must observe the initial ``std/config`` load from the
+    entry that triggers it.
+    """
+    kwargs.setdefault("stdlib_root", REPO_STDLIB_ROOT)
+    return ReplSession(**kwargs)
+
+
+def repl_session(**kwargs: object) -> ReplSession:
+    """Build a session over the repository standard library and open it.
+
+    ``agm.commands.repl`` opens a session before accepting an entry, which
+    loads and type-checks the initial library image; going through
+    :meth:`ReplSession.open` here exercises that same startup and lets the
+    session reuse the process-wide bootstrap image instead of re-checking the
+    standard library once per test.
+    """
+    session = unopened_repl_session(**kwargs)
+    session.open()
+    return session
+
+
+def eval_ok(session: ReplSession, text: str) -> EntryResult:
+    """Evaluate *text* as a REPL entry, asserting it succeeded."""
+    result = session.eval_entry(text)
+    assert result.ok, f"entry {text!r} failed: {result.diagnostics} {result.error}"
+    return result
+
+
+def read_config_result(session: ReplSession, key: str) -> EntryResult:
+    """Import-and-read ``std/config::key``, returning the full result (value + descriptors)."""
+    result = eval_ok(session, f"std/config::{key}")
+    assert result.value is not None
+    return result
+
+
+def record_variant(value: Value, descriptors: ValueDescriptors) -> str:
+    """Return the terminal member name a ``RecordValue``'s nominal resolves to.
+
+    A ``RecordValue`` carries only its opaque ``NominalId``; its scoped
+    display spelling comes from the entry's own descriptor table.
+    """
+    assert isinstance(value, RecordValue)
+    return descriptors.nominals[value.nominal].display_name.rsplit("::", maxsplit=1)[-1]

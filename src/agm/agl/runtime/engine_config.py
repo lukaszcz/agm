@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from agm.agent.spec import AGENT_SPECS
-from agm.agl.semantics.values import ArrayValue, DictValue, RecordValue
+from agm.agl.semantics.values import RecordValue
 from agm.config.engine_keys import ENGINE_KEYS, EngineKeyKind
 
 if TYPE_CHECKING:
@@ -47,30 +47,18 @@ _ENGINE_KEY_ENUM_SHAPES: dict[str, tuple[str, tuple[str, ...]]] = {
 def _restamp_value_tree(
     value: "Value", *, from_table: "BuiltinNominals", to_table: "BuiltinNominals"
 ) -> "Value":
-    """Recursively restamp every nominal identity in *value* from *from_table* to *to_table*.
+    """Recursively restamp every nominal identity in a record tree from *from_table* to *to_table*.
 
     A restamped record can itself carry other host-known nominal values (e.g.
     ``AgentSandbox``'s ``Sandbox`` member has ``Optional``/``Option``-typed
     fields), so restamping the outer identity alone would leave a nested
-    value's identity unrecognized by *to_table*'s owner. An array/dict is
-    restamped element-wise, into a fresh container. A field/element this
-    table has no name for (an ordinary, non-host-known value) crosses
-    unchanged.
+    value's identity unrecognized by *to_table*'s owner. Only records recurse:
+    every engine-setting value is a scalar, an ``Option``/``Optional``, or a
+    record built from those (see ``semantics.engine_keys.ENGINE_KEY_TYPES``)
+    -- never an array or dict -- so this never needs to look inside a
+    collection. A non-record value, including one nested in a field this
+    table has no name for, crosses unchanged.
     """
-    if isinstance(value, ArrayValue):
-        return ArrayValue(
-            elements=[
-                _restamp_value_tree(element, from_table=from_table, to_table=to_table)
-                for element in value.elements
-            ]
-        )
-    if isinstance(value, DictValue):
-        return DictValue(
-            entries={
-                key: _restamp_value_tree(entry, from_table=from_table, to_table=to_table)
-                for key, entry in value.entries.items()
-            }
-        )
     if not isinstance(value, RecordValue):
         return value
     fields = {
@@ -121,7 +109,7 @@ def restamp_engine_setting(
 ) -> "Value":
     """Restamp *value* onto *to_table*'s identity when *key* is enum-backed.
 
-    An enum-backed engine key (``AGENT``/``OPTION_TEXT`` kind) carries the
+    An enum-backed engine key (``AGENT``/``AGENT_SANDBOX``/``OPTION_TEXT`` kind) carries the
     identity of whichever nominal table stamped it; every reader of such a
     value needs it in its own table's identity to recognize the value's
     members with :func:`~agm.agl.ir.builtin_nominals.resolve_standard_member_name`

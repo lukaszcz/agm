@@ -20,13 +20,29 @@ from shutil import copyfile
 
 import pytest
 
-from agm.agl.ir.program import ValueDescriptors
-from agm.agl.repl import EntryResult, ReplSession
+from agm.agl.repl import ReplSession
 from agm.agl.runtime.engine_config import build_engine_config_seeds
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.values import BoolValue, IntValue, RecordValue, TextValue, Value
-from tests._agl_helpers import agent_value
+from tests._agl_helpers import (
+    agent_value,
+)
+from tests._agl_helpers import (
+    eval_ok as _ok,
+)
+from tests._agl_helpers import (
+    read_config_result as _read_result,
+)
+from tests._agl_helpers import (
+    record_variant as _variant,
+)
+from tests._agl_helpers import (
+    repl_session as _session,
+)
+from tests._agl_helpers import (
+    unopened_repl_session as _unopened_session,
+)
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 
@@ -61,58 +77,11 @@ class _FencedAgent:
         return AgentResponse(content="```json\n42\n```")
 
 
-def _unopened_session(**kwargs: object) -> ReplSession:
-    """Build a session over the repository standard library, left unopened.
-
-    For the tests that must observe the initial ``std/config`` load from the
-    entry that triggers it.
-    """
-    kwargs.setdefault("stdlib_root", _STDLIB_ROOT)
-    return ReplSession(**kwargs)
-
-
-def _session(**kwargs: object) -> ReplSession:
-    """Build a session over the repository standard library and open it.
-
-    ``agm.commands.repl`` opens a session before accepting an entry, which
-    loads and type-checks the initial library image; going through
-    :meth:`ReplSession.open` here exercises that same startup and lets the
-    session reuse the process-wide bootstrap image instead of re-checking the
-    standard library once per test.
-    """
-    session = _unopened_session(**kwargs)
-    session.open()
-    return session
-
-
-def _ok(session: ReplSession, text: str) -> EntryResult:
-    result = session.eval_entry(text)
-    assert result.ok, f"entry {text!r} failed: {result.diagnostics} {result.error}"
-    return result
-
-
-def _read_result(session: ReplSession, key: str) -> EntryResult:
-    """Import-and-read *key*, returning the full entry result (value + descriptors)."""
-    result = _ok(session, f"std/config::{key}")
-    assert result.value is not None
-    return result
-
-
 def _read(session: ReplSession, key: str) -> Value:
     """Import-and-read *key*, returning the read value of a later-entry read."""
     value = _read_result(session, key).value
     assert value is not None
     return value
-
-
-def _variant(value: Value, descriptors: ValueDescriptors) -> str:
-    """Return the terminal member name a ``RecordValue``'s nominal resolves to.
-
-    A ``RecordValue`` carries only its opaque ``NominalId``; its scoped
-    display spelling comes from the entry's own descriptor table.
-    """
-    assert isinstance(value, RecordValue)
-    return descriptors.nominals[value.nominal].display_name.rsplit("::", maxsplit=1)[-1]
 
 
 def _assert_setting(session: ReplSession, key: str, expected: object) -> None:

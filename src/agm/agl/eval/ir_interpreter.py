@@ -713,7 +713,7 @@ class IrInterpreter:
         engine settings, reflecting any writes made during the run.  A key
         with neither a host seed nor a declared default is absent.  Hosts that
         persist settings across runs (the REPL) read this back after a run to
-        seed the next one; an enum-backed value (``Option``/``Agent``) is
+        seed the next one; an enum-backed value (``Option``/``Agent``/``AgentSandbox``) is
         already restamped onto the reserved fallback identity, so such a host
         needs no program-specific nominal table of its own -- see
         :func:`~agm.agl.runtime.engine_config.restamp_engine_setting`.

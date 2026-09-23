@@ -18,11 +18,13 @@ from agm.agl.ir.reserved_nominals import (
     require_reserved_enum_member_id,
     reserved_nominal_id,
 )
+from agm.agl.runtime.engine_config import convert_host_value
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
     OPTION_TYPE_DEF,
     OPTIONAL_TYPE_DEF,
+    RESERVED_FIELD_DEFAULT_VALUES,
     create_seeded_type_table,
 )
 from agm.agl.semantics.types import (
@@ -35,6 +37,7 @@ from agm.agl.semantics.types import (
     RecordType,
     Type,
 )
+from tests._agl_helpers import run_program, shapes_match
 
 
 def _decl_id(t: Type) -> int:
@@ -143,3 +146,35 @@ class TestSeededTypeDefsCarryReservedIds:
     def test_agent_call_error_embedded_agent_field_carries_reserved_id(self) -> None:
         fields = dict(BUILTIN_EXCEPTION_TYPE_DEFS["AgentCallError"].fields)
         assert _decl_id(fields["agent"]) == reserved_nominal_id("Agent")
+
+
+@pytest.mark.parametrize("decl_id", sorted(RESERVED_FIELD_DEFAULT_VALUES))
+def test_reserved_field_defaults_match_the_stdlib_source(decl_id: int) -> None:
+    """A reserved record's host-side default constants must match its own AgL source.
+
+    ``RESERVED_FIELD_DEFAULT_VALUES`` hand-encodes each host-known record's
+    constructor field defaults for the pre-execution CLI/config decode
+    boundary (``runtime.engine_config.convert_host_value``'s
+    ``default_resolver``), since no evaluator is reachable there. Nothing
+    else compares those constants against the real stdlib source's own
+    declared defaults, so this runs the real stdlib's bare constructor
+    (through the ordinary evaluator) and the host's own bare value-syntax
+    decode of the same constructor side by side, and checks they agree field
+    by field. Parametrized over every reserved record carrying host-side
+    defaults, so a future one (today, only ``Sandbox``) is covered
+    automatically -- this is the one guard against silent divergence between
+    ``sandbox.agl``'s declared defaults and ``semantics/type_table.py``'s
+    host-side constants.
+    """
+    type_table = create_seeded_type_table()
+    typedef = type_table.get_by_id(decl_id)
+    assert typedef is not None
+    type_name = typedef.name
+
+    result = run_program(f"let probe = {type_name}()\nprobe\n")
+    assert result.ok
+    program_value = result.bindings["probe"]
+
+    host_value = convert_host_value(type_name, f"{type_name}()", typedef.handle(), type_table)
+
+    assert shapes_match(program_value, host_value)

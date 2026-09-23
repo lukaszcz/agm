@@ -333,7 +333,9 @@ bare member name (`Native`, `Disabled`, `Sandbox`) or a member constructor
 call. An omitted field of a defaulted-field constructor — such as `Sandbox`'s
 `memory`, `swap`, `settings`, and `patch` — fills from that field's own
 declared default, so `Sandbox`, `Sandbox()`, and `Sandbox(memory =
-Some("8G"))` all decode.
+Some("8G"))` all decode. A config-table entry may also spell such a value as
+a native TOML table instead of a quoted string, tagging its own and any
+nested constructor's kind with the same `"$case"` key its JSON form uses.
 
 ### Precedence
 
@@ -349,6 +351,11 @@ The CLI flag and config-file layers, and the selected program's own
 value; a source write to `std/config::X` overrides them from its program
 point onward. A program that never writes a setting keeps the value chosen by
 those layers.
+
+For example, `--default-sandbox Native` overrides both a `[prog.main]
+default-sandbox = "Sandbox"` table entry and `[exec] default-sandbox =
+"Sandbox"`; a later `std/config::default-sandbox := AgentSandbox::Disabled`
+write overrides the flag from that point on.
 
 `agm repl` resolves engine settings as source writes > CLI > `[exec]` > declared
 default. It has no entry program: a `program def` declared at the prompt is an
@@ -370,7 +377,15 @@ parameters are CLI-only. The selected program's own
 [`@config`](attributes.md#config) entries rank between this qualified table
 and `[exec]` for an engine setting, and between this table and a module route
 for a module parameter; `@config` is a source declaration, so it never
-appears in a config file.
+appears in a config file. For example:
+
+```toml
+[exec]
+default-sandbox = "Native"
+
+[prog.main]
+default-sandbox = 'Sandbox(memory = Some("8G"))'
+```
 
 A program a package registers as a CLI command is addressed by that command
 path too: `agm dev review`, registered for `review-tools/review::main`, reads

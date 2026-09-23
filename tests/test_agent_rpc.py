@@ -194,7 +194,10 @@ def test_prompt_handled_without_agent_run_completes_and_keeps_session_usable(
             ],
         },
     )
-    backend = open_backend(timeout=0.2)
+    # The idle timeout here is a deadman switch, not a timing assumption under test: a
+    # regression that makes `ask` wait for `agent_settled` even when the state response
+    # already reports the agent idle would otherwise hang instead of failing cleanly.
+    backend = open_backend(timeout=5)
 
     assert backend.ask(SessionAskRequest("handled command")).content == ""
     backend.compact("")

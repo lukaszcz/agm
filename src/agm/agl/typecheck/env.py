@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from agm.agl.syntax.types import AppliedT, NameT
     from agm.agl.typecheck.function_inference import FunctionSignatureRecord
 
+from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
@@ -232,12 +233,16 @@ class FunctionSignature(_Record):
                       (receiver included) mentions, in declaration order; each
                       call site resolves them and delivers their contracts.
                       Empty for every other function.
+    ``bounds``      — the declaration's constraint block, type-parameter name to
+                      its closed constraint kinds (``Hashable`` implies ``Eq``).
+                      Empty for a declaration with no ``{...}`` block.
     """
 
     params: tuple[ParamSpec, ...]
     result: Type
     type_params: tuple[str, ...] = ()
     target_params: tuple[str, ...] = ()
+    bounds: ConstraintBounds = MappingProxyType({})
 
 
 @_pickles_by_name

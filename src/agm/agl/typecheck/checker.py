@@ -43,9 +43,11 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Literal, Protocol, TypeGuard, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import Diagnostic, dollar_spacing_hint, static_root_message
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, is_std_config_root, spell_declaration
@@ -80,6 +82,8 @@ from agm.agl.semantics.type_table import (
     is_assignable_in,
     json_cast_hint,
     qualified_decl_name,
+    same_comparison_type,
+    satisfies_eq,
 )
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -654,10 +658,10 @@ def _rerooted_signature(sig: FunctionSignature, prefix: tuple[str, ...]) -> Func
     """
     if not prefix:
         return sig
-    return FunctionSignature(
+    return replace(
+        sig,
         params=tuple(replace(p, type=reroot_type(p.type, prefix)) for p in sig.params),
         result=reroot_type(sig.result, prefix),
-        type_params=sig.type_params,
     )
 
 
@@ -863,6 +867,8 @@ class _Checker:
         self._warnings: list[Diagnostic] = []
         # Type variables currently in scope (non-empty inside a generic def body).
         self._current_type_vars: frozenset[str] = frozenset()
+        # The enclosing def's constraint block, empty outside a bounded body.
+        self._current_bounds: ConstraintBounds = MappingProxyType({})
         self._cast_specs: dict[int, CastSpec] = {}
         # A built-in call's explicit ``::[T]`` type argument, keyed by Call.node_id.
         # Absent when the call has none. Populated by BuiltinCallChecker via
@@ -1359,7 +1365,9 @@ class _Checker:
         # def resets the set to empty (defs never nest, but this stays correct
         # regardless): the body's annotations see exactly this def's type vars.
         old_type_vars = self._current_type_vars
+        old_bounds = self._current_bounds
         self._current_type_vars = frozenset(sig.type_params)
+        self._current_bounds = sig.bounds
         try:
             # Bind params in the env.
             for p, spec in zip(node.params, sig.params):
@@ -1390,6 +1398,7 @@ class _Checker:
             self._set_extern_binding_targets(node.node_id, targets)
         finally:
             self._current_type_vars = old_type_vars
+            self._current_bounds = old_bounds
 
     def _check_program_config(self, node: FuncDef) -> None:
         """Check a ``program def``'s ``@config`` entries, if it carries one.
@@ -1448,9 +1457,11 @@ class _Checker:
         assert node.body is not None
         self._candidate_session = session
         old_type_vars = self._current_type_vars
+        old_bounds = self._current_bounds
         old_declaration_id = session.current_declaration_id
         session.current_declaration_id = node.node_id
         self._current_type_vars = frozenset(signature.type_params)
+        self._current_bounds = signature.bounds
         try:
             for param, spec in zip(node.params, signature.params, strict=True):
                 self._env.set_binding_type(param.node_id, spec.type)
@@ -1474,6 +1485,7 @@ class _Checker:
             return result
         finally:
             self._current_type_vars = old_type_vars
+            self._current_bounds = old_bounds
             session.current_declaration_id = old_declaration_id
             self._candidate_session = None
 
@@ -4687,14 +4699,18 @@ class _Checker:
             for typ in resolved
         )
 
-    @staticmethod
-    def _candidate_in_operation_can_defer(operands: tuple[Type, ...]) -> bool:
+    def _candidate_in_operation_can_defer(self, operands: tuple[Type, ...]) -> bool:
         """Whether partially known membership operands could form a valid operation."""
         left, right = operands
         if isinstance(right, InferenceVarType):
             return True
         if isinstance(right, ArrayType):
-            return True
+            # Defer while the element type is still unresolved; a concrete
+            # element type must already satisfy 'Eq' to keep deferring, or
+            # '_check_in_op' raises with a precise diagnostic now.
+            return contains_inference_var(right.elem) or satisfies_eq(
+                right.elem, self._env.type_table, self._current_bounds
+            )
         if isinstance(right, (TextType, DictType)):
             return contains_inference_var(left) or isinstance(left, (TextType, BottomType))
         return False
@@ -4706,7 +4722,7 @@ class _Checker:
             return all(
                 contains_inference_var(typ)
                 or isinstance(typ, BottomType)
-                or comparable_types(typ, typ, self._env.type_table)
+                or comparable_types(typ, typ, self._env.type_table, self._current_bounds)
                 for typ in resolved
             )
 
@@ -4826,24 +4842,18 @@ class _Checker:
         if op in (BinOp.EQ, BinOp.NEQ):
             if self._candidate_equality_can_defer(left_type, right_type):
                 return BoolType()
-            # reject operations on bare type variables.
-            if isinstance(left_type, TypeVarType):
-                raise AglTypeError(
-                    f"operation '=' is not permitted on a value of abstract type "
-                    f"variable '{left_type.name}'.",
-                    span=span,
-                )
-            if isinstance(right_type, TypeVarType):
-                raise AglTypeError(
-                    f"operation '=' is not permitted on a value of abstract type "
-                    f"variable '{right_type.name}'.",
-                    span=span,
-                )
             if not (
                 isinstance(left_type, BottomType)
                 or isinstance(right_type, BottomType)
-                or comparable_types(left_type, right_type, self._env.type_table)
+                or comparable_types(
+                    left_type, right_type, self._env.type_table, self._current_bounds
+                )
             ):
+                if same_comparison_type(left_type, right_type):
+                    raise AglTypeError(
+                        f"'=' needs 'Eq' (or 'Hashable') for type '{left_type!r}'.",
+                        span=span,
+                    )
                 raise AglTypeError(
                     f"Equality operands must have the same type; "
                     f"got '{left_type!r}' and '{right_type!r}'.",
@@ -4973,19 +4983,6 @@ class _Checker:
             (left_type, right_type), (), can_defer=self._candidate_in_operation_can_defer
         ):
             return BoolType()
-        # reject operations on bare type variables.
-        if isinstance(left_type, TypeVarType):
-            raise AglTypeError(
-                f"operation 'in' is not permitted on a value of abstract type variable "
-                f"'{left_type.name}'.",
-                span=span,
-            )
-        if isinstance(right_type, TypeVarType):
-            raise AglTypeError(
-                f"operation 'in' is not permitted on a value of abstract type variable "
-                f"'{right_type.name}'.",
-                span=span,
-            )
         if self._is_type_or_bottom(left_type, TextType) and self._is_type_or_bottom(
             right_type, TextType
         ):
@@ -4995,6 +4992,12 @@ class _Checker:
                 raise AglTypeError(
                     f"'in' element type mismatch: '{left_type!r}' in 'array[{right_type.elem!r}]'."
                     f"{json_cast_hint(left_type, right_type.elem, self._env.type_table)}",
+                    span=span,
+                )
+            if not satisfies_eq(right_type.elem, self._env.type_table, self._current_bounds):
+                raise AglTypeError(
+                    f"'in' needs 'Eq' (or 'Hashable') on the array element type "
+                    f"'{right_type.elem!r}'.",
                     span=span,
                 )
             return BoolType()
@@ -6049,7 +6052,9 @@ class _Checker:
             return
         if isinstance(pattern, LiteralPattern):
             lit_type = self._check_expr(pattern.literal, expected=None)
-            if not comparable_types(lit_type, subj_type, self._env.type_table):
+            if not comparable_types(
+                lit_type, subj_type, self._env.type_table, self._current_bounds
+            ):
                 raise AglTypeError(
                     f"Literal pattern of type '{lit_type!r}' is incompatible with "
                     f"scrutinee of type '{subj_type!r}'.",

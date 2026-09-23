@@ -2748,7 +2748,7 @@ class TestComparableTypesTableAware:
             )
         )
         handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
-        assert comparable_types(handle, handle, table) is True
+        assert comparable_types(handle, handle, table, bounds={}) is True
 
     def test_generic_enum_function_variant_via_instantiation_not_comparable(self) -> None:
         table = TypeTable()
@@ -2765,12 +2765,12 @@ class TestComparableTypesTableAware:
         fn_handle = EnumType(
             name="Holder", type_args=(fn_type,), module_id=ENTRY_ID, decl_id=700023
         )
-        assert comparable_types(fn_handle, fn_handle, table) is False
+        assert comparable_types(fn_handle, fn_handle, table, bounds={}) is False
 
         text_handle = EnumType(
             name="Holder", type_args=(TextType(),), module_id=ENTRY_ID, decl_id=700023
         )
-        assert comparable_types(text_handle, text_handle, table) is True
+        assert comparable_types(text_handle, text_handle, table, bounds={}) is True
 
     def test_record_with_unit_nested_in_array_field_not_comparable(self) -> None:
         # Nested depth: the record field itself is an array, whose element type
@@ -2790,7 +2790,7 @@ class TestComparableTypesTableAware:
         handle = RecordType(
             name="Wrapper", type_args=(UnitType(),), module_id=ENTRY_ID, decl_id=700024
         )
-        assert comparable_types(handle, handle, table) is False
+        assert comparable_types(handle, handle, table, bounds={}) is False
 
     def test_exception_with_function_field_not_comparable(self) -> None:
         table = TypeTable()
@@ -2805,7 +2805,7 @@ class TestComparableTypesTableAware:
             )
         )
         exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700025)
-        assert comparable_types(exc, exc, table) is False
+        assert comparable_types(exc, exc, table, bounds={}) is False
 
     def test_exception_with_only_scalar_fields_comparable(self) -> None:
         table = TypeTable()
@@ -2819,7 +2819,7 @@ class TestComparableTypesTableAware:
             )
         )
         exc = ExceptionType(name="Failure", module_id=ENTRY_ID, decl_id=700025)
-        assert comparable_types(exc, exc, table) is True
+        assert comparable_types(exc, exc, table, bounds={}) is True
 
     def test_record_containing_exception_with_function_field_not_comparable(self) -> None:
         # A record field of exception type walks that exception's flattened
@@ -2846,7 +2846,7 @@ class TestComparableTypesTableAware:
             )
         )
         handle = RecordType(name="Report", module_id=ENTRY_ID, decl_id=700026)
-        assert comparable_types(handle, handle, table) is False
+        assert comparable_types(handle, handle, table, bounds={}) is False
 
     def test_record_referencing_already_flagged_record_not_comparable(self) -> None:
         # X is unconditionally non-comparable (a function field); Y's only
@@ -2874,7 +2874,7 @@ class TestComparableTypesTableAware:
             )
         )
         handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700027)
-        assert comparable_types(handle, handle, table) is False
+        assert comparable_types(handle, handle, table, bounds={}) is False
 
     def test_dangling_field_reference_defaults_to_comparable(self) -> None:
         # Y's field references a declaration that was never registered (an
@@ -2892,7 +2892,7 @@ class TestComparableTypesTableAware:
             )
         )
         handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700027)
-        assert comparable_types(handle, handle, table) is True
+        assert comparable_types(handle, handle, table, bounds={}) is True
 
     def test_unregistered_handle_defaults_to_comparable(self) -> None:
         # Querying comparability of a handle whose own declaration was never
@@ -2900,7 +2900,7 @@ class TestComparableTypesTableAware:
         # is likewise defensive rather than a crash.
         table = TypeTable()
         handle = RecordType(name="Ghost", module_id=ENTRY_ID)
-        assert comparable_types(handle, handle, table) is True
+        assert comparable_types(handle, handle, table, bounds={}) is True
 
     def test_recursive_tree_is_comparable(self) -> None:
         # A self-referential enum (array/dict guard not even needed for
@@ -2924,7 +2924,7 @@ class TestComparableTypesTableAware:
             ),
         )
         handle = EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)
-        assert comparable_types(handle, handle, table) is True
+        assert comparable_types(handle, handle, table, bounds={}) is True
 
     def test_recursive_type_with_function_field_at_depth_not_comparable(self) -> None:
         # Same recursive shape as above, but one variant carries a function
@@ -2948,7 +2948,7 @@ class TestComparableTypesTableAware:
             ),
         )
         handle = EnumType(name="Tree", module_id=ENTRY_ID, decl_id=700028)
-        assert comparable_types(handle, handle, table) is False
+        assert comparable_types(handle, handle, table, bounds={}) is False
 
     def test_mutually_recursive_records_are_comparable(self) -> None:
         # A/B are mutually recursive through an array guard (inhabited) and
@@ -2978,8 +2978,8 @@ class TestComparableTypesTableAware:
         )
         a_handle = RecordType(name="A", module_id=ENTRY_ID, decl_id=700014)
         b_handle = RecordType(name="B", module_id=ENTRY_ID, decl_id=700015)
-        assert comparable_types(a_handle, a_handle, table) is True
-        assert comparable_types(b_handle, b_handle, table) is True
+        assert comparable_types(a_handle, a_handle, table, bounds={}) is True
+        assert comparable_types(b_handle, b_handle, table, bounds={}) is True
 
 
 # ---------------------------------------------------------------------------

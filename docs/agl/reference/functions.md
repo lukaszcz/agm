@@ -11,19 +11,24 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def         ::= attributes? "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= attributes? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
 func_decl_head   ::= decl_head | builtin_receiver "::" name
 decl_head     ::= [scope_path "::"] name
 builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
                    | "text" | "json" | "int" | "decimal" | "bool"
 func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"
+constraint_block ::= "{" constraint ("," constraint)* ","? "}"
+constraint       ::= ("Eq" | "Hashable") name
 param_list    ::= param ("," param)* ","?
 param         ::= attributes? field_name ":" type_expr ("=" or_expr)?
                 | "self" [":" type_expr]       (* first parameter of a method *)
 ```
+
+`constraint_block` bounds one or more of `type_params` `Eq` or `Hashable`; see
+[Constraint blocks](generics.md#constraint-blocks).
 
 A `def` is a static declaration at the module root or in a
 [named scope](scopes.md). A declaration head may include its scope path, as in
@@ -722,9 +727,11 @@ def bad[T](x: T, y: T) -> bool = x == y   # static error: '==' on type variable 
 
 Each of these is a static error. This *parametricity* guarantee means a
 generic function treats its type-variable values uniformly regardless of the
-concrete type they are instantiated at. (The restriction applies only to the
-bare type variable itself — a value of a concrete or composite type such as
-`array[T]` supports every operation that type normally allows.)
+concrete type they are instantiated at. (The restriction extends to any type
+that nests the bare type variable — `array[T]` still rejects `==`, `!=`, `in`,
+and literal-pattern matching unless the declaration bounds `T`; see
+[Constraint blocks](generics.md#constraint-blocks). Every other operation a
+composite type normally allows, such as indexing, remains unrestricted.)
 
 ## Calling functions
 

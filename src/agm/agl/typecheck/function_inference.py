@@ -12,8 +12,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, NamedTuple
 
+from agm.agl.constraints import ConstraintBounds, close_constraints
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import DeclarationKey
 from agm.agl.semantics.persistent import PersistentDict
@@ -637,6 +639,7 @@ def _infer_function_component(
             params=signature.params,
             result=concrete_result,
             type_params=signature.type_params,
+            bounds=signature.bounds,
         )
         function_type = FunctionType(
             params=tuple(param.type for param in signature.params), result=concrete_result
@@ -891,6 +894,21 @@ def _target_params(type_params: tuple[str, ...], params: Sequence[ParamSpec]) ->
     return tuple(name for name in type_params if name not in bound)
 
 
+def _declaration_bounds(node: FuncDef) -> ConstraintBounds:
+    """Return *node*'s constraint block as a bound environment.
+
+    Scope validation (``resolver._validate_constraints``) already rejects a
+    duplicate or redundant pairing, so each parameter names at most one
+    constraint here; :func:`close_constraints` still closes it (``Hashable``
+    implies ``Eq``).
+    """
+    if not node.constraints:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {c.param: close_constraints(frozenset({c.kind})) for c in node.constraints}
+    )
+
+
 def resolve_function_header(
     env: TypeEnvironment,
     node: FuncDef,
@@ -959,6 +977,7 @@ def resolve_function_header(
         result=resolved_result,
         type_params=signature_type_params,
         target_params=_target_params(signature_type_params, params) if node.is_extern else (),
+        bounds=_declaration_bounds(node),
     )
     return (
         signature,

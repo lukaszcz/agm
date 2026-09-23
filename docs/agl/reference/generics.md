@@ -365,7 +365,10 @@ def bad[T](x: T) -> bool = x == x     # static error: '==' not permitted on 'T'
 This guarantees a generic definition behaves uniformly at every instantiation:
 the body cannot branch on the actual type. (Once a type parameter is *applied*
 inside a known constructor — e.g. a `Box[T]` value — the surrounding structure
-is fully usable; only the bare `T` payload is opaque.)
+is usable for every operation except one that needs `Eq`/`Hashable` on the
+nested `T`, such as `==`/`!=`/`in`/literal-pattern matching over `array[T]`
+(see [Constraint blocks](#constraint-blocks)); only the bare `T` payload
+itself is opaque.)
 
 This language-internal guarantee does not extend to a Python companion behind
 `extern def`. The FFI passes the ordinary runtime representation at a generic
@@ -374,6 +377,26 @@ FFI](ffi.md#generics-and-trust). An extern type parameter that no parameter
 mentions is not opaque to its companion: each call site's concrete
 instantiation reaches it as a contract, so that instantiation may not be a
 type variable; see [Target type parameters](ffi.md#target-type-parameters).
+
+### Constraint blocks
+
+A declaration with type parameters may follow the bracketed list with a
+`{…}` constraint block naming one or more of them `Eq` or `Hashable`:
+
+```agl
+def same[T]{Eq T}(a: T, b: T) -> bool = a == b
+def member[T]{Hashable T}(x: T, xs: array[T]) -> bool = x in xs
+```
+
+`Hashable` implies `Eq`. A bound lifts the strict-parametricity restriction
+on `==`/`!=`, `in`, and literal-pattern matching for that parameter — and for
+any type that mentions it, such as `array[T]` or `Option[T]` — wherever it
+appears in the declaration's body, including its receiver's parameters for a
+method. Without a bound, those operations remain rejected on the parameter at
+any depth. A constraint names only a type parameter already in scope from the
+declaration or its receiver; naming the same parameter twice, or pairing it
+with both `Eq` and `Hashable`, is a static error. A block is rejected on a
+declaration with no type parameters.
 
 ## Invariance
 

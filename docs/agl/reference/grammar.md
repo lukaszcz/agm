@@ -338,13 +338,15 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def         ::= attributes? "def" func_decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= attributes? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
 func_decl_head   ::= decl_head | builtin_receiver "::" name
 builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
                    | "text" | "json" | "int" | "decimal" | "bool"
 func_body        ::= expr | suite
+constraint_block ::= "{" constraint ("," constraint)* ","? "}"
+constraint       ::= ("Eq" | "Hashable") name
 param_list      ::= param ("," param)* ","?
 param           ::= attributes? field_name [":" type_expr] ("=" or_expr)?
 ```
@@ -366,6 +368,9 @@ full zone semantics. No required
 positional-fillable (pos-only/standard) parameter may follow a defaulted one
 in the same zone. An optional `type_params` list after the function name makes
 the `def` generic (e.g. `def id[T](x: T) -> T`); see [Generics](generics.md).
+A generic declaration may follow it with a `constraint_block` bounding one or
+more type parameters `Eq` or `Hashable`; see
+[Constraint blocks](generics.md#constraint-blocks).
 
 All three function declaration forms accept the same `func_decl_head` surface.
 A builtin receiver may be declared in any module and must use the bare generic

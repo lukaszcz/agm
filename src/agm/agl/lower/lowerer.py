@@ -1152,6 +1152,7 @@ class _Lowerer:
             param_labels=param_labels,
             result_label=result_label,
             is_synthetic_main=funcdef.is_synthetic,
+            bounds=sig.bounds,
         )
         self._link.functions[fn_id] = desc
 
@@ -1193,6 +1194,7 @@ class _Lowerer:
             ),
             param_labels=param_labels,
             result_label=result_label,
+            bounds=signature.bounds,
         )
         self._link.functions[fn_id] = desc
 

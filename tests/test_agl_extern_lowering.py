@@ -91,6 +91,24 @@ def test_extern_body_carries_the_attributed_companion_name(tmp_path: Path) -> No
     assert body.companion_name == "py_double"
 
 
+def test_extern_descriptor_carries_closed_bounds(tmp_path: Path) -> None:
+    """A constraint block on an ``extern def`` reaches its ``FunctionDescriptor``."""
+    from agm.agl.constraints import ConstraintKind
+
+    result = _compile(
+        "extern def same[T]{Eq T}(a: T, b: T) -> bool\n"
+        "program def main() -> unit =\n"
+        "  let result = same(1, 1)\n",
+        "def same(a, b): return a == b\n",
+        tmp_path,
+    )
+
+    assert result.result.ok
+    assert result.executable is not None
+    descriptor = next(desc for desc in result.executable.functions.values() if desc.is_extern)
+    assert descriptor.bounds == {"T": frozenset({ConstraintKind.EQ})}
+
+
 def test_a_python_soft_keyword_name_compiles_through_the_pipeline(tmp_path: Path) -> None:
     result = _compile(
         "extern def match(value: int) -> int\n"

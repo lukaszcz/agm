@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.constraints import ConstraintKind
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy, RecordEncode
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import (
@@ -1803,6 +1804,53 @@ class TestLowerFunctions:
         assert isinstance(result.value, IrIndirectCall)
         assert isinstance(result.value.callee, IrField)
         assert result.value.callee.field == "print"
+
+
+class TestFunctionDescriptorBounds:
+    """A generic declaration's constraint block reaches its IR ``FunctionDescriptor``."""
+
+    def test_bounded_def_descriptor_carries_closed_bounds(self) -> None:
+        source = "def same[T]{Eq T}(a: T, b: T) -> bool = a == b\nlet r = same(1, 1)\n()"
+        prog = _lower(source)
+        (desc,) = [
+            d
+            for d in prog.functions.values()
+            if prog.symbols[d.function_symbol].public_name == "same"
+        ]
+        assert desc.bounds == {"T": frozenset({ConstraintKind.EQ})}
+
+    def test_bounded_def_descriptor_closes_hashable_over_eq(self) -> None:
+        source = (
+            "def contains[T]{Hashable T}(x: T, xs: array[T]) -> bool = x in xs\n"
+            "let r = contains(1, [1])\n()"
+        )
+        prog = _lower(source)
+        (desc,) = [
+            d
+            for d in prog.functions.values()
+            if prog.symbols[d.function_symbol].public_name == "contains"
+        ]
+        assert desc.bounds == {"T": frozenset({ConstraintKind.HASHABLE, ConstraintKind.EQ})}
+
+    def test_unbounded_def_descriptor_carries_no_bounds(self) -> None:
+        source = "def id[T](x: T) -> T = x\nlet r = id(1)\n()"
+        prog = _lower(source)
+        (desc,) = [
+            d
+            for d in prog.functions.values()
+            if prog.symbols[d.function_symbol].public_name == "id"
+        ]
+        assert desc.bounds == {}
+
+    def test_bounded_method_descriptor_carries_closed_bounds(self) -> None:
+        source = (
+            "record Box\n  value: int\n"
+            "def Box::same[T]{Eq T}(self, a: T, b: T) -> bool = a == b\n"
+            "let r = Box(value = 1).same(1, 1)\n()"
+        )
+        prog = _lower(source)
+        (desc,) = prog.functions.values()
+        assert desc.bounds == {"T": frozenset({ConstraintKind.EQ})}
 
 
 class TestScanCapturesLambdaBoundary:

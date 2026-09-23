@@ -1,10 +1,10 @@
 # A `{…}` constraint block on a generic function's type parameters parses
 # and is validated against the declaration's own and receiver type
-# parameters, but has no typing or runtime effect yet: every declaration
-# below behaves exactly like an unconstrained generic declaration at every
-# instantiation. Covers a free function, a builtin-receiver method, a
-# nominal-receiver method, and a static method with its own constrained
-# parameter.
+# parameters. None of the bodies below use an operation the bound governs
+# (`==`/`in`/literal patterns), so every declaration still runs exactly like
+# an unconstrained generic declaration at every instantiation. Covers a free
+# function, a builtin-receiver method, a nominal-receiver method, and a
+# static method with its own constrained parameter.
 record Box[T]
   value: T
 

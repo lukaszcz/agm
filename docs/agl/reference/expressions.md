@@ -650,7 +650,9 @@ binder/named-argument separator). Both operands must have the same type after
 Operands whose type is, or transitively contains, a function or `unit` value
 are a static error — this applies to bare values as well as to
 containers (`array`, `dict`), records, enums, or exceptions that hold such
-a type at any depth.
+a type at any depth. A generic type parameter — bare, or nested inside such
+a type — is comparable only where its declaration bounds it `Eq` or
+`Hashable`; see [Constraint blocks](generics.md#constraint-blocks).
 
 `==` is non-associative; `x == y == z` is a parse error.
 
@@ -667,6 +669,10 @@ issue in issues          # element membership:  issues: array[T]
 "source" in metadata     # key membership:      metadata: dict[text, V]
 "missing" in body        # substring:           both text
 ```
+
+Element membership requires the array's element type to satisfy `Eq`; a bare
+generic element type needs an `Eq`/`Hashable` bound, as for `==`
+(see [Constraint blocks](generics.md#constraint-blocks)).
 
 ### Arithmetic: `+` `-` `*` `/` and unary `-`
 

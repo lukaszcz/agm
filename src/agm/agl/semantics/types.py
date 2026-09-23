@@ -360,8 +360,8 @@ class TypeVarType:
       convertible to ``json``: a cast is compiled once with type arguments
       erased, so the conversion could not know what the variable stands for
       (``semantics.type_table.is_json_convertible``).
-    - Not comparable (``semantics.type_table.comparable_types`` returns
-      ``False`` for either side).
+    - Comparable (``semantics.type_table.comparable_types``) only when the
+      declaration's constraint block bounds this name ``Eq`` or ``Hashable``.
     - Assignable only to an identical ``TypeVarType`` (same name); ``json``
       does NOT absorb it; ``BottomType`` is still assignable to it.
     """

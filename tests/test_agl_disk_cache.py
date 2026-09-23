@@ -136,6 +136,25 @@ def test_persisted_syntax_executes_in_fresh_hosts(
     _run_cached_library(tmp_path, capsys, expected)
 
 
+def test_persisted_syntax_with_constraint_block_executes_in_fresh_hosts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A generic declaration's ``{...}`` constraint block round-trips through the
+    parsed-module disk cache (``_cached_library`` asserts the restore is a real
+    hit, not a silent cache miss)."""
+    source = _library(tmp_path)
+    source.write_text(
+        "builtin def print[T](value: T) -> unit\n"
+        "def same[T]{Eq T}(a: T, b: T) -> bool = a == b\n"
+        "program def main() -> unit = print (same(1, 1))\n"
+    )
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    _run_cached_library(tmp_path, capsys, "true\n")
+    _run_cached_library(tmp_path, capsys, "true\n")
+
+
 @pytest.mark.parametrize(
     "payload", [None, b"", b"broken", pickle.dumps(None), pickle.dumps((None, 1))]
 )

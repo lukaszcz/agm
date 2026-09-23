@@ -9,6 +9,7 @@ import pytest
 
 from agm.agl import artifact_cache, artifact_storage
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.constraints import ConstraintKind
 from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import compile_program_matches
 from agm.agl.modules.ids import ModuleId
@@ -340,6 +341,32 @@ def test_config_attribute_program_config_targets_round_trip_through_the_checked_
     assert original
     assert isinstance(round_tripped, CheckedModuleImage)
     assert round_tripped.program_config_targets == original
+
+
+def test_constraint_block_bounds_round_trip_through_the_checked_cache(tmp_path: Path) -> None:
+    """A generic declaration's constraint block survives the disk-backed checked-module cache."""
+    graph = make_file_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import helper\n\nprogram def main() -> unit = ()\n",
+            "helper": "def same[T]{Eq T}(a: T, b: T) -> bool = a == b\n",
+        },
+    )
+    resolved_program = resolve_program(graph)
+    caps = base_caps()
+    retainable = artifact_cache.retained_module_sources(graph)
+    checked = check_program(resolved_program, caps)
+    artifact_cache.retain_checked_modules(retainable, caps, checked.modules)
+    artifact_cache.clear_retained_artifacts()
+
+    restored = artifact_cache.retained_checked_modules(retainable, caps)
+
+    helper_id = next(mid for mid in graph.modules if mid != graph.entry_id)
+    original = checked.modules[helper_id].function_signatures["same"].bounds
+    round_tripped = restored[helper_id]
+    assert isinstance(round_tripped, CheckedModuleImage)
+    assert original == {"T": frozenset({ConstraintKind.EQ})}
+    assert round_tripped.function_signatures["same"].bounds == original
 
 
 def test_a_params_flip_invalidates_a_warm_checked_module_cache(tmp_path: Path) -> None:

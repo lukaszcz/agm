@@ -45,10 +45,13 @@ computes rather than for either consumer.
 ``satisfies_eq``/``satisfies_hashable`` check the ``Eq``/``Hashable``
 structural constraints (see ``agl.constraints``) against a type variable's
 in-scope bounds, or open-world mode (``bounds is None``, what
-:func:`comparable_types` uses) where a type variable, the bottom type, and
-an unresolved inference variable all count as satisfied. Both delegate to
-:func:`satisfies`, whose nominal case consults the same per-kind
-declaration-flags fixpoint via :meth:`TypeTable.nominal_satisfies`.
+:meth:`TypeTable.nominal_reaches_non_data`/:meth:`TypeTable.nominal_is_json_convertible`
+use for their non-``Eq``/JSON-shape questions) where a type variable, the
+bottom type, and an unresolved inference variable all count as satisfied.
+Both delegate to :func:`satisfies`, whose nominal case consults the same
+per-kind declaration-flags fixpoint via :meth:`TypeTable.nominal_satisfies`.
+:func:`comparable_types` instead always takes the checker's real bound
+environment.
 
 :meth:`TypeTable.has_finite_schema` answers a related but distinct
 whole-type question: not "does this type
@@ -1820,7 +1823,7 @@ def satisfies_hashable(t: Type, table: TypeTable, bounds: ConstraintBounds | Non
     return satisfies(t, ConstraintKind.HASHABLE, table, bounds)
 
 
-def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
+def comparable_types(left: Type, right: Type, table: TypeTable, bounds: ConstraintBounds) -> bool:
     """Return ``True`` if ``left`` and ``right`` may be compared.
 
     Equality (``=``, ``!=``) and ordering comparisons require both operands to
@@ -1830,23 +1833,24 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     non-``json`` type is a static error.  Records/enums/exceptions compare only
     with their own exact type.
 
-    Thin wrapper over :func:`satisfies_eq` in open-world mode (``bounds=None``
-    — a nested type variable is assumed comparable since no bound is ever in
-    scope here) plus the identity/numeric-pair rule. A bare TOP-LEVEL type
-    variable, the bottom type, or an inference variable is never comparable
-    (the checker additionally rejects a bare type variable explicitly there).
+    Thin wrapper over :func:`satisfies_eq` plus the identity/numeric-pair rule.
+    A type variable — top-level or nested — is comparable only when its name
+    is bound ``Eq``/``Hashable`` in ``bounds``; the bottom type and an
+    inference variable are then never comparable (see :func:`satisfies`).
+    Callers always supply the checker's real bound environment (possibly
+    empty), never open-world mode.
     """
-    if not (satisfies_eq(left, table, None) and satisfies_eq(right, table, None)):
-        return False
-    if isinstance(left, (BottomType, TypeVarType, InferenceVarType)) or isinstance(
-        right, (BottomType, TypeVarType, InferenceVarType)
-    ):
-        return False
-    if left == right:
-        return True
-    # The only cross-type comparison is numeric int↔decimal (either direction).
+    return (
+        satisfies_eq(left, table, bounds)
+        and satisfies_eq(right, table, bounds)
+        and same_comparison_type(left, right)
+    )
+
+
+def same_comparison_type(left: Type, right: Type) -> bool:
+    """Whether ``left`` and ``right`` are one type, or the int/decimal pair."""
     numeric = (IntType, DecimalType)
-    return isinstance(left, numeric) and isinstance(right, numeric)
+    return left == right or (isinstance(left, numeric) and isinstance(right, numeric))
 
 
 # ---------------------------------------------------------------------------

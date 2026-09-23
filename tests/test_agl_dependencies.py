@@ -74,7 +74,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
 @pytest.mark.parametrize(
     ("package", "allowed"),
     [
-        ("ir", ("agm.agl.ir", "agm.agl.modules.ids", "agm.agl.zones")),
+        ("ir", ("agm.agl.constraints", "agm.agl.ir", "agm.agl.modules.ids", "agm.agl.zones")),
         (
             "lower",
             (
@@ -124,6 +124,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
             "typecheck",
             (
                 "agm.agl.capabilities",
+                "agm.agl.constraints",
                 "agm.agl.diagnostics",
                 "agm.agl.ir.ids",
                 "agm.agl.ir.reserved_nominals",
@@ -250,6 +251,7 @@ def test_shared_leaves_sit_below_every_pass(leaf: str, allowed: tuple[str, ...])
 def test_ir_all_agm_dependencies_are_explicit() -> None:
     """Keep the IR on its own data plus the canonical config-key data leaf."""
     allowed = (
+        "agm.agl.constraints",
         "agm.agl.ir",
         "agm.agl.modules.ids",
         "agm.agl.zones",

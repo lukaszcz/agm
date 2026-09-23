@@ -87,6 +87,7 @@ class SandboxContext:
         spec: SandboxSpec,
         *,
         env: Mapping[str, str],
+        cwd: Path | None = None,
         pty: bool = False,
         alias_name: str | None = None,
     ) -> PreparedSandboxCommand:
@@ -94,11 +95,14 @@ class SandboxContext:
 
         The one place a caller's `command`/`spec` maps onto this context's
         ambient fields and `run_config` threads through to `prepare()`, so a
-        caller never hand-maps `SandboxRequest`'s fields itself.
+        caller never hand-maps `SandboxRequest`'s fields itself. *cwd*
+        overrides this context's own `cwd` for the one call (`exec`'s
+        per-call working directory); omitted, the request runs in this
+        context's `cwd`.
         """
         request = SandboxRequest(
             command=command,
-            cwd=self.cwd,
+            cwd=self.cwd if cwd is None else cwd,
             env=dict(env),
             home=self.home,
             proj_dir=self.proj_dir,

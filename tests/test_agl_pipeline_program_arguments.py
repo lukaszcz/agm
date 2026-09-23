@@ -29,7 +29,7 @@ class TestDiscoverPrograms:
             'program def main(@arg-pos count: int, @arg-std label: text = "x") -> unit = ()\n\n'
             "program def alt(verbose: bool = false) -> unit = ()\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         discovery = runtime.discover_programs(_prepared(source))
 
         assert discovery.checked is not None
@@ -62,7 +62,7 @@ class TestDiscoverPrograms:
             "\n"
             "program def alt() -> unit = ()\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         discovery = runtime.discover_programs(_prepared(source))
 
         by_name = {program.name: program for program in discovery.programs}
@@ -75,7 +75,7 @@ class TestDiscoverPrograms:
         ]
 
     def test_a_program_without_attributes_reports_declared_names_and_no_presentation(self) -> None:
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         discovery = runtime.discover_programs(
             _prepared("program def main(count: int = 0) -> unit = ()\n")
         )
@@ -85,7 +85,7 @@ class TestDiscoverPrograms:
         assert [param.cli for param in program.parameters] == [ProgramOptionSpec(name="count")]
 
     def test_reports_diagnostics_and_no_programs_on_a_load_failure(self) -> None:
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         discovery = runtime.discover_programs(_prepared("this is not @@@ valid AgL"))
 
         assert discovery.checked is None
@@ -105,7 +105,7 @@ class TestPreflightArgumentsAndRun:
             "  print label\n"
             "  print verbose\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = _prepared(source)
         discovery = runtime.discover_programs(prepared)
         assert discovery.compiled is not None
@@ -134,7 +134,7 @@ class TestPreflightArgumentsAndRun:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         source = "program def main(verbose: bool = false) -> unit =\n  print verbose\n"
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = _prepared(source)
         discovery = runtime.discover_programs(prepared)
         program = discovery.programs[0]
@@ -162,7 +162,7 @@ class TestPreflightArgumentsAndRun:
 class TestPreflightArgumentsFailures:
     def test_missing_required_argument_reports_a_diagnostic_without_executing(self) -> None:
         source = "program def main(value: int) -> unit = print value\n"
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = _prepared(source)
         discovery = runtime.discover_programs(prepared)
         program = discovery.programs[0]
@@ -180,7 +180,7 @@ class TestPreflightArgumentsFailures:
 
     def test_decode_failure_reports_a_diagnostic_without_executing(self) -> None:
         source = "program def main(value: int) -> unit = print value\n"
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = _prepared(source)
         discovery = runtime.discover_programs(prepared)
         program = discovery.programs[0]
@@ -198,7 +198,7 @@ class TestPreflightArgumentsFailures:
 
     def test_a_static_pipeline_failure_reports_diagnostics_without_an_executable(self) -> None:
         good_source = "program def main(value: int) -> unit = print value\n"
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         program = runtime.discover_programs(_prepared(good_source)).programs[0]
 
         bad_prepared = _prepared('program def main(value: int) -> unit = value + "x"\n')
@@ -221,19 +221,23 @@ class TestRunFacadeDerivesArgumentsFromTheProgramSignature:
     def test_a_defaulted_parameter_program_runs_with_no_arguments_supplied(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        result = PipelineDriver().run("program def main(value: int = 1) -> unit = print value\n")
+        result = PipelineDriver(get_sandbox_context=None).run(
+            "program def main(value: int = 1) -> unit = print value\n"
+        )
         assert result.ok
         assert capsys.readouterr().out == "1\n"
 
     def test_a_required_parameter_program_reports_a_clean_diagnostic(self) -> None:
-        result = PipelineDriver().run("program def main(value: int) -> unit = print value\n")
+        result = PipelineDriver(get_sandbox_context=None).run(
+            "program def main(value: int) -> unit = print value\n"
+        )
         assert not result.ok
         assert result.error is None
         messages = " | ".join(d.message for d in result.diagnostics)
         assert "value" in messages
 
     def test_check_only_required_parameter_program_reports_a_clean_diagnostic(self) -> None:
-        result = PipelineDriver().run(
+        result = PipelineDriver(get_sandbox_context=None).run(
             "program def main(value: int) -> unit = print value\n", check_only=True
         )
         assert not result.ok
@@ -250,7 +254,7 @@ class TestRaisingDefault:
             'def blow-up() -> int = raise Boom(message = "boom!", code = 7)\n\n'
             "program def main(value: int = blow-up()) -> unit = print value\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = _prepared(source)
         discovery = runtime.discover_programs(prepared)
         program = discovery.programs[0]

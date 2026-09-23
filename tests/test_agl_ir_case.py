@@ -150,7 +150,7 @@ let r = case x of
   | 1 => "second"
   | _ => "other"
 r"""
-    result = run_inline_command(PipelineDriver(), src)
+    result = run_inline_command(PipelineDriver(get_sandbox_context=None), src)
     assert not result.ok
     # Anchored at the redundant arm itself, not at the case head.
     assert [(d.line, d.column) for d in result.diagnostics] == [(4, 5)]
@@ -397,7 +397,7 @@ let r = case x of
   | 1 => "one"
   | 2 => "two"
 r"""
-    result = run_inline_command(PipelineDriver(), src)
+    result = run_inline_command(PipelineDriver(get_sandbox_context=None), src)
     assert not result.ok
     # Anchored at the case head, where the missing arms belong.
     assert [(d.line, d.column) for d in result.diagnostics] == [(2, 9)]
@@ -415,7 +415,7 @@ program def main() -> unit =
   let r = case c of
     | Blue() => "blue"
   print r"""
-    result = PipelineDriver().run(src)
+    result = PipelineDriver(get_sandbox_context=None).run(src)
     assert not result.ok
     assert any("Red" in diagnostic.message for diagnostic in result.diagnostics)
     assert [(d.line, d.column) for d in result.diagnostics] == [(5, 7)]

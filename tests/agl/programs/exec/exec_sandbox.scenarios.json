@@ -8,8 +8,7 @@
       "shell": [
         {
           "command": "echo hi",
-          "stdout": "hi\n",
-          "sandbox_unwrapped": true
+          "stdout": "hi\n"
         }
       ],
       "expect": {
@@ -41,7 +40,8 @@
         "mode": 3
       },
       "sandbox_home": {
-        "extra_settings_files": ["echo"]
+        "extra_settings_files": ["echo"],
+        "proj_dir": true
       },
       "shell": [
         {
@@ -157,7 +157,8 @@
         }
       ],
       "expect": {
-        "stdout_contains": ["99\n"]
+        "stdout_contains": ["99\n"],
+        "shell_sandbox_units_distinct": true
       }
     }
   ]

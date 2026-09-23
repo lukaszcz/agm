@@ -44,7 +44,7 @@ def _run(initializer: str, *, depth: int, max_call_depth: int):
     # ``out`` is bound then used so the block ends in an expression, keeping
     # ``out`` a public binding the caller can inspect.
     source = f"{_PRELUDE}let depth: int = {depth}\nlet out: int = {initializer}\nprint(out)\n"
-    driver = PipelineDriver(default_call_depth_limit=max_call_depth)
+    driver = PipelineDriver(default_call_depth_limit=max_call_depth, get_sandbox_context=None)
     return run_inline_command(driver, source)
 
 
@@ -137,7 +137,7 @@ def _operator_chain(terms: int) -> str:
 
 def _check_source(source: str) -> RunResult:
     """Run every static frontend pass over *source* without executing it."""
-    return run_inline_command(PipelineDriver(), source, check_only=True)
+    return run_inline_command(PipelineDriver(get_sandbox_context=None), source, check_only=True)
 
 
 def _raise_recursion_error(*_args: object, **_kwargs: object) -> object:

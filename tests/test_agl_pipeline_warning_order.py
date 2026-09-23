@@ -44,7 +44,7 @@ def _assert_warning_then_match_error(
 @pytest.mark.parametrize("check_only", [False, True])
 def test_single_run_preserves_checker_warning_before_match_failure(check_only: bool) -> None:
     result = run_inline_command(
-        PipelineDriver(agent_dispatcher=lambda _request: ""),
+        PipelineDriver(agent_dispatcher=lambda _request: "", get_sandbox_context=None),
         _FAILING_SOURCE,
         check_only=check_only,
     )
@@ -54,7 +54,7 @@ def test_single_run_preserves_checker_warning_before_match_failure(check_only: b
 
 
 def test_single_discovery_preserves_checker_warning_before_match_failure() -> None:
-    runtime = PipelineDriver(agent_dispatcher=lambda _request: "")
+    runtime = PipelineDriver(agent_dispatcher=lambda _request: "", get_sandbox_context=None)
     result = runtime.discover_programs(prepare_inline_command(_FAILING_SOURCE))
 
     assert result.compiled is None
@@ -63,7 +63,9 @@ def test_single_discovery_preserves_checker_warning_before_match_failure() -> No
 
 @pytest.mark.parametrize("check_only", [False, True])
 def test_program_run_preserves_checker_warning_before_match_failure(check_only: bool) -> None:
-    result = PipelineDriver(agent_dispatcher=lambda _request: "").run_prepared(
+    result = PipelineDriver(
+        agent_dispatcher=lambda _request: "", get_sandbox_context=None
+    ).run_prepared(
         _prepare_graph(_FAILING_SOURCE),
         check_only=check_only,
     )
@@ -73,9 +75,9 @@ def test_program_run_preserves_checker_warning_before_match_failure(check_only: 
 
 
 def test_program_discovery_preserves_checker_warning_before_match_failure() -> None:
-    result = PipelineDriver(agent_dispatcher=lambda _request: "").discover_programs(
-        _prepare_graph(_FAILING_SOURCE)
-    )
+    result = PipelineDriver(
+        agent_dispatcher=lambda _request: "", get_sandbox_context=None
+    ).discover_programs(_prepare_graph(_FAILING_SOURCE))
 
     assert result.compiled is None
     _assert_warning_then_match_error(result)

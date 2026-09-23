@@ -35,6 +35,7 @@ def _make_runtime(
 
     return PipelineDriver(
         agent_dispatcher=default_agent,
+        get_sandbox_context=None,
     )
 
 
@@ -64,7 +65,7 @@ def _run_program(
             assert isinstance(spec, AgentCommand)
             return agents[spec.command](request)
 
-        rt = PipelineDriver(agent_dispatcher=dispatch)
+        rt = PipelineDriver(agent_dispatcher=dispatch, get_sandbox_context=None)
     else:
         rt = _make_runtime(default_agent=default_agent)
     if entry_path is None:
@@ -106,7 +107,7 @@ def test_selected_program_preflight_excludes_unreachable_call_sites(tmp_path: Pa
         "import a\nimport b\nprogram def main() -> unit = ()\n",
         roots=agl_roots(library_root),
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     discovery = runtime.discover_programs(prepared)
     assert discovery.compiled is not None, discovery.diagnostics
     selected = next(
@@ -167,7 +168,7 @@ def test_selected_program_does_not_wire_unreachable_extern(tmp_path: Path) -> No
         "import a\nimport b\nprogram def main() -> unit = ()\n",
         roots=agl_roots(library_root),
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     discovery = runtime.discover_programs(prepared)
     selected = next(
         program

@@ -112,7 +112,8 @@ def test_ask_dispatches_each_agent_value_under_disabled_sandbox(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,
@@ -175,7 +176,8 @@ def test_ask_dispatches_each_agent_value_selects_each_spec_permission_flag(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,
@@ -238,7 +240,8 @@ def test_disabled_and_native_sandbox_modes_never_wrap_the_argv(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,
@@ -296,7 +299,8 @@ def test_ask_dispatches_claude_and_codex_under_native_sandbox_mode(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,
@@ -324,7 +328,8 @@ def test_agent_transport_failures_become_typed_errors(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
 
     run = run_inline_command(
@@ -358,7 +363,8 @@ def test_undecodable_agent_stdout_becomes_a_protocol_failure(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
 
     # Disabled: this test drives the real ``prepare_rendered_prompt_run`` seam
@@ -389,7 +395,8 @@ def test_caught_agent_call_error_keeps_static_agent_encoding_when_raised_later(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
 
     run = run_inline_command(
@@ -414,7 +421,8 @@ def test_user_exception_enum_field_keeps_slot_encoding_after_storage_and_reraise
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
 
     run = run_inline_command(
@@ -444,7 +452,8 @@ def test_nonzero_exit_message_includes_the_exit_code(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
 
     run = run_inline_command(
@@ -664,7 +673,8 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
         PipelineDriver(
             agent_dispatcher=value_driven_agent_factory(
                 idle_timeout=None, context=hermetic_config_context()
-            )
+            ),
+            get_sandbox_context=None,
         ),
         'let first: text = ask("one", agent = AgentCommand("runner"), '
         "sandbox = AgentSandbox::Disabled)\n"
@@ -697,7 +707,8 @@ def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
 
     run = run_inline_command(
@@ -716,7 +727,8 @@ def test_invalid_agent_value_becomes_typed_error() -> None:
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=hermetic_config_context()
-        )
+        ),
+        get_sandbox_context=None,
     )
 
     run = run_inline_command(
@@ -740,7 +752,7 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
         requests.append(value)
         return "not an integer"
 
-    runtime = PipelineDriver(agent_dispatcher=agent)
+    runtime = PipelineDriver(agent_dispatcher=agent, get_sandbox_context=None)
     result = run_inline_command(
         runtime,
         "import std/config\n"
@@ -828,7 +840,8 @@ def test_default_sandbox_mode_wraps_the_argv_and_honours_run_config_memory(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
-        )
+        ),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,
@@ -870,7 +883,8 @@ def test_interpolated_agent_command_sandboxes_under_the_real_executable(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
-        )
+        ),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,
@@ -956,7 +970,8 @@ def test_sandbox_context_is_built_at_most_once_per_factory(
     assert load_calls == []
 
     runtime = PipelineDriver(
-        agent_dispatcher=value_driven_agent_factory(idle_timeout=None, context=context)
+        agent_dispatcher=value_driven_agent_factory(idle_timeout=None, context=context),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,
@@ -987,7 +1002,8 @@ def test_explicit_settings_file_selects_that_file_over_the_profile_candidate(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
-        )
+        ),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,
@@ -1022,7 +1038,8 @@ def test_missing_srt_becomes_an_agent_call_error_carrying_the_library_message(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
-        )
+        ),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,
@@ -1065,7 +1082,8 @@ def test_temp_settings_cleanup_runs_after_success_and_failure(
     runtime = PipelineDriver(
         agent_dispatcher=value_driven_agent_factory(
             idle_timeout=None, context=ConfigContext(home=home, proj_dir=proj_dir, cwd=home)
-        )
+        ),
+        get_sandbox_context=None,
     )
     result = run_inline_command(
         runtime,

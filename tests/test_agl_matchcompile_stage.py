@@ -858,7 +858,7 @@ def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
 
 
 def test_single_and_program_discovery_surface_match_errors() -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     discovery = runtime.discover_programs(
         prepare_inline_command("let n: int = 1\ncase true of | true => n")
     )
@@ -894,7 +894,7 @@ def test_single_discovery_and_cached_run_compile_matches_once(
         "agm.agl.matchcompile.compile_program_matches",
         counted_compile,
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared = prepare_inline_command(
         "let selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
@@ -929,7 +929,7 @@ def test_program_discovery_and_cached_run_compile_matches_once(
         "agm.agl.matchcompile.compile_program_matches",
         counted_compile,
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared = _prepared_program(
         "let selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
@@ -963,7 +963,7 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
         "agm.agl.matchcompile.compile_program_matches",
         counted_compile,
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared = _prepared_program("case true of | true => 1 | false => 0")
 
     discovery = runtime.discover_programs(prepared)
@@ -979,7 +979,7 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
 
 def test_match_invalid_unreachable_case_fails_single_dry_run() -> None:
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         "def dormant(x: bool) -> int =\n  case x of\n    | true => 1\n()",
         check_only=True,
     )
@@ -1001,7 +1001,7 @@ def test_match_invalid_unreachable_import_fails_graph_check_only(tmp_path: Path)
         roots=frozenset({tmp_path}),
     )
 
-    result = PipelineDriver().run_prepared(prepared, check_only=True)
+    result = PipelineDriver(get_sandbox_context=None).run_prepared(prepared, check_only=True)
 
     assert not result.ok
     assert result.error is None

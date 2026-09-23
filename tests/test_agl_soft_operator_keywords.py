@@ -76,7 +76,7 @@ def test_operator_words_name_record_fields_and_arguments(
         f"record R\n{fields}\n\n"
         f"program def main() -> unit =\n  let value = R({arguments})\n{reads}\n"
     )
-    result = run_inline_command(PipelineDriver(), source)
+    result = run_inline_command(PipelineDriver(get_sandbox_context=None), source)
 
     assert list(result.diagnostics) == []
     assert result.error is None
@@ -86,7 +86,7 @@ def test_operator_words_name_record_fields_and_arguments(
 def test_operator_words_name_methods(capsys: pytest.CaptureFixture[str]) -> None:
     """Methods named for operator words declare and dispatch like any other."""
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         """
 record Flag
   set: bool
@@ -109,7 +109,7 @@ program def main() -> unit =
 def test_operators_still_apply_in_operator_position(capsys: pytest.CaptureFixture[str]) -> None:
     """Demotion changes nothing about how the operators themselves behave."""
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         """
 record Point
   x: int
@@ -133,7 +133,7 @@ program def main() -> unit =
 def test_range_stride_is_spelled_step(capsys: pytest.CaptureFixture[str]) -> None:
     """`step` gives a range its stride."""
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         """
 program def main() -> unit =
   for i in 1 to 5 step 2 do
@@ -153,7 +153,7 @@ program def main() -> unit =
 def test_by_is_an_ordinary_name(capsys: pytest.CaptureFixture[str]) -> None:
     """`by` carries no syntactic role, so it is available as a plain identifier."""
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         """
 def by(value: int) -> int = value * 2
 

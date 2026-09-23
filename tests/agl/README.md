@@ -68,7 +68,7 @@ Layout:
       "shell": [{"command": "printf done", "stdout": "done"},
                 {"command": "make test",
                  "sandbox_wrapped": {"profile": "make", "memory": "1G"}},
-                {"command": "echo hi", "sandbox_unwrapped": true}],
+                {"command": "echo hi"}],
       "sandbox_home": {"extra_settings_files": ["make"],
                         "run_toml": "[run.make]\nmemory = \"1G\"\n"},
       "http": [{"expect": {"method": "GET", "url": "https://x/y"},
@@ -150,9 +150,11 @@ Field notes:
   so acceptance tests never execute a real shell command. `sandbox_wrapped` asserts
   the recorded argv carries the real `systemd-run`/`srt` sandbox wrap, by `profile`
   (its `<profile>.json` settings candidate, or `null` for the `default.json`
-  fallback an unknown/unsplittable first word takes) or an exact `settings_suffix`,
-  plus optional `memory`/`swap` resource-limit values; `sandbox_unwrapped: true`
-  asserts the call carries no wrap at all (`["sh", "-c", <command>]`).
+  fallback an unknown/unsplittable first word takes) or an exact `settings_suffix`
+  (exactly one of the two is required), plus optional `memory`/`swap` resource-limit
+  values; omitting `sandbox_wrapped` asserts the call carries no wrap at all
+  (`["sh", "-c", <command>]`) -- the blanket invariant every scenario's `shell`
+  entries satisfy unless they opt into `sandbox_wrapped`.
 - `sandbox_home` — when present, materializes a real `[home]/.agm/sandbox` settings
   tree (`run_toml`, `extra_settings_files`) and PATH-reachable, never-invoked
   `systemd-run`/`srt` shims (`tests/_agl_helpers.py::write_transparent_sandbox_shims`),
@@ -161,7 +163,9 @@ Field notes:
   library. `unavailable: true` points `PATH` at an empty directory instead, for a
   preparation-failure scenario. A `params` value of the literal string
   `"$SANDBOX_SETTINGS_FILE"` is replaced with a real settings file's path, for an
-  explicit `Sandbox(settings = Some(...))` scenario.
+  explicit `Sandbox(settings = Some(...))` scenario. `proj_dir: true` gives the
+  context a real project directory, needed for a scenario to observe `patch`
+  (`SrtBackend` only consults it when a project directory is present).
 - `http` — ordered scripted HTTP exchanges, in `tests/_http_helpers.py`'s `FakeHttp`
   outcome shape: each object may assert an `expect` (method, url, a header subset where
   a `null` value asserts the header's absence, body, `timeout` as a `[connect, read]`
@@ -225,6 +229,9 @@ Field notes:
 - `expect.host_error` — the run must fail pre-execution (program argument
   binding or decode failure): no agent is called, no AgL exception is
   raised, and the diagnostics mention the fragments.
+- `expect.shell_sandbox_units_distinct` — every scripted shell call's
+  `systemd-run --unit` scope name is distinct, proving a sandboxed retry
+  re-prepares rather than reuses the first attempt's prepared command.
 - Exact `stdout` is asserted only where rendering is pinned by the design (`text`
   verbatim, scalars as scalar text). Pretty-JSON console rendering and
   boundary-marked prompt rendering are asserted with `contains` fragments to avoid

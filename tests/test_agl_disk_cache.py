@@ -111,7 +111,7 @@ def _run_cached_library(root: Path, capsys: pytest.CaptureFixture[str], expected
         diagnostics=(),
         warnings=(),
     )
-    driver = PipelineDriver()
+    driver = PipelineDriver(get_sandbox_context=None)
     prepared = driver.prepare_parsed_entry(parsed, default_stdlib=False)
     result = driver.run_prepared(prepared, select_default_program=True)
     assert result.ok, result.diagnostics
@@ -217,7 +217,7 @@ def test_cache_io_failure_preserves_compilation(
             return original(path, *args, **kwargs)
 
         monkeypatch.setattr(Path, operation, fail)
-    driver = PipelineDriver()
+    driver = PipelineDriver(get_sandbox_context=None)
     result = driver.run(source.read_text(), default_stdlib=False)
     assert result.ok, result.diagnostics
     assert capsys.readouterr().out == "41\n"

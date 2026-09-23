@@ -50,7 +50,7 @@ def _preflight(runtime: PipelineDriver, prepared: PreparedProgram) -> ArgumentPr
 def test_single_run_rejects_checked_artifact_from_different_prepared_program(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared_a = prepare_inline_command('print "stale"')
     discovery_a = runtime.discover_programs(prepared_a)
     assert discovery_a.checked is not None
@@ -65,7 +65,7 @@ def test_single_run_rejects_checked_artifact_from_different_prepared_program(
 def test_program_run_rejects_checked_artifact_from_different_prepared_program(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared_a = _prepare_graph('print "stale"')
     discovery_a = runtime.discover_programs(prepared_a)
     assert discovery_a.checked is not None
@@ -80,7 +80,7 @@ def test_program_run_rejects_checked_artifact_from_different_prepared_program(
 def test_run_rejects_executable_from_different_prepared_program(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared_a = prepare_inline_command('print "stale"')
     preflight_a = _preflight(runtime, prepared_a)
     assert preflight_a.result.ok
@@ -100,14 +100,14 @@ def test_run_rejects_executable_from_different_prepared_program(
 def test_run_rejects_executable_issued_by_another_pipeline(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    issuer = PipelineDriver()
+    issuer = PipelineDriver(get_sandbox_context=None)
     prepared = prepare_inline_command('print "stale"')
     preflight = _preflight(issuer, prepared)
     assert preflight.result.ok
     assert preflight.executable is not None
 
     with pytest.raises(ArtifactProvenanceError):
-        PipelineDriver().run_prepared(
+        PipelineDriver(get_sandbox_context=None).run_prepared(
             prepared,
             executable=preflight.executable,
             select_default_program=True,
@@ -119,7 +119,7 @@ def test_run_rejects_executable_issued_by_another_pipeline(
 def test_run_resumes_the_executable_from_its_preflight(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared = prepare_inline_command('print "fresh"')
 
     with patch("agm.agl.lower.lower_program", wraps=lower_program) as lower:
@@ -146,7 +146,7 @@ def test_run_relowers_a_preflight_executable_when_host_capabilities_change(
         def name(self) -> str:
             return "extra"
 
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared = prepare_inline_command('print "fresh"')
 
     with patch("agm.agl.lower.lower_program", wraps=lower_program) as lower:

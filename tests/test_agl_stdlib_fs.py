@@ -27,7 +27,7 @@ _STDLIB = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
 
 def _run_file(source: str, path: Path, *, roots: RootSet) -> object:
     """Run *source*'s entry ``program def main() -> unit`` (no arguments)."""
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared = PipelineDriver.prepare_program(source, entry_path=path, roots=roots)
     discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:

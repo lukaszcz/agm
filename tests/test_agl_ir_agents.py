@@ -475,7 +475,7 @@ def test_unit_typed_ask() -> None:
         calls.append(request)
         return "acknowledged"
 
-    runtime = PipelineDriver(agent_dispatcher=notify)
+    runtime = PipelineDriver(agent_dispatcher=notify, get_sandbox_context=None)
     result = run_inline_command(runtime, 'ask("Notify!")\n()')
     assert result.ok
     assert len(calls) == 1

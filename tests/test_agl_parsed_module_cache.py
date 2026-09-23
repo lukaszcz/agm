@@ -246,7 +246,7 @@ def _companion_transcript(root: Path, roots: RootSet) -> list[object]:
     module_path = _write_module(root, "lib/a", "extern def f() -> int\n")
     companion = module_path.with_suffix(".py")
     companion.write_text("def f():\n    return 1\n")
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = "import lib/a\nlet v = lib/a::f()"
 
     first = run_inline_command(runtime, source, roots=roots, default_stdlib=False)
@@ -291,7 +291,7 @@ def test_module_with_tab_indentation_is_reparsed(tmp_path: Path, library_parses:
 
 
 def test_warm_cache_preserves_program_behavior(capsys: pytest.CaptureFixture[str]) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = 'print("hi")\nprint(2 + 3)'
 
     first = run_inline_command(runtime, source)

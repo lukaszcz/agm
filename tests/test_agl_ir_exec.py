@@ -20,6 +20,7 @@ from tests._agl_helpers import (
     write_sandbox_home,
 )
 from tests.agl.ir_harness import (
+    ScriptedShellCall,
     completed_bindings,
     evaluate_ir_raises_with_shell,
     evaluate_ir_with_agents,
@@ -501,7 +502,7 @@ def test_exec_with_an_extended_environment_reaches_the_process_boundary() -> Non
 
     with patch("agm.core.process.run_capture_result", side_effect=fake_shell):
         result = run_inline_command(
-            PipelineDriver(),
+            PipelineDriver(get_sandbox_context=None),
             source,
             roots=agl_roots(),
             process_environment={"base": "original", "preserved": "kept"},
@@ -766,6 +767,7 @@ def test_sandboxed_exec_wraps_argv_and_selects_profile_from_first_shell_word(
     """``sandbox = Some(Sandbox())`` wraps the shell child under the real
     systemd-run/srt chain, selecting settings by the command's first shell
     word -- never ``sh``, the wrapper's own executable."""
+    monkeypatch.chdir(tmp_path)
     home = tmp_path / "home"
     write_sandbox_home(home, extra_settings_files=("echo",))
     monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
@@ -799,6 +801,7 @@ def test_sandboxed_exec_honours_run_config_memory_for_the_selected_profile(
     """``[run.<profile>].memory`` resolves the profile's own limit, proving the
     resolved profile's *limits* actually apply -- not just that its name
     reaches settings resolution (the previous test)."""
+    monkeypatch.chdir(tmp_path)
     home = tmp_path / "home"
     write_sandbox_home(home, run_toml='[run.make]\nmemory = "1G"\n', extra_settings_files=("make",))
     monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
@@ -838,6 +841,7 @@ def test_sandboxed_exec_preparation_failure_raises_exec_error(
     """A sandbox preparation failure raises ``ExecError`` exactly like a spawn
     failure: exit-code -1, empty stdout, the failure message as stderr, never
     timed out -- no shell process is ever started."""
+    monkeypatch.chdir(tmp_path)
     home = tmp_path / "home"
     monkeypatch.setattr("shutil.which", lambda *args, **kwargs: None)
 
@@ -852,11 +856,29 @@ def test_sandboxed_exec_preparation_failure_raises_exec_error(
     assert ir_exc.fields["timed-out"] is False
 
 
+def test_sandboxed_exec_without_a_host_sandbox_context_raises_exec_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A host that passes no ``get_sandbox_context`` (no sandbox capability)
+    raises ``ExecError`` for a sandboxed ``exec``, in the same spawn-failure
+    shape as any other preparation failure -- no shell process ever starts."""
+    monkeypatch.chdir(tmp_path)
+
+    source = 'exec("echo hi", sandbox = Some(Sandbox()))\n()'
+    ir_exc = evaluate_ir_raises_with_shell(source, {})
+    assert ir_exc.type_name == "ExecError"
+    assert ir_exc.fields["exit-code"] == -1
+    assert ir_exc.fields["stdout"] == ""
+    assert "sandbox context" in ir_exc.fields["stderr"]
+    assert ir_exc.fields["timed-out"] is False
+
+
 def test_sandboxed_exec_retry_reprepares_the_sandbox_on_every_attempt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A retried sandboxed exec prepares (and cleans up) a fresh sandboxed
     command per attempt, rather than reusing the first attempt's prepared argv."""
+    monkeypatch.chdir(tmp_path)
     home = tmp_path / "home"
     write_sandbox_home(home)
     monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
@@ -891,5 +913,165 @@ def test_sandboxed_exec_retry_reprepares_the_sandbox_on_every_attempt(
 
     assert ir["n"] == IntValue(99)
     assert len(argv_log) == 2
+    unit_names = []
     for argv in argv_log:
         assert argv[:4] == ["systemd-run", "--user", "--scope", "-q"]
+        unit_names.append(argv[argv.index("--unit") + 1])
+    # A fresh scope name per attempt proves the sandbox is re-prepared, not
+    # reused -- a "prepare once, reuse" implementation would pass every
+    # assertion above with the same name both times.
+    assert unit_names[0] != unit_names[1]
+
+
+def test_sandboxed_exec_structured_form_also_honours_sandbox(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The structured (``ExecResult``) form wraps the shell child exactly like
+    the parsed form -- ``sandbox`` is not a parsed-form-only operand."""
+    monkeypatch.chdir(tmp_path)
+    home = tmp_path / "home"
+    write_sandbox_home(home, extra_settings_files=("echo",))
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+    source = 'let r: ExecResult = exec("echo hi", sandbox = Some(Sandbox()))\nr'
+    commands = {"echo hi": _ok("hi\n")}
+    argv_log: list[list[str]] = []
+    ir = evaluate_ir_with_shell(
+        source,
+        commands,
+        argv_log=argv_log,
+        get_sandbox_context=session_sandbox_context(home),
+    )
+    from agm.agl.semantics.values import IntValue, RecordValue
+
+    assert isinstance(ir["r"], RecordValue)
+    assert ir["r"].fields["exit-code"] == IntValue(0)
+    assert len(argv_log) == 1
+    argv = argv_log[0]
+    assert argv[:4] == ["systemd-run", "--user", "--scope", "-q"]
+    srt_index = argv.index("srt")
+    assert argv[srt_index + 2] == str(home / ".agm" / "sandbox" / "echo.json")
+
+
+def test_sandboxed_exec_forwards_prepared_env_cwd_and_interrupt_cleanup_cmd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The prepared command's ``env``/``cwd``/``interrupt_cleanup_cmd`` -- not
+    the caller's raw operands -- are what actually reach the process
+    boundary: the sandbox backend's own env addition, the request's cwd
+    verbatim, and a scope-stop teardown command matching the wrapped argv's
+    own ``--unit`` name."""
+    monkeypatch.chdir(tmp_path)
+    home = tmp_path / "home"
+    write_sandbox_home(home, extra_settings_files=("echo",))
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+
+    source = (
+        'let result: text = exec("echo hi", '
+        f'cwd = Option[text]::Some(value = "{work_dir}"), '
+        "sandbox = Some(Sandbox()))\n"
+        "result"
+    )
+    commands = {"echo hi": _ok("hi\n")}
+    call_log: list[ScriptedShellCall] = []
+    ir = evaluate_ir_with_shell(
+        source,
+        commands,
+        call_log=call_log,
+        get_sandbox_context=session_sandbox_context(home),
+    )
+    from agm.agl.semantics.values import TextValue
+
+    assert ir["result"] == TextValue("hi")
+    assert len(call_log) == 1
+    call = call_log[0]
+    assert call.cwd == work_dir
+    assert call.env is not None
+    assert call.env["NODE_USE_ENV_PROXY"] == "1"
+    unit_name = call.args[call.args.index("--unit") + 1]
+    assert call.interrupt_cleanup_cmd == ["systemctl", "--user", "--no-block", "stop", unit_name]
+
+
+def _spy_prepared_close(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Record every ``PreparedSandboxCommand.close()`` call across this test."""
+    from agm.sandbox.request import PreparedSandboxCommand
+
+    calls: list[bool] = []
+    original_close = PreparedSandboxCommand.close
+
+    def spy(self: PreparedSandboxCommand) -> None:
+        calls.append(True)
+        original_close(self)
+
+    monkeypatch.setattr(PreparedSandboxCommand, "close", spy)
+    return calls
+
+
+def test_sandboxed_exec_closes_the_prepared_command_on_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    closed = _spy_prepared_close(monkeypatch)
+
+    source = 'let result: text = exec("echo hi", sandbox = Some(Sandbox()))\nresult'
+    evaluate_ir_with_shell(
+        source, {"echo hi": _ok("hi\n")}, get_sandbox_context=session_sandbox_context(home)
+    )
+
+    assert closed == [True]
+
+
+def test_sandboxed_exec_closes_the_prepared_command_on_non_zero_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    closed = _spy_prepared_close(monkeypatch)
+
+    source = 'let result: text = exec("false", sandbox = Some(Sandbox()))\nresult'
+    evaluate_ir_raises_with_shell(
+        source, {"false": _fail(1)}, get_sandbox_context=session_sandbox_context(home)
+    )
+
+    assert closed == [True]
+
+
+def test_sandboxed_exec_closes_the_prepared_command_on_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    closed = _spy_prepared_close(monkeypatch)
+
+    source = 'let result: text = exec("sleep 99", sandbox = Some(Sandbox()))\nresult'
+    evaluate_ir_raises_with_shell(
+        source, {"sleep 99": _timed_out()}, get_sandbox_context=session_sandbox_context(home)
+    )
+
+    assert closed == [True]
+
+
+def test_sandboxed_exec_closes_the_prepared_command_on_spawn_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+    closed = _spy_prepared_close(monkeypatch)
+
+    source = 'let result: text = exec("cmd", sandbox = Some(Sandbox()))\nresult'
+    evaluate_ir_raises_with_shell(
+        source, {"cmd": _spawn_failed()}, get_sandbox_context=session_sandbox_context(home)
+    )
+
+    assert closed == [True]

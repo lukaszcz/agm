@@ -82,7 +82,9 @@ def discover_program_declarations_from_source(
     try:
         from agm.agl import PipelineDriver
 
-        runtime = PipelineDriver(agent_dispatcher=lambda request: AgentResponse(content=""))
+        runtime = PipelineDriver(
+            agent_dispatcher=lambda request: AgentResponse(content=""), get_sandbox_context=None
+        )
         if inline_source:
             parsed = runtime.parse_entry(source, inline_command=True)
             prepared = runtime.prepare_parsed_entry(
@@ -224,7 +226,9 @@ def discover_program_artifacts_for_target(
             proj_dir=context.proj_dir,
         )
         assert source is not None
-        runtime = PipelineDriver(agent_dispatcher=lambda request: AgentResponse(content=""))
+        runtime = PipelineDriver(
+            agent_dispatcher=lambda request: AgentResponse(content=""), get_sandbox_context=None
+        )
         parsed = runtime.parse_entry(source, entry_path=entry_path, inline_command=inline_source)
         prepared = runtime.prepare_parsed_entry(
             parsed, roots=exec_roots.roots, default_stdlib=not no_stdlib

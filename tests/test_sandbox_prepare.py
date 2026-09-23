@@ -662,6 +662,22 @@ class TestLoadSettingsFailure:
                 SRT_BACKEND.resolve_settings(request)
 
 
+class TestWriteSettingsFailure:
+    """A merge/patch temp-settings write failure raises SandboxSettingsError."""
+
+    def test_temp_settings_write_failure_raises_sandbox_settings_error(
+        self, home_with_default_settings: Path
+    ) -> None:
+        proj_dir = home_with_default_settings / "project"
+        (proj_dir / "repo").mkdir(parents=True)
+        request = _request(
+            tmp_path=home_with_default_settings, proj_dir=proj_dir, patch_proj_dir=True
+        )
+        with patch.object(srt_module, "_write_json_temp", side_effect=OSError("disk full")):
+            with pytest.raises(SandboxSettingsError, match="failed to write sandbox settings"):
+                SRT_BACKEND.resolve_settings(request)
+
+
 class TestResolveSettingsFailureCleanup:
     """A failure after a merge temp file is written must not leave it behind."""
 

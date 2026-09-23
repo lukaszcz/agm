@@ -501,7 +501,9 @@ def test_builtin_exception_own_fields_are_standard_zone(
 ) -> None:
     """A builtin exception's own fields follow the standard zone, so they
     accept positional arguments in a constructor call."""
-    result = run_inline_command(PipelineDriver(), 'print(IndexError(1, 2, message = "m").index)\n')
+    result = run_inline_command(
+        PipelineDriver(get_sandbox_context=None), 'print(IndexError(1, 2, message = "m").index)\n'
+    )
 
     assert list(result.diagnostics) == [], " | ".join(d.message for d in result.diagnostics)
     assert result.error is None

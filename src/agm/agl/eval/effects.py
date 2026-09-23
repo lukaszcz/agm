@@ -89,12 +89,10 @@ from agm.agl.semantics.values import (
 from agm.core.parse import parse_timeout
 from agm.core.process import CapturedOutput
 from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
-from agm.sandbox.prepare import prepare
 from agm.sandbox.profile import profile_name_for_shell
 from agm.sandbox.request import (
     PreparedSandboxCommand,
     SandboxLimits,
-    SandboxRequest,
     SandboxSpec,
 )
 
@@ -969,11 +967,25 @@ class EffectHandlers:
             stderr=stderr_text,
         )
 
-    def _sandbox_context(self) -> "SandboxContext":
-        """Return this run's sandbox context, built lazily by the host on first use."""
-        get_context = self._ctx._get_sandbox_context
-        assert get_context is not None, "exec sandbox requires a host-provided sandbox context"
-        return get_context()
+    def _raise_sandbox_preparation_error(
+        self, message: str, cmd: str, location: Location
+    ) -> NoReturn:
+        """Raise ``ExecError`` for a sandbox preparation failure, in the spawn-failure shape.
+
+        Records the same ``exit_code=-1``/``duration=0.0`` trace event a spawn
+        failure would, before raising.
+        """
+        prefixed = f"Failed to prepare sandbox: {message}"
+        self._ctx._trace.exec_command(
+            command=cmd,
+            exit_code=-1,
+            duration=0.0,
+            stdout="",
+            stderr=prefixed,
+            timed_out=False,
+            span=location,
+        )
+        self._raise_exec_error(prefixed, command=cmd, exit_code=-1, stdout="", stderr=prefixed)
 
     def _run_exec_shell(
         self,
@@ -1004,31 +1016,16 @@ class EffectHandlers:
         interrupt_cleanup_cmd: list[str] | None = None
         prepared: PreparedSandboxCommand | None = None
         if spec is not None:
-            context = self._sandbox_context()
-            request = SandboxRequest(
-                command=argv,
-                cwd=cwd or Path.cwd(),
-                env=env,
-                home=context.home,
-                proj_dir=context.proj_dir,
-                spec=spec,
-            )
+            get_context = self._ctx._get_sandbox_context
+            if get_context is None:
+                self._raise_sandbox_preparation_error(
+                    "exec sandbox requires a host-provided sandbox context", cmd, location
+                )
+            context = get_context()
             try:
-                prepared = prepare(request, run_config=context.run_config)
+                prepared = context.prepare(argv, spec, env=env, cwd=cwd or Path.cwd())
             except (SandboxUnavailableError, SandboxSettingsError) as exc:
-                message = str(exc)
-                self._ctx._trace.exec_command(
-                    command=cmd,
-                    exit_code=-1,
-                    duration=0.0,
-                    stdout="",
-                    stderr=message,
-                    timed_out=False,
-                    span=location,
-                )
-                self._raise_exec_error(
-                    message, command=cmd, exit_code=-1, stdout="", stderr=message
-                )
+                self._raise_sandbox_preparation_error(str(exc), cmd, location)
             argv = prepared.argv
             run_env = prepared.env
             run_cwd = prepared.cwd

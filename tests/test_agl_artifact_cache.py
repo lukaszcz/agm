@@ -47,7 +47,7 @@ from tests.agl.ir_harness import (
 def test_repeated_executions_produce_the_expected_output(
     source: str, expected: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     for _ in range(2):
         result = run_inline_command(runtime, source)
         assert result.ok, result.diagnostics
@@ -65,7 +65,7 @@ def test_edited_imports_change_the_next_execution(
     path = tmp_path / "helper.agl"
     path.write_text("def helper() -> int = 1\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = "import helper::*\nprint(helper())\n"
     assert run_inline_command(runtime, source, roots=roots).ok
     assert capsys.readouterr().out == "1\n"
@@ -92,7 +92,7 @@ def test_field_default_survives_the_module_cache_disk_round_trip(
     """
     (tmp_path / "lib.agl").write_text("record Limits\n  retries: int = 3\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = "import lib::*\nprint(Limits().retries)\n"
 
     artifact_cache.clear_retained_artifacts()
@@ -113,7 +113,7 @@ def test_a_warm_checked_module_cache_still_resolves_an_imported_var_write(
     path = tmp_path / "store.agl"
     path.write_text("var total: int = 0\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = "import store::*\ntotal := total + 5\nprint(total)\n"
     for _ in range(2):
         result = run_inline_command(runtime, source, roots=roots)
@@ -130,7 +130,7 @@ def test_a_warm_checked_module_cache_still_resolves_an_unannotated_imported_var_
     path = tmp_path / "store.agl"
     path.write_text("var total = 0\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = "import store::*\ntotal := total + 5\nprint(total)\n"
     for _ in range(2):
         result = run_inline_command(runtime, source, roots=roots)
@@ -156,7 +156,7 @@ def test_exception_downcast_and_is_stay_stable_across_a_warm_artifact_cache_reus
         "  try f() catch Problem as p => p.code\n"
     )
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = """\
 import lib::*
 exception VeryDetailed extends Detailed
@@ -182,7 +182,7 @@ def test_editing_an_unannotated_exported_binding_type_invalidates_the_warm_cache
     path = tmp_path / "store.agl"
     path.write_text("let value = 1\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = "import store::*\nprint(value)\n"
     result = run_inline_command(runtime, source, roots=roots)
     assert result.ok, result.diagnostics
@@ -204,7 +204,7 @@ def test_warm_cached_importer_reflects_a_changed_unannotated_transitive_binding(
     mid_path = tmp_path / "mid.agl"
     mid_path.write_text("import store\ndef get() = store::value\n")
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = "import mid::*\nprint(get())\n"
 
     store_path.write_text("let value = 1\n")
@@ -227,7 +227,7 @@ def test_editing_a_folded_constant_invalidates_the_warm_cache(
     path = tmp_path / "store.agl"
     path.write_text('let part = "one"\nlet whole = "[%{part}]"\n')
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = "import store::*\nprint(whole)\n"
     result = run_inline_command(runtime, source, roots=roots)
     assert result.ok, result.diagnostics
@@ -244,7 +244,7 @@ def test_invalid_import_edit_is_rejected_and_can_be_repaired(
 ) -> None:
     path = tmp_path / "helper.agl"
     roots = agl_roots(tmp_path)
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     source = "import helper::*\nprint(helper())\n"
     path.write_text("def helper() -> int = 1\n")
     assert run_inline_command(runtime, source, roots=roots).ok
@@ -264,7 +264,7 @@ def test_invalid_import_edit_is_rejected_and_can_be_repaired(
 def test_same_named_imports_are_isolated_between_roots(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     for name, value in (("first", 1), ("second", 7), ("first", 1)):
         root = tmp_path / name
         root.mkdir(exist_ok=True)
@@ -280,7 +280,7 @@ def test_discarding_compilation_state_preserves_program_behavior(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     source = "print([1, 2, 3].map(fn(n: int) -> int => n * 2)[2])"
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     assert run_inline_command(runtime, source).ok
     assert capsys.readouterr().out == "6\n"
 
@@ -885,14 +885,15 @@ def test_custom_response_formats_do_not_leak_between_hosts(
         def name(self) -> str:
             return "tagged"
 
-    extended = PipelineDriver(agent_dispatcher=lambda request: "answer")
+    extended = PipelineDriver(agent_dispatcher=lambda request: "answer", get_sandbox_context=None)
     extended.register_codec(TaggedCodec())
     source = 'let answer: text = ask("prompt", format = "tagged")\nprint(answer)'
     assert run_inline_command(extended, source).ok
     assert capsys.readouterr().out == "answer\n"
 
     ordinary = PipelineDriver(
-        agent_dispatcher=lambda _: pytest.fail("unsupported format dispatched")
+        agent_dispatcher=lambda _: pytest.fail("unsupported format dispatched"),
+        get_sandbox_context=None,
     )
     rejected = run_inline_command(ordinary, source)
     assert not rejected.ok

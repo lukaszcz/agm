@@ -277,7 +277,7 @@ def test_dispatcher_retry_replays_the_complete_request_context() -> None:
         requests.append(request)
         return AgentResponse(["not a number", "7"][len(requests) - 1])
 
-    result = PipelineDriver(agent_dispatcher=dispatch).run(
+    result = PipelineDriver(agent_dispatcher=dispatch, get_sandbox_context=None).run(
         "program def main() -> unit =\n"
         '  let number: int = ask("count", on-parse-error = Retry(n = 1))\n'
     )
@@ -290,7 +290,7 @@ def test_dispatcher_retry_replays_the_complete_request_context() -> None:
 
 
 def _run(source: str, host: _Host) -> RunResult:
-    return PipelineDriver(session_host=host).run(source)
+    return PipelineDriver(session_host=host, get_sandbox_context=None).run(source)
 
 
 def test_session_open_maps_an_undecodable_agent_value_to_a_session_error(
@@ -837,7 +837,7 @@ _CLOSE_AFTER_DEFAULT = (
     [pytest.param(_CLOSE_AFTER_OPEN, id="open"), pytest.param(_CLOSE_AFTER_DEFAULT, id="default")],
 )
 def test_a_missing_session_host_becomes_a_catchable_session_error(source: str) -> None:
-    assert PipelineDriver().run(source).ok
+    assert PipelineDriver(get_sandbox_context=None).run(source).ok
 
 
 def test_a_failing_default_becomes_a_catchable_session_error() -> None:
@@ -981,7 +981,7 @@ def test_production_session_host_carries_the_stream_decode_offset(
     host = create_agl_session_host(idle_timeout=None, context=hermetic_config_context())
     # This test targets the decode-offset diagnostic, not sandbox preparation, so
     # it seeds ``Disabled`` explicitly rather than exercising the default sandbox.
-    result = PipelineDriver(session_host=host).run(
+    result = PipelineDriver(session_host=host, get_sandbox_context=None).run(
         "program def main() -> unit =\n"
         '  let answer: text = ask("hello", agent = AgentCommand("runner"), sandbox = Disabled)\n'
         "  print(answer)\n"

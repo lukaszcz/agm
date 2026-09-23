@@ -667,6 +667,26 @@ class TestReplRun:
         assert "Sandbox(" in rendered
         assert "8G" in rendered
 
+    def test_repl_run_wires_a_real_sandbox_context_into_the_session(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        """``repl.run`` -- the real production path -- threads a working
+        ``get_sandbox_context`` into the session's runtime, exactly like
+        ``exec_command.run`` does. A host that forgot to wire one would make a
+        sandboxed ``exec`` raise ``ExecError`` instead of running it."""
+        from agm.sandbox.prepare import SandboxContext
+
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args())
+        session: ReplSession = fake_plain_console[0]["session"]
+
+        get_sandbox_context = session._runtime._get_sandbox_context
+        assert get_sandbox_context is not None
+        assert isinstance(get_sandbox_context(), SandboxContext)
+
     def test_cli_agent_override_still_applies_after_reset(
         self,
         monkeypatch: pytest.MonkeyPatch,

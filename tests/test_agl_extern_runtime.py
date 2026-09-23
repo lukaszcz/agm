@@ -313,7 +313,7 @@ def test_dry_run_lists_call_site_without_running_the_extern(tmp_path: Path) -> N
         f"    open({str(marker)!r}, 'a').write('called')\n"
         "    return x + 1\n",
     )
-    driver = PipelineDriver()
+    driver = PipelineDriver(get_sandbox_context=None)
     prepared = prepare_inline_command(
         "import lib/mod\nlib/mod::f(1)",
         roots=_roots(root),
@@ -329,7 +329,7 @@ def test_dry_run_does_not_import_a_broken_companion(tmp_path: Path) -> None:
     root = tmp_path / "root"
     write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
     write_companion_file(root, "lib/mod", "raise RuntimeError('broken')\n")
-    driver = PipelineDriver()
+    driver = PipelineDriver(get_sandbox_context=None)
     prepared = prepare_inline_command(
         "import lib/mod\nlib/mod::f(1)",
         roots=_roots(root),
@@ -479,7 +479,9 @@ def test_runtime_state_closer_runs_once_when_process_exit_raises_system_exit(
     (tmp_path / "entry.py").write_text(companion)
 
     with pytest.raises(SystemExit):
-        PipelineDriver().run(source, entry_path=entry_path, roots=agl_roots())
+        PipelineDriver(get_sandbox_context=None).run(
+            source, entry_path=entry_path, roots=agl_roots()
+        )
 
     assert closed_log.read_text().count("\n") == 1
 
@@ -536,7 +538,9 @@ def test_pipeline_run_surfaces_a_failing_companion_closer_as_a_run_error_note(
     entry_path.write_text(source)
     (tmp_path / "entry.py").write_text(companion)
 
-    result = PipelineDriver().run(source, entry_path=entry_path, roots=agl_roots())
+    result = PipelineDriver(get_sandbox_context=None).run(
+        source, entry_path=entry_path, roots=agl_roots()
+    )
 
     assert result.ok is False
     assert result.error is not None

@@ -103,7 +103,10 @@ def _run(
 ) -> tuple[RunResult, FakeHttp]:
     adapter = install(monkeypatch, outcomes)
     result = run_inline_command(
-        PipelineDriver(), source, entry_path=tmp_path / "entry.agl", **kwargs
+        PipelineDriver(get_sandbox_context=None),
+        source,
+        entry_path=tmp_path / "entry.agl",
+        **kwargs,
     )
     return result, adapter
 
@@ -658,7 +661,9 @@ program def main() -> unit =
   let _ = http::get("https://x/b")
   ()
 """
-    result = run_inline_command(PipelineDriver(), source, entry_path=tmp_path / "entry.agl")
+    result = run_inline_command(
+        PipelineDriver(get_sandbox_context=None), source, entry_path=tmp_path / "entry.agl"
+    )
     assert result.ok, result.error
     adapter.assert_complete()
     assert len(open_calls) == 1

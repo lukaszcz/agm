@@ -345,8 +345,9 @@ class PipelineDriver:
         run still creates an interpreter with its own companion runtime state.
     get_sandbox_context : callable or None
         Lazily builds the `SandboxContext` a sandboxed ``exec`` call needs
-        (see `agm.sandbox.prepare.lazy_sandbox_context`). ``None`` when the
-        host wires no sandbox context.
+        (see `agm.sandbox.prepare.lazy_sandbox_context`). Required, so a host
+        with no sandbox capability passes ``None`` deliberately rather than
+        forgetting it; ``None`` makes a sandboxed ``exec`` raise ``ExecError``.
     """
 
     def __init__(
@@ -358,7 +359,7 @@ class PipelineDriver:
         shell_exec_timeout: float | None = None,
         default_call_depth_limit: int | None = None,
         extern_registry: "ExternRegistry | None" = None,
-        get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None",
     ) -> None:
         self._default_strict_json = default_strict_json
         self._agent_dispatcher = agent_dispatcher
@@ -418,7 +419,7 @@ class PipelineDriver:
         agent_dispatcher: AgentFn | None,
         session_host: "SessionHost | None",
         shell_exec_timeout: float | None,
-        get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
+        get_sandbox_context: "Callable[[], SandboxContext] | None",
     ) -> None:
         """Replace this driver's execution-time services before ``run_prepared``.
 
@@ -433,6 +434,9 @@ class PipelineDriver:
         :meth:`preflight_arguments` never read these fields, only the
         eventual :meth:`run_prepared` call does. Invalidates the cached host
         environment so the new dispatcher/session host take effect.
+        ``get_sandbox_context`` is required (``None`` is a deliberate "no
+        sandbox capability"), so a sandboxed ``exec`` raises ``ExecError``
+        instead of crashing when a host forgets to wire one.
         """
         self._default_strict_json = default_strict_json
         self._agent_dispatcher = agent_dispatcher

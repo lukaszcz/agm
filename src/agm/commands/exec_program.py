@@ -574,7 +574,9 @@ def run(
     # strict-json/agent-dispatch/session/timeout are wired in below, once the
     # selected program's own ``@config`` entries are known (see
     # ``configure_execution_services``); discovery and preflight never read them.
-    runtime = PipelineDriver(default_call_depth_limit=resolved_call_depth_limit)
+    runtime = PipelineDriver(
+        default_call_depth_limit=resolved_call_depth_limit, get_sandbox_context=None
+    )
     discovery = (
         cached_pipeline.discovery
         if cached_pipeline is not None

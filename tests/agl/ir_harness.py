@@ -8,6 +8,7 @@ import os
 import time
 import unittest.mock
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -559,12 +560,31 @@ def shell_caps() -> HostCapabilities:
     return HostCapabilities(supports_shell_exec=True, codec_kinds=base.codec_kinds)
 
 
+@dataclass(frozen=True, slots=True)
+class ScriptedShellCall:
+    """One recorded call into a scripted ``run_capture_result`` fake."""
+
+    args: list[str]
+    env: dict[str, str] | None
+    cwd: Path | None
+    interrupt_cleanup_cmd: list[str] | None
+
+
 def _scripted_shell(
     commands: dict[str, ProcessCaptureResult],
     *,
     cmd_log: list[str] | None = None,
     argv_log: list[list[str]] | None = None,
+    call_log: "list[ScriptedShellCall] | None" = None,
 ) -> Callable[..., ProcessCaptureResult]:
+    """Build a scripted ``run_capture_result`` fake.
+
+    *call_log*, when given, records every call's ``env``/``cwd``/
+    ``interrupt_cleanup_cmd`` (each fake otherwise discards them), so a test
+    can assert a prepared sandboxed command's fields actually reach the
+    process boundary.
+    """
+
     def run(
         args: list[str],
         *,
@@ -574,9 +594,15 @@ def _scripted_shell(
         isolate_process_group: bool = False,
         interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
-        del idle_timeout, cwd, env, isolate_process_group, interrupt_cleanup_cmd
+        del idle_timeout, isolate_process_group
         if argv_log is not None:
             argv_log.append(args)
+        if call_log is not None:
+            call_log.append(
+                ScriptedShellCall(
+                    args=list(args), env=env, cwd=cwd, interrupt_cleanup_cmd=interrupt_cleanup_cmd
+                )
+            )
         # The command is always the final argv element, with "-c" right
         # before it -- true whether or not a sandbox wrapper (with its own
         # "-c"-taking bootstrap steps) prefixes the plain ``sh -c <cmd>`` tail.
@@ -613,9 +639,10 @@ def evaluate_ir_with_shell(
     *,
     cmd_log_ir: list[str] | None = None,
     argv_log: list[list[str]] | None = None,
+    call_log: "list[ScriptedShellCall] | None" = None,
     get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
 ) -> dict[str, Value]:
-    shell = _scripted_shell(commands, cmd_log=cmd_log_ir, argv_log=argv_log)
+    shell = _scripted_shell(commands, cmd_log=cmd_log_ir, argv_log=argv_log, call_log=call_log)
     return completed_bindings(
         run_inline_ir_with_shell(source, shell, get_sandbox_context=get_sandbox_context)
     )

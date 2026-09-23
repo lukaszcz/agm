@@ -71,6 +71,12 @@ determined (for example, an empty or unsplittable command) selects the
 unqualified default settings. A sandbox preparation failure raises
 `ExecError` exactly like a spawn failure.
 
+`Sandbox`'s `memory` and `swap` fields ([Types](types.md#sandbox)) are each
+`Optional[text]` with three states: `Default` (the field's own default)
+resolves against configuration — the first-shell-word-keyed `[run.<name>]`
+limit, else the general `[run]` limit, else a built-in floor — `None` means
+no limit, and `Some("8G")` applies that limit verbatim.
+
 ## Single-argument sugar
 
 With no named arguments, `exec` may be called with the command template

@@ -33,7 +33,9 @@ def test_process_exit_preserves_the_requested_system_exit_code(
     trace_path = tmp_path / "trace.jsonl"
 
     with pytest.raises(SystemExit) as raised:
-        PipelineDriver().run(_exit_program(call), roots=_roots(), trace_file=trace_path)
+        PipelineDriver(get_sandbox_context=None).run(
+            _exit_program(call), roots=_roots(), trace_file=trace_path
+        )
 
     assert raised.value.code == expected_code
     records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
@@ -44,7 +46,7 @@ def test_process_exit_preserves_the_requested_system_exit_code(
 
 @pytest.mark.parametrize("code", [-1, 256])
 def test_process_exit_rejects_codes_outside_the_portable_range(code: int) -> None:
-    result = PipelineDriver().run(_exit_program(str(code)), roots=_roots())
+    result = PipelineDriver(get_sandbox_context=None).run(_exit_program(str(code)), roots=_roots())
 
     assert not result.ok
     assert result.error is not None
@@ -63,7 +65,7 @@ def test_process_metadata_uses_the_controlled_run_directory(
         "  print(process::hostname())\n"
     )
 
-    result = PipelineDriver().run(source, roots=_roots())
+    result = PipelineDriver(get_sandbox_context=None).run(source, roots=_roots())
 
     assert result.ok
     cwd, pid, hostname = capsys.readouterr().out.splitlines()
@@ -109,7 +111,7 @@ def test_process_cwd_raises_encoding_error_when_the_working_directory_is_not_val
 ) -> None:
     monkeypatch.setattr(os, "getcwd", lambda: "/tmp/h\udcffome")
 
-    result = PipelineDriver().run(
+    result = PipelineDriver(get_sandbox_context=None).run(
         "import std/process\nprogram def main() -> unit =\n  let _ = process::cwd()\n",
         roots=_roots(),
     )
@@ -125,7 +127,7 @@ def test_process_hostname_raises_encoding_error_when_the_hostname_is_not_valid_u
 ) -> None:
     monkeypatch.setattr(socket, "gethostname", lambda: "h\udcffost")
 
-    result = PipelineDriver().run(
+    result = PipelineDriver(get_sandbox_context=None).run(
         "import std/process\nprogram def main() -> unit =\n  let _ = process::hostname()\n",
         roots=_roots(),
     )

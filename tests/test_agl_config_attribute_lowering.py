@@ -160,7 +160,7 @@ class TestPreflightProgramConfig:
         source = (
             "import std/config\n\n@config(config::trace = true)\nprogram def main() -> unit = ()\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
         discovery = runtime.discover_programs(prepared)
         assert discovery.diagnostics == ()
@@ -180,7 +180,7 @@ class TestPreflightProgramConfig:
         source = (
             "@param let count: int = 1\n\n@config(count = 2)\nprogram def main() -> unit = ()\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
         discovery = runtime.discover_programs(prepared)
         assert discovery.diagnostics == ()
@@ -202,7 +202,7 @@ class TestPreflightProgramConfig:
             "@config(ratio = 2)\n"
             "program def main() -> unit = ()\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
         discovery = runtime.discover_programs(prepared)
         assert discovery.diagnostics == ()
@@ -220,7 +220,7 @@ class TestPreflightProgramConfig:
 
     def test_decodes_an_int_literal_coerced_to_a_json_target(self, tmp_path: Path) -> None:
         source = "@param let blob: json = 0\n\n@config(blob = 3)\nprogram def main() -> unit = ()\n"
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
         discovery = runtime.discover_programs(prepared)
         assert discovery.diagnostics == ()
@@ -246,7 +246,7 @@ class TestPreflightProgramConfig:
             "@config(Logging::level = 2)\n"
             "program def main() -> unit = ()\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
         discovery = runtime.discover_programs(prepared)
         assert discovery.diagnostics == ()
@@ -270,7 +270,7 @@ class TestPreflightProgramConfig:
         """Same as the scoped case, for a target declared in an imported module."""
         (tmp_path / "helper.agl").write_text("@param let value: int = 1\n")
         source = "import helper\n\n@config(helper::value = 2)\nprogram def main() -> unit = ()\n"
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
         discovery = runtime.discover_programs(prepared)
         assert discovery.diagnostics == ()
@@ -291,7 +291,7 @@ class TestPreflightProgramConfig:
 
     def test_empty_when_the_program_carries_no_config(self, tmp_path: Path) -> None:
         source = "program def main() -> unit = ()\n"
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
         discovery = runtime.discover_programs(prepared)
         (program,) = discovery.programs
@@ -313,7 +313,7 @@ class TestPreflightProgramConfig:
             "@config(count = 3)\n"
             "program def alt() -> unit = ()\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
         discovery = runtime.discover_programs(prepared)
         assert discovery.diagnostics == ()
@@ -394,7 +394,7 @@ class TestProgramDefCalledAsAnOrdinaryFunction:
             "def call_build() -> unit = build()\n\n"
             "program def main() -> unit = call_build()\n"
         )
-        runtime = PipelineDriver()
+        runtime = PipelineDriver(get_sandbox_context=None)
         prepared = PipelineDriver.prepare_program(source, roots=agl_roots(tmp_path))
         discovery = runtime.discover_programs(prepared)
         assert discovery.diagnostics == ()

@@ -26,13 +26,13 @@ def _compile(source: str, companion: str, tmp_path: Path) -> ArgumentPreflight:
     entry.write_text(source)
     (tmp_path / "entry.py").write_text(companion)
 
-    prepared = PipelineDriver().prepare_program(
+    prepared = PipelineDriver(get_sandbox_context=None).prepare_program(
         source,
         entry_path=entry,
         roots=RootSet(roots=frozenset({tmp_path})),
         default_stdlib=False,
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     discovery = runtime.discover_programs(prepared)
     (program,) = discovery.programs
     return runtime.preflight_arguments(

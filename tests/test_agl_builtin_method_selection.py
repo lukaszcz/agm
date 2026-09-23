@@ -82,7 +82,7 @@ def test_prelude_reexports_builtin_receiver_scopes_for_bare_routes() -> None:
         "  print(int::abs(-1))\n"
     )
 
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.checked is not None, discovery.diagnostics
 
@@ -96,7 +96,7 @@ def test_default_prelude_exposes_receiver_methods() -> None:
         roots=agl_std_package_roots(),
     )
 
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.checked is not None, discovery.diagnostics
 
@@ -114,7 +114,7 @@ def test_receiver_methods_require_an_import_without_the_prelude(
 ) -> None:
     unavailable = PipelineDriver.prepare_program(source, default_stdlib=False)
 
-    rejected = PipelineDriver().discover_programs(unavailable)
+    rejected = PipelineDriver(get_sandbox_context=None).discover_programs(unavailable)
 
     assert rejected.checked is None
     assert rejected.diagnostics
@@ -122,7 +122,7 @@ def test_receiver_methods_require_an_import_without_the_prelude(
     available = PipelineDriver.prepare_program(
         f"import {owner_import}\n{source}", default_stdlib=False
     )
-    selected = PipelineDriver().discover_programs(available)
+    selected = PipelineDriver(get_sandbox_context=None).discover_programs(available)
 
     assert selected.checked is not None, selected.diagnostics
 
@@ -136,7 +136,7 @@ def test_local_receiver_scope_coexists_with_the_prelude_reexport() -> None:
         'program def main() -> unit = print(text::shout("value"))\n'
     )
 
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.checked is not None, discovery.diagnostics
 
@@ -155,7 +155,7 @@ def test_prelude_hiding_a_method_keeps_other_receiver_methods_visible() -> None:
         'import std/prelude::* hiding text::trim\ndef value() -> int = "value".size()\n',
         roots=agl_std_package_roots(),
     )
-    selected = PipelineDriver().discover_programs(visible)
+    selected = PipelineDriver(get_sandbox_context=None).discover_programs(visible)
 
     assert selected.checked is not None, selected.diagnostics
 
@@ -163,7 +163,7 @@ def test_prelude_hiding_a_method_keeps_other_receiver_methods_visible() -> None:
         'import std/prelude::* hiding text::trim\ndef value() -> text = " value ".trim()\n',
         roots=agl_std_package_roots(),
     )
-    rejected = PipelineDriver().discover_programs(hidden)
+    rejected = PipelineDriver(get_sandbox_context=None).discover_programs(hidden)
 
     assert rejected.checked is None
     assert rejected.diagnostics
@@ -179,7 +179,7 @@ def test_fixture_prelude_exposes_array_text_and_scalar_methods() -> None:
         roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
 
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.checked is not None, discovery.diagnostics
 
@@ -190,7 +190,7 @@ def test_builtin_direct_method_calls_lower_as_receiver_first_direct_calls() -> N
         "program def main() -> unit = print([1].size())\n",
         roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.compiled is not None, discovery.diagnostics
     executable = lower_program(discovery.compiled)
@@ -213,7 +213,7 @@ def test_builtin_receiver_host_method_values_reuse_core_lowering_routes() -> Non
         "  ()\n",
         roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.compiled is not None, discovery.diagnostics
     executable = lower_program(discovery.compiled)
@@ -252,7 +252,7 @@ def test_generic_unbound_builtin_method_calls_infer_or_accept_receiver_type_args
         "  ()\n",
         roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.compiled is not None, discovery.diagnostics
     lower_program(discovery.compiled)
@@ -264,7 +264,7 @@ def test_generic_unbound_builtin_method_rejects_too_many_type_args() -> None:
         "program def main() -> unit = array::copy::[int, text]([1])\n",
         roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.compiled is None
 
@@ -275,7 +275,7 @@ def test_builtin_receiver_host_method_reuses_its_core_lowering_route() -> None:
         "program def main() -> unit = print([1].copy())\n",
         roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.compiled is not None, discovery.diagnostics
     executable = lower_program(discovery.compiled)
@@ -309,7 +309,7 @@ def test_applied_receiver_scope_is_reexportable_and_selectable_by_route(
     )
 
     assert prepared.resolved is not None, prepared.diagnostics
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.checked is not None, discovery.diagnostics
 
@@ -331,7 +331,7 @@ def test_prelude_method_modules_are_inferred_before_consumers() -> None:
     assert ModuleId.from_path("std/array") in graph.adjacency[STD_PRELUDE_ID]
     assert component_index[ModuleId.from_path("std/array")] < component_index[ENTRY_ID]
 
-    selected = PipelineDriver().discover_programs(prepared)
+    selected = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert selected.checked is not None, selected.diagnostics
 
@@ -344,7 +344,7 @@ def test_dry_run_attributes_ambient_method_externs_to_the_calling_module() -> No
     library's internals.
     """
     prepared = PipelineDriver.prepare_program("program def main() -> unit = print([1].size())\n")
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert discovery.compiled is not None, discovery.diagnostics
     inventory = lower_program(discovery.compiled).dry_run_inventory
@@ -371,7 +371,7 @@ def test_dry_run_keeps_method_modules_reached_through_source_imports(
         "import bridge\nprogram def main() -> unit = ()\n",
         roots=RootSet(roots=frozenset({tmp_path}), stdlib_roots=frozenset({stdlib})),
     )
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     discovery = runtime.discover_programs(prepared)
 
     assert prepared.resolved is not None, prepared.diagnostics
@@ -392,7 +392,7 @@ def test_receiver_methods_are_available_but_owning_module_free_functions_are_not
         roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
 
-    selected = PipelineDriver().discover_programs(prepared)
+    selected = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     assert selected.checked is not None, selected.diagnostics
 
@@ -400,7 +400,7 @@ def test_receiver_methods_are_available_but_owning_module_free_functions_are_not
         "program def main() -> unit = unavailable()\n",
         roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({stdlib_root})),
     )
-    rejected = PipelineDriver().discover_programs(unavailable)
+    rejected = PipelineDriver(get_sandbox_context=None).discover_programs(unavailable)
 
     assert rejected.checked is None
     assert rejected.diagnostics

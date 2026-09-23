@@ -13,7 +13,8 @@ Public contract exercised here:
 
     runtime = PipelineDriver(
         default_strict_json=False,  # lenient JSON recovery is the default
-        agent_dispatcher=fn,        # fn(request) -> str
+        agent_dispatcher=fn,        # fn(request) -> str,
+        get_sandbox_context=None,
     )
     result = runtime.run(source)
 
@@ -977,7 +978,7 @@ def test_module_param_paths_must_exist_in_selected_program_closure() -> None:
         "@param let enabled: bool = false\nprogram def main() -> unit = ()\n",
         default_stdlib=False,
     )
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
 
     with pytest.raises(AssertionError):
         module_param_values(discovery, discovery.programs[0], {"<entry>::missing": True})
@@ -987,7 +988,7 @@ def test_inline_entry_module_params_seed_root_binding(capsys: pytest.CaptureFixt
     from agm.agl import PipelineDriver
 
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         "@param var value: int = 1\nvalue := value + 1\nprint value\n",
         module_params={"<entry>::value": 4},
     )
@@ -1004,7 +1005,7 @@ def test_inline_entry_with_its_own_program_def_follows_relaxed_binding_order(
     from agm.agl import PipelineDriver
 
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         "def read-counter() -> int = counter\n\nvar counter = 41\n\n"
         "program def main() -> unit =\n  counter := counter + 1\n  print read-counter()\n",
     )
@@ -1031,7 +1032,9 @@ def _apply_sandbox_home(
     path, mirroring `_prepare_temp_filesystem`'s ``$TEMP_ROOT``) and the
     ``get_sandbox_context`` callable to thread into the runtime -- ``None``
     when the scenario has no ``sandbox_home``, so an ordinary scenario never
-    builds one.
+    builds one. ``proj_dir: true`` gives the context a real project directory
+    -- needed for a scenario to observe ``patch``, which ``SrtBackend`` only
+    consults when a project directory is present.
     """
     spec = scenario.get("sandbox_home")
     if spec is None:
@@ -1042,6 +1045,7 @@ def _apply_sandbox_home(
         run_toml=spec.get("run_toml", ""),
         extra_settings_files=tuple(spec.get("extra_settings_files", ())),
     )
+    proj_dir = tmp_path / "proj" if spec.get("proj_dir") else None
     explicit_settings = home / "explicit-settings.json"
     explicit_settings.write_text("{}", encoding="utf-8")
     process_environment = dict(scenario.get("process_environment") or {})
@@ -1051,20 +1055,20 @@ def _apply_sandbox_home(
         shim_dir = tmp_path / "sandbox-shims"
         write_transparent_sandbox_shims(shim_dir, log_dir=tmp_path / "sandbox-shim-log")
         process_environment.setdefault("PATH", str(shim_dir))
-    params = {
-        name: str(explicit_settings) if value == "$SANDBOX_SETTINGS_FILE" else value
-        for name, value in scenario.get("params", {}).items()
-    }
-    scenario = {**scenario, "process_environment": process_environment, "params": params}
-    return scenario, session_sandbox_context(home)
+    scenario = _substitute_params(scenario, {"$SANDBOX_SETTINGS_FILE": str(explicit_settings)})
+    scenario = {**scenario, "process_environment": process_environment}
+    return scenario, session_sandbox_context(home, proj_dir=proj_dir)
 
 
 def _run_program(
-    source: str, scenario: dict[str, Any], program: Path, tmp_path: Path
+    source: str,
+    scenario: dict[str, Any],
+    program: Path,
+    tmp_path: Path,
+    get_sandbox_context: Callable[[], SandboxContext] | None,
 ) -> tuple[Any, dict[str, ScriptedAgent], FakeShell, FakeHttp]:
     from agm.agl import PipelineDriver
 
-    scenario, get_sandbox_context = _apply_sandbox_home(scenario, tmp_path)
     agents = {
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
     }
@@ -1087,8 +1091,7 @@ def _run_program(
         runtime_options["agent_dispatcher"] = dispatch_agent
     if agents:
         runtime_options["session_host"] = _ScenarioSessionHost(agents)
-    if get_sandbox_context is not None:
-        runtime_options["get_sandbox_context"] = get_sandbox_context
+    runtime_options["get_sandbox_context"] = get_sandbox_context
     runtime = PipelineDriver(**runtime_options)
     default_stdlib = not scenario.get("no_stdlib", False)
     entry_path: Path | None = None
@@ -1332,6 +1335,20 @@ def _assert_sandbox_expectation(
             )
 
 
+def _substitute_params(scenario: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
+    """Replace each ``scenario["params"]`` value found in *mapping* with its real path.
+
+    Shared by every fixture that hands a scenario a real filesystem path
+    through a literal sentinel value (``$TEMP_ROOT``, ``$SANDBOX_SETTINGS_FILE``),
+    so the substitution logic exists once.
+    """
+    params = {
+        name: mapping.get(value, value) if isinstance(value, str) else value
+        for name, value in scenario.get("params", {}).items()
+    }
+    return {**scenario, "params": params}
+
+
 def _prepare_temp_filesystem(scenario: dict[str, Any], tmp_path: Path) -> dict[str, Any]:
     """Create a scenario's isolated filesystem fixture and bind its root parameter."""
     fixture = scenario.get("filesystem")
@@ -1356,11 +1373,7 @@ def _prepare_temp_filesystem(scenario: dict[str, Any], tmp_path: Path) -> dict[s
         except OSError:
             pytest.skip("symbolic links are unavailable")
 
-    params = {
-        name: str(root) if value == "$TEMP_ROOT" else value
-        for name, value in scenario.get("params", {}).items()
-    }
-    return {**scenario, "params": params}
+    return _substitute_params(scenario, {"$TEMP_ROOT": str(root)})
 
 
 def test_filesystem_fixture_skips_symlink_scenarios_when_symlinks_are_unavailable(
@@ -1847,13 +1860,27 @@ def test_program_scenario(
     scenario: dict[str, Any],
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Pinned so a sandboxed exec's ``cwd or Path.cwd()`` fallback never picks
+    # up the real process cwd -- a checkout with a real ``.sandbox/`` would
+    # otherwise merge in extra settings candidates non-hermetically.
+    monkeypatch.chdir(tmp_path)
+    # Explicit order: the filesystem fixture's ``$TEMP_ROOT`` and the sandbox
+    # home's ``$SANDBOX_SETTINGS_FILE`` are independent sentinel substitutions
+    # over the same scenario, so either order is safe -- but making it
+    # explicit here (rather than one nested inside `_run_program`) means a
+    # scenario using both never depends on incidental call order.
     scenario = _prepare_temp_filesystem(scenario, tmp_path)
+    scenario, get_sandbox_context = _apply_sandbox_home(scenario, tmp_path)
     result, agents, shell, http_adapter = _run_program(
-        program.read_text(encoding="utf-8"), scenario, program, tmp_path
+        program.read_text(encoding="utf-8"), scenario, program, tmp_path, get_sandbox_context
     )
     out = capsys.readouterr().out
     expect = scenario["expect"]
+    if expect.get("shell_sandbox_units_distinct"):
+        units = [argv[argv.index("--unit") + 1] for argv in shell.argvs]
+        assert len(set(units)) == len(units), f"expected distinct scope names, got {units}"
     if "host_error" in expect:
         _assert_host_error(result, agents, expect["host_error"])
         shell.assert_complete()
@@ -1882,7 +1909,9 @@ def test_static_rejection(program: Path) -> None:
     spec = _load_json(program.with_name(program.stem + ".expect.json"))
     expect = spec["diagnostic"]
     roots = _fixture_roots(spec)
-    result = _run_source_entry(PipelineDriver(), program.read_text(encoding="utf-8"), roots=roots)
+    result = _run_source_entry(
+        PipelineDriver(get_sandbox_context=None), program.read_text(encoding="utf-8"), roots=roots
+    )
     assert not result.ok, "expected the program to be rejected statically"
     assert result.error is None, "static rejection must happen before execution"
     diagnostics = list(result.diagnostics)
@@ -1900,7 +1929,9 @@ def test_static_rejection(program: Path) -> None:
 def test_pipeline_run_invokes_the_single_entry_program(capsys: pytest.CaptureFixture[str]) -> None:
     from agm.agl import PipelineDriver
 
-    result = PipelineDriver().run('program def main() -> unit = print "hello"')
+    result = PipelineDriver(get_sandbox_context=None).run(
+        'program def main() -> unit = print "hello"'
+    )
 
     assert result.ok
     assert capsys.readouterr().out == "hello\n"
@@ -1909,7 +1940,7 @@ def test_pipeline_run_invokes_the_single_entry_program(capsys: pytest.CaptureFix
 def test_pipeline_check_only_rejects_ambiguous_default_program() -> None:
     from agm.agl import PipelineDriver
 
-    result = PipelineDriver().run(
+    result = PipelineDriver(get_sandbox_context=None).run(
         "program def first() -> unit = ()\nprogram def second() -> unit = ()\n",
         check_only=True,
     )
@@ -1928,7 +1959,7 @@ def test_direct_std_option_import_runs_without_the_automatic_prelude(
 
     roots = agl_roots()
     result = _run_source_entry(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         "import std/prelude::print\n"
         "import std/option::Option\n"
         "program def main() -> unit =\n"
@@ -1951,7 +1982,7 @@ def test_std_core_option_reexport_preserves_nominal_identity(
 
     roots = agl_roots()
     result = _run_source_entry(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         "import std/prelude::{Option as CoreOption, print}\n"
         "import std/option::Option\n"
         "program def main() -> unit =\n"
@@ -1973,7 +2004,7 @@ def test_qualified_std_prelude_print_still_works(capsys: pytest.CaptureFixture[s
     declaration a bare ``print`` does, just by a qualified route."""
     from agm.agl import PipelineDriver
 
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     result = _run_source_entry(runtime, 'program def main() -> unit = std/prelude::print("hi")\n')
 
     assert list(result.diagnostics) == [], (
@@ -2074,7 +2105,7 @@ def test_legacy_exec_signature_rejects_extended_options_with_a_diagnostic(tmp_pa
 
     scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
     result = _run_source_entry(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         'program def main() -> unit = Std::exec("echo hi", env = ())\n',
         roots=RootSet(roots=frozenset(), stdlib_roots=frozenset({scoped_stdlib_root})),
     )
@@ -2106,7 +2137,7 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
     )
 
     shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         result = _run_source_entry(
             runtime,
@@ -2145,7 +2176,7 @@ def test_scoped_stdlib_arrangement_structured_exec_result_is_the_scoped_nominal(
     )
 
     shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         result = _run_source_entry(
             runtime,
@@ -2180,7 +2211,7 @@ def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scope
     )
 
     shell = FakeShell([{"command": "false", "returncode": 1}])
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         result = _run_source_entry(
             runtime,
@@ -2210,7 +2241,7 @@ def test_scoped_stdlib_arrangement_bare_print_is_undefined_but_qualified_works(
 
     scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
     roots = RootSet(roots=frozenset(), stdlib_roots=frozenset({scoped_stdlib_root}))
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
 
     bare_result = _run_source_entry(
         runtime, 'program def main() -> unit = print("hi")\n', roots=roots
@@ -2284,7 +2315,7 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
     )
 
     shell = FakeShell([{"command": "false", "returncode": 1}])
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         result = _run_source_entry(runtime, program, default_stdlib=False)
     shell.assert_complete()
@@ -2307,7 +2338,7 @@ def test_builtin_print_can_be_passed_as_a_function_value(
         'program def main() -> unit = apply(print, "hello")\n'
     )
 
-    result = _run_source_entry(PipelineDriver(), source)
+    result = _run_source_entry(PipelineDriver(get_sandbox_context=None), source)
 
     assert result.ok
     assert capsys.readouterr().out == "hello\n"
@@ -2327,7 +2358,7 @@ def test_scoped_builtin_reference_can_be_called_through_a_value(
         "  print(show(7))\n"
     )
 
-    result = _run_source_entry(PipelineDriver(), source)
+    result = _run_source_entry(PipelineDriver(get_sandbox_context=None), source)
 
     assert result.ok
     assert capsys.readouterr().out == "7\n"
@@ -2346,7 +2377,7 @@ def test_render_and_copy_builtins_can_be_called_through_values(
         "  print(show(clone-level(clone([7]))[0]))\n"
     )
 
-    result = _run_source_entry(PipelineDriver(), source)
+    result = _run_source_entry(PipelineDriver(get_sandbox_context=None), source)
 
     assert result.ok
     assert capsys.readouterr().out == "7\n"
@@ -2363,7 +2394,7 @@ def test_ask_request_builtin_value_uses_its_default_text_contract(
         '  print(make-request("Review this").prompt)\n'
     )
 
-    result = _run_source_entry(PipelineDriver(), source)
+    result = _run_source_entry(PipelineDriver(get_sandbox_context=None), source)
 
     assert result.ok
     assert capsys.readouterr().out == "Review this\n"
@@ -2382,7 +2413,7 @@ def test_builtin_exec_value_uses_ambient_defaults(
     shell = FakeShell([{"command": "answer", "stdout": "42\n"}])
 
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
-        result = _run_source_entry(PipelineDriver(), source)
+        result = _run_source_entry(PipelineDriver(get_sandbox_context=None), source)
 
     shell.assert_complete()
     assert result.ok
@@ -2403,7 +2434,9 @@ def test_effect_builtin_values_accept_explicit_output_specialization(
     shell = FakeShell([{"command": "second", "stdout": "1\n"}])
 
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
-        result = _run_source_entry(PipelineDriver(agent_dispatcher=lambda _request: "41"), source)
+        result = _run_source_entry(
+            PipelineDriver(agent_dispatcher=lambda _request: "41", get_sandbox_context=None), source
+        )
 
     shell.assert_complete()
     assert result.ok
@@ -2417,7 +2450,9 @@ def test_unconstrained_builtin_ask_value_defaults_to_text(
 
     source = 'program def main() -> unit =\n  let query = ask\n  print(query("Question"))\n'
 
-    result = _run_source_entry(PipelineDriver(agent_dispatcher=lambda _request: "answer"), source)
+    result = _run_source_entry(
+        PipelineDriver(agent_dispatcher=lambda _request: "answer", get_sandbox_context=None), source
+    )
 
     assert result.ok
     assert capsys.readouterr().out == "answer\n"
@@ -2440,7 +2475,9 @@ def test_builtin_ask_can_be_passed_as_a_contextually_typed_function_value(
         'program def main() -> unit = print(apply(ask, "How many?"))\n'
     )
 
-    result = _run_source_entry(PipelineDriver(agent_dispatcher=answer), source)
+    result = _run_source_entry(
+        PipelineDriver(agent_dispatcher=answer, get_sandbox_context=None), source
+    )
 
     assert result.ok
     assert len(prompts) == 1

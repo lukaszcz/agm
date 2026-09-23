@@ -675,13 +675,18 @@ def unavailable_sandbox_context() -> SandboxContext:
     raise AssertionError("sandbox context requested unexpectedly")
 
 
-def session_sandbox_context(home: Path) -> Callable[[], SandboxContext]:
+def session_sandbox_context(
+    home: Path, *, proj_dir: Path | None = None
+) -> Callable[[], SandboxContext]:
     """A real, lazily-built ``get_sandbox_context`` scoped to *home*.
 
     For a session backend test that does exercise sandboxing: pair with
     ``write_sandbox_home(home, ...)`` for a resolvable default settings file.
+    *proj_dir* is ``None`` by default, matching most tests; pass a real path
+    for one that needs project-scoped behavior (e.g. ``patch``) to actually
+    engage.
     """
-    return lazy_sandbox_context(ConfigContext(home=home, proj_dir=None, cwd=home))
+    return lazy_sandbox_context(ConfigContext(home=home, proj_dir=proj_dir, cwd=home))
 
 
 def write_sandbox_home(
@@ -803,7 +808,7 @@ def run_program(
     ``default-sandbox``, the generic restamp tests).
     """
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         source,
         roots=agl_roots(),
         builtin_host_settings=seed,

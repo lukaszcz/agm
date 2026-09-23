@@ -1902,9 +1902,17 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     captured: dict[str, object] = {}
 
     class RecordingRuntime(RealRuntime):
-        def __init__(self, *, default_call_depth_limit: int | None = None) -> None:
+        def __init__(
+            self,
+            *,
+            default_call_depth_limit: int | None = None,
+            get_sandbox_context: Any | None = None,
+        ) -> None:
             captured["default_call_depth_limit"] = default_call_depth_limit
-            super().__init__(default_call_depth_limit=default_call_depth_limit)
+            super().__init__(
+                default_call_depth_limit=default_call_depth_limit,
+                get_sandbox_context=get_sandbox_context,
+            )
 
         def configure_execution_services(
             self,
@@ -1913,10 +1921,11 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             agent_dispatcher: Any | None,
             session_host: Any | None,
             shell_exec_timeout: float | None,
-            get_sandbox_context: Any | None = None,
+            get_sandbox_context: Any | None,
         ) -> None:
             captured["default_strict_json"] = default_strict_json
             captured["shell_exec_timeout"] = shell_exec_timeout
+            captured["get_sandbox_context"] = get_sandbox_context
             super().configure_execution_services(
                 default_strict_json=default_strict_json,
                 agent_dispatcher=agent_dispatcher,
@@ -1965,6 +1974,46 @@ class TestExecConfigWiring:
         )
         assert exec_command.run(args) is None
         assert captured["default_strict_json"] is True
+
+    def test_run_wires_a_real_sandbox_context_into_the_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``exec_command.run`` -- the real production path, not a hand-built
+        ``PipelineDriver`` -- threads a working ``get_sandbox_context`` into
+        ``configure_execution_services``. A host that forgot to wire one would
+        make a sandboxed ``exec`` raise ``ExecError`` instead of running it;
+        this proves the callable is both present and real."""
+        from collections.abc import Callable
+        from typing import cast
+
+        from agm.cli_support.args import ExecArgs
+        from agm.config.context import ConfigContext
+        from agm.sandbox.prepare import SandboxContext
+
+        home = tmp_path / "home"
+        home.mkdir()
+        agl_file = tmp_path / "prog.agl"
+        write_file_program(agl_file, "let x = 1\nx\n")
+
+        monkeypatch.setattr(
+            exec_engine,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        captured = _spy_runtime(monkeypatch)
+
+        args = ExecArgs(
+            file=str(agl_file),
+            argument_tokens=[],
+            strict_json=None,
+            no_trace=False,
+            trace_file=None,
+        )
+        assert exec_command.run(args) is None
+        assert captured["get_sandbox_context"] is not None
+        get_sandbox_context = cast("Callable[[], SandboxContext]", captured["get_sandbox_context"])
+        assert isinstance(get_sandbox_context(), SandboxContext)
 
     def test_cli_strict_json_overrides_config(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2085,6 +2134,7 @@ def _exec_args_with_fallback_runtime(
             session_host: Any | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
+            get_sandbox_context: Any | None = None,
         ) -> None:
             del agent_dispatcher
             super().__init__(
@@ -2093,6 +2143,7 @@ def _exec_args_with_fallback_runtime(
                 session_host=session_host,
                 shell_exec_timeout=shell_exec_timeout,
                 default_call_depth_limit=default_call_depth_limit,
+                get_sandbox_context=get_sandbox_context,
             )
 
     monkeypatch.setattr(exec_engine, "PipelineDriver", FallbackRuntime)
@@ -2237,6 +2288,7 @@ class TestDryRunInventory:
                 session_host: Any | None = None,
                 shell_exec_timeout: float | None = None,
                 default_call_depth_limit: int | None = None,
+                get_sandbox_context: Any | None = None,
             ) -> None:
                 del agent_dispatcher
                 super().__init__(
@@ -2245,6 +2297,7 @@ class TestDryRunInventory:
                     session_host=session_host,
                     shell_exec_timeout=shell_exec_timeout,
                     default_call_depth_limit=default_call_depth_limit,
+                    get_sandbox_context=get_sandbox_context,
                 )
 
         monkeypatch.setattr(exec_engine, "PipelineDriver", SpyRuntime)

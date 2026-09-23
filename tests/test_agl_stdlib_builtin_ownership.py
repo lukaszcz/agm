@@ -201,7 +201,9 @@ def _split_stdlib(tmp_path: Path) -> RootSet:
 
 
 def _run(source: str, roots: RootSet, **options: object) -> RunResult:
-    return run_inline_command(PipelineDriver(**options), source, roots=roots)
+    return run_inline_command(
+        PipelineDriver(**options, get_sandbox_context=None), source, roots=roots
+    )
 
 
 def test_exceptions_declared_outside_the_prelude_are_raisable_and_catchable(
@@ -341,7 +343,7 @@ def test_reserved_fallbacks_still_serve_a_program_with_no_standard_library(
 ) -> None:
     """Without any standard library the host's own identities answer instead."""
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         "builtin def print[T](value: T) -> unit\n"
         'let caught = try\n  raise KeyError(key = "k", message = "boom")\n'
         "catch KeyError as e =>\n  e.key\nprint(caught)\n",
@@ -354,7 +356,7 @@ def test_reserved_fallbacks_still_serve_a_program_with_no_standard_library(
 
 def test_an_uncaught_reserved_exception_spells_its_bare_name() -> None:
     result = run_inline_command(
-        PipelineDriver(),
+        PipelineDriver(get_sandbox_context=None),
         'raise KeyError(key = "k", message = "boom")\n',
         default_stdlib=False,
     )

@@ -27,7 +27,7 @@ from tests._agl_helpers import REPO_STDLIB_ROOT, agl_roots
 
 def _run_file(source: str, path: Path, *, roots: RootSet) -> object:
     """Run *source*'s entry ``program def main() -> unit`` (no arguments)."""
-    runtime = PipelineDriver()
+    runtime = PipelineDriver(get_sandbox_context=None)
     prepared = PipelineDriver.prepare_program(source, entry_path=path, roots=roots)
     discovery = runtime.discover_programs(prepared)
     if discovery.compiled is None:
@@ -190,7 +190,7 @@ def test_lowering_attaches_the_call_span_to_a_missing_resource(tmp_path: Path) -
     entry = tmp_path / "main.agl"
     source = 'program def main() -> unit = print resource("missing.md")\n'
     prepared = PipelineDriver.prepare_program(source, entry_path=entry, roots=agl_roots())
-    discovery = PipelineDriver().discover_programs(prepared)
+    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
     assert discovery.compiled is not None
 
     with pytest.raises(ResourceError) as raised:

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import unittest.mock
+from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 import semver
@@ -32,6 +33,9 @@ from tests._http_helpers import install as install_fake_http
 from tests._process_helpers import FakeShell
 from tests.agl.ir_harness import write_companion_file, write_module_file
 
+if TYPE_CHECKING:
+    from agm.sandbox.prepare import SandboxContext
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -48,7 +52,9 @@ def _agent_returning(text: str):
 
 def _agent_runtime(agent: AgentFn, *, strict_json: bool = False) -> PipelineDriver:
     """Build a runtime with an explicit value dispatcher for test agents."""
-    return PipelineDriver(default_strict_json=strict_json, agent_dispatcher=agent)
+    return PipelineDriver(
+        default_strict_json=strict_json, agent_dispatcher=agent, get_sandbox_context=None
+    )
 
 
 def _load_jsonl(path: Path) -> list[dict[str, object]]:
@@ -87,7 +93,7 @@ class TestTraceFileCreated:
     def test_trace_file_created_at_custom_path(self, tmp_path: Path) -> None:
         """A custom --trace-file path receives JSONL trace output after a run."""
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, 'let x = 1\nprint "hello"', trace_file=trace_path)
         assert result.ok
         assert trace_path.exists(), "trace file must be created when trace_file is given"
@@ -95,7 +101,7 @@ class TestTraceFileCreated:
     def test_trace_file_has_jsonl_content(self, tmp_path: Path) -> None:
         """Each line of the trace file is a valid JSON object."""
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         _run_inline(rt, 'let x = 1\nprint "hello"', trace_file=trace_path)
         records = _load_jsonl(trace_path)
         assert len(records) >= 1
@@ -104,7 +110,7 @@ class TestTraceFileCreated:
 
     def test_trace_file_not_created_when_no_trace(self, tmp_path: Path) -> None:
         """When trace_file is None (no-trace semantics), no trace file is written."""
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, 'let x = 1\nprint "hello"', trace_file=None)
         assert result.ok
         # No trace file: any file created would be under .agent-files/ which
@@ -114,7 +120,7 @@ class TestTraceFileCreated:
     def test_run_result_exposes_trace_path(self, tmp_path: Path) -> None:
         """RunResult.trace_path is the Path of the written JSONL file."""
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, "let x = 1\nx", trace_file=trace_path)
         assert result.ok
         assert result.trace_path == trace_path
@@ -130,7 +136,7 @@ class TestTraceFileCreated:
 
         monkeypatch.setattr("agm.core.fs.mkdir", fail_mkdir)
         result = _run_inline(
-            PipelineDriver(),
+            PipelineDriver(get_sandbox_context=None),
             'print "still runs"',
             trace_file=tmp_path / "missing" / "trace.jsonl",
         )
@@ -148,7 +154,7 @@ class TestTraceFileCreated:
 class TestPrintRecord:
     def test_print_produces_trace_record(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         _run_inline(rt, 'print "hello world"', trace_file=trace_path)
         records = _load_jsonl(trace_path)
         kinds = [r.get("kind") for r in records]
@@ -156,7 +162,7 @@ class TestPrintRecord:
 
     def test_print_record_has_value(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         _run_inline(rt, 'print "hello world"', trace_file=trace_path)
         records = _load_jsonl(trace_path)
         print_recs = [r for r in records if r.get("kind") == "print"]
@@ -166,7 +172,7 @@ class TestPrintRecord:
 
     def test_print_record_has_span(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         _run_inline(rt, 'print "hello"', trace_file=trace_path)
         records = _load_jsonl(trace_path)
         print_recs = [r for r in records if r.get("kind") == "print"]
@@ -177,11 +183,16 @@ class TestPrintRecord:
 
 class TestExecCommandRecord:
     def _exec_record(
-        self, tmp_path: Path, source: str, shell: FakeShell | None = None
+        self,
+        tmp_path: Path,
+        source: str,
+        shell: FakeShell | None = None,
+        *,
+        get_sandbox_context: "Callable[[], SandboxContext] | None" = None,
     ) -> dict[str, object]:
         """Run *source* and return its single ``exec_command`` trace record."""
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=get_sandbox_context)
         with unittest.mock.patch(
             "agm.core.process.run_capture_result", side_effect=shell or FakeShell(stdout="captured")
         ):
@@ -238,6 +249,27 @@ class TestExecCommandRecord:
 
         assert rec["exit_code"] == -1
         assert "no shell" in cast(str, rec["stderr"])
+        assert rec["timed_out"] is False
+
+    def test_a_sandbox_preparation_failure_is_recorded_as_a_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A preparation failure never spawns a process, so it records
+        ``exit_code=-1``/``duration=0.0`` exactly like a spawn failure --
+        without ever calling the scripted shell."""
+        from tests._agl_helpers import session_sandbox_context
+
+        monkeypatch.setattr("shutil.which", lambda *args, **kwargs: None)
+        shell = FakeShell(responses=[])
+        rec = self._exec_record(
+            tmp_path,
+            'exec("echo hi", sandbox = Some(Sandbox()))',
+            shell,
+            get_sandbox_context=session_sandbox_context(tmp_path / "home"),
+        )
+
+        assert rec["exit_code"] == -1
+        assert rec["duration"] == 0.0
         assert rec["timed_out"] is False
 
 
@@ -551,7 +583,8 @@ class TestRetryRecords:
         runtime = PipelineDriver(
             agent_dispatcher=value_driven_agent_factory(
                 idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
-            )
+            ),
+            get_sandbox_context=None,
         )
         result = run_inline_command(
             runtime,
@@ -593,7 +626,8 @@ class TestRetryRecords:
         runtime = PipelineDriver(
             agent_dispatcher=value_driven_agent_factory(
                 idle_timeout=None, context=ConfigContext(home=home, proj_dir=None, cwd=home)
-            )
+            ),
+            get_sandbox_context=None,
         )
         result = run_inline_command(
             runtime,
@@ -703,7 +737,7 @@ class TestBuiltinExceptionFields:
 
     def test_arithmetic_error_trace_id_non_empty_with_logging(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         # Uncaught division by zero → ArithmeticError escapes the program.
         result = _run_inline(rt, "let x = 1 / 0\nx", trace_file=trace_path)
         assert not result.ok
@@ -715,7 +749,7 @@ class TestBuiltinExceptionFields:
         assert exc_recs and "trace_id" not in exc_recs[0]
 
     def test_arithmetic_error_trace_id_non_empty_without_logging(self) -> None:
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, "let x = 1 / 0\nx", trace_file=None)
         assert not result.ok
         assert result.error is not None
@@ -723,7 +757,7 @@ class TestBuiltinExceptionFields:
         assert "trace_id" not in result.error.fields
 
     def test_match_error_trace_id_non_empty_without_logging(self) -> None:
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         # Explicit source raising retains the ordinary MatchError runtime contract.
         result = _run_inline(
             rt,
@@ -741,7 +775,7 @@ class TestBuiltinExceptionFields:
 
     def test_max_iterations_trace_id_linked_with_logging(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         # A do-loop whose condition never becomes true exhausts its limit.
         result = _run_inline(
             rt,
@@ -765,7 +799,7 @@ class TestBuiltinExceptionFields:
 class TestRunBoundaryRecords:
     def test_run_start_record_present(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         _run_inline(rt, "let x = 1\nx", trace_file=trace_path)
         records = _load_jsonl(trace_path)
         kinds = [r.get("kind") for r in records]
@@ -773,7 +807,7 @@ class TestRunBoundaryRecords:
 
     def test_run_end_record_present(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         _run_inline(rt, "let x = 1\nx", trace_file=trace_path)
         records = _load_jsonl(trace_path)
         kinds = [r.get("kind") for r in records]
@@ -781,7 +815,7 @@ class TestRunBoundaryRecords:
 
     def test_run_start_before_run_end(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         _run_inline(rt, "let x = 1\nx", trace_file=trace_path)
         records = _load_jsonl(trace_path)
         kinds = [r.get("kind") for r in records]
@@ -792,7 +826,7 @@ class TestRunBoundaryRecords:
     def test_all_records_share_run_id(self, tmp_path: Path) -> None:
         """Every record in a trace file carries the same run_id."""
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         _run_inline(rt, 'var x = 1\nx := 2\nprint "done"', trace_file=trace_path)
         records = _load_jsonl(trace_path)
         assert len(records) >= 3
@@ -828,7 +862,7 @@ class TestRunBoundaryRecords:
 class TestNoLog:
     def test_no_trace_writes_nothing(self, tmp_path: Path) -> None:
         """With trace_file=None the trace store is a no-op and no files are created."""
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, 'let x = 1\nprint "silent"', trace_file=None)
         assert result.ok
         # No JSONL files created anywhere in tmp_path.
@@ -836,7 +870,7 @@ class TestNoLog:
         assert not jsonl_files
 
     def test_no_trace_result_trace_path_is_none(self, tmp_path: Path) -> None:
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, "let x = 1\nx", trace_file=None)
         assert result.trace_path is None
 
@@ -852,7 +886,7 @@ class TestNoLog:
     def test_no_trace_with_decimal_assignment_still_works(self, tmp_path: Path) -> None:
         """A no-trace run that assigns to a decimal binding still succeeds and
         writes nothing."""
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(
             rt,
             "var x: decimal = 0.1\nx := x + 0.2",
@@ -898,7 +932,7 @@ class TestDryRunNoTrace:
     def test_dry_run_does_not_write_trace(self, tmp_path: Path) -> None:
         """check_only=True (--dry-run) must produce no trace output."""
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, "let x = 1\nx", trace_file=trace_path, check_only=True)
         assert result.ok
         # No trace file created for dry-run.
@@ -906,7 +940,7 @@ class TestDryRunNoTrace:
 
     def test_dry_run_trace_path_is_none(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, "let x = 1\nx", trace_file=trace_path, check_only=True)
         assert result.trace_path is None
 
@@ -919,7 +953,7 @@ class TestDryRunNoTrace:
 class TestSourceSpans:
     def test_exec_record_has_source_span(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
+        rt = PipelineDriver(get_sandbox_context=None)
         _run_inline(rt, 'let x: text = exec "echo hi"\nx', trace_file=trace_path)
         records = _load_jsonl(trace_path)
         exec_recs = [r for r in records if r.get("kind") == "exec_command"]
@@ -1214,7 +1248,7 @@ class TestUnparseableFeedback:
     def test_retry_request_carries_reason_when_totally_unparseable(self, tmp_path: Path) -> None:
         """Second attempt's validation_errors is non-empty with the parse reason."""
         trace_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True, get_sandbox_context=None)
 
         captured_requests: list[AgentRequest] = []
         call_count = 0
@@ -1278,7 +1312,7 @@ class TestUnparseableFeedback:
 
         from agm.agl.runtime.codec import ParseResult
 
-        rt = PipelineDriver(default_strict_json=True)
+        rt = PipelineDriver(default_strict_json=True, get_sandbox_context=None)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="42")
@@ -1384,7 +1418,10 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
         assert result.ok
 
@@ -1409,7 +1446,7 @@ class TestCompanionTraceHook:
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'value': 1})\n",
         )
         result = run_inline_command(
-            PipelineDriver(),
+            PipelineDriver(get_sandbox_context=None),
             "import lib/logger\nlib/logger::emit()",
             roots=agl_roots(root),
             default_stdlib=False,
@@ -1432,7 +1469,7 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=None
+            PipelineDriver(get_sandbox_context=None), source, entry_path=entry_path, trace_file=None
         )
         assert result.ok
         assert not list(tmp_path.rglob("*.jsonl"))
@@ -1451,7 +1488,10 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
         assert result.ok
 
@@ -1474,7 +1514,10 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
         assert result.ok
 
@@ -1495,7 +1538,10 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
         assert result.ok
 
@@ -1517,7 +1563,10 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
 
         assert result.ok
@@ -1547,7 +1596,10 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
         assert not result.ok
         assert result.error is not None
@@ -1565,7 +1617,10 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
         assert result.ok
 
@@ -1585,7 +1640,10 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
         assert result.ok
 
@@ -1601,7 +1659,10 @@ class TestCompanionTraceHook:
         companion = "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n"
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
         assert result.ok
 
@@ -1636,7 +1697,10 @@ class TestCompanionTraceHook:
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=entry_path,
+            trace_file=trace_path,
         )
         assert result.ok
 
@@ -1675,7 +1739,7 @@ class TestCompanionTraceHook:
         )
         source = "import lib/logger\nlet _ = lib/logger::wrap()\n()\n"
         result = run_inline_command(
-            PipelineDriver(),
+            PipelineDriver(get_sandbox_context=None),
             source,
             roots=agl_roots(root),
             default_stdlib=False,
@@ -1711,7 +1775,7 @@ class TestCompanionTraceHook:
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n",
         )
         result = run_inline_command(
-            PipelineDriver(),
+            PipelineDriver(get_sandbox_context=None),
             "import lib/logger\nlib/logger::wrap()",
             roots=agl_roots(root),
             default_stdlib=False,
@@ -1750,7 +1814,7 @@ class TestCompanionTraceHook:
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n",
         )
         result = run_inline_command(
-            PipelineDriver(),
+            PipelineDriver(get_sandbox_context=None),
             "import lib/logger\nlib/logger::outer()",
             roots=agl_roots(root),
             default_stdlib=False,
@@ -1790,7 +1854,7 @@ class TestCompanionTraceHook:
             roots=frozenset(), packages=(package,), stdlib_roots=frozenset({REPO_STDLIB_ROOT})
         )
         result = run_inline_command(
-            PipelineDriver(),
+            PipelineDriver(get_sandbox_context=None),
             main_path.read_text(),
             roots=roots,
             entry_path=main_path,
@@ -1829,7 +1893,7 @@ class TestCompanionTraceHook:
         )
         source = "import lib/logger\nlib/logger::apply(fn(z: int) => lib/logger::emit())\n"
         result = run_inline_command(
-            PipelineDriver(),
+            PipelineDriver(get_sandbox_context=None),
             source,
             roots=agl_roots(root),
             default_stdlib=False,
@@ -1871,7 +1935,7 @@ class TestCompanionTraceHook:
             "from agl import runtime\n\ndef probe(z):\n    runtime.trace('probe', {'z': z})\n"
         )
         result = run_inline_command(
-            PipelineDriver(),
+            PipelineDriver(get_sandbox_context=None),
             source,
             roots=agl_roots(root),
             entry_path=entry_path,
@@ -1920,7 +1984,10 @@ program def main() -> unit =
   ()
 """
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=tmp_path / "entry.agl", trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=tmp_path / "entry.agl",
+            trace_file=trace_path,
         )
         assert result.ok, result.error
         adapter.assert_complete()
@@ -1955,7 +2022,10 @@ program def main() -> unit =
   ()
 """
         result = run_inline_command(
-            PipelineDriver(), source, entry_path=tmp_path / "entry.agl", trace_file=trace_path
+            PipelineDriver(get_sandbox_context=None),
+            source,
+            entry_path=tmp_path / "entry.agl",
+            trace_file=trace_path,
         )
         assert not result.ok
         adapter.assert_complete()

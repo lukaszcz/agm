@@ -103,6 +103,11 @@ class SrtBackend:
                 data = _load_settings_or_raise(selected)
 
             tracked_artifacts = track_bwrap_artifacts(data, request.cwd)
+        except OSError as error:
+            # A temp-settings write failure (disk full, permissions) is a
+            # reachable settings-resolution failure, not a host crash.
+            cleanup_artifacts(temp_files, [])
+            raise SandboxSettingsError(f"failed to write sandbox settings: {error}") from error
         except Exception:
             # Clean up a merge/patch temp file already written before the
             # failure, so a partial preparation never leaks it.

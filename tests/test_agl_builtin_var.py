@@ -26,7 +26,7 @@ from tests._agl_helpers import agent_value, agl_roots, run_inline_command
 
 def _run(source: str) -> RunResult:
     """Run a single-module *source* (no imports) through prepare + run_prepared."""
-    rt = PipelineDriver()
+    rt = PipelineDriver(get_sandbox_context=None)
     return run_inline_command(rt, source)
 
 
@@ -39,7 +39,7 @@ def _run_program(
 ) -> RunResult:
     """Run *source* (with imports) through the program pipeline against the stdlib."""
     roots = agl_roots(*extra_roots)
-    rt = PipelineDriver(shell_exec_timeout=shell_exec_timeout)
+    rt = PipelineDriver(shell_exec_timeout=shell_exec_timeout, get_sandbox_context=None)
     return run_inline_command(rt, source, roots=roots, builtin_host_settings=builtin_host_settings)
 
 
@@ -54,7 +54,7 @@ def _run_with_std_config(
     config_path = root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(std_config, encoding="utf-8")
-    rt = PipelineDriver()
+    rt = PipelineDriver(get_sandbox_context=None)
     return run_inline_command(
         rt,
         source,

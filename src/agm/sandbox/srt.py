@@ -63,12 +63,8 @@ class SrtBackend:
         spec = request.spec
         temp_files: list[Path] = []
         try:
-            # `data` tracks the most recently loaded/merged/patched settings
-            # content, so the file is parsed at most once no matter which
-            # branch below produced `selected` (a single load per candidate
-            # for merging; otherwise one load, reused for the patch step and
-            # for `track_bwrap_artifacts`).
             data: JsonDict | None = None
+            write_settings = False
             if spec.settings_file is not None:
                 selected = spec.settings_file
                 if not selected.is_absolute():
@@ -90,20 +86,21 @@ class SrtBackend:
                         ),
                         candidates=tuple(candidates),
                     )
-                if len(found) == 1:
-                    selected = found[0]
-                else:
+                selected = found[0]
+                if len(found) > 1:
                     settings_data = [_load_settings_or_raise(path) for path in found]
                     data = merge_settings_chain(settings_data)
-                    selected = _write_json_temp(data, temp_files)
+                    write_settings = True
 
             if spec.patch and request.proj_dir is not None:
                 selected_data = data if data is not None else _load_settings_or_raise(selected)
                 data = patch_for_proj_dir(selected_data, request.proj_dir)
-                selected = _write_json_temp(data, temp_files)
+                write_settings = True
 
             if data is None:
                 data = _load_settings_or_raise(selected)
+            if write_settings:
+                selected = _write_json_temp(data, temp_files)
 
             tracked_artifacts = track_bwrap_artifacts(data, request.cwd)
         except OSError as error:

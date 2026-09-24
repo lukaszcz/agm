@@ -143,22 +143,21 @@ def lazy_sandbox_context(context: "ConfigContext") -> Callable[[], SandboxContex
     """
     from agm.config.general import load_run_config
 
-    built: list[SandboxContext] = []
+    built: SandboxContext | None = None
 
     def get() -> SandboxContext:
-        if not built:
+        nonlocal built
+        if built is None:
             run_config = load_run_config(
                 home=context.home, proj_dir=context.proj_dir, cwd=context.cwd
             )
-            built.append(
-                SandboxContext(
-                    home=context.home,
-                    proj_dir=context.proj_dir,
-                    cwd=context.cwd,
-                    run_config=run_config,
-                )
+            built = SandboxContext(
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+                run_config=run_config,
             )
-        return built[0]
+        return built
 
     return get
 

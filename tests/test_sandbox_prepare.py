@@ -281,18 +281,24 @@ class TestPrepareArgvComposition:
         finally:
             prepared.close()
 
-    def test_pty_wrapper_outside_backend_wrapper(self, home_with_default_settings: Path) -> None:
+    def test_pty_wrapper_inside_backend_wrapper(self, home_with_default_settings: Path) -> None:
         request = _request(tmp_path=home_with_default_settings, pty=True)
         run_config = _run_config()
         prepared = prepare(request, run_config=run_config)
         try:
-            assert prepared.argv[:4] == [
+            srt_index = prepared.argv.index("srt")
+            assert prepared.argv[srt_index : srt_index + 4] == [
+                "srt",
+                "--settings",
+                str(prepared.settings_path),
+                "--",
+            ]
+            assert prepared.argv[srt_index + 4 : srt_index + 8] == [
                 sys.executable,
                 "-m",
                 "agm.sandbox.pty",
                 "--",
             ]
-            assert prepared.argv.index("srt") > 3
             assert prepared.argv[-2:] == ["echo", "hi"]
         finally:
             prepared.close()

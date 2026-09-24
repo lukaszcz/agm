@@ -80,6 +80,9 @@ class SandboxBackend(Protocol):
     def wrap(self, request: SandboxRequest, resolved: ResolvedSettings) -> list[str]:
         """Return the wrapper argv placed in front of *request*'s command."""
 
+    def format_command(self, request: SandboxRequest, command: list[str]) -> list[str]:
+        """Return command arguments in the form this backend expects after its wrapper."""
+
     def dry_run_wrap(self, request: SandboxRequest) -> list[str]:
         """Return the wrapper argv with a placeholder in place of a settings path.
 

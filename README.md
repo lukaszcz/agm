@@ -110,6 +110,7 @@ agm <command> [options] [args]
 
 Use `agm help` for the command list and `agm help <command>` for detailed help. Global options:
 
+- `--version` prints the AGM and AgL standard-library versions.
 - `--install-completion`
 - `--show-completion`
 
@@ -130,9 +131,11 @@ agm pkg create [DIR] [-o package.agmpkg]
 agm pkg install path/to/package
 agm pkg install package.agmpkg
 agm pkg install --editable path/to/package
+agm pkg switch package-name@1.0.2
 agm pkg list
 agm pkg info package-name
 agm pkg uninstall package-name
+agm pkg uninstall package-name@1.0.1
 agm pkg sync
 ```
 

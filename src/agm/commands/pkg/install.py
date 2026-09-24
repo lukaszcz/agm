@@ -15,7 +15,7 @@ from agm.packages.install import (
 
 
 def run(args: PkgInstallArgs) -> None:
-    """Install or activate the selected package directory."""
+    """Install the selected package directory or archive."""
 
     context = current_config_context()
     try:

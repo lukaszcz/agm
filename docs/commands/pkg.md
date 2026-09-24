@@ -10,7 +10,8 @@ source.
 | `agm pkg check [DIR]` | Validate a package directory |
 | `agm pkg create [DIR] [-o FILE]` | Validate and write a `<name>-<version>.agmpkg` archive |
 | `agm pkg install SRC [--editable] [--reinstall] [--shadow]` | Install and activate a directory or archive |
-| `agm pkg uninstall NAME` | Remove an active package |
+| `agm pkg switch NAME@VERSION` | Switch the globally active version |
+| `agm pkg uninstall NAME[@VERSION]` | Remove the active package or an exact stored version |
 | `agm pkg list` | List installed versions and active editable packages |
 | `agm pkg info NAME` | Show an active package's metadata and dependency status |
 | `agm pkg sync` | Install the active packages' unsatisfied Python requirements |
@@ -283,9 +284,14 @@ already satisfied distributions are left alone, and conflicting requirements acr
 the install rather than downgrading one. An installer failure or interruption fails the install and
 leaves the store as it was. `--dry-run` prints the installer command instead of running it.
 
+**`switch NAME@VERSION`** selects an exact stored version as globally active. The previous version
+remains installed. Activation validates package dependencies and registered commands.
+
 **`uninstall`** verifies the `RECORD`, validates the remaining selection, deactivates, and removes
 the recorded files (plus cache and VCS residue). An editable package is only deactivated. Command
-ownership displaced by the removed package is restored. Python distributions are never removed.
+ownership displaced by the removed package is restored. `uninstall NAME@VERSION` removes that exact
+stored version; when another version is active, activation stays unchanged. A matching active
+editable package is deactivated. Python distributions are never removed.
 
 **`list`** shows every stored version as `active` or `installed`, and every active editable
 package.

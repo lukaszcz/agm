@@ -34,6 +34,7 @@ from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import agl_roots, run_inline_command
+from tests._process_helpers import shell_command_from_argv
 from tests.agl.module_graph import build_module_graph, build_module_graph_from_program, load_graph
 
 if TYPE_CHECKING:
@@ -603,11 +604,7 @@ def _scripted_shell(
                     args=list(args), env=env, cwd=cwd, interrupt_cleanup_cmd=interrupt_cleanup_cmd
                 )
             )
-        # The command is always the final argv element, with "-c" right
-        # before it -- true whether or not a sandbox wrapper (with its own
-        # "-c"-taking bootstrap steps) prefixes the plain ``sh -c <cmd>`` tail.
-        assert args[-2] == "-c"
-        command = args[-1]
+        command = shell_command_from_argv(args)
         if cmd_log is not None:
             cmd_log.append(command)
         return commands[command]

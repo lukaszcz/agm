@@ -829,7 +829,10 @@ class TestRunDryRun:
         out = capsys.readouterr().out
         assert "claude.json" in out
         assert "myagent.json" not in out
-        assert "agm.sandbox.pty -- srt --settings '<dry-run-settings>' -- claude --some-arg" in out
+        assert (
+            f"srt --settings '<dry-run-settings>' -- {sys.executable} -m "
+            "agm.sandbox.pty -- claude --some-arg"
+        ) in out
 
     def test_dry_run_with_invalid_memory_limit_exits_with_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

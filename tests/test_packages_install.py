@@ -99,6 +99,104 @@ def _store_root(home: Path, name: str, version: str) -> Path:
     return home / ".agm" / "packages" / name / version
 
 
+def _two_stored_versions(tmp_path: Path) -> tuple[Path, Path]:
+    """Create an inactive alpha 1.0.0 and active alpha 2.0.0."""
+
+    home = tmp_path / "home"
+    for version in ("1.0.0", "2.0.0"):
+        install_directory(_package(tmp_path / version, "alpha", version), home=home, env={})
+    return home, _store_root(home, "alpha", "1.0.0")
+
+
+def test_uninstall_inactive_version_checks_store_identity_and_record(tmp_path: Path) -> None:
+    home, inactive = _two_stored_versions(tmp_path)
+    (inactive / "package.toml").write_text('[package]\nname = "bravo"\nversion = "1.0.0"\n')
+
+    with pytest.raises(PackageInstallError):
+        uninstall_package("alpha@1.0.0", home=home, env={})
+
+    (inactive / "package.toml").write_text('[package]\nname = "alpha"\nversion = "1.0.0"\n')
+    (inactive / "RECORD").write_text("broken")
+    with pytest.raises(PackageInstallError):
+        uninstall_package("alpha@1.0.0", home=home, env={})
+    assert inactive.exists()
+    assert str(load_activation_index(home=home, env={}).packages["alpha"].version) == "2.0.0"
+
+
+def test_uninstall_inactive_version_rejects_a_linked_tree(tmp_path: Path) -> None:
+    home, inactive = _two_stored_versions(tmp_path)
+    displaced = tmp_path / "displaced"
+    inactive.rename(displaced)
+    inactive.symlink_to(displaced, target_is_directory=True)
+
+    with pytest.raises(PackageInstallError):
+        uninstall_package("alpha@1.0.0", home=home, env={})
+    assert displaced.exists()
+
+
+def test_uninstall_inactive_version_dry_run_preserves_the_tree(tmp_path: Path) -> None:
+    home, inactive = _two_stored_versions(tmp_path)
+    dry_run.set_enabled(True)
+
+    uninstall_package("alpha@1.0.0", home=home, env={})
+
+    assert inactive.exists()
+    assert str(load_activation_index(home=home, env={}).packages["alpha"].version) == "2.0.0"
+
+
+def test_uninstall_inactive_version_retries_interrupted_cleanup(tmp_path: Path) -> None:
+    home, inactive = _two_stored_versions(tmp_path)
+    tombstone = inactive.parent / ".uninstalling-1.0.0"
+    inactive.rename(tombstone)
+
+    uninstall_package("alpha@1.0.0", home=home, env={})
+
+    assert not inactive.exists()
+    assert not tombstone.exists()
+    assert str(load_activation_index(home=home, env={}).packages["alpha"].version) == "2.0.0"
+
+
+def test_uninstall_inactive_version_cleans_a_stale_tombstone(tmp_path: Path) -> None:
+    home, inactive = _two_stored_versions(tmp_path)
+    tombstone = inactive.parent / ".uninstalling-1.0.0"
+    shutil.copytree(inactive, tombstone)
+
+    uninstall_package("alpha@1.0.0", home=home, env={})
+
+    assert not inactive.exists()
+    assert not tombstone.exists()
+
+
+def test_uninstall_inactive_version_dry_run_keeps_an_interrupted_tree(tmp_path: Path) -> None:
+    home, inactive = _two_stored_versions(tmp_path)
+    tombstone = inactive.parent / ".uninstalling-1.0.0"
+    inactive.rename(tombstone)
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError):
+        uninstall_package("alpha@1.0.0", home=home, env={})
+
+    assert tombstone.exists()
+
+
+def test_uninstall_inactive_version_reports_rename_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home, inactive = _two_stored_versions(tmp_path)
+    original_replace = Path.replace
+
+    def fail_replace(source: Path, target: Path) -> Path:
+        if source == inactive:
+            raise OSError("rename denied")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(PackageInstallError):
+        uninstall_package("alpha@1.0.0", home=home, env={})
+    assert inactive.exists()
+
+
 class _Preinstalled(NamedTuple):
     """One package to install while building a prebuilt store."""
 

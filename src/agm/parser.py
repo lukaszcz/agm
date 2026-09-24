@@ -473,7 +473,8 @@ _HELP_TEXTS: dict[str, str] = {
         agm pkg check [DIR]
         agm pkg create [DIR] [-o FILE]
         agm pkg install [--editable] [--reinstall] [--shadow] SRC
-        agm pkg uninstall NAME
+        agm pkg switch NAME@VERSION
+        agm pkg uninstall NAME[@VERSION]
         agm pkg list
         agm pkg info NAME
         agm pkg sync
@@ -1041,17 +1042,23 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         version. --editable mounts a directory SRC directly. --reinstall replaces the complete
         immutable installation at the same name and version; it cannot be combined with --editable.
         Conflicting registered commands refuse installation unless --shadow replaces the existing
-        registration. URL dependencies are fetched with their declared SHA-256 hash before install.
-        When a [python] requirement of the active packages is unsatisfied, all of their [python]
+        registration.
+        URL dependencies are fetched with their declared SHA-256 hash before install. When a
+        [python] requirement of the active packages is unsatisfied, all of their [python]
         requirements are installed jointly into AGM's interpreter environment (uv, else pip) before
         activation; a failed Python install, including a conflict between packages, fails the
         package install.
     """),
     ("pkg", "uninstall"): textwrap.dedent("""\
-        agm pkg uninstall NAME
+        agm pkg uninstall NAME[@VERSION]
 
-        Verify the active package RECORD, remove its installed tree, and clear its activation.
-        Editable packages only have their activation cleared.
+        Verify and remove the named stored version, clearing activation if selected. Without a
+        version, remove the active package. Editable packages only have their activation cleared.
+    """),
+    ("pkg", "switch"): textwrap.dedent("""\
+        agm pkg switch NAME@VERSION
+
+        Select an exact version already in the package store as globally active.
     """),
     ("pkg", "list"): textwrap.dedent("""\
         agm pkg list
@@ -1129,6 +1136,7 @@ def _overview_text() -> str:
         [
             "",
             "Global options:",
+            "  --version             Show the AGM and AgL standard-library versions.",
             "  --install-completion  Install shell completion for the current shell.",
             "  --show-completion     Print the shell completion script.",
             "",

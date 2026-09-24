@@ -311,7 +311,7 @@ type_expr ::= "unit"
             | qualifier_chain name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name
             | "array" "[" type_expr "]"
-            | "dict" "[" "text" "," type_expr "]"
+            | "dict" "[" type_expr "," type_expr "]"
             | func_type
 
 func_type ::= type_atom "->" type_expr
@@ -322,7 +322,7 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | qualifier_chain name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name
             | "array" "[" type_expr "]"
-            | "dict" "[" "text" "," type_expr "]"
+            | "dict" "[" type_expr "," type_expr "]"
 type_list ::= type_expr ("," type_expr)* ","?
 
 qualifier_chain   ::= "::" qualifier_segment*
@@ -333,7 +333,7 @@ qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
 
 `name "[" … "]"` is an applied type: a generic declaration instantiated at
 concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
-`array[T]` and `dict[text, V]` are the same form.
+`array[T]` and `dict[K, V]` are the same form.
 
 ## Function declarations
 
@@ -342,7 +342,7 @@ func_def         ::= attributes? "def" func_decl_head type_params? constraint_bl
 builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
 extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
 func_decl_head   ::= decl_head | builtin_receiver "::" name
-builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
+builtin_receiver ::= "array" "[" name "]" | "dict" "[" (name | "text") "," name "]"
                    | "text" | "json" | "int" | "decimal" | "bool"
 func_body        ::= expr | suite
 constraint_block ::= "{" constraint ("," constraint)* ","? "}"
@@ -376,7 +376,7 @@ bound a receiver parameter as well as the declaration's own; see
 
 All three function declaration forms accept the same `func_decl_head` surface.
 A builtin receiver may be declared in any module and must use the bare generic
-form (`array[E]` or `dict[text, V]`); see [Methods](functions.md#methods).
+form (`array[E]` or `dict[K, V]`); see [Methods](functions.md#methods).
 `extern_func_def` is never followed by a body;
 it declares a function implemented by a companion Python file (see
 [Python FFI](ffi.md)) rather than an AgL expression.

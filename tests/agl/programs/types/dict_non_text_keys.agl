@@ -1,0 +1,104 @@
+# dict[K, V] type-checks for any key type K, but a hashing operation
+# (indexing, :=, in) still requires Hashable K -- enforced structurally for
+# a concrete key. Non-empty dict literals are text-keyed, so every
+# non-text-keyed dict here starts and stays empty, exercising the
+# missing-key KeyError path (its key field rendered in AgL value syntax for
+# a non-text key), `in` on an absent key, zero-iteration `for`, and directed
+# index coercion (an int index into dict[decimal, V]). Modes 5-7 cover the
+# remaining scalar and generic-nominal Hashable key kinds (bool, json,
+# Box[int]). The wildcard branch (mode 8 and any other value) checks that
+# non-hashing operations (the type itself, `{}`, `for`, rendering, dict
+# `==`, `copy`/`shallow-copy`) stay legal even for a structurally
+# non-hashable key type such as array.
+
+enum Color
+  | Red
+  | Blue
+
+record Point
+  x: int
+  y: int
+
+record Box[T]
+  value: T
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        let by-color: dict[Color, int] = {}
+        print(Red in by-color)
+        var count: int = 0
+        for c in by-color do
+          count := count + 1
+        done
+        print count
+        try
+          let _ = by-color[Red]
+          print "unreachable"
+        catch KeyError as e =>
+          print "missing: %{e.key}"
+    | 2 =>
+        let by-point: dict[Point, text] = {}
+        print(Point(x = 1, y = 2) in by-point)
+        try
+          let _ = by-point[Point(x = 1, y = 2)]
+          print "unreachable"
+        catch KeyError as e =>
+          print "missing: %{e.key}"
+    | 3 =>
+        var by-int: dict[int, text] = {}
+        try
+          by-int[1] := "x"
+          print "unreachable"
+        catch KeyError as e =>
+          print "missing: %{e.key}"
+        var sum: int = 0
+        for k in by-int do
+          sum := sum + (k + 1)
+        done
+        print sum
+    | 4 =>
+        let by-decimal: dict[decimal, text] = {}
+        try
+          let _ = by-decimal[1]
+          print "unreachable"
+        catch KeyError =>
+          print "missing"
+    | 5 =>
+        let by-bool: dict[bool, text] = {}
+        print(true in by-bool)
+        try
+          let _ = by-bool[true]
+          print "unreachable"
+        catch KeyError as e =>
+          print "missing: %{e.key}"
+    | 6 =>
+        let by-json: dict[json, text] = {}
+        let key: json = 5
+        print(key in by-json)
+        try
+          let _ = by-json[key]
+          print "unreachable"
+        catch KeyError as e =>
+          print "missing: %{e.key}"
+    | 7 =>
+        let by-box: dict[Box[int], text] = {}
+        let key = Box(value = 1)
+        print(key in by-box)
+        try
+          let _ = by-box[key]
+          print "unreachable"
+        catch KeyError as e =>
+          print "missing: %{e.key}"
+    | _ =>
+        let d1: dict[array[int], text] = {}
+        let d2: dict[array[int], text] = {}
+        print(d1 == d2)
+        var count: int = 0
+        for k in d1 do
+          count := count + 1
+        done
+        print count
+        print(d1 as text)
+        print(copy(d1) == d1)
+        print(shallow-copy(d1) == d1)

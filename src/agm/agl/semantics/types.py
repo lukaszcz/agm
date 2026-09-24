@@ -143,7 +143,7 @@ class ArrayType:
 
 @dataclass(frozen=True, slots=True)
 class DictType:
-    """``dict[K, V]`` — the parser admits only ``text`` keys."""
+    """``dict[K, V]``, well-formed for any key type; hashing operations require ``Hashable K``."""
 
     key: Type
     value: Type
@@ -347,6 +347,12 @@ class BottomType:
         return "bottom"
 
 
+#: Prefix of the private rigid name a receiver-prefix ``_`` wildcard slot is
+#: renamed to (see ``typecheck.function_inference._method_type_parameter_name``);
+#: :meth:`TypeVarType.__repr__` renders any such name back as ``_``.
+METHOD_TYPE_SLOT_PREFIX = "__method_type_slot_"
+
+
 @dataclass(frozen=True, slots=True)
 class TypeVarType:
     """A rigid type variable bound by an enclosing generic declaration.
@@ -374,7 +380,7 @@ class TypeVarType:
         return "typevar"
 
     def __repr__(self) -> str:
-        return self.name
+        return "_" if self.name.startswith(METHOD_TYPE_SLOT_PREFIX) else self.name
 
 
 _inference_var_ids = count()
@@ -443,6 +449,8 @@ def match_type_template(
     template: Type,
     concrete: Type,
     type_params: tuple[str, ...],
+    *,
+    wildcard_inference_vars: bool = False,
 ) -> TypeTemplateMatch | None:
     """Match ``template`` exactly against ``concrete`` from one side.
 
@@ -451,6 +459,16 @@ def match_type_template(
     and every declared parameter must be inferred. The result is immutable
     and ordered like ``type_params`` so alias argument reordering and fixed
     subterms require no caller-specific logic.
+
+    ``wildcard_inference_vars`` is for SELECTION only (e.g.
+    ``TypeTable.method_candidates``): a still-uninferred position anywhere in
+    ``concrete`` (an ``InferenceVarType``, as an empty ``{}``/``[]`` literal
+    has before its element/key/value types are solved) is then compatible
+    with any template position, so a candidate is not spuriously ruled out
+    before inference has run. The returned bindings are then only a
+    compatibility witness, not final — the caller that goes on to specialize
+    the match must re-derive real bindings through unification instead of
+    trusting them.
     """
     parameters = frozenset(type_params)
     inferred: dict[str, Type] = {}
@@ -474,6 +492,8 @@ def match_type_template(
                 inferred[pattern.name] = actual
                 return True
             return previous == actual
+        if wildcard_inference_vars and isinstance(actual, InferenceVarType):
+            return True
         if isinstance(pattern, ArrayType):
             return isinstance(actual, ArrayType) and visit(pattern.elem, actual.elem)
         if isinstance(pattern, DictType):

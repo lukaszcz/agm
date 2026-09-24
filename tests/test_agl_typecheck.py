@@ -583,6 +583,29 @@ class TestComparableTypes:
             "  if n == 0 => a else => (if f2(a, n - 1) == true => a else => a)\n"
         )
 
+    def test_bounded_mutual_recursive_candidate_in_dict_key_accepted(self) -> None:
+        """Regression: candidate-mode 'in' inference for a mutually recursive,
+        omitted-result-type pair whose dict key is still an unresolved
+        provisional type must defer until concrete evidence resolves it,
+        consulting the real bound environment rather than rejecting outright.
+        """
+        accept_type(
+            "def f[K]{Hashable K}(k: K, d: dict[K, int], n: int) =\n"
+            "  if n == 0 => k in d else => g(k, d, n - 1)\n"
+            "def g[K]{Hashable K}(k: K, d: dict[K, int], n: int) =\n"
+            "  if n == 0 => false else => f(k, d, n - 1)\n"
+        )
+
+    def test_candidate_in_dict_key_still_inference_var_defers_then_fails(self) -> None:
+        """Regression: candidate-mode 'in' against a dict whose key type is a
+        genuine unresolved inference variable (an empty dict literal's, not a
+        bound type parameter's) must still defer during the candidate pass;
+        the authoritative pass, which never gets fresh evidence to resolve
+        that key, then rejects with the ordinary key type mismatch, not a
+        crash.
+        """
+        reject_type("def f(n: int) =\n  if n == 0 => 1 in {} else => f(n - 1)\n")
+
     def test_array_of_bound_type_variable_comparable_with_real_bounds(self) -> None:
         tv = TypeVarType("T")
         bounds = {"T": frozenset({ConstraintKind.EQ})}
@@ -643,6 +666,12 @@ class TestGenericEqualityOnTypeVariableBounds:
     def test_in_over_array_of_functions_rejected(self) -> None:
         # A function type never satisfies 'Eq', bound or not.
         reject_type("def f(fs: array[(int) -> int], g: (int) -> int) -> bool = g in fs")
+
+    def test_in_over_dict_with_bounded_key_accepted(self) -> None:
+        accept_type("def f[K, V]{Hashable K}(k: K, d: dict[K, V]) -> bool = k in d")
+
+    def test_in_over_dict_with_unbounded_key_rejected(self) -> None:
+        reject_type("def f[K, V](k: K, d: dict[K, V]) -> bool = k in d")
 
     def test_bare_type_variable_with_eq_bound_accepts_not_equal(self) -> None:
         accept_type("def f[T]{Eq T}(a: T, b: T) -> bool = a != b")
@@ -14873,6 +14902,69 @@ def test_agent_enum_is_a_json_serializable_program_parameter_type() -> None:
     binding_type = checked.type_env.get_binding_type(program_def.params[0].node_id)
     assert isinstance(binding_type, EnumType)
     assert binding_type.name == "Agent"
+
+
+class TestGenericDictKeyParamDeferral:
+    """A declaration's own type parameter occurring in ``dict``-key position must not
+    make every instantiation JSON/extern-unusable: the parameter is deferred until a
+    concrete reference supplies its argument, which is then checked for a wire form.
+    """
+
+    def test_own_type_param_key_instantiated_at_text_is_json_convertible(self) -> None:
+        source = 'record Box[K]\n  d: dict[K, int]\nlet b: Box[text] = Box(d = {"a": 1})\nb as json'
+        accept_type(source)
+
+    def test_own_type_param_key_instantiated_at_int_rejected_as_json(self) -> None:
+        err = reject_type(
+            "record Box[K]\n  d: dict[K, int]\nlet b: Box[int] = Box(d = {})\nb as json"
+        )
+        assert "json" in str(err).lower()
+
+    def test_own_type_param_key_instantiated_at_text_castable_from_json(self) -> None:
+        source = (
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            'let j: json = {"d": {"a": 1}}\n'
+            "let b = j as Box[text]\n"
+            "b"
+        )
+        accept_type(source)
+
+    def test_own_type_param_key_instantiated_at_int_rejected_from_json_cast(self) -> None:
+        err = reject_type(
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            'let j: json = {"d": {"a": 1}}\n'
+            "let b = j as Box[int]\n"
+            "b"
+        )
+        assert "json" in str(err).lower()
+
+    def test_own_type_param_key_transitive_through_nominal_argument(self) -> None:
+        """A key parameter propagates through a nominal field's own type argument:
+        Outer[T] holds Box[T] in a field, so T is a key parameter of Outer too.
+        """
+        source = (
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            "record Outer[T]\n"
+            "  b: Box[T]\n"
+            'let o: Outer[text] = Outer(b = Box(d = {"a": 1}))\n'
+            "o as json"
+        )
+        accept_type(source)
+
+    def test_own_type_param_key_transitive_through_nominal_argument_rejected(self) -> None:
+        source = (
+            "record Box[K]\n"
+            "  d: dict[K, int]\n"
+            "record Outer[T]\n"
+            "  b: Box[T]\n"
+            "let o: Outer[int] = Outer(b = Box(d = {}))\n"
+            "o as json"
+        )
+        err = reject_type(source)
+        assert "json" in str(err).lower()
 
 
 class TestBuiltinCallInGenericSlot:

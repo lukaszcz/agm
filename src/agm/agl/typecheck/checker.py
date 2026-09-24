@@ -79,7 +79,9 @@ from agm.agl.semantics.type_table import (
     TypeTable,
     cast_classification,
     comparable_types,
+    dict_key_has_wire_form,
     is_assignable_in,
+    is_extern_crossable,
     json_cast_hint,
     qualified_decl_name,
     same_comparison_type,
@@ -1129,7 +1131,7 @@ class _Checker:
                 )
 
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
-        """Require finite extern data shapes while allowing callback parameters.
+        """Require finite, extern-crossable data shapes while allowing callback parameters.
 
         Function values can cross from AgL into a companion as interpreter
         callbacks. The reverse conversion remains value-directed at runtime,
@@ -1139,13 +1141,33 @@ class _Checker:
             self._reject_unbounded_extern_type(
                 spec.type, span=param.span, use="an extern parameter type"
             )
+            self._reject_non_crossable_extern_type(
+                spec.type, span=param.span, use="an extern parameter type"
+            )
         self._reject_unbounded_extern_type(sig.result, span=node.span, use="an extern return type")
+        self._reject_non_crossable_extern_type(
+            sig.result, span=node.span, use="an extern return type"
+        )
 
     def _reject_unbounded_extern_type(self, typ: Type, *, span: SourceSpan, use: str) -> None:
         """Reject an extern type whose recursive declaration shape cannot close."""
         message = self._env.type_table.no_finite_schema_message(typ, use=use)
         if message is not None:
             raise AglTypeError(message, span=span)
+
+    def _reject_non_crossable_extern_type(self, typ: Type, *, span: SourceSpan, use: str) -> None:
+        """Reject an extern type containing a non-``text``-keyed dict.
+
+        No wire form exists for such a dict crossing the extern boundary
+        (:func:`~agm.agl.semantics.type_table.is_extern_crossable`), including
+        one nested in a record field or inside a callback parameter's type.
+        """
+        if not is_extern_crossable(typ, self._env.type_table):
+            raise AglTypeError(
+                f"'{typ!r}' cannot be used as {use}: it contains a dict keyed by "
+                "something other than 'text', which cannot cross an extern boundary.",
+                span=span,
+            )
 
     def _register_funcdef_signature(
         self,
@@ -1578,9 +1600,9 @@ class _Checker:
         if isinstance(schema_type, ArrayType):
             return self._wire_type_is_serializable(schema_type.elem, seen=seen, memo=memo)
         if isinstance(schema_type, DictType):
-            return self._wire_type_is_serializable(
-                schema_type.key, seen=seen, memo=memo
-            ) and self._wire_type_is_serializable(schema_type.value, seen=seen, memo=memo)
+            return dict_key_has_wire_form(schema_type.key) and self._wire_type_is_serializable(
+                schema_type.value, seen=seen, memo=memo
+            )
         if isinstance(schema_type, RecordType):
             if schema_type.decl_id in self._env.type_table.host_minted_declaration_ids():
                 return False
@@ -3164,12 +3186,23 @@ class _Checker:
         """Keep inferred-lambda return evidence only when it fixes the result type."""
         return set().union(*(provenance for typ, provenance in returned if typ == result_type))
 
-    def _provenance_for_index_result(self, result_type: Type, obj: Expr) -> set[int]:
-        """Carry container evidence only when indexing exposes its element/value type."""
+    def _provenance_for_container_result(
+        self, result_type: Type, obj: Expr, *, on: Literal["value", "key"]
+    ) -> set[int]:
+        """Carry container evidence only when a container operation exposes *result_type*.
+
+        *on* selects which ``DictType`` component the operation exposes:
+        ``"value"`` for indexing, ``"key"`` for iteration. An array always
+        exposes its element type.
+        """
         obj_type = self._node_type(obj.node_id)
-        exposes_result = (isinstance(obj_type, ArrayType) and obj_type.elem == result_type) or (
-            isinstance(obj_type, DictType) and obj_type.value == result_type
-        )
+        if isinstance(obj_type, ArrayType):
+            exposes_result = obj_type.elem == result_type
+        elif isinstance(obj_type, DictType):
+            component = obj_type.value if on == "value" else obj_type.key
+            exposes_result = component == result_type
+        else:
+            exposes_result = False
         if exposes_result:
             return self._inferred_return_provenance_for_exprs((obj,))
         return set()
@@ -4545,18 +4578,19 @@ class _Checker:
                 if isinstance(iter_type, ArrayType):
                     elem_type: Type = iter_type.elem
                 elif isinstance(iter_type, DictType):
-                    elem_type = TextType()
+                    elem_type = iter_type.key
                 elif isinstance(iter_type, TextType):
                     elem_type = TextType()
                 else:
                     raise AglTypeError(
-                        f"'for' collection must be array[T], dict[text,V], or text; "
+                        f"'for' collection must be array[T], dict[K,V], or text; "
                         f"got '{iter_type!r}'.",
                         span=node.for_iter.span,
                     )
             self._env.set_binding_type(node.node_id, elem_type)
             self._set_inferred_return_binding_provenance(
-                node.node_id, self._provenance_for_index_result(elem_type, node.for_iter)
+                node.node_id,
+                self._provenance_for_container_result(elem_type, node.for_iter, on="key"),
             )
         if node.while_cond is not None:
             while_type = self._check_expr(node.while_cond, expected=None)
@@ -4830,8 +4864,20 @@ class _Checker:
             return contains_inference_var(right.elem) or satisfies(
                 right.elem, ConstraintKind.EQ, self._env.type_table, self._current_bounds
             )
-        if isinstance(right, (TextType, DictType)):
+        if isinstance(right, TextType):
             return contains_inference_var(left) or isinstance(left, (TextType, BottomType))
+        if isinstance(right, DictType):
+            # Defer while the key type is still unresolved; a concrete key
+            # type must already be assignable and satisfy 'Hashable' to keep
+            # deferring, or '_check_in_op' raises with a precise diagnostic now.
+            if contains_inference_var(right.key):
+                return True
+            return contains_inference_var(left) or (
+                is_assignable_in(self._env.type_table, left, right.key)
+                and satisfies(
+                    right.key, ConstraintKind.HASHABLE, self._env.type_table, self._current_bounds
+                )
+            )
         return False
 
     def _candidate_equality_can_defer(self, left: Type, right: Type) -> bool:
@@ -5113,21 +5159,21 @@ class _Checker:
                     f"{json_cast_hint(left_type, right_type.elem, self._env.type_table)}",
                     span=span,
                 )
-            if not satisfies(
-                right_type.elem, ConstraintKind.EQ, self._env.type_table, self._current_bounds
-            ):
+            self._require_constraint(ConstraintKind.EQ, right_type.elem, span, subject="'in'")
+            return BoolType()
+        if isinstance(right_type, DictType):
+            if not is_assignable_in(self._env.type_table, left_type, right_type.key):
                 raise AglTypeError(
-                    f"'in' needs 'Eq' (or 'Hashable') on the array element type "
-                    f"'{right_type.elem!r}'.",
+                    f"'in' key type mismatch: '{left_type!r}' in '{right_type!r}'."
+                    f"{json_cast_hint(left_type, right_type.key, self._env.type_table)}",
                     span=span,
                 )
-            return BoolType()
-        if isinstance(right_type, DictType) and self._is_type_or_bottom(left_type, TextType):
+            self._require_constraint(ConstraintKind.HASHABLE, right_type.key, span, subject="'in'")
             return BoolType()
         if isinstance(right_type, BottomType):
             return BoolType()
         raise AglTypeError(
-            f"'in' requires (text in text), (T in array[T]), or (text in dict); "
+            f"'in' requires (text in text), (K in array[K]), or (K in dict[K, V]); "
             f"got '{left_type!r}' in '{right_type!r}'.",
             span=span,
         )
@@ -5454,6 +5500,7 @@ class _Checker:
         """
         receiver_template = method.signature.params[0]
         substitutions: dict[str, Type] = {}
+        engine = self._active_inference_engine()
         if isinstance(receiver_template, (RecordType, EnumType)):
             assert isinstance(receiver, type(receiver_template))
             substitutions = {
@@ -5463,16 +5510,28 @@ class _Checker:
                 )
                 if isinstance(template_arg, TypeVarType)
             }
-        elif isinstance(receiver_template, ArrayType):
-            assert isinstance(receiver, ArrayType)
-            assert isinstance(receiver_template.elem, TypeVarType)
-            substitutions[receiver_template.elem.name] = receiver.elem
-        elif isinstance(receiver_template, DictType):
-            assert isinstance(receiver, DictType)
-            assert isinstance(receiver_template.value, TypeVarType)
-            substitutions[receiver_template.value.name] = receiver.value
+        elif isinstance(receiver_template, (ArrayType, DictType)):
+            # Selection (``TypeTable.method_candidates``/``method_receiver_match``)
+            # only confirms *receiver* is STRUCTURALLY compatible with this
+            # method's receiver template — an uninferred receiver position
+            # (e.g. still-uninferred ``{}``) matches any template position
+            # there. Recovering the actual receiver-prefix bindings (e.g.
+            # ``K := text`` from a concrete ``dict[text, V]`` template) needs
+            # real unification through the active inference engine, so an
+            # uninferred receiver position gets SOLVED rather than merely
+            # accepted.
+            receiver_type_params = method.type_params[: method.receiver_type_param_arity]
+            fresh = {name: engine.fresh(name) for name in receiver_type_params}
+            freshened_template = (
+                substitute(receiver_template, fresh) if fresh else receiver_template
+            )
+            engine.unify(
+                freshened_template,
+                receiver,
+                engine.origin(span, role=ConstraintRole.RECEIVER_WIDENING, subject=method.name),
+            )
+            substitutions.update({name: engine.zonk(var) for name, var in fresh.items()})
         own_type_params = method.type_params[method.receiver_type_param_arity :]
-        engine = self._active_inference_engine()
         # Freshen the method's own type parameters in the same substitution pass
         # that applies the receiver's type arguments, rather than as a later,
         # separate pass over the already receiver-substituted signature. A
@@ -5863,11 +5922,28 @@ class _Checker:
 
     # --- index access ---
 
+    def _require_constraint(
+        self, kind: ConstraintKind, typ: Type, span: SourceSpan, *, subject: str
+    ) -> None:
+        """Require *kind* on *typ* at one structural-constraint operation site.
+
+        Shared by dict hashing (indexing, indexed assignment, ``in``) and
+        array ``in`` (``Eq``): a concrete type is checked structurally; a
+        type-variable type needs the enclosing declaration's constraint
+        block to state *kind* (or an implication of it, e.g. ``Hashable``
+        implies ``Eq``).
+        """
+        if not satisfies(typ, kind, self._env.type_table, self._current_bounds):
+            raise AglTypeError(
+                f"{subject} needs '{kind.value}' on '{typ!r}'.",
+                span=span,
+            )
+
     def _check_index_access(self, node: _IndexLike) -> Type:
         obj_type = self._check_expr(node.obj, expected=None)
         result = self._check_index_operand(obj_type, node.index, span=node.span, obj_expr=node.obj)
         self._set_inferred_return_expr_provenance(
-            node.node_id, self._provenance_for_index_result(result, node.obj)
+            node.node_id, self._provenance_for_container_result(result, node.obj, on="value")
         )
         return result
 
@@ -5905,8 +5981,11 @@ class _Checker:
             return TextType()
 
         if isinstance(obj_type, DictType):
-            index_type = self._check_expr(index, expected=TextType())
-            self._assert_assignable_from(index_type, TextType(), index.span, index)
+            index_type = self._check_expr(index, expected=obj_type.key)
+            self._assert_assignable_from(index_type, obj_type.key, index.span, index)
+            self._require_constraint(
+                ConstraintKind.HASHABLE, obj_type.key, span, subject="dict indexing"
+            )
             return obj_type.value
 
         error = AglTypeError(
@@ -5944,25 +6023,26 @@ class _Checker:
         self,
         expected: Type | None,
         *,
-        make_type: Callable[[Type], Type],
+        make_type: Callable[[Callable[[], Type]], Type],
         literal_name: str,
         span: SourceSpan,
     ) -> Type:
         """Return an empty literal's provisional container shape.
 
-        An uncontextualized empty literal introduces an element/value variable
-        that must resolve before the owning expression region closes. When a
-        generic call supplies a flexible expected type, the literal also gives
-        that type its container shape, leaving its element/value to be solved
-        by sibling arguments or the enclosing result context.
+        An uncontextualized empty literal introduces one fresh inference
+        variable per type parameter *make_type* draws from the fresh-variable
+        factory it is called with (element; or key and value for a dict) that
+        must resolve before the owning expression region closes. When a
+        generic call supplies a flexible expected type, the literal also
+        gives that type its container shape, leaving its parameters to be
+        solved by sibling arguments or the enclosing result context.
         """
         assert self._inference_region is not None
         engine = self._inference_region.engine
         if expected is not None:
             expected = engine.zonk(expected)
         if isinstance(expected, InferenceVarType):
-            element = engine.fresh()
-            shape = make_type(element)
+            shape = make_type(engine.fresh)
             engine.unify(
                 expected,
                 shape,
@@ -5971,18 +6051,26 @@ class _Checker:
             return engine.zonk(expected)
         if expected is not None:
             return expected
-        element = engine.fresh()
-        engine.require_solved(
-            element,
-            engine.origin(span, role=ConstraintRole.LITERAL_ELEMENT, subject=literal_name),
-        )
-        return make_type(element)
+        elements: list[InferenceVarType] = []
+
+        def fresh() -> Type:
+            element = engine.fresh()
+            elements.append(element)
+            return element
+
+        shape = make_type(fresh)
+        for element in elements:
+            engine.require_solved(
+                element,
+                engine.origin(span, role=ConstraintRole.LITERAL_ELEMENT, subject=literal_name),
+            )
+        return shape
 
     def _check_array_lit(self, node: ArrayLit, *, expected: Type | None) -> Type:
         if not node.elements:
             expected = self._complete_empty_literal_shape(
                 expected,
-                make_type=ArrayType,
+                make_type=lambda fresh: ArrayType(fresh()),
                 literal_name="empty array literal",
                 span=node.span,
             )
@@ -6028,19 +6116,19 @@ class _Checker:
         if not node.entries:
             expected = self._complete_empty_literal_shape(
                 expected,
-                make_type=lambda value: DictType(key=TextType(), value=value),
+                make_type=lambda fresh: DictType(key=fresh(), value=fresh()),
                 literal_name="empty dict literal",
                 span=node.span,
             )
         self._check_dict_literal_keys(node)
         val_expected = self._expected_value_type(expected)
         if not node.entries:
-            if val_expected is None:
+            if not isinstance(expected, (DictType, JsonType)):
                 raise AglTypeError(
                     "Empty dict literal requires a type annotation.",
                     span=node.span,
                 )
-            return self._literal_result_type(expected, DictType(key=TextType(), value=val_expected))
+            return expected
         if val_expected is not None and not contains_inference_var(val_expected):
             for entry in node.entries:
                 et = self._check_expr(entry.value, expected=val_expected)

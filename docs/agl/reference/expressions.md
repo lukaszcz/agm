@@ -487,8 +487,9 @@ code point. An out-of-range array or text index raises catchable `IndexError`
 with `index`, `length`, and `message` fields. Text is immutable, so it cannot
 be an indexed-assignment target.
 
-Dictionary indexes must be `text`. Missing keys raise catchable `KeyError`
-with `key` and `message` fields.
+A dictionary index must have (or directedly coerce to, e.g. `int` into a
+`decimal` key) the dictionary's key type, which must satisfy `Hashable`.
+Missing keys raise catchable `KeyError` with `key` and `message` fields.
 
 ## Calls
 
@@ -666,13 +667,15 @@ by code point.
 <!-- agl-check: fragment -->
 ```agl
 issue in issues          # element membership:  issues: array[T]
-"source" in metadata     # key membership:      metadata: dict[text, V]
+key in counts             # key membership:      counts: dict[K, V]
 "missing" in body        # substring:           both text
 ```
 
 Element membership requires the array's element type to satisfy `Eq`; a bare
 generic element type needs an `Eq`/`Hashable` bound, as for `==`
-(see [Constraint blocks](generics.md#constraint-blocks)).
+(see [Constraint blocks](generics.md#constraint-blocks)). Key membership
+requires the dict's key type to satisfy `Hashable`; the tested value must
+have (or directedly coerce to) that key type.
 
 ### Arithmetic: `+` `-` `*` `/` and unary `-`
 

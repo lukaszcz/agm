@@ -21,6 +21,7 @@ from agm.agl.scope.symbols import DeclarationKey
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import MethodDef, NominalOwner
 from agm.agl.semantics.types import (
+    METHOD_TYPE_SLOT_PREFIX,
     ArrayType,
     BoolType,
     DecimalType,
@@ -776,7 +777,7 @@ class ResolvedReceiver:
 
 def _method_type_parameter_name(node: FuncDef, index: int) -> str:
     """Return the private rigid name for one nonbinding receiver type slot."""
-    return f"__method_type_slot_{node.node_id}_{index}"
+    return f"{METHOD_TYPE_SLOT_PREFIX}{node.node_id}_{index}"
 
 
 def _method_signature_type_params(node: FuncDef, arity: int) -> tuple[str, ...]:
@@ -804,6 +805,9 @@ def _builtin_receiver_type(node: FuncDef, owner: "ReceiverOwner") -> tuple[Type,
         type_parameter = _method_signature_type_params(node, 1)[0]
         return ArrayType(TypeVarType(type_parameter)), 1, receiver.name
     if receiver.name == "dict":
+        if receiver.key_type_parameter is not None:
+            key_param, value_param = _method_signature_type_params(node, 2)[:2]
+            return DictType(TypeVarType(key_param), TypeVarType(value_param)), 2, receiver.name
         type_parameter = _method_signature_type_params(node, 1)[0]
         return DictType(TextType(), TypeVarType(type_parameter)), 1, receiver.name
     scalar_types: dict[str, Type] = {

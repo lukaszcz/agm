@@ -1,0 +1,4 @@
+def contains-key[K, V](d: dict[K, V], key: K) -> bool = key in d
+
+program def main() -> unit =
+  ()

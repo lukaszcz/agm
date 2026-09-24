@@ -26,16 +26,22 @@ from agm.agl.syntax.nodes import (
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, ArrayT, DictT, NameT
+from agm.agl.syntax.types import AppliedT, ArrayT, DictT, NameT, TextT
 from agm.agl.typecheck.env import AglTypeError
 
 
 @dataclass(frozen=True, slots=True)
 class BuiltinMethodReceiver:
-    """A validated builtin method receiver and its optional binding parameter."""
+    """A validated builtin method receiver and its optional binding parameter(s).
+
+    ``key_type_parameter`` is set only for a bare-key ``dict[K, V]`` receiver;
+    a concrete ``dict[text, V]`` receiver leaves it unset, matching only
+    text-keyed dicts.
+    """
 
     name: str
     type_parameter: str | None = None
+    key_type_parameter: str | None = None
 
 
 def builtin_method_receiver_for(
@@ -50,10 +56,12 @@ def builtin_method_receiver_for(
             )
         return BuiltinMethodReceiver("array", receiver.elem.name)
     if isinstance(receiver, DictT):
-        if not isinstance(receiver.value, NameT):
+        if not isinstance(receiver.value, NameT) or not isinstance(receiver.key, (NameT, TextT)):
             raise AglTypeError(
                 "Builtin method receivers must use their bare generic form.", span=receiver.span
             )
+        if isinstance(receiver.key, NameT):
+            return BuiltinMethodReceiver("dict", receiver.value.name, receiver.key.name)
         return BuiltinMethodReceiver("dict", receiver.value.name)
     if isinstance(receiver, AppliedT):
         raise AglTypeError("Unknown builtin method receiver.", span=receiver.span)

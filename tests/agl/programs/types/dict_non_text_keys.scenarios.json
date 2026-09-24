@@ -1,0 +1,60 @@
+{
+  "scenarios": [
+    {
+      "name": "enum_key_missing",
+      "params": {"mode": 1},
+      "expect": {
+        "stdout": "false\n0\nmissing: Color::Red\n"
+      }
+    },
+    {
+      "name": "record_key_missing",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "false\nmissing: Point(x = 1, y = 2)\n"
+      }
+    },
+    {
+      "name": "int_key_indexed_assign_missing",
+      "params": {"mode": 3},
+      "expect": {
+        "stdout": "missing: 1\n0\n"
+      }
+    },
+    {
+      "name": "int_literal_coerced_into_decimal_key_missing",
+      "params": {"mode": 4},
+      "expect": {
+        "stdout": "missing\n"
+      }
+    },
+    {
+      "name": "bool_key_missing",
+      "params": {"mode": 5},
+      "expect": {
+        "stdout": "false\nmissing: true\n"
+      }
+    },
+    {
+      "name": "json_key_missing",
+      "params": {"mode": 6},
+      "expect": {
+        "stdout": "false\nmissing: 5\n"
+      }
+    },
+    {
+      "name": "generic_nominal_key_missing",
+      "params": {"mode": 7},
+      "expect": {
+        "stdout": "false\nmissing: Box(value = 1)\n"
+      }
+    },
+    {
+      "name": "non_hashable_array_key_stays_legal_for_non_hashing_ops",
+      "params": {"mode": 8},
+      "expect": {
+        "stdout": "true\n0\n{}\ntrue\ntrue\n"
+      }
+    }
+  ]
+}

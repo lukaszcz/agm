@@ -625,21 +625,20 @@ class TestTypeExpressions:
         with pytest.raises(AglSyntaxError, match="exactly two"):
             parse("let d: dict[int] = {}")
 
-    def test_dict_non_text_key_complex_type_raises(self) -> None:
-        # dict key type must be text; a complex key is rendered with its type
-        # arguments (array[int]).
-        from agm.agl.parser.errors import AglSyntaxError
+    def test_dict_complex_key_type_parses(self) -> None:
+        # dict[K, V] admits any key type expression at parse time; Hashable K
+        # is checked later, at a hashing operation site.
+        let = first(parse("let d: dict[array[int], int] = {}"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, DictT)
+        assert isinstance(let.type_ann.key, ArrayT)
 
-        with pytest.raises(AglSyntaxError, match="text"):
-            parse("let d: dict[array[int], int] = {}")
-
-    def test_dict_named_type_key_raises(self) -> None:
-        # dict key type must be text; a named type key is rendered by its name
-        # in the error message.
-        from agm.agl.parser.errors import AglSyntaxError
-
-        with pytest.raises(AglSyntaxError, match="Review"):
-            parse("let d: dict[Review, int] = {}")
+    def test_dict_named_type_key_parses(self) -> None:
+        let = first(parse("let d: dict[Review, int] = {}"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, DictT)
+        assert isinstance(let.type_ann.key, NameT)
+        assert let.type_ann.key.name == "Review"
 
     def test_named_type(self) -> None:
         let = first(parse("let r: Review = x"))
@@ -714,13 +713,12 @@ class TestTypeExpressions:
         assert isinstance(let.type_ann, NameT)
         assert let.type_ann.name == "mytype"
 
-    def test_dict_key_must_be_text(self) -> None:
-        """dict keys must be text; the rejection names the type as it was written."""
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse("let x: dict[int, text] = 1")
-        msg = str(exc_info.value)
-        assert "'int'" in msg
-        assert "IntT" not in msg
+    def test_dict_non_text_key_type_parses(self) -> None:
+        """dict[K, V] admits a non-text key type; Hashable K is a typecheck concern."""
+        let = first(parse("let x: dict[int, text] = 1"))
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.type_ann, DictT)
+        assert isinstance(let.type_ann.key, IntT)
 
 
 # ---------------------------------------------------------------------------

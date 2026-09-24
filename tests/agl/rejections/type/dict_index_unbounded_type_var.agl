@@ -1,0 +1,4 @@
+def lookup[K, V](d: dict[K, V], key: K) -> V = d[key]
+
+program def main() -> unit =
+  ()

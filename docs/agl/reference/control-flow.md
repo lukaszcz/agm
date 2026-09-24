@@ -198,7 +198,7 @@ program def main() -> unit =
 ### Clause semantics
 
 **`for` — collection iteration.** `for x in COLLECTION` iterates `array[T]`
-(elements, in order), `dict[text, V]` (keys, in dict order), or `text`
+(elements, in order), `dict[K, V]` (keys, in dict order), or `text`
 (each character as a length-1 `text`). The loop variable `x` takes the
 element/key/char type respectively. `COLLECTION` is evaluated once, at loop
 entry. For an `array`, the loop observes that same mutable value for its

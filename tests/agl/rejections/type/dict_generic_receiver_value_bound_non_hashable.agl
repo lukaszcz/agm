@@ -1,0 +1,5 @@
+def dict[K, V]::bad{Hashable V}(self) -> int = 0
+
+program def main() -> unit =
+  let d: dict[int, array[int]] = {}
+  print(d.bad())

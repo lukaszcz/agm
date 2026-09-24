@@ -31,26 +31,29 @@ its counted owning enums' (:meth:`TypeTable.owning_enums_for_selection`).
 
 ``comparable_types``/``satisfies`` live here rather than in ``semantics.types``
 because their record/enum/exception arms consult the table's declaration-level
-constraint flags instead of walking embedded fields; ``semantics.types``
-cannot import this module without a circular import. Those flags are one
-fixpoint per :class:`~agm.agl.constraints.ConstraintKind`
+property flags instead of walking embedded fields; ``semantics.types`` cannot
+import this module without a circular import. Those flags are one fixpoint per
+:class:`~agm.agl.semantics.analyses.DataProperty`
 (``semantics.analyses.compute_declaration_flags``, cycle-safe by
 construction), cached on :class:`TypeTable` and invalidated whenever the
-table's declarations change. The ``Eq`` flag answers two separate language
-questions — may ``=``/``!=`` be applied (``comparable_types``)? and is there
-a JSON representation (:meth:`TypeTable.nominal_is_json_convertible`)? —
-which is why :meth:`TypeTable.nominal_satisfies` is named for the fact it
-computes rather than for either consumer.
+table's declarations change. ``EQ`` backs ``=``/``!=`` (``comparable_types``);
+``JSON_CONVERTIBLE`` backs :meth:`TypeTable.nominal_is_json_convertible`;
+``HASHABLE`` backs the ``Hashable`` constraint; ``EXTERN_CROSSABLE`` backs
+:func:`is_extern_crossable`. :meth:`TypeTable.nominal_satisfies` takes the
+language-level ``ConstraintKind`` (``Eq``/``Hashable``) and maps it onto its
+``DataProperty``; the JSON/extern properties have no language-level
+constraint spelling, so their table methods use the fixpoint directly.
 
 :func:`satisfies` checks a structural constraint (``Eq``/``Hashable``, see
 ``agl.constraints``) against a type variable's in-scope bounds, or open-world
-mode (``bounds is None``, what
-:meth:`TypeTable.nominal_reaches_non_data`/:meth:`TypeTable.nominal_is_json_convertible`
-use for their non-``Eq``/JSON-shape questions) where a type variable, the
-bottom type, and an unresolved inference variable all count as satisfied.
-Its nominal case consults the same per-kind declaration-flags fixpoint via
-:meth:`TypeTable.nominal_satisfies`. :func:`comparable_types` instead always
-takes the checker's real bound environment.
+mode (``bounds is None``, what :meth:`TypeTable.nominal_reaches_non_data`
+uses) where a type variable, the bottom type, and an unresolved inference
+variable all count as satisfied. Its nominal case consults the same
+declaration-flags fixpoint via :meth:`TypeTable.nominal_satisfies`.
+:func:`comparable_types` instead always takes the checker's real bound
+environment. :func:`is_json_convertible`/:func:`is_extern_crossable` are
+separate structural walks with no bounds concept at all — a bare type
+variable is simply never convertible/crossable in either.
 
 :meth:`TypeTable.has_finite_schema` answers a related but distinct
 whole-type question: not "does this type
@@ -67,7 +70,8 @@ diagnostic (agent output target, cast target, parameter type).
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterator, Mapping
+import enum
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, assert_never, cast
@@ -109,6 +113,7 @@ from agm.agl.semantics.types import (
     is_assignable,
     is_scalar_json_shaped,
     match_nominal_owner_template,
+    match_type_template,
     spells_bare,
     standard_option_type,
     substitute,
@@ -162,6 +167,122 @@ class MethodDef:
     def declaration_key(self) -> DeclKey:
         """Return the method's structured declaration identity."""
         return self.module_id, self.scope_path, self.name
+
+
+def method_receiver_match(method: MethodDef, owner: Type) -> TypeTemplateMatch | None:
+    """Match a built-in method's receiver template against a concrete *owner*, for SELECTION.
+
+    Only the method's own receiver-prefix type parameters
+    (``method.type_params[:method.receiver_type_param_arity]``) are free in
+    the receiver template: a concrete ``dict[text, V]`` receiver (no free key
+    parameter) matches only a text-keyed dict, while a bare ``dict[K, V]``
+    receiver matches any dict, binding both ``K`` and ``V``. Used by
+    :meth:`TypeTable.method_candidates` to decide candidacy; an owner
+    position still uninferred (e.g. an empty ``{}`` literal's key/value) is
+    treated as a wildcard (``wildcard_inference_vars``) so a candidate is not
+    ruled out before inference has run. Specialization
+    (``typecheck.checker._Checker._bound_method_type``) does NOT reuse this
+    match's bindings — it re-derives them through real unification, since a
+    wildcard match carries no real binding.
+    """
+    receiver_type_params = method.type_params[: method.receiver_type_param_arity]
+    return match_type_template(
+        method.signature.params[0], owner, receiver_type_params, wildcard_inference_vars=True
+    )
+
+
+class DataProperty(enum.Enum):
+    """One declaration-level structural property computed by the shared fixpoint.
+
+    ``EQ``/``HASHABLE`` back the language-level ``Eq``/``Hashable``
+    constraints (``agm.agl.constraints.ConstraintKind``); ``JSON_CONVERTIBLE``
+    backs ``as json``/``as text`` and every wire boundary; ``EXTERN_CROSSABLE``
+    backs extern signatures. Each has its own :class:`LeafPolicy` in
+    :data:`LEAF_POLICIES`. The shared fixpoint itself
+    (:func:`~agm.agl.semantics.analyses.compute_declaration_flags`) lives in
+    ``semantics.analyses``, which imports this enum and :data:`LEAF_POLICIES`
+    from here.
+    """
+
+    EQ = "eq"
+    HASHABLE = "hashable"
+    JSON_CONVERTIBLE = "json_convertible"
+    EXTERN_CROSSABLE = "extern_crossable"
+
+
+@dataclass(frozen=True, slots=True)
+class LeafPolicy:
+    """What counts as "bad" evidence for one declaration-level fixpoint.
+
+    ``recurse_containers`` — ``True`` to recurse into an ``array``/``dict``'s
+    element/value type; ``False`` to flag the container outright.
+    ``var_fields_bad`` — whether a declaration's own ``var`` field (or, for
+    an enum, one of its members' own) is itself bad.
+    ``non_data_bad`` — whether a function or ``unit`` leaf is bad outright;
+    when ``False``, a function leaf is instead evaluated by recursing into
+    its parameter and result types (``unit`` is then never bad).
+    ``text_dict_keys_only`` — whether a ``dict`` whose key type is not
+    ``text`` is bad outright (still subject to ``recurse_containers`` for a
+    text-keyed dict's value type).
+    """
+
+    recurse_containers: bool
+    var_fields_bad: bool
+    non_data_bad: bool
+    text_dict_keys_only: bool
+
+
+#: Property -> the policy computing its declaration-level "does not satisfy"
+#: set (see ``semantics.analyses.compute_declaration_flags``): EQ flags a
+#: declaration that unconditionally reaches ``unit``/a function type,
+#: recursing into ``array``/``dict``; HASHABLE flags one that is not deeply
+#: immutable data — a function/unit/``var`` field, or an ``array``/``dict``
+#: outright (never recursed into); JSON_CONVERTIBLE additionally flags a
+#: non-``text``-keyed dict (only a ``text`` key has a wire form);
+#: EXTERN_CROSSABLE is the same as JSON_CONVERTIBLE except a function leaf is
+#: data-crossable (an extern parameter may be a callback), so it recurses
+#: into function types instead of flagging them.
+LEAF_POLICIES: Mapping[DataProperty, LeafPolicy] = MappingProxyType(
+    {
+        DataProperty.EQ: LeafPolicy(
+            recurse_containers=True,
+            var_fields_bad=False,
+            non_data_bad=True,
+            text_dict_keys_only=False,
+        ),
+        DataProperty.HASHABLE: LeafPolicy(
+            recurse_containers=False,
+            var_fields_bad=True,
+            non_data_bad=True,
+            text_dict_keys_only=False,
+        ),
+        DataProperty.JSON_CONVERTIBLE: LeafPolicy(
+            recurse_containers=True,
+            var_fields_bad=False,
+            non_data_bad=True,
+            text_dict_keys_only=True,
+        ),
+        DataProperty.EXTERN_CROSSABLE: LeafPolicy(
+            recurse_containers=True,
+            var_fields_bad=False,
+            non_data_bad=False,
+            text_dict_keys_only=True,
+        ),
+    }
+)
+
+
+def _constraint_kind_to_data_property(kind: ConstraintKind) -> DataProperty:
+    """Map a language-level constraint kind onto its declaration-flags property.
+
+    The single place ``ConstraintKind`` (``Eq``/``Hashable``) is translated to
+    a :class:`DataProperty`; ``JSON_CONVERTIBLE`` and ``EXTERN_CROSSABLE``
+    have no language-level constraint spelling.
+    """
+    return {
+        ConstraintKind.EQ: DataProperty.EQ,
+        ConstraintKind.HASHABLE: DataProperty.HASHABLE,
+    }[kind]
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,10 +470,10 @@ class TypeTable:
         # walk of every receiver's methods.
         self._method_sites: dict[DeclKey, dict[DeclKey, MethodDef]] = {}
         # Whole-table declaration-flags fixpoint (see :meth:`nominal_satisfies`),
-        # one result per constraint kind, computed lazily on first use and
+        # one result per DataProperty, computed lazily on first use and
         # invalidated (cleared) whenever a declaration is added, removed, or
         # overwritten.
-        self._declaration_flags_cache: dict[ConstraintKind, DeclarationFlags] = {}
+        self._declaration_flags_cache: dict[DataProperty, DeclarationFlags] = {}
         # Member declaration id -> the enums declaring or referencing it, in
         # registration order. A referenced member belongs to several enums, so
         # this is multi-valued. Whole-table, rebuilt on any registration change.
@@ -589,7 +710,13 @@ class TypeTable:
         """
         constructor = self._builtin_constructor(owner)
         if constructor is not None:
-            return self._method_level(self._builtin_methods.get(constructor, {}).get(name, {}))
+            level = self._builtin_methods.get(constructor, {}).get(name, {})
+            candidates = self._method_level(level)
+            return tuple(
+                candidate
+                for candidate in candidates
+                if method_receiver_match(candidate, owner) is not None
+            )
         if not isinstance(owner, (RecordType, EnumType, ExceptionType)):
             return ()
         owner_ids: tuple[DeclId, ...] = (owner.decl_id,)
@@ -1316,29 +1443,14 @@ class TypeTable:
     ) -> bool:
         """Return ``True`` if *handle* satisfies *kind* (cycle-safe; see :func:`satisfies`).
 
-        Declaration-level: *handle*'s declaration must not be flagged
-        (:meth:`_declaration_flags`, one fixpoint per *kind*, checked first
-        so a flag applying by declaration identity alone — e.g. host-minted
-        origin — still applies before any ``TypeDef`` is registered), and,
-        when registered, each concrete ``type_args`` entry at a relevant
-        parameter position must itself satisfy *kind* (:func:`satisfies`, so
-        a bare type-variable argument consults *bounds*, including
-        open-world mode when *bounds* is ``None``); an exception carries no
-        ``type_args``, so only its declaration flag applies.
+        *kind* maps onto its :class:`~agm.agl.semantics.analyses.DataProperty`
+        (:func:`_constraint_kind_to_data_property`); see
+        :meth:`_nominal_satisfies_property` for the shared declaration-flag walk.
         """
-        flags = self._declaration_flags(kind)
-        if handle.decl_id in flags.flagged:
-            return False
-        typedef = self._defs.get(handle.decl_id)
-        if typedef is None:
-            return True
-        if isinstance(handle, ExceptionType):
-            return True
-        relevant = flags.relevant_params.get(handle.decl_id, frozenset())
-        return all(
-            satisfies(arg, kind, self, bounds)
-            for pname, arg in zip(typedef.type_params, handle.type_args)
-            if pname in relevant
+        return self._nominal_satisfies_property(
+            handle,
+            _constraint_kind_to_data_property(kind),
+            lambda arg: satisfies(arg, kind, self, bounds),
         )
 
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
@@ -1355,19 +1467,86 @@ class TypeTable:
         """Return ``True`` if *handle* has a JSON representation.
 
         A record and an exception convert to a JSON object of their fields, an
-        enum to ``{"$case": variant, …fields}``, so the only obstacle is a
-        non-data leaf somewhere inside — exactly :meth:`nominal_satisfies` for
-        ``Eq``, in open-world mode.
+        enum to ``{"$case": variant, …fields}``, so the obstacles are a
+        non-data leaf or a non-``text``-keyed ``dict`` somewhere inside
+        (:attr:`DataProperty.JSON_CONVERTIBLE`), checked structurally via
+        :func:`is_json_convertible` rather than through :func:`satisfies`.
         """
-        return self.nominal_satisfies(handle, ConstraintKind.EQ, None)
+        return self._nominal_satisfies_property(
+            handle,
+            DataProperty.JSON_CONVERTIBLE,
+            lambda arg: is_json_convertible(arg, self),
+        )
 
-    def _declaration_flags(self, kind: ConstraintKind) -> "DeclarationFlags":
-        cached = self._declaration_flags_cache.get(kind)
+    def nominal_is_extern_crossable(self, handle: RecordType | EnumType | ExceptionType) -> bool:
+        """Return ``True`` if *handle* may cross an extern boundary (cycle-safe).
+
+        Used by :func:`is_extern_crossable` for its nominal case; see
+        :attr:`DataProperty.EXTERN_CROSSABLE`.
+        """
+        return self._nominal_satisfies_property(
+            handle,
+            DataProperty.EXTERN_CROSSABLE,
+            lambda arg: is_extern_crossable(arg, self),
+        )
+
+    def _nominal_satisfies_property(
+        self,
+        handle: RecordType | EnumType | ExceptionType,
+        prop: DataProperty,
+        structural: Callable[[Type], bool],
+    ) -> bool:
+        """Shared declaration-flag + relevant-type-argument walk for one *prop*.
+
+        Declaration-level: *handle*'s declaration must not be flagged
+        (:meth:`_declaration_flags`, one fixpoint per *prop*, checked first
+        so a flag applying by declaration identity alone — e.g. host-minted
+        origin — still applies before any ``TypeDef`` is registered), and,
+        when registered, each concrete ``type_args`` entry at a relevant
+        parameter position must itself satisfy *prop*, via *structural*; an
+        exception carries no ``type_args``, so only its declaration flag
+        applies.
+
+        For a ``text_dict_keys_only`` policy (``JSON_CONVERTIBLE``/
+        ``EXTERN_CROSSABLE``), the argument at a KEY parameter position
+        (``DeclarationFlags.key_params`` — e.g. ``Box[K]`` with field
+        ``d: dict[K, int]``) must ADDITIONALLY satisfy
+        :func:`dict_key_has_wire_form` directly: a key parameter's own
+        occurrence in the declaration's template never flags it by itself
+        (deferred, like any bare type variable), so this is the only place
+        that check actually happens, at the concrete reference.
+        """
+        flags = self._declaration_flags(prop)
+        if handle.decl_id in flags.flagged:
+            return False
+        typedef = self._defs.get(handle.decl_id)
+        if typedef is None:
+            return True
+        if isinstance(handle, ExceptionType):
+            return True
+        relevant = flags.relevant_params.get(handle.decl_id, frozenset())
+        if not all(
+            structural(arg)
+            for pname, arg in zip(typedef.type_params, handle.type_args)
+            if pname in relevant
+        ):
+            return False
+        if not LEAF_POLICIES[prop].text_dict_keys_only:
+            return True
+        key_params = flags.key_params.get(handle.decl_id, frozenset())
+        return all(
+            dict_key_has_wire_form(arg)
+            for pname, arg in zip(typedef.type_params, handle.type_args)
+            if pname in key_params
+        )
+
+    def _declaration_flags(self, prop: DataProperty) -> "DeclarationFlags":
+        cached = self._declaration_flags_cache.get(prop)
         if cached is None:
-            from agm.agl.semantics.analyses import LEAF_POLICIES, compute_declaration_flags
+            from agm.agl.semantics.analyses import compute_declaration_flags
 
-            cached = compute_declaration_flags(self, LEAF_POLICIES[kind])
-            self._declaration_flags_cache[kind] = cached
+            cached = compute_declaration_flags(self, LEAF_POLICIES[prop])
+            self._declaration_flags_cache[prop] = cached
         return cached
 
     def has_finite_schema(self, t: Type) -> bool:
@@ -1643,7 +1822,7 @@ class TypeTable:
         """
         from agm.agl.semantics.analyses import field_templates, nominal_references
 
-        flags = self._declaration_flags(ConstraintKind.EQ).flagged
+        flags = self._declaration_flags(DataProperty.EQ).flagged
         result: set[DeclId] = set()
         for _field_name, template in field_templates(typedef, self._defs):
             for ref in nominal_references(template):
@@ -1856,12 +2035,26 @@ def same_comparison_type(left: Type, right: Type) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def dict_key_has_wire_form(key: Type) -> bool:
+    """Return whether *key* has a wire form as a ``dict`` key.
+
+    Only a ``text`` key has one (a JSON object's own keys) — every other key
+    type, a still-unresolved type variable included, has none. The single
+    predicate shared by :func:`is_json_convertible`, :func:`is_extern_crossable`,
+    ``semantics.analyses.compute_declaration_flags``'s ``JSON_CONVERTIBLE``/
+    ``EXTERN_CROSSABLE`` leaf policies, and the checker's own program-parameter/
+    agent-output wire-serializability walk.
+    """
+    return isinstance(key, TextType)
+
+
 def is_json_convertible(t: Type, table: TypeTable) -> bool:
     """Return ``True`` if ``t`` has a JSON representation.
 
     The scalars (``text``/``json``/``bool``/``int``/``decimal``) convert
     directly; an ``array`` converts iff its element type does; a ``dict``
-    converts iff both its key and value type do; a record or exception
+    converts iff its key is ``text`` (only a ``text`` key has a wire form)
+    and its value type converts; a record or exception
     converts to a JSON object of its fields and an enum
     to ``{"$case": variant, …fields}``, so a nominal converts iff no non-data
     type is reachable from its declaration
@@ -1888,7 +2081,9 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
         case ArrayType():
             return is_json_convertible(t.elem, table)
         case DictType():
-            return is_json_convertible(t.key, table) and is_json_convertible(t.value, table)
+            # Only a text key has a wire form, even when the key type
+            # itself would otherwise convert (e.g. int).
+            return dict_key_has_wire_form(t.key) and is_json_convertible(t.value, table)
         case RecordType() if t.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
             return False
         case ExceptionType():
@@ -1901,6 +2096,33 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             return False
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
+
+
+def is_extern_crossable(t: Type, table: TypeTable) -> bool:
+    """Return ``True`` if a value of type ``t`` may cross an extern boundary.
+
+    Structural, like :func:`is_json_convertible`, with two differences: a
+    function type is itself crossable (an AgL function value crosses as an
+    interpreter callback), so it recurses into the function's parameter and
+    result types rather than being rejected outright; and a free type
+    variable is crossable (an extern signature's own type parameters are
+    not erased the way a compiled ``as json`` cast's are, so they are
+    deferred here exactly as :func:`satisfies` defers them in open-world
+    mode). The remaining obstacle is a non-``text``-keyed ``dict`` anywhere,
+    including nested inside a function type
+    (:class:`~agm.agl.semantics.analyses.DataProperty.EXTERN_CROSSABLE`).
+
+    Structural over :func:`~agm.agl.semantics.types.type_children`: a
+    ``dict``'s key is checked directly (:func:`dict_key_has_wire_form`) and
+    only its value recurses; a nominal delegates to the table; every other
+    constructor (a leaf, an ``array``, or a function's params/result) is
+    crossable iff every direct child is.
+    """
+    if isinstance(t, DictType):
+        return dict_key_has_wire_form(t.key) and is_extern_crossable(t.value, table)
+    if isinstance(t, (RecordType, EnumType, ExceptionType)):
+        return table.nominal_is_extern_crossable(t)
+    return all(is_extern_crossable(child, table) for child in type_children(t))
 
 
 def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> bool:

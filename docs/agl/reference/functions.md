@@ -354,14 +354,16 @@ an annotation or `as` that narrows or widens the receiver's static type.
 
 A builtin receiver may be named in a method declaration in any module. This
 syntax is available to ordinary, `builtin`, and `extern` definitions:
-`array[E]::name` and `dict[text, V]::name` bind their receiver element or value
-parameter; `text`, `json`, `int`, `decimal`, and `bool` are bare receivers. A
-builtin receiver must use its bare generic form, so `array[int]::name` and
-`dict[text, array[int]]::name` are invalid. As with a nominal generic receiver,
-`_` may occupy an unused receiver slot; it binds a private rigid parameter and
-cannot be named by the method body. A `{…}` constraint block may bound the
-receiver's element or value parameter the same way it bounds a nominal
-receiver's; see [Generic methods](generics.md#generic-methods).
+`array[E]::name` binds its receiver element parameter and `dict[K, V]::name`
+binds its receiver key and value parameters; `dict[text, V]::name` binds only
+the value parameter and applies only to `text`-keyed dicts; `text`, `json`,
+`int`, `decimal`, and `bool` are bare receivers. Otherwise a builtin receiver
+must use its bare generic form, so `array[int]::name`, `dict[int, V]::name`,
+and `dict[text, array[int]]::name` are invalid. As with a nominal generic
+receiver, `_` may occupy an unused receiver slot; it binds a private rigid
+parameter and cannot be named by the method body. A `{…}` constraint block may
+bound the receiver's key, element, or value parameter the same way it bounds a
+nominal receiver's; see [Generic methods](generics.md#generic-methods).
 
 The prelude re-exports builtin receiver scopes, making standard-library methods
 reachable wherever the prelude is enabled. With `--no-stdlib`, import a route

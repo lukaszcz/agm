@@ -478,7 +478,9 @@ length: int
 ### `KeyError`
 
 Raised by missing dictionary keys during indexing or indexed dictionary
-assignment.
+assignment. `key` is always `text`: a `text` key crosses verbatim, and any
+other key type is rendered in AgL value syntax (e.g. a missing
+`dict[Point, V]` key becomes `"Point(x = 1, y = 2)"`).
 
 ```text
 key: text

@@ -62,7 +62,7 @@ names need not match the type declaration's names. A method must provide every
 receiver slot; `_` may occupy an unused slot and may repeat. Each `_` slot is a
 private rigid binding: it participates in receiver matching but is not readable
 in the method body. Type parameters after those slots belong to the method
-itself. The same positional rule applies to `array[E]` and `dict[text, V]`
+itself. The same positional rule applies to `array[E]` and `dict[K, V]`
 builtin receiver declarations.
 
 ```agl
@@ -153,7 +153,7 @@ program def main() -> unit =
 
 `Box[int]`, `Option[text]`, `Outcome[int, text]`, and the nested
 `Box[Box[int]]` are all applied types. The built-in `array[T]` and
-`dict[text, V]` use exactly the same form.
+`dict[K, V]` use exactly the same form.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -375,7 +375,9 @@ contents is a static error. You cannot:
 
 - compare it with `==`, `!=`, `<`, `<=`, `>`, `>=` (`x == x` on a `T` is
   rejected) — a `{Eq T}`/`{Hashable T}` bound lifts `==`/`!=`, and `in` over
-  `array[T]`; ordering never lifts, bound or not (see [Constraint
+  `array[T]`; a `{Hashable T}` bound additionally lifts indexing (`d[t]`),
+  indexed assignment (`d[t] := v`), and `in` over `dict[T, V]` when `T` is
+  the key; ordering never lifts, bound or not (see [Constraint
   blocks](#constraint-blocks)),
 - do arithmetic on it,
 - access a field (`x.foo`) or index (`x[0]`) of it,
@@ -420,7 +422,9 @@ def member[T]{Hashable T}(x: T, xs: array[T]) -> bool = x in xs
 `Hashable` implies `Eq`. A bound lifts the strict-parametricity restriction
 on `==`/`!=` and `in` for that parameter — and for any type that mentions
 it, such as `array[T]` or `Option[T]` — wherever it appears in the
-declaration's body, including its receiver's parameters for a method.
+declaration's body, including its receiver's parameters for a method. A
+`Hashable` bound on `T` additionally lifts dict hashing operations
+(indexing, indexed assignment, `in`) at a `dict[T, V]` key position.
 Without a bound, those operations remain rejected on the parameter at any
 depth. A constraint names only a type parameter already in scope from the
 declaration or its receiver; naming the same parameter twice, or pairing it

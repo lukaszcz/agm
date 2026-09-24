@@ -748,6 +748,10 @@ class TestTypeVarType:
     def test_repr(self) -> None:
         assert repr(TypeVarType("T")) == "T"
 
+    def test_repr_renders_method_type_slot_wildcard_as_underscore(self) -> None:
+        """A receiver-prefix `_` wildcard's private rigid name never leaks."""
+        assert repr(TypeVarType("__method_type_slot_1_0")) == "_"
+
     def test_equality_same_name(self) -> None:
         assert TypeVarType("T") == TypeVarType("T")
 

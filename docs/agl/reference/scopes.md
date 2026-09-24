@@ -242,7 +242,7 @@ A plain scope hosts methods for its resolved record, enum, enum member, or
 exception. The receiver may be declared locally or supplied by exactly one bare
 import reaching the method's region; a qualified-only import supplies no
 receiver name. Built-in receiver heads are the exception: `array[E]::name` and
-`dict[text, V]::name` declare methods for those generic receiver types, while
+`dict[K, V]::name` declare methods for those generic receiver types, while
 `text`, `json`, `int`, `decimal`, and `bool` are bare receiver heads. A type
 alias may be used as a target type, but its scope cannot declare methods.
 `Point::norm(p)` written bare follows ordinary scope-path rules, while

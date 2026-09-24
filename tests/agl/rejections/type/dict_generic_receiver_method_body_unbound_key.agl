@@ -1,0 +1,4 @@
+def dict[K, V]::has(self, key: K) -> bool = key in self
+
+program def main() -> unit =
+  ()

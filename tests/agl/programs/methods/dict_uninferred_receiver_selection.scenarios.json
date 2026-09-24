@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "merge_onto_empty_with_annotated_result",
+      "params": {"mode": 0},
+      "expect": {
+        "stdout": "{\"a\": 1}\n"
+      }
+    },
+    {
+      "name": "merge_onto_empty_from_annotated_operand",
+      "params": {"mode": 1},
+      "expect": {
+        "stdout": "{\"b\": 2}\n"
+      }
+    },
+    {
+      "name": "size_on_annotated_empty_binding",
+      "params": {"mode": 2},
+      "expect": {
+        "stdout": "0\n"
+      }
+    }
+  ]
+}

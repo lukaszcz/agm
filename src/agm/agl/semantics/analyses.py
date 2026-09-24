@@ -24,18 +24,27 @@ without needing another value of the same (or a mutually recursive)
 declaration. :func:`compute_uninhabited` returns the declarations that never
 reach that bottom.
 
-Non-data reachability and hashability
---------------------------------------
-Both facts are one shared declaration-level fixpoint
+Non-data reachability, hashability, JSON convertibility, and extern crossability
+---------------------------------------------------------------------------------
+These four facts are one shared declaration-level fixpoint
 (:func:`compute_declaration_flags` — see its own docstring for the growth
-rule), parameterised per :class:`~agm.agl.constraints.ConstraintKind` by a
-:class:`LeafPolicy` (:data:`LEAF_POLICIES`). ``Eq``'s policy flags a
+rule), one instance per :class:`~agm.agl.semantics.type_table.DataProperty`,
+each with its own :class:`~agm.agl.semantics.type_table.LeafPolicy`
+(:data:`~agm.agl.semantics.type_table.LEAF_POLICIES`). ``EQ``'s policy flags a
 declaration that unconditionally reaches ``unit`` or a function type — the
-basis of ``=``/``!=`` and of JSON convertibility
-(:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_satisfies`).
-``Hashable``'s policy flags one that is not deeply immutable data: it has an
+basis of ``=``/``!=`` (:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_satisfies`).
+``HASHABLE``'s policy flags one that is not deeply immutable data: it has an
 ``array``/``dict``/function/``unit``/``var`` field, transitively (see
-``semantics.type_table.satisfies``).
+``semantics.type_table.satisfies``). ``JSON_CONVERTIBLE`` is ``EQ`` plus a
+non-``text``-keyed ``dict`` anywhere (only a ``text`` key has a wire form;
+:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_is_json_convertible`)
+— a ``dict`` key filled by the declaration's OWN type parameter is deferred
+rather than flagged (see ``DeclarationFlags.key_params``), since its wire
+form depends on the argument a later concrete reference supplies.
+``EXTERN_CROSSABLE`` is the same, except a function leaf is itself
+data-crossable (an extern parameter may be a callback), so it recurses into
+function types instead of flagging them
+(:func:`~agm.agl.semantics.type_table.is_extern_crossable`).
 
 Finiteness (instantiation-closure) capability
 ----------------------------------------------
@@ -74,16 +83,16 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import assert_never
 
-from agm.agl.constraints import ConstraintKind
 from agm.agl.semantics.type_table import (
     DeclId,
+    LeafPolicy,
     TypeDef,
     TypeDefKind,
     TypeTable,
     decl_id_sort_key,
+    dict_key_has_wire_form,
 )
 from agm.agl.semantics.types import (
     ArrayType,
@@ -294,34 +303,6 @@ def uninhabitable_message(kind: TypeDefKind, name: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class LeafPolicy:
-    """What counts as "bad" evidence for one declaration-level fixpoint.
-
-    ``recurse_containers`` — ``True`` to recurse into an ``array``/``dict``'s
-    element/value type; ``False`` to flag the container outright.
-    ``var_fields_bad`` — whether a declaration's own ``var`` field (or, for
-    an enum, one of its members' own) is itself bad.
-    """
-
-    recurse_containers: bool
-    var_fields_bad: bool
-
-
-#: Kind -> the policy computing its declaration-level "does not satisfy" set
-#: (see :func:`compute_declaration_flags`): EQ flags a declaration that
-#: unconditionally reaches ``unit``/a function type, recursing into
-#: ``array``/``dict``; HASHABLE flags one that is not deeply immutable data —
-#: a function/unit/``var`` field, or an ``array``/``dict`` outright (never
-#: recursed into).
-LEAF_POLICIES: Mapping[ConstraintKind, LeafPolicy] = MappingProxyType(
-    {
-        ConstraintKind.EQ: LeafPolicy(recurse_containers=True, var_fields_bad=False),
-        ConstraintKind.HASHABLE: LeafPolicy(recurse_containers=False, var_fields_bad=True),
-    }
-)
-
-
-@dataclass(frozen=True, slots=True)
 class DeclarationFlags:
     """Whole-table "bad" fixpoint result (see :func:`compute_declaration_flags`).
 
@@ -335,10 +316,25 @@ class DeclarationFlags:
     therefore never relevant, matching the substitute-then-walk semantics
     this replaces: instantiating a phantom parameter with bad evidence cannot
     flag a declaration because the field template never actually mentions it.
+    ``key_params`` — for every declaration, the subset of its own type
+    parameters occurring in ``dict``-key position: a bare occurrence directly
+    as a ``dict``'s key, or one passed as the argument at ANOTHER
+    declaration's own key parameter (transitively) — e.g. ``Box[K]`` with
+    field ``d: dict[K, int]`` has key parameter ``K``, so ``Outer[T]`` with
+    field ``b: Box[T]`` has key parameter ``T`` too. Only meaningful for a
+    ``text_dict_keys_only`` policy: a key parameter's own occurrence never
+    flags its declaration by itself (deferred, like any bare type variable),
+    but at a concrete reference the argument filling it must separately
+    satisfy :func:`~agm.agl.semantics.type_table.dict_key_has_wire_form`
+    (:meth:`~agm.agl.semantics.type_table.TypeTable._nominal_satisfies_property`)
+    — a nominal type can never itself have a wire form as a key, so, unlike
+    ``relevant_params``, this never recurses INTO a nominal argument filling
+    a key parameter, only through a bare type variable.
     """
 
     flagged: frozenset[DeclId]
     relevant_params: Mapping[DeclId, frozenset[str]]
+    key_params: Mapping[DeclId, frozenset[str]]
 
 
 def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> DeclarationFlags:
@@ -348,8 +344,13 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
     grows — never retracts — as evidence accumulates: a bad leaf anywhere in
     the declaration's own field/variant templates (per *policy*, at any
     depth, via :func:`field_templates`), a bad ``var`` field, a reference to
-    an already-flagged declaration, or (seeded up front) host-minted origin
-    (:meth:`~agm.agl.semantics.type_table.TypeTable.host_minted_declaration_ids`).
+    an already-flagged declaration, or (seeded up front, when
+    ``policy.non_data_bad``) host-minted origin
+    (:meth:`~agm.agl.semantics.type_table.TypeTable.host_minted_declaration_ids`)
+    — a host-minted declaration is an opaque non-data leaf, so it is bad
+    exactly where a function/``unit`` leaf is bad, and crossable otherwise
+    (e.g. ``EXTERN_CROSSABLE``, which recurses into a function's own
+    parameter/result types instead of flagging it outright).
     A bare type variable is never itself bad — deferred to the concrete
     instantiation — which is what lets a self-referential declaration (a
     reference to its own, still-unflagged, identity) go unflagged by the
@@ -372,9 +373,10 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
         if typedef.kind == "exception" and typedef.base in exception_children:
             exception_children[typedef.base].add(decl_id)
 
-    field_flagged = set(table.host_minted_declaration_ids())
+    field_flagged = set(table.host_minted_declaration_ids()) if policy.non_data_bad else set()
     flagged = set(field_flagged)
     relevant: dict[DeclId, set[str]] = {decl_id: set() for decl_id in defs}
+    key_params: dict[DeclId, set[str]] = {decl_id: set() for decl_id in defs}
     changed = True
     while changed:
         changed = False
@@ -389,7 +391,8 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
                 )
             )
             template_bad = own_var_field_bad or any(
-                _template_is_flagged(t, policy, flagged, relevant, defs) for t in templates
+                _template_is_flagged(t, policy, flagged, relevant, own_params, defs)
+                for t in templates
             )
             inherited_field_bad = (
                 typedef.kind == "exception"
@@ -410,14 +413,20 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
                 changed = True
 
             gained: set[str] = set()
+            gained_keys: set[str] = set()
             for t in templates:
                 gained |= _template_relevant_params(t, own_params, relevant, defs)
+                gained_keys |= _template_key_params(t, own_params, key_params, defs)
             if not gained <= relevant[decl_id]:
                 relevant[decl_id] |= gained
+                changed = True
+            if not gained_keys <= key_params[decl_id]:
+                key_params[decl_id] |= gained_keys
                 changed = True
     return DeclarationFlags(
         flagged=frozenset(flagged),
         relevant_params={decl_id: frozenset(params) for decl_id, params in relevant.items()},
+        key_params={decl_id: frozenset(params) for decl_id, params in key_params.items()},
     )
 
 
@@ -455,22 +464,44 @@ def _template_is_flagged(
     policy: LeafPolicy,
     flagged: set[DeclId],
     relevant: Mapping[DeclId, set[str]],
+    own_params: frozenset[str],
     defs: Mapping[DeclId, TypeDef],
 ) -> bool:
-    """Return whether *t* is, or transitively reaches, bad evidence under *policy*."""
+    """Return whether *t* is, or transitively reaches, bad evidence under *policy*.
+
+    *own_params* is the enclosing declaration's own type parameters (fixed
+    for the whole walk of one declaration's templates): a ``dict`` key that
+    is a bare occurrence of one of them is never immediately bad, even under
+    a ``text_dict_keys_only`` policy — deferred to the concrete reference,
+    like any bare type variable, and tracked separately as a key parameter
+    (:func:`_template_key_params`, :attr:`DeclarationFlags.key_params`).
+    """
     match t:
-        case FunctionType() | UnitType():
-            return True
+        case UnitType():
+            return policy.non_data_bad
+        case FunctionType():
+            if policy.non_data_bad:
+                return True
+            return any(
+                _template_is_flagged(p, policy, flagged, relevant, own_params, defs)
+                for p in t.params
+            ) or _template_is_flagged(t.result, policy, flagged, relevant, own_params, defs)
         case ArrayType():
             if not policy.recurse_containers:
                 return True
-            return _template_is_flagged(t.elem, policy, flagged, relevant, defs)
+            return _template_is_flagged(t.elem, policy, flagged, relevant, own_params, defs)
         case DictType():
             if not policy.recurse_containers:
                 return True
+            if (
+                policy.text_dict_keys_only
+                and not dict_key_has_wire_form(t.key)
+                and not (isinstance(t.key, TypeVarType) and t.key.name in own_params)
+            ):
+                return True
             return _template_is_flagged(
-                t.key, policy, flagged, relevant, defs
-            ) or _template_is_flagged(t.value, policy, flagged, relevant, defs)
+                t.key, policy, flagged, relevant, own_params, defs
+            ) or _template_is_flagged(t.value, policy, flagged, relevant, own_params, defs)
         case ExceptionType():
             return t.decl_id in flagged
         case RecordType() | EnumType():
@@ -482,7 +513,7 @@ def _template_is_flagged(
                 return False
             own_relevant = relevant.get(decl_id, set())
             return any(
-                _template_is_flagged(arg, policy, flagged, relevant, defs)
+                _template_is_flagged(arg, policy, flagged, relevant, own_params, defs)
                 for pname, arg in zip(target.type_params, t.type_args)
                 if pname in own_relevant
             )
@@ -545,6 +576,68 @@ def _template_relevant_params(
             | DecimalType()
             | BottomType()
             | InferenceVarType()
+        ):
+            return set()
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _template_key_params(
+    t: Type,
+    own_params: frozenset[str],
+    key_params: Mapping[DeclId, set[str]],
+    defs: Mapping[DeclId, TypeDef],
+) -> set[str]:
+    """Return the subset of *own_params* occurring in *t* in ``dict``-key position.
+
+    A bare occurrence directly as a ``dict`` key counts; so does one reached
+    through another declaration's own key parameter, transitively, via
+    nominal type arguments (``key_params`` — the same growing fixpoint fact
+    this computes, consulted for whatever has already stabilized for the
+    REFERENCED declaration). Recurses into every constructor to find a key
+    position nested arbitrarily deep, EXCEPT a ``dict``'s own key: a nominal
+    type filling it (rather than a bare parameter) can never itself have a
+    wire form no matter its own arguments, so nothing is deferred there.
+    """
+    match t:
+        case TypeVarType() | InferenceVarType():
+            return set()
+        case ArrayType():
+            return _template_key_params(t.elem, own_params, key_params, defs)
+        case DictType():
+            direct = (
+                {t.key.name}
+                if isinstance(t.key, TypeVarType) and t.key.name in own_params
+                else set()
+            )
+            return direct | _template_key_params(t.value, own_params, key_params, defs)
+        case FunctionType():
+            result: set[str] = set()
+            for p in t.params:
+                result |= _template_key_params(p, own_params, key_params, defs)
+            result |= _template_key_params(t.result, own_params, key_params, defs)
+            return result
+        case RecordType() | EnumType():
+            decl_id = t.decl_id
+            target = defs.get(decl_id)
+            if target is None:
+                return set()
+            target_key = key_params.get(decl_id, set())
+            result = set()
+            for pname, arg in zip(target.type_params, t.type_args):
+                if pname in target_key and isinstance(arg, TypeVarType) and arg.name in own_params:
+                    result.add(arg.name)
+                result |= _template_key_params(arg, own_params, key_params, defs)
+            return result
+        case (
+            ExceptionType()
+            | UnitType()
+            | TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | BottomType()
         ):
             return set()
         case _ as unreachable:  # pragma: no cover

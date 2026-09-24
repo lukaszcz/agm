@@ -1540,7 +1540,7 @@ class _Lowerer:
                     location=self._loc(span),
                     kind=kind,
                     value=self.lower_expr(obj_expr),
-                    index=self.lower_expr(index_expr),
+                    index=self.lower_coerced(index_expr, self._index_expected_type(container_type)),
                 )
 
             # ----------------------------------------------------------
@@ -2266,7 +2266,7 @@ class _Lowerer:
             item_ir = self._coerce_operand(item, container_type.elem)
         elif isinstance(container_type, DictType):
             kind = ContainsKind.DICT
-            item_ir = item.ir
+            item_ir = self._coerce_operand(item, container_type.key)
         elif isinstance(container_type, TextType):
             kind = ContainsKind.TEXT
             item_ir = item.ir
@@ -3919,7 +3919,7 @@ class _Lowerer:
                 location=self._loc(span),
                 container=self.lower_expr(target.obj),
                 kind=kind,
-                index=self.lower_expr(target.index),
+                index=self.lower_coerced(target.index, self._index_expected_type(container_type)),
                 value=ir_val,
             )
 
@@ -3947,6 +3947,14 @@ class _Lowerer:
             symbol=sym,
             value=ir_val,
         )
+
+    def _index_expected_type(self, container_type: Type) -> Type:
+        """Return the type an index expression must coerce to for *container_type*.
+
+        A dict index coerces to the dict's key type (e.g. an ``int`` index
+        into ``dict[decimal, V]``); an array or text index is always ``int``.
+        """
+        return container_type.key if isinstance(container_type, DictType) else IntType()
 
     def _kind_for_container(self, t: Type) -> IndexKind:
         """Return IndexKind for an indexable array, dict, or text value."""

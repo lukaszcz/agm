@@ -95,7 +95,7 @@ class ArrayT:
 
 @dataclass(frozen=True, slots=True)
 class DictT:
-    """A ``dict[K, V]`` type.  The parser admits only ``text`` keys."""
+    """A ``dict[K, V]`` type, well-formed for any key type expression."""
 
     key: TypeExpr
     value: TypeExpr

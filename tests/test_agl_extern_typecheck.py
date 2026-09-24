@@ -261,6 +261,59 @@ class TestExternCallableSignatures:
 
 
 # ---------------------------------------------------------------------------
+# Non-text-keyed dicts have no wire form, so they cannot cross an extern
+# boundary (semantics.type_table.is_extern_crossable).
+# ---------------------------------------------------------------------------
+
+
+class TestExternDictKeyCrossability:
+    def test_text_keyed_dict_param_permitted(self) -> None:
+        check_extern("extern def f(d: dict[text, int]) -> int\n0")
+
+    def test_non_text_keyed_dict_param_rejected(self) -> None:
+        err = reject_extern("extern def f(d: dict[int, text]) -> int\n0")
+        assert "extern boundary" in str(err).lower()
+
+    def test_non_text_keyed_dict_return_rejected(self) -> None:
+        err = reject_extern("extern def f(x: int) -> dict[int, text]\n0")
+        assert "extern boundary" in str(err).lower()
+
+    def test_non_text_keyed_dict_nested_in_record_field_rejected(self) -> None:
+        source = "record Box\n  d: dict[int, text]\nextern def f(b: Box) -> int\n0"
+        err = reject_extern(source)
+        assert "extern boundary" in str(err).lower()
+
+    def test_non_text_keyed_dict_nested_in_callback_param_rejected(self) -> None:
+        err = reject_extern("extern def f(cb: (dict[int, text]) -> unit) -> int\n0")
+        assert "extern boundary" in str(err).lower()
+
+    def test_host_minted_opaque_type_param_permitted(self) -> None:
+        check_extern("extern def f(s: Session) -> int\n0")
+
+    def test_host_minted_opaque_type_nested_in_record_field_permitted(self) -> None:
+        source = "record Box\n  session: Session\nextern def f(b: Box) -> int\n0"
+        check_extern(source)
+
+    def test_generic_key_param_instantiated_at_text_permitted(self) -> None:
+        source = "record Box[K]\n  d: dict[K, int]\nextern def f(b: Box[text]) -> int\n0"
+        check_extern(source)
+
+    def test_generic_key_param_instantiated_at_non_text_rejected(self) -> None:
+        source = "record Box[K]\n  d: dict[K, int]\nextern def f(b: Box[int]) -> int\n0"
+        err = reject_extern(source)
+        assert "extern boundary" in str(err).lower()
+
+    def test_wildcard_receiver_key_slot_rejected(self) -> None:
+        """A `_` receiver-prefix wildcard key still rejects for extern crossability.
+
+        See ``TestTypeVarType.test_repr_renders_method_type_slot_wildcard_as_underscore``
+        in ``test_agl_types.py`` for the diagnostic-rendering regression check:
+        the wildcard's private rigid name must never leak into this rejection.
+        """
+        reject_extern("extern def dict[_, V]::sz(self) -> int\n0")
+
+
+# ---------------------------------------------------------------------------
 # Calls type exactly like ordinary declared-function calls
 # ---------------------------------------------------------------------------
 

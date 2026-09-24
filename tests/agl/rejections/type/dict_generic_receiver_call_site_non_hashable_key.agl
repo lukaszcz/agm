@@ -1,0 +1,5 @@
+def dict[K, V]::has{Hashable K}(self, key: K) -> bool = key in self
+
+program def main() -> unit =
+  let d: dict[array[int], text] = {}
+  print(d.has([1]))

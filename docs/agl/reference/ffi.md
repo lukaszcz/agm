@@ -187,8 +187,13 @@ than an extern signature.
 | function | a callback proxy, valid only inside the invocation window |
 
 `bool` is considered before `int` on return because Python makes `bool` an
-`int` subclass while AgL does not. A bare Python `list` or `dict` is never an
-AgL boundary value and is rejected. Construct a new AgL container with
+`int` subclass while AgL does not. A `dict` keyed by anything other than
+`text` — including one reached through a generic type parameter instantiated
+non-`text`, at any nesting depth (a field, an array/dict element, a callback
+parameter) — has no wire form and cannot cross an extern boundary at all;
+`extern def` rejects such a signature statically (see [`array[T]` and
+`dict[K, T]`](types.md#arrayt-and-dictk-t)). A bare Python `list` or `dict`
+is never an AgL boundary value and is rejected. Construct a new AgL container with
 `agl.array([...])` or `agl.dict({...})` instead. Wrap every JSON value,
 including `None` and scalars, with `agl.json(value)`; this keeps JSON `null`
 and JSON `3` distinct from `unit` and `int`.

@@ -72,7 +72,7 @@ _OWNED_METHOD = MethodDef(
     scope_path=(),
     name="doubled",
     decl_node_id=910,
-    signature=FunctionType(params=(), result=IntType()),
+    signature=FunctionType(params=(_METHOD_OWNER,), result=IntType()),
     receiver_type_param_arity=0,
     type_params=(),
 )
@@ -81,7 +81,7 @@ _BUILTIN_METHOD = MethodDef(
     scope_path=(),
     name="tripled",
     decl_node_id=911,
-    signature=FunctionType(params=(), result=IntType()),
+    signature=FunctionType(params=(IntType(),), result=IntType()),
     receiver_type_param_arity=0,
     type_params=(),
 )

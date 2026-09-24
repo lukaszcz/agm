@@ -1,0 +1,10 @@
+# A generic nominal is hashable only per instantiation: Box[int] is
+# hashable, but Box[array[int]] is not, since its own field is itself a
+# non-hashable array.
+record Box[T]
+  value: T
+
+program def main() -> unit =
+  let d: dict[Box[array[int]], text] = {}
+  let key = Box(value = [1])
+  print(key in d)

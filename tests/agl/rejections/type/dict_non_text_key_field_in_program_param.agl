@@ -1,0 +1,5 @@
+record Counts
+  by-id: dict[int, text]
+
+program def main(counts: Counts) -> unit =
+  print counts

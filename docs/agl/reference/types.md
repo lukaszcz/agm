@@ -17,7 +17,7 @@ bool
 int
 decimal
 array[T]
-dict[text, T]
+dict[K, T]
 () -> B
 A -> B
 (A, B, …) -> C
@@ -34,7 +34,7 @@ type_expr ::= "unit"
                                                                (* qualified applied type *)
             | qualifier_chain name                            (* qualified type *)
             | "array" "[" type_expr "]"
-            | "dict" "[" "text" "," type_expr "]"
+            | "dict" "[" type_expr "," type_expr "]"
             | func_type
 
 func_type ::= type_atom "->" type_expr
@@ -45,7 +45,7 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | qualifier_chain name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name
             | "array" "[" type_expr "]"
-            | "dict" "[" "text" "," type_expr "]"
+            | "dict" "[" type_expr "," type_expr "]"
 type_list       ::= type_expr ("," type_expr)* ","?
 qualifier_chain ::= "::" qualifier_segment* | qualifier_segment+
 qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
@@ -59,7 +59,7 @@ at concrete type arguments, e.g. `Box[int]`, `Option[text]`,
 `Outcome[int, text]`, or nested `Box[Box[int]]`. A `qualifier_chain` may precede
 the complete type name before its brackets, as in `mylib::Box[int]` or
 `Geometry::Box[int]`; without brackets it forms a qualified type such as
-`mylib::Point` or `Geometry::Point`. The built-in `array[T]` and `dict[text, V]`
+`mylib::Point` or `Geometry::Point`. The built-in `array[T]` and `dict[K, V]`
 are the same applied-type form. See [Named scopes](scopes.md) for scope-path
 resolution.
 
@@ -68,9 +68,17 @@ An inline enum member may also be selected from an applied enum owner:
 `Member`. That selection is already concrete, so it cannot take another type
 application; use `Source::Member[T]` when applying the member directly.
 
-`dict[text, T]` keys are always `text`, and the key position must be spelled
-literally as `text`. There are no union types, no string-literal types, and no
-optional/nullable types; model alternatives and optionality with enums.
+`dict[K, T]` admits any key type `K` structurally. A *hashing operation* on
+a concrete key — indexing (`d[k]`), indexed assignment (`d[k] := v`), and
+`k in d` — requires `K` to be `Hashable`
+([Constraint blocks](generics.md#constraint-blocks)); every other operation
+(the type itself, empty `{}`, `for`, rendering, `==`, `copy`/`shallow-copy`)
+accepts any `K`, including a structurally non-hashable one such as `array`.
+A non-empty dict literal `{k: v, …}` is always `text`-keyed, and casting or
+parsing into a dict requires a `text` key
+(see [Casts and convertibility](#casts-and-convertibility)). There are no
+union types, no string-literal types, and no optional/nullable types; model
+alternatives and optionality with enums.
 
 User declarations may themselves be **generic** — `record`, `enum`, `type`
 aliases, and `def` functions can declare type parameters. See
@@ -151,7 +159,7 @@ enum MaybeText
   | Present(value: text)
 ```
 
-### `array[T]` and `dict[text, T]`
+### `array[T]` and `dict[K, T]`
 
 Homogeneous containers, and **mutable reference values**: binding, assignment,
 passing as an argument, and storing in a field never copy an array or dict —
@@ -180,7 +188,7 @@ See [Copying values](#copying-values) below for `copy`/`shallow-copy`.)
 
 #### Builtin-type methods
 
-`array[T]`, `dict[text, T]`, `text`, `json`, `int`, `decimal`, and `bool` can
+`array[T]`, `dict[K, T]`, `text`, `json`, `int`, `decimal`, and `bool` can
 have methods declared by any module. `std/prelude` re-exports the standard
 library receiver scopes, making their exported methods visible by default;
 `hiding` can remove an individual method route. With `--no-stdlib`, import a
@@ -774,7 +782,7 @@ the following breaks the chain:
 
 - an enum member that does not need another value of the same (or a
   mutually recursive) type — a **base case**, such as `Leaf` above;
-- an `array[T]`/`dict[text, T]` field whose element type is the recursive
+- an `array[T]`/`dict[K, T]` field whose element type is the recursive
   type — the empty array or dict is always a value, regardless of `T`, as
   with `Category.subcategories` above.
 
@@ -1068,7 +1076,7 @@ may raise `CastError`.
 
 | Target type | Permitted source types | Outcome |
 | ----------- | ---------------------- | ------- |
-| `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `array[E]`, `dict[text,V]`, record, enum, exception) | total for conformance — renders the value to its AgL-form text representation; a cyclic walk raises `CyclicValueError` |
+| `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `array[E]`, `dict[K,V]` for any `K`, record, enum, exception) | total for conformance — renders the value to its AgL-form text representation; a cyclic walk raises `CyclicValueError` |
 | `json` | any type with a JSON representation — see [Convertibility to `json`](#convertibility-to-json) | total for conformance — canonicalizes the value to `json`; a cyclic walk raises `CyclicValueError` |
 | `bool` | `bool` | total (no-op) |
 | `bool` | `text`, `json` | fallible — value must be a JSON boolean |
@@ -1081,7 +1089,7 @@ may raise `CastError`.
 | `array[E]` | identical `array[E]` | total (no-op) |
 | `array[E]` | `text` | fallible — strict JSON or AgL value syntax parse, then element validation |
 | `array[E]` | `json` | fallible — element validation |
-| `dict[text,V]` | identical `dict[text,V]` | total (no-op) |
+| `dict[K,V]` | identical `dict[K,V]` | total (no-op), for any key type `K` |
 | `dict[text,V]` | `text` | fallible — strict JSON or AgL value syntax parse, then value validation |
 | `dict[text,V]` | `json` | fallible — value validation |
 | record `R` | same record `R` | total (no-op) |
@@ -1112,7 +1120,9 @@ A type converts to `json` with `as json` iff no **non-data** type — `unit`, a
 function type, or the opaque host-created `Session` — is reachable from it:
 
 - the scalars `text`, `json`, `bool`, `int`, `decimal` always convert;
-- `array[E]`/`dict[text, V]` converts iff `E`/`V` does;
+- `array[E]` converts iff `E` does; `dict[K, V]` converts iff `K` is `text`
+  and `V` does — only a `text` key has a JSON representation, regardless of
+  whether `K` is otherwise non-data-reaching;
 - a record, enum, or exception converts iff no non-data type is reachable
   from its declaration, transitively through its fields (and, for an
   exception, through its `extends` ancestors and its catchable descendants,
@@ -1141,7 +1151,7 @@ Redundant casts to the same type are accepted with no warning and are no-ops;
 to its own type (`xs as array[int]`) is a true no-op: it yields the *same*
 value, not a copy, so a mutation through the result is visible through `xs`
 and vice versa. This differs from `as json` on a container, which builds an
-independent snapshot (see [`array[T]` and `dict[text, T]`](#arrayt-and-dicttext-t)
+independent snapshot (see [`array[T]` and `dict[K, T]`](#arrayt-and-dictk-t)
 above).
 
 A **fallible** cast may raise `CastError` if the value does not conform to

@@ -52,7 +52,6 @@ from agm.agl.syntax.types import (
     TextT,
     TypeExpr,
     UnitT,
-    render_type_expr,
 )
 
 # The receiver parameter every method declares first.
@@ -1027,7 +1026,7 @@ class AstBuilder(Transformer):
             receiver_type: TypeExpr = ArrayT(
                 elem=type_args[0], span=segment.span, node_id=self._next_id()
             )
-        elif segment.name == "dict" and len(type_args) == 2 and isinstance(type_args[0], TextT):
+        elif segment.name == "dict" and len(type_args) == 2:
             receiver_type = DictT(
                 key=type_args[0], value=type_args[1], span=segment.span, node_id=self._next_id()
             )
@@ -1255,13 +1254,7 @@ class AstBuilder(Transformer):
             raise syntax_error_from_meta(meta, "array[] takes exactly one type argument")
         if name == "dict":
             if len(type_args) == 2:
-                key_type = type_args[0]
-                if not isinstance(key_type, TextT):
-                    raise AglSyntaxError(
-                        f"dict keys are always text in AgL, got {render_type_expr(key_type)!r}.",
-                        span=key_type.span,
-                    )
-                return DictT(key=key_type, value=type_args[1], span=span, node_id=nid)
+                return DictT(key=type_args[0], value=type_args[1], span=span, node_id=nid)
             raise syntax_error_from_meta(meta, "dict[] takes exactly two type arguments")
         return AppliedT(name=name, args=type_args, span=span, node_id=nid)
 

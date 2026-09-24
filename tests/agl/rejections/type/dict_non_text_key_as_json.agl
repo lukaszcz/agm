@@ -1,0 +1,4 @@
+program def main() -> unit =
+  let d: dict[int, text] = {}
+  let j = d as json
+  print j

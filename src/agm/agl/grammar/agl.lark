@@ -361,7 +361,7 @@ type_ann: COLON type_expr
 // () -> C uses empty type_list; multiple parameters still require parentheses.
 //
 // applied_type: name[type_arg_list] — user-defined generic type application.
-//   Handles array[T], dict[text, V], and any user-defined generic like Pair[A, B].
+//   Handles array[T], dict[K, V], and any user-defined generic like Pair[A, B].
 // ---------------------------------------------------------------------------
 
 ?type_expr: LPAR type_list? RPAR THIN_ARROW type_expr       -> func_type

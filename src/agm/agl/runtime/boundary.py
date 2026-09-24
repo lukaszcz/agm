@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+import decimal
 import operator
 from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
 from dataclasses import dataclass
@@ -12,6 +13,11 @@ from typing import NoReturn, Protocol, Self, SupportsIndex, cast, overload
 from agm.agl.ir.ids import Location, NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
 from agm.agl.runtime.render import render_value
+from agm.agl.semantics.arithmetic import (
+    arithmetic_message,
+    checked_decimal,
+    signal_kind_for,
+)
 from agm.agl.semantics.exceptions import exception_message
 from agm.agl.semantics.types import terminal_name
 from agm.agl.semantics.values import (
@@ -119,6 +125,21 @@ def raise_key_error(exc_cls: AglExceptionClass, message: str, key: str) -> NoRet
 def raise_parse_error(exc_cls: AglExceptionClass, raw: str, message: str) -> NoReturn:
     """Raise an AgL parse-error-shaped exception carrying the unparsable *raw* input."""
     raise AglException(exc_cls(message=message, raw=raw))
+
+
+def raise_arithmetic_error(
+    exc_cls: AglExceptionClass, operation: str, exc: decimal.DecimalException
+) -> NoReturn:
+    """Raise an AgL ``ArithmeticError``-shaped exception for a companion's own decimal signal.
+
+    *operation* names the companion function (e.g. ``"pow"``, ``"round"``);
+    the message is chosen from *exc*'s signal kind, matching the message a
+    native AgL arithmetic failure with the same kind produces.
+    """
+    kind = signal_kind_for(exc)
+    raise AglException(
+        exc_cls(message=arithmetic_message(operation, kind), operation=operation)
+    ) from exc
 
 
 _FunctionEncoder = Callable[[IrClosureValue], object] | None
@@ -848,7 +869,9 @@ def decode_boundary_value(obj: object) -> Value:
     (``_agl_descriptor``), so decoding needs no registry lookup: it resolves
     a nominal purely from ``type(obj)``, which is why a value built at
     companion import time, on a worker thread, or retained past the call
-    that produced it all decode the same way.
+    that produced it all decode the same way. A ``Decimal`` outside the
+    pinned context's range is rejected here as a :class:`BoundaryViolation`,
+    like any other unrepresentable extern return value.
     """
     return _decode_boundary_value(obj, {})
 
@@ -862,7 +885,10 @@ def _decode_boundary_value(obj: object, memo: dict[int, Value]) -> Value:
     if isinstance(obj, int):
         return IntValue(obj)
     if isinstance(obj, Decimal):
-        return DecimalValue(obj)
+        try:
+            return DecimalValue(checked_decimal(obj))
+        except ValueError as exc:
+            raise BoundaryViolation(str(exc)) from exc
     if isinstance(obj, str):
         return TextValue(obj)
     if isinstance(obj, AglJson):

@@ -25,17 +25,22 @@ from agm.agl.semantics.types import DecimalType, IntType, JsonType, Type, is_sca
 __all__ = ["compile_coercion"]
 
 
-def compile_coercion(source: Type, target: Type) -> Coercion | None:
+def compile_coercion(
+    source: Type, target: Type, *, operation: str = "as decimal"
+) -> Coercion | None:
     """Compile an implicit coercion from *source* to *target*.
 
     Returns a ``Coercion`` descriptor to be wrapped in an ``IrCoerce`` node, or
     ``None`` when no coercion node is needed (identity, or no implicit
-    coercion exists for this pair).
+    coercion exists for this pair). *operation* labels an ``IntToDecimal``
+    coercion's out-of-range error: the caller passes the triggering
+    operator for a mixed binary-operator operand, or leaves the default for
+    a cast or another implicit non-operator context.
     """
     if source == target:
         return None
     if isinstance(target, DecimalType) and isinstance(source, IntType):
-        return IntToDecimal()
+        return IntToDecimal(operation=operation)
     if isinstance(target, JsonType) and is_scalar_json_shaped(source):
         return ToJson()
     return None

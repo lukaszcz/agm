@@ -1,0 +1,20 @@
+import std/json
+
+# Every decimal value at runtime is within the pinned context's range (Emax/
+# Emin 999999): decoding a number into a `decimal`-typed value -- here, an
+# `as decimal` cast on parsed JSON -- rejects an out-of-range number with the
+# ordinary CastError a malformed cast raises, so an out-of-range decimal can
+# never be bound. A `json`-typed value is exempt: it may hold a number of any
+# magnitude, and JSON rendering always prints it exactly, falling back to
+# compact JSON exponent notation (still exact) rather than expanding a huge
+# exponent into fixed-point digits.
+
+program def main() -> unit =
+  let huge: json = json::parse("1e1000000")
+  print huge
+
+  try
+    let _ = huge as decimal
+    print "unexpected cast"
+  catch CastError as e =>
+    print "cast caught: %{e.source-type} -> %{e.target-type}"

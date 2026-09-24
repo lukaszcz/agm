@@ -10,6 +10,8 @@ from typing import Protocol, cast
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.ir.ids import NominalId
+from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.scope import AglScopeError
@@ -18,6 +20,7 @@ from tests.agl.module_graph import resolve_and_check_inline_entry
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "packages" / "stdlib"
 _MATH_MODULE = ModuleId(("std", "math"))
+_ARITHMETIC_ERROR = NominalId(9_500_001)
 
 
 class _MathCompanion(Protocol):
@@ -33,7 +36,20 @@ class _MathCompanion(Protocol):
 
 
 def _math_companion() -> _MathCompanion:
+    """Load ``std/math`` through the same extern boundary as production."""
     registry = ExternRegistry()
+    registry.set_nominals(
+        {
+            _ARITHMETIC_ERROR: NominalDescriptor(
+                nominal=_ARITHMETIC_ERROR,
+                module_id=ModuleId(("std", "errors")),
+                scope_path=(),
+                declared_name="ArithmeticError",
+                kind=NominalKind.EXCEPTION,
+                fields=("message", "operation"),
+            ),
+        },
+    )
     module: ModuleType = registry.load_companion(_MATH_MODULE, _STDLIB_ROOT / "src" / "math.py")
     return cast(_MathCompanion, module)
 

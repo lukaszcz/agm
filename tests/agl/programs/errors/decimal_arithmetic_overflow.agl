@@ -1,0 +1,61 @@
+import std/json
+
+# Decimal arithmetic runs under a fixed context (28 significant digits,
+# Emax/Emin 999999). A result outside that range converts the trapped
+# `decimal` signal into a catchable ArithmeticError instead of crashing the
+# host, for every decimal operator: unary `-` and `+ - * /`. Boundary values
+# are constructed via `json::parse` because AgL decimal literals have no
+# exponent notation; every decimal value at runtime is already within the
+# pinned context's range (json::parse -> decimal rejects an out-of-range
+# number at the cast, before it can ever be bound), so `x`/`y`/`z` here are
+# always boundary-valid operands -- only the operator's own result overflows.
+
+def run(x: decimal, y: decimal, z: decimal) -> unit =
+  try
+    let _ = -z
+    print "neg ok"
+  catch ArithmeticError as e =>
+    print "neg caught: %{e.operation}"
+
+  try
+    let _ = x + y
+    print "add ok"
+  catch ArithmeticError as e =>
+    print "add caught: %{e.operation}"
+
+  try
+    let _ = x - y
+    print "sub ok"
+  catch ArithmeticError as e =>
+    print "sub caught: %{e.operation}"
+
+  try
+    let _ = x * y
+    print "mul ok"
+  catch ArithmeticError as e =>
+    print "mul caught: %{e.operation}"
+
+  try
+    let _ = x / y
+    print "div ok"
+  catch ArithmeticError as e =>
+    print "div caught: %{e.operation}"
+
+program def main(mode: int) -> unit =
+  case mode of
+    | 1 =>
+        run(
+          json::parse("9.9e999999") as decimal,
+          json::parse("9.9e999999") as decimal,
+          0.0,
+        )
+    | 2 =>
+        run(
+          json::parse("9.9e999999") as decimal,
+          json::parse("-9.9e999999") as decimal,
+          0.0,
+        )
+    | 3 =>
+        run(1.0, json::parse("1e-1000000") as decimal, 0.0)
+    | _ =>
+        run(2.5, 1.25, 1.5)

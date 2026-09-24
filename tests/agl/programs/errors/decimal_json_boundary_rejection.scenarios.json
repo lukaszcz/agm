@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "json_number_out_of_range_still_prints_but_decimal_cast_is_rejected",
+      "expect": {
+        "stdout": "1E+1000000\ncast caught: json -> decimal\n"
+      }
+    }
+  ]
+}

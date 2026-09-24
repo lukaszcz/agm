@@ -920,6 +920,35 @@ class TestDecimalSerialization:
         captured = capsys.readouterr()
         assert captured.out.strip() == "0.1"
 
+    def test_json_decimal_switches_to_exponent_form_above_the_fixed_point_bound(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import decimal
+
+        # `str` alone is not a bound: with exponent <= 0 it stays in plain
+        # form regardless of how far the coefficient's zeros are from the
+        # decimal point, so a huge exponent-0 coefficient like this one would
+        # otherwise force a huge fixed-point expansion. Exercised through the
+        # public `json` rendering path (`print` on a `json`-typed decimal),
+        # not the private `_decimal_text` helper.
+        rt = PipelineDriver()
+        result = run_inline_command(rt, "let x: json = (10.pow(20000) as decimal) as json\nprint x")
+        assert result.ok is True
+        text = capsys.readouterr().out.strip()
+        assert text == "1E+20000"
+        assert decimal.Decimal(text) == decimal.Decimal(10) ** 20000
+
+    def test_json_decimal_keeps_small_fixed_point_output_unchanged(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rt = PipelineDriver()
+        source = (
+            "let a: json = (1.50 as json)\nlet b: json = (100 as decimal) as json\nprint a\nprint b"
+        )
+        result = run_inline_command(rt, source)
+        assert result.ok is True
+        assert capsys.readouterr().out.splitlines() == ["1.50", "100"]
+
     def test_run_error_preserves_decimal_exactness(self) -> None:
         import decimal
 

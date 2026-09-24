@@ -1,0 +1,7 @@
+# Every decimal value at runtime is within the pinned context's range (Emax/
+# Emin 999999): a host-supplied program argument decoded into a
+# `decimal`-typed parameter rejects an out-of-range number at preflight,
+# before the program ever runs, exactly like any other malformed argument.
+
+program def main(rate: decimal) -> unit =
+  print rate

@@ -1,3 +1,4 @@
+import std/errors::ArithmeticError
 import std/errors::RangeError
 
 scope IntInternals

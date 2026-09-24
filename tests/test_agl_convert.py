@@ -509,6 +509,17 @@ class TestDecodeValueErrors:
         with pytest.raises(ValueError, match="decimal"):
             decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), "not a number")
 
+    def test_decimal_type_got_decimal_out_of_range(self) -> None:
+        # Also covers the int branch's shared range check (`checked_decimal`):
+        # both branches route through the same helper, so one overflow case
+        # exercises it without constructing a slow, huge Python int.
+        with pytest.raises(ValueError):
+            decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), Decimal("1e1000000"))
+
+    def test_decimal_type_got_non_finite_decimal(self) -> None:
+        with pytest.raises(ValueError):
+            decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), Decimal("Infinity"))
+
     def test_bool_type_got_int(self) -> None:
         with pytest.raises(ValueError, match="bool"):
             decode_value(ScalarDecode(kind=ScalarKind.BOOL), 1)

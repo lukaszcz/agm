@@ -5,21 +5,23 @@ runtime ``Value`` and returns the converted ``Value``.  On an expected fallible
 failure it raises the module-private ``AglCastConversion`` sentinel (carrying
 the message + user-facing source/target labels + rendered raw value); the
 caller wraps it into the appropriate ``CastError`` / ``ValueParseError`` /
-``BoolValue(False)``.
+``BoolValue(False)``.  ``WIDEN_INT_TO_DECIMAL`` instead raises
+``AglArithmeticSignal`` when the int is too large for the pinned decimal
+context (see ``semantics.arithmetic.int_to_decimal``); the caller converts it
+to the catchable ``ArithmeticError``.
 
 It reuses the existing runtime leaf primitives (rendering, JSON serialization,
 the host text/value-syntax decode boundary, JSON-Schema validation, and the
 typeless ``decode_value`` decode walk) rather than reimplementing them.
 
-Imports: stdlib + ``agm.agl.semantics.values`` + ``agm.agl.ir``
-contracts + ``agm.agl.runtime`` leaf helpers (including the host
-text/value-syntax decode boundary).  No ``syntax`` / ``scope`` / ``typecheck``
-imports are permitted here.
+Imports: stdlib + ``agm.agl.semantics.values`` + ``agm.agl.semantics.arithmetic``
++ ``agm.agl.ir`` contracts + ``agm.agl.runtime`` leaf helpers (including the
+host text/value-syntax decode boundary).  No ``syntax`` / ``scope`` /
+``typecheck`` imports are permitted here.
 """
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import assert_never
 
 from agm.agl.ir.contracts import (
@@ -36,6 +38,7 @@ from agm.agl.runtime.convert import (
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import encode_value
 from agm.agl.runtime.value_decode import host_text_to_json
+from agm.agl.semantics.arithmetic import int_to_decimal
 from agm.agl.semantics.values import (
     DecimalValue,
     IntValue,
@@ -72,7 +75,7 @@ def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescrip
                 raise AssertionError(  # pragma: no cover
                     f"WIDEN_INT_TO_DECIMAL expected IntValue, got {type(value).__name__}"
                 )
-            return DecimalValue(Decimal(value.value))
+            return DecimalValue(int_to_decimal(value.value))
         case ConversionStrategy.RENDER_TO_TEXT:
             return TextValue(render_value(value, descriptors))
         case ConversionStrategy.TO_JSON:

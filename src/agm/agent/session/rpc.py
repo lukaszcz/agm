@@ -29,6 +29,7 @@ from agm.agent.session.protocol import (
 from agm.agent.spec import AgentPi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.process import CapturedOutput, kill_process_group
+from agm.util.decimal import decimal_in_range
 from agm.util.unicode import loads_json
 
 _RpcOperation = Literal[
@@ -784,7 +785,7 @@ def _stats_from_response(response: dict[str, object]) -> SessionStats:
         or output_tokens < 0
     ):
         raise _malformed_stats()
-    cost = _finite_decimal(data.get("cost"))
+    cost = _bounded_decimal(data.get("cost"))
     if cost is None or cost < 0:
         raise _malformed_stats()
     context_usage = data.get("contextUsage")
@@ -796,7 +797,7 @@ def _stats_from_response(response: dict[str, object]) -> SessionStats:
         if percent is None:
             context_percent = _CONTEXT_PERCENT_UNAVAILABLE
         else:
-            parsed_percent = _finite_decimal(percent)
+            parsed_percent = _bounded_decimal(percent)
             if parsed_percent is None or parsed_percent < 0 or parsed_percent > 100:
                 raise _malformed_stats()
             context_percent = parsed_percent
@@ -805,14 +806,20 @@ def _stats_from_response(response: dict[str, object]) -> SessionStats:
     return SessionStats(input_tokens, output_tokens, cost, context_percent)
 
 
-def _finite_decimal(value: object) -> Decimal | None:
+def _bounded_decimal(value: object) -> Decimal | None:
+    """Parse *value* into a decimal within the pinned AgL range, or ``None``.
+
+    Malformed, non-finite, and out-of-range values are all treated alike by
+    the caller: as malformed session stats, since a runtime ``DecimalValue``
+    built from them must satisfy the same invariant as any other.
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float, Decimal, str)):
         return None
     try:
         decimal = Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
-    return decimal if decimal.is_finite() else None
+    return decimal if decimal_in_range(decimal) else None
 
 
 def _malformed_stats() -> _RpcProtocolError:

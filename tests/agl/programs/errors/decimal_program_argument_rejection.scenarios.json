@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "in_range_argument_runs_normally",
+      "params": {"rate": "1.5"},
+      "expect": {
+        "stdout": "1.5\n"
+      }
+    },
+    {
+      "name": "out_of_range_argument_is_rejected_at_preflight",
+      "params": {"rate": "1e1000000"},
+      "expect": {
+        "host_error": {}
+      }
+    }
+  ]
+}

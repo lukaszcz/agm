@@ -577,8 +577,8 @@ class TestCoerceIntToDecimal:
         assert result == {"d": DecimalValue(decimal.Decimal(5))}
 
     def test_int_to_decimal_large_exact(self) -> None:
-        """Converting a large integer to Decimal must be exact (no float loss)."""
-        big = 10**30 + 7
+        """Converting an in-range int to decimal is exact, even past 28 significant digits."""
+        big = 10**30 + 7  # 31 significant digits: creation never rounds, only checks range.
         sym, desc = _let_sym(0, "big")
         result = _run(
             (
@@ -609,6 +609,30 @@ class TestCoerceIntToDecimal:
         )
         with pytest.raises(InvalidIrError):
             IrInterpreter(prog).run()
+
+    def test_int_to_decimal_overflow_raises_arithmetic_error(self) -> None:
+        """IntToDecimal outside the pinned context's range raises ArithmeticError.
+
+        A real out-of-range int (``10**1_000_000``, well past Emax 999999) --
+        the bit-length range check rejects it without ever constructing a
+        ``Decimal``, so this stays cheap despite the huge magnitude.
+        """
+        from agm.agl.semantics.exceptions import AglRaise
+
+        sym, desc = _let_sym(0, "d")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrCoerce(_LOC, IrConstInt(_LOC, 10**1_000_000), IntToDecimal()),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(AglRaise) as exc:
+            IrInterpreter(prog).run()
+        assert exc.value.exc.nominal == NominalId(require_reserved_nominal_id("ArithmeticError"))
 
 
 # ---------------------------------------------------------------------------
@@ -916,6 +940,31 @@ class TestDefensiveErrors:
         )
         with pytest.raises(InvalidIrError, match="IrUnary NEG: expected numeric"):
             IrInterpreter(prog).run()
+
+    def test_ir_unary_neg_decimal_is_exact_past_28_digits(self) -> None:
+        """IrUnary NEG on a decimal negates exactly (``copy_negate``), never
+        rounding to the ambient context's 28-digit precision -- a
+        31-significant-digit operand stays exact rather than being clipped."""
+        from agm.agl.ir import IrUnary, NumericKind, UnaryOp
+
+        big = decimal.Decimal(10**30 + 7)
+        sym, desc = _let_sym(0, "n")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrUnary(
+                        _LOC,
+                        op=UnaryOp.NEG,
+                        kind=NumericKind.DECIMAL,
+                        value=IrConstDecimal(_LOC, big),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result["n"] == DecimalValue(big.copy_negate())
 
     def test_ir_variant_is_on_non_enum_raises(self) -> None:
         """IrNominalIs on a non-enum value raises InvalidIrError (defensive)."""

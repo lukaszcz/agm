@@ -1370,23 +1370,30 @@ class _Lowerer:
         source: Type,
         expected: Type,
         location: Location,
+        *,
+        operation: str = "as decimal",
     ) -> IrExpr:
-        """Wrap pre-lowered IR in ``IrCoerce`` when ``source`` needs ``expected``."""
-        op = compile_coercion(source, expected)
+        """Wrap pre-lowered IR in ``IrCoerce`` when ``source`` needs ``expected``.
+
+        *operation* labels an int-to-decimal widening's out-of-range error;
+        see ``compile_coercion``.
+        """
+        op = compile_coercion(source, expected, operation=operation)
         if op is None:
             return ir
         return IrCoerce(location=location, value=ir, operation=op)
 
-    def lower_coerced(self, node: Expr, expected: Type) -> IrExpr:
+    def lower_coerced(self, node: Expr, expected: Type, *, operation: str = "as decimal") -> IrExpr:
         """Lower *node* as an expression, then wrap in ``IrCoerce`` if needed.
 
         The node's own checked type is retrieved via ``node_types``; a coercion
         from that type to *expected* is compiled and, if non-``None``, wraps the
-        result in ``IrCoerce``.
+        result in ``IrCoerce``. *operation* labels an int-to-decimal widening's
+        out-of-range error; see ``compile_coercion``.
         """
         ir = self.lower_expr(node)
         own_type = self._node_type(node.node_id)
-        return self._coerce_ir(ir, own_type, expected, self._loc(node.span))
+        return self._coerce_ir(ir, own_type, expected, self._loc(node.span), operation=operation)
 
     def lower_expr(self, node: Expr) -> IrExpr:
         """Lower an AST expression node to its own-typed IR (no outer coercion)."""
@@ -2193,9 +2200,18 @@ class _Lowerer:
             return self._lower_ordering(op, lhs, rhs, loc), BoolType()
         assert_never(op)  # pragma: no cover
 
-    def _coerce_operand(self, operand: _Operand, expected: Type) -> IrExpr:
-        """Wrap a lowered operand in the coercion its checked type needs for *expected*."""
-        return self._coerce_ir(operand.ir, operand.type, expected, operand.location)
+    def _coerce_operand(
+        self, operand: _Operand, expected: Type, *, operation: str = "as decimal"
+    ) -> IrExpr:
+        """Wrap a lowered operand in the coercion its checked type needs for *expected*.
+
+        *operation* labels an int-to-decimal widening's out-of-range error; a
+        binary operator passes its own operator string so a mixed-numeric
+        operand's overflow reads as the operator, not "as decimal".
+        """
+        return self._coerce_ir(
+            operand.ir, operand.type, expected, operand.location, operation=operation
+        )
 
     def _lower_arith(
         self, op: BinOp, lhs: _Operand, rhs: _Operand, loc: Location
@@ -2207,12 +2223,13 @@ class _Lowerer:
         else:
             common = IntType()
             kind = ArithKind.INT
+        operation = _ARITH_OP_MAP[op].value
         arith = IrArith(
             location=loc,
             op=_ARITH_OP_MAP[op],
             kind=kind,
-            lhs=self._coerce_operand(lhs, common),
-            rhs=self._coerce_operand(rhs, common),
+            lhs=self._coerce_operand(lhs, common, operation=operation),
+            rhs=self._coerce_operand(rhs, common, operation=operation),
         )
         return arith, common
 
@@ -2223,8 +2240,8 @@ class _Lowerer:
             location=loc,
             op=ArithOp.DIV,
             kind=ArithKind.DECIMAL,
-            lhs=self._coerce_operand(lhs, common),
-            rhs=self._coerce_operand(rhs, common),
+            lhs=self._coerce_operand(lhs, common, operation=ArithOp.DIV.value),
+            rhs=self._coerce_operand(rhs, common, operation=ArithOp.DIV.value),
         )
 
     def _lower_equality(self, op: BinOp, lhs: _Operand, rhs: _Operand, loc: Location) -> IrCompare:
@@ -2233,12 +2250,13 @@ class _Lowerer:
             common: Type = DecimalType()
         else:
             common = lhs.type
+        cmp_op = CmpOp.EQ if op is BinOp.EQ else CmpOp.NEQ
         return IrCompare(
             location=loc,
-            op=CmpOp.EQ if op is BinOp.EQ else CmpOp.NEQ,
+            op=cmp_op,
             kind=CompareKind.STRUCTURAL,
-            lhs=self._coerce_operand(lhs, common),
-            rhs=self._coerce_operand(rhs, common),
+            lhs=self._coerce_operand(lhs, common, operation=cmp_op.value),
+            rhs=self._coerce_operand(rhs, common, operation=cmp_op.value),
         )
 
     def _lower_ordering(self, op: BinOp, lhs: _Operand, rhs: _Operand, loc: Location) -> IrCompare:
@@ -2252,12 +2270,13 @@ class _Lowerer:
         else:
             common = IntType()
             kind = CompareKind.INT
+        operation = _CMP_OP_MAP[op].value
         return IrCompare(
             location=loc,
             op=_CMP_OP_MAP[op],
             kind=kind,
-            lhs=self._coerce_operand(lhs, common),
-            rhs=self._coerce_operand(rhs, common),
+            lhs=self._coerce_operand(lhs, common, operation=operation),
+            rhs=self._coerce_operand(rhs, common, operation=operation),
         )
 
     def _lower_in_op(self, item: _Operand, container: _Operand, loc: Location) -> IrContains:

@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "cast_as_question_implicit_and_mixed_arithmetic_all_reject_the_out_of_range_int",
+      "expect": {
+        "stdout": "cast caught: as decimal\nas? result: true\nimplicit caught: as decimal\nmixed caught: +\n"
+      }
+    }
+  ]
+}

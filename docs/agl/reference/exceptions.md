@@ -450,10 +450,15 @@ scrutinee: json        # structural JSON encoding of the rejected value
 
 ### `ArithmeticError`
 
-Raised by division by zero.
+Raised by decimal arithmetic or int-to-decimal conversion that overflows the
+fixed decimal context's range, divides by zero, or is otherwise invalid
+([Numbers: int and decimal](types.md#numbers-int-and-decimal)), and by a
+`std/math` decimal function whose own result does the same — `round`, for
+instance, when its result would need more than 28 digits.
 
 ```text
-operation: text    # the operator, e.g. "/"
+operation: text    # the operator, conversion, or std/math function name,
+                    # e.g. "/", "as decimal", or "pow"
 ```
 
 ### `TypeError`
@@ -648,7 +653,7 @@ how equality and tracing treat one.
 | Negative `int.pow` exponent, negative `decimal.sqrt` receiver, negative `decimal.pow` exponent on a zero base, or non-positive range `for` step (`by k` with `k ≤ 0`) | `RangeError` |
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
-| Division by zero | `ArithmeticError` |
+| Division by zero, a decimal result outside the fixed context's range, or an `int`-to-`decimal` conversion outside that range | `ArithmeticError` |
 | Engine-setting write the host rejects (unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `std/value::parse` — input is neither strict JSON nor an AgL value-syntax literal, or does not conform to the target type | `ValueParseError` |

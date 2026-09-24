@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 from decimal import Decimal
 
 import pytest
@@ -86,6 +87,22 @@ def test_text_literal_surface_constants_define_escape_directions() -> None:
 def test_scalar_text_spells_a_decimal_without_scientific_notation() -> None:
     assert scalar_text(Decimal("1.50")) == "1.5"
     assert scalar_text(Decimal("1E+2")) == "100"
+
+
+def test_scalar_text_spells_more_than_28_significant_digits_exactly() -> None:
+    # A decimal is range-checked, not precision-checked, at creation, so it
+    # can carry more digits than the pinned arithmetic context's own
+    # precision. Rendering must still be exact -- not context-rounded.
+    value = Decimal("1.2345678901234567890123456789012345")
+    assert scalar_text(value) == "1.2345678901234567890123456789012345"
+
+
+def test_scalar_text_ignores_the_ambient_context() -> None:
+    # Rendering never consults the ambient decimal context (unlike
+    # Decimal.normalize, which would round under a narrower one).
+    value = Decimal("1.2345678901234567890123456789012345")
+    with decimal.localcontext(decimal.Context(prec=5)):
+        assert scalar_text(value) == "1.2345678901234567890123456789012345"
 
 
 def test_scalar_text_spells_ints_and_bools_the_way_agl_does() -> None:

@@ -113,7 +113,7 @@ def test_div_by_zero_raises() -> None:
     source = "let x: decimal = 1 / 0\n()"
     ir_exc = evaluate_ir_raises(source)
     assert ir_exc.type_name == "ArithmeticError"
-    assert ir_exc.fields["message"] == "Division by zero"
+    assert ir_exc.fields["operation"] == "/"
 
 
 # ---------------------------------------------------------------------------
@@ -378,18 +378,54 @@ def test_unary_neg_decimal() -> None:
     assert ir["x"] == DecimalValue(decimal.Decimal("-3.14"))
 
 
+def test_unary_neg_decimal_is_exact_for_a_31_digit_literal() -> None:
+    """Negation is exact (`copy_negate`), never rounded to 28 significant
+    digits: a 31-digit literal negates without losing precision, and
+    `a == -b` holds when `b` is that negation."""
+    source = "let a: decimal = 123456789012345678901234567890.1\nlet b = -a\nlet same = a == -b\n()"
+    ir = evaluate_ir(source)
+    assert ir["b"] == DecimalValue(decimal.Decimal("-123456789012345678901234567890.1"))
+    assert ir["same"] == BoolValue(True)
+
+
 # ---------------------------------------------------------------------------
 # Defensive coverage: arith.py invalid kind branches
 # ---------------------------------------------------------------------------
 
 
 def test_arith_div_by_zero_raises_sentinel() -> None:
-    """div() raises AglDivisionByZero on zero divisor."""
-    from agm.agl.eval.arith import AglDivisionByZero, div
-    from agm.agl.semantics.values import IntValue
+    """div() raises decimal.DivisionByZero on a zero divisor (caught and
+    classified by the interpreter, not by arith.py itself)."""
+    from agm.agl.eval.arith import div
+    from agm.agl.semantics.arithmetic import AGL_DECIMAL_CONTEXT
 
-    with pytest.raises(AglDivisionByZero):
-        div(IntValue(5), IntValue(0))
+    with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+        with pytest.raises(decimal.DivisionByZero):
+            div(DecimalValue(decimal.Decimal(5)), DecimalValue(decimal.Decimal(0)))
+
+
+def test_arith_zero_by_zero_is_a_division_by_zero() -> None:
+    """``0 / 0`` is classified as a division by zero, not an invalid operation."""
+    from agm.agl.eval.arith import div
+    from agm.agl.semantics.arithmetic import AGL_DECIMAL_CONTEXT
+
+    with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+        with pytest.raises(decimal.DivisionByZero):
+            div(DecimalValue(decimal.Decimal(0)), DecimalValue(decimal.Decimal(0)))
+
+
+def test_mixed_arith_out_of_range_int_operand_labels_the_operator() -> None:
+    """A binary operator's own int operand, when out of range, is widened
+    (and range-checked) by the lowerer's compile-time ``IntToDecimal``
+    coercion and labelled with the operator itself, not "as decimal" (the
+    ``as``/``as?`` cast's own label)."""
+    # 2.pow(3400000) is well within `int`'s unbounded range but, past ~4300
+    # digits, outside the pinned decimal range -- rejected cheaply by the
+    # bit-length check without ever constructing a `Decimal` from it.
+    source = "let n = 2.pow(3400000)\nlet x = n + 1.0\n()\n"
+    ir_exc = evaluate_ir_raises(source)
+    assert ir_exc.type_name == "ArithmeticError"
+    assert ir_exc.fields["operation"] == "+"
 
 
 def test_logical_not_requires_bool() -> None:

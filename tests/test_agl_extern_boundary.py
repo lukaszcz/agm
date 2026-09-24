@@ -339,6 +339,29 @@ def test_array_view_index_getitem_returns_the_encoded_element() -> None:
     assert view[0] == 3
 
 
+def test_array_view_index_with_an_out_of_range_int_probe_never_equals_a_decimal() -> None:
+    """A companion can call ``.index()`` with a Python int of arbitrary
+    magnitude, uncoerced by the lowerer's own range check: an out-of-range
+    int can never equal any in-range decimal, so the search reports "not
+    found" rather than constructing a huge ``Decimal`` to compare against."""
+    huge = 10**1_000_000
+    view = AglArrayView(ArrayValue([DecimalValue(Decimal("1.5"))]), _NO_DESCRIPTORS)
+
+    with pytest.raises(ValueError):
+        view.index(huge)
+
+
+def test_array_view_index_with_an_out_of_range_int_element_never_equals_a_decimal_probe() -> None:
+    """Symmetric to the int-probe case: a live view can also hold an
+    out-of-range int element (written through by a companion), which an
+    in-range decimal probe can never equal."""
+    huge = 10**1_000_000
+    view = AglArrayView(ArrayValue([IntValue(huge)]), _NO_DESCRIPTORS)
+
+    with pytest.raises(ValueError):
+        view.index(Decimal("1.5"))
+
+
 def test_array_view_slice_setitem_replaces_a_range_of_elements() -> None:
     array_value = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
     view = AglArrayView(array_value, _NO_DESCRIPTORS)
@@ -715,6 +738,17 @@ def test_int_value_round_trips_through_the_boundary() -> None:
 def test_decimal_value_round_trips_through_the_boundary() -> None:
     assert encode_boundary_value(DecimalValue(Decimal("1.5")), _NO_DESCRIPTORS) == Decimal("1.5")
     assert decode_boundary_value(Decimal("1.5")) == DecimalValue(Decimal("1.5"))
+
+
+def test_decode_boundary_value_rejects_a_decimal_out_of_the_pinned_context_range() -> None:
+    with pytest.raises(BoundaryViolation):
+        decode_boundary_value(Decimal("1e1000000"))
+
+
+@pytest.mark.parametrize("obj", [Decimal("Infinity"), Decimal("-Infinity"), Decimal("NaN")])
+def test_decode_boundary_value_rejects_a_non_finite_decimal(obj: Decimal) -> None:
+    with pytest.raises(BoundaryViolation):
+        decode_boundary_value(obj)
 
 
 def test_text_value_round_trips_through_the_boundary() -> None:

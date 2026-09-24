@@ -704,7 +704,9 @@ have (or directedly coerce to) that key type.
 1. Both operands must be numeric. `+ - *` on two `int` values yield `int`; if
    either is `decimal`, the result is `decimal`.
 2. `/` **always yields `decimal`**, even for two `int` operands.
-3. Division by zero raises `ArithmeticError` at runtime.
+3. Division by zero raises `ArithmeticError` at runtime, as does a `decimal`
+   result outside the fixed decimal context's range
+   ([Numbers: int and decimal](types.md#numbers-int-and-decimal)).
 4. Unary `-` negates an `int` or `decimal`.
 
 Text is concatenated with the prelude operator `++`, not `+`; see
@@ -726,8 +728,11 @@ EXPR as? T    # optional cast: Option[T], never raises
 without raising, yielding `Some(value)` carrying the converted value on
 success and `None` on failure — so a successful test also supplies the value.
 `as text` and `as json` raise `CyclicValueError` when conversion walks a
-reference cycle; their `as?` forms yield `None` instead. Casting from an enum
-to one of its member records is an identity downcast;
+reference cycle; their `as?` forms yield `None` instead. `as decimal` on an
+`int` outside the fixed decimal context's range
+([Numbers: int and decimal](types.md#numbers-int-and-decimal)) raises
+`ArithmeticError` the same way, and `as? decimal` yields `None` instead.
+Casting from an enum to one of its member records is an identity downcast;
 casting a member record to a containing enum is an identity upcast. Enums can
 be cast when they share constructors; the runtime constructor must belong to
 the target enum. An exception value follows the same identity-cast shape over

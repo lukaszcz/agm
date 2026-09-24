@@ -394,9 +394,10 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
         rpc._require_not_cancelled({"data": {"cancelled": True}}, "fork")
     with pytest.raises(rpc._RpcProtocolError):
         rpc._validate_response({"type": "response", "id": "", "command": "x", "success": True})
-    assert rpc._finite_decimal("1.5") is not None
-    assert rpc._finite_decimal(True) is None
-    assert rpc._finite_decimal("NaN") is None
+    assert rpc._bounded_decimal("1.5") is not None
+    assert rpc._bounded_decimal(True) is None
+    assert rpc._bounded_decimal("NaN") is None
+    assert rpc._bounded_decimal("1e1000000") is None
 
     class Process:
         stdin = None
@@ -504,7 +505,7 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
         "contextUsage": empty_context,
     }
     assert rpc._stats_from_response({"data": missing_percent}).context_percent == Decimal("0")
-    assert rpc._finite_decimal("invalid") is None
+    assert rpc._bounded_decimal("invalid") is None
 
     class RunningProcess:
         stdin = cast(io.BufferedWriter, io.BytesIO())

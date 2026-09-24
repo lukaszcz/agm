@@ -63,6 +63,7 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
+from agm.util.decimal import strip_trailing_zeros
 
 
 class AglNonDataValue(Exception):
@@ -390,12 +391,38 @@ def _emit(obj: object, *, indent: int | None, level: int) -> str:
     return json.dumps(obj, ensure_ascii=False)  # pragma: no cover
 
 
+#: Above this many characters, a decimal's exact fixed-point JSON-number text
+#: risks exhausting memory. ``str`` alone is not a bound: it only switches to
+#: scientific notation for a positive exponent or an adjusted exponent below
+#: -6, so a mid-range value -- positive exponent, but not so negative that
+#: ``str`` would already switch -- still renders fixed-point at whatever
+#: length its digits and exponent demand. A ``json``-typed value (exempt from
+#: the pinned range, and so of any magnitude) or a decimal near the pinned
+#: context's own Emax/Etiny can force such an expansion of well over a
+#: million characters.
+_MAX_FIXED_POINT_DIGITS = 10_000
+
+
 def _decimal_text(d: Decimal) -> str:
-    """Exact unquoted numeric text for a ``Decimal`` (no float round trip)."""
-    # ``str`` preserves the Decimal's exact value but can use scientific
-    # notation (e.g. ``1E+2``); ``format(d, "f")`` forces plain fixed-point
-    # while remaining exact.
-    return format(d, "f")
+    """Exact unquoted JSON-number text for a ``Decimal`` (no float round trip).
+
+    A non-finite value (``Infinity``/``-Infinity``/``NaN`` -- reachable only
+    through a ``json``-typed value, since every other decimal creation site
+    rejects one) renders as ``str``/``format`` already does for it, matching
+    what a bare ``print`` or a failed cast's own rendering of the raw value
+    shows. A finite value renders as plain fixed-point (``format(d, "f")``)
+    whenever its length stays bounded; above :data:`_MAX_FIXED_POINT_DIGITS`,
+    the minimal-coefficient scientific form (``str`` on the trailing-zero-
+    stripped value, e.g. ``"1E+40"``) is emitted instead -- still exact, and
+    still a valid JSON number (``int exp``).
+    """
+    if not d.is_finite():
+        return format(d, "f")
+    _, digits, exponent = d.as_tuple()
+    assert isinstance(exponent, int)  # d is finite here
+    if len(digits) + abs(exponent) <= _MAX_FIXED_POINT_DIGITS:
+        return format(d, "f")
+    return str(strip_trailing_zeros(d))
 
 
 def _emit_array(obj: list[object], *, indent: int | None, level: int) -> str:

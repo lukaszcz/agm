@@ -295,6 +295,10 @@ class TestLiterals:
         d = first(parse("3.14"))
         assert isinstance(d, DecimalLit) and d.value == decimal.Decimal("3.14")
 
+    def test_decimal_out_of_range_is_a_compile_time_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse("1" + "0" * 1_000_000 + ".0")
+
     def test_bool_true(self) -> None:
         b = first(parse("true"))
         assert isinstance(b, BoolLit) and b.value is True
@@ -3086,6 +3090,10 @@ class TestPatterns:
         assert isinstance(pat.literal, literal_type)
         if not isinstance(pat.literal, NullLit):
             assert pat.literal.value == value
+
+    def test_decimal_pattern_literal_out_of_range_is_a_compile_time_error(self) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(f"case x of | {'1' + '0' * 1_000_000}.0 => a")
 
     def test_as_patterns_wrap_complete_patterns_and_chain(self) -> None:
         expr = first(parse("case r of | Rect(w, h) as rect as shape => shape"))

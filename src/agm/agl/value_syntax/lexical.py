@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Final
 
 from agm.agl.value_syntax.errors import ValueSyntaxError
+from agm.util.decimal import strip_trailing_zeros
 from agm.util.ident import IDENT_STOP, is_identifier_start
 from agm.util.interp import INTERP_TRIGGER
 
@@ -64,12 +65,15 @@ def scalar_text(value: int | decimal.Decimal | bool) -> str:
     """Return an int, decimal, or bool as its plain (unquoted) AgL spelling.
 
     A decimal drops trailing zeros without falling back to scientific
-    notation, which AgL surface syntax does not spell.
+    notation, which AgL surface syntax does not spell. Rendering is
+    context-free (:func:`~agm.util.decimal.strip_trailing_zeros`), so it
+    never rounds and never raises, however many significant digits *value*
+    carries.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, decimal.Decimal):
-        return format(value.normalize(), "f")
+        return format(strip_trailing_zeros(value), "f")
     return str(value)
 
 

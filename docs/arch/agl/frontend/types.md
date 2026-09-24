@@ -34,7 +34,7 @@ Checked artifacts hold concrete types and no solver state; that closure invarian
 
 ## Code Entry Points
 
-- `src/agm/agl/semantics/` — values, semantic types, `TypeTable`, whole-table analyses, exceptions, text literals, cycle guards, copying, the pure argument zone-binder (`arguments.py`).
+- `src/agm/agl/semantics/` — values, semantic types, `TypeTable`, whole-table analyses, exceptions, text literals, cycle guards, copying, the pure argument zone-binder (`arguments.py`), arithmetic-signal classification (`arithmetic.py`, built on the pinned decimal context and range invariant in `src/agm/util/decimal.py`).
 - `src/agm/agl/typecheck/` — the checker, builtin typing rules and contracts, the inference solver, function-header inference, the argument-binding wrapper, declaration validation.
 - `src/agm/agl/type_schema.py` — compile-time JSON schema, decode, encode-plan, and target type-tree derivation.
 - Tests: `tests/test_agl_typecheck*.py`, `test_agl_types.py`, `test_agl_type_table.py`, `test_agl_inference.py`, `test_agl_arguments.py`, `test_agl_semantics_arguments.py`.

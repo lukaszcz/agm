@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SymbolId
+from agm.util.decimal import int_in_range
 
 # ---------------------------------------------------------------------------
 # JSON-tree comparison helpers
@@ -515,11 +516,22 @@ def value_equal(left: Value, right: Value) -> bool:
 
     ``int`` and ``decimal`` widen when compared directly. Structural equality
     remains responsible for recursive positions, where values retain their
-    exact element types and therefore do not widen.
+    exact element types and therefore do not widen. AgL source never reaches
+    this branch with an out-of-range int operand -- the lowerer's
+    ``IntToDecimal`` coercion widens (and range-checks) any mixed int/decimal
+    equality operand at compile time -- but an FFI companion can still
+    produce an ``IntValue`` of arbitrary magnitude uncoerced (e.g. indexing a
+    live array view), so an out-of-range int is decided ``False`` via the
+    cheap ``int_in_range`` check rather than constructing ``Decimal(int)`` for
+    a magnitude that can never equal any valid decimal anyway.
     """
     if isinstance(left, IntValue) and isinstance(right, DecimalValue):
+        if not int_in_range(left.value):
+            return False
         return decimal.Decimal(left.value) == right.value
     if isinstance(left, DecimalValue) and isinstance(right, IntValue):
+        if not int_in_range(right.value):
+            return False
         return left.value == decimal.Decimal(right.value)
     return values_equal(left, right)
 

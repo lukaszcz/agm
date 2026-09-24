@@ -5,6 +5,13 @@ This module is the single source of truth for operator semantics.
 
 IMPORTANT: Only imports from stdlib, agm.agl.semantics.values, and agm.agl.ir.operations.
 No syntax, scope, or typecheck imports are permitted here.
+
+Every DECIMAL-kind operand here is already a ``DecimalValue``: mixed int/decimal
+operands are widened at compile time by the lowerer's ``IntToDecimal``
+coercion (``lower.lowerer``), labelled with the triggering operator, so this
+module never widens an int itself. A trapped ``decimal.DecimalException``
+(overflow, division by zero, invalid operation) propagates uncaught to the
+caller, which classifies and labels it (``eval.ir_interpreter``).
 """
 
 from __future__ import annotations
@@ -25,7 +32,6 @@ from agm.agl.semantics.values import (
 )
 
 __all__ = [
-    "AglDivisionByZero",
     "add",
     "contains",
     "div",
@@ -36,19 +42,6 @@ __all__ = [
     "sub",
     "value_eq",
 ]
-
-
-class AglDivisionByZero(Exception):
-    """Sentinel raised by div() on a zero divisor.
-
-    Each evaluator catches this and wraps it into an ``AglRaise``.
-    """
-
-
-def _to_decimal(value: IntValue | DecimalValue) -> decimal.Decimal:
-    if isinstance(value, IntValue):
-        return decimal.Decimal(value.value)
-    return value.value
 
 
 def value_eq(left: Value, right: Value) -> bool:
@@ -76,15 +69,9 @@ def _cmp(op: CmpOp, lv: _Ordered, rv: _Ordered) -> bool:
 
 
 def order(op: CmpOp, left: Value, right: Value) -> bool:
-    """Ordering comparison (LT/LE/GT/GE) with int↔decimal widening."""
+    """Ordering comparison (LT/LE/GT/GE). Operands are already same-typed."""
     if op not in (CmpOp.LT, CmpOp.LE, CmpOp.GT, CmpOp.GE):
         raise AssertionError(f"order: non-ordering op {op!r}")
-    # Widen int for mixed numeric ordering.
-    if isinstance(left, IntValue) and isinstance(right, DecimalValue):
-        left = DecimalValue(decimal.Decimal(left.value))
-    elif isinstance(left, DecimalValue) and isinstance(right, IntValue):
-        right = DecimalValue(decimal.Decimal(right.value))
-
     if isinstance(left, IntValue) and isinstance(right, IntValue):
         return _cmp(op, left.value, right.value)
     if isinstance(left, DecimalValue) and isinstance(right, DecimalValue):
@@ -118,7 +105,7 @@ def contains(kind: ContainsKind, item: Value, container: Value) -> bool:
 
 
 def add(kind: ArithKind, left: Value, right: Value) -> Value:
-    """Addition: INT or DECIMAL (with widening)."""
+    """Addition: INT or DECIMAL."""
     match kind:
         case ArithKind.INT:
             if not isinstance(left, IntValue) or not isinstance(right, IntValue):
@@ -128,20 +115,18 @@ def add(kind: ArithKind, left: Value, right: Value) -> Value:
                 )
             return IntValue(left.value + right.value)
         case ArithKind.DECIMAL:
-            if not isinstance(left, (IntValue, DecimalValue)) or not isinstance(
-                right, (IntValue, DecimalValue)
-            ):
+            if not isinstance(left, DecimalValue) or not isinstance(right, DecimalValue):
                 raise AssertionError(
-                    f"add DECIMAL: expected numeric+numeric, got"
+                    f"add DECIMAL: expected DecimalValue+DecimalValue, got"
                     f" {type(left).__name__}+{type(right).__name__}"
                 )
-            return DecimalValue(_to_decimal(left) + _to_decimal(right))
+            return DecimalValue(left.value + right.value)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
 def sub(kind: ArithKind, left: Value, right: Value) -> Value:
-    """Subtraction: INT or DECIMAL (with widening)."""
+    """Subtraction: INT or DECIMAL."""
     match kind:
         case ArithKind.INT:
             if not isinstance(left, IntValue) or not isinstance(right, IntValue):
@@ -151,20 +136,18 @@ def sub(kind: ArithKind, left: Value, right: Value) -> Value:
                 )
             return IntValue(left.value - right.value)
         case ArithKind.DECIMAL:
-            if not isinstance(left, (IntValue, DecimalValue)) or not isinstance(
-                right, (IntValue, DecimalValue)
-            ):
+            if not isinstance(left, DecimalValue) or not isinstance(right, DecimalValue):
                 raise AssertionError(
-                    f"sub DECIMAL: expected numeric+numeric, got"
+                    f"sub DECIMAL: expected DecimalValue+DecimalValue, got"
                     f" {type(left).__name__}+{type(right).__name__}"
                 )
-            return DecimalValue(_to_decimal(left) - _to_decimal(right))
+            return DecimalValue(left.value - right.value)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
 def mul(kind: ArithKind, left: Value, right: Value) -> Value:
-    """Multiplication: INT or DECIMAL (with widening)."""
+    """Multiplication: INT or DECIMAL."""
     match kind:
         case ArithKind.INT:
             if not isinstance(left, IntValue) or not isinstance(right, IntValue):
@@ -174,34 +157,35 @@ def mul(kind: ArithKind, left: Value, right: Value) -> Value:
                 )
             return IntValue(left.value * right.value)
         case ArithKind.DECIMAL:
-            if not isinstance(left, (IntValue, DecimalValue)) or not isinstance(
-                right, (IntValue, DecimalValue)
-            ):
+            if not isinstance(left, DecimalValue) or not isinstance(right, DecimalValue):
                 raise AssertionError(
-                    f"mul DECIMAL: expected numeric+numeric, got"
+                    f"mul DECIMAL: expected DecimalValue+DecimalValue, got"
                     f" {type(left).__name__}+{type(right).__name__}"
                 )
-            return DecimalValue(_to_decimal(left) * _to_decimal(right))
+            return DecimalValue(left.value * right.value)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
 def div(left: Value, right: Value) -> Value:
-    """Division: always returns DECIMAL. Raises AglDivisionByZero on zero divisor."""
-    if not isinstance(left, (IntValue, DecimalValue)) or not isinstance(
-        right, (IntValue, DecimalValue)
-    ):
+    """Division: always DECIMAL. A trapped signal (zero divisor, overflow) propagates.
+
+    A zero divisor raises ``decimal.DivisionByZero`` up front, so ``0 / 0`` is
+    a division by zero too -- the context itself reports it only as the
+    coarse ``InvalidOperation``.
+    """
+    if not isinstance(left, DecimalValue) or not isinstance(right, DecimalValue):
         raise AssertionError(
-            f"div: expected numeric+numeric, got {type(left).__name__}+{type(right).__name__}"
+            f"div: expected DecimalValue+DecimalValue, got"
+            f" {type(left).__name__}+{type(right).__name__}"
         )
-    rd = _to_decimal(right)
-    if rd == decimal.Decimal(0):
-        raise AglDivisionByZero()
-    return DecimalValue(_to_decimal(left) / rd)
+    if right.value.is_zero():
+        raise decimal.DivisionByZero()
+    return DecimalValue(left.value / right.value)
 
 
 def negate(kind: NumericKind, value: Value) -> Value:
-    """Unary negation: INT or DECIMAL."""
+    """Unary negation: INT or DECIMAL. Decimal negation is exact and cannot overflow."""
     match kind:
         case NumericKind.INT:
             if not isinstance(value, IntValue):
@@ -212,7 +196,10 @@ def negate(kind: NumericKind, value: Value) -> Value:
                 raise AssertionError(
                     f"negate DECIMAL: expected DecimalValue, got {type(value).__name__}"
                 )
-            return DecimalValue(-value.value)
+            # `copy_negate` flips the sign bit only: context-free, never rounds,
+            # never raises -- unlike `-value.value`, which rounds to the
+            # ambient context's precision and could overflow on a carry.
+            return DecimalValue(value.value.copy_negate())
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 

@@ -39,4 +39,4 @@ Dry-run is a global mode set from `--dry-run`. Because the process and filesyste
 - `src/agm/core/cleanup.py` — primary-error-preserving cleanup; `src/agm/core/dry_run.py` — global dry-run state; `src/agm/core/log.py` — logging and JSONL append.
 - `src/agm/core/pyenv.py` — requirement satisfaction and installation for AGM's interpreter environment.
 - `src/agm/core/http.py` — the `requests`-backed HTTP transport seam: session, request/response streaming, failure classification, charset decoding.
-- `src/agm/util/graph.py`, `text.py`, `unicode.py`, `ident.py`, `interp.py`, `scoping.py`, `recursion.py` — the pure helpers.
+- `src/agm/util/graph.py`, `text.py`, `unicode.py`, `ident.py`, `interp.py`, `scoping.py`, `recursion.py`, `decimal.py` — the pure helpers.

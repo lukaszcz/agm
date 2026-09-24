@@ -139,7 +139,15 @@ class IterKind(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class IntToDecimal:
-    """Coercion: widen an ``int`` value to ``decimal``."""
+    """Coercion: widen an ``int`` value to ``decimal``.
+
+    *operation* labels the ``ArithmeticError`` raised when the int falls
+    outside the decimal range: the operator for a mixed binary-operator
+    operand (e.g. ``"+"``, ``"=="``), or ``"as decimal"`` for a cast or an
+    implicit non-operator context.
+    """
+
+    operation: str = "as decimal"
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,7 +8,7 @@ Allowed imports:
 - ``agm.agl.semantics.values`` (all value types, Cell, Frame)
 - ``agm.agl.semantics.exceptions`` (AglRaise, make_builtin_exception)
 - ``agm.agl.semantics.copying`` (deep_copy_value, shallow_copy_value)
-- ``agm.agl.eval._decimal`` (shared pinned decimal context)
+- ``agm.agl.semantics.arithmetic`` (shared pinned decimal context)
 - ``agm.agl.runtime.serialize`` (untyped coercion and static direct JSON
   construction)
 - ``agm.config.engine_keys`` (the canonical engine-key catalog data leaf)
@@ -23,9 +23,7 @@ import inspect
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, ContextManager, Protocol, TypeVar, assert_never, cast
 
-from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.eval.arith import (
-    AglDivisionByZero,
     add,
     contains,
     div,
@@ -156,6 +154,13 @@ from agm.agl.runtime.render import render_key_value_syntax, render_value
 from agm.agl.runtime.serialize import encode_value
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.trace import TraceStore, noop_trace
+from agm.agl.semantics.arithmetic import (
+    AGL_DECIMAL_CONTEXT,
+    AglArithmeticSignal,
+    arithmetic_signal_raise,
+    int_to_decimal,
+    signal_kind_for,
+)
 from agm.agl.semantics.copying import deep_copy_value, shallow_copy_value
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
@@ -425,12 +430,12 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
     (cannot occur in well-lowered IR; defensive check only).
     """
     match coercion:
-        case IntToDecimal():
+        case IntToDecimal(operation=operation):
             if not isinstance(value, IntValue):
                 raise InvalidIrError(
                     f"IntToDecimal coercion requires IntValue, got {type(value).__name__}"
                 )
-            return DecimalValue(decimal.Decimal(value.value))
+            return DecimalValue(int_to_decimal(value.value, operation))
 
         case ToJson():
             return JsonValue(encode_value(_SCALAR_ENCODE_PLAN, value))
@@ -779,10 +784,20 @@ class IrInterpreter:
         """
         return cyclic_value_raise(nominals=self._program.builtin_nominals)
 
+    def _arithmetic_failure(self, exc: AglArithmeticSignal) -> AglRaise:
+        """Convert a trapped ``decimal`` signal into an ``AglRaise(ArithmeticError)``.
+
+        Mirrors ``_cyclic_failure``: centralizes the sentinel-to-exception
+        conversion so every arithmetic, negation, and conversion site that can
+        hit a decimal overflow or invalid operation raises identical
+        exception fields.
+        """
+        return arithmetic_signal_raise(exc, nominals=self._program.builtin_nominals)
+
     def _render_or_raise(
         self, value: Value, *, pretty: bool = False, quote_strings: bool = False
     ) -> str:
-        """Render a value, converting only the rendering cycle sentinel."""
+        """Render a value, converting the rendering-cycle sentinel."""
         try:
             return render_value(
                 value, self._descriptors, pretty=pretty, quote_strings=quote_strings
@@ -1565,7 +1580,10 @@ class IrInterpreter:
 
                 case IrCoerce(value=val_expr, operation=op):
                     value = self._eval(val_expr)
-                    return _apply_coercion(value, op)
+                    try:
+                        return _apply_coercion(value, op)
+                    except AglArithmeticSignal as exc:
+                        raise self._arithmetic_failure(exc)
 
                 case IrSequence(items=items) | IrBlock(items=items):
                     last: Value = UNIT_VALUE
@@ -1588,16 +1606,9 @@ class IrInterpreter:
                                 return div(lhs_val, rhs_val)
                             case _ as unreachable:  # pragma: no cover
                                 assert_never(unreachable)
-                    except AglDivisionByZero:
-                        raise AglRaise(
-                            _make_exc_value(
-                                "ArithmeticError",
-                                "Division by zero",
-                                nominals=self._program.builtin_nominals,
-                                fields={
-                                    "operation": TextValue("/"),
-                                },
-                            )
+                    except decimal.DecimalException as exc:
+                        raise self._arithmetic_failure(
+                            AglArithmeticSignal(arith_op.value, signal_kind_for(exc))
                         )
 
                 case IrCompare(op=cmp_op, kind=_kind, lhs=lhs_expr, rhs=rhs_expr):
@@ -1664,6 +1675,8 @@ class IrInterpreter:
                                 raise InvalidIrError(
                                     f"IrUnary NEG: expected numeric, got {type(val).__name__}"
                                 )
+                            # `negate` negates a decimal exactly (`copy_negate`),
+                            # so this can never raise.
                             return negate(kind, val)
                         case _ as _unreachable_unary:  # pragma: no cover
                             assert_never(_unreachable_unary)
@@ -1781,6 +1794,14 @@ class IrInterpreter:
                         if failure_mode is ConversionFailureMode.RETURN_OPTION:
                             return self._option_none()
                         raise self._cyclic_failure()
+                    except AglArithmeticSignal as exc:
+                        # `as decimal` on an int too large for the pinned
+                        # context (``WIDEN_INT_TO_DECIMAL``) mirrors the cycle
+                        # case: a conversion test reports failure, ordinary `as`
+                        # raises the catchable ArithmeticError.
+                        if failure_mode is ConversionFailureMode.RETURN_OPTION:
+                            return self._option_none()
+                        raise self._arithmetic_failure(exc)
                     if failure_mode is ConversionFailureMode.RETURN_OPTION:
                         return self._option_some(converted)
                     return converted

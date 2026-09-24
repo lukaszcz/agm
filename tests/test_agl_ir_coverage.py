@@ -38,14 +38,17 @@ from tests.agl.ir_harness import evaluate_ir
 def test_arithmetic_mixed_and_defensive_edges() -> None:
     one = IntValue(1)
     decimal_one = DecimalValue(decimal.Decimal(1))
+    # value_eq (structural equality) still widens int<->decimal directly; a
+    # binary operator's own operands are pre-coerced same-typed by the
+    # lowerer before reaching order()/div(), so those two no longer widen.
     assert value_eq(one, decimal_one)
     assert value_eq(decimal_one, one)
-    assert order(CmpOp.LE, one, decimal_one)
-    assert order(CmpOp.GE, decimal_one, one)
+    assert order(CmpOp.LE, decimal_one, decimal_one)
+    assert order(CmpOp.GE, decimal_one, decimal_one)
     assert not contains(ContainsKind.DICT, one, DictValue({"1": one}))
     with pytest.raises(AssertionError, match="cannot compare"):
         order(CmpOp.LT, TextValue("x"), one)
-    with pytest.raises(AssertionError, match="expected numeric"):
+    with pytest.raises(AssertionError, match="expected DecimalValue"):
         div(TextValue("x"), one)
 
 

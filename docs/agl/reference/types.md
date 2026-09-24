@@ -125,9 +125,31 @@ There is **no binary floating-point type**.
 - `decimal` — an exact decimal number. Literals with a fractional part, such
   as `1.5`, are `decimal`.
 
-Arithmetic is performed under a fixed decimal context: 28 significant digits
-with banker's rounding (round-half-even). This context is part of the
-language semantics and does not vary by host.
+Arithmetic is performed under a fixed decimal context: 28 significant digits,
+banker's rounding (round-half-even), with the adjusted exponent of the most
+significant digit bounded by ±999999 and subnormal values reaching down to
+the smallest representable exponent below it. This context is part of the
+language semantics and does not vary by host. A `decimal` value, however
+created, is always finite and within this exponent range — range is checked,
+not precision, so a value with more than 28 significant digits is created and
+kept exactly. A decimal literal outside this range is a compile-time error.
+Decoding a number into a `decimal` — from JSON, an agent or `std/http`
+response, a host-supplied program argument, or an extern return value —
+rejects one outside this range, or non-finite, with that boundary's own
+error, so a `decimal` value can never arise out of range. A `json`-typed
+value is exempt and may hold a number of any magnitude.
+
+A `decimal` operator (`+ - *` or `/`) rounds its result to 28 significant
+digits; unary `-` is exact. A result that underflows below the range loses
+precision and may become zero instead of raising; one that overflows above
+it, or is otherwise invalid (such as division by zero), raises the catchable
+`ArithmeticError` ([Exceptions](exceptions.md#arithmeticerror)), labelled
+with the operator. Converting an `int` to `decimal` — an explicit `as decimal`
+cast, or the implicit widening a mixed-operand operator or a `decimal`-typed
+context applies — raises the same way when the `int` falls outside the range,
+labelled with the triggering operator or `as decimal` for a non-operator
+context. `as?` tolerates this the same way it tolerates a reference cycle:
+`as? decimal` yields `None` instead of raising.
 
 On the JSON wire both kinds are plain JSON numbers, parsed and emitted
 exactly. A wire number written without a fraction or exponent reads as an

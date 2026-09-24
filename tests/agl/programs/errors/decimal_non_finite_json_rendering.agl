@@ -1,0 +1,22 @@
+import std/toml
+
+# A `json`-typed value is exempt from the pinned decimal range and may hold a
+# non-finite number: TOML's `inf`/`nan` literals parse into `Decimal`
+# `Infinity`/`NaN`, carried uncoerced inside the `json` value. Printing it, and
+# rendering the raw value inside a rejected `as decimal` cast's CastError,
+# must both still work instead of crashing on a finiteness assumption.
+program def main() -> unit =
+  let document = toml::parse('''
+positive_infinity = inf
+negative_infinity = -inf
+not_a_number = nan
+''')
+  print document.get("positive_infinity")
+  print document.get("negative_infinity")
+  print document.get("not_a_number")
+
+  try
+    let _ = document.get("positive_infinity") as decimal
+    print "unexpected cast"
+  catch CastError as e =>
+    print "cast caught: %{e.source-type} -> %{e.target-type}, raw=%{e.raw}"

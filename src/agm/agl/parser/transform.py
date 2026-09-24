@@ -53,6 +53,7 @@ from agm.agl.syntax.types import (
     TypeExpr,
     UnitT,
 )
+from agm.util.decimal import decimal_in_range
 
 # The receiver parameter every method declares first.
 _SELF_PARAM = "self"
@@ -1476,14 +1477,28 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
+    def _build_decimal_lit(self, tok: Token, meta: Meta) -> syntax.DecimalLit:
+        """Build a ``DecimalLit`` from *tok*, rejecting one outside the pinned range.
+
+        Shared by :meth:`lit_decimal` and :meth:`pat_lit_decimal` -- the one
+        place a decimal literal's text becomes a ``Decimal`` -- so both an
+        expression literal and a pattern literal out of range are caught here,
+        at compile time, with the same range predicate every other decimal
+        creation site uses.
+        """
+        value = decimal.Decimal(str(tok))
+        span = self._span_from_meta(meta)
+        if not decimal_in_range(value):
+            # The bound, not the value: an out-of-range literal can carry
+            # well over a million digits, and *span* already identifies the
+            # rejected source text.
+            raise AglSyntaxError("decimal literal is out of range", span=span)
+        return syntax.DecimalLit(value=value, span=span, node_id=self._next_id())
+
     def lit_decimal(self, meta: Meta, args: _Args) -> syntax.DecimalLit:
         tok = args[0]
         assert isinstance(tok, Token)
-        return syntax.DecimalLit(
-            value=decimal.Decimal(str(tok)),
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
+        return self._build_decimal_lit(tok, meta)
 
     def lit_true(self, meta: Meta, args: _Args) -> syntax.BoolLit:
         return syntax.BoolLit(value=True, span=self._span_from_meta(meta), node_id=self._next_id())
@@ -2594,11 +2609,7 @@ class AstBuilder(Transformer):
     def pat_lit_decimal(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         tok = args[0]
         assert isinstance(tok, Token)
-        lit = syntax.DecimalLit(
-            value=decimal.Decimal(str(tok)),
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
+        lit = self._build_decimal_lit(tok, meta)
         return self._literal_pattern(lit, meta)
 
     def pat_lit_true(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:

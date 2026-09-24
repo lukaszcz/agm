@@ -66,6 +66,24 @@
         "raises": {"type": "RangeError"},
         "calls": {}
       }
+    },
+    {
+      "name": "decimal_power_overflow_raises_arithmetic_error",
+      "params": {"mode": 9},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "ArithmeticError"},
+        "calls": {}
+      }
+    },
+    {
+      "name": "decimal_round_overflow_raises_arithmetic_error",
+      "params": {"mode": 10},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "ArithmeticError"},
+        "calls": {}
+      }
     }
   ]
 }

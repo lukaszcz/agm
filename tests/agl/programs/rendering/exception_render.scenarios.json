@@ -14,8 +14,11 @@
           "\"target-type\": \"int\"",
           "\"raw\": \"abc\"",
           "no int\n",
-          "ArithmeticError(message = \"Division by zero\", operation = \"/\")",
-          "operation: /\n"
+          "ArithmeticError(message = ",
+          "operation = \"/\")",
+          "operation: /\n",
+          "{\"message\": ",
+          "\"operation\": \"/\"}"
         ],
         "stdout_not_contains": [
           "parsed:",
@@ -32,8 +35,11 @@
         "stdout_contains": [
           "parsed: 42\n",
           "got int\n",
-          "ArithmeticError(message = \"Division by zero\", operation = \"/\")",
-          "operation: /\n"
+          "ArithmeticError(message = ",
+          "operation = \"/\")",
+          "operation: /\n",
+          "{\"message\": ",
+          "\"operation\": \"/\"}"
         ],
         "stdout_not_contains": [
           "CastError",

@@ -96,6 +96,32 @@ def test_total_cast_agrees(source: str) -> None:
     evaluate_ir(source)
 
 
+#: A real out-of-range int, computed at runtime via `.pow()` rather than
+#: spelled as a literal -- an AgL int literal (and Python's own int-to-str
+#: conversion) cannot exceed ~4300 digits, well under what the pinned range
+#: needs to overflow. The bit-length range check rejects this cheaply,
+#: without ever constructing a ``Decimal`` from it.
+_HUGE_INT_EXPR = "2.pow(3400000)"
+
+
+def test_widen_int_to_decimal_overflow_raises_arithmetic_error() -> None:
+    """`as decimal` on an int outside the pinned context's range raises ArithmeticError."""
+    ir_exc = evaluate_ir_raises(f"let n = {_HUGE_INT_EXPR}\nlet x = n as decimal\n()\n")
+    assert ir_exc.type_name == "ArithmeticError"
+    assert ir_exc.fields["operation"] == "as decimal"
+
+
+def test_widen_int_to_decimal_overflow_as_question_returns_none() -> None:
+    """`as? decimal` on an int outside the pinned context's range yields ``None``, never raising."""
+    # Loads full stdlib for `.pow()`, so `None`'s nominal differs from
+    # `_none()`'s `NO_BUILTIN_DECLARATIONS` table; the `Option::None` shape
+    # (no fields, unlike `Some`'s `value` field) is what a structural check
+    # without pinning that table's specific nominal id can assert.
+    ir = evaluate_ir(f"let n = {_HUGE_INT_EXPR}\nlet r = n as? decimal\n()\n")
+    assert isinstance(ir["r"], RecordValue)
+    assert ir["r"].fields == {}
+
+
 def test_array_int_ref_to_json() -> None:
     """let a: array[int] = [1, 2]; let j: json = a as json  — explicit cast, whole-array."""
     source = "let a: array[int] = [1, 2]\nlet j: json = a as json\n()\n"

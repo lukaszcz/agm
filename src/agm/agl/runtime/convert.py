@@ -45,6 +45,7 @@ from agm.agl.ir.contracts import (
     ScalarKind,
     resolve_schema_ref,
 )
+from agm.agl.semantics.arithmetic import checked_decimal
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -323,10 +324,8 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
         case ScalarKind.DECIMAL:
             if isinstance(obj, bool):
                 raise ValueError("Expected decimal, got bool")
-            if isinstance(obj, Decimal):
-                return DecimalValue(obj)
-            if isinstance(obj, int):
-                return DecimalValue(Decimal(obj))
+            if isinstance(obj, (Decimal, int)):
+                return DecimalValue(checked_decimal(obj))
             raise ValueError(f"Expected decimal, got {type(obj).__name__} {obj!r}")
         case ScalarKind.BOOL:
             if isinstance(obj, bool):

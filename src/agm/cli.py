@@ -47,6 +47,7 @@ from agm.cli_support.args import (
     WorktreeNewArgs,
     WorktreeRemoveArgs,
 )
+from agm.cli_support.execution_options import execution_option_spec
 from agm.cli_support.run_options import exec_option_conflict, trace_option_conflict
 from agm.command_catalog import COMMAND_OVERVIEW
 from agm.config.general import parse_timeout
@@ -170,54 +171,106 @@ def _dry_run_option() -> bool:
 
 
 def _strict_json_option() -> bool | None:
+    option = execution_option_spec("strict_json")
     return typer.Option(
         None,
-        "--strict-json/--no-strict-json",
+        *option.declarations,
+        metavar=option.metavar,
         help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
     )
 
 
 def _max_call_depth_option() -> int | None:
+    option = execution_option_spec("max_call_depth")
     return typer.Option(
         None,
-        "--max-call-depth",
+        *option.declarations,
+        metavar=option.metavar,
         help="Override the maximum recursion call depth (CLI > config).",
     )
 
 
 def _default_agent_option() -> str | None:
+    option = execution_option_spec("default_agent")
     return typer.Option(
         None,
-        "--default-agent",
-        metavar="AGENT",
+        *option.declarations,
+        metavar=option.metavar,
         help="Seed the free-ask default session from an Agent value or command.",
     )
 
 
 def _default_sandbox_option() -> str | None:
+    option = execution_option_spec("default_sandbox")
     return typer.Option(
         None,
-        "--default-sandbox",
-        metavar="SANDBOX",
+        *option.declarations,
+        metavar=option.metavar,
         help="Seed std/config::default-sandbox from an AgentSandbox value.",
     )
 
 
 def _trace_file_option() -> str | None:
+    option = execution_option_spec("trace_file")
     return typer.Option(
         None,
-        "--trace-file",
+        *option.declarations,
+        metavar=option.metavar,
         help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
         autocompletion=completion.complete_path_argument,
     )
 
 
 def _no_trace_option(help_text: str) -> bool:
-    return typer.Option(False, "--no-trace", help=help_text)
+    option = execution_option_spec("no_trace")
+    return typer.Option(False, *option.declarations, metavar=option.metavar, help=help_text)
 
 
 def _trace_option(help_text: str) -> bool:
-    return typer.Option(False, "--trace", help=help_text)
+    option = execution_option_spec("trace")
+    return typer.Option(False, *option.declarations, metavar=option.metavar, help=help_text)
+
+
+def _timeout_option() -> str | None:
+    option = execution_option_spec("timeout")
+    return typer.Option(
+        None,
+        *option.declarations,
+        metavar=option.metavar,
+        help=(
+            "Override initial shell-exec and agent idle timeouts (e.g. '30s', '5m', '120').  "
+            "Seeds the in-program 'std/config::timeout' setting to Some(VALUE).  "
+            "Mutually exclusive with --no-timeout."
+        ),
+    )
+
+
+def _no_timeout_option() -> bool:
+    option = execution_option_spec("no_timeout")
+    return typer.Option(
+        False,
+        *option.declarations,
+        metavar=option.metavar,
+        help=(
+            "Remove any configured initial shell-exec and agent timeout.  "
+            "Seeds the in-program 'std/config::timeout' setting to None.  "
+            "Mutually exclusive with --timeout."
+        ),
+    )
+
+
+def _no_trace_file_option() -> bool:
+    option = execution_option_spec("no_trace_file")
+    return typer.Option(
+        False,
+        *option.declarations,
+        metavar=option.metavar,
+        help=(
+            "Clears only the in-program trace-file binding; a trace-file path set in "
+            "config or auto-assigned by --trace still applies.  Use --no-trace to disable "
+            "tracing entirely.  Mutually exclusive with --trace-file."
+        ),
+    )
 
 
 def _module_path_option() -> list[str]:
@@ -1064,33 +1117,9 @@ def exec_cmd(
         "Disable the automatic import std/prelude::* prelude throughout the loaded program "
         "(entry and library modules)."
     ),
-    timeout: str | None = typer.Option(
-        None,
-        "--timeout",
-        help=(
-            "Override initial shell-exec and agent idle timeouts (e.g. '30s', '5m', '120').  "
-            "Seeds the in-program 'std/config::timeout' setting to Some(VALUE).  "
-            "Mutually exclusive with --no-timeout."
-        ),
-    ),
-    no_timeout: bool = typer.Option(
-        False,
-        "--no-timeout",
-        help=(
-            "Remove any configured initial shell-exec and agent timeout.  "
-            "Seeds the in-program 'std/config::timeout' setting to None.  "
-            "Mutually exclusive with --timeout."
-        ),
-    ),
-    no_trace_file: bool = typer.Option(
-        False,
-        "--no-trace-file",
-        help=(
-            "Clears only the in-program trace-file binding; a trace-file path set in "
-            "config or auto-assigned by --trace still applies.  Use --no-trace to disable "
-            "tracing entirely.  Mutually exclusive with --trace-file."
-        ),
-    ),
+    timeout: str | None = _timeout_option(),
+    no_timeout: bool = _no_timeout_option(),
+    no_trace_file: bool = _no_trace_file_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
     # (``help_option_names: []``) and lets unknown options through, so the whole

@@ -1149,6 +1149,29 @@ class TestRenderHelp:
         assert "--dry-run" in text
         assert "Check only." in text
 
+    def test_exec_runtime_options_render_in_a_shared_section_at_the_end(self) -> None:
+        from typer.main import get_command
+
+        from agm.cli import app
+        from agm.cli_dispatch import registered_run_options
+
+        run_options = registered_run_options(click.Context(get_command(app)))
+        text = _command(_param("tag", TextType())).render_help(
+            "agm publish", extra_options=run_options
+        )
+        section = text.rpartition("Execution options:\n")[2]
+
+        assert section == (
+            "  --strict-json / --no-strict-json\n"
+            "  --max-call-depth N\n"
+            "  --default-agent AGENT\n"
+            "  --default-sandbox SANDBOX\n"
+            "  --timeout DURATION / --no-timeout\n"
+            "  --trace, --no-trace, --trace-file PATH, --no-trace-file\n"
+        )
+        assert text.index("Execution options:") > text.index("--tag")
+        assert "--help" in text.partition("Execution options:")[0]
+
     def test_a_parameterless_program_renders_usage_and_options_only(self) -> None:
         text = _command().render_help("main")
 

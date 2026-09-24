@@ -8225,6 +8225,15 @@ class TestPackageInstall:
         assert "<name>" in command_help.stdout
         assert "--tag" in command_help.stdout
         assert "Greet someone" in command_help.stdout
+        assert command_help.stdout.endswith(
+            "Execution options:\n"
+            "  --strict-json / --no-strict-json\n"
+            "  --max-call-depth N\n"
+            "  --default-agent AGENT\n"
+            "  --default-sandbox SANDBOX\n"
+            "  --timeout DURATION / --no-timeout\n"
+            "  --trace, --no-trace, --trace-file PATH, --no-trace-file\n"
+        )
         assert short_help.returncode == 0
         assert "--tag" in short_help.stdout
         assert configured.stdout == "alice:configured\n"

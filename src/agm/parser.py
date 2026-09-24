@@ -7,6 +7,7 @@ import textwrap
 from collections.abc import Sequence
 from typing import NoReturn, Protocol
 
+from agm.cli_support.execution_options import execution_options_section
 from agm.command_catalog import COMMAND_OVERVIEW
 from agm.core.env import help_width
 from agm.util.text import first_paragraph, format_description_column
@@ -631,28 +632,6 @@ _HELP_TEXTS: dict[str, str] = {
         Options:
           -c, --command COMMAND  Execute the program given as COMMAND instead of FILE.
           -p, --program PATH     Select a program def by declaration path.
-          --strict-json         Require bare JSON output from agents (no recovery).
-          --no-strict-json      Use lenient JSON recovery (default).
-          --max-call-depth N    Override the maximum recursion call depth
-                                (CLI > config).
-          --default-agent AGENT Seed the free-ask default session from an Agent value
-                                or command.
-          --default-sandbox SANDBOX
-                                Seed std/config::default-sandbox from an AgentSandbox
-                                value.
-          --timeout DURATION    Override initial shell-exec and agent idle timeouts;
-                                seed std/config::timeout to Some(DURATION). Mutually
-                                exclusive with --no-timeout.
-          --no-timeout          Remove configured initial shell-exec and agent timeouts;
-                                seed std/config::timeout to None. Mutually exclusive
-                                with --timeout.
-          --trace               Enable trace logging (auto timestamped path).
-          --trace-file PATH     Write trace log to PATH.
-          --no-trace-file       Clear the CLI trace-file seed only; use --no-trace
-                                to disable tracing entirely.
-          --no-trace            Disable trace logging (overrides config).
-          --trace, --trace-file, and --no-trace are mutually exclusive.
-          --trace-file and --no-trace-file are mutually exclusive.
           --no-stdlib           Disable the automatic import std/prelude::* prelude
                                 throughout the loaded program (entry and library modules).
           -I DIR, --module-path DIR
@@ -705,24 +684,11 @@ _HELP_TEXTS: dict[str, str] = {
         or [exec] config.
 
         Options:
-          --strict-json         Require bare JSON output from agents (no recovery).
-          --no-strict-json      Use lenient JSON recovery (default).
-          --max-call-depth N    Override the maximum recursion call depth
-                                (CLI > config; source pragmas are not applied in the REPL).
-          --default-agent AGENT Seed the free-ask default session from an Agent value
-                                or command.
-          --default-sandbox SANDBOX
-                                Seed std/config::default-sandbox from an AgentSandbox
-                                value.
           --quiet               Suppress automatic echoing of entry results.
           --no-stdlib           Disable the automatic import std/prelude::* prelude for
                                 each loaded REPL program (entries and library modules).
                                 Explicit imports remain available, and :reset
                                 keeps this choice.
-          --trace               Enable trace logging (auto timestamped path).
-          --trace-file PATH     Write a JSONL trace log to PATH.
-          --no-trace            Disable trace logging.
-          --trace, --trace-file, and --no-trace are mutually exclusive.
           --plain               Force the plain, non-interactive line front end
                                 (auto-detected otherwise).
 
@@ -1148,7 +1114,14 @@ def _overview_text() -> str:
 
 def help_text_for(command: str) -> str | None:
     canonical = _HELP_ALIASES.get(command, command)
-    return _HELP_TEXTS.get(canonical)
+    text = _HELP_TEXTS.get(canonical)
+    if text is None:
+        return None
+    if canonical == "exec":
+        return text + "\n" + execution_options_section("exec")
+    if canonical == "repl":
+        return text + "\n" + execution_options_section("repl")
+    return text
 
 
 def print_overview(file: _Writeable | None = None) -> None:

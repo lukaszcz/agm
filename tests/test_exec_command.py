@@ -4052,7 +4052,7 @@ class TestProgramArgumentsDynamicHelp:
         assert "--count" in out
         assert "--tag" not in out
 
-    def test_help_for_a_program_without_value_parameters_shows_only_the_help_option(
+    def test_help_for_a_program_without_value_parameters_shows_help_and_execution_options(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "prog.agl"
@@ -4063,6 +4063,16 @@ class TestProgramArgumentsDynamicHelp:
         out = capsys.readouterr().out
         assert f"agm exec {agl_file}" in out
         assert "--help" in out
+        options, _, execution_options = out.partition("Execution options:\n")
+        assert "--strict-json" not in options
+        assert execution_options.endswith(
+            "  --strict-json / --no-strict-json\n"
+            "  --max-call-depth N\n"
+            "  --default-agent AGENT\n"
+            "  --default-sandbox SANDBOX\n"
+            "  --timeout DURATION / --no-timeout\n"
+            "  --trace, --no-trace, --trace-file PATH, --no-trace-file\n"
+        )
 
     def test_help_for_a_program_can_show_a_dry_run_parameter(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

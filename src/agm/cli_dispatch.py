@@ -152,6 +152,7 @@ def registered_command_help(
         program_name=f"agm {path_name}",
         description=description or "Run the registered AgL program.",
         extra_options=run_options,
+        execution_surface="registered",
     )
 
 

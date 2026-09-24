@@ -2249,6 +2249,22 @@ class TestParserHelpers:
             assert option in result
         assert "--runner" not in result
 
+    def test_exec_help_ends_with_the_shared_execution_options_section(self) -> None:
+        output = io.StringIO()
+        parser_helpers.print_help_for_command_path(["exec"], file=output)
+        result = output.getvalue()
+
+        assert result.endswith(
+            "Execution options:\n"
+            "  --strict-json / --no-strict-json\n"
+            "  --max-call-depth N\n"
+            "  --default-agent AGENT\n"
+            "  --default-sandbox SANDBOX\n"
+            "  --timeout DURATION / --no-timeout\n"
+            "  --trace, --no-trace, --trace-file PATH, --no-trace-file\n"
+        )
+        assert "--help" not in result.rpartition("Execution options:")[2]
+
     def test_exec_help_lists_installed_program_reference(self) -> None:
         output = io.StringIO()
         parser_helpers.print_help_for_command_path(["exec"], file=output)
@@ -2262,6 +2278,21 @@ class TestParserHelpers:
         assert "--strict-json" in result
         assert "--default-agent" in result
         assert "--runner" not in result
+
+    def test_repl_help_ends_with_its_supported_execution_options(self) -> None:
+        output = io.StringIO()
+        parser_helpers.print_help_for_command_path(["repl"], file=output)
+        result = output.getvalue()
+
+        assert result.endswith(
+            "Execution options:\n"
+            "  --strict-json / --no-strict-json\n"
+            "  --max-call-depth N\n"
+            "  --default-agent AGENT\n"
+            "  --default-sandbox SANDBOX\n"
+            "  --trace, --no-trace, --trace-file PATH\n"
+        )
+        assert "--help" not in result.rpartition("Execution options:")[2]
 
     def test_print_command_help_with_file_param(self) -> None:
         output = io.StringIO()

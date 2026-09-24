@@ -19,12 +19,15 @@ def run(args: PkgInstallArgs) -> None:
 
     context = current_config_context()
     try:
+        if args.editable and args.reinstall:
+            raise PackageInstallError("--reinstall cannot be used with --editable")
         source = Path(args.source)
         if source.is_file() and not args.editable:
             plan = install_archive_with_plan(
                 source,
                 home=context.home,
                 shadow=args.shadow,
+                reinstall=args.reinstall,
             )
         else:
             plan = install_directory_with_plan(
@@ -32,6 +35,7 @@ def run(args: PkgInstallArgs) -> None:
                 home=context.home,
                 editable=args.editable,
                 shadow=args.shadow,
+                reinstall=args.reinstall,
             )
     # A user-supplied source path can fail at the operating-system boundary
     # before any package rule applies; report it like every other bad source.

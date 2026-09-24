@@ -7796,6 +7796,32 @@ class TestPackageSync:
 
 
 class TestPackageInstall:
+    def test_reinstall_replaces_the_complete_existing_package_tree(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        (package / "obsolete.txt").write_text("old", encoding="utf-8")
+        store = tmp_path / "agm-home" / "packages" / "alpha" / "1.0.0"
+
+        initial = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
+        (package / "obsolete.txt").unlink()
+        (package / "replacement.txt").write_text("new", encoding="utf-8")
+        (package / "src" / "main.agl").write_text(
+            "program def main() -> unit = ()\nlet replacement = 1\n", encoding="utf-8"
+        )
+        refused = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path, check=False)
+        replaced = run_agm(["pkg", "install", "--reinstall", str(package)], env=env, cwd=tmp_path)
+
+        assert initial.returncode == 0
+        assert refused.returncode == 1
+        assert "alpha" in refused.stderr and "1.0.0" in refused.stderr
+        assert "--reinstall" in refused.stderr
+        assert replaced.returncode == 0
+        assert not (store / "obsolete.txt").exists()
+        assert (store / "replacement.txt").read_text(encoding="utf-8") == "new"
+        assert "let replacement" in (store / "src" / "main.agl").read_text(encoding="utf-8")
+
     def test_create_rejects_a_resource_excluded_from_the_portable_archive(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

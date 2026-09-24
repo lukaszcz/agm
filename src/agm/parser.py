@@ -472,7 +472,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm pkg init [DIR] [--name NAME] [--version VERSION]
         agm pkg check [DIR]
         agm pkg create [DIR] [-o FILE]
-        agm pkg install [--editable] [--shadow] SRC
+        agm pkg install [--editable] [--reinstall] [--shadow] SRC
         agm pkg uninstall NAME
         agm pkg list
         agm pkg info NAME
@@ -1041,15 +1041,17 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         DIR defaults to the current directory and -o selects the output file.
     """),
     ("pkg", "install"): textwrap.dedent("""\
-        agm pkg install [--editable] [--shadow] SRC
+        agm pkg install [--editable] [--reinstall] [--shadow] SRC
 
         Install a package directory or .agmpkg archive into AGM's versioned store and activate its
-        version. --editable mounts a directory SRC directly. Conflicting registered commands refuse
-        installation unless --shadow replaces the existing registration. URL dependencies are
-        fetched with their declared SHA-256 hash before install. When a [python] requirement of the
-        active packages is unsatisfied, all of their [python] requirements are installed jointly
-        into AGM's interpreter environment (uv, else pip) before activation; a failed Python
-        install, including a conflict between packages, fails the package install.
+        version. --editable mounts a directory SRC directly. --reinstall replaces the complete
+        immutable installation at the same name and version; it cannot be combined with --editable.
+        Conflicting registered commands refuse installation unless --shadow replaces the existing
+        registration. URL dependencies are fetched with their declared SHA-256 hash before install.
+        When a [python] requirement of the active packages is unsatisfied, all of their [python]
+        requirements are installed jointly into AGM's interpreter environment (uv, else pip) before
+        activation; a failed Python install, including a conflict between packages, fails the
+        package install.
     """),
     ("pkg", "uninstall"): textwrap.dedent("""\
         agm pkg uninstall NAME

@@ -134,6 +134,7 @@ class TestPackageLifecycle:
 
         assert invoke(runner, ["pkg", "create", "package", "-o", "out.agmpkg"]).exit_code == 0
         assert invoke(runner, ["pkg", "install", "--editable", "--shadow", "source"]).exit_code == 0
+        assert invoke(runner, ["pkg", "install", "--reinstall", "source"]).exit_code == 0
         assert invoke(runner, ["pkg", "uninstall", "alpha"]).exit_code == 0
         assert invoke(runner, ["pkg", "list"]).exit_code == 0
         assert invoke(runner, ["pkg", "info", "alpha"]).exit_code == 0
@@ -143,6 +144,8 @@ class TestPackageLifecycle:
         assert install_calls[0].source == "source"
         assert install_calls[0].editable is True
         assert install_calls[0].shadow is True
+        assert install_calls[1].source == "source"
+        assert install_calls[1].reinstall is True
         assert uninstall_calls[0].name == "alpha"
         assert len(list_calls) == 1
         assert info_calls[0].name == "alpha"

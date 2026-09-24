@@ -2034,7 +2034,7 @@ def test_install_rejects_changed_directory_content_for_an_existing_identity(tmp_
     changed_source = "program def main() -> unit = ()\nlet changed = 1\n"
     (source / MODULE_TREE_DIRNAME / "main.agl").write_text(changed_source, encoding="utf-8")
 
-    with pytest.raises(PackageInstallError, match="content"):
+    with pytest.raises(PackageInstallError, match="already installed.*--reinstall"):
         install_directory(source, home=home, env={})
 
     assert (installed.root / MODULE_TREE_DIRNAME / "main.agl").read_text(
@@ -2266,7 +2266,7 @@ def test_install_archive_rejects_a_different_content_hash_for_an_existing_identi
 
     install_archive(first_archive, home=home, env={})
 
-    with pytest.raises(PackageInstallError, match="content"):
+    with pytest.raises(PackageInstallError, match="already installed.*--reinstall"):
         install_archive(second_archive, home=home, env={})
 
     assert (
@@ -2315,6 +2315,47 @@ def test_dry_run_archive_install_validates_an_existing_verified_tree(tmp_path: P
     assert (home / ".agm" / "packages" / "index.toml").read_text(encoding="utf-8") == activation
 
 
+def test_dry_run_archive_reinstall_reports_without_replacing_the_store_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    archive = tmp_path / "alpha.agmpkg"
+    write_archive(source, archive)
+    home = tmp_path / "home"
+    installed = install_archive(archive, home=home, env={})
+    previous_record = (installed.root / "RECORD").read_bytes()
+    dry_run.set_enabled(True)
+
+    assert (
+        install_archive_with_plan(archive, home=home, env={}, reinstall=True).package == installed
+    )
+
+    assert (installed.root / "RECORD").read_bytes() == previous_record
+    assert "dry-run: agm reinstall-package" in capsys.readouterr().out
+
+
+def test_dry_run_directory_reinstall_reports_without_replacing_the_store_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    previous_record = (installed.root / "RECORD").read_bytes()
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\ndescription = "changed"\n',
+        encoding="utf-8",
+    )
+    dry_run.set_enabled(True)
+
+    assert (
+        install_directory_with_plan(source, home=home, env={}, reinstall=True).package.root
+        == installed.root
+    )
+
+    assert (installed.root / "RECORD").read_bytes() == previous_record
+    assert "dry-run: agm reinstall-package" in capsys.readouterr().out
+
+
 def test_dry_run_archive_install_rejects_a_content_conflict_with_existing_tree(
     tmp_path: Path,
 ) -> None:
@@ -2331,8 +2372,189 @@ def test_dry_run_archive_install_rejects_a_content_conflict_with_existing_tree(
     install_archive(first_archive, home=home, env={})
     dry_run.set_enabled(True)
 
-    with pytest.raises(PackageInstallError, match="content"):
+    with pytest.raises(PackageInstallError, match="already installed"):
         install_archive(second_archive, home=home, env={})
+
+
+def test_reinstall_archive_replaces_the_complete_existing_tree(tmp_path: Path) -> None:
+    first_source = _package(tmp_path / "first-source", "alpha", "1.0.0")
+    (first_source / "obsolete.txt").write_text("old", encoding="utf-8")
+    second_source = _package(tmp_path / "second-source", "alpha", "1.0.0")
+    (second_source / "replacement.txt").write_text("new", encoding="utf-8")
+    first_archive = tmp_path / "first.agmpkg"
+    second_archive = tmp_path / "second.agmpkg"
+    write_archive(first_source, first_archive)
+    write_archive(second_source, second_archive)
+    home = tmp_path / "home"
+    installed = install_archive(first_archive, home=home, env={})
+
+    replaced = install_archive_with_plan(second_archive, home=home, env={}, reinstall=True).package
+
+    assert replaced.root == installed.root
+    assert not (replaced.root / "obsolete.txt").exists()
+    assert (replaced.root / "replacement.txt").read_text(encoding="utf-8") == "new"
+    assert verify_record(replaced.root)
+
+
+@pytest.mark.parametrize("archive_source", [False, True], ids=["directory", "archive"])
+def test_reinstall_publishes_if_the_previous_tree_disappears_before_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, archive_source: bool
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    (installed.root / "obsolete.txt").write_text("old", encoding="utf-8")
+    original_publish = package_install._publish_staged_refresh
+
+    def publish_after_removal(staging: Path, destination: Path) -> Path | None:
+        shutil.rmtree(destination)
+        return original_publish(staging, destination)
+
+    monkeypatch.setattr(package_install, "_publish_staged_refresh", publish_after_removal)
+    (source / "replacement.txt").write_text("new", encoding="utf-8")
+
+    if archive_source:
+        archive = tmp_path / "replacement.agmpkg"
+        write_archive(source, archive)
+        replaced = install_archive_with_plan(archive, home=home, env={}, reinstall=True).package
+    else:
+        replaced = install_directory_with_plan(source, home=home, env={}, reinstall=True).package
+
+    assert replaced.root == installed.root
+    assert not (replaced.root / "obsolete.txt").exists()
+    assert (replaced.root / "replacement.txt").read_text(encoding="utf-8") == "new"
+
+
+def test_failed_directory_reinstall_cleans_its_staging_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    previous_manifest = (installed.root / "package.toml").read_bytes()
+
+    def fail_publish(_staging: Path, _destination: Path) -> Path | None:
+        raise OSError("publish failed")
+
+    monkeypatch.setattr(package_install, "_publish_staged_refresh", fail_publish)
+
+    with pytest.raises(PackageInstallError, match="publish failed"):
+        install_directory_with_plan(source, home=home, env={}, reinstall=True)
+
+    assert (installed.root / "package.toml").read_bytes() == previous_manifest
+    assert not tuple(installed.root.parent.glob(".agm-package-*"))
+
+
+def test_reinstall_keeps_the_previous_tree_if_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    original_rmtree = package_install.fs.rmtree
+
+    def fail_previous_cleanup(path: Path) -> None:
+        if path.name.startswith(".agm-previous-"):
+            raise OSError("cleanup failed")
+        original_rmtree(path)
+
+    monkeypatch.setattr(package_install.fs, "rmtree", fail_previous_cleanup)
+    (source / "replacement.txt").write_text("new", encoding="utf-8")
+
+    replaced = install_directory_with_plan(source, home=home, env={}, reinstall=True).package
+
+    assert replaced.root == installed.root
+    assert (replaced.root / "replacement.txt").read_text(encoding="utf-8") == "new"
+    assert len(tuple(replaced.root.parent.glob(".agm-previous-*"))) == 1
+
+
+def test_dry_run_reinstall_reports_a_source_distribution_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+
+    def fail_distribution_files(_root: Path) -> tuple[tuple[str, bytes], ...]:
+        raise OSError("source read failed")
+
+    monkeypatch.setattr(package_install, "distribution_files", fail_distribution_files)
+    dry_run.set_enabled(True)
+
+    with pytest.raises(PackageInstallError, match="source read failed"):
+        install_directory_with_plan(source, home=home, env={}, reinstall=True)
+
+    assert (installed.root / "package.toml").is_file()
+
+
+def test_reinstall_directory_replaces_the_complete_existing_tree(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+    (source / "obsolete.txt").write_text("old", encoding="utf-8")
+    home = tmp_path / "home"
+    installed = install_directory(source, home=home, env={})
+    (source / "obsolete.txt").unlink()
+    (source / "replacement.txt").write_text("new", encoding="utf-8")
+    (source / MODULE_TREE_DIRNAME / "main.agl").write_text(
+        "program def main() -> unit = ()\nlet replacement = 1\n", encoding="utf-8"
+    )
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\ndescription = "reinstalled"\n',
+        encoding="utf-8",
+    )
+
+    replaced = install_directory_with_plan(source, home=home, env={}, reinstall=True).package
+
+    assert replaced.root == installed.root
+    assert replaced.manifest.description == "reinstalled"
+    assert not (replaced.root / "obsolete.txt").exists()
+    assert (replaced.root / "replacement.txt").read_text(encoding="utf-8") == "new"
+    assert "let replacement" in (replaced.root / MODULE_TREE_DIRNAME / "main.agl").read_text(
+        encoding="utf-8"
+    )
+    assert verify_record(replaced.root)
+
+
+def test_reinstall_cannot_be_used_with_an_editable_package(tmp_path: Path) -> None:
+    source = _package(tmp_path / "source", "alpha", "1.0.0")
+
+    with pytest.raises(PackageInstallError, match="cannot be used with --editable"):
+        install_directory_with_plan(
+            source, home=tmp_path / "home", env={}, editable=True, reinstall=True
+        )
+
+
+def test_failed_reinstall_restores_the_previous_store_tree_and_activation(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    owner = _package(
+        tmp_path / "owner",
+        "owner",
+        "1.0.0",
+        '\n[commands]\nlaunch = { program = "owner/main::main" }\n',
+    )
+    install_directory(owner, home=home, env={})
+    source = _package(
+        tmp_path / "alpha",
+        "alpha",
+        "1.0.0",
+        '\n[commands]\noriginal = { program = "alpha/main::main" }\n',
+    )
+    installed = install_directory(source, home=home, env={})
+    previous_module = (installed.root / MODULE_TREE_DIRNAME / "main.agl").read_bytes()
+    previous_index = load_activation_index(home=home, env={})
+    (source / "package.toml").write_text(
+        '[package]\nname = "alpha"\nversion = "1.0.0"\n\n'
+        '[commands]\nlaunch = { program = "alpha/main::main" }\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PackageInstallError, match="conflict"):
+        install_directory_with_plan(source, home=home, env={}, reinstall=True)
+
+    assert (installed.root / MODULE_TREE_DIRNAME / "main.agl").read_bytes() == previous_module
+    assert load_activation_index(home=home, env={}) == previous_index
+    assert not tuple(installed.root.parent.glob(".agm-previous-*"))
 
 
 def test_dry_run_archive_install_rejects_a_tampered_existing_tree(tmp_path: Path) -> None:
@@ -2913,7 +3135,7 @@ def test_install_refuses_unsatisfied_and_different_existing_manifest(tmp_path: P
         '[package]\nname = "bravo"\nversion = "1.0.0"\ndescription = "changed"\n',
         encoding="utf-8",
     )
-    with pytest.raises(PackageInstallError, match="disagrees"):
+    with pytest.raises(PackageInstallError, match="already installed.*--reinstall"):
         install_directory(source, home=home, env={})
 
 

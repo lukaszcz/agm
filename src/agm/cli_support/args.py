@@ -38,6 +38,7 @@ class PkgInstallArgs:
     source: str
     editable: bool
     shadow: bool
+    reinstall: bool = False
 
 
 @dataclass(slots=True)

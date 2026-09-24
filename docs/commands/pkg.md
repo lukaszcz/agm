@@ -9,7 +9,7 @@ source.
 | `agm pkg init [DIR] [--name NAME] [--version VERSION]` | Scaffold a new package |
 | `agm pkg check [DIR]` | Validate a package directory |
 | `agm pkg create [DIR] [-o FILE]` | Validate and write a `<name>-<version>.agmpkg` archive |
-| `agm pkg install SRC [--editable] [--shadow]` | Install and activate a directory or archive |
+| `agm pkg install SRC [--editable] [--reinstall] [--shadow]` | Install and activate a directory or archive |
 | `agm pkg uninstall NAME` | Remove an active package |
 | `agm pkg list` | List installed versions and active editable packages |
 | `agm pkg info NAME` | Show an active package's metadata and dependency status |
@@ -268,9 +268,12 @@ every path-only dependency needs a stored version or `url` first.
 the distribution in `<AGM-home>/packages/<name>/<version>/` with a SHA-256 `RECORD`. From a
 directory source it first merges the module tree's `@command` registrations into the manifest, so
 the stored package carries one complete command table. Activation is published atomically only
-after the resulting selection validates; a failed install leaves nothing active. Dependencies
-resolve from the store first, then a declared `path` (installed alongside), then a `url` (fetched
-and hash-verified; never in `--dry-run`). Versions are kept side by side, one per identity (build
+after the resulting selection validates; a failed install leaves nothing active. If a package with
+the same name and version already exists with different contents, install reports that identity and
+suggests `--reinstall`. That flag completely replaces the immutable store tree, restoring the
+previous tree if activation fails. It cannot be combined with `--editable`. Dependencies resolve
+from the store first, then a declared `path` (installed alongside), then a `url` (fetched and
+hash-verified; never in `--dry-run`). Versions are kept side by side, one per identity (build
 metadata included, as above). `--editable` activates the source directory in place: no copy, no
 `RECORD`, edits visible immediately, and its command table is re-derived from source on each
 dispatch. Before activation is published, if AGM's interpreter environment does not satisfy some

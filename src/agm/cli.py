@@ -1496,6 +1496,9 @@ def pkg_install(
     ),
     editable: bool = typer.Option(False, "--editable", help="Activate a live package directory."),
     shadow: bool = typer.Option(False, "--shadow", help="Replace conflicting package commands."),
+    reinstall: bool = typer.Option(
+        False, "--reinstall", help="Replace the installed package with this name and version."
+    ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1508,6 +1511,7 @@ def pkg_install(
             source=_require_value(source, command_path=["pkg", "install"], name="source"),
             editable=editable,
             shadow=shadow,
+            reinstall=reinstall,
         )
     )
 

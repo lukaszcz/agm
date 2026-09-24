@@ -224,6 +224,16 @@ def test_missing_package_is_rejected_without_activating_it(tmp_path: Path, opera
     assert not (_context(tmp_path).home / ".agm" / "packages" / "missing").exists()
 
 
+def test_install_command_rejects_reinstall_for_editable_packages(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as raised:
+        install_command.run(PkgInstallArgs("source", editable=True, shadow=False, reinstall=True))
+
+    assert raised.value.code == 1
+    assert "--reinstall cannot be used with --editable" in capsys.readouterr().err
+
+
 def test_list_command_marks_only_the_exact_build_identity_active(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

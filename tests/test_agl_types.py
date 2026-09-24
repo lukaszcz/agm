@@ -304,7 +304,10 @@ class TestTypeReprAndKind:
         assert repr(ArrayType(elem=IntType())) == "array[int]"
 
     def test_dict_repr(self) -> None:
-        assert repr(DictType(value=TextType())) == "dict[text, text]"
+        assert repr(DictType(key=TextType(), value=TextType())) == "dict[text, text]"
+
+    def test_dict_repr_with_non_text_key(self) -> None:
+        assert repr(DictType(key=IntType(), value=TextType())) == "dict[int, text]"
 
     def test_record_repr(self) -> None:
         assert repr(RecordType(name="Point")) == "Point"
@@ -354,7 +357,7 @@ class TestTypeReprAndKind:
         assert ArrayType(elem=IntType()).kind == "array"
 
     def test_dict_kind(self) -> None:
-        assert DictType(value=IntType()).kind == "dict"
+        assert DictType(key=TextType(), value=IntType()).kind == "dict"
 
     def test_record_kind(self) -> None:
         assert RecordType(name="R").kind == "record"
@@ -411,7 +414,12 @@ class TestIsJsonShaped:
         assert is_json_shaped(ArrayType(elem=IntType())) is True
 
     def test_dict_of_json_shaped_is_json_shaped(self) -> None:
-        assert is_json_shaped(DictType(value=TextType())) is True
+        assert is_json_shaped(DictType(key=TextType(), value=TextType())) is True
+
+    def test_dict_with_non_text_key_is_not_json_shaped(self) -> None:
+        # A native JSON object slot has no representation for a non-text key,
+        # even when the value is itself JSON-shaped.
+        assert is_json_shaped(DictType(key=IntType(), value=TextType())) is False
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +436,7 @@ class TestIsScalarJsonShaped:
         assert is_scalar_json_shaped(ArrayType(elem=IntType())) is False
 
     def test_dict_is_not_scalar_json_shaped(self) -> None:
-        assert is_scalar_json_shaped(DictType(value=IntType())) is False
+        assert is_scalar_json_shaped(DictType(key=TextType(), value=IntType())) is False
 
     def test_record_is_not_scalar_json_shaped(self) -> None:
         assert is_scalar_json_shaped(RecordType(name="R")) is False
@@ -839,7 +847,7 @@ class TestInferenceVarType:
         "typ",
         [
             ArrayType(InferenceVarType("T")),
-            DictType(InferenceVarType("T")),
+            DictType(TextType(), InferenceVarType("T")),
             FunctionType(params=(InferenceVarType("T"),), result=InferenceVarType("T")),
             RecordType("Box", type_args=(InferenceVarType("T"),)),
             EnumType("Option", type_args=(InferenceVarType("T"),)),
@@ -855,7 +863,7 @@ class TestInferenceVarType:
         variable = InferenceVarType("T")
         typ = FunctionType(
             params=(ArrayType(variable),),
-            result=RecordType("Box", type_args=(DictType(variable),)),
+            result=RecordType("Box", type_args=(DictType(TextType(), variable),)),
         )
 
         assert tuple(item for item in iter_type(typ) if item == variable) == (variable, variable)
@@ -1012,25 +1020,39 @@ class TestTypeTemplateMatch:
     def test_nested_containers_and_functions_require_consistent_binding(self) -> None:
         variable = TypeVarType("T")
         template = FunctionType(
-            params=(ArrayType(variable), DictType(variable)),
+            params=(ArrayType(variable), DictType(TextType(), variable)),
             result=variable,
         )
         matching = FunctionType(
-            params=(ArrayType(IntType()), DictType(IntType())),
+            params=(ArrayType(IntType()), DictType(TextType(), IntType())),
             result=IntType(),
         )
         conflicting = FunctionType(
-            params=(ArrayType(IntType()), DictType(TextType())),
+            params=(ArrayType(IntType()), DictType(TextType(), TextType())),
             result=IntType(),
         )
 
         assert match_type_template(template, matching, ("T",)) is not None
         assert match_type_template(template, conflicting, ("T",)) is None
 
+    def test_dict_key_position_is_matched_structurally(self) -> None:
+        # The key is a template hole too, matched and required consistent
+        # exactly like the value.
+        template = DictType(TypeVarType("K"), TypeVarType("K"))
+        matching = DictType(IntType(), IntType())
+        conflicting = DictType(IntType(), TextType())
+
+        assert match_type_template(template, matching, ("K",)) == TypeTemplateMatch(
+            (("K", IntType()),)
+        )
+        assert match_type_template(template, conflicting, ("K",)) is None
+
     def test_shape_nominal_and_rigid_leaf_mismatches_do_not_match(self) -> None:
         module = ModuleId.from_path("library/remote")
 
-        assert match_type_template(ArrayType(IntType()), DictType(IntType()), ()) is None
+        assert (
+            match_type_template(ArrayType(IntType()), DictType(TextType(), IntType()), ()) is None
+        )
         assert (
             match_type_template(
                 EnumType("Remote", module_id=module),
@@ -1112,7 +1134,11 @@ class TestHelpers:
         assert free_type_vars(ArrayType(TypeVarType("T"))) == frozenset({"T"})
 
     def test_free_type_vars_dict(self) -> None:
-        assert free_type_vars(DictType(TypeVarType("V"))) == frozenset({"V"})
+        assert free_type_vars(DictType(TextType(), TypeVarType("V"))) == frozenset({"V"})
+
+    def test_free_type_vars_dict_key(self) -> None:
+        # The key is a structural child too: a variable occurring there is free.
+        assert free_type_vars(DictType(TypeVarType("K"), TypeVarType("V"))) == frozenset({"K", "V"})
 
     def test_free_type_vars_function(self) -> None:
         ft = FunctionType(params=(TypeVarType("A"),), result=TypeVarType("B"))
@@ -1150,9 +1176,14 @@ class TestHelpers:
         assert result == ArrayType(IntType())
 
     def test_substitute_dict(self) -> None:
-        t = DictType(TypeVarType("V"))
+        t = DictType(TextType(), TypeVarType("V"))
         result = substitute(t, {"V": TextType()})
-        assert result == DictType(TextType())
+        assert result == DictType(TextType(), TextType())
+
+    def test_substitute_dict_key(self) -> None:
+        t = DictType(TypeVarType("K"), IntType())
+        result = substitute(t, {"K": TextType()})
+        assert result == DictType(TextType(), IntType())
 
     def test_substitute_function(self) -> None:
         ft = FunctionType(params=(TypeVarType("A"),), result=TypeVarType("B"))
@@ -1409,7 +1440,7 @@ class TestNominalEquality:
         assert ArrayType(IntType()) != ArrayType(TextType())
 
     def test_dict_type_stays_structural(self) -> None:
-        assert DictType(IntType()) != DictType(TextType())
+        assert DictType(TextType(), IntType()) != DictType(TextType(), TextType())
 
     def test_function_type_stays_structural(self) -> None:
         f1 = FunctionType(params=(IntType(),), result=TextType())

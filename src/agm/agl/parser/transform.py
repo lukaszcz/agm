@@ -610,13 +610,15 @@ class AstBuilder(Transformer):
         Any applied head (``Box[T]``) contributes its bare-name arguments;
         whether it is a real builtin receiver is typecheck's concern.
         """
-        if isinstance(receiver, ArrayT) and isinstance(receiver.elem, NameT):
-            return (receiver.elem.name,)
-        if isinstance(receiver, DictT) and isinstance(receiver.value, NameT):
-            return (receiver.value.name,)
-        if isinstance(receiver, AppliedT):
-            return tuple(arg.name for arg in receiver.args if isinstance(arg, NameT))
-        return ()
+        if isinstance(receiver, ArrayT):
+            children: tuple[TypeExpr, ...] = (receiver.elem,)
+        elif isinstance(receiver, DictT):
+            children = (receiver.key, receiver.value)
+        elif isinstance(receiver, AppliedT):
+            children = receiver.args
+        else:
+            children = ()
+        return tuple(child.name for child in children if isinstance(child, NameT))
 
     def _function_declaration_head(
         self, args: _Args
@@ -1026,7 +1028,9 @@ class AstBuilder(Transformer):
                 elem=type_args[0], span=segment.span, node_id=self._next_id()
             )
         elif segment.name == "dict" and len(type_args) == 2 and isinstance(type_args[0], TextT):
-            receiver_type = DictT(value=type_args[1], span=segment.span, node_id=self._next_id())
+            receiver_type = DictT(
+                key=type_args[0], value=type_args[1], span=segment.span, node_id=self._next_id()
+            )
         else:
             receiver_type = AppliedT(
                 name=segment.name,
@@ -1257,7 +1261,7 @@ class AstBuilder(Transformer):
                         f"dict keys are always text in AgL, got {render_type_expr(key_type)!r}.",
                         span=key_type.span,
                     )
-                return DictT(value=type_args[1], span=span, node_id=nid)
+                return DictT(key=key_type, value=type_args[1], span=span, node_id=nid)
             raise syntax_error_from_meta(meta, "dict[] takes exactly two type arguments")
         return AppliedT(name=name, args=type_args, span=span, node_id=nid)
 

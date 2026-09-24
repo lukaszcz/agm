@@ -2601,10 +2601,10 @@ class TestDeriveSchema:
         assert derive_schema(JsonType(), type_table_for()) == {}
 
     def test_dict_type(self) -> None:
-        from agm.agl.semantics.types import DictType, IntType
+        from agm.agl.semantics.types import DictType, IntType, TextType
         from tests._agl_helpers import derive_schema
 
-        result = derive_schema(DictType(value=IntType()), type_table_for())
+        result = derive_schema(DictType(key=TextType(), value=IntType()), type_table_for())
         assert result == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_type(self) -> None:

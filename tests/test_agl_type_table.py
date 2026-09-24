@@ -1930,7 +1930,7 @@ class TestGenericSubstitution:
                     ("first", TypeVarType("T")),
                     ("second", TypeVarType("U")),
                     ("firsts", ArrayType(TypeVarType("T"))),
-                    ("seconds", DictType(TypeVarType("U"))),
+                    ("seconds", DictType(TextType(), TypeVarType("U"))),
                 ),
                 decl_node_id=700018,
             )
@@ -1943,7 +1943,7 @@ class TestGenericSubstitution:
             "first": IntType(),
             "second": TextType(),
             "firsts": ArrayType(IntType()),
-            "seconds": DictType(TextType()),
+            "seconds": DictType(TextType(), TextType()),
         }
 
     def test_enum_members_substitute_type_args(self) -> None:
@@ -3019,7 +3019,7 @@ class TestSatisfiesEq:
     def test_dict_of_functions_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
         fn_type = FunctionType(params=(), result=IntType())
-        assert satisfies(DictType(fn_type), ConstraintKind.EQ, table, {}) is False
+        assert satisfies(DictType(TextType(), fn_type), ConstraintKind.EQ, table, {}) is False
 
     def test_function_type_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
@@ -3110,12 +3110,69 @@ class TestSatisfiesEq:
 
     def test_dict_of_unbounded_type_variable_does_not_satisfy_eq(self) -> None:
         table = TypeTable()
-        assert satisfies(DictType(TypeVarType("T")), ConstraintKind.EQ, table, {}) is False
+        assert (
+            satisfies(DictType(TextType(), TypeVarType("T")), ConstraintKind.EQ, table, {}) is False
+        )
 
     def test_dict_of_bounded_type_variable_satisfies_eq(self) -> None:
         table = TypeTable()
         bounds = {"T": frozenset({ConstraintKind.EQ})}
-        assert satisfies(DictType(TypeVarType("T")), ConstraintKind.EQ, table, bounds) is True
+        assert (
+            satisfies(DictType(TextType(), TypeVarType("T")), ConstraintKind.EQ, table, bounds)
+            is True
+        )
+
+    def test_dict_satisfies_eq_only_when_both_key_and_value_do(self) -> None:
+        # Eq is required of both children independently: a bad key disqualifies
+        # the dict even when the value is fine, and vice versa.
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        assert satisfies(DictType(fn_type, IntType()), ConstraintKind.EQ, table, {}) is False
+        assert satisfies(DictType(IntType(), fn_type), ConstraintKind.EQ, table, {}) is False
+        assert satisfies(DictType(IntType(), IntType()), ConstraintKind.EQ, table, {}) is True
+
+    def test_record_with_bad_dict_key_is_flagged_for_eq_and_json(self) -> None:
+        # The KEY position of a field's dict type is scanned by the
+        # declaration-flagging fixpoint too: a function hiding there
+        # disqualifies the record from Eq (and, by the same fixpoint, from
+        # JSON convertibility) even though the value type is fine.
+        table = TypeTable()
+        fn_type = FunctionType(params=(), result=IntType())
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Mapping",
+                module_id=ENTRY_ID,
+                fields=(("entries", DictType(fn_type, IntType())),),
+                decl_node_id=701025,
+            )
+        )
+        handle = RecordType(name="Mapping", module_id=ENTRY_ID, decl_id=701025)
+        assert satisfies(handle, ConstraintKind.EQ, table, {}) is False
+        assert is_json_convertible(handle, table) is False
+
+    def test_generic_record_dict_key_position_is_relevant_for_eq(self) -> None:
+        # T appears only in the dict's KEY position; relevant_params must
+        # still mark it relevant, or a bad instantiation for T slips through
+        # unchecked (nominal_satisfies only recurses into relevant params).
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="KeyBox",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("entries", DictType(TypeVarType("T"), IntType())),),
+                decl_node_id=701026,
+            )
+        )
+        fn_type = FunctionType(params=(), result=IntType())
+        int_box = RecordType(
+            name="KeyBox", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=701026
+        )
+        fn_box = RecordType(name="KeyBox", type_args=(fn_type,), module_id=ENTRY_ID, decl_id=701026)
+        assert satisfies(int_box, ConstraintKind.EQ, table, {}) is True
+        assert satisfies(fn_box, ConstraintKind.EQ, table, {}) is False
 
     def test_generic_nominal_with_unbounded_type_variable_argument_does_not_satisfy_eq(
         self,
@@ -3209,7 +3266,16 @@ class TestSatisfiesHashable:
 
     def test_dict_never_satisfies_hashable(self) -> None:
         table = TypeTable()
-        assert satisfies(DictType(IntType()), ConstraintKind.HASHABLE, table, {}) is False
+        assert (
+            satisfies(DictType(TextType(), IntType()), ConstraintKind.HASHABLE, table, {}) is False
+        )
+
+    def test_dict_never_satisfies_hashable_regardless_of_key_type(self) -> None:
+        # dict is disqualified outright, before even looking at its key type.
+        table = TypeTable()
+        assert (
+            satisfies(DictType(IntType(), IntType()), ConstraintKind.HASHABLE, table, {}) is False
+        )
 
     def test_function_type_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
@@ -3286,7 +3352,7 @@ class TestSatisfiesHashable:
                 kind="record",
                 name="Mapping",
                 module_id=ENTRY_ID,
-                fields=(("entries", DictType(IntType())),),
+                fields=(("entries", DictType(TextType(), IntType())),),
                 decl_node_id=701023,
             )
         )
@@ -3672,7 +3738,7 @@ class TestHashableImpliesEq:
             (IntType(), {}),
             (DecimalType(), {}),
             (ArrayType(IntType()), {}),
-            (DictType(IntType()), {}),
+            (DictType(TextType(), IntType()), {}),
             (UnitType(), {}),
             (FunctionType(params=(), result=IntType()), {}),
             (BottomType(), {}),
@@ -3838,7 +3904,7 @@ class TestCastClassification:
 
     def test_dict_of_scalars_to_json_total(self) -> None:
         assert (
-            cast_classification(DictType(value=IntType()), JsonType(), TypeTable())
+            cast_classification(DictType(key=TextType(), value=IntType()), JsonType(), TypeTable())
             == CastKind.TOTAL_JSON
         )
 
@@ -4079,9 +4145,19 @@ class TestIsJsonConvertible:
         good = RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030)
         bad = RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029)
         assert is_json_convertible(ArrayType(elem=ArrayType(elem=good)), table) is True
-        assert is_json_convertible(DictType(value=ArrayType(elem=good)), table) is True
+        assert (
+            is_json_convertible(DictType(key=TextType(), value=ArrayType(elem=good)), table) is True
+        )
         assert is_json_convertible(ArrayType(elem=ArrayType(elem=bad)), table) is False
-        assert is_json_convertible(DictType(value=ArrayType(elem=bad)), table) is False
+        assert (
+            is_json_convertible(DictType(key=TextType(), value=ArrayType(elem=bad)), table) is False
+        )
+
+    def test_dict_follows_its_key_type_too(self) -> None:
+        # A non-convertible key disqualifies the dict even with a good value.
+        table = TypeTable()
+        assert is_json_convertible(DictType(key=UnitType(), value=IntType()), table) is False
+        assert is_json_convertible(DictType(key=TextType(), value=IntType()), table) is True
 
     def test_recursive_declaration_converts(self) -> None:
         table = TypeTable()
@@ -4133,7 +4209,11 @@ class TestJsonCastHint:
     def test_container_and_nominal_into_json_are_hinted(self) -> None:
         table = _bad_record_table()
         good = RecordType(name="Good", module_id=ENTRY_ID, decl_id=700030)
-        for value_type in (ArrayType(elem=IntType()), DictType(value=IntType()), good):
+        for value_type in (
+            ArrayType(elem=IntType()),
+            DictType(key=TextType(), value=IntType()),
+            good,
+        ):
             assert "as json" in json_cast_hint(value_type, JsonType(), table)
 
     def test_nonconvertible_container_into_json_is_not_hinted(self) -> None:
@@ -4153,7 +4233,11 @@ class TestJsonCastHint:
         # The reverse direction: the fix is a cast to the target type, never
         # `as json`.
         table = TypeTable()
-        for target in (TextType(), ArrayType(elem=IntType()), DictType(value=IntType())):
+        for target in (
+            TextType(),
+            ArrayType(elem=IntType()),
+            DictType(key=TextType(), value=IntType()),
+        ):
             assert json_cast_hint(JsonType(), target, table) == ""
 
 
@@ -4165,7 +4249,9 @@ class TestJsonRepresentationObstacle:
 
     def test_structural_non_data_leaf_through_a_dict_is_named(self) -> None:
         table = TypeTable()
-        message = table.json_representation_obstacle(DictType(value=ArrayType(elem=UnitType())))
+        message = table.json_representation_obstacle(
+            DictType(key=TextType(), value=ArrayType(elem=UnitType()))
+        )
         assert message is not None
         assert "unit" in message
 
@@ -4388,9 +4474,15 @@ class TestFiniteClosure:
         exc = ExceptionType("Oops", module_id=ENTRY_ID)
         enum = EnumType("Choice", module_id=ENTRY_ID)
         box = RecordType("Box", type_args=(enum,), module_id=ENTRY_ID, decl_id=700002)
-        typ = FunctionType(params=(ArrayType(exc),), result=DictType(box))
+        typ = FunctionType(params=(ArrayType(exc),), result=DictType(TextType(), box))
         assert list(nominal_references(typ)) == [exc, box, enum]
         assert list(nominal_references(BoolType())) == []
+
+    def test_nominal_references_walks_dict_key_too(self) -> None:
+        # A nominal reference occurring in KEY position must be yielded too,
+        # not only one occurring in value position.
+        box = RecordType("Box", module_id=ENTRY_ID, decl_id=700701)
+        assert list(nominal_references(DictType(box, IntType()))) == [box]
 
     def test_uniform_self_reference_is_finite(self) -> None:
         # Tree[T] referencing Tree[T]: the parameter-dependency self-loop
@@ -5156,7 +5248,7 @@ class TestFiniteClosure:
                         "next",
                         RecordType(
                             "Q",
-                            type_args=(DictType(TypeVarType("T")),),
+                            type_args=(DictType(TextType(), TypeVarType("T")),),
                             module_id=ENTRY_ID,
                             decl_id=700043,
                         ),
@@ -5168,6 +5260,39 @@ class TestFiniteClosure:
         assert (
             table.has_finite_schema(
                 RecordType("Q", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700043)
+            )
+            is False
+        )
+
+    def test_growing_via_dict_key_is_infinite(self) -> None:
+        # Q[T] referencing Q[dict[T, int]]: T occurs under the dict
+        # constructor via the KEY position this time, still a proper
+        # subterm of the argument template.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Q",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(
+                    ("value", TypeVarType("T")),
+                    (
+                        "next",
+                        RecordType(
+                            "Q",
+                            type_args=(DictType(TypeVarType("T"), IntType()),),
+                            module_id=ENTRY_ID,
+                            decl_id=700702,
+                        ),
+                    ),
+                ),
+                decl_node_id=700702,
+            )
+        )
+        assert (
+            table.has_finite_schema(
+                RecordType("Q", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700702)
             )
             is False
         )
@@ -5277,6 +5402,28 @@ class TestFiniteClosure:
         )
         assert table.canonical_schema_type(weird) == weird
         assert table.schema_relevant_type_args(weird) == (IntType(), TextType())
+
+    def test_schema_canonical_type_collapses_phantom_argument_in_dict_key(self) -> None:
+        # A dict KEY position is canonicalized too: a nominal reference
+        # sitting there has its own phantom argument collapsed to unit,
+        # exactly as one sitting in value position would.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Phantom",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(),
+                decl_node_id=700703,
+            )
+        )
+        phantom = RecordType("Phantom", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700703)
+        canonical_phantom = RecordType(
+            "Phantom", type_args=(UnitType(),), module_id=ENTRY_ID, decl_id=700703
+        )
+        dict_type = DictType(phantom, TextType())
+        assert table.canonical_schema_type(dict_type) == DictType(canonical_phantom, TextType())
 
     def test_argument_template_type_var_foreign_to_source_is_ignored(self) -> None:
         # Defensive: an argument template's type variable that is not among
@@ -5526,6 +5673,37 @@ class TestFiniteClosure:
             )
         )
         holder = RecordType("Holder", module_id=ENTRY_ID, decl_id=700023)
+        culprit = table.first_infinite_declaration(holder)
+        assert culprit is not None
+        assert (culprit.module_id, culprit.scope_path, culprit.name) == (ENTRY_ID, (), "Perfect")
+
+    def test_first_infinite_declaration_names_culprit_reached_through_dict_key(self) -> None:
+        # The culprit reference sits in the dict's KEY position this time,
+        # not its value — nominal_references_for_schema must still find it.
+        table = self._perfect_table()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Holder",
+                module_id=ENTRY_ID,
+                fields=(
+                    (
+                        "p",
+                        DictType(
+                            RecordType(
+                                "Perfect",
+                                type_args=(IntType(),),
+                                module_id=ENTRY_ID,
+                                decl_id=700037,
+                            ),
+                            TextType(),
+                        ),
+                    ),
+                ),
+                decl_node_id=700704,
+            )
+        )
+        holder = RecordType("Holder", module_id=ENTRY_ID, decl_id=700704)
         culprit = table.first_infinite_declaration(holder)
         assert culprit is not None
         assert (culprit.module_id, culprit.scope_path, culprit.name) == (ENTRY_ID, (), "Perfect")

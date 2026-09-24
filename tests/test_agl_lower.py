@@ -569,11 +569,13 @@ class TestCompileCoercion:
         assert result is None
 
     def test_dict_int_to_json_is_none(self) -> None:
-        result = compile_coercion(DictType(IntType()), JsonType())
+        result = compile_coercion(DictType(TextType(), IntType()), JsonType())
         assert result is None
 
     def test_dict_int_to_dict_decimal_is_none(self) -> None:
-        result = compile_coercion(DictType(IntType()), DictType(DecimalType()))
+        result = compile_coercion(
+            DictType(TextType(), IntType()), DictType(TextType(), DecimalType())
+        )
         assert result is None
 
     def test_record_field_mismatch_is_none(self) -> None:

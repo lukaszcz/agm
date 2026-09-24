@@ -300,6 +300,7 @@ class InferenceEngine:
             self._unify(left.elem, right.elem, origin, evidence)
             return
         if isinstance(left, DictType) and isinstance(right, DictType):
+            self._unify(left.key, right.key, origin, evidence)
             self._unify(left.value, right.value, origin, evidence)
             return
         if isinstance(left, FunctionType) and isinstance(right, FunctionType):
@@ -376,6 +377,7 @@ class InferenceEngine:
             self._complete(inferred.elem, context.elem, origin)
             return
         if isinstance(inferred, DictType) and isinstance(context, DictType):
+            self._complete(inferred.key, context.key, origin)
             self._complete(inferred.value, context.value, origin)
             return
         if isinstance(inferred, FunctionType) and isinstance(context, FunctionType):

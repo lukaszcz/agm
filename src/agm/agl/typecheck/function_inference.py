@@ -805,7 +805,7 @@ def _builtin_receiver_type(node: FuncDef, owner: "ReceiverOwner") -> tuple[Type,
         return ArrayType(TypeVarType(type_parameter)), 1, receiver.name
     if receiver.name == "dict":
         type_parameter = _method_signature_type_params(node, 1)[0]
-        return DictType(TypeVarType(type_parameter)), 1, receiver.name
+        return DictType(TextType(), TypeVarType(type_parameter)), 1, receiver.name
     scalar_types: dict[str, Type] = {
         "text": TextType(),
         "json": JsonType(),

@@ -215,7 +215,7 @@ def _target_type_for_request(request: ContractRequest) -> Type:
     if kind == "array":
         return ArrayType(JsonType())
     if kind == "dict":
-        return DictType(JsonType())
+        return DictType(TextType(), JsonType())
     # These two build a handle from a bare label string with no declaration
     # in hand, so they name no declaration: decl_id keeps its NO_DECL_ID
     # default.

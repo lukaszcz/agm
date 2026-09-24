@@ -10,7 +10,7 @@ from agm.agl import PipelineDriver
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PreparedProgram
-from agm.agl.semantics.types import ArrayType, DictType, IntType, TypeVarType
+from agm.agl.semantics.types import ArrayType, DictType, IntType, TextType, TypeVarType
 from agm.agl.syntax import FuncDef
 from agm.agl.typecheck.env import FunctionSignature
 from agm.agl.typecheck.program import CheckedProgram
@@ -221,7 +221,7 @@ def test_builtin_dict_receiver_wildcard_uses_a_private_rigid_type_parameter(tmp_
     signature = _signature_for(discovery.checked, "std/dict")
     (type_parameter,) = signature.type_params
     assert type_parameter.startswith("__method_type_slot_")
-    assert signature.params[0].type == DictType(TypeVarType(type_parameter))
+    assert signature.params[0].type == DictType(TextType(), TypeVarType(type_parameter))
 
 
 def test_generic_dict_receiver_binds_its_value_slot(tmp_path: Path) -> None:
@@ -235,7 +235,7 @@ def test_generic_dict_receiver_binds_its_value_slot(tmp_path: Path) -> None:
 
     assert discovery.checked is not None, discovery.diagnostics
     signature = _signature_for(discovery.checked, "std/dict")
-    assert signature.params[0].type == DictType(TypeVarType("V"))
+    assert signature.params[0].type == DictType(TextType(), TypeVarType("V"))
 
 
 def test_scalar_builtin_receiver_may_be_declared_in_a_named_region() -> None:

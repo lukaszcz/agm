@@ -610,6 +610,7 @@ class TestTypeExpressions:
         let = first(parse("let d: dict[text, int] = {}"))
         assert isinstance(let, LetDecl)
         assert isinstance(let.type_ann, DictT)
+        assert isinstance(let.type_ann.key, TextT)
         assert isinstance(let.type_ann.value, IntT)
 
     def test_array_wrong_arg_count_raises(self) -> None:

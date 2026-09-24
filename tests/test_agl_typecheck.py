@@ -425,7 +425,7 @@ class TestIsJsonShaped:
         assert not is_json_shaped(ArrayType(elem=UnitType()))
 
     def test_dict_of_json_shaped(self) -> None:
-        assert is_json_shaped(DictType(value=TextType()))
+        assert is_json_shaped(DictType(key=TextType(), value=TextType()))
 
     def test_record_not_json_shaped(self) -> None:
         rt = RecordType(name="R")
@@ -507,7 +507,12 @@ class TestComparableTypes:
 
     def test_dict_of_function_not_comparable(self) -> None:
         ft = FunctionType(params=(IntType(),), result=TextType())
-        assert not comparable_types(DictType(value=ft), DictType(value=ft), _EMPTY_TABLE, bounds={})
+        assert not comparable_types(
+            DictType(key=TextType(), value=ft),
+            DictType(key=TextType(), value=ft),
+            _EMPTY_TABLE,
+            bounds={},
+        )
 
     def test_record_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
@@ -553,7 +558,10 @@ class TestComparableTypes:
 
     def test_dict_of_text_comparable(self) -> None:
         assert comparable_types(
-            DictType(value=TextType()), DictType(value=TextType()), _EMPTY_TABLE, bounds={}
+            DictType(key=TextType(), value=TextType()),
+            DictType(key=TextType(), value=TextType()),
+            _EMPTY_TABLE,
+            bounds={},
         )
 
     def test_bounded_mutual_recursive_candidate_equality_accepted(self) -> None:
@@ -685,8 +693,8 @@ class TestIsAssignable:
         narrows to scalars, since absorbing a container would rebuild it)."""
         assert is_json_shaped(ArrayType(elem=IntType()))
         assert not is_assignable(ArrayType(elem=IntType()), JsonType())
-        assert is_json_shaped(DictType(value=IntType()))
-        assert not is_assignable(DictType(value=IntType()), JsonType())
+        assert is_json_shaped(DictType(key=TextType(), value=IntType()))
+        assert not is_assignable(DictType(key=TextType(), value=IntType()), JsonType())
 
     def test_bottom_to_any(self) -> None:
         assert is_assignable(BottomType(), IntType())
@@ -905,8 +913,30 @@ class TestTypeEnvironment:
     def test_resolve_dict_type(self) -> None:
         env = TypeEnvironment()
         sp = mk_span()
-        result = env.resolve_type_expr(DictT(value=TextT(span=sp, node_id=1), span=sp, node_id=2))
-        assert result == DictType(value=TextType())
+        result = env.resolve_type_expr(
+            DictT(
+                key=TextT(span=sp, node_id=1),
+                value=TextT(span=sp, node_id=2),
+                span=sp,
+                node_id=3,
+            )
+        )
+        assert result == DictType(key=TextType(), value=TextType())
+
+    def test_resolve_dict_type_key(self) -> None:
+        # Key and value are resolved independently: distinct types confirm
+        # the key is not just a copy of the value's resolution.
+        env = TypeEnvironment()
+        sp = mk_span()
+        result = env.resolve_type_expr(
+            DictT(
+                key=IntT(span=sp, node_id=1),
+                value=TextT(span=sp, node_id=2),
+                span=sp,
+                node_id=3,
+            )
+        )
+        assert result == DictType(key=IntType(), value=TextType())
 
     def test_resolve_func_type(self) -> None:
         env = TypeEnvironment()
@@ -8592,13 +8622,15 @@ class TestDictLiterals:
     def test_dict_text_int(self) -> None:
         r = accept_type('{"a": 1, "b": 2}')
         node = r.resolved.program.body.items[0]
-        assert r.node_types[node.node_id] == DictType(value=IntType())
+        assert r.node_types[node.node_id] == DictType(key=TextType(), value=IntType())
 
     def test_dict_empty_with_annotation(self) -> None:
         r = accept_type("let d: dict[text, int] = {}\nd")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == DictType(value=IntType())
+        assert r.type_env.get_binding_type(decl.node_id) == DictType(
+            key=TextType(), value=IntType()
+        )
 
     def test_dict_empty_no_annotation_raises(self) -> None:
         err = reject_type("{}")
@@ -8706,7 +8738,7 @@ class TestProvisionalContainerLiterals:
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
         assert checked.type_env.get_binding_type(xs.node_id) == ArrayType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(TextType(), IntType())
         self._assert_finalized(checked)
 
     def test_empty_literals_are_solved_by_enclosing_results_and_constructor_fields(self) -> None:
@@ -8726,7 +8758,7 @@ class TestProvisionalContainerLiterals:
         assert isinstance(values, LetDecl)
         assert isinstance(bundle, LetDecl)
         assert checked.type_env.get_binding_type(xs.node_id) == ArrayType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(TextType(), IntType())
         assert strip_decl_ids(checked.type_env.get_binding_type(bundle.node_id)) == RecordType(
             "Bundle", (IntType(),)
         )
@@ -8738,7 +8770,7 @@ class TestProvisionalContainerLiterals:
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
         assert checked.type_env.get_binding_type(xs.node_id) == ArrayType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(TextType(), IntType())
         self._assert_finalized(checked)
 
     def test_empty_literals_are_solved_by_branch_common_types(self) -> None:
@@ -8752,7 +8784,7 @@ class TestProvisionalContainerLiterals:
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
         assert checked.type_env.get_binding_type(xs.node_id) == ArrayType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(TextType(), IntType())
         self._assert_finalized(checked)
 
     def test_uncontextual_mixed_members_require_an_enum_annotation(self) -> None:
@@ -8809,7 +8841,7 @@ class TestProvisionalContainerLiterals:
             option_int
         )
         assert strip_decl_ids(checked.type_env.get_binding_type(values.node_id)) == DictType(
-            option_int
+            TextType(), option_int
         )
         self._assert_finalized(checked)
 
@@ -8949,7 +8981,9 @@ class TestTypeDeclarations:
         )
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == DictType(value=JsonType())
+        assert r.type_env.get_binding_type(decl.node_id) == DictType(
+            key=TextType(), value=JsonType()
+        )
 
     def test_parameterized_alias_to_generic_enum_constructs_variant(self) -> None:
         checked = accept_type(
@@ -9116,7 +9150,7 @@ class TestFieldAnnotationTypes:
         # Exercises line 323: DictT in _ensure_referenced_type_built
         r = accept_type("type N = int\nrecord R\n  d: dict[text, N]\nR(d = {})")
         fields = _constructed_record_fields(r, r.resolved.program.body.items[2].node_id)
-        assert fields == {"d": DictType(value=IntType())}
+        assert fields == {"d": DictType(key=TextType(), value=IntType())}
 
     def test_two_records_same_enum_field(self) -> None:
         # Exercises line 246: _ensure_built_enum called twice returns early
@@ -9929,6 +9963,7 @@ class TestIndexTypechecking:
         decl = self._binding(
             "d",
             DictT(
+                key=TextT(span=sp, node_id=_mk_node_id()),
                 value=IntT(span=sp, node_id=_mk_node_id()),
                 span=sp,
                 node_id=_mk_node_id(),
@@ -11691,7 +11726,7 @@ class TestGenericFunctionInferenceRegions:
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
         assert checked.type_env.get_binding_type(xs.node_id) == ArrayType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(values.node_id) == DictType(TextType(), IntType())
         self._assert_finalized(checked)
 
     def test_bottom_requires_context_but_can_be_completed_by_it(self) -> None:
@@ -12263,7 +12298,7 @@ class TestGenerics:
         )
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
-        assert r.node_types[decl.value.node_id] == DictType(value=TextType())
+        assert r.node_types[decl.value.node_id] == DictType(key=TextType(), value=TextType())
         # Nothing else can fix T here: without the annotation the call has no
         # evidence for it at all.
         reject_type("def empty-dict[T]() -> dict[text, T] = {}\nlet d = empty-dict()\nd")
@@ -14206,6 +14241,19 @@ class TestNoFiniteSchemaUseSites:
     def test_program_parameter_not_wire_serializable_rejected(self) -> None:
         err = reject_type("program def main(p: unit) -> unit = ()")
         assert "json-serializable" in str(err).lower()
+
+    def test_wire_serializable_recurses_into_dict_key(self) -> None:
+        # dict[text, int] is decodable through both its key and value; a
+        # dict whose key cannot itself cross the JSON boundary is not
+        # wire-serializable even though its value is fine. The parser only
+        # ever builds a text key, so this is checked at the type level
+        # directly rather than through a program parameter.
+        from agm.agl.typecheck.checker import _Checker
+
+        checker = _Checker(TypeEnvironment(), resolve_inline_entry("()"), default_capabilities())
+        fn_type = FunctionType(params=(), result=IntType())
+        assert checker._type_is_wire_serializable(DictType(key=TextType(), value=IntType()))
+        assert not checker._type_is_wire_serializable(DictType(key=fn_type, value=IntType()))
 
     def test_ask_growing_type_reachable_through_field_rejected(self) -> None:
         # The root type (`Holder`) is not itself infinite; the culprit

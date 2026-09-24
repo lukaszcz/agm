@@ -2405,10 +2405,11 @@ class TypeEnvironment:
             )
             return ArrayType(elem=elem)
         if isinstance(type_expr, DictT):
+            key = self.resolve_type_expr(type_expr.key, _resolving=_resolving, type_vars=type_vars)
             val = self.resolve_type_expr(
                 type_expr.value, _resolving=_resolving, type_vars=type_vars
             )
-            return DictType(value=val)
+            return DictType(key=key, value=val)
         if isinstance(type_expr, NameT):
             eff_span = span if span is not None else type_expr.span
             if type_expr.qualifier is not None:

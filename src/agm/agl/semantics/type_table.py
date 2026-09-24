@@ -1442,8 +1442,11 @@ class TypeTable:
                 )
             case ArrayType(elem=elem):
                 return ArrayType(self._canonical_schema_type(elem, relevant_params))
-            case DictType(value=value):
-                return DictType(self._canonical_schema_type(value, relevant_params))
+            case DictType(key=key, value=value):
+                return DictType(
+                    self._canonical_schema_type(key, relevant_params),
+                    self._canonical_schema_type(value, relevant_params),
+                )
             case FunctionType(params=params, result=result):
                 return FunctionType(
                     params=tuple(self._canonical_schema_type(p, relevant_params) for p in params),
@@ -1784,9 +1787,9 @@ def satisfies(
     Structural: every scalar satisfies both kinds; a function or ``unit`` type satisfies
     neither, transitively (a container/record/enum/exception that reaches one
     at any depth is itself disqualified — the nominal case defers to
-    :meth:`TypeTable.nominal_satisfies`); ``array``/``dict`` satisfy only
-    ``Eq``, recursing into the element/value type (never ``Hashable``,
-    regardless of content).
+    :meth:`TypeTable.nominal_satisfies`); ``array`` satisfies only ``Eq``,
+    recursing into the element type; ``dict`` satisfies only ``Eq``, and only
+    when both its key and value do (never ``Hashable``, regardless of content).
 
     A bare type variable, the bottom type, and an unresolved inference
     variable — anywhere, including nested inside an array/dict/nominal
@@ -1805,7 +1808,11 @@ def satisfies(
         case ArrayType():
             return kind is ConstraintKind.EQ and satisfies(t.elem, kind, table, bounds)
         case DictType():
-            return kind is ConstraintKind.EQ and satisfies(t.value, kind, table, bounds)
+            return (
+                kind is ConstraintKind.EQ
+                and satisfies(t.key, kind, table, bounds)
+                and satisfies(t.value, kind, table, bounds)
+            )
         case RecordType() | EnumType() | ExceptionType():
             return table.nominal_satisfies(t, kind, bounds)
         case TextType() | JsonType() | BoolType() | IntType() | DecimalType():
@@ -1853,8 +1860,9 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
     """Return ``True`` if ``t`` has a JSON representation.
 
     The scalars (``text``/``json``/``bool``/``int``/``decimal``) convert
-    directly; an ``array``/``dict`` converts iff its element/value type does;
-    a record or exception converts to a JSON object of its fields and an enum
+    directly; an ``array`` converts iff its element type does; a ``dict``
+    converts iff both its key and value type do; a record or exception
+    converts to a JSON object of its fields and an enum
     to ``{"$case": variant, …fields}``, so a nominal converts iff no non-data
     type is reachable from its declaration
     (:meth:`TypeTable.nominal_is_json_convertible`). The non-data types —
@@ -1880,7 +1888,7 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
         case ArrayType():
             return is_json_convertible(t.elem, table)
         case DictType():
-            return is_json_convertible(t.value, table)
+            return is_json_convertible(t.key, table) and is_json_convertible(t.value, table)
         case RecordType() if t.decl_id in HOST_MINTED_PRELUDE_TYPE_IDS:
             return False
         case ExceptionType():

@@ -45,6 +45,7 @@ from agm.agl.semantics.types import (
     ExceptionType,
     IntType,
     RecordType,
+    TextType,
     TypeVarType,
     UnitType,
 )
@@ -381,7 +382,7 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
             '[{"$case": "Empty"}, {"$case": "One", "box": {"item": {}}}]',
         ),
         (
-            DictType(choice),
+            DictType(TextType(), choice),
             DictValue({"primary": one_value}),
             '{"primary": {"$case": "One", "box": {"item": {}}}}',
         ),

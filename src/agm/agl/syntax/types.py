@@ -95,8 +95,9 @@ class ArrayT:
 
 @dataclass(frozen=True, slots=True)
 class DictT:
-    """A ``dict[text, V]`` type.  Dict keys are always ``text`` in AgL."""
+    """A ``dict[K, V]`` type.  The parser admits only ``text`` keys."""
 
+    key: TypeExpr
     value: TypeExpr
     span: SourceSpan = field(compare=False)
     node_id: int = field(compare=False)
@@ -164,6 +165,7 @@ def member_type_params(
         elif isinstance(expr, ArrayT):
             visit(expr.elem)
         elif isinstance(expr, DictT):
+            visit(expr.key)
             visit(expr.value)
         elif isinstance(expr, FuncT):
             for param in expr.params:
@@ -197,7 +199,8 @@ def render_type_expr(type_expr: TypeExpr, *, parenthesize_function: bool = False
     if isinstance(type_expr, ArrayT):
         return f"array[{render_type_expr(type_expr.elem)}]"
     if isinstance(type_expr, DictT):
-        return f"dict[text, {render_type_expr(type_expr.value)}]"
+        key = render_type_expr(type_expr.key)
+        return f"dict[{key}, {render_type_expr(type_expr.value)}]"
     if isinstance(type_expr, FuncT):
         if not type_expr.params:
             params = "()"

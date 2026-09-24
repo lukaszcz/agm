@@ -12,7 +12,7 @@ Type hierarchy
 - ``IntType`` — the ``int`` primitive (arbitrary-precision integer).
 - ``DecimalType`` — the ``decimal`` primitive (exact fixed-point).
 - ``ArrayType(elem)`` — ``array[T]``.
-- ``DictType(value)`` — ``dict[text, V]`` (keys are always ``text`` in AgL).
+- ``DictType(key, value)`` — ``dict[K, V]`` (the parser admits only ``text`` keys).
 - ``RecordType(name, type_args, module_id, decl_id)`` — a ``record`` nominal
   type handle whose identity is ``decl_id``; field shapes live in the shared
   ``TypeTable`` (``semantics.type_table``), keyed by declaration identity.
@@ -143,8 +143,9 @@ class ArrayType:
 
 @dataclass(frozen=True, slots=True)
 class DictType:
-    """``dict[text, V]`` — string-keyed dict."""
+    """``dict[K, V]`` — the parser admits only ``text`` keys."""
 
+    key: Type
     value: Type
 
     @property
@@ -152,7 +153,7 @@ class DictType:
         return "dict"
 
     def __repr__(self) -> str:
-        return f"dict[text, {self.value!r}]"
+        return f"dict[{self.key!r}, {self.value!r}]"
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +477,11 @@ def match_type_template(
         if isinstance(pattern, ArrayType):
             return isinstance(actual, ArrayType) and visit(pattern.elem, actual.elem)
         if isinstance(pattern, DictType):
-            return isinstance(actual, DictType) and visit(pattern.value, actual.value)
+            return (
+                isinstance(actual, DictType)
+                and visit(pattern.key, actual.key)
+                and visit(pattern.value, actual.value)
+            )
         if isinstance(pattern, FunctionType):
             return (
                 isinstance(actual, FunctionType)
@@ -597,8 +602,8 @@ def type_children(t: Type) -> tuple[Type, ...]:
     match t:
         case ArrayType(elem=elem):
             return (elem,)
-        case DictType(value=value):
-            return (value,)
+        case DictType(key=key, value=value):
+            return (key, value)
         case FunctionType(params=params, result=result):
             return (*params, result)
         case RecordType(type_args=type_args) | EnumType(type_args=type_args):
@@ -640,7 +645,7 @@ def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
         case ArrayType():
             return ArrayType(children[0])
         case DictType():
-            return DictType(children[0])
+            return DictType(children[0], children[1])
         case FunctionType(params=params):
             return FunctionType(params=children[: len(params)], result=children[-1])
         case RecordType(name=name, module_id=module_id, scope_path=scope_path, decl_id=decl_id):
@@ -801,8 +806,10 @@ def is_json_shaped(value_type: Type) -> bool:
     JSON-shaped types are the values that may inhabit a ``json`` slot:
     ``null``/``json``, ``bool``, ``int``, ``decimal``, ``text``, and
     ``array``/``dict`` whose element/value types are themselves JSON-shaped.
-    Records, enums, and exceptions are **not** JSON-shaped — explicitly cast
-    one with ``as json`` to convert it to its structural JSON representation.
+    A ``dict`` is JSON-shaped only when its key is ``text`` — a native JSON
+    object slot has no other key representation. Records, enums, and
+    exceptions are **not** JSON-shaped — explicitly cast one with ``as json``
+    to convert it to its structural JSON representation.
 
     AgL: ``UnitType`` and ``FunctionType`` are also NOT
     JSON-shaped; function values render only as opaque handles.
@@ -820,7 +827,7 @@ def is_json_shaped(value_type: Type) -> bool:
     if isinstance(value_type, ArrayType):
         return is_json_shaped(value_type.elem)
     if isinstance(value_type, DictType):
-        return is_json_shaped(value_type.value)
+        return isinstance(value_type.key, TextType) and is_json_shaped(value_type.value)
     if isinstance(value_type, InferenceVarType):
         return False
     # RecordType, EnumType, ExceptionType, UnitType, FunctionType,

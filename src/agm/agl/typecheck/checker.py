@@ -1578,7 +1578,9 @@ class _Checker:
         if isinstance(schema_type, ArrayType):
             return self._wire_type_is_serializable(schema_type.elem, seen=seen, memo=memo)
         if isinstance(schema_type, DictType):
-            return self._wire_type_is_serializable(schema_type.value, seen=seen, memo=memo)
+            return self._wire_type_is_serializable(
+                schema_type.key, seen=seen, memo=memo
+            ) and self._wire_type_is_serializable(schema_type.value, seen=seen, memo=memo)
         if isinstance(schema_type, RecordType):
             if schema_type.decl_id in self._env.type_table.host_minted_declaration_ids():
                 return False
@@ -4720,7 +4722,7 @@ class _Checker:
         self._check_dict_literal_keys(expr)
         for entry in expr.entries:
             self._check_template_literal_child(entry.value)
-        return DictType(value=JsonType())
+        return DictType(key=TextType(), value=JsonType())
 
     def _check_template_literal_child(self, expr: Expr) -> Type:
         """Check a single child of a template container literal.
@@ -6026,7 +6028,7 @@ class _Checker:
         if not node.entries:
             expected = self._complete_empty_literal_shape(
                 expected,
-                make_type=DictType,
+                make_type=lambda value: DictType(key=TextType(), value=value),
                 literal_name="empty dict literal",
                 span=node.span,
             )
@@ -6038,19 +6040,19 @@ class _Checker:
                     "Empty dict literal requires a type annotation.",
                     span=node.span,
                 )
-            return self._literal_result_type(expected, DictType(value=val_expected))
+            return self._literal_result_type(expected, DictType(key=TextType(), value=val_expected))
         if val_expected is not None and not contains_inference_var(val_expected):
             for entry in node.entries:
                 et = self._check_expr(entry.value, expected=val_expected)
                 self._assert_assignable_from(et, val_expected, entry.span, entry.value)
-            return self._literal_result_type(expected, DictType(value=val_expected))
+            return self._literal_result_type(expected, DictType(key=TextType(), value=val_expected))
         values = tuple(entry.value for entry in node.entries)
         with self._frame_direct_candidate_use(exprs=values):
             unified = self._unify_elements(values, kind="Dict", span=node.span)
         self._set_inferred_return_expr_provenance(
             node.node_id, self._provenance_for_result(unified, values)
         )
-        return DictType(value=unified)
+        return DictType(key=TextType(), value=unified)
 
     def _enum_annotation_hint(self, *types: Type, noun: str = "literal") -> str:
         """Prompt an explicit enum slot for compatible sibling member records."""

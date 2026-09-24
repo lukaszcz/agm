@@ -159,6 +159,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.elem, callback)
 
     elif isinstance(node, DictT):
+        walk(node.key, callback)
         walk(node.value, callback)
 
     elif isinstance(node, UnitT):

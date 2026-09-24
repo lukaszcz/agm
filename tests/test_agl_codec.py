@@ -492,11 +492,11 @@ class TestDeriveSchema:
         }
 
     def test_dict_of_text(self) -> None:
-        schema = derive_schema(DictType(value=TextType()), type_table_for())
+        schema = derive_schema(DictType(key=TextType(), value=TextType()), type_table_for())
         assert schema == {"type": "object", "additionalProperties": {"type": "string"}}
 
     def test_dict_of_int(self) -> None:
-        schema = derive_schema(DictType(value=IntType()), type_table_for())
+        schema = derive_schema(DictType(key=TextType(), value=IntType()), type_table_for())
         assert schema == {"type": "object", "additionalProperties": {"type": "integer"}}
 
     def test_record_schema(self) -> None:
@@ -1888,7 +1888,7 @@ class TestTypedValueConstruction:
 
     def test_dict_of_text(self) -> None:
         codec = JsonCodec()
-        typ = DictType(value=TextType())
+        typ = DictType(key=TextType(), value=TextType())
         result = _parse_typed(codec, '{"a": "hello"}', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, DictValue)
@@ -2412,7 +2412,7 @@ def _json_ty() -> tast.JsonT:
 
 
 def _dict_ty(value: tast.TypeExpr) -> tast.DictT:
-    return tast.DictT(value=value, span=_sp(), node_id=_nid())
+    return tast.DictT(key=_text_ty(), value=value, span=_sp(), node_id=_nid())
 
 
 class TestPipelineDriverWireUp:
@@ -3155,7 +3155,7 @@ class TestValidationErrorClassification:
         result = _parse_typed(
             codec,
             '{"k": {"$case": "Z"}}',
-            DictType(value=enum),
+            DictType(key=TextType(), value=enum),
             strict_json=False,
             table=type_table_for(enum_def),
         )

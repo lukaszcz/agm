@@ -468,7 +468,9 @@ def _template_is_flagged(
         case DictType():
             if not policy.recurse_containers:
                 return True
-            return _template_is_flagged(t.value, policy, flagged, relevant, defs)
+            return _template_is_flagged(
+                t.key, policy, flagged, relevant, defs
+            ) or _template_is_flagged(t.value, policy, flagged, relevant, defs)
         case ExceptionType():
             return t.decl_id in flagged
         case RecordType() | EnumType():
@@ -513,7 +515,9 @@ def _template_relevant_params(
         case ArrayType():
             return _template_relevant_params(t.elem, own_params, relevant, defs)
         case DictType():
-            return _template_relevant_params(t.value, own_params, relevant, defs)
+            return _template_relevant_params(
+                t.key, own_params, relevant, defs
+            ) | _template_relevant_params(t.value, own_params, relevant, defs)
         case FunctionType():
             result: set[str] = set()
             for p in t.params:
@@ -654,7 +658,8 @@ def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionTyp
             yield t
         case ArrayType(elem=elem):
             yield from nominal_references(elem)
-        case DictType(value=value):
+        case DictType(key=key, value=value):
+            yield from nominal_references(key)
             yield from nominal_references(value)
         case FunctionType(params=params, result=result):
             for p in params:
@@ -702,7 +707,8 @@ def nominal_references_for_schema(
             yield t
         case ArrayType(elem=elem):
             yield from nominal_references_for_schema(elem, defs, relevant_params)
-        case DictType(value=value):
+        case DictType(key=key, value=value):
+            yield from nominal_references_for_schema(key, defs, relevant_params)
             yield from nominal_references_for_schema(value, defs, relevant_params)
         case FunctionType(params=params, result=result):
             for p in params:
@@ -851,9 +857,10 @@ def _param_occurrences(
             return _param_occurrences(
                 elem, growing=True, defs=defs, relevant_params=relevant_params
             )
-        case DictType(value=value):
-            return _param_occurrences(
-                value, growing=True, defs=defs, relevant_params=relevant_params
+        case DictType(key=key, value=value):
+            return _merge_growing(
+                _param_occurrences(key, growing=True, defs=defs, relevant_params=relevant_params),
+                _param_occurrences(value, growing=True, defs=defs, relevant_params=relevant_params),
             )
         case FunctionType(params=params, result=result):
             merged: dict[str, bool] = {}

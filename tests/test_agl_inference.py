@@ -86,7 +86,7 @@ class TestInstantiation:
             ("T",),
             (
                 ArrayType(TypeVarType("T")),
-                DictType(TypeVarType("T")),
+                DictType(TextType(), TypeVarType("T")),
                 RecordType("Box", (TypeVarType("T"),)),
                 EnumType("Option", (TypeVarType("T"),)),
                 IntType(),
@@ -96,7 +96,7 @@ class TestInstantiation:
         variable = instantiated.variables["T"]
         assert instantiated.templates == (
             ArrayType(variable),
-            DictType(variable),
+            DictType(TextType(), variable),
             RecordType("Box", (variable,)),
             EnumType("Option", (variable,)),
             IntType(),
@@ -109,7 +109,8 @@ class TestUnification:
         [
             (IntType(), TextType()),
             (ArrayType(IntType()), ArrayType(TextType())),
-            (DictType(IntType()), DictType(TextType())),
+            (DictType(TextType(), IntType()), DictType(TextType(), TextType())),
+            (DictType(IntType(), IntType()), DictType(TextType(), IntType())),
             (FunctionType((IntType(),), IntType()), FunctionType((), IntType())),
             (TypeVarType("T"), TypeVarType("U")),
             (
@@ -163,7 +164,11 @@ class TestUnification:
         enum_variable = engine.fresh("enum")
 
         engine.unify(ArrayType(array_variable), ArrayType(IntType()), _origin(engine, 1))
-        engine.unify(DictType(dict_variable), DictType(TextType()), _origin(engine, 2))
+        engine.unify(
+            DictType(TextType(), dict_variable),
+            DictType(TextType(), TextType()),
+            _origin(engine, 2),
+        )
         engine.unify(
             FunctionType((function_variable,), function_variable),
             FunctionType((IntType(),), IntType()),
@@ -189,6 +194,17 @@ class TestUnification:
             TextType(),
         )
         assert engine.zonk(record_variable) == IntType()
+
+    def test_structural_unification_descends_into_dict_key(self) -> None:
+        # The key is a flexible child too, unified independently of the value.
+        engine = InferenceEngine()
+        key_variable = engine.fresh("key")
+
+        engine.unify(
+            DictType(key_variable, TextType()), DictType(IntType(), TextType()), _origin(engine, 1)
+        )
+
+        assert engine.zonk(key_variable) == IntType()
 
     def test_nominal_arguments_and_function_parts_are_invariant(self) -> None:
         engine = InferenceEngine()
@@ -253,7 +269,7 @@ class TestUnification:
         "wrap",
         [
             lambda variable: ArrayType(variable),
-            lambda variable: DictType(variable),
+            lambda variable: DictType(TextType(), variable),
             lambda variable: FunctionType((variable,), IntType()),
             lambda variable: RecordType("Box", (variable,)),
             lambda variable: EnumType("Option", (variable,)),
@@ -311,8 +327,8 @@ class TestContextCompletion:
         first = engine.fresh("T")
         second = engine.fresh("U")
         engine.complete_from_context(
-            FunctionType((ArrayType(first),), DictType(second)),
-            FunctionType((ArrayType(IntType()),), DictType(TextType())),
+            FunctionType((ArrayType(first),), DictType(TextType(), second)),
+            FunctionType((ArrayType(IntType()),), DictType(TextType(), TextType())),
             _origin(engine, 1, role=ConstraintRole.EXPECTED_RESULT),
         )
 
@@ -353,7 +369,9 @@ class TestContextCompletion:
     def test_context_ignores_mismatched_shapes_and_bottom(self) -> None:
         engine = InferenceEngine()
         variable = engine.fresh("T")
-        engine.complete_from_context(ArrayType(variable), DictType(IntType()), _origin(engine, 1))
+        engine.complete_from_context(
+            ArrayType(variable), DictType(TextType(), IntType()), _origin(engine, 1)
+        )
         engine.complete_from_context(variable, BottomType(), _origin(engine, 2))
 
         assert engine.is_solved(variable) is False
@@ -369,7 +387,9 @@ class TestContextCompletion:
             ArrayType(array_variable), ArrayType(IntType()), _origin(engine, 1)
         )
         engine.complete_from_context(
-            DictType(dict_variable), DictType(TextType()), _origin(engine, 2)
+            DictType(TextType(), dict_variable),
+            DictType(TextType(), TextType()),
+            _origin(engine, 2),
         )
         engine.complete_from_context(
             FunctionType((function_variable,), IntType()),
@@ -394,6 +414,16 @@ class TestContextCompletion:
         assert tuple(
             engine.zonk(variable) for variable in (dict_variable, function_variable, enum_variable)
         ) == (TextType(), TextType(), TextType())
+
+    def test_context_recurses_into_dict_key(self) -> None:
+        # The key is completed from context independently of the value.
+        engine = InferenceEngine()
+        key_variable = engine.fresh("key")
+        engine.complete_from_context(
+            DictType(key_variable, TextType()), DictType(IntType(), TextType()), _origin(engine, 1)
+        )
+
+        assert engine.zonk(key_variable) == IntType()
 
     def test_context_ignores_recursive_or_incompatible_matching_shapes(self) -> None:
         engine = InferenceEngine()

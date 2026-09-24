@@ -249,9 +249,32 @@ class TestTypeExprs:
         assert t.elem is elem
 
     def test_dict_t(self) -> None:
+        key = TextT(span=self._s(), node_id=3)
         val = IntT(span=self._s(), node_id=2)
-        t = DictT(value=val, span=self._s(), node_id=1)
+        t = DictT(key=key, value=val, span=self._s(), node_id=1)
+        assert t.key is key
         assert t.value is val
+
+    def test_walk_visits_dict_t_key(self) -> None:
+        from agm.agl.syntax.visitor import walk
+
+        key = NameT(name="OnlyThroughDictKey", span=self._s(), node_id=3)
+        value = TextT(span=self._s(), node_id=2)
+        t = DictT(key=key, value=value, span=self._s(), node_id=1)
+        visited: list[object] = []
+        walk(t, visited.append)
+        assert key in visited
+
+    def test_member_type_params_captures_owner_param_through_dict_key(self) -> None:
+        # A dict field's KEY position is scanned too: an inline enum member
+        # capturing an owner type parameter only through the key must still
+        # be recognized as using it.
+        from agm.agl.syntax.types import member_type_params
+
+        key = NameT(name="K", span=self._s(), node_id=1)
+        value = IntT(span=self._s(), node_id=2)
+        dict_t = DictT(key=key, value=value, span=self._s(), node_id=3)
+        assert member_type_params((dict_t,), ("K", "V")) == ("K",)
 
     def test_func_t_no_params(self) -> None:
         result = IntT(span=self._s(), node_id=2)
@@ -1388,7 +1411,7 @@ class TestWalk:
         decimal_t = DecimalT(span=s, node_id=104)
         name_t = NameT(name="MyT", span=s, node_id=105)
         list_t = ArrayT(elem=text_t, span=s, node_id=106)
-        dict_t = DictT(value=int_t, span=s, node_id=107)
+        dict_t = DictT(key=text_t, value=int_t, span=s, node_id=107)
         unit_t = UnitT(span=s, node_id=108)
         func_t = FuncT(params=(int_t, text_t), result=bool_t, span=s, node_id=111)
         applied_t = AppliedT(name="Pair", args=(int_t, text_t), span=s, node_id=112)

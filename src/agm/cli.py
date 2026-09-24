@@ -601,6 +601,7 @@ def main_callback(
 
 @app.command()
 def help(
+    ctx: typer.Context,
     help_command: list[str] | None = typer.Argument(
         None,
         metavar="command",
@@ -617,7 +618,7 @@ def help(
     except ValueError:
         from agm.cli_dispatch import print_registered_command_help
 
-        if not print_registered_command_help(help_command):
+        if not print_registered_command_help(help_command, ctx):
             print_command_help(" ".join(help_command))
     raise typer.Exit()
 

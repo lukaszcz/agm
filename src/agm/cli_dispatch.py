@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, NoReturn, TypedDict, cast
 import click
 from click.shell_completion import CompletionItem
 from typer.core import TyperCommand, TyperGroup, TyperOption
+from typer.models import Context as TyperContext
 
 from agm.cli_support.args import ExecArgs
 from agm.config.context import current_config_context
@@ -78,7 +79,7 @@ def _path_length(item: tuple[str, CommandRegistration]) -> int:
     return len(item[0].split())
 
 
-def registered_run_options(ctx: click.Context) -> tuple[TyperOption, ...]:
+def registered_run_options(ctx: click.Context | TyperContext) -> tuple[TyperOption, ...]:
     """Return ``agm exec``'s run-time options, which a registered command parses too.
 
     They are ``agm exec``'s own option objects, taken from the ``agm`` group at
@@ -156,7 +157,7 @@ def registered_command_help(
     )
 
 
-def print_registered_command_help(command_path: Sequence[str]) -> bool:
+def print_registered_command_help(command_path: Sequence[str], ctx: object) -> bool:
     """Print registered-command help when *command_path* names one exactly."""
     try:
         context = current_config_context()
@@ -180,7 +181,7 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
             registration,
             program=program,
             command=command,
-            run_options=registered_run_options(click.get_current_context()),
+            run_options=registered_run_options(cast(click.Context | TyperContext, ctx)),
         ),
         end="",
     )

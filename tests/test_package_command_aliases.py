@@ -7,7 +7,9 @@ import pytest
 from click.testing import CliRunner
 from typer.main import get_command
 
+import agm.cli_dispatch as dispatch
 from agm.cli import app
+from agm.packages.activation import ActivationIndex
 from agm.packages.manifest import ManifestError, load_manifest_text
 from tests._package_helpers import install_directory
 
@@ -19,6 +21,7 @@ version = "1.0.0"
 "devel nested inspect" = { program = "tools/main::main" }
 "devel releases" = {}
 "devel releases inspect" = { program = "tools/main::main" }
+"devel refine" = { program = "tools/main::main" }
 [commands.devel]
 doc = "Choose a development workflow."
 [commands.devel.review]
@@ -75,6 +78,29 @@ def test_leaf_help_documents_the_program_behind_the_command(
     assert "Review the selected subject." in result.output
     assert "Subject to inspect." in result.output
     assert path in result.output
+
+
+def test_help_command_uses_its_context_for_registered_programs(
+    command_package: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    load_command_index = dispatch.load_command_index
+
+    def fail_current_context() -> click.Context:
+        raise RuntimeError("no global Click context")
+
+    def disable_global_context(*, home: Path, proj_dir: Path | None, cwd: Path) -> ActivationIndex:
+        monkeypatch.setattr(dispatch.click, "get_current_context", fail_current_context)
+        return load_command_index(home=home, proj_dir=proj_dir, cwd=cwd)
+
+    monkeypatch.setattr(dispatch, "load_command_index", disable_global_context)
+
+    result = CliRunner().invoke(
+        get_command(app), ["help", "devel", "refine"], catch_exceptions=False
+    )
+
+    assert result.exit_code == 0
+    assert "agm devel refine" in result.output
+    assert "Review the selected subject." in result.output
 
 
 @pytest.mark.parametrize("section", ["rev", "dev.review", "devel.review"])

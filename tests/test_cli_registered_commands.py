@@ -1066,7 +1066,9 @@ def test_registered_command_help_returns_false_when_index_is_unavailable(
         lambda **_: (_ for _ in ()).throw(ValueError("bad index")),
     )
 
-    assert not dispatch.print_registered_command_help(["tools", "lint"])
+    assert not dispatch.print_registered_command_help(
+        ["tools", "lint"], click.Context(get_command(cli.app))
+    )
 
 
 def test_unknown_command_without_registered_entry_keeps_click_error(

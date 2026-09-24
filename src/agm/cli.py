@@ -552,6 +552,7 @@ def _run_workspace_open(
     detached: bool,
     pane_count: str | None,
     parent: str | None,
+    no_fetch: bool,
 ) -> None:
     import agm.commands.workspace.open as workspace_open_command
 
@@ -561,6 +562,7 @@ def _run_workspace_open(
             pane_count=pane_count,
             parent=parent,
             branch=_require_value(target, command_path=command_path, name="target"),
+            no_fetch=no_fetch,
         )
     )
 
@@ -615,6 +617,7 @@ def open(
         help="Base a new branch on this workspace.",
         autocompletion=completion.complete_worktree_branch,
     ),
+    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -626,6 +629,7 @@ def open(
         detached=detached,
         pane_count=pane_count,
         parent=parent,
+        no_fetch=no_fetch,
     )
 
 
@@ -787,6 +791,7 @@ def workspace_open(
         help="Base a new branch on this workspace.",
         autocompletion=completion.complete_worktree_branch,
     ),
+    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -798,6 +803,7 @@ def workspace_open(
         detached=detached,
         pane_count=pane_count,
         parent=parent,
+        no_fetch=no_fetch,
     )
 
 

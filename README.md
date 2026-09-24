@@ -164,7 +164,10 @@ agm open main
 agm open --num-panes 4 feat/login
 agm open --parent develop feat/search
 agm open --detach feat/search
+agm open --no-fetch feat/search
 ```
+
+`--no-fetch` skips Git fetches and resolves remote branches from locally available refs.
 
 ### `agm close`
 

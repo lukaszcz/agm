@@ -18,7 +18,7 @@ class _Writeable(Protocol):
 
 _HELP_TEXTS: dict[str, str] = {
     "open": textwrap.dedent("""\
-        agm open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+        agm open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] [--no-fetch] TARGET
 
         Open a tmux session for an AGM workspace, creating or checking out a branch as needed.
 
@@ -27,6 +27,7 @@ _HELP_TEXTS: dict[str, str] = {
           -n, --num-panes PANES   Create the session with PANES panes.
           -p, --parent PARENT     Base a newly created branch workspace on PARENT instead of
                                   the main workspace's current branch.
+          --no-fetch              Skip Git fetches; remote branches are resolved from local refs.
 
         Behavior:
           repo           Open the main workspace.
@@ -114,12 +115,14 @@ _HELP_TEXTS: dict[str, str] = {
                        Do not create a git repository in notes/.
     """),
     "workspace": textwrap.dedent("""\
-        agm workspace open  [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+        agm workspace open  [-d|--detach] [-n|--num-panes PANES]
+                            [-p|--parent PARENT] [--no-fetch] TARGET
         agm workspace close [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
         agm workspace setup
         agm workspace list  [-v|--verbose]
         agm workspace shell-regen SHELL_DIR
-        agm wsp open        [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+        agm wsp open        [-d|--detach] [-n|--num-panes PANES]
+                            [-p|--parent PARENT] [--no-fetch] TARGET
         agm wsp close       [-f|--force] [-D] [--keep-branch] [--keep-workspace] BRANCH
         agm wsp setup
         agm wsp list        [-v|--verbose]
@@ -786,13 +789,14 @@ _HELP_ALIASES: dict[str, str] = {
 
 _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
     ("workspace", "open"): textwrap.dedent("""\
-        agm workspace open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+        agm workspace open [-d|--detach] [-n|--num-panes PANES]
+                           [-p|--parent PARENT] [--no-fetch] TARGET
 
         Open a tmux session for an AGM workspace, creating or checking out a
         branch workspace as needed.
     """),
     ("wsp", "open"): textwrap.dedent("""\
-        agm wsp open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] TARGET
+        agm wsp open [-d|--detach] [-n|--num-panes PANES] [-p|--parent PARENT] [--no-fetch] TARGET
 
         Alias form of agm workspace open.
     """),

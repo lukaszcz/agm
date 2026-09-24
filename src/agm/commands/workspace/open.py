@@ -177,6 +177,7 @@ def _prepare_workspace(
     parent: str | None,
     branch: str,
     create_branch: bool,
+    no_fetch: bool = False,
     cwd: Path | None = None,
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
@@ -198,6 +199,7 @@ def _prepare_workspace(
         existing_ok=not create_branch,
         cwd=project_repo_dir(proj_dir),
         start_point=start_point if create_branch else None,
+        fetch=not no_fetch,
         env=env,
     )
     commit_config_dir_changes(
@@ -221,6 +223,7 @@ def create_workspace(
     pane_count: str | None,
     parent: str | None,
     branch: str,
+    no_fetch: bool = False,
     cwd: Path | None = None,
 ) -> None:
     _prepare_workspace(
@@ -229,6 +232,7 @@ def create_workspace(
         parent=parent,
         branch=branch,
         create_branch=True,
+        no_fetch=no_fetch,
         cwd=cwd,
     )
 
@@ -239,6 +243,7 @@ def checkout_workspace(
     pane_count: str | None,
     parent: str | None,
     branch: str,
+    no_fetch: bool = False,
     cwd: Path | None = None,
 ) -> None:
     _prepare_workspace(
@@ -247,6 +252,7 @@ def checkout_workspace(
         parent=parent,
         branch=branch,
         create_branch=False,
+        no_fetch=no_fetch,
         cwd=cwd,
     )
 
@@ -257,6 +263,7 @@ def open_or_create_workspace(
     pane_count: str | None,
     parent: str | None,
     branch: str,
+    no_fetch: bool = False,
     cwd: Path | None = None,
 ) -> None:
     current = Path.cwd() if cwd is None else cwd.resolve()
@@ -272,7 +279,8 @@ def open_or_create_workspace(
         open_workspace(detached=detached, pane_count=pane_count, branch=None, cwd=current)
         return
 
-    git_helpers.fetch(repo_dir)
+    if not no_fetch:
+        git_helpers.fetch(repo_dir)
     if has_expected_worktree(proj_dir, branch):
         if parent is not None:
             print(
@@ -294,6 +302,7 @@ def open_or_create_workspace(
             pane_count=pane_count,
             parent=None,
             branch=branch,
+            no_fetch=no_fetch,
             cwd=current,
         )
         return
@@ -302,6 +311,7 @@ def open_or_create_workspace(
         pane_count=pane_count,
         parent=parent,
         branch=branch,
+        no_fetch=no_fetch,
         cwd=current,
     )
 
@@ -312,4 +322,5 @@ def run(args: OpenArgs) -> None:
         pane_count=args.pane_count,
         parent=args.parent,
         branch=args.branch,
+        no_fetch=args.no_fetch,
     )

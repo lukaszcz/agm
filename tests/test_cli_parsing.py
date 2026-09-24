@@ -1001,6 +1001,19 @@ class TestOpen:
         assert len(calls) == 1
         assert calls[0].branch == "feat/x"
 
+    @pytest.mark.parametrize("command", [["open"], ["workspace", "open"], ["wsp", "open"]])
+    def test_open_no_fetch(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+        command: list[str],
+    ) -> None:
+        calls = make_recorder(monkeypatch, workspace_open_command)
+        result = invoke(runner, [*command, "--no-fetch", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_fetch is True
+
     def test_open_with_pane_count(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, workspace_open_command)
         result = invoke(runner, ["open", "-n", "6", "repo"])

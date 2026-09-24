@@ -67,10 +67,11 @@ def ensure_worktree(
     existing_ok: bool = False,
     reuse_existing_branch: bool = False,
     start_point: str | None = None,
+    fetch: bool = True,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> Path:
-    """Create a worktree if needed and return its path."""
+    """Create a worktree if needed and return its path, fetching remote refs when requested."""
 
     current = Path.cwd() if cwd is None else cwd.resolve()
     create_branch = new_branch is not None
@@ -98,7 +99,8 @@ def ensure_worktree(
     dirname = worktrees_path / branch_name
     resolved_dirname = dirname.resolve(strict=False)
 
-    git_helpers.fetch(repo_dir, env=env)
+    if fetch:
+        git_helpers.fetch(repo_dir, env=env)
     if create_branch and reuse_existing_branch:
         existing_branch = branch_exists(repo_dir, branch_name, env=env)
         if existing_branch:

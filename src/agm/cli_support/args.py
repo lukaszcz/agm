@@ -102,6 +102,7 @@ class OpenArgs:
     pane_count: str | None
     parent: str | None
     branch: str
+    no_fetch: bool = False
 
 
 @dataclass(slots=True)

@@ -585,6 +585,37 @@ class TestCheckoutSession:
 
 
 class TestSmartOpenSession:
+    def test_no_fetch_skips_fetch_for_branch_creation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env: dict[str, str],
+    ) -> None:
+        project = _make_git_project(tmp_path, env)
+        fetches: list[Path] = []
+
+        def record_fetch(repo_dir: Path, *, env: dict[str, str] | None = None) -> None:
+            del env
+            fetches.append(repo_dir)
+
+        def skip_session(**_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(open_module.git_helpers, "fetch", record_fetch)
+        monkeypatch.setattr(open_module, "create_configured_workspace_session", skip_session)
+
+        open_or_create_workspace(
+            detached=True,
+            pane_count=None,
+            parent=None,
+            branch="new-branch",
+            no_fetch=True,
+            cwd=project,
+        )
+
+        assert fetches == []
+        assert (project / "worktrees" / "new-branch" / ".git").exists()
+
     def test_opens_main_session_when_main_branch(
         self,
         tmp_path: Path,

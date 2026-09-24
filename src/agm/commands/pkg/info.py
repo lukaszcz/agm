@@ -8,6 +8,7 @@ import textwrap
 from agm.cli_support.args import PkgInfoArgs
 from agm.config.context import current_config_context
 from agm.core.env import help_width
+from agm.core.pyenv import requirement_status
 from agm.packages.activation import (
     PackageActivationError,
     active_package_version,
@@ -86,3 +87,5 @@ def run(args: PkgInfoArgs) -> None:
                 kind = "editable" if selected.editable is not None else "active"
                 status = f"{kind} {active_versions[name]}"
         print(f"requires {name} {requirement}: {status}")
+    for spec in manifest.python_dependencies:
+        print(f"requires python package {spec}: {requirement_status(spec).describe()}")

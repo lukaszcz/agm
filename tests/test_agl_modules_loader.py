@@ -25,9 +25,9 @@ from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.syntax.nodes import ImportDecl
 from agm.agl.syntax.spans import SourceId
 from agm.packages.layout import MODULE_TREE_DIRNAME
-from agm.packages.manifest import load_manifest
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import agl_roots, agl_std_package_roots
+from tests._package_helpers import package_info
 from tests._timeouts import fail_if_slow
 from tests.agl.module_graph import load_graph
 
@@ -70,7 +70,7 @@ def _package(tmp_path: Path, name: str, *, dependencies: tuple[str, ...] = ()) -
         + (f"\n[dependencies]\n{dependency_table}" if dependencies else "")
     )
     (root / MODULE_TREE_DIRNAME).mkdir()
-    return PackageInfo(root, load_manifest(root / "package.toml"))
+    return package_info(root)
 
 
 def _write_package_module(package: PackageInfo, module_path: str, source: str = _MINIMAL) -> Path:
@@ -739,6 +739,94 @@ class TestDependencyClosures:
         lone = ModuleId.from_path("lone")
 
         assert graph.dependency_closures()[lone] == (graph.modules[lone],)
+
+
+# ---------------------------------------------------------------------------
+# Source dependency closures
+# ---------------------------------------------------------------------------
+
+
+class TestSourceDependencyClosures:
+    def _cycle_through_the_closed_module(self, tmp_path: Path) -> ModuleGraph:
+        """top -> {b, d}; b -> {top, c}: a cycle running back through ``top``."""
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "top", "import b\nimport d")
+        _write_module(root, "b", "import top\nimport c")
+        _write_module(root, "c")
+        _write_module(root, "d")
+        return load_graph("import top", entry_path=None, roots=_roots(root))
+
+    def test_a_source_closure_keeps_the_order_of_the_walk_that_found_it(
+        self, tmp_path: Path
+    ) -> None:
+        """A closure is ordered by its own walk, not by combining its neighbours'.
+
+        Program parameters are presented in closure order, and once a cycle
+        runs back through the module being closed over, the two disagree:
+        walking ``top`` reaches ``c`` through ``b`` before returning for ``d``,
+        while ``top``'s neighbours' closures concatenate to ``d`` before ``c``.
+        """
+        graph = self._cycle_through_the_closed_module(tmp_path)
+        top = ModuleId.from_path("top")
+        composed = tuple(
+            dict.fromkeys(
+                (
+                    top,
+                    *(
+                        module_id
+                        for neighbour in graph.source_adjacency[top]
+                        for module_id in graph.source_reachable_modules(neighbour)
+                    ),
+                )
+            )
+        )
+
+        assert graph.source_reachable_modules(top) == (
+            top,
+            ModuleId.from_path("b"),
+            ModuleId.from_path("c"),
+            ModuleId.from_path("d"),
+        )
+        assert set(composed) == set(graph.source_reachable_modules(top))
+        assert composed != graph.source_reachable_modules(top)
+
+    def test_a_loader_injected_edge_joins_no_source_closure(self, tmp_path: Path) -> None:
+        """Two unrelated modules share a prelude edge, and neither closure shows it."""
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "left")
+        _write_module(root, "right")
+        graph = load_graph("import left\nimport right", entry_path=None, roots=_roots(root))
+        left = ModuleId.from_path("left")
+        right = ModuleId.from_path("right")
+
+        assert STD_PRELUDE_ID in graph.adjacency[left]
+        assert STD_PRELUDE_ID in graph.adjacency[right]
+        assert graph.source_reachable_modules(left) == (left,)
+        assert graph.source_reachable_modules(right) == (right,)
+        assert set(graph.source_reachable_modules(graph.entry_id)) == {
+            graph.entry_id,
+            left,
+            right,
+        }
+
+    def test_a_module_is_walked_once_however_often_it_is_asked_for(self, tmp_path: Path) -> None:
+        graph = self._cycle_through_the_closed_module(tmp_path)
+        top = ModuleId.from_path("top")
+
+        closure = graph.source_reachable_modules(top)
+
+        assert graph.source_reachable_modules(top) is closure
+
+    def test_a_replaced_graph_walks_its_own_source_edges(self, tmp_path: Path) -> None:
+        graph = self._cycle_through_the_closed_module(tmp_path)
+        top = ModuleId.from_path("top")
+        assert len(graph.source_reachable_modules(top)) == 4
+
+        trimmed = replace(graph, source_adjacency={**graph.source_adjacency, top: ()})
+
+        assert trimmed.source_reachable_modules(top) == (top,)
 
 
 # ---------------------------------------------------------------------------

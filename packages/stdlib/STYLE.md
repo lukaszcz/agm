@@ -45,6 +45,33 @@ bind an argument.
 - Keep named arguments when the declaration explicitly requires them, such as
   an exception field marked `@arg-named`.
 
+## Declarations
+
+- Declare a record's fields in the indented block form, one field per line,
+  rather than in a parenthesized list:
+
+  ```agl
+  record Choice[C]
+    choice: C
+    confidence: decimal
+    probabilities: dict[text, decimal]
+  ```
+
+- Declare an exception's new fields the same way, one field per line:
+
+  ```agl
+  exception ApiError extends Exception
+    status: int
+    body: json
+  ```
+
+- Omit the parentheses when a record or exception has no (new) fields:
+
+  ```agl
+  record Token
+  exception AuthError extends ApiError
+  ```
+
 ## Companion Python
 
 Python companions follow Python naming and formatting conventions, not the AgL style from this file.

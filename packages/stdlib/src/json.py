@@ -2,8 +2,9 @@
 
 from decimal import Decimal
 
-from agl import AglException, array, json, nominals, option_none, option_some
+from agl import array, json, nominals, option_none, option_some
 
+from agm.agl.runtime.boundary import raise_key_error, raise_parse_error
 from agm.agl.runtime.codec import extract_json_text
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 
@@ -11,18 +12,16 @@ JsonParseError = nominals.std.errors.JsonParseError
 KeyError = nominals.std.errors.KeyError
 
 
-def _parse_error(raw: str, message: str) -> None:
-    raise AglException(JsonParseError(message=message, raw=raw))
-
-
 def _parse(raw: str, *, lenient: bool) -> object:
     candidate = extract_json_text(raw) if lenient else raw
     if candidate is None:
-        _parse_error(raw, "Could not recover a single JSON value from the input.")
+        raise_parse_error(
+            JsonParseError, raw, "Could not recover a single JSON value from the input."
+        )
     try:
         return json(parse_json_strict(candidate))
     except StrictJsonParseError as exc:
-        _parse_error(raw, exc.message)
+        raise_parse_error(JsonParseError, raw, exc.message)
 
 
 def parse(raw: str) -> object:
@@ -68,7 +67,7 @@ def has(value: object, key: str) -> bool:
 def get(value: object, key: str) -> object:
     raw = value.value
     if not isinstance(raw, dict) or key not in raw:
-        raise AglException(KeyError(message="JSON object key not found", key=key))
+        raise_key_error(KeyError, "JSON object key not found", key)
     return json(raw[key])
 
 

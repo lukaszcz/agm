@@ -1028,42 +1028,41 @@ def standard_optional_type(inner: Type) -> EnumType:
 OPTION_TEXT_TYPE: EnumType = standard_option_type(TextType())
 
 
-def is_standard_agent_enum(type_: Type) -> TypeGuard[EnumType]:
-    """Return whether *type_* is the standard library's ``Agent`` enum."""
+def _is_standard_enum(type_: Type, name: str) -> TypeGuard[EnumType]:
+    """Return whether *type_* is the standard library's enum called *name*.
+
+    Checked by nominal provenance, not by name alone: a user-declared
+    ``enum Option[T]`` in the entry module shares the name but not the
+    identity, and does not qualify. A standard enum either carries the
+    host's reserved fallback identity (``RESERVED_ID``, as
+    :data:`OPTION_TEXT_TYPE` does) or is declared under the standard
+    library's module tree (e.g. ``std/option``).
+    """
     return (
         isinstance(type_, EnumType)
-        and type_.name == "Agent"
+        and type_.name == name
         and (type_.module_id.is_reserved or type_.module_id.is_standard_library)
     )
+
+
+def is_standard_agent_enum(type_: Type) -> TypeGuard[EnumType]:
+    """Return whether *type_* is the standard library's ``Agent`` enum."""
+    return _is_standard_enum(type_, "Agent")
 
 
 def is_standard_option_enum(type_: Type) -> TypeGuard[EnumType]:
     """Return whether *type_* is the standard library's ``Option`` enum.
 
-    Checked by nominal provenance, not by name alone: a user-declared
-    ``enum Option[T]`` in the entry module shares the name but not the
-    identity, and does not qualify. The standard ``Option`` either carries
-    the host's reserved fallback identity (``RESERVED_ID``, as
-    :data:`OPTION_TEXT_TYPE` does) or is declared under the standard
-    library's module tree (e.g. ``std/option``). This is the single
-    predicate shared by every layer that special-cases ``Option`` —
-    typechecking's method-projection fallback, engine-setting decode, and
-    the CLI's type-directed option projection.
+    The single predicate shared by every layer that special-cases
+    ``Option`` — typechecking's method-projection fallback,
+    engine-setting decode, and the CLI's type-directed option projection.
     """
-    return (
-        isinstance(type_, EnumType)
-        and type_.name == "Option"
-        and (type_.module_id.is_reserved or type_.module_id.is_standard_library)
-    )
+    return _is_standard_enum(type_, "Option")
 
 
 def is_standard_optional_enum(type_: Type) -> TypeGuard[EnumType]:
     """Return whether *type_* is the standard library's ``Optional`` enum."""
-    return (
-        isinstance(type_, EnumType)
-        and type_.name == "Optional"
-        and (type_.module_id.is_reserved or type_.module_id.is_standard_library)
-    )
+    return _is_standard_enum(type_, "Optional")
 
 
 _OUTPUT_CONTRACT_TYPE = RecordType(

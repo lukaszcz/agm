@@ -12,7 +12,8 @@ from tests.agl.ir_harness import evaluate_ir, evaluate_ir_graph, lower_inline_ir
 
 def test_bound_method_partial_captures_receiver_once() -> None:
     source = """\
-record Meter(value: int)
+record Meter
+  value: int
 
 var builds = 0
 var first = 0
@@ -40,7 +41,8 @@ program def main() -> unit =
 def test_explicit_generic_bound_method_partial_uses_selected_specialization() -> None:
     """An explicit generic method partial publishes its bound function type for lowering."""
     source = """\
-record Box[T](value: T)
+record Box[T]
+  value: T
 
 def Box::replace[T, U](self, value: U) -> U = value
 

@@ -29,7 +29,8 @@ from typing import TYPE_CHECKING, Protocol, cast
 from agm.agl.artifact_storage import artifact_entry, read_payload, write_payload
 from agm.agl.diagnostics import AglError
 from agm.agl.ir.builtin_nominals import BuiltinNominals
-from agm.agl.ir.ids import FunctionId, NominalId
+from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.ids import ContractId, FunctionId, NominalId
 from agm.agl.ir.program import FunctionDescriptor, NominalDescriptor, ValueDescriptors
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import (
@@ -39,6 +40,7 @@ from agm.agl.runtime.boundary import (
     AglJson,
     BoundaryTypeError,
     BoundaryViolation,
+    active_contract_encoder,
     active_descriptors,
     active_function_encoder,
     current_descriptors,
@@ -46,10 +48,18 @@ from agm.agl.runtime.boundary import (
     encode_boundary_value,
     synthesize_nominal_classes,
 )
+from agm.agl.runtime.type_contracts import TypeContract, build_type_contract
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
-from agm.agl.semantics.values import ArrayValue, DictValue, IrClosureValue, TextValue, Value
+from agm.agl.semantics.values import (
+    ArrayValue,
+    ContractValue,
+    DictValue,
+    IrClosureValue,
+    TextValue,
+    Value,
+)
 from agm.core import fs
 from agm.core.cleanup import run_cleanup_steps
 from agm.util.scoping import ScopedVar
@@ -61,7 +71,18 @@ if TYPE_CHECKING:
 
 # These companion module attributes are APIs, never synthesized nominal aliases.
 _COMPANION_API_NAMES = frozenset(
-    {"AglException", "array", "dict", "json", "nominals", "option_none", "option_some", "runtime"}
+    {
+        "AglException",
+        "TypeContract",
+        "array",
+        "dict",
+        "json",
+        "nominals",
+        "option",
+        "option_none",
+        "option_some",
+        "runtime",
+    }
 )
 
 
@@ -157,6 +178,15 @@ class _CompanionRuntime:
         active = self._active_call.get()
         state = active.state if active is not None else self._detached_state
         return state.get_or_create(key, factory, close)
+
+    def tracing(self) -> bool:
+        """Whether :meth:`trace` would record: an active call whose store is writing.
+
+        Lets a companion skip building a payload that tracing, off by
+        default, would discard.
+        """
+        active = self._active_call.get()
+        return active is not None and active.trace_store.path is not None
 
     def trace(self, kind: str, payload: dict[str, object]) -> None:
         """Emit a companion trace record tagged with the active call's origin and span.
@@ -458,6 +488,8 @@ class ExternRegistry:
         self._nominal_classes: dict[NominalId, type[object]] = {}
         self._nominal_by_id: dict[NominalId, NominalDescriptor] = {}
         self._function_by_id: dict[FunctionId, FunctionDescriptor] = {}
+        # Keyed by request identity; the entry pins its request so the id stays unique.
+        self._type_contracts: dict[int, tuple[ContractRequest, TypeContract]] = {}
 
     def set_nominals(
         self,
@@ -543,6 +575,7 @@ class ExternRegistry:
         setattr(module, "dict", _dict)
         setattr(module, "json", AglJson)
         setattr(module, "AglException", AglException)
+        setattr(module, "TypeContract", TypeContract)
         setattr(module, "runtime", _COMPANION_RUNTIME)
         nominals = ModuleType("agl.nominals")
         setattr(module, "nominals", nominals)
@@ -555,6 +588,7 @@ class ExternRegistry:
         if option_cls is not None:
             setattr(module, "option_none", functools.partial(_option_none, option_cls))
             setattr(module, "option_some", functools.partial(_option_some, option_cls))
+            setattr(module, "option", functools.partial(_option, option_cls))
         _build_nominal_namespace(nominals, leaves)
         names: dict[str, list[type[object]]] = {}
         for cls in leaves.values():
@@ -563,6 +597,17 @@ class ExternRegistry:
             if len(classes) == 1 and name not in _COMPANION_API_NAMES:
                 setattr(module, name, classes[0])
         return module
+
+    def holds_current(self, companion_path: Path) -> bool:
+        """Whether :meth:`load_companion` of *companion_path* would reuse an import."""
+        canonical = companion_path.resolve()
+        cached = self._by_path.get(canonical)
+        if cached is None:
+            return False
+        try:
+            return cached[0] == fs.identity_stamp(canonical)
+        except OSError:
+            return False
 
     def load_companion(self, module_id: ModuleId, companion_path: Path) -> ModuleType:
         """Import *companion_path* for *module_id*, executing it once per version.
@@ -649,6 +694,10 @@ class ExternRegistry:
                 del self._resolved[key]
         self._by_module[module_id] = module
 
+    def loaded_companion(self, module_id: ModuleId) -> ModuleType | None:
+        """The companion module bound to *module_id*, or ``None`` when none is loaded."""
+        return self._by_module.get(module_id)
+
     def resolve(self, module_id: ModuleId, name: str) -> ExternCallable:
         """Return *module_id*'s companion callable named *name*.
 
@@ -690,6 +739,7 @@ class ExternRegistry:
         descriptors: ValueDescriptors,
         function_encoder: Callable[[IrClosureValue], object] | None = None,
         active_call: ActiveCall | None = None,
+        contracts: Mapping[ContractId, ContractRequest] | None = None,
     ) -> Value:
         """Cross the boundary for one extern call: encode, call, and decode.
 
@@ -727,8 +777,17 @@ class ExternRegistry:
         encodes through the interpreter it is running under. Like
         *active_call*, it is scoped to this call's context: a thread the
         companion spawns sees it only if it runs in a copy of that context.
+        *contracts* resolves the leading target contracts of a type-directed
+        extern call into their cached :class:`TypeContract`, likewise scoped;
+        ``None`` (any other call) shadows an enclosing call's resolver.
         """
-        with active_function_encoder(function_encoder), active_descriptors(descriptors):
+        with (
+            active_function_encoder(function_encoder),
+            active_descriptors(descriptors),
+            active_contract_encoder(
+                None if contracts is None else functools.partial(self._type_contract, contracts)
+            ),
+        ):
             try:
                 encoded_args = [encode_boundary_value(arg, descriptors) for arg in args]
             except BoundaryViolation as exc:
@@ -777,6 +836,17 @@ class ExternRegistry:
                     python_type=type(exc).__name__,
                     nominals=nominals,
                 ) from exc
+
+    def _type_contract(
+        self, contracts: Mapping[ContractId, ContractRequest], value: ContractValue
+    ) -> TypeContract:
+        """Return *value*'s ``TypeContract``, built once per request alongside the classes."""
+        request = contracts[value.contract_id]
+        cached = self._type_contracts.get(id(request))
+        if cached is None:
+            cached = (request, build_type_contract(request, self._nominal_classes))
+            self._type_contracts[id(request)] = cached
+        return cached[1]
 
 
 def _nominal_identity_path(descriptor: NominalDescriptor) -> tuple[str, ...]:
@@ -882,3 +952,14 @@ def _option_some(option_cls: type, value: object) -> object:
     Bound as ``agl.option_some``; see :func:`_option_none`.
     """
     return cast(object, getattr(option_cls, "Some")(value=value))
+
+
+def _option(option_cls: type, value: object, present: bool) -> object:
+    """Build ``Option::Some(value)`` when *present*, else ``Option::None``.
+
+    Bound as ``agl.option``, for a companion that has already computed both
+    the value and whether it exists. *value* is evaluated by the caller, so a
+    site whose value is only well-defined when present uses a conditional
+    over :func:`_option_some`/:func:`_option_none` instead.
+    """
+    return _option_some(option_cls, value) if present else _option_none(option_cls)

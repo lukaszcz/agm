@@ -7,6 +7,7 @@ import pytest
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
 from agm.agl.modules.roots import RootSet
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
@@ -297,7 +298,7 @@ def test_path_names_text_without_the_standard_library() -> None:
 
 def test_a_declared_path_type_replaces_the_reserved_text_alias() -> None:
     with pytest.raises(AglTypeError):
-        _check('record path(value: int)\nlet p: path = "a"\n()\n', default_stdlib=False)
+        _check('record path\n  value: int\nlet p: path = "a"\n()\n', default_stdlib=False)
 
 
 def test_url_type_alias_is_bare_visible_through_the_prelude() -> None:
@@ -328,12 +329,12 @@ def test_builtin_record_shape_must_match_field_default_presence() -> None:
     have is a structural mismatch, distinct from a field type/name mismatch."""
     with pytest.raises(AglTypeError, match="Builtin type 'SessionStats' has an invalid definition"):
         _check(
-            "builtin record SessionStats(\n"
-            "  input-tokens: int,\n"
-            "  output-tokens: int,\n"
-            "  cost: decimal,\n"
-            "  context-percent: decimal = 0.0,\n"
-            ")\n()\n",
+            "builtin record SessionStats\n"
+            "  input-tokens: int\n"
+            "  output-tokens: int\n"
+            "  cost: decimal\n"
+            "  context-percent: decimal = 0.0"
+            "\n()\n",
             default_stdlib=False,
         )
 
@@ -361,6 +362,27 @@ def test_builtin_option_shape_must_match() -> None:
         _check("builtin\nenum Option[T] =\n  | None\n  | Some(value: T, extra: int)\n()\n")
 
 
+def test_builtin_shape_error_names_the_declaration_in_any_cache_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bad ``Option`` is reported as ``Option`` whether or not the standard
+    library's modules were already parsed.
+
+    ``Optional`` reuses ``Option``'s members, so a redeclared ``Option`` makes
+    both invalid, and only ``Option`` names a declaration the author wrote.
+    Which module set the checker sees depends on the artifact caches, so the
+    two halves of the run below have to agree.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    clear_parsed_module_cache()
+    bad_option = "builtin\nenum Option[T] =\n  | None\n  | Some(value: T, extra: int)\n()\n"
+    with pytest.raises(AglTypeError, match="Builtin type 'Option' has an invalid definition"):
+        _check(bad_option)
+    _check("let x: Option[int] = Some(value = 1)\nprint(x)\n")
+    with pytest.raises(AglTypeError, match="Builtin type 'Option' has an invalid definition"):
+        _check(bad_option)
+
+
 def test_builtin_optional_must_reference_option_members() -> None:
     with pytest.raises(AglTypeError, match="Builtin type 'Optional' has an invalid definition"):
         _check(
@@ -369,8 +391,9 @@ def test_builtin_optional_must_reference_option_members() -> None:
             "  | Some(value: T)\n"
             "\n"
             "scope Fake\n"
-            "  record None()\n"
-            "  record Some[T](value: T)\n"
+            "  record None\n"
+            "  record Some[T]\n"
+            "    value: T\n"
             "end Fake\n"
             "\n"
             "builtin enum Optional[T]\n"
@@ -386,7 +409,7 @@ def test_builtin_agent_sandbox_must_reference_the_builtin_sandbox_record() -> No
     with pytest.raises(AglTypeError, match="Builtin type 'AgentSandbox' has an invalid definition"):
         _check(
             "scope Fake\n"
-            "  record Sandbox()\n"
+            "  record Sandbox\n"
             "end Fake\n"
             "\n"
             "builtin enum AgentSandbox\n"
@@ -422,7 +445,7 @@ def test_exception_base_must_be_exception_type() -> None:
 
 
 def test_implicit_exception_base_bypasses_lexical_shadowing() -> None:
-    _check("scope S\n  record Exception()\n  exception Foo()\nend S\n\n()\n")
+    _check("scope S\n  record Exception\n  exception Foo\nend S\n\n()\n")
 
 
 def test_exception_fields_cannot_duplicate_inherited_fields() -> None:

@@ -27,7 +27,8 @@ def copy_terminal_size(source_fd: int, target_fd: int) -> None:
 def write_all(fd: int, data: bytes) -> None:
     """Write all *data* to *fd*."""
 
-    remaining = data
+    # A memoryview keeps the unwritten tail a zero-copy slice of *data*.
+    remaining = memoryview(data)
     while remaining:
         written = os.write(fd, remaining)
         if written == 0:

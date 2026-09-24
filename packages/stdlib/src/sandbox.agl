@@ -2,9 +2,8 @@ import std/option::Option
 import std/optional::Optional
 import std/path::path
 
-builtin record Sandbox(
-  memory: Optional[text] = Default,
-  swap: Optional[text] = Default,
-  settings: Option[path] = None,
-  patch: bool = true,
-)
+builtin record Sandbox
+  memory: Optional[text] = Default
+  swap: Optional[text] = Default
+  settings: Option[path] = None
+  patch: bool = true

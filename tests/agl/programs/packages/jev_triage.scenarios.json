@@ -1,0 +1,761 @@
+{
+  "scenarios": [
+    {
+      "name": "an_urgent_billing_ticket_is_escalated",
+      "params": {"message": "I was charged twice and nobody answers!"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {"type": "noul", "instructions": "Does this message express urgency?"}
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.9}},
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.8, "Technical": 0.1, "Sales": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "score",
+                  "instructions": "How frustrated is the customer?",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "score",
+                "score": 1.43,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.17, "1": 0.23, "2": 0.6}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "urgent": {"type": "noul", "instructions": "Does the message express urgency?"},
+                "team": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                },
+                "frustration": {
+                  "type": "score",
+                  "instructions": "frustration",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "urgent": {"type": "noul", "noul": 0.8},
+              "team": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.8, "Technical": 0.1, "Sales": 0.1}
+              },
+              "frustration": {
+                "type": "score",
+                "score": 1.43,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.17, "1": 0.23, "2": 0.6}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {"stdout": "true\nTeam::Billing\n1.43\nFrustration::Furious\nescalate\n"}
+    },
+    {
+      "name": "a_calm_technical_ticket_is_not_escalated",
+      "params": {"message": "I was charged twice and nobody answers!"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {"type": "noul", "instructions": "Does this message express urgency?"}
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.2}},
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Technical",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.1, "Technical": 0.8, "Sales": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "score",
+                  "instructions": "How frustrated is the customer?",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "score",
+                "score": 0.1,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.9, "1": 0.1, "2": 0.0}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "urgent": {"type": "noul", "instructions": "Does the message express urgency?"},
+                "team": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                },
+                "frustration": {
+                  "type": "score",
+                  "instructions": "frustration",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "frustration": {
+                "type": "score",
+                "score": 0.1,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.9, "1": 0.1, "2": 0.0}
+              },
+              "team": {
+                "type": "choice",
+                "choice": "Technical",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.1, "Technical": 0.8, "Sales": 0.1}
+              },
+              "urgent": {"type": "noul", "noul": 0.1}
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {"stdout": "false\nTeam::Technical\n0.1\nFrustration::Calm\n"}
+    },
+    {
+      "name": "an_urgent_sales_ticket_is_not_escalated_and_a_tied_level_is_the_lower_one",
+      "params": {"message": "I was charged twice and nobody answers!"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {"type": "noul", "instructions": "Does this message express urgency?"}
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.5}},
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Sales",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.1, "Technical": 0.1, "Sales": 0.8}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "score",
+                  "instructions": "How frustrated is the customer?",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "score",
+                "score": 1.2,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.2, "1": 0.4, "2": 0.4}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "urgent": {"type": "noul", "instructions": "Does the message express urgency?"},
+                "team": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                },
+                "frustration": {
+                  "type": "score",
+                  "instructions": "frustration",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "urgent": {"type": "noul", "noul": 0.9},
+              "team": {
+                "type": "choice",
+                "choice": "Sales",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.1, "Technical": 0.1, "Sales": 0.8}
+              },
+              "frustration": {
+                "type": "score",
+                "score": 1.2,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.2, "1": 0.4, "2": 0.4}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {"stdout": "true\nTeam::Sales\n1.2\nFrustration::Frustrated\n"}
+    },
+    {
+      "name": "seeded_settings_select_the_model_endpoint_timeout_and_noul_threshold",
+      "params": {"message": "I was charged twice and nobody answers!"},
+      "module_params": {
+        "sysone/jev::model": {"$case": "Some", "value": "jev-2"},
+        "sysone/jev::base-url": {"$case": "Some", "value": "https://jev.example"},
+        "sysone/jev::timeout": {"$case": "Some", "value": "30s"},
+        "sysone/jev::noul-threshold": 0.95
+      },
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-2",
+              "questions": {
+                "question": {"type": "noul", "instructions": "Does this message express urgency?"}
+              }
+            },
+            "url": "https://jev.example/v1/systemone",
+            "timeout": 30.0
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.9}},
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-2",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                }
+              }
+            },
+            "url": "https://jev.example/v1/systemone",
+            "timeout": 30.0
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.8, "Technical": 0.1, "Sales": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-2",
+              "questions": {
+                "question": {
+                  "type": "score",
+                  "instructions": "How frustrated is the customer?",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            },
+            "url": "https://jev.example/v1/systemone",
+            "timeout": 30.0
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "score",
+                "score": 1.43,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.17, "1": 0.23, "2": 0.6}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-2",
+              "questions": {
+                "urgent": {"type": "noul", "instructions": "Does the message express urgency?"},
+                "team": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                },
+                "frustration": {
+                  "type": "score",
+                  "instructions": "frustration",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            },
+            "url": "https://jev.example/v1/systemone",
+            "timeout": 30.0
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "urgent": {"type": "noul", "noul": 0.9},
+              "team": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.8, "Technical": 0.1, "Sales": 0.1}
+              },
+              "frustration": {
+                "type": "score",
+                "score": 1.43,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.17, "1": 0.23, "2": 0.6}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {"stdout": "false\nTeam::Billing\n1.43\nFrustration::Furious\n"}
+    },
+    {
+      "name": "a_rate_limited_request_raises_jev_rate_limit_error",
+      "params": {"message": "I was charged twice and nobody answers!"},
+      "module_params": {"sysone/jev::max-retries": 0},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {"type": "noul", "instructions": "Does this message express urgency?"}
+              }
+            }
+          },
+          "status": 429,
+          "json": {"error": "slow down"},
+          "headers": {"x-typesafe-request-id": "req-9", "retry-after-ms": "1500"}
+        }
+      ],
+      "expect": {
+        "stdout": "",
+        "raises": {
+          "type": "JevRateLimitError",
+          "fields": {
+            "status": 429,
+            "body": {"error": "slow down"},
+            "retry-after-ms": {"$case": "Some", "value": 1500},
+            "request-id": {"$case": "Some", "value": "req-9"}
+          }
+        }
+      }
+    },
+    {
+      "name": "an_unauthorized_fan_out_raises_jev_auth_error_after_the_single_questions",
+      "params": {"message": "I was charged twice and nobody answers!"},
+      "module_params": {"sysone/jev::max-retries": 0},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {"type": "noul", "instructions": "Does this message express urgency?"}
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.9}},
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.8, "Technical": 0.1, "Sales": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "score",
+                  "instructions": "How frustrated is the customer?",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "score",
+                "score": 1.43,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.17, "1": 0.23, "2": 0.6}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {"status": 401, "json": {"error": "bad key"}}
+      ],
+      "expect": {
+        "stdout": "true\nTeam::Billing\n1.43\nFrustration::Furious\n",
+        "raises": {"type": "JevAuthError", "fields": {"status": 401, "request-id": {"$case": "None"}}}
+      }
+    },
+    {
+      "name": "a_fan_out_answer_outside_the_target_raises_jev_response_error",
+      "params": {"message": "I was charged twice and nobody answers!"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {"type": "noul", "instructions": "Does this message express urgency?"}
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.9}},
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.8,
+                "probabilities": {"Billing": 0.8, "Technical": 0.1, "Sales": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "score",
+                  "instructions": "How frustrated is the customer?",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "score",
+                "score": 1.43,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.17, "1": 0.23, "2": 0.6}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": "I was charged twice and nobody answers!",
+              "model": "jev-latest",
+              "questions": {
+                "urgent": {"type": "noul", "instructions": "Does the message express urgency?"},
+                "team": {
+                  "type": "choice",
+                  "instructions": "Which team should handle this?",
+                  "criteria": {"Billing": null, "Technical": null, "Sales": null}
+                },
+                "frustration": {
+                  "type": "score",
+                  "instructions": "frustration",
+                  "criteria": ["Calm", "Frustrated", "Furious"]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "urgent": {"type": "noul", "noul": 0.8},
+              "team": {
+                "type": "choice",
+                "choice": "Legal",
+                "confidence": 0.8,
+                "probabilities": {"Legal": 1.0}
+              },
+              "frustration": {
+                "type": "score",
+                "score": 1.43,
+                "confidence": 0.6,
+                "legend": {"0": "Calm", "1": "Frustrated", "2": "Furious"},
+                "probabilities": {"0": 0.17, "1": 0.23, "2": 0.6}
+              }
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {
+        "stdout": "true\nTeam::Billing\n1.43\nFrustration::Furious\n",
+        "raises": {
+          "type": "JevResponseError",
+          "fields": {
+            "field-path": "answers.team.choice",
+            "request-id": {"$case": "Some", "value": "req-1"}
+          }
+        }
+      }
+    }
+  ]
+}

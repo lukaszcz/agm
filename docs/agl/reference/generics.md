@@ -371,7 +371,10 @@ is fully usable; only the bare `T` payload is opaque.)
 This language-internal guarantee does not extend to a Python companion behind
 `extern def`. The FFI passes the ordinary runtime representation at a generic
 position and trusts the companion to preserve parametricity; see [Python
-FFI](ffi.md#generics-and-trust).
+FFI](ffi.md#generics-and-trust). An extern type parameter that no parameter
+mentions is not opaque to its companion: each call site's concrete
+instantiation reaches it as a contract, so that instantiation may not be a
+type variable; see [Target type parameters](ffi.md#target-type-parameters).
 
 ## Invariance
 
@@ -473,7 +476,9 @@ value parameter ([Host environment](host-environment.md#program-arguments)), and
 def` parameter or result ([Python FFI](ffi.md)). The first three derive a
 **finite JSON Schema**; the FFI requires the same finite closure without
 deriving any schema, since values cross the boundary by their runtime
-representation rather than a derived artifact.
+representation rather than a derived artifact. The one FFI exception is a
+[target type parameter](ffi.md#target-type-parameters), whose instantiation
+derives a finite JSON Schema like an `ask` target's.
 
 Derivation expands the schema-relevant concrete instantiations reachable from
 the type. Uniform, permutation, and argument-constant recursion do not by

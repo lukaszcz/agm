@@ -319,11 +319,16 @@ def test_recursive_defs_share_a_non_generic_member_across_enum_instantiations() 
 
 
 _AGENT_SOURCE = """\
-record Shared(value: int)
+record Shared
+  value: int
 enum RR = ::Shared | Other(label: text)
 enum RRPrime = ::Shared
 enum Tree = Leaf | Node(value: int, children: array[Tree])
-record Answer(plain: Shared, selected: RR, prime: RRPrime, tree: Tree)
+record Answer
+  plain: Shared
+  selected: RR
+  prime: RRPrime
+  tree: Tree
 let worker: Agent = AgentCommand(\"worker\")
 let answer: Answer = ask(\"answer\", agent = worker)
 let encoded = answer as json

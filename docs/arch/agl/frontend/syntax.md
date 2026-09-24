@@ -2,14 +2,14 @@
 
 The hand-written lexer handles layout (INDENT/DEDENT), string templates with `%{}` expressions and `${NAME}` environment interpolation, and the tight slash-path and `::` qualifier syntax. A Lark LALR grammar recognizes the token stream, and the AST builder validates and constructs frozen dataclass nodes with stable ids. Comments produce no tokens, but their spans are exposed as a side channel for highlighters.
 
-Single- and triple-quoted templates share hole recognition and token emission. Environment holes scan names with the shared identifier rules and desugar to expression tokens. Triple-quoted dedenting measures indentation across literal/hole segments, assembles retained line slices, and maps only literal boundaries, preserving hole tokens' source positions without per-character position tables. A `$` literal (to end of line, or an indented block) opens and closes with its own delimiter tokens, but shares the same fragment and hole tokens, hole scanner, and `template` grammar rule as a quoted template.
+Single- and triple-quoted templates share hole recognition and token emission. Environment holes scan names with the shared identifier rules and emit a single token each, spanning the hole and carrying its name; the AST builder turns that token into the qualified environment read it stands for. Triple-quoted dedenting measures indentation across literal/hole segments, assembles retained line slices, and maps only literal boundaries, preserving hole tokens' source positions without per-character position tables. A `$` literal (to end of line, or an indented block) opens and closes with its own delimiter tokens, but shares the same fragment and hole tokens, hole scanner, and `template` grammar rule as a quoted template.
 
 The lexer's escape, number, identifier, and environment-hole scanning rules live in `agl/value_syntax/lexical.py`, a leaf below the lexer that also backs the value-syntax reader (`agl/value_syntax/reader.py`), so both scan AgL literals identically. A `\uXXXX` escape denotes a scalar value: an adjacent high and low pair combines into one character, as in JSON, and any other surrogate escape is a lexical error, as is a raw surrogate anywhere in the source.
 The same leaf spells values back as literals (`quote_text`, `scalar_text`), so runtime rendering and compile-time constant folding cannot diverge.
 
 ## Constant Folding
 
-`syntax/constants.py` is the syntactic constant-expression predicate. `syntax/module_constants.py` folds a module's own constants to text from its AST alone: it indexes every static `let`/`var` by declaration path, resolves a reference by the language's own same-module rule (enclosing scope region outward, `::` from the root), and folds templates whose holes name scalars. It depends on no resolver, which is what lets both the scope pass and the parse-only package command scan (`packages/source_commands.py`) fold one attribute argument the same way — and is why a reference reaches the declaring module only.
+`syntax/constants.py` is the syntactic constant-expression predicate. `syntax/module_constants.py` folds a module's own constants to text from its AST alone: it indexes every static `let`/`var` by declaration path, resolves a reference by the language's own same-module rule through the shared search-order leaf `syntax/qualifiers.py` (enclosing scope region outward, `::` from the root), and folds templates whose holes name scalars. It depends on no resolver, which is what lets both the scope pass and the parse-only package command scan (`packages/source_commands.py`) fold one attribute argument the same way — and is why a reference reaches the declaring module only.
 
 ## Keywords
 
@@ -38,6 +38,6 @@ An inline-source host (`agm exec -c`, the REPL) parses statement-oriented source
 
 - `src/agm/agl/keywords.py`, `src/agm/agl/lexer/` — keyword inventories and indentation-aware lexing; `lexer/operators.py` is the shared operator-position inventory, `lexer/layout.py` the INDENT/DEDENT and continuation filter.
 - `src/agm/agl/grammar/agl.lark`, `src/agm/agl/parser/` — grammar, parsing, AST construction, inline-source wrapping.
-- `src/agm/agl/syntax/` — AST nodes, spans, advisories, the constant-expression predicate, module-constant folding, and resource-call classification.
+- `src/agm/agl/syntax/` — AST nodes, spans, advisories, the constant-expression predicate, the qualifier search order, module-constant folding, and resource-call classification.
 - `src/agm/agl/attributes.py` — the built-in attribute catalog: targets, argument shapes, repetition, and conflicts.
 - Tests: `tests/test_agl_lexer.py`, `test_agl_parser.py`, `test_agl_ast.py`, `test_agl_wrap.py`, `test_agl_module_constants.py`.

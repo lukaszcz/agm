@@ -45,7 +45,7 @@ from tests._agl_helpers import (
 from tests._command_coverage import record_invocation
 from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
 from tests._git_helpers import clone_with_fork_remote
-from tests._package_helpers import write_installed_package
+from tests._package_helpers import write_installed_package, write_python_package
 from tests._proc_helpers import wait_for_path
 
 
@@ -7493,6 +7493,25 @@ def _write_store_test_package(root: Path, name: str, version: str) -> Path:
     return root
 
 
+def _install_fake_uv(directory: Path, env: dict[str, str]) -> Path:
+    """Put a recording ``uv`` first on PATH; return its argv log.
+
+    It exits with ``FAKE_UV_STATUS`` (default 0) and never installs anything.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    log = directory / "uv.log"
+    uv = directory / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(log))}\n"
+        'exit "${FAKE_UV_STATUS:-0}"\n',
+        encoding="utf-8",
+    )
+    uv.chmod(uv.stat().st_mode | stat.S_IEXEC)
+    env["PATH"] = str(directory) + ":" + env["PATH"]
+    return log
+
+
 class TestPackageInit:
     def test_initializes_a_package_that_checks_and_archives(
         self, tmp_path: Path, env: dict[str, str]
@@ -7628,6 +7647,43 @@ class TestPackageCheck:
         assert result.stderr
         assert "Traceback" not in result.stderr
 
+    def test_passes_a_package_whose_python_requirements_hold(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        log = _install_fake_uv(tmp_path / "bin", env)
+        package = write_python_package(
+            tmp_path / "alpha",
+            "alpha",
+            "packaging>=1",
+            "agm-test-absent-inapplicable; python_version < '3'",
+        )
+
+        result = run_agm(["pkg", "check", str(package)], env=env, cwd=tmp_path)
+
+        assert result.returncode == 0
+        assert not log.exists()
+
+    def test_reports_unsatisfied_python_requirements_without_installing(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        log = _install_fake_uv(tmp_path / "bin", env)
+        package = write_python_package(
+            tmp_path / "alpha",
+            "alpha",
+            "packaging>=1",
+            "agm-test-absent-alpha>=1",
+            "packaging<1",
+        )
+
+        result = run_agm(["pkg", "check", str(package)], env=env, cwd=tmp_path, check=False)
+
+        assert result.returncode == 1
+        assert "agm-test-absent-alpha>=1" in result.stderr
+        assert "packaging<1" in result.stderr
+        assert "packaging>=1" not in result.stderr
+        assert "Traceback" not in result.stderr
+        assert not log.exists()
+
     def test_group_and_command_help_are_available(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -7641,6 +7697,102 @@ class TestPackageCheck:
         assert "check" in group.stdout
         assert "check" in help_command.stdout
         assert "DIR" in command_help.stdout
+
+
+class TestPackageSync:
+    def test_installs_the_active_union_when_a_requirement_is_unsatisfied(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        log = _install_fake_uv(tmp_path / "bin", env)
+        alpha = write_python_package(
+            tmp_path / "alpha", "alpha", "packaging>=1", "agm-test-absent-alpha>=1"
+        )
+        bravo = write_python_package(tmp_path / "bravo", "bravo", "agm-test-absent-b")
+        run_agm(["pkg", "install", str(alpha)], env=env, cwd=tmp_path)
+        run_agm(["pkg", "install", "--editable", str(bravo)], env=env, cwd=tmp_path)
+        log.unlink()
+
+        result = run_agm(["pkg", "sync"], env=env, cwd=tmp_path)
+
+        runs = log.read_text(encoding="utf-8").splitlines()
+        assert len(runs) == 1
+        assert runs[0].startswith("pip install --python ")
+        assert runs[0].split()[4:] == [
+            "packaging>=1",
+            "agm-test-absent-alpha>=1",
+            "agm-test-absent-b",
+        ]
+        assert "agm-test-absent-alpha>=1" in result.stdout
+        assert "agm-test-absent-b" in result.stdout
+
+    def test_satisfied_requirements_run_no_installer(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        log = _install_fake_uv(tmp_path / "bin", env)
+        empty = run_agm(["pkg", "sync"], env=env, cwd=tmp_path)
+        alpha = write_python_package(tmp_path / "alpha", "alpha", "packaging>=1")
+        run_agm(["pkg", "install", str(alpha)], env=env, cwd=tmp_path)
+
+        result = run_agm(["pkg", "sync"], env=env, cwd=tmp_path)
+
+        assert empty.returncode == 0
+        assert result.returncode == 0
+        assert result.stdout
+        assert not log.exists()
+
+    def test_dry_run_reports_the_installer_command_without_running_it(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        log = _install_fake_uv(tmp_path / "bin", env)
+        alpha = write_python_package(tmp_path / "alpha", "alpha", "agm-test-absent-alpha>=1")
+        run_agm(["pkg", "install", "--editable", str(alpha)], env=env, cwd=tmp_path)
+        log.unlink()
+
+        result = run_agm(["pkg", "sync", "--dry-run"], env=env, cwd=tmp_path)
+
+        assert result.returncode == 0
+        assert "dry-run:" in result.stdout
+        assert "agm-test-absent-alpha>=1" in result.stdout
+        assert not log.exists()
+
+    def test_exec_of_a_companion_with_an_unsatisfied_requirement_points_to_sync(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        _install_fake_uv(tmp_path / "bin", env)
+        alpha = write_python_package(tmp_path / "alpha", "alpha", "agm-test-absent-alpha>=1")
+        (alpha / "src" / "twice.agl").write_text("extern def twice(x: int) -> int\n")
+        (alpha / "src" / "twice.py").write_text("def twice(x):\n    return 2 * x\n")
+        run_agm(["pkg", "install", str(alpha)], env=env, cwd=tmp_path)
+
+        result = run_agm(
+            ["exec", "-c", "import alpha/twice\nprint(alpha/twice::twice(2))"],
+            env=env,
+            cwd=tmp_path,
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "agm-test-absent-alpha>=1" in result.stderr
+        assert "agm pkg sync" in result.stderr
+        assert "Traceback" not in result.stderr
+
+    def test_installer_failure_exits_non_zero(self, tmp_path: Path, env: dict[str, str]) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        log = _install_fake_uv(tmp_path / "bin", env)
+        alpha = write_python_package(tmp_path / "alpha", "alpha", "agm-test-absent-alpha>=1")
+        run_agm(["pkg", "install", "--editable", str(alpha)], env=env, cwd=tmp_path)
+        env["FAKE_UV_STATUS"] = "3"
+
+        result = run_agm(["pkg", "sync"], env=env, cwd=tmp_path, check=False)
+
+        assert result.returncode == 1
+        assert result.stderr
+        assert "Traceback" not in result.stderr
+        assert len(log.read_text(encoding="utf-8").splitlines()) == 2
 
 
 class TestPackageInstall:
@@ -7757,6 +7909,32 @@ class TestPackageInstall:
         assert uninstall.returncode == 0
         assert missing_import.returncode == 1
         assert unknown.returncode == 1
+
+    def test_info_reports_python_requirements_and_whether_they_hold(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
+        header = '[package]\nname = "alpha"\nversion = "1.0.0"\n\n[python]\n'
+        (package / "package.toml").write_text(
+            header + "dependencies = ['packaging>=1', 'agm-e2e-absent; python_version < \"3\"']\n",
+            encoding="utf-8",
+        )
+
+        run_agm(["pkg", "install", "--editable", str(package)], env=env, cwd=tmp_path)
+        held = run_agm(["pkg", "info", "alpha"], env=env, cwd=tmp_path)
+        (package / "package.toml").write_text(
+            header + 'dependencies = ["packaging>=1", "agm-e2e-absent>=1"]\n', encoding="utf-8"
+        )
+        missing = run_agm(["pkg", "info", "alpha"], env=env, cwd=tmp_path)
+
+        held_lines = held.stdout.splitlines()
+        assert "installed" in next(line for line in held_lines if "packaging>=1" in line)
+        assert "not applicable" in next(line for line in held_lines if "agm-e2e-absent" in line)
+        assert "unsatisfied" not in held.stdout
+        assert "missing" in next(
+            line for line in missing.stdout.splitlines() if "agm-e2e-absent>=1" in line
+        )
 
     def test_registered_commands_restore_the_remaining_active_owner(
         self, tmp_path: Path, env: dict[str, str]
@@ -9361,7 +9539,7 @@ class TestExecCommand:
     ) -> None:
         work = tmp_path / "work"
         work.mkdir()
-        (work / "geometry.agl").write_text("record Point(x: int, y: int)\n", encoding="utf-8")
+        (work / "geometry.agl").write_text("record Point\n  x: int\n  y: int\n", encoding="utf-8")
         (work / "metrics.agl").write_text(
             "import geometry::*\n"
             "def Point::shift(self, amount: int) -> Point = "

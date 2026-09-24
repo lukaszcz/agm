@@ -39,9 +39,9 @@ export helpers
 use Shared::*
 builtin var setting: int
 def helper() -> unit = ()
-record Item()
+record Item
 enum State = Ready
-exception Problem()
+exception Problem
 type Count = int
 infixl |> at 12
 
@@ -228,7 +228,9 @@ def test_wrapped_root_declaration_reference_is_reported_by_the_scope_pipeline() 
 def test_wrap_inline_program_keeps_a_binding_a_root_declaration_references() -> None:
     program, next_node_id = parse_program_seeded(
         """\
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int
 let used = Point(1, 2)
 let unused = Point(3, 4)
 def read() -> int = used.x
@@ -252,8 +254,11 @@ print(read())
 def test_wrap_inline_program_retains_bindings_reachable_through_other_retained_bindings() -> None:
     program, next_node_id = parse_program_seeded(
         """\
-record Point(x: int, y: int)
-record Boxed(inner: Point)
+record Point
+  x: int
+  y: int
+record Boxed
+  inner: Point
 let corner = Point(1, 2)
 let boxed = Boxed(corner)
 def read() -> int = boxed.inner.y
@@ -329,7 +334,7 @@ def test_wrap_inline_program_treats_any_binder_in_a_declaration_as_shadowing(
     declaration: str,
 ) -> None:
     program, next_node_id = parse_program_seeded(
-        f"record Point(x: int, y: int)\nexception Boom()\nlet hidden = 1\n{declaration}\n",
+        f"record Point\n  x: int\n  y: int\nexception Boom\nlet hidden = 1\n{declaration}\n",
         start_id=0,
     )
     binding = program.body.items[2]
@@ -359,7 +364,9 @@ def test_wrap_inline_program_keeps_an_unreferenced_scoped_binding_at_the_root() 
 def test_wrap_inline_program_retains_a_binding_a_scoped_binding_references() -> None:
     program, next_node_id = parse_program_seeded(
         """\
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int
 let corner = Point(1, 2)
 let Config::origin = corner
 print 1

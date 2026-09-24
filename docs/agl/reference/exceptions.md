@@ -39,6 +39,15 @@ constructible from a bare reference, even when every field has a default
 (see [Fieldless and all-defaulted constructor
 references](expressions.md#fieldless-and-all-defaulted-constructor-references)):
 exception construction always needs an explicit call, `raise Abort(...)`.
+An exception with no own fields omits the body:
+
+```agl
+exception DeployError extends Exception
+  service: text
+
+exception RollbackError extends DeployError
+```
+
 `trace-id` is not reserved: a user-declared exception may use it as one of its
 own fields. Exception fields do not accept `var` and cannot be reassigned.
 `builtin exception` is the standard-library form for host-recognized exception

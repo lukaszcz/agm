@@ -3,10 +3,10 @@
 # same renderer. A nullary constructor is an auto-value, so its bare spelling
 # round-trips as written; every fieldless case below renders without
 # parentheses, regardless of where its record is declared.
-record Root()
+record Root
 
 scope S
-  record Inner()
+  record Inner
 end S
 
 enum E

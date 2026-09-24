@@ -203,10 +203,12 @@ class TestValueDirectedBoundary:
 
     def test_scope_and_nominal_sharing_a_name_resolves_both(self, tmp_path: Path) -> None:
         source = (
-            "record Box(value: text)\n"
+            "record Box\n"
+            "  value: text\n"
             "\n"
             "scope Box\n"
-            "  record Inner(label: text)\n"
+            "  record Inner\n"
+            "    label: text\n"
             "end Box\n"
             "\n"
             "extern def make_box() -> Box\n"
@@ -286,7 +288,8 @@ class TestValueDirectedBoundary:
         self, tmp_path: Path
     ) -> None:
         source = (
-            "record Node(children: array[Node])\n"
+            "record Node\n"
+            "  children: array[Node]\n"
             "extern def boom(xs: array[Node]) -> unit\n"
             "let leaf = Node(children = [])\n"
             "var xs: array[Node] = [leaf]\n"
@@ -306,7 +309,8 @@ class TestValueDirectedBoundary:
         self, tmp_path: Path
     ) -> None:
         source = (
-            "record Node(var children: array[Node])\n"
+            "record Node\n"
+            "  var children: array[Node]\n"
             "extern def show(node: Node) -> unit\n"
             "var node = Node(children = [])\n"
             "node.children := [node]\n"

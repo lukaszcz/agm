@@ -12,7 +12,8 @@ import std/agent::*
 import std/session
 import std/package
 
-record Box(value: int)
+record Box
+  value: int
 
 def increment(x: int) -> int = x + 1
 def double(x: int) -> int = x * 2

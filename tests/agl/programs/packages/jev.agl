@@ -1,0 +1,117 @@
+# `sysone/jev` through the package mount: every `ask` target kind, the typed
+# trio, raw `system-one`, an `ask-many` record of `Noul`, `Choice`, and `bool`
+# fields, the `try-` twins, `JevError` subtypes caught by type and by the root,
+# target errors raised before any request, and settings written in source then
+# overridden per call.
+import sysone/jev
+import sysone/jev::{JevError, JevApiError, JevRateLimitError, JevTargetError}
+
+enum Team
+  | @doc("Invoices and refunds.") Billing
+  | Technical
+  | @json-name("acct") Account
+
+enum Level
+  | @doc("Can wait.") Low
+  | Medium
+  | @doc("Drop everything.") High
+
+record Note
+  text: text
+
+record Ticket
+  urgent: bool
+  note: text
+
+record Routing
+  @doc("Is it spam?")
+  spam: jev::Noul
+  routed: jev::Choice[Team]
+  urgent: bool
+
+def describe(e: JevError) -> text =
+  case e as? JevApiError of
+    | Some(value) => "%{value.status} %{e.request-id.unwrap-or("-")}"
+    | None => "no status"
+
+def target-of[T](request: () -> T) -> text =
+  try
+    let _ = request()
+    "no error"
+  catch JevTargetError as e => e.target
+
+program def main(scenario: text) -> unit =
+  let state = {"ticket": "I was charged twice." as json} as json
+  case scenario of
+    | "targets" =>
+        let urgent: bool = jev::ask("Is it urgent?", state)
+        let spam = jev::ask::[jev::Noul]("Is it spam?", state)
+        let team: Team = jev::ask("Which team?", state)
+        let routed = jev::ask::[jev::Choice[Team]]("Which team?", state)
+        let level: jev::Score[Level] = jev::ask("How severe?", state)
+        print([urgent, spam.value(), spam.value(0.05)])
+        print(team == Team::Account as Team)
+        print(routed.choice == Team::Billing as Team)
+        print(routed.probabilities)
+        print(level.level == Level::High as Level)
+        print(level.probabilities)
+    | "trio" =>
+        let criteria = jev::NoulCriteria("A refund request" as json, "Anything else" as json)
+        let refund = jev::ask-noul("Is it a refund?", state, Some(criteria))
+        let chosen = jev::ask-choice::[Team]("Which team?", state)
+        let scored: jev::Score[Level] = jev::ask-score("How severe?", state)
+        print(refund)
+        print([chosen.confidence, scored.score, scored.confidence])
+        let questions: dict[text, jev::Question] = {
+          "refund": jev::Question::NoulQuestion({"text": "Refund?"} as json, None),
+          "tone": jev::Question::ChoiceQuestion("Tone?" as json,
+            {"calm": null, "angry": "Raised voice" as json}),
+        }
+        let response = jev::system-one(state, questions)
+        print(response.model)
+        print(response.request-id)
+        print(response.usage)
+        print(response.answers["refund"])
+        print(response.answers["tone"])
+    | "many" =>
+        let routing: Routing = jev::ask-many(state)
+        print([routing.spam.probability, routing.routed.confidence])
+        print(routing.routed.choice == Team::Account as Team)
+        print(routing.routed.probabilities)
+        print(routing.urgent)
+    | "caught" =>
+        let rated = try
+          let _ = jev::ask-noul("Is it urgent?", state)
+          "none"
+        catch JevRateLimitError as e => "rate limited after %{e.retry-after-ms.unwrap-or(0)}ms"
+        print(rated)
+        let failed = try
+          let _ = jev::ask::[Team]("Which team?", state)
+          "none"
+        catch JevError as e => describe(e)
+        print(failed)
+        case jev::try-ask-noul("Is it urgent?", state) of
+          | Ok(value) => print(value.probability)
+          | Err(error) => print("err: %{describe(error)}")
+        case jev::try-system-one(state, {}) of
+          | Ok(_) => print("answered")
+          | Err(error) => print("err: %{describe(error)}")
+        print(jev::try-ask-noul("Is it urgent?", state).is-ok())
+    | "target_errors" =>
+        print(target-of(fn() => jev::ask::[text]("Which?", state)))
+        print(target-of(fn() => jev::ask::[Note]("Which?", state)))
+        print(target-of(fn() => jev::ask-many::[Ticket](state)))
+        print(target-of(fn() => jev::ask-many::[Team](state)))
+        print(target-of(fn() => jev::ask::[Option[Team]]("Which?", state)))
+        print(target-of(fn() => jev::ask-choice::[Note]("Which?", state)))
+    | "settings" =>
+        let first: bool = jev::ask("Is it urgent?", state)
+        jev::model := Some("jev-2")
+        jev::noul-threshold := 0.8
+        jev::timeout := Some("2m")
+        let written: bool = jev::ask("Is it urgent?", state)
+        let per-call: bool = jev::ask("Is it urgent?", state, model = Some("jev-3"),
+          timeout = Some("5s"), noul-threshold = 0.6)
+        print([first, written, per-call])
+    | _ =>
+        ()

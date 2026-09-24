@@ -8,7 +8,8 @@
 # ordinary nested array, and "diamond" makes the same inner `Node` reachable
 # twice through `xs` without `xs` ever reaching back to itself.
 
-record Node(children: array[Node])
+record Node
+  children: array[Node]
 
 extern def count(xs: array[Node]) -> int
 extern def show(xs: array[Node]) -> int

@@ -69,7 +69,7 @@ def _format_record_type(typ: RecordType, table: TypeTable) -> str:
 def _format_record_type_with_name(typ: RecordType, name: str, table: TypeTable) -> str:
     fields = table.record_fields(typ)
     if not fields:
-        return f"record {name}()"
+        return f"record {name}"
     lines = [f"record {name}"]
     lines.extend(f"  {field_name}: {field_type!r}" for field_name, field_type in fields.items())
     return "\n".join(lines)

@@ -1,11 +1,14 @@
 # A named scope's type aliases resolve their targets in the declaring scope,
 # and alias, record, and generic constructors all keep the scope's identity.
-record Holder(value: Codec::Encoded)
+record Holder
+  value: Codec::Encoded
 
 scope Codec
-  record Frame(payload: text)
+  record Frame
+    payload: text
   type Encoded = Frame
-  record Pair[T](first: T)
+  record Pair[T]
+    first: T
   type Boxed[T] = Pair[T]
 
   def wrap(payload: text) -> Encoded = Frame("w:" ++ payload)

@@ -1,0 +1,657 @@
+{
+  "scenarios": [
+    {
+      "name": "ask_builds_every_target_kind_from_its_question",
+      "params": {"scenario": "targets"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.5}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it spam?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.1}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team?",
+                  "criteria": {"Billing": "Invoices and refunds.", "Technical": null, "acct": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "acct",
+                "confidence": 0.7,
+                "probabilities": {"Billing": 0.1, "Technical": 0.2, "acct": 0.7}
+              }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team?",
+                  "criteria": {"Billing": "Invoices and refunds.", "Technical": null, "acct": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.7,
+                "probabilities": {"Billing": 0.7, "Technical": 0.2, "acct": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "score",
+                  "instructions": "How severe?",
+                  "criteria": ["Can wait.", "Medium", "Drop everything."]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "score",
+                "score": 1.8,
+                "confidence": 0.4,
+                "legend": {"0": "Can wait.", "1": "Medium", "2": "Drop everything."},
+                "probabilities": {"0": 0.05, "1": 0.1, "2": 0.85}
+              }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {
+        "stdout": "[true, false, true]\ntrue\ntrue\n{\"Billing\": 0.7, \"Technical\": 0.2, \"acct\": 0.1}\ntrue\n[0.05, 0.1, 0.85]\n"
+      }
+    },
+    {
+      "name": "ask_converts_other_answers_of_the_same_targets",
+      "params": {"scenario": "targets"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.49}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it spam?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.9}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team?",
+                  "criteria": {"Billing": "Invoices and refunds.", "Technical": null, "acct": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Technical",
+                "confidence": 0.7,
+                "probabilities": {"Billing": 0.2, "Technical": 0.7, "acct": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team?",
+                  "criteria": {"Billing": "Invoices and refunds.", "Technical": null, "acct": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Technical",
+                "confidence": 0.7,
+                "probabilities": {"Billing": 0.2, "Technical": 0.7, "acct": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "score",
+                  "instructions": "How severe?",
+                  "criteria": ["Can wait.", "Medium", "Drop everything."]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "score",
+                "score": 0.3,
+                "confidence": 0.4,
+                "legend": {"0": "Can wait.", "1": "Medium", "2": "Drop everything."},
+                "probabilities": {"0": 0.7, "1": 0.3, "2": 0.0}
+              }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {
+        "stdout": "[false, true, true]\nfalse\nfalse\n{\"Billing\": 0.2, \"Technical\": 0.7, \"acct\": 0.1}\nfalse\n[0.7, 0.3, 0]\n"
+      }
+    },
+    {
+      "name": "the_typed_trio_and_raw_system_one_send_their_questions",
+      "params": {"scenario": "trio"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "noul",
+                  "instructions": "Is it a refund?",
+                  "criteria": {"true": "A refund request", "false": "Anything else"}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team?",
+                  "criteria": {"Billing": "Invoices and refunds.", "Technical": null, "acct": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.9,
+                "probabilities": {"Billing": 0.9, "Technical": 0.05, "acct": 0.05}
+              }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "score",
+                  "instructions": "How severe?",
+                  "criteria": ["Can wait.", "Medium", "Drop everything."]
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "score",
+                "score": 1.0,
+                "confidence": 0.8,
+                "legend": {"0": "Can wait.", "1": "Medium", "2": "Drop everything."},
+                "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "refund": {"type": "noul", "instructions": {"text": "Refund?"}},
+                "tone": {
+                  "type": "choice",
+                  "instructions": "Tone?",
+                  "criteria": {"calm": null, "angry": "Raised voice"}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "refund": {"type": "noul", "noul": 0.6},
+              "tone": {
+                "type": "choice",
+                "choice": "angry",
+                "confidence": 0.5,
+                "probabilities": {"calm": 0.25, "angry": 0.75}
+              }
+            },
+            "usage": {"input_tokens": 30}
+          },
+          "headers": {"x-typesafe-request-id": "req-7"}
+        }
+      ],
+      "expect": {
+        "stdout": "Noul(probability = 0.8)\n[0.9, 1, 0.8]\njev-1\nOption::Some(value = \"req-7\")\nUsage(input-tokens = Option::Some(value = 30), output-tokens = Option::None)\nAnswer::NoulAnswer(noul = 0.6)\nAnswer::ChoiceAnswer(choice = \"angry\", confidence = 0.5, probabilities = {\"calm\": 0.25, \"angry\": 0.75})\n"
+      }
+    },
+    {
+      "name": "ask_many_fills_noul_choice_and_bool_fields_in_one_request",
+      "params": {"scenario": "many"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "spam": {"type": "noul", "instructions": "Is it spam?"},
+                "routed": {
+                  "type": "choice",
+                  "instructions": "routed",
+                  "criteria": {"Billing": "Invoices and refunds.", "Technical": null, "acct": null}
+                },
+                "urgent": {"type": "noul", "instructions": "urgent"}
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "spam": {"type": "noul", "noul": 0.1},
+              "routed": {
+                "type": "choice",
+                "choice": "acct",
+                "confidence": 0.7,
+                "probabilities": {"Billing": 0.2, "Technical": 0.1, "acct": 0.7}
+              },
+              "urgent": {"type": "noul", "noul": 0.9}
+            },
+            "usage": {"input_tokens": 30, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {
+        "stdout": "[0.1, 0.7]\ntrue\n{\"Billing\": 0.2, \"Technical\": 0.1, \"acct\": 0.7}\ntrue\n"
+      }
+    },
+    {
+      "name": "ask_many_converts_other_answers_of_the_same_fields",
+      "params": {"scenario": "many"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "spam": {"type": "noul", "instructions": "Is it spam?"},
+                "routed": {
+                  "type": "choice",
+                  "instructions": "routed",
+                  "criteria": {"Billing": "Invoices and refunds.", "Technical": null, "acct": null}
+                },
+                "urgent": {"type": "noul", "instructions": "urgent"}
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "spam": {"type": "noul", "noul": 0.6},
+              "routed": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.5,
+                "probabilities": {"Billing": 0.5, "Technical": 0.3, "acct": 0.2}
+              },
+              "urgent": {"type": "noul", "noul": 0.4}
+            },
+            "usage": {"input_tokens": 30, "output_tokens": 3}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {
+        "stdout": "[0.6, 0.5]\nfalse\n{\"Billing\": 0.5, \"Technical\": 0.3, \"acct\": 0.2}\nfalse\n"
+      }
+    },
+    {
+      "name": "failures_are_caught_by_their_type_by_the_root_and_by_the_try_twins",
+      "params": {"scenario": "caught"},
+      "module_params": {"sysone/jev::max-retries": 0},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "status": 429,
+          "json": {"error": "scripted"},
+          "headers": {"retry-after-ms": "250", "x-typesafe-request-id": "req-5"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team?",
+                  "criteria": {"Billing": "Invoices and refunds.", "Technical": null, "acct": null}
+                }
+              }
+            }
+          },
+          "status": 503,
+          "json": {"error": "scripted"},
+          "headers": {"x-typesafe-request-id": "req-6"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "status": 401,
+          "json": {"error": "scripted"},
+          "headers": {}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.4}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {"stdout": "rate limited after 250ms\n503 req-6\nerr: 401 -\nerr: no status\ntrue\n"}
+    },
+    {
+      "name": "nothing_is_caught_when_every_request_succeeds",
+      "params": {"scenario": "caught"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.9}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {
+                "question": {
+                  "type": "choice",
+                  "instructions": "Which team?",
+                  "criteria": {"Billing": "Invoices and refunds.", "Technical": null, "acct": null}
+                }
+              }
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {
+              "question": {
+                "type": "choice",
+                "choice": "Billing",
+                "confidence": 0.7,
+                "probabilities": {"Billing": 0.7, "Technical": 0.2, "acct": 0.1}
+              }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.25}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            }
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.9}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {"stdout": "none\nnone\n0.25\nerr: no status\ntrue\n"}
+    },
+    {
+      "name": "unsupported_targets_raise_jev_target_error_before_any_request",
+      "params": {"scenario": "target_errors"},
+      "jev": [],
+      "expect": {"stdout": "text\nNote\nTicket.note\nTeam\nstd/option::Option[Team]\nNote\n"}
+    },
+    {
+      "name": "source_writes_change_the_settings_and_per_call_values_override_them",
+      "params": {"scenario": "settings"},
+      "jev": [
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-latest",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            },
+            "timeout": 10.0
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.7}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-2",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            },
+            "timeout": 120.0
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.7}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        },
+        {
+          "expect": {
+            "body": {
+              "state": {"ticket": "I was charged twice."},
+              "model": "jev-3",
+              "questions": {"question": {"type": "noul", "instructions": "Is it urgent?"}}
+            },
+            "timeout": 5.0
+          },
+          "json": {
+            "model": "jev-1",
+            "answers": {"question": {"type": "noul", "noul": 0.7}},
+            "usage": {"input_tokens": 12, "output_tokens": 1}
+          },
+          "headers": {"x-typesafe-request-id": "req-1"}
+        }
+      ],
+      "expect": {"stdout": "[true, false, true]\n"}
+    }
+  ]
+}

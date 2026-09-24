@@ -2,8 +2,11 @@
 # annotations. Runtime parsing and scoped-type construction use those types
 # from the program body.
 scope A
-  record R(v: int)
-  record Box[T](value: T)
+  record R
+    v: int
+
+  record Box[T]
+    value: T
   type Alias = int
 
   let x: R = R(v = 1)

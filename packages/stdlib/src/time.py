@@ -6,7 +6,9 @@ import time
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 
-from agl import AglException, nominals
+from agl import nominals
+
+from agm.agl.runtime.boundary import raise_parse_error
 
 TimeParseError = nominals.std.time.TimeParseError
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -29,10 +31,6 @@ def _datetime_from_epoch(epoch: Decimal) -> datetime:
         (epoch * _MICROSECONDS_PER_SECOND).to_integral_value(rounding=ROUND_HALF_EVEN)
     )
     return _EPOCH + timedelta(microseconds=microseconds)
-
-
-def _parse_error(raw: str) -> None:
-    raise AglException(TimeParseError(message="Could not parse time.", raw=raw))
 
 
 def now() -> Decimal:
@@ -60,7 +58,7 @@ def parse_iso(raw: str) -> Decimal:
     try:
         return _epoch_seconds(datetime.fromisoformat(raw))
     except (OverflowError, ValueError):
-        _parse_error(raw)
+        raise_parse_error(TimeParseError, raw, "Could not parse time.")
 
 
 def format_iso(epoch: Decimal) -> str:
@@ -78,7 +76,7 @@ def parse(raw: str, fmt: str) -> Decimal:
     try:
         return _epoch_seconds(datetime.strptime(raw, fmt))
     except (OverflowError, ValueError):
-        _parse_error(raw)
+        raise_parse_error(TimeParseError, raw, "Could not parse time.")
 
 
 __all__ = ["format", "format_iso", "monotonic", "now", "now_iso", "parse", "parse_iso", "sleep"]

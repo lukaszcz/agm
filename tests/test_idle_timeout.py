@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from agm.config.general import parse_timeout
+from agm.core.parse import parse_positive_timeout
 from agm.core.process import run_capture, run_subprocess
 
 # ---------------------------------------------------------------------------
@@ -48,6 +49,16 @@ class TestParseTimeout:
 
     def test_zero_with_suffix(self) -> None:
         assert parse_timeout("0h") == 0.0
+
+
+class TestParsePositiveTimeout:
+    def test_positive_duration_is_seconds(self) -> None:
+        assert parse_positive_timeout("1.5m") == 90.0
+
+    @pytest.mark.parametrize("value", ["0", "0h", "99999999999999999999", "9" * 400, "soon"])
+    def test_zero_unrepresentable_or_malformed_raises(self, value: str) -> None:
+        with pytest.raises(ValueError):
+            parse_positive_timeout(value)
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import httpx2
+import pytest
+
 from agm.config.context import current_config_context
 from agm.config.general import agm_home_dir
 from agm.packages.activation import load_activation_index
@@ -40,6 +43,16 @@ def test_project_and_shell_variables_are_not_inherited() -> None:
     for name in ("PROJ_DIR", "REPO_DIR", "TMUX", "TMUX_PANE"):
         assert name not in os.environ
     assert not any(name.startswith("AGM_") for name in os.environ if name != "AGM_STDLIB")
+    assert not any(name.startswith("TYPESAFE_") for name in os.environ)
+
+
+def test_proxy_variables_are_not_inherited() -> None:
+    assert not any(name.lower().endswith("_proxy") for name in os.environ)
+
+
+def test_a_real_httpx2_send_fails_the_test_without_dialing_out() -> None:
+    with httpx2.Client() as client, pytest.raises(pytest.fail.Exception):
+        client.get("https://typesafe.invalid/v1/models")
 
 
 def test_git_identity_does_not_depend_on_a_personal_gitconfig() -> None:

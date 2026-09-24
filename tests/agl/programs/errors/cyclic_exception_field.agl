@@ -8,7 +8,8 @@
 # `xs` ever reaching back to itself -- confirming sharing alone is not
 # mistaken for a cycle in the error-reporting path either.
 
-record Node(children: array[Node])
+record Node
+  children: array[Node]
 
 exception Boom extends Exception
   data: array[Node]

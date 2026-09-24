@@ -24,8 +24,9 @@ def to_slug(title):
 
 An extern declaration has the same parameters, type parameters, defaults, and
 first-class behavior as an ordinary `def`, but has no body and requires a
-return annotation. Arguments are passed positionally in declaration order after
-AgL has applied its own defaults and named-argument rules.
+return annotation. Arguments are passed positionally in declaration order, after
+any [target contracts](#target-type-parameters), once AgL has applied its own
+defaults and named-argument rules.
 
 The companion callable is found by name. By default that is the extern's final
 declared member name, used verbatim, which therefore has to be a valid Python
@@ -54,8 +55,10 @@ may resolve to the same companion name.
 
 An extern is allowed only in a file-backed module. A module with externs needs
 a `.py` sibling, imported once before evaluation begins. Missing companions,
-missing callables, and import failures are load-time diagnostics. In a REPL
-session a companion is imported once until `:reset`.
+missing callables, import failures, and unsatisfied
+[`[python]` requirements](packages.md#resources-and-companions) of the owning
+package are load-time diagnostics. In a REPL session a companion is imported
+once until `:reset`.
 
 During the import, AGM temporarily supplies a module named `agl`. A companion
 imports the program's nominal classes, value constructors, and exception carrier from it:
@@ -64,8 +67,10 @@ imports the program's nominal classes, value constructors, and exception carrier
 from agl import AglException, Box, Shape, array, dict, json
 ```
 
-`option_some(value)` and `option_none()` build the standard `Option`; they
-exist only when `std/option` is loaded.
+`option_some(value)` and `option_none()` build the standard `Option`, and
+`option(value, present)` picks between them; they exist only when `std/option`
+is loaded. `option` evaluates *value* eagerly, so a value that is well-defined
+only when present needs the conditional form.
 
 `agl` is available only for the companion import. The imported classes and
 constructors remain valid afterwards. The fixed module name means concurrent
@@ -137,6 +142,9 @@ Like `runtime.state`, this must be called during an extern invocation; a
 direct host call outside evaluation is a silent no-op. Nothing is written when
 tracing is off. A payload value with no JSON representation, including a
 reference cycle, is replaced by a marker rather than failing the call.
+
+`runtime.tracing()` reports whether a record would be written, so a companion
+can skip building a payload that tracing, off by default, would discard.
 
 The record is `{ts, run_id, kind, origin, site, line, col, ...payload}`: `ts`
 and `run_id` identify the record's moment and run like every other trace
@@ -382,7 +390,9 @@ boundary does not enforce parametricity itself. A companion is trusted to
 respect the same parametricity rules that its AgL declaration promises;
 violations are latent and can produce an incorrect result later. In
 particular, `f[T, U](xs, xs)` is allowed: two generic positions never need
-schema reconciliation.
+schema reconciliation. A type parameter that no parameter mentions is the one
+exception: its instantiation crosses too, as a
+[target contract](#target-type-parameters).
 
 Likewise, a companion must honor the declared argument and return types, and
 the same obligation covers a value written into a live `array`, `dict`, or
@@ -392,6 +402,100 @@ an unrelated point, with an error the program cannot catch. An unsupported
 Python value (such as a bare `list`) raises `ExternError`. Ordinary Python
 exceptions also become `ExternError`, whose `python-type` holds the original
 exception class name. A `BaseException` still propagates.
+
+## Target type parameters
+
+A type parameter of an `extern def` that no value parameter mentions, the
+receiver `self` included, is a **target type parameter**. Like `ask`, such a
+**type-directed** extern returns a type its caller chooses: every call site
+resolves each target parameter to a concrete type, and the companion receives
+it as an `agl.TypeContract`. The contracts lead the companion's arguments, one
+per target parameter in declaration order (the order of an explicit `::[…]`
+list), before the receiver and the declared arguments. There is no attribute
+to write and no AgL value for a contract.
+
+<!-- agl-check: fragment -->
+```agl
+enum Team
+  | @doc("Invoices and refunds.") Billing
+  | Technical
+
+record Triage
+  @doc("Which team should handle this?")
+  team: Team
+  urgent: bool
+
+extern def classify[T](question: text) -> T
+
+program def main() -> unit =
+  let team: Team = classify("Which team?")
+  let triage = classify::[Triage]("Triage this ticket.")
+  if triage.urgent => print(team)
+```
+
+```python
+# Companion
+from agl import TypeContract
+
+
+def build(target: TypeContract):
+    match target.kind:
+        case "bool":
+            return False
+        case "enum":
+            return next(iter(target.members.values())).nominal()
+        case "record":
+            return target.nominal(
+                **{field.name: build(field.contract) for field in target.fields.values()}
+            )
+    raise ValueError(f"unsupported target {target.label}")
+
+
+def classify(target, question):
+    return build(target)
+```
+
+A target resolves as an [`ask` target](agent-calls.md#target-types-types-as-contracts)
+does: an explicit `::[…]` type argument wins, else the expected type — an
+annotation, a `:=` target, a parameter type, or an expected function type.
+Unlike `ask`, there is **no default**: a target that neither supplies is a
+static error asking for `::[…]`, so a target parameter the result does not
+mention is always explicit. The resolved target must also be a valid JSON
+output contract, as for a JSON-decoded `ask`: concrete, containing no type
+variable of an enclosing generic `def` (a generic wrapper cannot forward its
+own type parameter), with a finite JSON Schema, and JSON-serializable — never
+`unit`, a function, or an exception.
+
+A target is resolved per **occurrence**. A reference (`let f: (text) -> Team =
+classify`, `classify::[Team]`), a method projection, and a partial application
+(`classify::[Team](?)`) resolve it where they occur, and every call through
+the resulting function value delivers that occurrence's contract. Each
+occurrence resolves independently of the others.
+
+A `TypeContract` describes the resolved target:
+
+| Attribute | Meaning |
+|---|---|
+| `kind` | `"text"`, `"int"`, `"decimal"`, `"bool"`, `"json"`, `"array"`, `"dict"`, `"record"`, `"enum"`, or `"member"` |
+| `label` | the type's printed name, such as `array[Team]`; library types are qualified, such as `std/option::Option[Team]` |
+| `doc` | a record's, enum's, or member's `@doc`, else `None` |
+| `nominal` | a record's or member's synthesized class, an enum's namespace class, else `None` |
+| `fields` | record or member fields keyed by JSON name, in declaration order: `(name, doc, contract)`, with the declared name and the field's `@doc` |
+| `members` | enum member contracts keyed by JSON tag, in declaration order |
+| `items`, `values` | an array's element contract and a dict's value contract, else `None` |
+| `schema` | a fresh copy of the target's self-contained [derived JSON Schema](agent-calls.md#derived-json-schema) |
+
+`Option[T]` and every other enum, generic or not, have kind `"enum"`. A
+recursive target is a cyclic graph: each recursive type is one shared contract
+object wherever it recurs, so a walk over one keeps a visited set. A contract
+is immutable, only the host creates one, and contracts compare by identity.
+`TypeContract` is importable from `agl` for annotations and `isinstance`
+checks.
+
+The return is trusted like every extern's: the companion constructs a value of
+the target, and nothing checks it. It builds a record or member by calling
+`nominal` with declared field names, as in the example above, and everything
+else as the [value mapping](#value-mapping) prescribes.
 
 ## Trust boundary
 

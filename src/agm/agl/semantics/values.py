@@ -26,7 +26,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-from agm.agl.ir.ids import FunctionId, NominalId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SymbolId
 
 # ---------------------------------------------------------------------------
 # JSON-tree comparison helpers
@@ -441,6 +441,17 @@ class IteratorValue:
         self.entry_length = len(self.elements)
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class ContractValue:
+    """A type-directed extern occurrence's target contract, bound for the companion.
+
+    Opaque non-data: never rendered, compared, serialized, or crossed except
+    as a leading extern argument.
+    """
+
+    contract_id: ContractId
+
+
 # ---------------------------------------------------------------------------
 # Broad runtime value union
 # ---------------------------------------------------------------------------
@@ -459,6 +470,7 @@ Value: TypeAlias = (
     | ConstructorValue
     | IrClosureValue
     | IteratorValue
+    | ContractValue
 )
 
 # ---------------------------------------------------------------------------
@@ -494,6 +506,7 @@ __all__ = [
     "BoolValue",
     "Cell",
     "ConstructorValue",
+    "ContractValue",
     "DecimalValue",
     "DictValue",
     "ExceptionValue",

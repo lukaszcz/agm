@@ -1,0 +1,209 @@
+# Typed questions to TypeSafe's System One model (Jev).
+#
+# The target type of `jev::ask` selects the question kind and converts the
+# answer:
+#
+# - `bool` and `Noul` ask a noul (yes/no) question; `bool` is the noul
+#   probability thresholded by `noul-threshold`, as `Noul::value` does.
+# - A fieldless enum `E` and `Choice[E]` ask a choice question. A label is a
+#   member's JSON tag (`@json-name`, else its declared name); its description
+#   is the member's `@doc`, else `null`.
+# - `Score[L]` asks a score question whose ordered rubric is `L`'s members in
+#   declaration order; a level's description is the member's `@doc`, else its
+#   tag. Bare `decimal` is not a target: a score needs a rubric type.
+#
+# A choice or score target must be an enum of at least two members, every
+# member fieldless, and a rubric has 2-10 levels; any other target raises
+# `JevTargetError` before a request is sent. An answer the target cannot hold
+# (a label outside it, or probabilities not keyed by exactly its labels or
+# levels) raises `JevResponseError`.
+#
+# Every request function takes the settings it uses as trailing parameters
+# defaulting to the module settings below. Requests go through the official
+# `typesafe-sdk`, which owns retries, backoff, `Retry-After`, request ids, and
+# response validation. One client is pooled per interpreter for each distinct
+# combination of `api-key`, `base-url`, and `max-retries`, so a call's values
+# of these select or create a pooled client; its `model` and `timeout` apply
+# to that request only. A `None` setting is not passed to the SDK, so its own
+# environment variables and defaults apply.
+#
+# A `timeout` is a positive plain number (seconds) or a positive number
+# suffixed with `s`, `m`, or `h`; text that is not a duration, a zero
+# duration, or one too large to wait for raises `std/errors::TypeError` when a
+# request uses it.
+#
+# Traces `jev_request` (model, state, questions), `jev_response` (model,
+# answers, usage, request id), and `jev_failure` (error type, status, request
+# id) records; the API key never appears in a record.
+
+@param @opt-name("jev-api-key") @opt-env("TYPESAFE_API_KEY") @doc("TypeSafe API key.")
+var api-key: Option[text] = None
+@param @opt-name("jev-base-url") @doc("TypeSafe API base URL; None uses the SDK default.")
+var base-url: Option[text] = None
+@param @opt-name("jev-model") @doc("Jev model; None uses the SDK default.")
+var model: Option[text] = None
+@param @opt-name("jev-timeout") @doc("Request timeout; None uses the SDK default.")
+var timeout: Option[text] = None
+@param @opt-name("jev-max-retries") @doc("Retries after a failed request attempt.")
+var max-retries: int = 2
+@param @opt-name("jev-noul-threshold") @doc("Probability from which a noul answer is true.")
+var noul-threshold: decimal = 0.5
+
+# A noul answer: the probability of yes.
+record Noul
+  probability: decimal
+
+# `true` when `probability` reaches `threshold`.
+def Noul::value(self, threshold: decimal = ::noul-threshold) -> bool =
+  self.probability >= threshold
+
+# `probabilities` is keyed by member tag.
+record Choice[C]
+  choice: C
+  confidence: decimal
+  probabilities: dict[text, decimal]
+
+# `level` is the most probable member, the lowest-index one on a tie; `score`
+# is the probability-weighted level index; `probabilities` is by level index.
+record Score[L]
+  level: L
+  score: decimal
+  confidence: decimal
+  probabilities: array[decimal]
+
+# Descriptions of the yes and no outcomes.
+record NoulCriteria
+  when-true: json
+  when-false: json
+
+# The raw API shape. Instructions and descriptions accept structured JSON as
+# the API does.
+enum Question
+  | NoulQuestion(instructions: json, criteria: Option[NoulCriteria])
+  # Label to description, or `null` for an undescribed label.
+  | ChoiceQuestion(instructions: json, options: dict[text, json])
+  # Ordered level descriptions, 2-10.
+  | ScoreQuestion(instructions: json, levels: array[json])
+
+enum Answer
+  | NoulAnswer(noul: decimal)
+  | ChoiceAnswer(choice: text, confidence: decimal, probabilities: dict[text, decimal])
+  | ScoreAnswer(score: decimal, confidence: decimal, probabilities: array[decimal],
+                legend: array[json])
+
+record Usage
+  input-tokens: Option[int]
+  output-tokens: Option[int]
+
+# `answers` is keyed by question name.
+record Response
+  model: text
+  answers: dict[text, Answer]
+  usage: Usage
+  request-id: Option[text]
+
+# `message` is the SDK's message. An SDK error with no more specific class
+# below (a missing API key, an invalid retry policy, no questions), including
+# one raised while building the client, is a plain `JevError` whose
+# `request-id` is `None`.
+exception JevError extends Exception
+  request-id: Option[text]
+
+# An unsuccessful HTTP response after the SDK's retries.
+exception JevApiError extends JevError
+  status: int
+  body: json
+
+# 401 or 403.
+exception JevAuthError extends JevApiError
+
+# 400, 404, or 422.
+exception JevRequestError extends JevApiError
+
+# 429.
+exception JevRateLimitError extends JevApiError
+  retry-after-ms: Option[int]
+
+# 5xx.
+exception JevServerError extends JevApiError
+
+# The request reached no response.
+exception JevConnectionError extends JevError
+  cause: text
+
+# `timeout` is the timeout the SDK reported for the request, as duration
+# text in the `timeout` form above (such as `"10.0s"`).
+exception JevTimeoutError extends JevError
+  timeout: text
+
+# A success response whose body is structurally invalid at `field-path`, or
+# whose answer the target cannot hold: `answers.<question>.choice` for a label
+# outside it, `answers.<question>.probabilities` for keys other than exactly
+# its labels or level indices.
+exception JevResponseError extends JevError
+  field-path: text
+
+# A target type no question kind maps; `target` is its type label (such as
+# `Team` or `std/option::Option[Team]`), or `<record>.<field>` for an
+# `ask-many` field.
+exception JevTargetError extends JevError
+  target: text
+
+# Asks `questions`, keyed by name, about `state` in one request.
+@extern-name("system_one")
+extern def system-one(state: json, questions: dict[text, Question],
+                      model: Option[text] = ::model, timeout: Option[text] = ::timeout,
+                      api-key: Option[text] = ::api-key, base-url: Option[text] = ::base-url,
+                      max-retries: int = ::max-retries) -> Response
+
+def try-system-one(state: json, questions: dict[text, Question], model: Option[text] = ::model,
+                   timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
+                   base-url: Option[text] = ::base-url,
+                   max-retries: int = ::max-retries) -> Result[Response, JevError] =
+  try Ok(system-one(state, questions, model, timeout, api-key, base-url, max-retries))
+  catch JevError as e => Err(e)
+
+@extern-name("ask_noul")
+extern def ask-noul(instructions: text, state: json = "", criteria: Option[NoulCriteria] = None,
+                    model: Option[text] = ::model, timeout: Option[text] = ::timeout,
+                    api-key: Option[text] = ::api-key, base-url: Option[text] = ::base-url,
+                    max-retries: int = ::max-retries) -> Noul
+
+def try-ask-noul(instructions: text, state: json = "", criteria: Option[NoulCriteria] = None,
+                 model: Option[text] = ::model, timeout: Option[text] = ::timeout,
+                 api-key: Option[text] = ::api-key, base-url: Option[text] = ::base-url,
+                 max-retries: int = ::max-retries) -> Result[Noul, JevError] =
+  try Ok(ask-noul(instructions, state, criteria, model, timeout, api-key, base-url, max-retries))
+  catch JevError as e => Err(e)
+
+# The functions below take their target from the call site, so they have no
+# `try-` twins; catch `JevError` instead.
+
+@extern-name("ask_choice")
+extern def ask-choice[C](instructions: text, state: json = "", model: Option[text] = ::model,
+                         timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
+                         base-url: Option[text] = ::base-url,
+                         max-retries: int = ::max-retries) -> Choice[C]
+
+@extern-name("ask_score")
+extern def ask-score[L](instructions: text, state: json = "", model: Option[text] = ::model,
+                        timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
+                        base-url: Option[text] = ::base-url,
+                        max-retries: int = ::max-retries) -> Score[L]
+
+# Asks one question typed by the target.
+extern def ask[T](instructions: text, state: json = "", model: Option[text] = ::model,
+                  timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
+                  base-url: Option[text] = ::base-url, max-retries: int = ::max-retries,
+                  noul-threshold: decimal = ::noul-threshold) -> T
+
+# Asks one question per field of the record target in one request, keyed by
+# the field's JSON name. A field is `bool`, `Noul`, a fieldless enum,
+# `Choice[E]`, or `Score[L]`; its instructions are its `@doc`, else its name.
+# A record without fields, or any other field, raises `JevTargetError`; for a
+# field, its `target` is `<record>.<field>`.
+@extern-name("ask_many")
+extern def ask-many[T](state: json, model: Option[text] = ::model,
+                       timeout: Option[text] = ::timeout, api-key: Option[text] = ::api-key,
+                       base-url: Option[text] = ::base-url, max-retries: int = ::max-retries,
+                       noul-threshold: decimal = ::noul-threshold) -> T

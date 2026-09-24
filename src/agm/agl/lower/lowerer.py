@@ -41,7 +41,8 @@ from agm.agl.ir.contracts import (
     ContractPayload,
     ContractRequest,
     ConversionFailureMode,
-    DecodeSchema,
+    DecodePlan,
+    TypeTree,
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -70,6 +71,7 @@ from agm.agl.ir.nodes import (
     IrConstUnit,
     IrContains,
     IrContinue,
+    IrContract,
     IrConvert,
     IrCopyValue,
     IrDirectCall,
@@ -274,6 +276,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
     build_format_instructions,
     derive_schema_and_decode,
+    derive_schema_decode_and_tree,
 )
 from agm.agl.typecheck.env import (
     CheckedModule,
@@ -285,6 +288,16 @@ from agm.util.graph import toposort
 from agm.util.text import normalize_newlines
 
 __all__ = ["InitializerOrigin", "_LinkState", "builtin_nominals_from_declarations"]
+
+
+def _json_payload(schema: dict[str, object], decode_plan: DecodePlan) -> ContractPayload:
+    """Build the JSON codec payload of a derived *schema* and *decode_plan*."""
+    return ContractPayload(
+        json_schema=json.dumps(schema),
+        decode=decode_plan.root,
+        format_instructions=build_format_instructions(schema),
+        defs=decode_plan.defs,
+    )
 
 
 def _contract_has_schema(
@@ -522,6 +535,81 @@ class _Operand:
     location: Location
 
 
+#: The host operations a built-in call, built-in value, or bound built-in
+#: method can lower to. One closed space over the three classifications the
+#: checker records: a free built-in, a built-in type static, and a session
+#: lifecycle operation.
+_BuiltinOp = BuiltinKind | BuiltinStaticKind | IrSessionOpKind
+
+#: Every spelling a reserved ``builtin def`` may carry -- free function or
+#: method -- mapped to the operation it dispatches. The checker admits no
+#: other spelling, so a lookup miss here is a compiler bug rather than a
+#: program error. ``parse``/``try-parse`` are absent by design: their
+#: spellings are ordinary names that only the resolver's own classification
+#: identifies (see ``NON_RESERVED_BUILTIN_CALL_NAMES``).
+_BUILTIN_OPS: dict[str, _BuiltinOp] = {
+    **BUILTIN_CALL_NAMES,
+    **{op.value: op for op in IrSessionOpKind},
+}
+
+#: The argument name each session operation that takes one accepts. Every
+#: other session operation is receiver-only.
+_SESSION_OP_ARGUMENTS: dict[IrSessionOpKind, str] = {
+    IrSessionOpKind.COMPACT: "instructions",
+    IrSessionOpKind.SET_NAME: "name",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _BuiltinOperands:
+    """The lowered operands one built-in host operation reads.
+
+    ``value`` is the operation's leading operand: the printed, rendered,
+    copied or parsed value, an ``ask`` prompt, an ``exec`` command, an
+    ``open`` agent, or a session receiver. Every other slot is read by the
+    operations that declare it, and ``None`` selects the host default.
+    """
+
+    value: IrExpr | None = None
+    agent: IrExpr | None = None
+    session: IrExpr | None = None
+    argument: IrExpr | None = None
+    transport: IrExpr | None = None
+    name: IrExpr | None = None
+    pretty: IrExpr | None = None
+    quote_strings: IrExpr | None = None
+    env: IrExpr | None = None
+    cwd: IrExpr | None = None
+    timeout: IrExpr | None = None
+    sandbox: IrExpr | None = None
+    target_type: Type | None = None
+    path: str | None = None
+    max_attempts: int = 1
+
+    @property
+    def subject(self) -> IrExpr:
+        """The leading operand, which every operation that reads one is given."""
+        assert self.value is not None, "compiler bug: builtin operation without its operand"
+        return self.value
+
+    def with_receiver(
+        self, op: "_BuiltinOp", receiver: IrExpr, *, is_session: bool
+    ) -> "_BuiltinOperands":
+        """Place a built-in method's receiver in the slot *op* reads it from.
+
+        An ``ask`` dispatches on its receiver (an agent, or a session it is
+        asked on) while keeping the prompt as its leading operand; every other
+        receiver method operates on the receiver itself.
+        """
+        if op is BuiltinKind.ASK or op is BuiltinKind.ASK_REQUEST:
+            return replace(
+                self,
+                agent=None if is_session else receiver,
+                session=receiver if is_session else None,
+            )
+        return replace(self, value=receiver)
+
+
 _ARITH_OP_MAP: dict[BinOp, ArithOp] = {
     BinOp.ADD: ArithOp.ADD,
     BinOp.SUB: ArithOp.SUB,
@@ -731,26 +819,61 @@ class _Lowerer:
         self._link.contracts[cid] = request
         return cid
 
-    def _contract_payload_for_spec(
-        self, node_id: int, spec: OutputContractSpec
-    ) -> tuple[str | None, str, DecodeSchema | None, tuple[tuple[str, DecodeSchema], ...]]:
-        """Return JSON schema, instructions, decode root, and defs for a contract spec."""
-        materialized = self._contract_payloads.get(node_id)
-        if materialized is not None:
-            return (
-                materialized.json_schema,
-                materialized.format_instructions,
-                materialized.decode,
-                materialized.defs,
-            )
+    def _derived_contract_payload(self, spec: OutputContractSpec) -> ContractPayload:
+        """Derive the codec payload of *spec* from its target type."""
         if spec.codec_name != "json":
-            return None, "", None, ()
-        schema_dict, decode_plan = derive_schema_and_decode(spec.target_type, self._type_table)
-        return (
-            json.dumps(schema_dict),
-            build_format_instructions(schema_dict),
-            decode_plan.root,
-            decode_plan.defs,
+            return ContractPayload(json_schema=None, decode=None, format_instructions="")
+        return _json_payload(*derive_schema_and_decode(spec.target_type, self._type_table))
+
+    def _contract_request_for_spec(
+        self,
+        spec: OutputContractSpec,
+        *,
+        structured_exec: bool,
+        payload: ContractPayload | None,
+        type_tree: TypeTree | None = None,
+    ) -> ContractRequest:
+        """Build the typeless contract request for one checked output contract spec.
+
+        *payload* replaces the one derived from *spec* when given.
+        """
+        if payload is None:
+            payload = self._derived_contract_payload(spec)
+        return ContractRequest(
+            codec_name=spec.codec_name,
+            strict_json=spec.strict_json,
+            json_schema=payload.json_schema,
+            decode=payload.decode,
+            target_type_label=repr(spec.target_type),
+            structured_exec=structured_exec,
+            format_instructions=payload.format_instructions,
+            is_unit=isinstance(spec.target_type, UnitType),
+            target_type_kind=spec.target_type.kind,
+            target_type=spec.target_type,
+            defs=payload.defs,
+            type_tree=type_tree,
+        )
+
+    def _target_contract_request(self, spec: OutputContractSpec) -> ContractRequest:
+        """Build a type-directed extern's contract request, carrying its target's type tree."""
+        schema_dict, decode_plan, tree = derive_schema_decode_and_tree(
+            spec.target_type, self._type_table
+        )
+        return self._contract_request_for_spec(
+            spec,
+            structured_exec=False,
+            payload=_json_payload(schema_dict, decode_plan),
+            type_tree=tree,
+        )
+
+    def _target_contracts(self, node_id: int, span: SourceSpan) -> tuple[IrContract, ...]:
+        """Register and lower an extern occurrence's target contracts; empty for any other."""
+        return tuple(
+            IrContract(
+                location=self._loc(span),
+                contract_id=self._alloc_contract(self._target_contract_request(spec)),
+            )
+            for spec in self._checked.target_contract_specs.get(node_id, ())
         )
 
     def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
@@ -1118,6 +1241,8 @@ class _Lowerer:
         ir_params, _sig, _param_decl_ids, param_labels, result_label = self._lower_declared_params(
             funcdef, fn_id
         )
+        signature = self._checked.type_env.get_function_signature_by_node_id(funcdef.node_id)
+        assert signature is not None
 
         desc = FunctionDescriptor(
             function_id=fn_id,
@@ -1127,6 +1252,7 @@ class _Lowerer:
             impl=ExternFunctionBody(
                 name=funcdef.name,
                 companion_name=self._checked.resolved.attributes.extern_names[funcdef.node_id],
+                target_count=len(signature.target_params),
             ),
             param_labels=param_labels,
             result_label=result_label,
@@ -1392,6 +1518,8 @@ class _Lowerer:
                     )
                 if ref.kind is BinderKind.function_binding and ref.is_builtin:
                     return self._lower_builtin_value(ref, nid, span)
+                if nid in self._checked.target_contract_specs:
+                    return self._lower_extern_target_value(ref, nid, span)
                 declaration = self._binding_references.declarations.get(ref.decl_node_id)
                 if self._substituting_constants and declaration is not None:
                     return self.lower_expr(declaration.value)
@@ -2275,90 +2403,42 @@ class _Lowerer:
         """Eta-expand one context-specialized builtin function reference."""
         function_type = self._node_type(node_id)
         assert isinstance(function_type, FunctionType)
-        signature = self._checked.type_env.get_function_signature_by_node_id(ref.decl_node_id)
-        assert signature is not None
         static_kind = builtin_type_static_kind(ref.module_id, ref.scope_path, ref.name)
+        is_session = ref.module_id.is_standard_library and ref.scope_path == ("Session",)
         loc = self._loc(span)
 
         def build_body(param_symbols: tuple[SymbolId, ...]) -> IrExpr:
-            operands = tuple(IrLoad(location=loc, symbol=symbol) for symbol in param_symbols)
-            if static_kind is not None:
-                return self._lower_builtin_static_value_body(static_kind, operands, loc)
+            # The eta closure's parameters are the built-in's required ones, in
+            # order, so its first operand is the receiver of a method and the
+            # leading argument of anything else.
+            loads = tuple(IrLoad(location=loc, symbol=symbol) for symbol in param_symbols)
+            op = static_kind if static_kind is not None else _BUILTIN_OPS[ref.name]
             if ref.is_method:
-                return self._lower_builtin_method_value_body(
-                    ref.name,
-                    is_session=ref.module_id.is_standard_library and ref.scope_path == ("Session",),
-                    receiver=operands[0],
-                    operands=operands[1:],
-                    result_type=function_type.result,
-                    node_id=node_id,
-                    span=span,
+                operands = self._method_operands(op, loads[1:], function_type.result)
+                operands = operands.with_receiver(op, loads[0], is_session=is_session)
+            else:
+                operands = _BuiltinOperands(
+                    value=loads[0] if loads else None, target_type=function_type.result
                 )
-            kind = BUILTIN_CALL_NAMES[ref.name]
-            match kind:
-                case BuiltinKind.PRINT:
-                    return IrPrint(location=loc, value=operands[0])
-                case BuiltinKind.RENDER:
-                    return IrRenderValue(location=loc, value=operands[0])
-                case BuiltinKind.COPY | BuiltinKind.SHALLOW_COPY:
-                    return IrCopyValue(
-                        location=loc,
-                        kind=(
-                            CopyKind.SHALLOW if kind is BuiltinKind.SHALLOW_COPY else CopyKind.DEEP
-                        ),
-                        value=operands[0],
-                    )
-                case BuiltinKind.ASK:
-                    return self._lower_ask_operands(
-                        node_id=node_id,
-                        span=span,
-                        prompt=operands[0],
-                        target_type=function_type.result,
-                        structured_exec=False,
-                        is_request=False,
-                        agent=None,
-                        session=IrSessionDefault(location=loc),
-                        sandbox=None,
-                        max_attempts=1,
-                    )
-                case BuiltinKind.ASK_REQUEST:
-                    return self._lower_ask_operands(
-                        node_id=node_id,
-                        span=span,
-                        prompt=operands[0],
-                        target_type=self._checked.explicit_builtin_targets.get(node_id, TextType()),
-                        structured_exec=False,
-                        is_request=True,
-                        agent=None,
-                        session=None,
-                        sandbox=None,
-                        max_attempts=1,
-                    )
-                case BuiltinKind.EXEC:
-                    env, cwd, timeout, sandbox = self._default_exec_operands(loc)
-                    return self._lower_exec_operands(
-                        node_id=node_id,
-                        span=span,
-                        command=operands[0],
-                        env=env,
-                        cwd=cwd,
-                        timeout=timeout,
-                        sandbox=sandbox,
-                        max_attempts=1,
-                    )
-                case BuiltinKind.RESOURCE_DIR:
-                    return self._lower_resolved_resource(None, span)
-                # Scope rejects resource values because their path must stay literal.
-                case BuiltinKind.RESOURCE:  # pragma: no cover
-                    raise AssertionError(  # pragma: no cover
-                        "resource cannot reach builtin-value lowering"
-                    )
-                # Scope rejects parse/try-parse values: their target type is
-                # resolved at the call site, which no closure value carries.
-                case BuiltinKind.PARSE | BuiltinKind.TRY_PARSE:  # pragma: no cover
-                    raise AssertionError(  # pragma: no cover
-                        f"{ref.name} cannot reach builtin-value lowering"
-                    )
+            return self._lower_builtin_operands(op, operands, node_id=node_id, span=span)
+
+        return self._make_partial_closure(function_type, span, (), build_body)
+
+    def _lower_extern_target_value(
+        self, ref: BindingRef, node_id: int, span: SourceSpan
+    ) -> IrMakeClosure:
+        """Eta-expand a type-directed extern reference around its occurrence's contracts."""
+        function_type = self._node_type(node_id)
+        assert isinstance(function_type, FunctionType)
+        loc = self._loc(span)
+
+        def build_body(param_symbols: tuple[SymbolId, ...]) -> IrExpr:
+            return self._lower_direct_call_with_args(
+                function_id=self._link.fn_node_to_id[ref.decl_node_id],
+                span=span,
+                arguments=tuple(IrLoad(location=loc, symbol=symbol) for symbol in param_symbols),
+                occurrence=node_id,
+            )
 
         return self._make_partial_closure(function_type, span, (), build_body)
 
@@ -2371,185 +2451,234 @@ class _Lowerer:
         self.resources.append((self._resource_root, path, resolved))
         return IrResource(location=self._loc(span), path=str(resolved))
 
-    def _lower_builtin_static_value_body(
-        self,
-        kind: BuiltinStaticKind,
-        operands: tuple[IrExpr, ...],
-        loc: Location,
-    ) -> IrExpr:
-        """Build a type-static host operation from closure operands."""
-        match kind:
-            case BuiltinStaticKind.SESSION_OPEN:
-                return IrSessionOpen(
-                    location=loc,
-                    agent=operands[0],
-                    transport=None,
-                    name=IrConstText(location=loc, value=""),
-                    sandbox=self._default_sandbox_operand(loc),
-                )
-            case BuiltinStaticKind.SESSION_DEFAULT:
-                return IrSessionDefault(location=loc)
-            case _ as unreachable:  # pragma: no cover
-                assert_never(unreachable)
+    @staticmethod
+    def _method_operands(
+        op: _BuiltinOp, rest: tuple[IrExpr, ...], result_type: Type
+    ) -> _BuiltinOperands:
+        """Place a built-in method's operands other than its receiver.
 
-    def _lower_builtin_method_value_body(
-        self,
-        name: str,
-        *,
-        is_session: bool,
-        receiver: IrExpr,
-        operands: tuple[IrExpr, ...],
-        result_type: Type,
-        node_id: int,
-        span: SourceSpan,
-    ) -> IrExpr:
-        """Build a receiver-backed host operation from closure operands."""
-        loc = self._loc(span)
-        if name == "print":
-            return IrPrint(location=loc, value=receiver)
-        if name == "render":
-            return IrRenderValue(location=loc, value=receiver)
-        if name in {"copy", "shallow-copy"}:
-            return IrCopyValue(
-                location=loc,
-                kind=CopyKind.SHALLOW if name == "shallow-copy" else CopyKind.DEEP,
-                value=receiver,
-            )
-        if name == "ask":
-            return self._lower_ask_operands(
-                node_id=node_id,
-                span=span,
-                prompt=operands[0],
-                target_type=result_type,
-                structured_exec=False,
-                is_request=False,
-                agent=None if is_session else receiver,
-                session=receiver if is_session else None,
-                sandbox=None,
-                max_attempts=1,
-            )
-        if name == "ask-request":
-            return self._lower_ask_operands(
-                node_id=node_id,
-                span=span,
-                prompt=operands[0],
-                target_type=self._checked.explicit_builtin_targets.get(node_id, TextType()),
-                structured_exec=False,
-                is_request=True,
-                agent=receiver,
-                session=None,
-                sandbox=None,
-                max_attempts=1,
-            )
-        argument = operands[0] if operands else None
-        return IrSessionOp(
-            location=loc,
-            session=receiver,
-            op=IrSessionOpKind(name),
-            arg=argument,
+        A session operation takes at most one argument; an ``ask`` takes its
+        prompt; the value-shaped built-ins take nothing beyond the receiver
+        their caller places with :meth:`_BuiltinOperands.with_receiver`.
+        """
+        if isinstance(op, IrSessionOpKind):
+            return _BuiltinOperands(argument=rest[0] if rest else None)
+        return _BuiltinOperands(
+            value=rest[0] if rest else None,
+            target_type=result_type,
         )
+
+    def _call_subject(self, op: _BuiltinOp, call_node: "Call") -> IrExpr:
+        """Lower a built-in call's leading argument under its explicit target.
+
+        ``copy``/``shallow-copy`` carry that target in the call's own checked
+        result type, and ``print``/``render`` read it from the checker's side
+        table (see :meth:`_explicit_builtin_target_type`), so an explicit
+        widening such as ``copy::[decimal](5)`` takes effect the way any other
+        call site coerces its arguments. Every other built-in's ``::[T]`` names
+        its output contract rather than its argument.
+        """
+        target: Type | None = None
+        if op is BuiltinKind.COPY or op is BuiltinKind.SHALLOW_COPY:
+            target = self._node_type(call_node.node_id)
+        elif op is BuiltinKind.PRINT or op is BuiltinKind.RENDER:
+            target = self._explicit_builtin_target_type(call_node)
+        argument = call_node.args[0]
+        return self.lower_expr(argument) if target is None else self.lower_coerced(argument, target)
+
+    def _call_operands(
+        self,
+        op: _BuiltinOp,
+        call_node: "Call",
+        *,
+        receiver: IrExpr | None,
+        is_session: bool,
+    ) -> _BuiltinOperands:
+        """Collect one built-in call's arguments into its operation's operands.
+
+        Each family resolves its own positional and named spellings: a session
+        operation takes a single argument, ``Session::open`` three slots, a
+        resource a literal path, and every other built-in a leading argument
+        plus options addressed by name.
+        """
+        named = {argument.name: argument.value for argument in call_node.named_args}
+        if isinstance(op, IrSessionOpKind):
+            spelling = _SESSION_OP_ARGUMENTS.get(op)
+            argument = (
+                call_node.args[0]
+                if call_node.args
+                else None
+                if spelling is None
+                else named.get(spelling)
+            )
+            operands = _BuiltinOperands(
+                argument=None if argument is None else self.lower_expr(argument)
+            )
+        elif op is BuiltinStaticKind.SESSION_OPEN:
+            transport = call_node.args[1] if len(call_node.args) > 1 else named.get("transport")
+            session_name = call_node.args[2] if len(call_node.args) > 2 else named.get("name")
+            sandbox = call_node.args[3] if len(call_node.args) > 3 else named.get("sandbox")
+            operands = _BuiltinOperands(
+                value=self.lower_expr(call_node.args[0] if call_node.args else named["agent"]),
+                transport=None if transport is None else self.lower_expr(transport),
+                name=None if session_name is None else self.lower_expr(session_name),
+                sandbox=self._lower_optional(sandbox),
+            )
+        elif op is BuiltinKind.RESOURCE or op is BuiltinKind.RESOURCE_DIR:
+            operands = _BuiltinOperands(
+                path=resource_path(call_node, is_directory=op is BuiltinKind.RESOURCE_DIR)
+            )
+        else:
+            agent = named.get("agent")
+            operands = _BuiltinOperands(
+                value=self._call_subject(op, call_node) if call_node.args else None,
+                agent=None if agent is None else self.lower_expr(agent),
+                pretty=self._lower_optional(named.get("pretty")),
+                quote_strings=self._lower_optional(named.get("quote-strings")),
+                env=self._lower_optional(named.get("env")),
+                cwd=self._lower_optional(named.get("cwd")),
+                timeout=self._lower_optional(named.get("timeout")),
+                sandbox=self._lower_optional(named.get("sandbox")),
+                target_type=self._node_type(call_node.node_id),
+                max_attempts=self._extract_max_attempts(call_node),
+            )
+        if receiver is None:
+            return operands
+        return operands.with_receiver(op, receiver, is_session=is_session)
+
+    def _lower_optional(self, node: "Expr | None") -> IrExpr | None:
+        """Lower an optional argument expression, keeping an absent one absent."""
+        return None if node is None else self.lower_expr(node)
 
     def _lower_builtin_call(
         self,
-        kind: BuiltinKind,
+        op: _BuiltinOp,
         call_node: "Call",
         span: "SourceSpan",
         *,
-        agent: IrExpr | None = None,
         receiver: IrExpr | None = None,
+        is_session: bool = False,
     ) -> IrExpr:
-        """Lower a builtin call node by dispatching on ``BuiltinKind``.
+        """Lower a built-in call by collecting its arguments as host operands."""
+        return self._lower_builtin_operands(
+            op,
+            self._call_operands(op, call_node, receiver=receiver, is_session=is_session),
+            node_id=call_node.node_id,
+            span=span,
+        )
 
-        Host builtins (``PRINT``, ``RENDER``, ``COPY``,
-        ``SHALLOW_COPY``, ``ASK``, ``ASK_REQUEST``, and ``EXEC``) are lowered
-        here.
+    def _lower_builtin_operands(
+        self,
+        op: _BuiltinOp,
+        operands: _BuiltinOperands,
+        *,
+        node_id: int,
+        span: "SourceSpan",
+    ) -> IrExpr:
+        """Build one built-in host operation from already-lowered operands.
+
+        The single place a built-in becomes IR: a direct call, an eta-expanded
+        built-in value, and a bound built-in method all collect their own
+        arguments and meet here.
         """
         loc = self._loc(span)
-        match kind:
+        match op:
             case BuiltinKind.PRINT:
-                # print(expr) / print::[T](expr) — lower the argument, coerced to
-                # an explicit ``::[T]`` target when present (see
-                # ``_explicit_builtin_target_type``).
-                target = self._explicit_builtin_target_type(call_node)
-                arg_ir = (
-                    receiver
-                    if receiver is not None
-                    else self.lower_expr(call_node.args[0])
-                    if target is None
-                    else self.lower_coerced(call_node.args[0], target)
-                )
-                return IrPrint(location=loc, value=arg_ir)
+                return IrPrint(location=loc, value=operands.subject)
 
             case BuiltinKind.RENDER:
-                # render(expr, pretty:, quote-strings:) / render::[T](expr, ...) —
-                # lower the value (coerced to an explicit ``::[T]`` target when
-                # present) and any supplied boolean display options.
-                target = self._explicit_builtin_target_type(call_node)
-                arg_ir = (
-                    receiver
-                    if receiver is not None
-                    else self.lower_expr(call_node.args[0])
-                    if target is None
-                    else self.lower_coerced(call_node.args[0], target)
-                )
-                pretty = None
-                quote_strings = None
-                for named in call_node.named_args:
-                    lowered = self.lower_expr(named.value)
-                    if named.name == "pretty":
-                        pretty = lowered
-                    else:
-                        quote_strings = lowered
                 return IrRenderValue(
                     location=loc,
-                    value=arg_ir,
-                    pretty=pretty,
-                    quote_strings=quote_strings,
+                    value=operands.subject,
+                    pretty=operands.pretty,
+                    quote_strings=operands.quote_strings,
                 )
-
-            case BuiltinKind.RESOURCE | BuiltinKind.RESOURCE_DIR:
-                path = resource_path(call_node, is_directory=kind is BuiltinKind.RESOURCE_DIR)
-                return self._lower_resolved_resource(path, span)
 
             case BuiltinKind.COPY | BuiltinKind.SHALLOW_COPY:
-                # copy(value) / shallow_copy(value) — identity in the checker's own
-                # result type for this call node (natural argument type, or the
-                # explicit ``::[T]`` override); coerce the argument to it so an
-                # explicit scalar-widening override (e.g. copy::[decimal](5)) takes
-                # effect, matching how any other call site coerces its arguments.
-                result_type = self._node_type(call_node.node_id)
-                arg_ir = (
-                    receiver
-                    if receiver is not None
-                    else self.lower_coerced(call_node.args[0], result_type)
-                )
-                copy_kind = CopyKind.SHALLOW if kind is BuiltinKind.SHALLOW_COPY else CopyKind.DEEP
-                return IrCopyValue(location=loc, kind=copy_kind, value=arg_ir)
+                copy_kind = CopyKind.SHALLOW if op is BuiltinKind.SHALLOW_COPY else CopyKind.DEEP
+                return IrCopyValue(location=loc, kind=copy_kind, value=operands.subject)
+
+            case BuiltinKind.RESOURCE | BuiltinKind.RESOURCE_DIR:
+                return self._lower_resolved_resource(operands.path, span)
+
+            case BuiltinKind.PARSE:
+                return self._lower_parse_call(node_id, operands.subject, span)
+
+            case BuiltinKind.TRY_PARSE:
+                return self._lower_try_parse_call(node_id, operands.subject, span)
 
             case BuiltinKind.ASK:
-                return self._lower_ask_call(
-                    call_node,
-                    span,
-                    structured_exec=False,
-                    agent=agent,
-                    session=(
-                        None if agent is not None else IrSessionDefault(location=self._loc(span))
-                    ),
+                # A free ask names neither agent nor session and runs on the
+                # ambient default session.
+                session = operands.session
+                if session is None and operands.agent is None:
+                    session = IrSessionDefault(location=loc)
+                assert operands.target_type is not None, "compiler bug: ask without a target type"
+                return self._lower_ask_operands(
+                    node_id=node_id,
+                    span=span,
+                    prompt=operands.subject,
+                    target_type=operands.target_type,
+                    is_request=False,
+                    agent=operands.agent,
+                    session=session,
+                    sandbox=operands.sandbox,
+                    max_attempts=operands.max_attempts,
                 )
 
             case BuiltinKind.ASK_REQUEST:
-                return self._lower_ask_call(
-                    call_node, span, structured_exec=False, is_request=True, agent=agent
+                return self._lower_ask_operands(
+                    node_id=node_id,
+                    span=span,
+                    prompt=operands.subject,
+                    # The request's own result is always AgentRequest; its
+                    # contract target is the explicit ``::[T]``, or text.
+                    target_type=self._checked.explicit_builtin_targets.get(node_id, TextType()),
+                    is_request=True,
+                    agent=operands.agent,
+                    session=None,
+                    sandbox=operands.sandbox,
+                    max_attempts=operands.max_attempts,
                 )
 
             case BuiltinKind.EXEC:
-                return self._lower_exec_call(call_node, span)
+                # The host-backed defaults are ordinary IR operands, so each
+                # call reads the current module binding.
+                env, cwd, timeout, sandbox = self._default_exec_operands(loc)
+                return self._lower_exec_operands(
+                    node_id=node_id,
+                    span=span,
+                    command=operands.subject,
+                    env=env if operands.env is None else operands.env,
+                    cwd=cwd if operands.cwd is None else operands.cwd,
+                    timeout=timeout if operands.timeout is None else operands.timeout,
+                    sandbox=sandbox if operands.sandbox is None else operands.sandbox,
+                    max_attempts=operands.max_attempts,
+                )
 
-            case BuiltinKind.PARSE:
-                return self._lower_parse_call(call_node, span)
+            case BuiltinStaticKind.SESSION_OPEN:
+                return IrSessionOpen(
+                    location=loc,
+                    agent=operands.subject,
+                    transport=operands.transport,
+                    name=(
+                        IrConstText(location=loc, value="")
+                        if operands.name is None
+                        else operands.name
+                    ),
+                    sandbox=operands.sandbox or self._default_sandbox_operand(loc),
+                )
 
-            case BuiltinKind.TRY_PARSE:
-                return self._lower_try_parse_call(call_node, span)
+            case BuiltinStaticKind.SESSION_DEFAULT:
+                return IrSessionDefault(location=loc)
+
+            case IrSessionOpKind():
+                return IrSessionOp(
+                    location=loc,
+                    session=operands.subject,
+                    op=op,
+                    arg=operands.argument,
+                )
 
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
@@ -2590,17 +2719,16 @@ class _Lowerer:
             location=self._loc(span), value=value_ir, recipe=recipe, failure_mode=failure_mode
         )
 
-    def _lower_parse_call(self, call_node: "Call", span: "SourceSpan") -> IrExpr:
+    def _lower_parse_call(self, node_id: int, value: IrExpr, span: "SourceSpan") -> IrExpr:
         """Lower ``std/value::parse[T](value)`` from its recorded ``CastSpec``;
         failure raises ``ValueParseError`` instead of ``CastError`` (see
         ``eval.ir_interpreter._on_cast_failure``).
         """
-        spec = self._checked.cast_specs[call_node.node_id]
-        arg_ir = self.lower_expr(call_node.args[0])
+        spec = self._checked.cast_specs[node_id]
         if spec.kind is CastKind.TOTAL_NOOP:
-            return arg_ir
+            return value
         return self._lower_recipe_convert(
-            arg_ir,
+            value,
             TextType(),
             spec.target_type,
             spec.kind,
@@ -2608,7 +2736,7 @@ class _Lowerer:
             failure_mode=ConversionFailureMode.RAISE_VALUE_PARSE_ERROR,
         )
 
-    def _lower_try_parse_call(self, call_node: "Call", span: "SourceSpan") -> IrExpr:
+    def _lower_try_parse_call(self, node_id: int, value: IrExpr, span: "SourceSpan") -> IrExpr:
         """Lower ``std/value::try-parse[T](value)`` to a hand-built try/catch.
 
         Composes existing IR nodes rather than a second decoder: the checked
@@ -2619,12 +2747,12 @@ class _Lowerer:
         ``try <parse> catch ValueParseError as e => Result::Err(error = e)``.
         """
         loc = self._loc(span)
-        result_type = self._node_type(call_node.node_id)
+        result_type = self._node_type(node_id)
         assert isinstance(result_type, EnumType)
         members = self._type_table.enum_member_names(result_type)
         ok_type, err_type = members["Ok"], members["Err"]
 
-        parsed = self._lower_parse_call(call_node, span)
+        parsed = self._lower_parse_call(node_id, value, span)
         try_body = self._lower_constructor_from_slots(ok_type, {"value": parsed}, span)
 
         exc_sym = self._alloc_synthetic_sym(mutable=False)
@@ -2645,38 +2773,6 @@ class _Lowerer:
         )
         return IrTry(location=loc, body=try_body, handlers=(handler,))
 
-    def _lower_session_static_call(
-        self, kind: BuiltinStaticKind, call_node: Call, span: SourceSpan
-    ) -> IrExpr:
-        """Lower a checker-selected ``Session`` type static."""
-        loc = self._loc(span)
-        named_args = {arg.name: arg.value for arg in call_node.named_args}
-        match kind:
-            case BuiltinStaticKind.SESSION_OPEN:
-                agent = call_node.args[0] if call_node.args else named_args["agent"]
-                transport = (
-                    call_node.args[1] if len(call_node.args) > 1 else named_args.get("transport")
-                )
-                name = call_node.args[2] if len(call_node.args) > 2 else named_args.get("name")
-                sandbox = (
-                    call_node.args[3] if len(call_node.args) > 3 else named_args.get("sandbox")
-                )
-                return IrSessionOpen(
-                    location=loc,
-                    agent=self.lower_expr(agent),
-                    transport=None if transport is None else self.lower_expr(transport),
-                    name=IrConstText(location=loc, value="")
-                    if name is None
-                    else self.lower_expr(name),
-                    sandbox=self._default_sandbox_operand(loc)
-                    if sandbox is None
-                    else self.lower_expr(sandbox),
-                )
-            case BuiltinStaticKind.SESSION_DEFAULT:
-                return IrSessionDefault(location=loc)
-            case _ as unreachable:  # pragma: no cover
-                assert_never(unreachable)
-
     def _is_session_builtin_method(self, method: MethodDef) -> bool:
         """Report whether *method* belongs to the canonical ``Session`` receiver."""
         receiver = method.signature.params[0]
@@ -2686,48 +2782,6 @@ class _Lowerer:
         if isinstance(session_type, RecordType) and receiver.decl_id == session_type.decl_id:
             return True
         return method.module_id.is_standard_library and method.scope_path == ("Session",)
-
-    def _lower_session_method_operands(
-        self,
-        call_node: Call,
-        name: str,
-        session: IrExpr,
-        span: SourceSpan,
-    ) -> IrExpr:
-        """Lower a Session method after selecting its receiver operand."""
-        if name == "ask":
-            return self._lower_ask_call(
-                call_node,
-                span,
-                structured_exec=False,
-                session=session,
-            )
-
-        named_args = {arg.name: arg.value for arg in call_node.named_args}
-        if name == "compact":
-            argument = call_node.args[0] if call_node.args else named_args.get("instructions")
-        elif name == "set-name":
-            argument = call_node.args[0] if call_node.args else named_args["name"]
-        else:
-            argument = None
-        return IrSessionOp(
-            location=self._loc(span),
-            session=session,
-            op=IrSessionOpKind(name),
-            arg=None if argument is None else self.lower_expr(argument),
-        )
-
-    def _lower_session_method_call(
-        self, call_node: Call, method: MethodDef, span: SourceSpan
-    ) -> IrExpr:
-        """Lower a checker-selected direct ``Session`` method call."""
-        assert isinstance(call_node.callee, FieldAccess)
-        return self._lower_session_method_operands(
-            call_node,
-            method.name,
-            self.lower_expr(call_node.callee.obj),
-            span,
-        )
 
     def _lower_call(self, call_node: "Call", nid: int, span: "SourceSpan") -> IrExpr:
         """Lower a Call node.
@@ -2748,24 +2802,30 @@ class _Lowerer:
         # Check for builtin calls first
         static_kind = self._checked.resolved.builtin_static_calls.get(nid)
         if static_kind is not None:
-            return self._lower_session_static_call(static_kind, call_node, span)
+            return self._lower_builtin_call(static_kind, call_node, span)
         if isinstance(callee, FieldAccess):
             method = self._checked.method_selection_for(callee.node_id)
             if method is not None and self._is_session_builtin_method(method):
-                return self._lower_session_method_call(call_node, method, span)
+                return self._lower_builtin_call(
+                    _BUILTIN_OPS[method.name],
+                    call_node,
+                    span,
+                    receiver=self.lower_expr(callee.obj),
+                    is_session=True,
+                )
 
         builtin_kind = self._checked.resolved.builtin_calls.get(nid)
         if builtin_kind is not None:
             if isinstance(callee, FieldAccess):
                 method = self._checked.method_selection_for(callee.node_id)
                 if method is not None and method.is_builtin:
-                    method_kind = BUILTIN_CALL_NAMES[method.name]
-                    receiver = self.lower_expr(callee.obj)
-                    if method_kind in {BuiltinKind.ASK, BuiltinKind.ASK_REQUEST}:
-                        return self._lower_builtin_call(
-                            method_kind, call_node, span, agent=receiver
-                        )
-                    return self._lower_builtin_call(method_kind, call_node, span, receiver=receiver)
+                    # A session method has already returned above.
+                    return self._lower_builtin_call(
+                        _BUILTIN_OPS[method.name],
+                        call_node,
+                        span,
+                        receiver=self.lower_expr(callee.obj),
+                    )
             else:
                 return self._lower_builtin_call(builtin_kind, call_node, span)
 
@@ -2800,22 +2860,21 @@ class _Lowerer:
                         and isinstance(receiver_type, RecordType)
                         and receiver_type.decl_id == session.decl_node_id
                     )
-                    if is_session and call_node.args:
-                        forwarded = replace(call_node, args=call_node.args[1:])
-                        return self._lower_session_method_operands(
-                            forwarded,
-                            callee_ref.name,
-                            self.lower_expr(call_node.args[0]),
-                            span,
-                        )
                     kind = BUILTIN_CALL_NAMES.get(callee_ref.name)
-                    if kind in {BuiltinKind.ASK, BuiltinKind.ASK_REQUEST} and call_node.args:
+                    receiver_call = is_session or kind in {
+                        BuiltinKind.ASK,
+                        BuiltinKind.ASK_REQUEST,
+                    }
+                    if receiver_call and call_node.args:
+                        # A receiver method spelled as a plain call: its first
+                        # argument is the receiver, the rest its arguments.
                         forwarded = replace(call_node, args=call_node.args[1:])
                         return self._lower_builtin_call(
-                            kind,
+                            _BUILTIN_OPS[callee_ref.name],
                             forwarded,
                             span,
-                            agent=self.lower_expr(call_node.args[0]),
+                            receiver=self.lower_expr(call_node.args[0]),
+                            is_session=is_session,
                         )
                     return self._lower_indirect_call(call_node, nid, span)
                 return self._lower_direct_call(call_node, callee_ref, nid, span)
@@ -2831,11 +2890,13 @@ class _Lowerer:
         function_id: FunctionId,
         span: SourceSpan,
         arguments: tuple[IrExpr | UseDefault, ...],
+        occurrence: int,
     ) -> IrDirectCall:
+        """Build a direct call led by the target contracts recorded at node *occurrence*."""
         return IrDirectCall(
             location=self._loc(span),
             function_id=function_id,
-            arguments=arguments,
+            arguments=(*self._target_contracts(occurrence, span), *arguments),
         )
 
     def _lower_direct_call(
@@ -2865,6 +2926,7 @@ class _Lowerer:
             function_id=fn_id,
             span=span,
             arguments=tuple(ir_args),
+            occurrence=result_node_id,
         )
 
     def _method_function_id(self, method: MethodDef) -> FunctionId:
@@ -2902,6 +2964,7 @@ class _Lowerer:
             function_id=self._method_function_id(method),
             span=span,
             arguments=tuple(ir_args),
+            occurrence=call_node.node_id,
         )
 
     def _lower_indirect_call_with_args(
@@ -3101,6 +3164,7 @@ class _Lowerer:
             function_id=fn_id,
             span=span,
             arguments=arguments,
+            occurrence=call_node.node_id,
         )
 
     def _partial_value_body(
@@ -3208,12 +3272,12 @@ class _Lowerer:
             receiver = IrLoad(location=loc, symbol=receiver_symbol)
             operands = tuple(IrLoad(location=loc, symbol=symbol) for symbol in param_symbols)
             if method.is_builtin:
-                return self._lower_builtin_method_value_body(
-                    method.name,
-                    is_session=self._is_session_builtin_method(method),
-                    receiver=receiver,
-                    operands=operands,
-                    result_type=bound_type.result,
+                op = _BUILTIN_OPS[method.name]
+                return self._lower_builtin_operands(
+                    op,
+                    self._method_operands(op, operands, bound_type.result).with_receiver(
+                        op, receiver, is_session=self._is_session_builtin_method(method)
+                    ),
                     node_id=node.node_id,
                     span=node.span,
                 )
@@ -3221,6 +3285,7 @@ class _Lowerer:
                 function_id=self._method_function_id(method),
                 span=node.span,
                 arguments=(receiver, *operands),
+                occurrence=node.node_id,
             )
 
         closure = self._make_partial_closure(bound_type, node.span, (receiver_capture,), build_body)
@@ -3648,53 +3713,8 @@ class _Lowerer:
     # Ask/ask-request lowering
     # ------------------------------------------------------------------
 
-    def _lower_ask_call(
-        self,
-        call_node: "Call",
-        span: "SourceSpan",
-        *,
-        structured_exec: bool,
-        is_request: bool = False,
-        agent: IrExpr | None = None,
-        session: IrExpr | None = None,
-    ) -> IrExpr:
-        """Lower an ask() or ask-request() builtin call to its host-operation node."""
-        named_agent = next(
-            (argument.value for argument in call_node.named_args if argument.name == "agent"),
-            None,
-        )
-        if agent is None and named_agent is not None:
-            agent = self.lower_expr(named_agent)
-            session = None
-        named_sandbox = next(
-            (argument.value for argument in call_node.named_args if argument.name == "sandbox"),
-            None,
-        )
-        sandbox = None if named_sandbox is None else self.lower_expr(named_sandbox)
-        target_type = (
-            self._explicit_builtin_target_type(call_node) or TextType()
-            if is_request
-            else self._checked.node_types[call_node.node_id]
-        )
-        return self._lower_ask_operands(
-            node_id=call_node.node_id,
-            span=span,
-            prompt=self.lower_expr(call_node.args[0]),
-            target_type=target_type,
-            structured_exec=structured_exec,
-            is_request=is_request,
-            agent=agent,
-            session=session,
-            sandbox=sandbox,
-            max_attempts=self._extract_max_attempts(call_node),
-        )
-
     def _default_sandbox_operand(self, loc: Location) -> IrExpr:
-        """Build the ``std/config::default-sandbox`` load an omitted sandbox operand uses.
-
-        Shared by every call/open site that defaults its ``sandbox`` operand
-        to the current engine setting, so the key is built in one place.
-        """
+        """Read the current default agent sandbox mode."""
         return IrBuiltinLoad(
             location=loc,
             key=builtin_var_key(STD_CONFIG_ID, (), "default-sandbox"),
@@ -3707,7 +3727,6 @@ class _Lowerer:
         span: SourceSpan,
         prompt: IrExpr,
         target_type: Type,
-        structured_exec: bool,
         is_request: bool,
         agent: IrExpr | None,
         session: IrExpr | None,
@@ -3725,27 +3744,16 @@ class _Lowerer:
                 json_schema=None,
                 decode=None,
                 target_type_label="unit" if is_unit else "text",
-                structured_exec=structured_exec,
+                structured_exec=False,
                 format_instructions="",
                 is_unit=True,
                 target_type_kind="unit",
             )
         else:
-            json_schema_str, fmt_instr, decode_schema, decode_defs = (
-                self._contract_payload_for_spec(node_id, spec)
-            )
-            contract_req = ContractRequest(
-                codec_name=spec.codec_name,
-                strict_json=spec.strict_json,
-                json_schema=json_schema_str,
-                decode=decode_schema,
-                target_type_label=repr(spec.target_type),
-                structured_exec=structured_exec,
-                format_instructions=fmt_instr,
-                is_unit=False,
-                target_type_kind=spec.target_type.kind,
-                target_type=spec.target_type,
-                defs=decode_defs,
+            contract_req = self._contract_request_for_spec(
+                spec,
+                structured_exec=False,
+                payload=self._contract_payloads.get(node_id),
             )
         contract_id = self._alloc_contract(contract_req)
 
@@ -3789,45 +3797,6 @@ class _Lowerer:
     # Exec lowering
     # ------------------------------------------------------------------
 
-    def _lower_exec_call(
-        self,
-        call_node: "Call",
-        span: "SourceSpan",
-    ) -> IrExpr:
-        """Lower an exec() builtin call to IrExec."""
-        loc = self._loc(span)
-
-        # The command is positional. The host-backed defaults are expressed
-        # as ordinary IR operands so each call reads the current module binding.
-        command_ir = self.lower_expr(call_node.args[0])
-        named_map = {arg.name: arg for arg in call_node.named_args}
-        default_env, default_cwd, default_timeout, default_sandbox = self._default_exec_operands(
-            loc
-        )
-        env_ir = self.lower_expr(named_map["env"].value) if "env" in named_map else default_env
-        cwd_ir = self.lower_expr(named_map["cwd"].value) if "cwd" in named_map else default_cwd
-        timeout_ir = (
-            self.lower_expr(named_map["timeout"].value)
-            if "timeout" in named_map
-            else default_timeout
-        )
-        sandbox_ir = (
-            self.lower_expr(named_map["sandbox"].value)
-            if "sandbox" in named_map
-            else default_sandbox
-        )
-
-        return self._lower_exec_operands(
-            node_id=call_node.node_id,
-            span=span,
-            command=command_ir,
-            env=env_ir,
-            cwd=cwd_ir,
-            timeout=timeout_ir,
-            sandbox=sandbox_ir,
-            max_attempts=self._extract_max_attempts(call_node),
-        )
-
     def _default_exec_operands(self, loc: Location) -> tuple[IrExpr, IrExpr, IrExpr, IrExpr]:
         """Build exec's ambient environment, cwd, timeout, and sandbox defaults."""
         env: IrExpr = (
@@ -3859,21 +3828,10 @@ class _Lowerer:
         """Build an exec operation from already-lowered direct or closure operands."""
         spec = self._checked.contract_specs.get(node_id)
         assert spec is not None, "exec always has a contract spec after checking"
-        json_schema_str, fmt_instr, decode_schema, decode_defs = self._contract_payload_for_spec(
-            node_id, spec
-        )
-        contract_req = ContractRequest(
-            codec_name=spec.codec_name,
-            strict_json=spec.strict_json,
-            json_schema=json_schema_str,
-            decode=decode_schema,
-            target_type_label=repr(spec.target_type),
+        contract_req = self._contract_request_for_spec(
+            spec,
             structured_exec=spec.structured_exec,
-            format_instructions=fmt_instr,
-            is_unit=isinstance(spec.target_type, UnitType),
-            target_type_kind=spec.target_type.kind,
-            target_type=spec.target_type,
-            defs=decode_defs,
+            payload=self._contract_payloads.get(node_id),
         )
         return IrExec(
             location=self._loc(span),

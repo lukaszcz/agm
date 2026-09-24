@@ -1,0 +1,279 @@
+{
+  "scenarios": [
+    {
+      "name": "direct_calls_reach_every_host_operation",
+      "params": {
+        "route": "direct"
+      },
+      "agents": {
+        "writer": {
+          "responses": [
+            "session answer",
+            "agent answer"
+          ],
+          "session": {
+            "operations": {
+              "compact": [
+                "success"
+              ],
+              "reset": [
+                "success"
+              ],
+              "set-name": [
+                "success"
+              ],
+              "stats": [
+                {
+                  "input_tokens": 4,
+                  "output_tokens": 9,
+                  "cost": "0.10",
+                  "context_percent": "3"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "shell": [
+        {
+          "command": "echo direct",
+          "stdout": "direct output\n"
+        }
+      ],
+      "expect": {
+        "stdout_contains": [
+          "direct\n",
+          "[1, 2]\n",
+          "true\n",
+          "kept\n",
+          "session answer\n",
+          "9\n",
+          "agent answer\n",
+          "request prompt\n",
+          "direct output\n"
+        ],
+        "calls": {
+          "writer": 0
+        },
+        "sessions": [
+          {
+            "agent": "writer",
+            "tag": "session-1",
+            "opened": true,
+            "closed": true,
+            "parent": null
+          },
+          {
+            "agent": "writer",
+            "tag": "session-2",
+            "opened": true,
+            "closed": true,
+            "parent": null
+          }
+        ],
+        "session_prompts": [
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 0,
+            "starts_with": "session prompt"
+          },
+          {
+            "agent": "writer",
+            "session": "session-2",
+            "call": 0,
+            "starts_with": "agent prompt"
+          }
+        ]
+      }
+    },
+    {
+      "name": "builtin_values_reach_every_host_operation",
+      "params": {
+        "route": "value"
+      },
+      "agents": {
+        "writer": {
+          "responses": [
+            "session answer",
+            "agent answer"
+          ],
+          "session": {
+            "operations": {
+              "compact": [
+                "success"
+              ],
+              "reset": [
+                "success"
+              ],
+              "fork": [
+                "success"
+              ],
+              "set-name": [
+                "success"
+              ],
+              "stats": [
+                {
+                  "input_tokens": 4,
+                  "output_tokens": 11,
+                  "cost": "0.10",
+                  "context_percent": "3"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "shell": [
+        {
+          "command": "echo value",
+          "stdout": "value output\n"
+        }
+      ],
+      "expect": {
+        "stdout_contains": [
+          "value\n",
+          "[\n  3,\n  4\n]\n",
+          "copied\n",
+          "6\n",
+          "session answer\n",
+          "11\n",
+          "agent answer\n",
+          "request prompt\n",
+          "value output\n"
+        ],
+        "calls": {
+          "writer": 0
+        },
+        "sessions": [
+          {
+            "agent": "writer",
+            "tag": "session-1",
+            "opened": true,
+            "closed": true,
+            "parent": null
+          },
+          {
+            "agent": "writer",
+            "tag": "session-2",
+            "opened": true,
+            "closed": true,
+            "parent": "session-1"
+          },
+          {
+            "agent": "writer",
+            "tag": "session-3",
+            "opened": true,
+            "closed": true,
+            "parent": null
+          }
+        ],
+        "session_prompts": [
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 0,
+            "starts_with": "session prompt"
+          },
+          {
+            "agent": "writer",
+            "session": "session-3",
+            "call": 0,
+            "starts_with": "agent prompt"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bound_methods_reach_every_host_operation",
+      "params": {
+        "route": "bound"
+      },
+      "agents": {
+        "writer": {
+          "responses": [
+            "session answer",
+            "agent answer",
+            "free answer"
+          ],
+          "session": {
+            "operations": {
+              "compact": [
+                "success"
+              ],
+              "set-name": [
+                "success"
+              ],
+              "stats": [
+                {
+                  "input_tokens": 4,
+                  "output_tokens": 13,
+                  "cost": "0.10",
+                  "context_percent": "3"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expect": {
+        "stdout_contains": [
+          "bound\n",
+          "session answer\n",
+          "13\n",
+          "agent answer\n",
+          "request prompt\n",
+          "free answer\n",
+          "free request\n",
+          "true\n"
+        ],
+        "calls": {
+          "writer": 0
+        },
+        "sessions": [
+          {
+            "agent": "writer",
+            "tag": "session-1",
+            "opened": true,
+            "closed": true,
+            "parent": null
+          },
+          {
+            "agent": "writer",
+            "tag": "session-2",
+            "opened": true,
+            "closed": true,
+            "parent": null
+          },
+          {
+            "agent": "writer",
+            "tag": "session-3",
+            "opened": true,
+            "closed": true,
+            "parent": null
+          }
+        ],
+        "session_prompts": [
+          {
+            "agent": "writer",
+            "session": "session-1",
+            "call": 0,
+            "starts_with": "session prompt"
+          },
+          {
+            "agent": "writer",
+            "session": "session-2",
+            "call": 0,
+            "starts_with": "agent prompt"
+          },
+          {
+            "agent": "writer",
+            "session": "session-3",
+            "call": 0,
+            "starts_with": "free prompt"
+          }
+        ]
+      }
+    }
+  ]
+}

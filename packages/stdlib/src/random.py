@@ -7,7 +7,9 @@ import uuid as uuid_module
 from decimal import Decimal
 from typing import Protocol
 
-from agl import AglException, nominals, runtime
+from agl import nominals, runtime
+
+from agm.agl.runtime.boundary import raise_index_error
 
 IndexError = nominals.std.errors.IndexError
 
@@ -45,14 +47,10 @@ def uniform() -> Decimal:
     return Decimal(str(_random().random()))
 
 
-def _empty_choice_error() -> None:
-    raise AglException(IndexError(message="cannot choose from an empty array", index=0, length=0))
-
-
 def choice(values: _MutableSequence) -> object:
     """Return one selected element, raising AgL's ``IndexError`` when empty."""
     if not values:
-        _empty_choice_error()
+        raise_index_error(IndexError, "cannot choose from an empty array", 0, 0)
     return values[_random().randrange(len(values))]
 
 

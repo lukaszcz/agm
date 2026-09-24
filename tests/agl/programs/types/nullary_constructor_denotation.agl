@@ -1,8 +1,9 @@
 # Fieldless constructors construct values outside call position, while calls and
 # field-bearing constructor values retain their existing behavior.
-record R1()
-record Token[T]()
-record Box(value: int)
+record R1
+record Token[T]
+record Box
+  value: int
 
 enum Tree
   | Leaf

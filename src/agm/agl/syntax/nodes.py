@@ -484,6 +484,8 @@ class FuncDef(GenericDeclaration):
 
     ``return_type`` is ``None`` when omitted and inferred from the body.
     ``body`` is an expression (which may be a ``Block`` for multi-step bodies).
+    ``is_method`` records the leading ``self`` parameter that makes the
+    declaration a method.
     """
 
     name: str
@@ -497,6 +499,7 @@ class FuncDef(GenericDeclaration):
     is_extern: bool = False
     is_program: bool = False
     is_synthetic: bool = False
+    is_method: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
     receiver_type: TypeExpr | None = None
     attributes: tuple[Attribute, ...] = ()

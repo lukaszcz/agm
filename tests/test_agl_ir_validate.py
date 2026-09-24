@@ -15,6 +15,7 @@ Sections:
 from __future__ import annotations
 
 import decimal
+from dataclasses import replace
 
 import pytest
 
@@ -81,9 +82,18 @@ from agm.agl.ir import (
     UseDefault,
     VariantDescriptor,
 )
-from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    ScalarDecode,
+    ScalarKind,
+    TypeNode,
+    TypeNodeField,
+    TypeNodeKind,
+    TypeNodeRef,
+    TypeTree,
+)
 from agm.agl.ir.ids import ContractId
-from agm.agl.ir.nodes import IrExpr
+from agm.agl.ir.nodes import IrContract, IrExpr
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import STD_CONFIG_ID, ModuleId
@@ -2291,6 +2301,145 @@ class TestConstructorFieldUseDefault:
         )
         with pytest.raises(InvalidIrError, match="field_defaults"):
             validate_ir(_make_program(nominals={NOM0: descriptor}))
+
+
+class TestExternTargetOperands:
+    """A type-directed extern call leads with one registered ``IrContract`` per target."""
+
+    _CID = ContractId(value=0)
+
+    def _program(
+        self,
+        *initializers: IrExpr,
+        target_count: int = 1,
+        default: IrExpr | None = None,
+        type_tree: TypeTree | None = None,
+    ) -> ExecutableProgram:
+        extern = FunctionDescriptor(
+            function_id=FN0,
+            function_symbol=SYM0,
+            module_id=MOD_A,
+            params=(IrFunctionParam(symbol=SYM1, default=default),),
+            impl=ExternFunctionBody(
+                name="query", companion_name="query", target_count=target_count
+            ),
+        )
+        prog = _make_program(
+            symbols={SYM0: _sym_desc_imm(), SYM1: _fn_sym_desc()},
+            initializers=initializers,
+            functions={FN0: extern},
+        )
+        request = ContractRequest(
+            codec_name="json",
+            strict_json=True,
+            json_schema='{"type": "integer"}',
+            decode=ScalarDecode(kind=ScalarKind.INT),
+            target_type_label="int",
+            structured_exec=False,
+            format_instructions="",
+            type_tree=type_tree,
+        )
+        return replace(prog, contracts={self._CID: request})
+
+    def _validate(
+        self, *arguments: IrExpr | UseDefault, target_count: int = 1, default: IrExpr | None = None
+    ) -> None:
+        validate_ir(
+            self._program(
+                _make_direct_call(FN0, args=arguments), target_count=target_count, default=default
+            )
+        )
+
+    def _contract(self, contract_id: ContractId | None = None) -> IrContract:
+        return IrContract(location=LOC, contract_id=contract_id or self._CID)
+
+    def test_leading_contract_passes(self) -> None:
+        self._validate(self._contract(), IrConstText(location=LOC, value="q"))
+
+    def test_default_index_counts_declared_parameters(self) -> None:
+        self._validate(
+            self._contract(),
+            UseDefault(param_index=0),
+            default=IrConstText(location=LOC, value="q"),
+        )
+
+    def test_unregistered_contract_id_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="9999"):
+            self._validate(
+                self._contract(ContractId(value=9999)), IrConstText(location=LOC, value="q")
+            )
+
+    def test_missing_contract_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="arguments"):
+            self._validate(IrConstText(location=LOC, value="q"))
+
+    def test_leading_operand_must_be_a_contract(self) -> None:
+        with pytest.raises(InvalidIrError, match="IrContract"):
+            self._validate(
+                IrConstText(location=LOC, value="c"), IrConstText(location=LOC, value="q")
+            )
+
+    def test_contract_in_a_parameter_position_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="IrContract"):
+            self._validate(self._contract(), self._contract())
+
+    def test_contract_leading_an_ordinary_call_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="IrContract"):
+            self._validate(self._contract(), target_count=0)
+
+    def test_contract_outside_a_call_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="IrContract"):
+            validate_ir(self._program(self._contract()))
+
+    def test_contract_outside_a_call_raises_when_shallow(self) -> None:
+        with pytest.raises(InvalidIrError, match="IrContract"):
+            validate_ir(self._program(self._contract()), deep=False)
+
+    def test_contract_id_unchecked_when_shallow(self) -> None:
+        call = _make_direct_call(
+            FN0,
+            args=(self._contract(ContractId(value=9999)), IrConstText(location=LOC, value="q")),
+        )
+        validate_ir(_make_program(initializers=(call,)), deep=False)
+
+    def test_loading_the_raw_extern_closure_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="target"):
+            validate_ir(self._program(IrLoad(location=LOC, symbol=SYM0)))
+
+    def test_loading_an_ordinary_extern_closure_passes(self) -> None:
+        validate_ir(self._program(IrLoad(location=LOC, symbol=SYM0), target_count=0))
+
+    @staticmethod
+    def _tree(root: TypeNode | TypeNodeRef, nominal: NominalId | None = None) -> TypeTree:
+        """A recursive record tree: *root* over a def whose field refers back to it."""
+        body = TypeNode(
+            TypeNodeKind.RECORD,
+            "Node",
+            "{}",
+            nominal=nominal,
+            fields=(TypeNodeField("next", "next", None, TypeNodeRef("Node")),),
+        )
+        return TypeTree(root=root, defs=(("Node", body),))
+
+    def _validate_tree(self, tree: TypeTree) -> None:
+        validate_ir(self._program(type_tree=tree))
+
+    def test_type_tree_passes(self) -> None:
+        items = TypeNode(TypeNodeKind.ARRAY, "array[Node]", "{}", items=TypeNodeRef("Node"))
+        self._validate_tree(self._tree(TypeNode(TypeNodeKind.DICT, "d", "{}", values=items)))
+
+    def test_type_tree_unknown_reference_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="Missing"):
+            self._validate_tree(self._tree(TypeNodeRef("Missing")))
+
+    def test_type_tree_duplicate_definition_raises(self) -> None:
+        tree = self._tree(TypeNodeRef("Node"))
+        with pytest.raises(InvalidIrError, match="Node"):
+            self._validate_tree(replace(tree, defs=tree.defs * 2))
+
+    def test_type_tree_unregistered_nominal_raises(self) -> None:
+        with pytest.raises(InvalidIrError, match="nominal"):
+            self._validate_tree(self._tree(TypeNodeRef("Node"), NominalId(value=9999)))
 
 
 # ===========================================================================

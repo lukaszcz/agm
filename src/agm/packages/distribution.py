@@ -154,6 +154,9 @@ def normalized_manifest(manifest: PackageManifest) -> bytes:
             else:
                 rendered = ", ".join(f"{key} = {_toml_string(value)}" for key, value in fields)
                 lines.append(f"{_toml_key(name)} = {{ {rendered} }}")
+    if manifest.python_dependencies:
+        dependencies = _toml_array(manifest.python_dependencies)
+        lines.extend(("", "[python]", f"dependencies = {dependencies}"))
     if manifest.commands:
         lines.extend(("", "[commands]"))
         for path in sorted(manifest.commands):

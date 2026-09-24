@@ -492,7 +492,7 @@ exception Problem extends Exception
   code: int
 exception Detailed extends Problem
   detail: text
-exception VeryDetailed extends Detailed()
+exception VeryDetailed extends Detailed
 """
 
 

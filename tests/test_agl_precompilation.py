@@ -7,12 +7,16 @@ import os
 import pickle
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
 
+from agm.agl import lower
 from agm.agl.artifact_cache import clear_retained_artifacts
+from agm.agl.ir.contracts import ContractPayload, TypeNode, TypeTree
+from agm.agl.ir.program import ExecutableProgram
+from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
@@ -169,7 +173,7 @@ def test_a_shared_cyclic_dependency_reattaches_to_fresh_resolved_modules_under_a
     ("declarations", "expression", "expected"),
     [
         (
-            "record Box(value: int)\ntype Alias = Box\ndef box() -> Alias = Box(21)\n",
+            "record Box\n  value: int\ntype Alias = Box\ndef box() -> Alias = Box(21)\n",
             "box().value",
             "21\n",
         ),
@@ -302,6 +306,104 @@ def test_precompiled_externs_use_current_companion_code(
         result = compile_again("import library::*\nprint(current())")
         assert result.ok, result.diagnostics
         assert capsys.readouterr().out == f"{value}\n"
+
+
+def test_precompiled_extern_target_contracts_round_trip(
+    tmp_path: Path,
+    compile_again: Callable[[str], RunResult],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A reloaded library still delivers its type-directed extern calls' ``TypeContract``s."""
+    (tmp_path / "library.agl").write_text(
+        "builtin def print[T](value: T) -> unit\n"
+        "extern def query[T](question: text, context: text) -> T\n"
+        "record Pair\n"
+        "  left: text\n"
+        "  right: text\n"
+        'def direct(question: text) -> text = query(question, "d")\n'
+        "def by-reference() -> (text, text) -> text = query\n"
+        'def by-partial() -> (text) -> text = query::[text]("p", ?)\n'
+        'def paired() -> Pair = query("l", "r")\n'
+    )
+    (tmp_path / "library.py").write_text(
+        "import agl\n"
+        "def query(contract, question, context):\n"
+        "    assert isinstance(contract, agl.TypeContract)\n"
+        "    if contract.kind == 'record':\n"
+        "        return contract.nominal(left=question, right=context)\n"
+        "    return f'{contract.label} {question} {context}'\n"
+    )
+    source = (
+        'import library::*\nprint(direct("q"))\nprint(by-reference()("r", "c"))\n'
+        'print(by-partial()("c"))\nprint(paired())'
+    )
+    outputs: list[str] = []
+    artifacts: dict[Path, int] = {}
+    for _ in range(2):
+        result = compile_again(source)
+        assert result.ok, result.diagnostics
+        outputs.append(capsys.readouterr().out)
+        if not artifacts:
+            artifacts = {path: path.stat().st_mtime_ns for path in tmp_path.rglob("*.ir")}
+    assert artifacts
+    assert {path: path.stat().st_mtime_ns for path in artifacts} == artifacts
+    first, second = outputs
+    assert first == second
+    assert first.splitlines() == [
+        "text q d",
+        "text r c",
+        "text p c",
+        'Pair(left = "l", right = "r")',
+    ]
+
+
+def test_precompiled_extern_type_trees_round_trip(
+    tmp_path: Path,
+    compile_again: Callable[[str], RunResult],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reloaded library keeps its extern contracts' type trees and its types' field docs."""
+    executables: list[ExecutableProgram] = []
+    lower_program = lower.lower_program
+
+    def capture(
+        compiled: MatchCompiledProgram,
+        *,
+        contract_payloads: Mapping[int, ContractPayload] | None = None,
+    ) -> ExecutableProgram:
+        executables.append(lower_program(compiled, contract_payloads=contract_payloads))
+        return executables[-1]
+
+    monkeypatch.setattr(lower, "lower_program", capture)
+    (tmp_path / "library.agl").write_text(
+        '@doc("A team.")\nenum Team\n  | @doc("Money.") @json-name("billing") Billing\n'
+        "  | Technical\n"
+        "enum Tree\n  | Leaf(team: Team)\n  | Node(children: array[Tree])\n"
+        'record Ticket\n  @doc("Who owns it.") team: Team\n  title: text\n'
+        "extern def query[T](question: text) -> T\n"
+        'def tree() -> Tree = query("q")\n'
+    )
+    (tmp_path / "library.py").write_text("def query(*args):\n    return args[0]\n")
+    trees: list[list[TypeTree | None]] = []
+    artifacts: dict[Path, int] = {}
+    for _ in range(2):
+        result = compile_again('import library::*\ndef ticket() -> Ticket = query("t")\n0')
+        assert result.ok, result.diagnostics
+        trees.append([request.type_tree for request in executables[-1].contracts.values()])
+        if not artifacts:
+            artifacts = {path: path.stat().st_mtime_ns for path in tmp_path.rglob("*.ir")}
+    assert artifacts
+    assert {path: path.stat().st_mtime_ns for path in artifacts} == artifacts
+    first, second = trees
+    assert first == second
+    by_defs = {tuple(key for key, _node in tree.defs): tree for tree in first if tree is not None}
+    assert len(first) == 2 and set(by_defs) == {("Tree",), ()}
+    ticket = by_defs[()].root
+    assert isinstance(ticket, TypeNode)
+    assert [(field.name, field.doc) for field in ticket.fields] == [
+        ("team", "Who owns it."),
+        ("title", None),
+    ]
 
 
 def test_cached_ir_tracks_resource_symlink_targets(

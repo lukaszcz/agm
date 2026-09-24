@@ -6,7 +6,9 @@ import std/path
 type location = path
 type maybe-location = Option[location]
 
-record Plan(source: location, target: path)
+record Plan
+  source: location
+  target: path
 
 def describe(target: location) -> text =
   "%{path::basename(target)} in '%{path::dirname(target)}'"

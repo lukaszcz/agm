@@ -50,6 +50,7 @@ from agm.agl.lexer import (
     tokenize,
 )
 from agm.agl.lexer.tokens import (
+    ENV_HOLE,
     MODPATH,
     MODQUAL,
     SOFT_KEYWORD_TOKENS,
@@ -98,6 +99,7 @@ _STRING_TOKENS: frozenset[str] = frozenset(
         "TEMPLATE_END",
         "INTERP_START",
         "INTERP_END",
+        ENV_HOLE,
         VERBATIM_START,
         VERBATIM_END,
     }
@@ -788,9 +790,13 @@ def run_console(
             on_setting_save(key, value)
 
     def highlighted_writer(text: str, agl_ranges: tuple[tuple[int, int], ...]) -> None:
+        # Write to the current ``sys.stdout`` like the loop's plain writer does.
+        # Left to itself prompt_toolkit resolves a process-global output that
+        # caches the stream it first saw, which outlives any redirection.
         print_formatted_text(
             FormattedText(_highlighted_agl_fragments(text, session, agl_ranges)),
             style=prompt_session.style,
+            file=sys.stdout,
         )
 
     run_repl_loop(

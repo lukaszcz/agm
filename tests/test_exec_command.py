@@ -2401,7 +2401,7 @@ class TestExecFFI:
     def test_exec_calls_an_extern_backed_orphan_method(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        (tmp_path / "geometry.agl").write_text("record Point(x: int)\n", encoding="utf-8")
+        (tmp_path / "geometry.agl").write_text("record Point\n  x: int\n", encoding="utf-8")
         (tmp_path / "metrics.agl").write_text(
             "import geometry::*\nextern def Point::norm(self) -> int\n", encoding="utf-8"
         )
@@ -2808,6 +2808,7 @@ class TestExecTimeoutAndLogFileFlags:
         from agm.agl.ir.ids import SymbolId
         from agm.agl.ir.nodes import UseDefault
         from agm.agl.ir.program import ExecutableProgram
+        from agm.agl.ir.static_keys import StaticBindingKey
         from agm.agl.matchcompile import MatchCompiledProgram
         from agm.agl.pipeline import PipelineDriver as RealRuntime
         from agm.agl.pipeline import PreparedProgram, RunResult
@@ -2828,6 +2829,7 @@ class TestExecTimeoutAndLogFileFlags:
                 host_settings_policy: HostSettingsPolicy | None = None,
                 builtin_host_settings: Mapping[str, Value] | None = None,
                 process_environment: Mapping[str, str] | None = None,
+                param_seeds: Mapping[StaticBindingKey, Value] | None = None,
                 program_symbol: SymbolId | None = None,
                 arguments: "tuple[Value | UseDefault, ...]" = (),
             ) -> RunResult:
@@ -2841,6 +2843,7 @@ class TestExecTimeoutAndLogFileFlags:
                     executable=executable,
                     host_settings_policy=host_settings_policy,
                     builtin_host_settings=builtin_host_settings,
+                    param_seeds=param_seeds,
                     process_environment=process_environment,
                     program_symbol=program_symbol,
                     arguments=arguments,

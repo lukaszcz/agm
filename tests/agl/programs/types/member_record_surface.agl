@@ -1,6 +1,10 @@
 # Inline and referenced enum members retain their complete record surface.
-record Pair[A, B](left: A, right: B)
-record Referenced[T](value: T)
+record Pair[A, B]
+  left: A
+  right: B
+
+record Referenced[T]
+  value: T
 
 enum Tree[T]
   | Leaf
@@ -21,7 +25,10 @@ def Tree::describe[T](self) -> text =
 def Referenced::show[T](self) -> text = "ref %{self.value}"
 def refresh(value: Referenced[text]) -> Referenced[text] = value with value = value.value ++ "!"
 
-record Holder(node: Tree::Node[int], nodes: array[Tree::Node[int]], ref: Referenced[text])
+record Holder
+  node: Tree::Node[int]
+  nodes: array[Tree::Node[int]]
+  ref: Referenced[text]
 def replace-in-slot(node: Tree::Node[int]) -> Tree::Node[int] = node.replace(8)
 
 program def main() -> unit =

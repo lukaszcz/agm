@@ -1,6 +1,8 @@
 # Methods can update mutable fields through their `self` receiver, and every
 # alias observes both updates.
-record Counter(var value: int, var label: text)
+record Counter
+  var value: int
+  var label: text
 
 def Counter::add(self, amount: int) -> unit =
   self.value := self.value + amount

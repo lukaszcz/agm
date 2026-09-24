@@ -1,9 +1,9 @@
 scope Left
-  record Token()
+  record Token
 end Left
 
 scope Right
-  record Token()
+  record Token
 end Right
 
 program def main() -> unit =

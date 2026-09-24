@@ -19,7 +19,7 @@ import pytest
 
 from agm.cli_support.args import RunArgs
 from agm.commands import run as run_command
-from agm.config.general import RunConfig
+from agm.config.general import CommandSetting, RunConfig
 
 
 def _make_run_config(
@@ -35,13 +35,10 @@ def _make_run_config(
     """Build a :class:`RunConfig` with everything the caller did not name empty."""
 
     return RunConfig(
-        aliases=aliases or {},
-        default_memory_limit=memory_limit,
-        command_memory_limits=command_memory_limits or {},
-        default_swap_limit=swap_limit,
-        command_swap_limits=command_swap_limits or {},
-        default_pty=pty,
-        command_ptys=command_ptys or {},
+        alias=CommandSetting(default=None, overrides=aliases or {}),
+        memory=CommandSetting(default=memory_limit, overrides=command_memory_limits or {}),
+        swap=CommandSetting(default=swap_limit, overrides=command_swap_limits or {}),
+        pty=CommandSetting(default=pty, overrides=command_ptys or {}),
     )
 
 
@@ -795,6 +792,44 @@ class TestRunDryRun:
         assert "dry-run: sandbox configuration" in out
         assert "settings source: merged" in out
         assert "srt --settings '<dry-run-settings>' -- echo hi" in out
+
+    def test_dry_run_pty_uses_alias_target_for_settings(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._enable_dry_run()
+        env = self._setup_env(tmp_path, monkeypatch)
+        agm_home = tmp_path / "agm-home"
+        (agm_home / "sandbox").mkdir(parents=True)
+        (agm_home / "sandbox" / "claude.json").write_text("{}", encoding="utf-8")
+        env["AGM_HOME"] = str(agm_home)
+        monkeypatch.setattr(run_command.os, "isatty", lambda _fd: True)
+        monkeypatch.setattr(
+            run_command,
+            "load_run_config",
+            lambda **_: _make_run_config(aliases={"myagent": "claude"}),
+        )
+        monkeypatch.setattr("shutil.which", lambda *_args, **_kwargs: "/bin/tool")
+
+        run_command.run(
+            RunArgs(
+                run_command=["myagent", "--some-arg"],
+                no_sandbox=False,
+                no_patch=False,
+                memory=None,
+                swap=None,
+                no_memory_limit=True,
+                no_swap_limit=True,
+                settings_file=None,
+            )
+        )
+
+        out = capsys.readouterr().out
+        assert "claude.json" in out
+        assert "myagent.json" not in out
+        assert "agm.sandbox.pty -- srt --settings '<dry-run-settings>' -- claude --some-arg" in out
 
     def test_dry_run_with_invalid_memory_limit_exits_with_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

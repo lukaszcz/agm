@@ -4,10 +4,14 @@
 # array — all convert, whether or not a cycle exists elsewhere in the
 # program.
 
-record Scalar(value: int)
+record Scalar
+  value: int
+
 record Box[T]
   value: T
-record Node(children: array[Node])
+
+record Node
+  children: array[Node]
 
 enum Tree
   | leaf

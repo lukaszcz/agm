@@ -33,6 +33,7 @@ from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind, ScopeNode
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
+    MethodDef,
     TypeDef,
     TypeTable,
     comparable_types,
@@ -859,7 +860,7 @@ class TestTypeEnvironment:
         sigs = env.all_function_signatures()
         assert "g" in sigs
 
-    def test_restore_binding_metadata_restores_prior_signature(self) -> None:
+    def test_rewind_restores_prior_binding_metadata(self) -> None:
         previous = TypeEnvironment()
         signature = FunctionSignature(params=(), result=IntType())
         previous.set_binding_type(1, IntType())
@@ -874,23 +875,66 @@ class TestTypeEnvironment:
         )
         current.register_function_signature("f", FunctionSignature(params=(), result=TextType()))
         current.register_extern_node_id(1)
-        current.restore_binding_metadata_from(previous, (1,), ("f",))
+        current.rewind_from(previous, type_names=(), binding_node_ids=(1,), functions={1: "f"})
 
         assert current.get_binding_type(1) == IntType()
         assert current.get_function_signature_by_node_id(1) == signature
         assert current.all_function_signatures().get("f") == signature
         assert current.is_extern_node_id(1)
 
-    def test_restore_binding_metadata_discards_uncommitted_function_signature(self) -> None:
+    def test_rewind_discards_an_uncommitted_function_signature(self) -> None:
         previous = TypeEnvironment()
         current = TypeEnvironment()
         current.register_function_signature(
             "transient", FunctionSignature(params=(), result=IntType())
         )
 
-        current.restore_binding_metadata_from(previous, (), ("transient",))
+        current.rewind_from(
+            previous, type_names=(), binding_node_ids=(), functions={7: "transient"}
+        )
 
         assert current.all_function_signatures().get("transient") is None
+
+    def test_one_rewind_reaches_every_key_space(self) -> None:
+        """A single call rewinds type names, bindings, and functions with their methods.
+
+        The three live in different key spaces, so a rewind that dropped one
+        of them would still pass every test of the other two.
+        """
+        owner = RecordType(name="Owner", module_id=ENTRY_ID, decl_id=41)
+        typedef = TypeDef(kind="record", name="Owner", module_id=ENTRY_ID, decl_node_id=41)
+        kept_signature = FunctionSignature(params=(), result=IntType())
+        kept_method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Owner",),
+            name="show",
+            decl_node_id=7,
+            signature=FunctionType(params=(owner,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        previous = TypeEnvironment()
+        previous.type_table.register(typedef)
+        previous.register_type("Owner", owner)
+        previous.set_binding_type(3, IntType())
+        previous.register_function_signature("f", kept_signature)
+        previous.type_table.register_method(owner, kept_method)
+
+        current = TypeEnvironment()
+        current.type_table.register(typedef)
+        current.register_type("Owner", TextType())
+        current.set_binding_type(3, TextType())
+        current.register_function_signature("f", FunctionSignature(params=(), result=TextType()))
+        current.type_table.register_builtin_method("text", replace(kept_method, decl_node_id=8))
+
+        current.rewind_from(
+            previous, type_names=("Owner",), binding_node_ids=(3,), functions={8: "f"}
+        )
+
+        assert current.get_type("Owner") == owner
+        assert current.get_binding_type(3) == IntType()
+        assert current.all_function_signatures().get("f") == kept_signature
+        assert current.type_table.method_candidates(TextType(), "show") == ()
+        assert current.type_table.method_candidates(owner, "show") == (kept_method,)
 
     def test_seed_rejects_an_environment_with_a_flexible_variable(self) -> None:
         source = TypeEnvironment()
@@ -959,7 +1003,7 @@ class TestTypeEnvironment:
         env2.seed_from(env1)
         assert env2.get_type("Abort") is not None
 
-    def test_restore_type_names_from_restores_all_type_metadata(self) -> None:
+    def test_rewind_restores_all_type_metadata(self) -> None:
         previous = TypeEnvironment()
         restored = RecordType(name="Restored")
         previous.type_table.register(
@@ -1005,7 +1049,12 @@ class TestTypeEnvironment:
 
         current = TypeEnvironment()
         current.register_type("Restored", TextType())
-        current.restore_type_names_from(previous, ("Abort", "Restored", "Alias"))
+        current.rewind_from(
+            previous,
+            type_names=("Abort", "Restored", "Alias"),
+            binding_node_ids=(),
+            functions={},
+        )
 
         assert current.type_table.get(ENTRY_ID, "Restored") == previous.type_table.get(
             ENTRY_ID, "Restored"
@@ -1407,7 +1456,8 @@ class TestScopedBindingTypes:
     def test_enum_declaration_preserves_a_standalone_record_in_its_scope(self) -> None:
         checked = accept_type(
             "scope Color\n"
-            "  record Meta(value: int)\n"
+            "  record Meta\n"
+            "    value: int\n"
             "end Color\n"
             "\n"
             "enum Color | Red\n"
@@ -1502,7 +1552,7 @@ class TestScopedBindingTypes:
         assert r.node_types[r.resolved.program.body.items[1].node_id] == IntType()
 
     def test_region_form_annotation_resolves_a_bare_sibling_record(self) -> None:
-        r = accept_type("scope A\n  record R(v: int)\n  let x: R = R(v = 1)\nend A\n\nA::x.v")
+        r = accept_type("scope A\n  record R\n    v: int\n  let x: R = R(v = 1)\nend A\n\nA::x.v")
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         let_decl = next(item for item in region.items if isinstance(item, LetDecl))
@@ -1512,7 +1562,7 @@ class TestScopedBindingTypes:
         assert r.node_types[r.resolved.program.body.items[1].node_id] == IntType()
 
     def test_region_form_var_annotation_resolves_a_bare_sibling_record(self) -> None:
-        r = accept_type("scope A\n  record R(v: int)\n  var x: R = R(v = 1)\nend A\n\nA::x.v")
+        r = accept_type("scope A\n  record R\n    v: int\n  var x: R = R(v = 1)\nend A\n\nA::x.v")
         region = r.resolved.program.body.items[0]
         assert isinstance(region, ScopeRegion)
         var_decl = next(item for item in region.items if isinstance(item, VarDecl))
@@ -1522,7 +1572,9 @@ class TestScopedBindingTypes:
         assert r.node_types[r.resolved.program.body.items[1].node_id] == IntType()
 
     def test_shorthand_form_annotation_resolves_a_bare_sibling_record(self) -> None:
-        r = accept_type("scope A\n  record R(v: int)\nend A\n\nlet A::x: R = A::R(v = 1)\nA::x.v")
+        r = accept_type(
+            "scope A\n  record R\n    v: int\nend A\n\nlet A::x: R = A::R(v = 1)\nA::x.v"
+        )
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
         binding_type = r.type_env.get_binding_type(decl.node_id)
@@ -1531,7 +1583,9 @@ class TestScopedBindingTypes:
         assert r.node_types[r.resolved.program.body.items[2].node_id] == IntType()
 
     def test_shorthand_form_var_annotation_resolves_a_bare_sibling_record(self) -> None:
-        r = accept_type("scope A\n  record R(v: int)\nend A\n\nvar A::x: R = A::R(v = 1)\nA::x.v")
+        r = accept_type(
+            "scope A\n  record R\n    v: int\nend A\n\nvar A::x: R = A::R(v = 1)\nA::x.v"
+        )
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, VarDecl)
         binding_type = r.type_env.get_binding_type(decl.node_id)
@@ -1542,7 +1596,9 @@ class TestScopedBindingTypes:
     def test_shorthand_pattern_binder_annotation_resolves_a_bare_sibling_record(self) -> None:
         """The ``let A::r: R = A::R(v = 1)`` shorthand names both the binder and
         its own type with the same bare sibling spelling."""
-        r = accept_type("scope A\n  record R(v: int)\nend A\n\nlet A::r: R = A::R(v = 1)\nA::r.v")
+        r = accept_type(
+            "scope A\n  record R\n    v: int\nend A\n\nlet A::r: R = A::R(v = 1)\nA::r.v"
+        )
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
         binding_type = r.type_env.get_binding_type(decl.node_id)
@@ -1554,7 +1610,8 @@ class TestScopedBindingTypes:
     def test_region_form_annotation_resolves_a_generic_application(self) -> None:
         r = accept_type(
             "scope A\n"
-            "  record Box[T](value: T)\n"
+            "  record Box[T]\n"
+            "    value: T\n"
             "  let b: Box[int] = Box(value = 1)\n"
             "end A\n"
             "\n"
@@ -1572,7 +1629,8 @@ class TestScopedBindingTypes:
     def test_region_form_annotation_resolves_a_function_type(self) -> None:
         r = accept_type(
             "scope A\n"
-            "  record R(v: int)\n"
+            "  record R\n"
+            "    v: int\n"
             "  let f: (R) -> int = fn(r: R) -> int => r.v\n"
             "end A\n"
             "\n"
@@ -1592,7 +1650,8 @@ class TestScopedBindingTypes:
     def test_region_form_cast_target_resolves_a_bare_sibling_record(self) -> None:
         r = accept_type(
             "scope A\n"
-            "  record R(v: int)\n"
+            "  record R\n"
+            "    v: int\n"
             '  let j: json = exec("ls", format = "json")\n'
             "  let r = j as R\n"
             "end A\n"
@@ -1610,7 +1669,8 @@ class TestScopedBindingTypes:
     def test_region_form_exec_result_type_resolves_a_bare_sibling_record(self) -> None:
         r = accept_type(
             "scope A\n"
-            "  record Out(value: int)\n"
+            "  record Out\n"
+            "    value: int\n"
             '  let o: Out = exec("run", format = "json")\n'
             "end A\n"
             "\n"
@@ -1640,7 +1700,8 @@ class TestScopedBindingTypes:
         not reset to the module root."""
         r = accept_type(
             "scope A\n"
-            "  record R(v: int)\n"
+            "  record R\n"
+            "    v: int\n"
             "  def f() -> int =\n"
             "    let x: R = R(v = 1)\n"
             "    x.v\n"
@@ -1741,10 +1802,18 @@ class TestScopedBuiltinTypes:
 
     def test_builtin_enum_rejects_referenced_members_with_the_canonical_shapes(self) -> None:
         err = reject_type(
-            "record AgentCommand(command: text)\n"
-            "record AgentClaude(model: text, thinking: text)\n"
-            "record AgentCodex(model: text, thinking: text)\n"
-            "record AgentPi(provider: text, model: text, thinking: text)\n"
+            "record AgentCommand\n"
+            "  command: text\n"
+            "record AgentClaude\n"
+            "  model: text\n"
+            "  thinking: text\n"
+            "record AgentCodex\n"
+            "  model: text\n"
+            "  thinking: text\n"
+            "record AgentPi\n"
+            "  provider: text\n"
+            "  model: text\n"
+            "  thinking: text\n"
             "builtin enum Agent =\n"
             "  | ::AgentCommand\n"
             "  | ::AgentClaude\n"
@@ -1788,8 +1857,9 @@ class TestScopedBuiltinTypes:
 
     def test_builtin_option_rejects_referenced_members_with_canonical_shapes(self) -> None:
         err = reject_type(
-            "record None()\n"
-            "record Some[T](value: T)\n"
+            "record None\n"
+            "record Some[T]\n"
+            "  value: T\n"
             "builtin enum Option[T] =\n"
             "  | ::None\n"
             "  | ::Some[T]\n"
@@ -1835,7 +1905,7 @@ class TestScopedBuiltinTypes:
     def test_scoped_builtin_exception_raises_and_catches_at_its_own_path(self) -> None:
         r = accept_type(
             "scope A\n"
-            "  builtin exception RangeError extends Exception()\n"
+            "  builtin exception RangeError extends Exception\n"
             "  def trigger() -> text =\n"
             "    try\n"
             '      raise RangeError(message = "boom")\n'
@@ -1920,7 +1990,7 @@ class TestScopedBuiltinTypes:
             "  builtin\n"
             "  exception Exception\n"
             "    @arg-named message: text\n"
-            "  builtin exception Abort extends Exception()\n"
+            "  builtin exception Abort extends Exception\n"
             "end A\n"
             "\n"
             "()\n",
@@ -1941,7 +2011,7 @@ class TestScopedBuiltinTypes:
             "    message: text\n"
             "\n"
             "  scope B\n"
-            "    builtin exception Abort extends Exception()\n"
+            "    builtin exception Abort extends Exception\n"
             "  end B\n"
             "end A\n"
             "\n"
@@ -2150,7 +2220,7 @@ class TestBuiltinTypeModuleIdentity:
             "builtin\n"
             "exception Exception\n"
             "  @arg-named message: text\n"
-            "builtin exception RangeError extends Exception()\n"
+            "builtin exception RangeError extends Exception\n"
             "()\n",
             default_stdlib=False,
         )
@@ -2871,7 +2941,7 @@ class TestAsk:
         assert "prompt" in str(err).lower() or "argument" in str(err).lower()
 
     def test_ask_wrong_agent_type(self) -> None:
-        err = reject_type('record Other()\nOther().ask("Q")')
+        err = reject_type('record Other\nOther().ask("Q")')
         assert "field or method" in str(err).lower()
 
     def test_ask_with_json_codec(self) -> None:
@@ -5785,7 +5855,7 @@ class TestCatchReachability:
         "  code: int\n"
         "exception Detailed extends Problem\n"
         "  detail: text\n"
-        "exception Unrelated extends Exception()\n"
+        "exception Unrelated extends Exception\n"
         "exception Plain\n"
         "  note: text\n"
         "exception Mine extends Plain\n"
@@ -5852,6 +5922,8 @@ class TestCatchReachability:
 
         An entry module's declarations resolve before the standard library's,
         so a warm process must not be what makes the implied base resolvable.
+        The base taken is the standard library's own declaration, never the
+        reserved fallback identity that stands in for an unloaded one.
         """
         from agm.agl import artifact_cache
 
@@ -5859,6 +5931,12 @@ class TestCatchReachability:
         source = self._HIERARCHY + "try 1 catch Plain => 2 catch _ => 3"
         r = accept_type(source)
         assert r.node_types[r.resolved.program.body.items[-1].node_id] == IntType()
+        table = r.type_env.type_table
+        plain = table.get(ENTRY_ID, "Plain")
+        root = table.standard_builtin_declaration("Exception")
+        assert plain is not None and root is not None
+        assert plain.base == root.decl_node_id
+        assert plain.base != EXCEPTION_BASE.decl_id
 
 
 # ---------------------------------------------------------------------------
@@ -6096,7 +6174,7 @@ class TestBinaryOps:
         reject_type(
             "enum Tree\n"
             "  | Leaf\n"
-            "record Other()\n"
+            "record Other\n"
             "def contains(member: Other, members: array[Tree]) -> bool = member in members\n"
             "contains"
         )
@@ -7169,7 +7247,7 @@ _EXCEPTION_IS_HIERARCHY = (
     "  code: int\n"
     "exception Detailed extends Problem\n"
     "  detail: text\n"
-    "exception Unrelated extends Exception()\n"
+    "exception Unrelated extends Exception\n"
 )
 
 
@@ -7249,7 +7327,7 @@ class TestExceptionIsTest:
             "    code: int\n"
             "  exception Detailed extends Base\n"
             "    detail: text\n"
-            "  exception Other extends Exception()\n"
+            "  exception Other extends Exception\n"
             "end Lib\n"
             "\n"
             'let d = Lib::Detailed(message = "m", code = 1, detail = "x")\n'
@@ -7453,7 +7531,7 @@ class TestConstructorFieldDefaults:
         assert constructed.name == "Ok"
 
     def test_exception_constructor_omits_defaulted_field(self) -> None:
-        r = accept_type('exception MyErr(code: int = 0)\nMyErr(message = "e")')
+        r = accept_type('exception MyErr\n  code: int = 0\nMyErr(message = "e")')
         constructed = r.node_types[r.resolved.program.body.items[1].node_id]
         assert isinstance(constructed, ExceptionType)
         assert constructed.name == "MyErr"
@@ -8606,7 +8684,7 @@ class TestProvisionalContainerLiterals:
         assert "annotate the literal with its enum type" in str(error).lower()
 
     def test_unrelated_record_list_keeps_the_normal_mismatch_diagnostic(self) -> None:
-        error = reject_type("record Left()\nrecord Right()\nlet values = [Left(), Right()]\nvalues")
+        error = reject_type("record Left\nrecord Right\nlet values = [Left(), Right()]\nvalues")
         assert "inconsistent types" in str(error).lower()
         assert "annotate the literal with its enum type" not in str(error).lower()
 
@@ -8670,8 +8748,8 @@ class TestProvisionalContainerLiterals:
     def test_unrelated_record_branches_keep_the_normal_mismatch_diagnostic(self) -> None:
         error = reject_type(
             "let select-left: bool = true\n"
-            "record Left()\n"
-            "record Right()\n"
+            "record Left\n"
+            "record Right\n"
             "if select-left => Left() else => Right()"
         )
         assert "incompatible types" in str(error).lower()
@@ -9049,7 +9127,7 @@ class TestParsePolicy:
         simply not ``ParsePolicy::Abort``/``Retry`` is still rejected --
         genuine constructor identity is required, not merely that SOME
         constructor resolves."""
-        err = reject_type('record Foo()\nlet n: int = ask("Q", on-parse-error = Foo())\nn')
+        err = reject_type('record Foo\nlet n: int = ask("Q", on-parse-error = Foo())\nn')
         assert "on-parse-error" in str(err).lower() or "ParsePolicy" in str(err)
 
     def test_on_parse_error_wrong_qualifier_raises(self) -> None:
@@ -9425,7 +9503,7 @@ class TestHostContractBuiltinIdentity:
         its own scoped declaration."""
         r = accept_type(
             "scope A\n"
-            "  builtin exception RangeError extends Exception()\n"
+            "  builtin exception RangeError extends Exception\n"
             "  def trigger(stride: int) -> unit =\n"
             "    try\n"
             "      for i in 1 to 5 step stride do\n"
@@ -10007,7 +10085,8 @@ class TestIndexTypechecking:
 
     def test_parsed_field_assignment_accepts_mutable_record_field(self) -> None:
         checked = accept_type(
-            "record Box(var value: int)\n"
+            "record Box\n"
+            "  var value: int\n"
             "def update(box: Box) -> unit =\n"
             "  box.value := 2\n"
             "update(Box(value = 1))"
@@ -10036,7 +10115,8 @@ class TestIndexTypechecking:
 
     def test_field_assignment_rejects_method_target(self) -> None:
         reject_type(
-            "record Box(var value: int)\n"
+            "record Box\n"
+            "  var value: int\n"
             "def Box::replace(self, value: int) -> unit =\n"
             "  self.value := value\n"
             "let box = Box(value = 1)\n"
@@ -10063,7 +10143,7 @@ class TestIndexTypechecking:
 class TestQualifiedCalls:
     def test_user_method_named_resource_uses_declared_signature(self) -> None:
         checked = accept_type(
-            "record P()\ndef P::resource(self) -> P = self\nlet value = P::resource(P())\nvalue"
+            "record P\ndef P::resource(self) -> P = self\nlet value = P::resource(P())\nvalue"
         )
 
         # The name matches a built-in, but the declared method's own signature
@@ -10092,7 +10172,7 @@ class TestRootBindingInitializers:
         self, method_name: str
     ) -> None:
         source = (
-            "record Provider()\n"
+            "record Provider\n"
             f"def Provider::{method_name}(self) -> int =\n"
             "  print 1\n"
             "  1\n"
@@ -10104,7 +10184,7 @@ class TestRootBindingInitializers:
 
     def test_root_constructor_initializer_is_constant(self) -> None:
         checked = resolve_and_check_entry(
-            "record Settings(value: int)\nlet settings = Settings(value = 1)",
+            "record Settings\n  value: int\nlet settings = Settings(value = 1)",
             default_capabilities(),
         )
 
@@ -10143,7 +10223,7 @@ class TestProgramFunctionDefinitions:
         (
             "program def main[T]() -> unit = ()",
             "program def main() -> int = 1",
-            "record Receiver()\nprogram def Receiver::main(self) -> unit = ()",
+            "record Receiver\n\nprogram def Receiver::main(self) -> unit = ()",
         ),
         ids=("type-parameters", "non-unit-result", "method"),
     )
@@ -10163,7 +10243,7 @@ class TestProgramFunctionDefinitions:
         wrong order would report the receiver as an undecodable program
         parameter instead of as a method.
         """
-        err = reject_type("record Receiver()\nprogram def Receiver::main(self) -> unit = ()")
+        err = reject_type("record Receiver\n\nprogram def Receiver::main(self) -> unit = ()")
 
         assert "method" in str(err)
 
@@ -10222,7 +10302,9 @@ class TestProgramParameterValidation:
 
     def test_decodable_parameters_typecheck(self) -> None:
         checked = accept_type(
-            "record Options(count: int)\n"
+            "record Options\n"
+            "  count: int\n"
+            "\n"
             'program def main(value: int, opts: Options, label: text = "x") -> unit = ()'
         )
         sig = checked.function_signatures["main"]
@@ -10264,7 +10346,7 @@ class TestStaticParameterBindingValidation:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         resolved = resolve_entry(
-            "record Token[T](value: int)\n@param let value: Token[int] = Token(value = 1)",
+            "record Token[T]\n  value: int\n@param let value: Token[int] = Token(value = 1)",
             default_stdlib=False,
         )
         record = resolved.program.body.items[0]
@@ -13499,7 +13581,7 @@ class TestGenericRecursiveTypes:
     def test_phantom_generic_argument_self_reference_is_accepted(self) -> None:
         # Phantom[T] does not use T in its value shape, so Phantom[A] does not
         # require an A value and the record has a finite value.
-        r = accept_type("record Phantom[T]()\nrecord A\n  child: Phantom[A]\nA(child = Phantom())")
+        r = accept_type("record Phantom[T]\nrecord A\n  child: Phantom[A]\nA(child = Phantom())")
         assert r.resolved.program is not None
 
 
@@ -13533,7 +13615,7 @@ class TestExceptionRecursiveTypes:
 
     def test_exception_declared_without_extends_breaks_a_field_cycle(self) -> None:
         r = accept_type(
-            "exception Root()\nexception Holder extends Root\n  root: Root\n"
+            "exception Root\nexception Holder extends Root\n  root: Root\n"
             'Holder(message = "h", root = Root(message = "r"))'
         )
         assert r.resolved.program is not None
@@ -14020,7 +14102,7 @@ class TestExceptionCast:
     def test_unrelated_exception_cast_rejected(self) -> None:
         src = (
             _EXCEPTION_HIERARCHY
-            + "exception Other extends Exception()\n"
+            + "exception Other extends Exception\n"
             + 'let p: Problem = Detailed(message = "m", code = 1, detail = "x")\np as Other'
         )
         err = reject_type(src)
@@ -14031,7 +14113,7 @@ class TestExceptionCast:
     def test_sibling_exception_cast_rejected(self) -> None:
         src = (
             _EXCEPTION_HIERARCHY
-            + "exception Sibling extends Problem()\n"
+            + "exception Sibling extends Problem\n"
             + 'let d: Detailed = Detailed(message = "m", code = 1, detail = "x")\nd as Sibling'
         )
         err = reject_type(src)
@@ -14442,11 +14524,10 @@ class TestGenericNominalModuleId:
         assert isinstance(inferred, RecordType)
         assert contains_inference_var(engine.zonk(inferred))
 
-    def test_build_generic_record_stamps_module_id(self) -> None:
-        """_TypeBuilder._build_generic_record stamps the template with module_id.
+    def test_generic_record_template_stamps_module_id(self) -> None:
+        """A generic record's template ``RecordType`` carries its owning module_id.
 
-        The checker's _build_generic_record must pass module_id=self._module_id
-        when constructing the template RecordType.  Verify via parse+check.
+        Verified via parse+check.
         """
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.typecheck.env import GenericTypeDef
@@ -14600,7 +14681,7 @@ class TestLambdaRequiredAfterDefaulted:
 @pytest.mark.parametrize(
     ("source", "expected_name"),
     [
-        ("record agent()\nagent()", "agent"),
+        ("record agent\nagent()", "agent"),
         ("enum agent\n  | value\nvalue", "value"),
         ("type agent = int\nlet value: agent = 1\nvalue", None),
         ("def agent() -> int = 1\nagent()", None),
@@ -14623,7 +14704,7 @@ def test_agent_is_an_ordinary_declaration_name(source: str, expected_name: str |
     ("source", "expected_type"),
     [
         ("let param = 1\nparam", IntType()),
-        ("record Config(param: int)\nConfig(param = 1)", None),
+        ("record Config\n  param: int\nConfig(param = 1)", None),
         ("def f(param: int) -> int = param\nf(1)", IntType()),
         ("program def main(param: int) -> unit = print param", UnitType()),
     ],
@@ -14688,10 +14769,12 @@ class TestSessionPreludeTypes:
     @pytest.mark.parametrize(
         "source",
         (
-            "record Box(session: Session)\n"
+            "record Box\n"
+            "  session: Session\n"
             "let box = Box(session = Session::default())\n"
             "box as json",
-            "record Box(session: Session)\n"
+            "record Box\n"
+            "  session: Session\n"
             "Box(session = Session::default()) == Box(session = Session::default())",
         ),
     )

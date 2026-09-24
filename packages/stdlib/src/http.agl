@@ -40,7 +40,8 @@ end HeadersInternals
 
 # The raw record keeps names exactly as given; use the `headers(...)`
 # constructor to normalise them.
-record Headers(entries: dict[text, text])
+record Headers
+  entries: dict[text, text]
 
 # Constructor: lowercases every name in `entries`. Names equal up to case
 # collapse to one entry; the later entry wins.
@@ -80,8 +81,14 @@ enum Receive = Decode | Ignore | Save(path: path)
 # were followed; `cookies` are the cookies the final response set. `elapsed`
 # is monotonic seconds for the whole exchange, body transfer included.
 # `body` is `""` under `Ignore`/`Save`, and always for a `Head` response.
-record Response(status: int, headers: Headers, body: text, url: url, method: Method,
-                cookies: dict[text, text], elapsed: decimal)
+record Response
+  status: int
+  headers: Headers
+  body: text
+  url: url
+  method: Method
+  cookies: dict[text, text]
+  elapsed: decimal
 
 # `true` for a 2xx status.
 def Response::ok(self) -> bool = self.status >= 200 and self.status < 300
@@ -105,7 +112,7 @@ exception HttpError extends Exception
   method: Method
 
 # Unsupported scheme or malformed URL.
-exception HttpUrlError extends HttpError()
+exception HttpUrlError extends HttpError
 # A request could not be transmitted at all, e.g. a header value with a
 # newline or a method token with invalid characters.
 exception HttpRequestError extends HttpError
@@ -286,8 +293,14 @@ def try-head(url: url, query: dict[text, text] = {}, headers: Headers = headers(
 # url, or a client with no `base-url`, is used as given. Cookies are data:
 # `Response.cookies` is what the final response set, and persisting them is
 # `client with cookies = response.cookies`.
-record Client(base-url: Option[url], headers: Headers, auth: Auth, cookies: dict[text, text],
-              timeout: Option[text], follow-redirects: bool, verify-tls: bool)
+record Client
+  base-url: Option[url]
+  headers: Headers
+  auth: Auth
+  cookies: dict[text, text]
+  timeout: Option[text]
+  follow-redirects: bool
+  verify-tls: bool
 
 # Captures the module `::timeout` setting now, so a client's `timeout = None`
 # unambiguously means "no timeout" rather than "follow a later module write".

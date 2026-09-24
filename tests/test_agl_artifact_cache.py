@@ -490,11 +490,14 @@ def test_rehydration_onto_a_cached_preparation_matches_a_cache_free_compile(
         {
             "entry": "import lib::*\nincrement(Box(value = 1).double())",
             "lib": (
-                "record Box(value: int)\n"
+                "record Box\n"
+                "  value: int\n"
                 "def Box::double(self) = self.value * 2\n"
                 "def increment(x: int) = x + 1\n"
                 "def triple(x: int) = x * 3\n"
-                "record Pair[A, B](first: A, second: B)\n"
+                "record Pair[A, B]\n"
+                "  first: A\n"
+                "  second: B\n"
                 "enum Shape\n"
                 "  | circle(radius: int)\n"
                 "  | square(side: int)\n"
@@ -906,12 +909,16 @@ def test_custom_response_formats_do_not_leak_between_hosts(
 
 _HEADER_LIB_SRC = (
     "type Count = int\n"
-    "record Box(value: Count)\n"
-    "record Pair[A, B](first: A, second: B)\n"
+    "record Box\n"
+    "  value: Count\n"
+    "record Pair[A, B]\n"
+    "  first: A\n"
+    "  second: B\n"
     "enum Shape\n"
     "  | circle(radius: int)\n"
     "  | square(side: int)\n"
-    "exception Broken(reason: text)\n"
+    "exception Broken\n"
+    "  reason: text\n"
     "def Box::doubled(self) -> int = self.value * 2\n"
     "def Shape::sides(self) -> int = case self of | circle => 0 | square => 4\n"
     "def int::tripled(self) -> int = self * 3\n"

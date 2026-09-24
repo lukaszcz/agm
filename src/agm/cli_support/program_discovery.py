@@ -27,8 +27,8 @@ from agm.agl.runtime.request import AgentResponse
 
 if TYPE_CHECKING:
     from agm.agl.pipeline import ParsedEntry, PreparedProgram, ProgramDiscovery
-    from agm.agl.runtime.types import ProgramDeclInfo
-    from agm.cli_support.exec_target import PackageProgramReference
+    from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo
+    from agm.cli_support.exec_target import ExecTarget, PackageProgramReference
     from agm.cli_support.program_options import ProgramCommand
     from agm.config.context import ConfigContext
 
@@ -43,6 +43,8 @@ __all__ = [
     "discover_program_declarations_from_source",
     "discover_programs_for_target",
     "program_candidates",
+    "registered_command_for",
+    "registered_program_command",
     "select_entry_program",
     "unmatched_program_message",
 ]
@@ -180,8 +182,15 @@ def discover_program_artifacts_for_target(
     module_paths: "list[str] | None",
     no_stdlib: bool,
     context: "ConfigContext | None" = None,
+    resolved_target: "ExecTarget | None" = None,
 ) -> ProgramDiscoveryArtifacts | None:
-    """Discover an ``agm exec`` target and retain every reusable static artifact."""
+    """Discover an ``agm exec`` target and retain every reusable static artifact.
+
+    *resolved_target* is the same selector already classified by the caller.
+    Resolving an installed reference selects the active packages, so a caller
+    holding the result passes it here rather than paying for that selection a
+    second time.
+    """
     from agm.agl import PipelineDriver
     from agm.cli_support.exec_roots import effective_exec_roots
     from agm.cli_support.exec_target import (
@@ -196,12 +205,16 @@ def discover_program_artifacts_for_target(
     try:
         if context is None:
             context = current_config_context()
-        target = resolve_exec_target(
-            file=file,
-            command=command,
-            home=context.home,
-            proj_dir=context.proj_dir,
-            cwd=context.cwd,
+        target = (
+            resolve_exec_target(
+                file=file,
+                command=command,
+                home=context.home,
+                proj_dir=context.proj_dir,
+                cwd=context.cwd,
+            )
+            if resolved_target is None
+            else resolved_target
         )
         source: str | None
         entry_path: Path | None
@@ -308,22 +321,66 @@ class ExecProgramDiscovery:
         )
         return select_entry_program(programs, requested=requested)
 
-    def command_for_file(self, file: str) -> "ProgramCommand | None":
-        """Return the selected program's command for a potential FILE token.
+    def params_for(
+        self, file: str | None, program: "ProgramDeclInfo | None"
+    ) -> "tuple[ParamBindingInfo, ...]":
+        """Return *program*'s module parameters from *file*'s already-discovered artifacts."""
+        artifacts = self.cached_artifacts(file)
+        if artifacts is None or program is None:
+            return ()
+        return artifacts.discovery.params_for(program)
 
-        The tail parser calls this only when pre-FILE program options make a
-        spelling-only FILE scan ambiguous, so it may ask about several
-        candidate tokens; ``None`` means the token does not name one usable,
-        selected program.
+    def command_for_file(self, file: str | None) -> "ProgramCommand | None":
+        """Return the command *file*'s selected program projects onto the ``agm exec`` tail.
+
+        The single way every advisory exec surface — the tail split, the help
+        printer, and shell completion — turns a FILE token into a program
+        command, so they all describe the same invocation. ``None`` means the
+        token does not name one usable, selected program; the tail parser
+        relies on that, asking about several candidate tokens when pre-FILE
+        program options make a spelling-only FILE scan ambiguous.
         """
         from agm.cli_support.program_options import EXEC_RESERVED_FLAGS, program_command_for
 
         program = self.selection(file).selected
-        artifacts = self.cached_artifacts(file)
-        params = (
-            () if artifacts is None or program is None else artifacts.discovery.params_for(program)
-        )
-        return program_command_for(program, EXEC_RESERVED_FLAGS, params)
+        return program_command_for(program, EXEC_RESERVED_FLAGS, self.params_for(file, program))
+
+
+def registered_command_for(
+    program: "ProgramDeclInfo | None", artifacts: ProgramDiscoveryArtifacts | None
+) -> "ProgramCommand | None":
+    """Project an already-discovered *program* onto a registered command's option surface.
+
+    :meth:`ExecProgramDiscovery.command_for_file`'s counterpart for the
+    registered-command side: the one place that pairs a declaration with the
+    module parameters of the discovery that produced it, so a registered
+    command's parsing, help and completion surfaces never project different
+    flags. ``None`` when there is no declaration or its flags collide.
+    """
+    from agm.cli_support.program_options import REGISTERED_RESERVED_FLAGS, program_command_for
+
+    params = () if program is None or artifacts is None else artifacts.discovery.params_for(program)
+    return program_command_for(program, REGISTERED_RESERVED_FLAGS, params)
+
+
+def registered_program_command(
+    program: str,
+    package_name: str,
+    *,
+    context: "ConfigContext | None" = None,
+) -> "tuple[ProgramDeclInfo | None, ProgramCommand | None]":
+    """Discover a registered command's program declaration and project its command.
+
+    For the surfaces that only describe a registered command; the dispatching
+    command keeps its own discovery, whose artifacts it reuses to execute.
+    """
+    from agm.commands.exec_program import registered_program_declaration
+
+    artifacts: list[ProgramDiscoveryArtifacts] = []
+    declaration = registered_program_declaration(
+        program, package_name, context=context, artifact_sink=artifacts
+    )
+    return declaration, registered_command_for(declaration, artifacts[0] if artifacts else None)
 
 
 def unmatched_program_message(

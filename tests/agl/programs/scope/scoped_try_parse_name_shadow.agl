@@ -15,7 +15,7 @@ scope WithType
 end WithType
 
 scope WithException
-  exception ValueParseError extends Exception()
+  exception ValueParseError extends Exception
 
   def go(input: text) -> text =
     case try-parse::[int](input) of

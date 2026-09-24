@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import decimal
 import re
+from threading import TIMEOUT_MAX
 
 
 def format_timeout(seconds: float) -> str:
@@ -34,3 +35,11 @@ def parse_timeout(value: str) -> float:
     if unit == "h":
         return amount * 3600
     return amount
+
+
+def parse_positive_timeout(value: str) -> float:
+    """:func:`parse_timeout` restricted to a positive delay a thread wait can represent."""
+    seconds = parse_timeout(value)
+    if not 0 < seconds <= TIMEOUT_MAX:
+        raise ValueError(f"timeout {value!r} is not positive and representable")
+    return seconds

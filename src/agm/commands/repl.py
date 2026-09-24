@@ -54,11 +54,7 @@ from agm.config.module_roots import (
 )
 from agm.core import dry_run
 from agm.core.cleanup import preserve_primary_error
-from agm.core.log import (
-    LiveTracePathResolver,
-    prepare_trace_log_from_decision,
-    resolve_trace_decision,
-)
+from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
 from agm.core.toml import toml_dict
 from agm.packages.activation import select_package_roots
 from agm.packages.development import discover_development_packages
@@ -84,16 +80,33 @@ def run(args: ReplArgs) -> None:
         args.max_call_depth if args.max_call_depth is not None else config.max_call_depth
     )
 
-    # Resolve the CLI > config trace decision ONCE: it both drives the trace
-    # file prepared here and seeds the readable ``trace``/``trace-file``
-    # registers below, exactly as ``agm exec`` does.
-    trace_decision = resolve_trace_decision(
-        cli_no_trace=args.no_trace,
-        cli_trace=args.trace,
-        cli_trace_file=args.trace_file,
-        config_trace=config.trace,
-        config_trace_file=config.trace_file,
+    # Seed only explicit CLI/config controls.  Trace-service fallbacks remain
+    # absent so a ``builtin var`` initializer can provide the setting default.
+    # The raw timeout preserves its configured spelling.
+    cli_values: dict[str, object | None] = {}
+    if args.strict_json is not None:
+        cli_values["strict-json"] = args.strict_json
+    if args.no_trace:
+        cli_values["trace"] = False
+    elif args.trace:
+        cli_values["trace"] = True
+    if args.trace_file is not None:
+        cli_values["trace-file"] = args.trace_file
+    if args.default_agent is not None:
+        cli_values["default-agent"] = args.default_agent
+    if args.default_sandbox is not None:
+        cli_values["default-sandbox"] = args.default_sandbox
+
+    engine_tiers = build_host_engine_seeds(
+        config=config,
+        primary_table=toml_dict(merged_config.get("exec")),
+        cli_values=cli_values,
     )
+    engine_seeds = engine_tiers.merged()
+
+    # One resolution for both the readable ``trace`` seed and the trace file
+    # prepared below, exactly as ``agm exec`` does.
+    trace_decision = engine_tiers.trace_decision()
 
     # Resolve and validate the trace log file up front so an unwritable
     # ``--trace-file`` exits 1 BEFORE the loop starts rather than crashing
@@ -137,29 +150,6 @@ def run(args: ReplArgs) -> None:
     except ValueError as exc:
         print(f"Error: invalid package roots: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-
-    # Seed only explicit CLI/config controls.  Trace-service fallbacks remain
-    # absent so a ``builtin var`` initializer can provide the setting default.
-    # The raw timeout preserves its configured spelling.
-    cli_values: dict[str, object | None] = {}
-    if args.strict_json is not None:
-        cli_values["strict-json"] = args.strict_json
-    if args.no_trace:
-        cli_values["trace"] = False
-    elif args.trace:
-        cli_values["trace"] = True
-    if args.trace_file is not None:
-        cli_values["trace-file"] = args.trace_file
-    if args.default_agent is not None:
-        cli_values["default-agent"] = args.default_agent
-    if args.default_sandbox is not None:
-        cli_values["default-sandbox"] = args.default_sandbox
-
-    engine_seeds = build_host_engine_seeds(
-        config=config,
-        primary_table=toml_dict(merged_config.get("exec")),
-        cli_values=cli_values,
-    ).merged()
 
     process_environment = dict(os.environ)
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):

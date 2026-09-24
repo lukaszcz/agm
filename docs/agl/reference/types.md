@@ -195,7 +195,8 @@ can make one hold a reference back to a container that (transitively)
 contains it — a genuine reference cycle:
 
 ```agl
-record Node(children: array[Node])
+record Node
+  children: array[Node]
 
 program def main() -> unit =
   var xs: array[Node] = [Node(children = [])]
@@ -582,12 +583,13 @@ record Issue
 A field without a `=` default is required. A field with `= <constant expr>`
 is optional: a call that omits it uses the default. `var` is valid on
 records and enum-member records, not exceptions. It affects assignment
-only, not construction or the field's type. A fieldless record uses an
-empty parenthesized field list (`record R1()`). Its constructor reference in
+only, not construction or the field's type. A fieldless record omits the body
+(`record R1`) or uses an empty parenthesized field list (`record R1()`). Its constructor reference in
 value position constructs an `R1` value; a record whose every field has a
 default behaves the same way — its bare reference constructs it with every
 default, exactly like `R1()` or `R1`; see
 [Expressions](expressions.md#fieldless-and-all-defaulted-constructor-references).
+
 By default, record fields are **standard**: they may be supplied positionally
 or as `field = value`:
 
@@ -606,20 +608,29 @@ let named = Issue(
 of the declaration zones every field that does not carry its own:
 
 ```agl
-# Inline / parenthesized forms: attribute in front of a field
-record Pair[T1, T2](fst: T1, snd: T2)                # both fields standard
-record R(@arg-pos x: int, y: int)                    # x pos-only, y standard
+record Pair[T1, T2]      # both fields standard
+  fst: T1
+  snd: T2
+
+record R                 # x pos-only, y standard
+  @arg-pos x: int
+  y: int
 
 @arg-named
-record NamedPair(fst: int, snd: int)                 # both fields named-only
+record NamedPair         # both fields named-only
+  fst: int
+  snd: int
 
-# Block form: the attribute may sit on its own line or in front of the field
+# The attribute may sit on its own line or in front of the field
 record Mixed
   id: int
   @arg-named
   value: int
   @arg-named label: text
 ```
+
+A parenthesized or inline field list takes the same attributes in front of its
+fields: `record R(@arg-pos x: int, y: int)`.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -666,8 +677,11 @@ A qualified member spelling instead references an existing record. The
 reference may apply the enum's type parameters, and aliases are transparent:
 
 ```agl
-record Saved(id: int)
-record Box[T](value: T)
+record Saved
+  id: int
+
+record Box[T]
+  value: T
 
 enum Stored[T] = ::Saved | ::Box[T] | Fresh(value: T)
 ```
@@ -893,7 +907,7 @@ let p1: mylib::Point = mylib::origin()
 let p2: M::Point     = M::origin()
 
 scope A
-  record Token()
+  record Token
 end A
 
 let token: A::Token = A::Token()

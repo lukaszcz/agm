@@ -7,7 +7,7 @@ import operator
 from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Protocol, Self, SupportsIndex, cast, overload
+from typing import NoReturn, Protocol, Self, SupportsIndex, cast, overload
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
@@ -18,6 +18,7 @@ from agm.agl.semantics.values import (
     UNIT_VALUE,
     ArrayValue,
     BoolValue,
+    ContractValue,
     DecimalValue,
     DictValue,
     ExceptionValue,
@@ -85,6 +86,34 @@ class AglException(Exception):
         self.value = decoded
 
 
+class AglExceptionClass(Protocol):
+    """A synthesized AgL exception class, constructed from its declared fields.
+
+    The raise helpers below take the class rather than resolving one by name:
+    the boundary knows nothing of the standard library's declarations, so a
+    companion supplies the identity it declared.
+    """
+
+    def __call__(self, **fields: object) -> object: ...
+
+
+def raise_index_error(
+    exc_cls: AglExceptionClass, message: str, index: int, length: int
+) -> NoReturn:
+    """Raise an AgL ``IndexError``-shaped exception for *index* against *length*."""
+    raise AglException(exc_cls(message=message, index=index, length=length))
+
+
+def raise_key_error(exc_cls: AglExceptionClass, message: str, key: str) -> NoReturn:
+    """Raise an AgL ``KeyError``-shaped exception for the missing *key*."""
+    raise AglException(exc_cls(message=message, key=key))
+
+
+def raise_parse_error(exc_cls: AglExceptionClass, raw: str, message: str) -> NoReturn:
+    """Raise an AgL parse-error-shaped exception carrying the unparsable *raw* input."""
+    raise AglException(exc_cls(message=message, raw=raw))
+
+
 _FunctionEncoder = Callable[[IrClosureValue], object] | None
 
 _IMMUTABLE_MESSAGE = "AgL nominal values are immutable"
@@ -104,6 +133,21 @@ _ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextva
 def active_function_encoder(encoder: "_FunctionEncoder") -> ScopedVar["_FunctionEncoder | None"]:
     """Publish *encoder* as the ambient closure encoder for a call's extent."""
     return ScopedVar(_ACTIVE_FUNCTION_ENCODER, encoder)
+
+
+_ContractEncoder = Callable[[ContractValue], object] | None
+
+# The target-contract encoder for the extent of one type-directed extern call,
+# published like the closure encoder: resolving a contract needs the program's
+# contract table and the registry's classes, neither of which this module holds.
+_ACTIVE_CONTRACT_ENCODER: contextvars.ContextVar["_ContractEncoder"] = contextvars.ContextVar(
+    "agl_active_contract_encoder", default=None
+)
+
+
+def active_contract_encoder(encoder: "_ContractEncoder") -> ScopedVar["_ContractEncoder | None"]:
+    """Publish *encoder* as the ambient target-contract encoder for a call's extent."""
+    return ScopedVar(_ACTIVE_CONTRACT_ENCODER, encoder)
 
 
 #: Empty descriptor view used when a nominal view is built outside any active
@@ -760,6 +804,11 @@ def _encode_boundary_value(
                 "on the interpreter's own thread"
             )
         return encoder(value)
+    if isinstance(value, ContractValue):
+        contract_encoder = _ACTIVE_CONTRACT_ENCODER.get()
+        if contract_encoder is None:
+            raise BoundaryViolation("a target contract crosses only into its extern call")
+        return contract_encoder(value)
     if isinstance(value, (RecordValue, ExceptionValue)):
         encoded = memo.get(id(value))
         if encoded is not None:

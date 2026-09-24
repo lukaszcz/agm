@@ -659,7 +659,8 @@ req
 def test_ask_request_schema_describes_enum_members_from_doc_attributes() -> None:
     source = """\
 @doc("The review was deferred.")
-record Deferred(date: text)
+record Deferred
+  date: text
 
 enum Review
   | @doc("The change is ready to merge.") Pass

@@ -35,19 +35,21 @@ def exception_descriptor(
     *field_defaults* maps a declaration's own identity to its lowered
     per-field defaults (see ``_LinkState.field_defaults``); flattened base
     first across the ``extends`` chain — like ``fields`` itself — so an
-    inherited field keeps its base's lowered default. A chain link absent
-    from *field_defaults* (declares no defaulted field) contributes an
+    inherited field keeps its base's lowered default unless redeclared.
+    A chain link absent from *field_defaults* contributes an
     all-``None`` run.
     """
     nominal = NominalId(typedef.decl_node_id)
     chain = type_table.exception_chain_defs(typedef.decl_node_id)
-    flattened_defaults = tuple(
-        default
-        for chain_typedef in chain
-        for default in field_defaults.get(
+    defaults_by_field: dict[str, IrExpr | None] = {}
+    for chain_typedef in chain:
+        own_defaults = field_defaults.get(
             NominalId(chain_typedef.decl_node_id), (None,) * len(chain_typedef.fields)
         )
-    )
+        defaults_by_field.update(
+            zip((name for name, _ in chain_typedef.fields), own_defaults, strict=True)
+        )
+    flattened_defaults = tuple(defaults_by_field.values())
     return NominalDescriptor(
         nominal=nominal,
         module_id=typedef.module_id,

@@ -1,7 +1,7 @@
-record Token()
+record Token
 
 scope Left
-  record Token()
+  record Token
 end Left
 
 program def main() -> unit =

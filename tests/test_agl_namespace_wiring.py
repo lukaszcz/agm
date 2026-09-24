@@ -620,14 +620,15 @@ def test_qualified_constructor_use_and_import_route_collision_is_ambiguous(
                 "use S as lib\n"
                 "\n"
                 "scope S\n"
-                "  record X(value: int)\n"
+                "  record X\n"
+                "    value: int\n"
                 "end S\n"
                 "\n"
                 "let item = S::X(value = 1)\n"
                 "case item of\n"
                 "  | lib::X(value) => value\n"
             ),
-            "lib": "record X(value: int)\n",
+            "lib": "record X\n  value: int\n",
         },
     )
 
@@ -709,12 +710,13 @@ def test_qualified_applied_type_use_and_import_route_collision_is_ambiguous(
                 "use S as lib\n"
                 "\n"
                 "scope S\n"
-                "  record T[A](value: A)\n"
+                "  record T[A]\n"
+                "    value: A\n"
                 "end S\n"
                 "\n"
                 "def identity(value: lib::T[int]) -> lib::T[int] = value\n"
             ),
-            "lib": "record T[A](value: A)\n",
+            "lib": "record T[A]\n  value: A\n",
         },
     )
 
@@ -727,7 +729,7 @@ def test_qualified_type_use_and_import_routes_deduplicate_same_origin(tmp_path: 
         tmp_path,
         {
             "entry": "import lib\nuse /lib as lib\ndef identity(value: lib::T) -> lib::T = value\n",
-            "lib": "record T(value: int)\n",
+            "lib": "record T\n  value: int\n",
         },
     )
 
@@ -743,7 +745,7 @@ def test_qualified_applied_type_routes_deduplicate_same_origin(tmp_path: Path) -
                 "use /lib as lib\n"
                 "def identity(value: lib::T[int]) -> lib::T[int] = value\n"
             ),
-            "lib": "record T[A](value: A)\n",
+            "lib": "record T[A]\n  value: A\n",
         },
     )
 
@@ -783,10 +785,10 @@ def test_inner_use_shadows_root_import_and_use_contributions(tmp_path: Path) -> 
 
 
 _BARE_TYPE_USES = [
-    ("record R(value: text)\n", "def identity(value: R) -> R = value\n"),
-    ("record R(value: text)\n", 'let decoded = "{\\"value\\":\\"ok\\"}" as R\n'),
-    ("record R[A](value: A)\n", "def identity(value: R[int]) -> R[int] = value\n"),
-    ("record R[A](value: A)\n", 'let decoded = "{\\"value\\":1}" as R[int]\n'),
+    ("record R\n  value: text\n", "def identity(value: R) -> R = value\n"),
+    ("record R\n  value: text\n", 'let decoded = "{\\"value\\":\\"ok\\"}" as R\n'),
+    ("record R[A]\n  value: A\n", "def identity(value: R[int]) -> R[int] = value\n"),
+    ("record R[A]\n  value: A\n", 'let decoded = "{\\"value\\":1}" as R[int]\n'),
 ]
 
 
@@ -846,8 +848,8 @@ def test_resolve_named_type_rejects_root_use_and_import_tail_collision(tmp_path:
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": ("import lib::*\nuse S::*\n\nscope S\n  record R(value: text)\nend S\n"),
-            "lib": "record R(value: int)\n",
+            "entry": ("import lib::*\nuse S::*\n\nscope S\n  record R\n    value: text\nend S\n"),
+            "lib": "record R\n  value: int\n",
         },
     )
 
@@ -865,8 +867,8 @@ def test_ambiguous_caught_exception_is_reported_as_ambiguous(tmp_path: Path) -> 
                 "import m/a\nimport m/b\nuse m/a::*\nuse m/b::*\n"
                 "let _ = try\n  ()\ncatch Boom as e =>\n  ()\n"
             ),
-            "m/a": "exception Boom extends Exception()\n",
-            "m/b": "exception Boom extends Exception()\n",
+            "m/a": "exception Boom extends Exception\n",
+            "m/b": "exception Boom extends Exception\n",
         },
     )
 
@@ -883,11 +885,10 @@ def test_ambiguous_exception_base_is_reported_as_ambiguous(tmp_path: Path) -> No
         tmp_path,
         {
             "entry": (
-                "import m/a\nimport m/b\nuse m/a::*\nuse m/b::*\n"
-                "exception Local extends Boom()\n()\n"
+                "import m/a\nimport m/b\nuse m/a::*\nuse m/b::*\nexception Local extends Boom\n()\n"
             ),
-            "m/a": "exception Boom extends Exception()\n",
-            "m/b": "exception Boom extends Exception()\n",
+            "m/a": "exception Boom extends Exception\n",
+            "m/b": "exception Boom extends Exception\n",
         },
     )
 
@@ -909,7 +910,7 @@ def test_resolve_named_type_deduplicates_root_routes_to_same_origin(tmp_path: Pa
         tmp_path,
         {
             "entry": "import lib::*\nuse lib::*\n",
-            "lib": "record R(value: int)\n",
+            "lib": "record R\n  value: int\n",
         },
     )
 
@@ -923,8 +924,8 @@ def test_resolve_named_type_deduplicates_root_routes_to_same_origin(tmp_path: Pa
         tmp_path / "rival",
         {
             "entry": "import lib::*\nimport other::*\n",
-            "lib": "record R(value: int)\n",
-            "other": "record R(value: int)\n",
+            "lib": "record R\n  value: int\n",
+            "other": "record R\n  value: int\n",
         },
         default_stdlib=False,
     )
@@ -961,7 +962,9 @@ def test_use_can_target_type_scope_exposed_by_an_earlier_use(tmp_path: Path) -> 
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": ("use Outer::*\nuse R::*\n\nscope Outer\n  record R(value: int)\nend Outer\n"),
+            "entry": (
+                "use Outer::*\nuse R::*\n\nscope Outer\n  record R\n    value: int\nend Outer\n"
+            ),
         },
     )
 
@@ -1227,13 +1230,14 @@ def test_type_anchors_select_module_routes_over_same_named_local_scopes(tmp_path
                 "import A\n"
                 "\n"
                 "scope A\n"
-                "  record T(value: text)\n"
+                "  record T\n"
+                "    value: text\n"
                 "end A\n"
                 "\n"
                 "def keep(value: /A::T) -> /A::T = value\n"
                 "keep(/A::T(value = 1))"
             ),
-            "A": "record T(value: int)",
+            "A": "record T\n  value: int",
         },
     )
 
@@ -1248,13 +1252,14 @@ def test_unanchored_type_scope_and_module_route_clash_requires_an_anchor(tmp_pat
                 "import A\n"
                 "\n"
                 "scope A\n"
-                "  record T(value: text)\n"
+                "  record T\n"
+                "    value: text\n"
                 "  def keep(value: A::T) -> A::T = value\n"
                 "end A\n"
                 "\n"
                 "()"
             ),
-            "A": "record T(value: int)",
+            "A": "record T\n  value: int",
         },
     )
 
@@ -1280,7 +1285,7 @@ def test_imported_type_route_keeps_its_missing_member_error_over_a_local_scope(
                 "\n"
                 "def use(value: A::Missing) -> int = 1"
             ),
-            "A": "record Present()",
+            "A": "record Present",
         },
     )
 
@@ -1301,13 +1306,14 @@ def test_unanchored_generic_type_scope_and_module_route_clash_requires_an_anchor
                 "import A\n"
                 "\n"
                 "scope A\n"
-                "  record T[V](value: V)\n"
+                "  record T[V]\n"
+                "    value: V\n"
                 "  def keep(value: A::T[int]) -> A::T[int] = value\n"
                 "end A\n"
                 "\n"
                 "()"
             ),
-            "A": "record T[V](value: V)",
+            "A": "record T[V]\n  value: V",
         },
     )
 

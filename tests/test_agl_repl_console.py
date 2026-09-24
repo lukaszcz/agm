@@ -24,6 +24,7 @@ from unittest.mock import patch
 
 import pytest
 from lark.lexer import Token
+from prompt_toolkit.application.current import create_app_session, get_app_session
 from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory, InMemoryHistory
@@ -248,13 +249,30 @@ class TestMultiline:
             assert echoed in output
 
     def test_incomplete_header_keeps_prompting(self) -> None:
-        # ``record R`` alone is incomplete, so the first Enter opens a
+        # ``enum E`` alone is incomplete, so the first Enter opens a
         # continuation rather than submitting.  A blank line then force-submits
         # the still-incomplete buffer, which surfaces a parse error (no
         # declaration is promoted).
-        output = drive("record R\r\r\x04")
+        output = drive("enum E\r\r\x04")
         assert "declared" not in output
         assert ": error:" in output.lower()
+
+    @pytest.mark.parametrize(
+        ("header", "probe"),
+        [
+            ("record R", "R == R()"),
+            ("exception R extends Exception", 'R(message = "m") is R'),
+        ],
+    )
+    def test_bare_declaration_header_submits_fieldless_on_blank_line(
+        self, header: str, probe: str
+    ) -> None:
+        # A bare header may still take an indented field block, so Enter keeps
+        # it open; a blank line submits it as a fieldless declaration.
+        output = drive(header + "\r\r" + probe + "\r\x04")
+        assert "R declared" in output
+        assert "true" in output
+        assert ": error:" not in output.lower()
 
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_triple_quoted_string_continues_through_blank_lines(self, quote: str) -> None:
@@ -320,7 +338,7 @@ class TestMultiline:
 class TestLexer:
     def test_info_output_is_highlighted_as_agl(self) -> None:
         session = ReplSession()
-        assert session.eval_entry("record Issue()").ok
+        assert session.eval_entry("record Issue").ok
         text = "Issue is a record type.\nType:\n  record Issue"
         fragments = _highlighted_agl_fragments(
             text, session, ((0, len("Issue")), (len("Issue is a record type.\nType:\n"), len(text)))
@@ -351,6 +369,17 @@ class TestLexer:
 
     def test_info_command_uses_the_highlighted_writer(self) -> None:
         output = drive("let count = 1\r:info count\r\x04")
+
+        assert "count is a binding" in output
+        assert "let count" in output
+
+    def test_info_output_survives_a_warmed_global_output(self) -> None:
+        # Left to itself prompt_toolkit resolves a process-global output that
+        # caches the stream it first saw, so an earlier console user in the
+        # same process could send :info to the real terminal instead of here.
+        with create_app_session():
+            get_app_session().output  # warm the cache against the real stdout
+            output = drive("let count = 1\r:info count\r\x04")
 
         assert "count is a binding" in output
         assert "let count" in output
@@ -396,6 +425,12 @@ class TestLexer:
         fragments = lexer.lex_document(Document('print "hello"'))(0)
         styles = {style for style, _text in fragments}
         assert "class:agl.string" in styles
+
+    def test_environment_hole_is_styled_as_part_of_its_string(self) -> None:
+        lexer = AglPromptLexer()
+        fragments = lexer.lex_document(Document('print "${HOME}"'))(0)
+        assert ("class:agl.string", "${HOME}") in fragments
+        assert "".join(text for _style, text in fragments) == 'print "${HOME}"'
 
     def test_half_typed_dollar_verbatim_header_preserves_prefix_highlighting(self) -> None:
         # `ask $` with nothing typed after the `$` yet is a half-typed entry

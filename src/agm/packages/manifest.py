@@ -13,6 +13,7 @@ from agm.agl.keywords import is_plain_name
 from agm.agl.modules.ids import ModuleId
 from agm.command_catalog import invalid_command_path
 from agm.core.toml import TomlDict, load_toml_file, parse_toml_doc, toml_dict
+from agm.packages.record import is_sha256_hex
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
 _COMMAND_FIELDS = frozenset({"program", "doc"})
@@ -79,6 +80,7 @@ class PackageManifest:
     dependencies: dict[str, DependencySpec] = field(default_factory=dict)
     commands: dict[str, CommandSpec] = field(default_factory=dict)
     aliases: dict[str, str] = field(default_factory=dict)
+    python_dependencies: tuple[str, ...] = ()
     unknown_fields: tuple[UnknownField, ...] = ()
 
 
@@ -108,17 +110,27 @@ def expanded_commands(manifest: PackageManifest) -> dict[str, CommandSpec]:
     builds the expansion rather than re-checking it.
     """
     commands = dict(manifest.commands)
-    if not manifest.aliases:
-        return commands
     for alias, target in manifest.aliases.items():
-        additions = {alias: manifest.commands.get(target, CommandSpec())}
-        additions.update(
-            (alias + path[len(target) :], spec)
-            for path, spec in manifest.commands.items()
-            if path.startswith(target + " ")
-        )
-        commands.update(additions)
+        commands.update(_alias_additions(manifest.commands, alias, target))
     return commands
+
+
+def _alias_additions(
+    commands: dict[str, CommandSpec], alias: str, target: str
+) -> dict[str, CommandSpec]:
+    """Return the paths *alias* contributes for canonical *target* and its descendants.
+
+    The single statement of what an alias expands to: :func:`expanded_commands`
+    applies it and :func:`validate_command_set` checks the result of applying it.
+    """
+
+    additions = {alias: commands.get(target, CommandSpec())}
+    additions.update(
+        (alias + path[len(target) :], spec)
+        for path, spec in commands.items()
+        if path.startswith(target + " ")
+    )
+    return additions
 
 
 def validate_command_set(manifest: PackageManifest) -> None:
@@ -146,11 +158,7 @@ def validate_command_set(manifest: PackageManifest) -> None:
     for alias, target in manifest.aliases.items():
         if target not in canonical_paths:
             raise ManifestError(f"alias {alias!r} names unknown canonical command {target!r}")
-        additions = {
-            alias,
-            *(alias + path[len(target) :] for path in commands if path.startswith(target + " ")),
-        }
-        for path in additions:
+        for path in _alias_additions(commands, alias, target):
             if path in canonical_paths or path in added:
                 raise ManifestError(f"alias {alias!r} conflicts with command {path!r}")
             added.add(path)
@@ -222,7 +230,9 @@ def load_manifest_text(content: str, *, commands_complete: bool = True) -> Packa
 
 
 def _parse_manifest(raw: TomlDict, *, commands_complete: bool = True) -> PackageManifest:
-    unknown = _unknown_keys(raw, {"package", "dependencies", "commands", "aliases"}, "manifest")
+    unknown = _unknown_keys(
+        raw, {"package", "dependencies", "commands", "aliases", "python"}, "manifest"
+    )
     package = _required_table(raw, "package")
     unknown += _unknown_keys(
         package,
@@ -244,6 +254,7 @@ def _parse_manifest(raw: TomlDict, *, commands_complete: bool = True) -> Package
         dependencies=_dependencies(_optional_table(raw, "dependencies"), unknown),
         commands=_commands(_optional_table(raw, "commands"), unknown),
         aliases=alias_map,
+        python_dependencies=_python_dependencies(_optional_table(raw, "python"), unknown),
         unknown_fields=tuple(unknown),
     )
     if commands_complete:
@@ -306,6 +317,33 @@ def _dependency_table(name: str, raw: TomlDict, unknown: list[UnknownField]) -> 
     return DependencySpec(version, path=path, url=url, hash=content_hash)
 
 
+def _python_dependencies(raw: TomlDict, unknown: list[UnknownField]) -> tuple[str, ...]:
+    """Validate ``[python] dependencies`` as PEP 508 requirements; keep them verbatim.
+
+    A marker must evaluate as a requirement's: no ``extra``, ``extras``, or
+    ``dependency_groups``, and no incomparable comparison.
+    """
+    unknown += _unknown_keys(raw, {"dependencies"}, "python")
+    specs = _optional_str_list(raw, "dependencies", "python")
+    if not specs:
+        return specs
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    from agm.core.pyenv import marker_value
+
+    for spec in specs:
+        try:
+            requirement = Requirement(spec)
+        except InvalidRequirement as exc:
+            raise ManifestError(f"python dependency is not a PEP 508 requirement: {exc}") from exc
+        if requirement.url is not None:
+            raise ManifestError(f"python dependency {spec!r} must not be a direct URL reference")
+        marker = requirement.marker
+        if marker is not None and marker_value(marker, context="requirement") is None:
+            raise ManifestError(f"python dependency {spec!r} has a marker it cannot evaluate")
+    return specs
+
+
 def parse_sha256(value: str) -> str | None:
     """Return the lowercase digest of a SHA-256 declaration, or ``None``.
 
@@ -319,10 +357,8 @@ def parse_sha256(value: str) -> str | None:
     )
     if prefix is None:
         return None
-    digest = value[len(prefix) :]
-    if len(digest) != 64 or any(character not in "0123456789abcdefABCDEF" for character in digest):
-        return None
-    return digest.lower()
+    digest = value[len(prefix) :].lower()
+    return digest if is_sha256_hex(digest) else None
 
 
 def _commands(raw: TomlDict, unknown: list[UnknownField]) -> dict[str, CommandSpec]:

@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias, cast
 
 from agm.agent.runner import parse_command
 
@@ -25,6 +25,8 @@ __all__ = [
     "AGENT_SPECS",
     "AgentSpec",
     "PermissionMode",
+    "payload_fields",
+    "payload_items",
     "SessionTransport",
 ]
 
@@ -61,7 +63,6 @@ class AgentCommand:
 
     command: str
 
-    PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("command",)
     prompt_via_stdin: ClassVar[bool] = False
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
@@ -78,10 +79,6 @@ class AgentCommand:
         del permission_mode
         return parse_command(self.command, kind="agent")
 
-    def payload_values(self) -> tuple[str, ...]:
-        """This specification's ``PAYLOAD_FIELDS`` values, in that order."""
-        return (self.command,)
-
 
 @dataclass(frozen=True, slots=True)
 class AgentClaude:
@@ -90,7 +87,6 @@ class AgentClaude:
     model: str
     thinking: str
 
-    PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("model", "thinking")
     prompt_via_stdin: ClassVar[bool] = False
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
@@ -102,10 +98,6 @@ class AgentClaude:
             *_claude_options(self.model, self.thinking),
             *_CLAUDE_PERMISSION_FLAGS[permission_mode],
         ]
-
-    def payload_values(self) -> tuple[str, ...]:
-        """This specification's ``PAYLOAD_FIELDS`` values, in that order."""
-        return (self.model, self.thinking)
 
     def session_argv(
         self,
@@ -146,17 +138,12 @@ class AgentCodex:
     model: str
     thinking: str
 
-    PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("model", "thinking")
     prompt_via_stdin: ClassVar[bool] = True
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.CLI
 
     def argv(self, *, permission_mode: PermissionMode = PermissionMode.NONE) -> list[str]:
         """Build the argv for a one-shot Codex prompt invocation, reading stdin."""
         return self._exec_argv(permission_mode=permission_mode)
-
-    def payload_values(self) -> tuple[str, ...]:
-        """This specification's ``PAYLOAD_FIELDS`` values, in that order."""
-        return (self.model, self.thinking)
 
     def session_argv(
         self,
@@ -204,7 +191,6 @@ class AgentPi:
     model: str
     thinking: str
 
-    PAYLOAD_FIELDS: ClassVar[tuple[str, ...]] = ("provider", "model", "thinking")
     prompt_via_stdin: ClassVar[bool] = False
     DEFAULT_SESSION_TRANSPORT: ClassVar[SessionTransport] = SessionTransport.RPC
 
@@ -216,10 +202,6 @@ class AgentPi:
         """
         del permission_mode
         return ["pi", "-p", *_pi_options(self.provider, self.model, self.thinking)]
-
-    def payload_values(self) -> tuple[str, ...]:
-        """This specification's ``PAYLOAD_FIELDS`` values, in that order."""
-        return (self.provider, self.model, self.thinking)
 
     def session_argv(
         self,
@@ -299,6 +281,20 @@ _CODEX_RESUME_PERMISSION_FLAGS: Mapping[PermissionMode, tuple[str, ...]] = Mappi
         PermissionMode.NONE: (),
     }
 )
+
+
+def payload_fields(spec_cls: type[AgentSpec]) -> tuple[str, ...]:
+    """The names of *spec_cls*'s declared fields, in declaration order.
+
+    A dataclass's ``__match_args__`` is exactly that list, and unlike
+    ``dataclasses.fields`` it is typed.
+    """
+    return spec_cls.__match_args__
+
+
+def payload_items(spec: AgentSpec) -> dict[str, str]:
+    """*spec*'s field values, keyed by field name."""
+    return {name: cast("str", getattr(spec, name)) for name in payload_fields(type(spec))}
 
 
 def _claude_options(model: str, thinking: str) -> list[str]:

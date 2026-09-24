@@ -1,0 +1,88 @@
+# Every built-in host operation reaches the same lowering through each of its
+# three routes: a direct call, a reference used as a value, and a receiver
+# method. Exercises print/render/copy/shallow-copy, ask/ask-request, exec, the
+# Session statics, and every session lifecycle operation.
+
+import std/config
+
+program def main(route: text) -> unit =
+  let writer = AgentPi("writer", "model", "high")
+  std/config::default-agent := writer
+  if
+    | route == "direct" =>
+      print("direct")
+      print(render([1, 2], pretty = false, quote-strings = false))
+      print(copy::[decimal](5) == 5)
+      print(shallow-copy("kept"))
+      let session = Session::open(agent = writer, name = "opened")
+      let reply: text = Session::ask(session, "session prompt")
+      print(reply)
+      session.compact(instructions = "tidy")
+      Session::set-name(session, "renamed")
+      print(Session::stats(session).output-tokens)
+      let answer: text = Agent::ask(writer, "agent prompt")
+      print(answer)
+      print(Agent::ask-request(writer, "request prompt").prompt)
+      let outcome = exec("echo direct", cwd = None, timeout = Some("30s"))
+      print(outcome.stdout)
+      Session::reset(session)
+      session.close()
+    | route == "value" =>
+      let show = print::[text]
+      let shown = render::[array[int]]
+      let duplicate = copy::[text]
+      let shallow = shallow-copy::[array[int]]
+      let ask-with = Agent::ask
+      let request-with = Agent::ask-request
+      let run = exec
+      let open-session = Session::open
+      let ask-session = Session::ask
+      let compact-session = Session::compact
+      let rename-session = Session::set-name
+      let stats-of = Session::stats
+      let fork-session = Session::fork
+      let reset-session = Session::reset
+      let close-session = Session::close
+      show("value")
+      print(shown([3, 4]))
+      print(duplicate("copied"))
+      print(shallow([5, 6])[1])
+      let session = open-session(writer)
+      let reply: text = ask-session(session, "session prompt")
+      print(reply)
+      compact-session(session)
+      rename-session(session, "renamed")
+      print(stats-of(session).output-tokens)
+      let child = fork-session(session)
+      reset-session(child)
+      let answer: text = ask-with(writer, "agent prompt")
+      print(answer)
+      print(request-with(writer, "request prompt").prompt)
+      let outcome = run("echo value")
+      print(outcome.stdout)
+      close-session(child)
+      close-session(session)
+    | else =>
+      let ask-free = ask::[text]
+      let request-free = ask-request::[text]
+      let default-session = Session::default
+      print("bound")
+      let session = Session::open(writer)
+      let ask-on = session.ask::[text]
+      let compact-it = session.compact
+      let rename-it = session.set-name
+      let stats-it = session.stats
+      let close-it = session.close
+      let ask-it = writer.ask::[text]
+      let request-it = writer.ask-request::[text]
+      print(ask-on("session prompt"))
+      compact-it()
+      rename-it("renamed")
+      print(stats-it().output-tokens)
+      print(ask-it("agent prompt"))
+      print(request-it("request prompt").prompt)
+      print(ask-free("free prompt"))
+      print(request-free("free request").prompt)
+      let ambient = default-session()
+      print(ambient.agent is AgentPi)
+      close-it()

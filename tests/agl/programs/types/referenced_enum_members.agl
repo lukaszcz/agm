@@ -1,7 +1,12 @@
 # Referenced records remain their own values while inhabiting each declared enum slot.
-record R1(x: int)
-record R2(label: text)
-record Box[T](value: T)
+record R1
+  x: int
+
+record R2
+  label: text
+
+record Box[T]
+  value: T
 type TextBox = Box[text]
 
 enum RR = ::R1 | ::R2 | R3(child: RR)

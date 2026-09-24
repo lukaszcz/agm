@@ -1,4 +1,4 @@
 {
   "module_roots": ["program_modules/type/unannotated_binding_pre_pass_exception_duplicate_field"],
-  "diagnostic": {"line": 6, "message_contains": ["duplicate"]}
+  "diagnostic": {"line": 9, "message_contains": ["duplicate"]}
 }

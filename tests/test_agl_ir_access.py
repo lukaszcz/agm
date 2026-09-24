@@ -557,7 +557,8 @@ def test_golden_field_assign_lowers_to_ir_field_set() -> None:
     from agm.agl.ir.nodes import IrFieldSet, IrLoad
 
     source = """\
-record Point(var x: int)
+record Point
+  var x: int
 let point = Point(x = 1)
 point.x := 2
 ()
@@ -581,7 +582,8 @@ def test_golden_field_assign_coerces_rhs_to_declared_field_type() -> None:
 
     prog = _lower(
         """\
-record Point(var x: decimal)
+record Point
+  var x: decimal
 let point = Point(x = 1.0)
 point.x := 2
 ()

@@ -138,7 +138,7 @@ def value_node_to_json(
     """
     resolved = _resolve(schema, defs)
     if isinstance(resolved, ScalarDecode):
-        return _convert_scalar(node, resolved.kind, defs)
+        return _convert_scalar(node, resolved.kind)
     if isinstance(resolved, ArrayDecode):
         if not isinstance(node, ArrayNode):
             raise ValueDecodeError(f"expected an array, got {_node_kind(node)}", node.start)
@@ -156,10 +156,10 @@ def value_node_to_json(
     )
 
 
-def _convert_scalar(node: ValueNode, kind: ScalarKind, defs: DefsMap) -> object:
+def _convert_scalar(node: ValueNode, kind: ScalarKind) -> object:
     match kind:
         case ScalarKind.JSON:
-            return _convert_json(node, defs)
+            return _convert_json(node)
         case ScalarKind.TEXT:
             if isinstance(node, TextNode):
                 return node.value
@@ -178,7 +178,7 @@ def _convert_scalar(node: ValueNode, kind: ScalarKind, defs: DefsMap) -> object:
     raise ValueDecodeError(f"expected {expected}, got {_node_kind(node)}", node.start)
 
 
-def _convert_json(node: ValueNode, defs: DefsMap) -> object:
+def _convert_json(node: ValueNode) -> object:
     """Convert *node* into plain heterogeneous JSON data; a constructor is an error."""
     if isinstance(node, NullNode):
         return None
@@ -189,9 +189,9 @@ def _convert_json(node: ValueNode, defs: DefsMap) -> object:
     if isinstance(node, TextNode):
         return node.value
     if isinstance(node, ArrayNode):
-        return [_convert_json(item, defs) for item in node.items]
+        return [_convert_json(item) for item in node.items]
     if isinstance(node, DictNode):
-        return _convert_dict_entries(node, lambda v: _convert_json(v, defs))
+        return _convert_dict_entries(node, _convert_json)
     raise ValueDecodeError("a constructor is not valid inside json", node.start)
 
 

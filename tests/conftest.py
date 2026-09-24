@@ -13,11 +13,12 @@ from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, NoReturn
 
+import httpx2
 import pytest
 import requests
 
 from agm.agl.self_validation import self_validation_enabled, set_self_validation_enabled
-from agm.core import dry_run
+from agm.core import dry_run, process
 from agm.core import http as core_http
 from agm.core.process import CapturedOutput
 from tests import _command_coverage
@@ -28,6 +29,7 @@ from tests._durations import (
 )
 from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
 from tests._http_helpers import FakeHttp
+from tests._package_helpers import PythonInstaller
 
 # Re-exported so pytest picks the per-test cost accounting up as conftest hooks.
 # Registering the module with ``-p`` instead would break every invocation that
@@ -251,7 +253,8 @@ def isolate_host_environment(
     or fail depending on the machine.  Point ``HOME`` (and the XDG roots git
     consults) at a per-test directory, supply git identity explicitly so an
     empty home can still commit, and drop the project/terminal variables an agm
-    workspace shell exports.
+    workspace shell exports, and drop inherited proxy settings so HTTP clients
+    can initialize before their fake transport takes over.
 
     Tests that need a populated home build one and pass it explicitly, as
     ``home=`` or in an ``env`` mapping.  The home lives outside the test's own
@@ -266,6 +269,9 @@ def isolate_host_environment(
         monkeypatch.setenv(name, value)
     for name in _HOST_CONTEXT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
+    for name in tuple(os.environ):
+        if name.lower().endswith("_proxy"):
+            monkeypatch.delenv(name)
 
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
@@ -356,6 +362,35 @@ def refuse_real_http_requests(monkeypatch: pytest.MonkeyPatch) -> None:
         return session
 
     monkeypatch.setattr(core_http, "open_session", refused_session)
+
+
+@pytest.fixture(autouse=True)
+def refuse_real_httpx2_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail any real ``httpx2`` network send and strip the TypeSafe SDK's environment.
+
+    ``httpx2.HTTPTransport`` is the network transport an ``httpx2`` client (such
+    as the TypeSafe SDK's) uses unless given another; a scripted
+    ``httpx2.MockTransport`` (``tests/_jev_helpers.py``) is unaffected. Inherited
+    ``TYPESAFE_*`` variables would configure the SDK's key, URL, model, and
+    logging from the host.
+    """
+    for name in list(os.environ):
+        if name.startswith("TYPESAFE_"):
+            monkeypatch.delenv(name, raising=False)
+
+    def refused(self: httpx2.HTTPTransport, request: httpx2.Request) -> NoReturn:
+        pytest.fail(f"unscripted real network request: {request.method} {request.url}")
+
+    monkeypatch.setattr(httpx2.HTTPTransport, "handle_request", refused)
+
+
+@pytest.fixture()
+def python_installer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> PythonInstaller:
+    """Replace the Python installer with a recorder for AGM home ``tmp_path / "home"``."""
+    recorder = PythonInstaller(home=tmp_path / "home")
+    monkeypatch.setattr(process, "run_foreground", recorder.run_foreground)
+    monkeypatch.setattr("agm.core.pyenv.shutil.which", lambda _name: "/opt/tools/uv")
+    return recorder
 
 
 @pytest.fixture()

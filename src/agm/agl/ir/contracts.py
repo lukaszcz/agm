@@ -3,7 +3,8 @@
 This module holds closed tagged-data descriptors that the lowerer compiles
 while checker types are still available, and that the evaluator executes
 WITHOUT any checker ``Type``.  It defines the cast/conversion descriptors
-(``ConversionRecipe`` and the ``DecodeSchema`` union).
+(``ConversionRecipe`` and the ``DecodeSchema`` union), and the ``TypeTree``
+describing a type-directed extern's target.
 
 Dependency rule: ``agm.agl.ir`` imports
 only stdlib + ``ir.ids`` / ``ir.operations`` + ``modules.ids`` + ``zones``
@@ -51,7 +52,13 @@ __all__ = [
     "ScalarDecode",
     "ScalarEncode",
     "ScalarKind",
+    "TypeNode",
+    "TypeNodeField",
+    "TypeNodeKind",
+    "TypeNodeRef",
     "TypeParameterEncode",
+    "TypeTree",
+    "TypeTreeEntry",
     "VariantDecode",
     "VariantEncode",
     "forwarded_encode_key",
@@ -442,6 +449,79 @@ class ConversionRecipe:
 
 
 # ---------------------------------------------------------------------------
+# Type tree — typeless description of a type-directed extern's target type.
+# ---------------------------------------------------------------------------
+
+
+class TypeNodeKind(enum.Enum):
+    """Shape of one type-tree node."""
+
+    TEXT = "text"
+    INT = "int"
+    DECIMAL = "decimal"
+    BOOL = "bool"
+    JSON = "json"
+    ARRAY = "array"
+    DICT = "dict"
+    RECORD = "record"
+    ENUM = "enum"
+    MEMBER = "member"
+
+
+@dataclass(frozen=True, slots=True)
+class TypeNodeRef:
+    """Reference to the ``TypeTree.defs`` entry keyed like the JSON Schema's ``$defs``."""
+
+    key: str
+
+
+@dataclass(frozen=True, slots=True)
+class TypeNodeField:
+    """One record or member field: declared name, JSON key, field ``@doc``, and type."""
+
+    name: str
+    json_name: str
+    doc: str | None
+    node: "TypeTreeEntry"
+
+
+@dataclass(frozen=True, slots=True)
+class TypeNode:
+    """One described type.
+
+    ``label`` is the type's schema-canonical spelling (shared by every
+    occurrence of a hoisted definition); the root's own label is
+    ``ContractRequest.target_type_label``. ``schema`` is the node's JSON Schema
+    fragment as a JSON string, whose ``$ref``s resolve against the tree's ``defs``.
+    ``doc`` is the declaration's ``@doc``. ``nominal`` identifies a record,
+    enum, or member declaration. ``fields`` (records, members) and
+    ``members`` (enums, as ``(json_tag, member)``) keep declaration order;
+    ``items``/``values`` are an array's elements and a dict's values.
+    """
+
+    kind: TypeNodeKind
+    label: str
+    schema: str
+    doc: str | None = None
+    nominal: NominalId | None = None
+    fields: tuple[TypeNodeField, ...] = ()
+    members: "tuple[tuple[str, TypeNode], ...]" = ()
+    items: "TypeTreeEntry | None" = None
+    values: "TypeTreeEntry | None" = None
+
+
+TypeTreeEntry = TypeNode | TypeNodeRef
+
+
+@dataclass(frozen=True, slots=True)
+class TypeTree:
+    """A target type's description mirroring its ``DecodePlan``: root plus recursive ``defs``."""
+
+    root: TypeTreeEntry
+    defs: tuple[tuple[str, TypeNode], ...] = ()
+
+
+# ---------------------------------------------------------------------------
 # Contract request — per-call ask/exec descriptor
 # ---------------------------------------------------------------------------
 
@@ -494,6 +574,8 @@ class ContractRequest:
     ``defs``                — ``$defs`` table for a recursive target type (empty
                               for a non-recursive one, see ``DecodePlan``); ``()``
                               for the text codec.
+    ``type_tree``           — the target's ``TypeTree`` for a type-directed
+                              extern's contract; ``None`` for ask and exec.
     """
 
     codec_name: str
@@ -507,6 +589,7 @@ class ContractRequest:
     target_type_kind: str = ""
     target_type: object | None = None
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
+    type_tree: TypeTree | None = None
 
 
 _SchemaT = TypeVar("_SchemaT")

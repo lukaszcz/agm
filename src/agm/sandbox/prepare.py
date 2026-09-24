@@ -376,7 +376,7 @@ def prepare(
         env = active_backend.prepare_env(request, env)
 
     pty_wrapper = [sys.executable, "-m", "agm.sandbox.pty", "--"] if request.pty else []
-    argv = [*process_prefix, *wrapper, *pty_wrapper, *request.command]
+    argv = [*pty_wrapper, *process_prefix, *wrapper, *request.command]
 
     return PreparedSandboxCommand(
         argv=argv,

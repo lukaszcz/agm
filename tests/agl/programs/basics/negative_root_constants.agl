@@ -1,7 +1,9 @@
 # Root bindings whose initializers apply a unary operator to constant operands:
 # bare literals, container elements, and constructor arguments.
 
-record Range(lo: int, hi: int)
+record Range
+  lo: int
+  hi: int
 
 enum Bias
   | Low

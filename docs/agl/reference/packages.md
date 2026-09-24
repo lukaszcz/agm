@@ -175,7 +175,24 @@ program def main() -> unit =
 
 An [`extern def`](ffi.md) companion is the `.py` sibling of its module inside
 the module tree and is included with the package; there is no separate
-declaration for it.
+declaration for it. The third-party Python distributions a companion imports
+are declared as PEP 508 requirements in the manifest:
+
+```toml
+[python]
+dependencies = ["typesafe-sdk>=0.7,<1"]
+```
+
+Companions run in AGM's own interpreter, so the requirements are checked
+against its environment (see [`agm pkg`](../../commands/pkg.md#python)).
+[`agm pkg install`](../../commands/pkg.md#commands) and
+[`agm pkg sync`](../../commands/pkg.md#commands) install unsatisfied
+requirements (`just install` ends with `agm pkg sync`), and
+[`agm pkg check`](../../commands/pkg.md#commands) reports them. `agm pkg sync`
+covers only active packages. A run that would import a companion of a package
+with an unsatisfied requirement fails before evaluation with an error naming
+the package and the requirement. It suggests `agm pkg sync` when that package
+is the active one, otherwise installing it with `agm pkg install`.
 
 ## Diagnostics
 

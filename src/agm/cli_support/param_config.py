@@ -25,10 +25,13 @@ from agm.config.qualified_keys import (
 
 __all__ = [
     "ParamValueTiers",
-    "RouteReport",
     "resolve_module_param_values",
     "resolve_param_values",
 ]
+
+
+#: A config table route: declaring module, scope, and registered command paths.
+_RouteKey = tuple[tuple[str, ...], tuple[str, ...], tuple[tuple[str, ...], ...]]
 
 
 @dataclass(frozen=True)
@@ -45,7 +48,7 @@ class ParamValueTiers:
     lower: Mapping[StaticBindingKey, object]
 
 
-class RouteReport(NamedTuple):
+class _RouteReport(NamedTuple):
     """One config table route and the leaves it may supply."""
 
     module_segments: tuple[str, ...]
@@ -55,7 +58,7 @@ class RouteReport(NamedTuple):
     positional_only: frozenset[str]
 
 
-def _report_undeclared_config_keys(config: GeneralConfig, routes: Iterable[RouteReport]) -> None:
+def _report_undeclared_config_keys(config: GeneralConfig, routes: Iterable[_RouteReport]) -> None:
     """Warn for configured route leaves that no host input consumes.
 
     Each route carries its own declaration set because one config table can
@@ -97,7 +100,7 @@ def resolve_param_values(
     entry_segments: tuple[str, ...],
     command_paths: tuple[tuple[str, ...], ...],
     surface: ParamSurface,
-) -> tuple[ParamValueTiers, list[RouteReport]]:
+) -> ParamValueTiers:
     """Resolve module-parameter config values beneath parsed CLI/environment values.
 
     Module routes are addressed by each binding's declaration module and
@@ -108,6 +111,9 @@ def resolve_param_values(
     less-specific config layer than the module route. The supplied and
     program-route values form :attr:`ParamValueTiers.upper`; the module-route
     values not already covered by that tier form :attr:`ParamValueTiers.lower`.
+
+    Configured leaves on those routes that no host input consumes are reported
+    as warnings here, where the routes are known.
     """
     supplied = frozenset(params)
     entries = surface.entries
@@ -125,10 +131,10 @@ def resolve_param_values(
     _merge_route_values(upper, supplied, program_routes, program_values)
     lower = {key: value for key, value in module_values.items() if key not in upper}
 
-    return (
-        ParamValueTiers(upper=upper, lower=lower),
-        _route_reports(program, entry_segments, command_paths, entries, program_routes),
+    _report_undeclared_config_keys(
+        config, _route_reports(program, entry_segments, command_paths, entries, program_routes)
     )
+    return ParamValueTiers(upper=upper, lower=lower)
 
 
 def _reject_configured_cross_route_ambiguities(
@@ -137,29 +143,53 @@ def _reject_configured_cross_route_ambiguities(
     program_routes: Sequence[tuple[ParamSurfaceEntry, QualifiedConfigKey]],
 ) -> None:
     """Reject a configured table leaf that resolves to distinct route kinds."""
+    if not program_routes:
+        return
+    # Every program route addresses the same table route, so its leaves are
+    # read once; module routes repeat per declaration module and scope.
+    _entry, shared_key = program_routes[0]
+    program_leaves = configured_leaf_tables(
+        config, shared_key.module_segments, shared_key.scope_path, shared_key.command_paths
+    )
+    module_leaves_by_route: dict[_RouteKey, dict[str, tuple[str, ...]]] = {}
     for module_param, module_key in module_routes:
-        module_leaves = configured_leaf_tables(
-            config, module_key.module_segments, module_key.scope_path, module_key.command_paths
+        route: _RouteKey = (
+            module_key.module_segments,
+            module_key.scope_path,
+            module_key.command_paths,
         )
+        if route not in module_leaves_by_route:
+            module_leaves_by_route[route] = configured_leaf_tables(
+                config, module_key.module_segments, module_key.scope_path, module_key.command_paths
+            )
+        module_leaves = module_leaves_by_route[route]
         module_table = module_leaves.get(module_key.leaf)
         if module_table is None:
             continue
-        for entry, program_key in program_routes:
-            if module_param.key == entry.param.key or module_key.leaf != program_key.leaf:
-                continue
-            program_leaves = configured_leaf_tables(
-                config,
-                program_key.module_segments,
-                program_key.scope_path,
-                program_key.command_paths,
-            )
-            if program_leaves.get(program_key.leaf) != module_table:
-                continue
-            table_name = display_table_path(module_table)
-            raise QualifiedConfigLookupError(
-                f"config key {table_name}.{module_key.leaf} matches multiple parameters: "
-                f"{module_param.declaration_path}, {entry.param.declaration_path}"
-            )
+        peers = tuple(
+            entry.param
+            for entry, program_key in program_routes
+            if module_param.key != entry.param.key
+            and module_key.leaf == program_key.leaf
+            and program_leaves.get(program_key.leaf) == module_table
+        )
+        if peers:
+            _reject_configured_ambiguity(module_leaves, {module_key.leaf: (module_param, *peers)})
+
+
+def _reject_configured_ambiguity(
+    leaf_tables: Mapping[str, tuple[str, ...]],
+    candidates: Mapping[str, Sequence[ParamBindingInfo]],
+) -> None:
+    """Reject the first *candidates* leaf that one of *leaf_tables*' tables sets."""
+    for leaf, claimants in candidates.items():
+        table = leaf_tables.get(leaf)
+        if table is None:
+            continue
+        names = ", ".join(claimant.declaration_path for claimant in claimants)
+        raise QualifiedConfigLookupError(
+            f"config key {display_table_path(table)}.{leaf} matches multiple parameters: {names}"
+        )
 
 
 def resolve_module_param_values(
@@ -215,29 +245,9 @@ def _reject_configured_ambiguous_module_leaves(
     for (module_segments, scope_path, leaf), candidates in candidates_by_route.items():
         if len(candidates) < 2:
             continue
-        leaf_tables = configured_leaf_tables(config, module_segments, scope_path)
-        if leaf not in leaf_tables:
-            continue
-        names = ", ".join(candidate.declaration_path for candidate in candidates)
-        table_name = display_table_path(leaf_tables[leaf])
-        raise QualifiedConfigLookupError(
-            f"config key {table_name}.{leaf} matches multiple parameters: {names}"
+        _reject_configured_ambiguity(
+            configured_leaf_tables(config, module_segments, scope_path), {leaf: candidates}
         )
-
-
-def _program_route_spellings(entry: ParamSurfaceEntry) -> tuple[str, ...]:
-    """Return the program-table leaves that address *entry*'s binding.
-
-    Every spelling the parameter wins on the CLI surface addresses it in the
-    selected program's table too, so a parameter whose bare name is claimed by
-    a nearer declaration stays configurable per program through a qualified
-    spelling. Only the bare name yields to an engine key, which owns that leaf.
-    """
-    return tuple(
-        spelling
-        for spelling in entry.spellings
-        if spelling != entry.param.cli.name or spelling not in ENGINE_KEY_NAMES
-    )
 
 
 def _program_routes(
@@ -246,16 +256,22 @@ def _program_routes(
     command_paths: tuple[tuple[str, ...], ...],
     entries: Sequence[ParamSurfaceEntry],
 ) -> tuple[tuple[ParamSurfaceEntry, QualifiedConfigKey], ...]:
-    """Return selected-program routes for resolving module-parameter spellings."""
+    """Return selected-program routes for resolving module-parameter spellings.
+
+    Every spelling a parameter wins on the CLI surface addresses it in the
+    selected program's table too, so a parameter whose bare name is claimed by
+    a nearer declaration — the host's engine keys included — stays configurable
+    per program through a qualified spelling. :class:`ParamSurface` is the sole
+    authority on which spellings those are.
+    """
     if not entry_segments:
         return ()
     program_path = (*program.scope_path, program.name)
     routes: list[tuple[ParamSurfaceEntry, QualifiedConfigKey]] = []
     for entry in entries:
-        spellings = _program_route_spellings(entry)
-        if not spellings:
+        if not entry.spellings:
             continue
-        leaf, *aliases = spellings
+        leaf, *aliases = entry.spellings
         routes.append(
             (
                 entry,
@@ -298,14 +314,7 @@ def _reject_configured_ambiguous_program_leaves(
         return
     program_path = (*program.scope_path, program.name)
     configured = configured_leaf_tables(config, entry_segments, program_path, command_paths)
-    for spelling, candidates in surface.ambiguous.items():
-        if spelling not in configured:
-            continue
-        names = ", ".join(candidate.declaration_path for candidate in candidates)
-        table_name = display_table_path(configured[spelling])
-        raise QualifiedConfigLookupError(
-            f"config key {table_name}.{spelling} matches multiple parameters: {names}"
-        )
+    _reject_configured_ambiguity(configured, surface.ambiguous)
 
 
 def _route_reports(
@@ -314,7 +323,7 @@ def _route_reports(
     command_paths: tuple[tuple[str, ...], ...],
     entries: Sequence[ParamSurfaceEntry],
     program_routes: Sequence[tuple[ParamSurfaceEntry, QualifiedConfigKey]],
-) -> list[RouteReport]:
+) -> list[_RouteReport]:
     """Describe module and selected-program config routes for warning reporting."""
     by_module_scope: dict[tuple[ModuleId, tuple[str, ...]], list[ParamBindingInfo]] = {}
     for entry in entries:
@@ -323,14 +332,14 @@ def _route_reports(
                 entry.param
             )
 
-    reports: list[RouteReport] = []
+    reports: list[_RouteReport] = []
     ordered_modules = _report_modules(program, entries)
     for module in ordered_modules:
         if module.is_entry:
             continue
         root_params = by_module_scope.get((module, ()), [])
         reports.append(
-            RouteReport(
+            _RouteReport(
                 module.segments,
                 (),
                 (),
@@ -345,7 +354,7 @@ def _route_reports(
         )
         for scope_path in scope_paths:
             declared = frozenset(param.cli.name for param in by_module_scope[(module, scope_path)])
-            reports.append(RouteReport(module.segments, scope_path, (), declared, frozenset()))
+            reports.append(_RouteReport(module.segments, scope_path, (), declared, frozenset()))
 
     if entry_segments:
         declared = frozenset(
@@ -361,7 +370,7 @@ def _route_reports(
             if parameter.kind is ParamZone.POSITIONAL_ONLY
         )
         reports.append(
-            RouteReport(
+            _RouteReport(
                 entry_segments,
                 (*program.scope_path, program.name),
                 command_paths,

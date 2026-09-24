@@ -147,12 +147,18 @@ check:
 install-agm:
     uv tool install --reinstall "{{justfile_directory()}}"
 
+# Print the install prefix: the first non-option argument, if any
+[private]
+install-prefix *args:
+    @for arg in {{args}}; do \
+        if [[ "$arg" != -* ]]; then echo "$arg"; break; fi; \
+    done
+
+# Install agm, its user config, and the editor modes, then sync the active
+# packages' Python requirements into the freshly installed agm's environment
 install *args:
     test -d "{{prompts_dir}}"
-    install_prefix=""; \
-    for arg in {{args}}; do \
-        if [[ "$arg" != -* ]]; then install_prefix="$arg"; break; fi; \
-    done; \
+    install_prefix="$(just install-prefix {{args}})"; \
     if [[ -n "$install_prefix" ]]; then \
         UV_TOOL_BIN_DIR="$install_prefix/bin" uv tool install --reinstall "{{justfile_directory()}}"; \
     else \
@@ -160,3 +166,9 @@ install *args:
     fi
     uv run python tools/install_agm_config.py {{args}}
     just setup-emacs-optional {{args}}
+    install_prefix="$(just install-prefix {{args}})"; \
+    if [[ -n "$install_prefix" ]]; then \
+        AGM_HOME="$install_prefix/.agm" "$install_prefix/bin/agm" pkg sync; \
+    else \
+        "$(uv tool dir --bin)/agm" pkg sync; \
+    fi

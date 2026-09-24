@@ -350,6 +350,11 @@ enum Option[T]
 let n: Option[int] = picker.ask("Pick a number, or nothing.")
 ```
 
+A [type-directed `extern def`](ffi.md#target-type-parameters) resolves its
+target type parameters by the same rules — explicit type argument, else
+expected type, concrete, with a finite JSON Schema — except that it has no
+`text` default.
+
 ### Recursive target types
 
 A [recursive record or enum](types.md#recursive-types) works as a target type

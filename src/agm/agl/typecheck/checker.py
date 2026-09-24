@@ -40,7 +40,7 @@ The checker raises ``AglTypeError`` on the first error (first-error abort).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Literal, Protocol, TypeGuard, assert_never, cast
@@ -111,6 +111,7 @@ from agm.agl.semantics.types import (
     reroot_type,
     standard_option_type,
     substitute,
+    transform_type,
 )
 from agm.agl.syntax.nodes import (
     ArrayLit,
@@ -192,6 +193,8 @@ from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.builtins import (
     BuiltinCallChecker,
     PendingBuiltinObligation,
+    check_schema_compilable,
+    reject_unparseable_target,
 )
 from agm.agl.typecheck.constant_bindings import ModuleConstantBindings
 from agm.agl.typecheck.constructors import ConstructorChecker, type_name_not_a_value
@@ -291,14 +294,26 @@ def _variant_not_in_enum(variant: str, enum_type: EnumType, span: SourceSpan) ->
     )
 
 
+def _contract_targets(
+    signature: FunctionSignature, instantiation: Mapping[str, Type]
+) -> tuple[Type, ...]:
+    """Instantiate *signature*'s target parameters at one occurrence, in declaration order."""
+    return tuple(instantiation[name] for name in signature.target_params)
+
+
 @dataclass(frozen=True, slots=True)
 class _ExternTarget:
-    """Extern identity carried by first-class function provenance."""
+    """Extern identity carried by first-class function provenance.
+
+    ``contract_targets`` instantiates the extern's target parameters at the
+    occurrence that selected it, in declaration order.
+    """
 
     name: str
     result_type: Type
     decl_node_id: int
     module_id: ModuleId
+    contract_targets: tuple[Type, ...] = ()
 
 
 _ExternTargets = tuple[_ExternTarget, ...]
@@ -332,15 +347,35 @@ class _SelectedBuiltinMethod:
 
 @dataclass(frozen=True, slots=True)
 class PendingExternCallObligation:
-    """Syntax-derived extern inventory metadata awaiting region finalization."""
+    """Syntax-derived extern inventory metadata awaiting region finalization.
+
+    ``contract_targets`` are the callee's target-parameter instantiations.
+    """
 
     node_id: int
     callee: str
     target_type: Type
     span: SourceSpan
+    contract_targets: tuple[Type, ...] = ()
 
 
-_PendingFinalization = PendingBuiltinObligation | PendingExternCallObligation
+@dataclass(frozen=True, slots=True)
+class PendingTargetContractObligation:
+    """A type-directed extern value occurrence's target contracts awaiting region finalization.
+
+    A value occurrence (reference or partial application) is not a call, so it
+    emits no inventory record.
+    """
+
+    node_id: int
+    callee: str
+    contract_targets: tuple[Type, ...]
+    span: SourceSpan
+
+
+_PendingFinalization = (
+    PendingBuiltinObligation | PendingExternCallObligation | PendingTargetContractObligation
+)
 
 
 @dataclass(slots=True)
@@ -853,6 +888,7 @@ class _Checker:
         self._module_constants: ModuleConstantBindings | None = None
         self._inference_region: _InferenceRegion | None = None
         self._contract_specs: dict[int, OutputContractSpec] = {}
+        self._target_contract_specs: dict[int, tuple[OutputContractSpec, ...]] = {}
         self._call_sites: list[CallSiteRecord] = []
         self._warnings: list[Diagnostic] = []
         # Type variables currently in scope (non-empty inside a generic def body).
@@ -2002,9 +2038,21 @@ class _Checker:
                         )
                     )
                 else:
-                    self._finalize_extern_call_obligation(
-                        replace(obligation, target_type=region.engine.zonk(obligation.target_type))
+                    contract_targets = tuple(
+                        region.engine.zonk(target) for target in obligation.contract_targets
                     )
+                    if isinstance(obligation, PendingExternCallObligation):
+                        self._finalize_extern_call_obligation(
+                            replace(
+                                obligation,
+                                target_type=region.engine.zonk(obligation.target_type),
+                                contract_targets=contract_targets,
+                            )
+                        )
+                    else:
+                        self._finalize_target_contracts(
+                            obligation.node_id, obligation.callee, contract_targets, obligation.span
+                        )
             self._finalize_extern_provenance(region)
             if region.engine.has_variables():
                 final_type = region.engine.zonk(typ)
@@ -2053,7 +2101,13 @@ class _Checker:
         assert self._inference_region is not None
         self._inference_region.finalization_obligations.append(obligation)
 
-    def _register_extern_call_obligation(self, node: Call, callee: str, target_type: Type) -> None:
+    def _register_extern_call_obligation(
+        self,
+        node: Call,
+        callee: str,
+        target_type: Type,
+        contract_targets: tuple[Type, ...] = (),
+    ) -> None:
         """Queue typed extern inventory metadata in source registration order."""
         assert self._inference_region is not None
         self._inference_region.finalization_obligations.append(
@@ -2062,7 +2116,30 @@ class _Checker:
                 callee=callee,
                 target_type=target_type,
                 span=node.span,
+                contract_targets=contract_targets,
             )
+        )
+
+    def _register_target_contract_obligation(
+        self, node_id: int, targets: _ExternTargets, span: SourceSpan
+    ) -> None:
+        """Queue the target contracts of the type-directed extern value occurrence at *node_id*."""
+        assert self._inference_region is not None
+        self._inference_region.finalization_obligations.extend(
+            PendingTargetContractObligation(
+                node_id=node_id,
+                callee=target.name,
+                contract_targets=target.contract_targets,
+                span=span,
+            )
+            for target in targets
+            if target.contract_targets
+        )
+
+    def _register_member_target_contract_obligation(self, node: FieldAccess) -> None:
+        """Queue the target contracts of the extern method value occurrence *node* selects."""
+        self._register_target_contract_obligation(
+            node.node_id, self._extern_expr_targets.get(node.node_id, ()), node.span
         )
 
     def _record_node_type(self, node_id: int, typ: Type) -> None:
@@ -2143,11 +2220,13 @@ class _Checker:
         if isinstance(expr, IsTest):
             return self._check_is_test(expr)
         if isinstance(expr, FieldAccess):
-            return self._require_field_access_type(
+            typ = self._require_field_access_type(
                 expr,
                 self._check_field_access(expr, expected=expected),
                 expected=expected,
             )
+            self._register_member_target_contract_obligation(expr)
+            return typ
         if isinstance(expr, RecordUpdate):
             return self._check_record_update(expr, expected=expected)
         if _is_index_like(expr):
@@ -2195,38 +2274,42 @@ class _Checker:
             span=node.span,
         )
 
-    def _builtin_value_template(
-        self, ref: BindingRef, signature: FunctionSignature
-    ) -> FunctionType:
-        """Build a required-parameter signature over the live host contracts."""
-        params = tuple(param.type for param in signature.params if not param.has_default)
-        result = signature.result
-        kind = BUILTIN_CALL_NAMES.get(ref.name)
-        static_kind = builtin_type_static_kind(ref.module_id, ref.scope_path, ref.name)
-        if static_kind is BuiltinStaticKind.SESSION_OPEN:
-            params = (self._builtins.contract_type("Agent"),)
-            result = self._builtins.contract_type("Session")
-        elif static_kind is BuiltinStaticKind.SESSION_DEFAULT:
-            result = self._builtins.contract_type("Session")
-        elif kind is BuiltinKind.ASK_REQUEST:
-            result = self._builtins.contract_type("AgentRequest")
-        elif kind is BuiltinKind.EXEC:
-            result = self._builtins.contract_type("ExecResult")
+    def _live_builtin_nominal(self, typ: Type) -> Type:
+        """Re-point one builtin nominal at the declaration this program selects.
 
-        if ref.is_method and params:
-            session = self._env.type_table.standard_builtin_declaration("Session")
-            receiver = params[0]
-            if (
-                session is not None
-                and isinstance(receiver, RecordType)
-                and receiver.decl_id == session.decl_node_id
-            ):
-                params = (self._builtins.contract_type("Session"), *params[1:])
-                if ref.name == "fork":
-                    result = params[0]
-                elif ref.name == "stats":
-                    result = self._builtins.contract_type("SessionStats")
-        return FunctionType(params=params, result=result)
+        ``TypeTable.builtin_declaration`` is the same selection the host mints
+        from, so a nominal already naming it — and any type that names no
+        builtin declaration at all — is returned unchanged.
+        """
+        if not isinstance(typ, (RecordType, EnumType, ExceptionType)):
+            return typ
+        live = self._env.type_table.builtin_declaration(typ.name)
+        if live is None or live.decl_node_id == typ.decl_id:
+            return typ
+        return live.handle(() if isinstance(typ, ExceptionType) else typ.type_args)
+
+    def _live_builtin_signature(self, template: FunctionType) -> FunctionType:
+        """Return *template* with every builtin nominal on this program's contracts.
+
+        A ``builtin def``'s header names the standard library's own
+        declarations. A program that declares its own ``builtin`` of one of
+        those names owns the values the host mints for it
+        (``lower.lowerer.builtin_nominals_from_declarations``), so every
+        parameter and the result are re-pointed onto the selected
+        declarations before the signature types a reference.
+        """
+        live = transform_type(template, self._live_builtin_nominal)
+        assert isinstance(live, FunctionType)
+        return live
+
+    def _builtin_value_template(self, signature: FunctionSignature) -> FunctionType:
+        """Build a required-parameter signature over the live host contracts."""
+        return self._live_builtin_signature(
+            FunctionType(
+                params=tuple(param.type for param in signature.params if not param.has_default),
+                result=signature.result,
+            )
+        )
 
     def _builtin_value_type(
         self,
@@ -2241,7 +2324,7 @@ class _Checker:
         kind = BUILTIN_CALL_NAMES.get(ref.name)
         signature = self._env.get_function_signature_by_node_id(ref.decl_node_id)
         assert signature is not None
-        template = self._builtin_value_template(ref, signature)
+        template = self._builtin_value_template(signature)
         engine = self._active_inference_engine()
 
         target = explicit_target
@@ -2371,8 +2454,10 @@ class _Checker:
                             node.span, role=ConstraintRole.EXPECTED_RESULT, subject=ref.name
                         ),
                     )
+                occurrence = self._extern_ref_targets(ref, concrete, instantiation.variables)
+                self._register_target_contract_obligation(node.node_id, occurrence, node.span)
                 self._set_extern_expr_targets(
-                    node.node_id, self._extern_targets_for_ref(ref, concrete)
+                    node.node_id, self._extern_targets_for_ref(ref, occurrence)
                 )
                 self._set_generic_function_expr_result_dependencies(
                     node.node_id, self._generic_function_result_dependencies(sig)
@@ -2385,7 +2470,10 @@ class _Checker:
                         self._inferred_return_binding_provenance.get(ref.decl_node_id, set()),
                     )
                 return concrete
-        self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, typ))
+        # A non-generic extern has no target parameters, so this occurrence queues nothing.
+        self._set_extern_expr_targets(
+            node.node_id, self._extern_targets_for_ref(ref, self._extern_ref_targets(ref, typ, {}))
+        )
         if isinstance(typ, FunctionType):
             self._set_generic_function_expr_result_dependencies(
                 node.node_id,
@@ -2578,12 +2666,14 @@ class _Checker:
             self._record_node_type(node.expr.node_id, typ)
             return typ
         if isinstance(node.expr, FieldAccess):
-            return self._require_field_access_type(
+            typ = self._require_field_access_type(
                 node.expr,
                 self._check_specialized_field_access(node.expr, type_args=node.type_args),
                 expected=expected,
                 type_args=node.type_args,
             )
+            self._register_member_target_contract_obligation(node.expr)
+            return typ
 
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
@@ -2651,7 +2741,9 @@ class _Checker:
             ),
         )
         self._record_node_type(node.expr.node_id, concrete)
-        self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, concrete))
+        occurrence = self._extern_ref_targets(ref, concrete, subst)
+        self._register_target_contract_obligation(node.expr.node_id, occurrence, node.span)
+        self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, occurrence))
         self._set_generic_function_expr_result_dependencies(
             node.node_id, self._generic_function_result_dependencies(sig)
         )
@@ -2807,6 +2899,7 @@ class _Checker:
             ("partial_calls", self._partial_calls),
             ("method_selections", self._method_selections),
             ("contract_specs", self._contract_specs),
+            ("target_contract_specs", self._target_contract_specs),
             ("cast_specs", self._cast_specs),
             ("explicit_builtin_targets", self._explicit_builtin_targets),
             ("extern_expr_targets", self._extern_expr_targets),
@@ -2825,6 +2918,18 @@ class _Checker:
         """Store a region-owned output contract specification."""
         self._record_side_table_addition("contract_specs", self._contract_specs, node_id)
         self._contract_specs[node_id] = spec
+
+    def _record_target_contract_specs(
+        self, node_id: int, specs: tuple[OutputContractSpec, ...]
+    ) -> None:
+        """Store target contracts per type-directed extern occurrence node.
+
+        An occurrence is a call, reference, method projection, or partial application.
+        """
+        self._record_side_table_addition(
+            "target_contract_specs", self._target_contract_specs, node_id
+        )
+        self._target_contract_specs[node_id] = specs
 
     def _record_cast_spec(self, node_id: int, spec: CastSpec) -> None:
         """Store a region-owned cast specification."""
@@ -3271,23 +3376,37 @@ class _Checker:
         assert self._return_extern_targets_stack
         self._return_extern_targets_stack[-1].extend(targets)
 
-    def _extern_targets_for_ref(self, ref: BindingRef, typ: Type) -> _ExternTargets:
-        """Return extern call targets represented by a resolved value reference."""
-        if ref.kind is BinderKind.function_binding and self._env.is_extern_node_id(
+    def _extern_ref_targets(
+        self, ref: BindingRef, typ: Type, instantiation: Mapping[str, Type]
+    ) -> _ExternTargets:
+        """Return the target a reference to extern *ref* selects under *instantiation*.
+
+        Empty unless *ref* names an extern.
+        """
+        if ref.kind is not BinderKind.function_binding or not self._env.is_extern_node_id(
             ref.decl_node_id
         ):
-            assert isinstance(typ, FunctionType), (
-                f"extern binding {ref.name!r} has non-function type {typ!r}"
-            )
-            return (
-                _ExternTarget(
-                    name=ref.name,
-                    result_type=typ.result,
-                    decl_node_id=ref.decl_node_id,
-                    module_id=ref.module_id,
-                ),
-            )
-        return self._extern_binding_targets.get(ref.decl_node_id, ())
+            return ()
+        assert isinstance(typ, FunctionType), (
+            f"extern binding {ref.name!r} has non-function type {typ!r}"
+        )
+        signature = self._env.get_function_signature_by_node_id(ref.decl_node_id)
+        assert signature is not None
+        return (
+            _ExternTarget(
+                name=ref.name,
+                result_type=typ.result,
+                decl_node_id=ref.decl_node_id,
+                module_id=ref.module_id,
+                contract_targets=_contract_targets(signature, instantiation),
+            ),
+        )
+
+    def _extern_targets_for_ref(
+        self, ref: BindingRef, occurrence: _ExternTargets
+    ) -> _ExternTargets:
+        """Return a reference's extern provenance: its *occurrence* target, else its binding's."""
+        return occurrence or self._extern_binding_targets.get(ref.decl_node_id, ())
 
     def _extern_targets_for_function_exprs(
         self, exprs: Sequence[Expr], result_type: Type
@@ -3299,12 +3418,37 @@ class _Checker:
             *(self._extern_expr_targets.get(expr.node_id, ()) for expr in exprs)
         )
 
-    def _finalize_extern_call_obligation(self, obligation: PendingExternCallObligation) -> None:
-        """Publish one concrete extern inventory record at region close."""
-        if contains_inference_var(obligation.target_type):
+    @staticmethod
+    def _reject_unresolved_extern_types(types: Iterable[Type], span: SourceSpan) -> None:
+        """Reject an extern occurrence whose *types* inference left unsolved."""
+        if any(contains_inference_var(typ) for typ in types):
             raise AglTypeError(
-                "Cannot infer a concrete target type for this extern call.", span=obligation.span
+                "Cannot infer a concrete target type for this extern call.", span=span
             )
+
+    def _finalize_target_contracts(
+        self, node_id: int, callee: str, targets: tuple[Type, ...], span: SourceSpan
+    ) -> None:
+        """Validate and record one extern occurrence's target contracts at region close.
+
+        Each target must be concrete and meet ``ask``'s JSON output-contract rule.
+        Records nothing for an extern without target parameters.
+        """
+        self._reject_unresolved_extern_types(targets, span)
+        for target in targets:
+            reject_unparseable_target(callee, target, span)
+            check_schema_compilable(self, target, "json", span, use="an extern target type")
+        if targets:
+            self._record_target_contract_specs(
+                node_id, tuple(OutputContractSpec(target, "json", True) for target in targets)
+            )
+
+    def _finalize_extern_call_obligation(self, obligation: PendingExternCallObligation) -> None:
+        """Publish one concrete extern inventory record and its target contracts at region close."""
+        self._finalize_target_contracts(
+            obligation.node_id, obligation.callee, obligation.contract_targets, obligation.span
+        )
+        self._reject_unresolved_extern_types((obligation.target_type,), obligation.span)
         self._append_call_site(
             CallSiteRecord(
                 node_id=obligation.node_id,
@@ -3322,10 +3466,17 @@ class _Checker:
     ) -> _ExternTargets:
         """Zonk one function-provenance target group, self-validating it when enabled."""
         zonked = tuple(
-            replace(target, result_type=engine.zonk(target.result_type)) for target in targets
+            replace(
+                target,
+                result_type=engine.zonk(target.result_type),
+                contract_targets=tuple(engine.zonk(typ) for typ in target.contract_targets),
+            )
+            for target in targets
         )
         if self_validation_enabled():
-            engine.assert_no_inference_vars(target.result_type for target in zonked)
+            engine.assert_no_inference_vars(
+                typ for target in zonked for typ in (target.result_type, *target.contract_targets)
+            )
         return self._merge_extern_targets(zonked)
 
     def _finalize_extern_provenance(self, region: _InferenceRegion) -> None:
@@ -3567,6 +3718,33 @@ class _Checker:
             target.append(index)
         return (*ordinary, *contextual)
 
+    def _constrain_bound_arguments(
+        self,
+        param_types: Sequence[Type],
+        binding: Sequence[Expr | None],
+        *,
+        subject: str,
+        error_subject: str,
+    ) -> None:
+        """Constrain every supplied argument against its parameter, in check order.
+
+        Unlike :meth:`_check_bound_call_args`' post-solve assignability check,
+        this unifies a still-flexible parameter slot with its argument, which
+        is what selects a generic instantiation. Unfilled and placeholder
+        positions contribute nothing.
+        """
+        for index in self._argument_check_order(binding):
+            bound_expr = binding[index]
+            if bound_expr is None or isinstance(bound_expr, Placeholder):
+                continue
+            self._constrain_argument(
+                param_types[index],
+                bound_expr,
+                role=ConstraintRole.FUNCTION_ARGUMENT,
+                subject=subject,
+                error_subject=error_subject,
+            )
+
     def _check_bound_call_args(
         self,
         params: tuple[ParamSpec, ...],
@@ -3609,8 +3787,11 @@ class _Checker:
         *,
         callee_declaration_id: int,
         expected: Type | None,
-    ) -> Type:
-        """Check a generic declared call with fresh expression-local variables."""
+    ) -> tuple[Type, Mapping[str, Type]]:
+        """Check a generic declared call with fresh expression-local variables.
+
+        Returns the call's type and its type-parameter instantiation.
+        """
         if node.type_args:
             if len(node.type_args) != len(sig.type_params):
                 raise AglTypeError(
@@ -3639,7 +3820,10 @@ class _Checker:
                 result=substitute(sig.result, subst),
                 span=node.span,
             )
-            return self._finish_declared_call(node, params, result, binding, hole_indices)
+            return (
+                self._finish_declared_call(node, params, result, binding, hole_indices),
+                subst,
+            )
 
         assert self._inference_region is not None
         engine = self._inference_region.engine
@@ -3679,18 +3863,12 @@ class _Checker:
             expr for expr in binding if expr is not None and not isinstance(expr, Placeholder)
         )
         try:
-            for index in self._argument_check_order(binding):
-                param = params[index]
-                bound_expr = binding[index]
-                if bound_expr is None or isinstance(bound_expr, Placeholder):
-                    continue
-                self._constrain_argument(
-                    param.type,
-                    bound_expr,
-                    role=ConstraintRole.FUNCTION_ARGUMENT,
-                    subject=func_name,
-                    error_subject=f"call to '{func_name}'",
-                )
+            self._constrain_bound_arguments(
+                tuple(param.type for param in params),
+                binding,
+                subject=func_name,
+                error_subject=f"call to '{func_name}'",
+            )
 
             produced = self._call_result_type(params, result, binding, hole_indices)
             if expected is not None:
@@ -3701,8 +3879,11 @@ class _Checker:
                         node.span, role=ConstraintRole.EXPECTED_RESULT, subject=func_name
                     ),
                 )
-            return self._finish_declared_call(
-                node, params, result, binding, hole_indices, check_args=False
+            return (
+                self._finish_declared_call(
+                    node, params, result, binding, hole_indices, check_args=False
+                ),
+                instantiation.variables,
             )
         except AglTypeError as exc:
             framed = self._frame_generic_constraint_error(exc, participants)
@@ -3739,8 +3920,9 @@ class _Checker:
         binding = self._bind_call_args(sig.params, node, func_name)
 
         # Dispatch to the generic path when the function has type parameters.
+        instantiation: Mapping[str, Type] = {}
         if sig.type_params:
-            result_type = self._check_generic_declared_call(
+            result_type, instantiation = self._check_generic_declared_call(
                 node,
                 func_name,
                 sig,
@@ -3770,20 +3952,23 @@ class _Checker:
                 if hole_indices and isinstance(result_type, FunctionType)
                 else result_type
             )
+            contract_targets = _contract_targets(sig, instantiation)
             if hole_indices:
-                self._set_extern_expr_targets(
-                    node.node_id,
-                    (
-                        _ExternTarget(
-                            name=func_name,
-                            result_type=extern_target_type,
-                            decl_node_id=callee_ref.decl_node_id,
-                            module_id=callee_ref.module_id,
-                        ),
+                partial_targets = (
+                    _ExternTarget(
+                        name=func_name,
+                        result_type=extern_target_type,
+                        decl_node_id=callee_ref.decl_node_id,
+                        module_id=callee_ref.module_id,
+                        contract_targets=contract_targets,
                     ),
                 )
+                self._set_extern_expr_targets(node.node_id, partial_targets)
+                self._register_target_contract_obligation(node.node_id, partial_targets, node.span)
             else:
-                self._register_extern_call_obligation(node, func_name, extern_target_type)
+                self._register_extern_call_obligation(
+                    node, func_name, extern_target_type, contract_targets
+                )
         elif isinstance(result_type, FunctionType):
             self._set_extern_expr_targets(
                 node.node_id, self._extern_binding_targets.get(callee_ref.decl_node_id, ())
@@ -3839,7 +4024,7 @@ class _Checker:
                     checker = self._agent_builtin_method_checkers.get(callee_type.name)
             if checker is not None:
                 return checker(node, expected=expected, receiver_type=callee_type.receiver_type)
-            callee_type = self._bound_method_type(
+            callee_type, _instantiation = self._bound_method_type(
                 callee_type.method,
                 callee_type.receiver_type,
                 type_args=node.type_args or None,
@@ -3877,18 +4062,12 @@ class _Checker:
         # check cannot solve those; only ``_constrain_argument`` unifies a
         # flexible slot with its argument's type, exactly like the generic
         # declared-call path does for a plain function.
-        for index in self._argument_check_order(binding):
-            param = params[index]
-            bound_expr = binding[index]
-            if bound_expr is None or isinstance(bound_expr, Placeholder):
-                continue
-            self._constrain_argument(
-                param.type,
-                bound_expr,
-                role=ConstraintRole.FUNCTION_ARGUMENT,
-                subject=method.name,
-                error_subject=f"call to '{method.name}'",
-            )
+        self._constrain_bound_arguments(
+            tuple(param.type for param in params),
+            binding,
+            subject=method.name,
+            error_subject=f"call to '{method.name}'",
+        )
         result_type = self._finish_declared_call(
             node, params, callee_type.result, binding, {}, check_args=False
         )
@@ -3900,7 +4079,10 @@ class _Checker:
                 engine.origin(node.span, role=ConstraintRole.EXPECTED_RESULT, subject=method.name),
             )
         if self._env.is_extern_node_id(method.decl_node_id):
-            self._register_extern_call_obligation(node, method.name, result_type)
+            (target,) = self._extern_expr_targets[field_access.node_id]
+            self._register_extern_call_obligation(
+                node, method.name, result_type, target.contract_targets
+            )
         return result_type
 
     # --- value call (lambda / higher-order) ---
@@ -3935,20 +4117,23 @@ class _Checker:
             # whereas value-position syntax uses TypeApply; both route through
             # ``_check_specialized_field_access`` (see its docstring for why the
             # specialization must be published on the inner node here too).
-            if isinstance(node.callee, FieldAccess) and node.type_args:
-                callee_type = self._require_field_access_type(
-                    node.callee,
-                    self._check_specialized_field_access(node.callee, type_args=node.type_args),
-                    expected=expected,
-                    type_args=node.type_args,
-                )
-            elif isinstance(node.callee, FieldAccess):
-                callee_type = self._require_field_access_type(
-                    node.callee,
-                    self._check_field_access(node.callee, expected=None),
-                    expected=expected,
-                )
-                self._record_node_type(node.callee.node_id, callee_type)
+            if isinstance(node.callee, FieldAccess):
+                if node.type_args:
+                    callee_type = self._require_field_access_type(
+                        node.callee,
+                        self._check_specialized_field_access(node.callee, type_args=node.type_args),
+                        expected=expected,
+                        type_args=node.type_args,
+                    )
+                else:
+                    callee_type = self._require_field_access_type(
+                        node.callee,
+                        self._check_field_access(node.callee, expected=None),
+                        expected=expected,
+                    )
+                    self._record_node_type(node.callee.node_id, callee_type)
+                # Only a partial member call reaches here: the method is a value occurrence.
+                self._register_member_target_contract_obligation(node.callee)
             else:
                 callee_type = self._check_expr(node.callee, expected=None)
         with self._frame_direct_candidate_use(exprs=(node.callee,)):
@@ -3977,18 +4162,12 @@ class _Checker:
         binding: tuple[Expr | None, ...] = node.args
         if hole_indices:
             self._record_partial_call(node, binding, hole_indices, callee_kind="value")
-        for index in self._argument_check_order(node.args):
-            arg = node.args[index]
-            ptype = callee_type.params[index]
-            if isinstance(arg, Placeholder):
-                continue
-            self._constrain_argument(
-                ptype,
-                arg,
-                role=ConstraintRole.FUNCTION_ARGUMENT,
-                subject="function value",
-                error_subject="function value call",
-            )
+        self._constrain_bound_arguments(
+            callee_type.params,
+            node.args,
+            subject="function value",
+            error_subject="function value call",
+        )
         assert self._inference_region is not None
         self._resolve_operator_values(self._inference_region)
         params = tuple(
@@ -5223,8 +5402,13 @@ class _Checker:
         span: SourceSpan,
         required_only: bool = False,
         explicit_target: Type | None = None,
-    ) -> FunctionType:
-        """Specialize *method* for *receiver* and remove its receiver parameter."""
+    ) -> tuple[FunctionType, Mapping[str, Type]]:
+        """Specialize *method* for *receiver* and remove its receiver parameter.
+
+        Also returns the instantiation of the method's own type parameters, which
+        callers specializing a builtin method discard: builtin methods are never
+        type-directed externs, so they have no target contracts.
+        """
         receiver_template = method.signature.params[0]
         substitutions: dict[str, Type] = {}
         if isinstance(receiver_template, (RecordType, EnumType)):
@@ -5267,18 +5451,12 @@ class _Checker:
             parameter_indices = tuple(
                 index for index in parameter_indices if not signature.params[index].has_default
             )
-        result = specialized.result
-        if method.is_builtin:
-            if method.name == "ask-request":
-                result = self._builtins.contract_type("AgentRequest")
-            elif method.name == "fork":
-                result = receiver
-            elif method.name == "stats":
-                result = self._builtins.contract_type("SessionStats")
         bound = FunctionType(
             params=tuple(specialized.params[index] for index in parameter_indices),
-            result=result,
+            result=specialized.result,
         )
+        if method.is_builtin:
+            bound = self._live_builtin_signature(bound)
         if type_args is not None:
             explicit = (
                 {own_type_params[0]: explicit_target}
@@ -5303,9 +5481,9 @@ class _Checker:
                 )
             concrete = engine.zonk(bound)
             assert isinstance(concrete, FunctionType)
-            return concrete
+            return concrete, own_fresh
         if not own_type_params:
-            return bound
+            return bound, own_fresh
 
         if required_only and method.is_builtin and method.name in {"ask", "ask-request"}:
             default = self._builtins.default_target(BuiltinKind.ASK)
@@ -5327,7 +5505,7 @@ class _Checker:
                 expected,
                 engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=method.name),
             )
-        return bound
+        return bound, own_fresh
 
     def _check_specialized_field_access(
         self, field_access: FieldAccess, *, type_args: tuple[TypeExpr, ...]
@@ -5368,7 +5546,7 @@ class _Checker:
             explicit_target = self._env.resolve_type_expr(
                 type_args[0], span=node.span, type_vars=self._current_type_vars
             )
-        bound = self._bound_method_type(
+        bound, _instantiation = self._bound_method_type(
             method,
             typ.receiver_type,
             type_args=type_args,
@@ -5559,10 +5737,13 @@ class _Checker:
                 return _SelectedBuiltinMethod(
                     name=method.name, receiver_type=receiver, method=method
                 )
-            bound = self._bound_method_type(
+            bound, instantiation = self._bound_method_type(
                 method, receiver, type_args=type_args, expected=expected, span=node.span
             )
             if self._env.is_extern_node_id(method.decl_node_id):
+                # ``MethodDef`` omits target parameters; read them off the signature.
+                signature = self._env.get_function_signature_by_node_id(method.decl_node_id)
+                assert signature is not None
                 self._set_extern_expr_targets(
                     node.node_id,
                     (
@@ -5571,6 +5752,7 @@ class _Checker:
                             result_type=bound.result,
                             decl_node_id=method.decl_node_id,
                             module_id=method.module_id,
+                            contract_targets=_contract_targets(signature, instantiation),
                         ),
                     ),
                 )
@@ -6592,6 +6774,7 @@ class _Checker:
             resolved=self._resolved,
             node_types=self._node_types,
             contract_specs=self._contract_specs,
+            target_contract_specs=self._target_contract_specs,
             call_sites=tuple(self._call_sites),
             warnings=tuple(self._warnings),
             type_env=self._env,

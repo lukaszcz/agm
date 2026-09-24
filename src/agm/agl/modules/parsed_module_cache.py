@@ -82,9 +82,6 @@ ModuleBuilder = Callable[[int, str], "tuple[LoadedModule, int]"]
 # module from the graph around it.
 InfixSignature = tuple[object, ...]
 
-# (canonical path, module id, operator-table signature)
-_ResolvedKey = tuple[str, "ModuleId", InfixSignature]
-
 # Rewrites one module's infix chains, returning its resolved form.
 InfixResolver = Callable[[], "LoadedModule"]
 

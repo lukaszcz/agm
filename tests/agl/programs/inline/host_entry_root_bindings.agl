@@ -9,7 +9,9 @@ import std/config
 let label = "corner"
 let rounds = 2
 
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int
 
 enum Shape
   | Flat

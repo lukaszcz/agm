@@ -1,9 +1,11 @@
 scope One
-  record Shared(value: int)
+  record Shared
+    value: int
 end One
 
 scope Two
-  record Shared(value: text)
+  record Shared
+    value: text
 end Two
 
 type First = One::Shared

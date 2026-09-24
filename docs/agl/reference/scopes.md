@@ -13,7 +13,9 @@ ends with the same path:
 
 ```agl
 scope Geometry
-  record Point(x: int, y: int)
+  record Point
+    x: int
+    y: int
 
   def origin() -> Point = ::Geometry::Point(0, 0)
 

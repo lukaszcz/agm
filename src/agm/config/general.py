@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Generic, TypeVar
 
-from agm.config.engine_keys import ENGINE_KEY_KINDS
+from agm.config.engine_keys import ENGINE_KEY_KINDS, PATH_ENGINE_KEYS
 from agm.core.env import agm_installation_prefix, resolve_env
 from agm.core.fs import mkdir, write_text
 from agm.core.parse import parse_timeout as parse_timeout
@@ -23,6 +24,10 @@ from agm.core.toml import (
 from agm.packages.layout import activation_index_path
 from agm.project.layout import project_config_dir
 from agm.util.interp import interp_preserving
+
+_T = TypeVar("_T")
+_K = TypeVar("_K")
+_D = TypeVar("_D")
 
 
 @dataclass(frozen=True)
@@ -63,10 +68,9 @@ class ConfigCommandNotFound(ValueError):
 # before merging, so that relative paths are always interpreted relative to
 # the config file that defines them.  When the config-dir-resolved path does
 # not exist, cwd is used as a fallback.
-_CONFIG_PATH_FIELDS: dict[str, list[str]] = {
-    "exec": [
-        "trace-file",
-    ],
+_CONFIG_PATH_FIELDS: dict[str, Sequence[str]] = {
+    # ``[exec]`` carries exactly the path-valued engine keys.
+    "exec": PATH_ENGINE_KEYS,
     "loop": [
         "tasks_dir",
         "prompt_file",
@@ -200,32 +204,38 @@ def config_file_candidates(
 
 
 @dataclass(frozen=True)
-class RunConfig:
-    """Resolved run-command configuration."""
+class CommandSetting(Generic[_T]):
+    """One ``[run]`` setting: a default plus its per-command overrides."""
 
-    aliases: dict[str, str]
-    default_memory_limit: str | None
-    command_memory_limits: dict[str, str]
-    default_swap_limit: str | None
-    command_swap_limits: dict[str, str]
-    default_pty: bool
-    command_ptys: dict[str, bool]
+    default: _T
+    overrides: Mapping[str, _T]
+
+    def for_command(self, command_name: str) -> _T:
+        return self.overrides.get(command_name, self.default)
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    """Resolved run-command configuration: one shape per ``[run]`` setting."""
+
+    alias: CommandSetting[str | None]
+    memory: CommandSetting[str | None]
+    swap: CommandSetting[str | None]
+    pty: CommandSetting[bool]
 
     def alias_for(self, command_name: str) -> str | None:
-        return self.aliases.get(command_name)
+        return self.alias.for_command(command_name)
 
     def memory_limit_for(self, command_name: str | None) -> str | None:
         if command_name is None:
-            return self.default_memory_limit
-        return self.command_memory_limits.get(command_name, self.default_memory_limit)
+            return self.memory.default
+        return self.memory.for_command(command_name)
 
     def swap_limit_for(self, command_name: str | None) -> str | None:
-        if command_name is None:
-            return self.default_swap_limit
-        return self.command_swap_limits.get(command_name, self.default_swap_limit)
+        return self.swap.default if command_name is None else self.swap.for_command(command_name)
 
     def pty_for(self, command_name: str) -> bool:
-        return self.command_ptys.get(command_name, self.default_pty)
+        return self.pty.for_command(command_name)
 
 
 @dataclass(frozen=True)
@@ -297,7 +307,7 @@ class RefineConfig:
 
 def _interpolate_and_expand_section_paths(
     section: TomlDict,
-    fields: list[str],
+    fields: Sequence[str],
 ) -> tuple[TomlDict, set[str]]:
     resolved = dict(section)
     unresolved_fields: set[str] = set()
@@ -314,7 +324,7 @@ def _interpolate_and_expand_section_paths(
 
 def _anchor_section_paths(
     section: TomlDict,
-    fields: list[str],
+    fields: Sequence[str],
     config_dir: Path,
     cwd: Path,
     *,
@@ -343,7 +353,7 @@ def _anchor_section_paths(
 
 def _resolve_section_paths(
     section: TomlDict,
-    fields: list[str],
+    fields: Sequence[str],
     config_dir: Path,
     cwd: Path,
     *,
@@ -371,9 +381,9 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
     for section_name, section in resolved.items():
         if isinstance(section, dict):
             # Every known section lists its path-like fields explicitly;
-            # unknown/program sections fall back to just "trace-file", the only
-            # path-like engine key they carry.
-            fields = _CONFIG_PATH_FIELDS.get(section_name, ["trace-file"])
+            # unknown/program sections carry only engine keys, so they fall
+            # back to the path-valued ones.
+            fields = _CONFIG_PATH_FIELDS.get(section_name, PATH_ENGINE_KEYS)
             resolved[section_name] = _resolve_section_paths(
                 toml_dict(section),
                 fields,
@@ -417,42 +427,50 @@ def load_merged_config(
     return load_general_config(home=home, proj_dir=proj_dir, cwd=cwd, env=env).merged
 
 
+def _setting_value(table: TomlDict, key: str, kind: type[_K]) -> _K | None:
+    """Return ``table[key]`` when it is a *kind* value, treating empty text as absent."""
+    value = table.get(key)
+    if isinstance(value, str) and not value:
+        return None
+    return value if isinstance(value, kind) else None
+
+
+def _command_setting(
+    run_table: TomlDict,
+    key: str,
+    kind: type[_K],
+    *,
+    default: _D,
+    global_key: bool = True,
+) -> CommandSetting[_K | _D]:
+    """Load one ``[run]`` setting from its bare key and its per-command tables.
+
+    The default is ``[run].<key>`` when *global_key*, falling back to
+    *default*; ``[run.<command>].<key>`` overrides it for that command.
+    """
+    resolved: _K | _D = default
+    if global_key:
+        global_value = _setting_value(run_table, key, kind)
+        if global_value is not None:
+            resolved = global_value
+    overrides: dict[str, _K | _D] = {}
+    for command_name, command_config in run_table.items():
+        value = _setting_value(toml_dict(command_config), key, kind)
+        if value is not None:
+            overrides[command_name] = value
+    return CommandSetting(default=resolved, overrides=overrides)
+
+
 def load_run_config(*, home: Path, proj_dir: Path | None, cwd: Path) -> RunConfig:
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     run_table = toml_dict(merged.get("run"))
-    aliases: dict[str, str] = {}
-    command_memory_limits: dict[str, str] = {}
-    command_swap_limits: dict[str, str] = {}
-    command_ptys: dict[str, bool] = {}
-    default_memory = run_table.get("memory")
-    default_memory_limit = (
-        default_memory if isinstance(default_memory, str) and default_memory else None
-    )
-    default_swap = run_table.get("swap")
-    default_swap_limit = default_swap if isinstance(default_swap, str) and default_swap else None
-    default_pty = _optional_bool(run_table, "pty", default=True)
-    for command_name, command_config in run_table.items():
-        config = toml_dict(command_config)
-        alias = config.get("alias")
-        if isinstance(alias, str) and alias:
-            aliases[command_name] = alias
-        memory = config.get("memory")
-        if isinstance(memory, str) and memory:
-            command_memory_limits[command_name] = memory
-        swap = config.get("swap")
-        if isinstance(swap, str) and swap:
-            command_swap_limits[command_name] = swap
-        pty = config.get("pty")
-        if isinstance(pty, bool):
-            command_ptys[command_name] = pty
     return RunConfig(
-        aliases=aliases,
-        default_memory_limit=default_memory_limit,
-        command_memory_limits=command_memory_limits,
-        default_swap_limit=default_swap_limit,
-        command_swap_limits=command_swap_limits,
-        default_pty=default_pty,
-        command_ptys=command_ptys,
+        # A bare ``[run] alias`` would rename every command, so alias is
+        # per-command only.
+        alias=_command_setting(run_table, "alias", str, default=None, global_key=False),
+        memory=_command_setting(run_table, "memory", str, default=None),
+        swap=_command_setting(run_table, "swap", str, default=None),
+        pty=_command_setting(run_table, "pty", bool, default=True),
     )
 
 

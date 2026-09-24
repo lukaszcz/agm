@@ -78,7 +78,8 @@ def test_session_statics_reject_invalid_arguments(source: str) -> None:
 def test_session_open_rejects_lookalike_option_some_record() -> None:
     _reject(
         "scope Fake\n"
-        "  record Some[T](foo: T)\n"
+        "  record Some[T]\n"
+        "    foo: T\n"
         "end Fake\n"
         "\n"
         'let agent = Agent::AgentCommand(command = "agent")\n'
@@ -107,7 +108,7 @@ def test_non_prelude_type_cannot_use_builtin_static_syntax() -> None:
     ("session_declaration", "local_constructor", "local_kind"),
     [
         ("enum Session\n  | open", "User::Session::open()", "enum"),
-        ("record Session()", "User::Session()", "record"),
+        ("record Session", "User::Session()", "record"),
     ],
 )
 def test_nested_user_session_does_not_shadow_prelude_session_static(
@@ -132,7 +133,7 @@ def test_nested_user_session_does_not_shadow_prelude_session_static(
 
 def test_non_prelude_session_static_header_is_not_a_builtin() -> None:
     message = _reject(
-        "scope User\n  record Session()\n  builtin def Session::open() -> Session\nend User"
+        "scope User\n  record Session\n  builtin def Session::open() -> Session\nend User"
     )
     assert "unknown builtin" in message.lower()
 
@@ -164,7 +165,7 @@ def test_prelude_session_constructor_spelling_is_rejected_as_an_unknown_static(
     """A prelude static owner rejects constructor-like value references."""
     (tmp_path / "std").mkdir()
     (tmp_path / "std" / "prelude.agl").write_text(
-        "builtin record Session()\n"
+        "builtin record Session\n"
         "builtin def Session::default() -> Session\n"
         "let value = Session::Session\n",
         encoding="utf-8",

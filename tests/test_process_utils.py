@@ -1532,6 +1532,31 @@ class TestCapturedOutput:
         with pytest.raises(UnicodeDecodeError):
             out.text()
 
+    def test_text_drops_orphaned_leading_continuation_bytes_when_head_truncated(self) -> None:
+        # Dropping the head of a stream can strand the continuation bytes of a
+        # character whose lead byte went with it.
+        out = CapturedOutput(data="é".encode()[-1:] + b"ok", truncated=False, head_truncated=True)
+        assert out.text() == "ok"
+
+    def test_text_of_only_orphaned_continuation_bytes_is_empty(self) -> None:
+        out = CapturedOutput(data=b"\x80\x80", truncated=False, head_truncated=True)
+        assert out.text() == ""
+
+    def test_text_does_not_drop_a_leading_continuation_byte_when_head_is_intact(self) -> None:
+        out = CapturedOutput(data=b"\x80ok", truncated=False)
+        with pytest.raises(UnicodeDecodeError):
+            out.text()
+
+    def test_text_reports_offsets_within_the_retained_bytes(self) -> None:
+        out = CapturedOutput(data=b"\x80ok\xff", truncated=False, head_truncated=True)
+        with pytest.raises(UnicodeDecodeError) as exc_info:
+            out.text()
+        assert exc_info.value.start == 2
+
+    def test_text_is_decoded_once(self) -> None:
+        out = CapturedOutput(data=b"payload", truncated=False)
+        assert out.text() is out.text()
+
     def test_display_uses_backslashreplace(self) -> None:
         out = CapturedOutput(data=b"ok\xff", truncated=False)
         assert out.display() == "ok\\xff"

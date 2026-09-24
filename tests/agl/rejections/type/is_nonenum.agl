@@ -1,4 +1,4 @@
-record Item()
+record Item
 
 program def main() -> unit =
   let item = Item

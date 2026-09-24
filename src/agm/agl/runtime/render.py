@@ -17,12 +17,13 @@ as AgL surface syntax.  A record or exception renders its nominal's
 from __future__ import annotations
 
 from agm.agl.ir.program import ValueDescriptors
-from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
+from agm.agl.runtime.serialize import AglNonDataValue, dumps_exact, value_to_json_obj
 from agm.agl.semantics.cycles import enter_value
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
     ConstructorValue,
+    ContractValue,
     DecimalValue,
     DictValue,
     ExceptionValue,
@@ -204,6 +205,9 @@ def _render(
         finally:
             active.discard(id(value))
         return _render_sequence(f"{display_name}(", ")", items, level=level, pretty=pretty)
+
+    if isinstance(value, ContractValue):
+        raise AglNonDataValue("contract")
 
     raise RuntimeError(f"render: unhandled value type {type(value).__name__}")  # pragma: no cover
 

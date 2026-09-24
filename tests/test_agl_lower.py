@@ -288,11 +288,12 @@ def test_lowering_preserves_scoped_nominal_identity_for_generic_and_enum_types()
     from tests.agl.ir_harness import nominal_id_for
 
     source = """
-record Token()
+record Token
 
 scope Left
-  record Token()
-  record Box[T](value: T)
+  record Token
+  record Box[T]
+    value: T
   enum Flag | on
 end Left
 
@@ -438,7 +439,8 @@ def test_direct_lowerer_helper_passes_complete_compiled_match_site_mapping() -> 
 
 def test_capture_scan_captures_enclosing_field_assignment_receiver() -> None:
     source = (
-        "record Box(var value: int)\n"
+        "record Box\n"
+        "  var value: int\n"
         "def make-update() -> unit =\n"
         "  let box = Box(value = 1)\n"
         "  let update = fn() -> unit => if true => box.value := 2 else => ()\n"
@@ -1243,7 +1245,7 @@ class TestNominalsEmpty:
     def test_mutable_record_nominal_names_its_mutable_fields(self) -> None:
         from tests.agl.ir_harness import nominal_id_for
 
-        program = _lower("record Point(var x: int, y: int)\nPoint(x = 1, y = 2)")
+        program = _lower("record Point\n  var x: int\n  y: int\nPoint(x = 1, y = 2)")
         descriptor = program.nominals[nominal_id_for(program, "Point")]
 
         assert descriptor.fields == ("x", "y")
@@ -1353,7 +1355,7 @@ class TestBuiltinNominalsTable:
         library's own ``RangeError``: the declaration is what drives the
         table's answer, not a shared name.
         """
-        source = "builtin exception RangeError extends Exception()\n()\n"
+        source = "builtin exception RangeError extends Exception\n()\n"
         checked = _check(source, default_stdlib=False)
         typedef = checked.type_env.type_table.get(ENTRY_ID, "RangeError")
         assert typedef is not None
@@ -1380,7 +1382,7 @@ class TestBuiltinNominalsTable:
         """
         from tests.agl.ir_harness import nominal_id_for
 
-        source = "scope A\n  builtin exception RangeError extends Exception()\nend A\n\n()\n"
+        source = "scope A\n  builtin exception RangeError extends Exception\nend A\n\n()\n"
         prog = _lower(source, default_stdlib=False)
         assert prog.builtin_nominals.nominal("RangeError") == nominal_id_for(prog, "A::RangeError")
 
@@ -1416,7 +1418,7 @@ class TestBuiltinNominalsTable:
 
         source = (
             "scope A\n"
-            "  builtin exception RangeError extends Exception()\n"
+            "  builtin exception RangeError extends Exception\n"
             "end A\n"
             "\n"
             "let stride = 0\n"
@@ -1440,8 +1442,8 @@ class TestBuiltinNominalsTable:
         [
             ("()\n", True),
             ("()\n", False),
-            ("builtin exception RangeError extends Exception()\n()\n", False),
-            ("scope A\n  builtin exception RangeError extends Exception()\nend A\n\n()\n", False),
+            ("builtin exception RangeError extends Exception\n()\n", False),
+            ("scope A\n  builtin exception RangeError extends Exception\nend A\n\n()\n", False),
             (
                 "scope A\n"
                 "  builtin record ExecResult\n"
@@ -1819,7 +1821,8 @@ class TestLowerFunctions:
 
     def test_builtin_named_function_field_call_lowers_to_indirect_call(self) -> None:
         source = (
-            "record Holder(print: (text) -> text)\n"
+            "record Holder\n"
+            "  print: (text) -> text\n"
             'let result = Holder(print = fn(value: text) -> text => value).print("ok")\n'
             "()"
         )
@@ -2041,7 +2044,8 @@ class TestMethodLowering:
 
     def test_direct_method_call_is_receiver_first_direct_call_without_closure(self) -> None:
         source = """\
-record Meter(value: int)
+record Meter
+  value: int
 
 def make(value: int) -> Meter = Meter(value = value)
 def Meter::add(self, amount: int) -> int = self.value + amount
@@ -2066,7 +2070,9 @@ let result = make(10).add(2)
         from agm.agl.lower.program import lower_program
         from tests.agl.module_graph import load_graph
 
-        (tmp_path / "geometry.agl").write_text("record Point(x: int, y: int)\n", encoding="utf-8")
+        (tmp_path / "geometry.agl").write_text(
+            "record Point\n  x: int\n  y: int\n", encoding="utf-8"
+        )
         (tmp_path / "metrics.agl").write_text(
             "import geometry::*\n"
             "def Point::shift(self, amount: int) -> Point = "
@@ -2111,7 +2117,8 @@ let result = make(10).add(2)
 
     def test_method_value_captures_receiver_once_in_one_partial_closure(self) -> None:
         source = """\
-record Meter(value: int)
+record Meter
+  value: int
 
 def make(value: int) -> Meter = Meter(value = value)
 def Meter::add(self, amount: int) -> int = self.value + amount

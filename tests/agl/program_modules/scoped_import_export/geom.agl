@@ -1,2 +1,4 @@
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int
 def sum2(p: Point) -> int = p.x + p.y

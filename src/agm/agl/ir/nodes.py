@@ -74,6 +74,7 @@ __all__ = [
     "IrConstText",
     "IrResource",
     "IrConstUnit",
+    "IrContract",
     "IrContains",
     "IrContinue",
     "IrConvert",
@@ -957,7 +958,8 @@ class UseDefault:
     """Sentinel for an omitted defaulted argument/field: use the owner's own default.
 
     In ``IrDirectCall.arguments``, ``param_index`` indexes the callee's
-    ``FunctionDescriptor.params``. In ``IrMakeRecord.fields``/
+    ``FunctionDescriptor.params`` after any leading ``IrContract`` operands.
+    In ``IrMakeRecord.fields``/
     ``IrMakeException.fields``, it indexes the constructed nominal's own
     ``NominalDescriptor.field_defaults`` — the same sentinel, reused rather
     than duplicated, because both cases fill an omitted slot from an
@@ -986,7 +988,10 @@ class IrMakeClosure:
 
 @dataclass(frozen=True, slots=True)
 class IrDirectCall:
-    """IR direct call to a named user function."""
+    """IR direct call to a named user function or extern.
+
+    A type-directed extern's call leads with one ``IrContract`` per target parameter.
+    """
 
     location: Location
     function_id: FunctionId
@@ -1091,6 +1096,18 @@ class IrSessionOpen:
     transport: "IrExpr | None"
     name: "IrExpr"
     sandbox: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrContract:
+    """IR operand: one target contract of a type-directed extern occurrence.
+
+    Leads the extern's call operands, one per target parameter in declaration
+    order; evaluates to an opaque ``ContractValue``.
+    """
+
+    location: Location
+    contract_id: ContractId
 
 
 @dataclass(frozen=True, slots=True)
@@ -1272,6 +1289,7 @@ IrExpr = (
     | IrMakeClosure
     | IrDirectCall
     | IrIndirectCall
+    | IrContract
     | IrPrint
     | IrRenderValue
     | IrCopyValue

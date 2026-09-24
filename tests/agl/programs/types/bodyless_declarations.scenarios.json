@@ -1,0 +1,49 @@
+{
+  "scenarios": [
+    {
+      "name": "bare_records_construct_compare_render_and_match",
+      "params": {
+        "mode": "records"
+      },
+      "expect": {
+        "stdout": "true\nToken\ntrue\nPhantom\nMarked\nApi::Handle\ntoken\nToken\nBox(value = 1)\n"
+      }
+    },
+    {
+      "name": "bare_exception_extending_a_base_carries_the_base_fields",
+      "params": {
+        "mode": "auth"
+      },
+      "expect": {
+        "stdout": "auth 401: denied, api: true\n"
+      }
+    },
+    {
+      "name": "bare_exception_without_a_base_is_caught",
+      "params": {
+        "mode": "oops"
+      },
+      "expect": {
+        "stdout": "oops: oops\n"
+      }
+    },
+    {
+      "name": "bare_scoped_exception_is_caught_by_its_base",
+      "params": {
+        "mode": "scoped"
+      },
+      "expect": {
+        "stdout": "api 403: scoped\n"
+      }
+    },
+    {
+      "name": "parenthesized_empty_exception_still_behaves_the_same",
+      "params": {
+        "mode": "paren"
+      },
+      "expect": {
+        "stdout": "paren: paren\n"
+      }
+    }
+  ]
+}

@@ -227,6 +227,7 @@ class EffectHandlers:
                     location=location,
                     resolve_span=self._ctx._extern_span_resolver,
                 ),
+                contracts=self._ctx._program.contracts if extern.target_count else None,
             )
 
     # ------------------------------------------------------------------

@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, cast
 
 if TYPE_CHECKING:
     from agm.agl.scope.program import ResolvedModule
@@ -92,6 +92,7 @@ from agm.agl.semantics.types import (
     substitute,
 )
 from agm.agl.syntax.nodes import Expr, Pattern, QualifierAnchor, QualifierChain
+from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
 from agm.agl.zones import ParamZone
@@ -141,13 +142,61 @@ def _render_type_atom(atom: NameAtom) -> str:
     return atom if isinstance(atom, str) else "::".join(atom)
 
 
+def _member_values(source: object, names: tuple[str, ...]) -> tuple[object, ...]:
+    """Read *names* off *source*, in order."""
+    values: list[object] = []
+    for name in names:
+        value: object = getattr(source, name)
+        values.append(value)
+    return tuple(values)
+
+
+# ---------------------------------------------------------------------------
+# _Record — shared behavior of this module's data records
+# ---------------------------------------------------------------------------
+
+
+class _Record:
+    """Base of this module's frozen, slotted data records.
+
+    ``__match_args__`` names a record's fields in declaration order, which is
+    all its state amounts to, so the hooks below move that state by name.
+    Restoring one ``CheckedModuleImage`` runs them thousands of times, which
+    is why they read that tuple rather than the field tuple
+    ``dataclass(frozen=True, slots=True)``'s own hooks rebuild per object.
+    ``image``/``rehydrate`` carry a record's state across the same way.
+    """
+
+    __slots__ = ()
+    __match_args__: ClassVar[tuple[str, ...]] = ()
+
+    def __getstate__(self) -> tuple[object, ...]:
+        return _member_values(self, self.__match_args__)
+
+    def __setstate__(self, state: tuple[object, ...]) -> None:
+        for name, value in zip(self.__match_args__, state):
+            object.__setattr__(self, name, value)
+
+
+def _pickles_by_name[T: _Record](cls: type[T]) -> type[T]:
+    """Reinstate :class:`_Record`'s pickle hooks on a record class.
+
+    ``dataclass(slots=True)`` rebuilds the class and puts its own hooks in the
+    new body, where they would otherwise shadow the inherited ones.
+    """
+    setattr(cls, "__getstate__", _Record.__getstate__)
+    setattr(cls, "__setstate__", _Record.__setstate__)
+    return cls
+
+
 # ---------------------------------------------------------------------------
 # ParamSpec — per-parameter descriptor in a FunctionSignature
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ParamSpec:
+class ParamSpec(_Record):
     """Full descriptor for one parameter in a ``FunctionSignature``.
 
     ``name``        — the declared parameter name.
@@ -167,8 +216,9 @@ class ParamSpec:
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class FunctionSignature:
+class FunctionSignature(_Record):
     """Full declared signature of a root or named-scope ``def``.
 
     Carries named/default/kind information needed for declared-name call sites.
@@ -178,15 +228,21 @@ class FunctionSignature:
     ``result``      — the declared return type.
     ``type_params`` — tuple of type-parameter names for generic functions
                       (empty for non-generic functions).
+    ``target_params`` — an ``extern def``'s type parameters no value parameter
+                      (receiver included) mentions, in declaration order; each
+                      call site resolves them and delivers their contracts.
+                      Empty for every other function.
     """
 
     params: tuple[ParamSpec, ...]
     result: Type
     type_params: tuple[str, ...] = ()
+    target_params: tuple[str, ...] = ()
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class GenericTypeDef:
+class GenericTypeDef(_Record):
     """Template for a generic record or enum definition.
 
     ``kind``        — ``"record"`` or ``"enum"``.
@@ -202,8 +258,9 @@ class GenericTypeDef:
     template: RecordType | EnumType
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class GenericAliasDef:
+class GenericAliasDef(_Record):
     """Resolved template for a parameterized type alias.
 
     ``type_params`` — ordered tuple of type-parameter names.
@@ -215,8 +272,9 @@ class GenericAliasDef:
     template: Type
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ConstructorSignature:
+class ConstructorSignature(_Record):
     """Signature for one record constructor.
 
     ``owner_name``      — name of the record declaration.
@@ -254,8 +312,9 @@ class AglTypeError(AglError):
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class CallSiteRecord:
+class CallSiteRecord(_Record):
     """Static call-site descriptor recorded by the checker for one agent/exec call.
 
     Captured in ``_check_agent_call`` — the one place where the call's resolved
@@ -288,28 +347,24 @@ class CallSiteRecord:
     col: int
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class OutputContractSpec:
-    """Statically derived output contract for one ``AgentCall`` node.
+class OutputContractSpec(_Record):
+    """Statically derived output contract for one ``ask``/``exec`` call, or for one
+    target parameter of a type-directed extern occurrence (always strict ``json``).
 
     ``target_type``
-        The resolved semantic type the agent's output will be parsed into.
+        The resolved semantic type the output will be parsed into.
     ``codec_name``
         The codec selected for this call (e.g. ``"text"`` or ``"json"``).
         Output-discarding unit calls use ``"none"``. When ``structured_exec``
-        is ``True`` this field holds the placeholder
-        value ``"text"`` and is **unused** —  will branch on
-        ``structured_exec`` to skip codec lookup and return the raw ``ExecResult``
-        handle instead.
+        is ``True`` this field holds the unused placeholder ``"text"``.
     ``strict_json``
-        The effective strict-JSON flag for this call (``None`` means the
-        codec is not JSON-based and the flag is irrelevant; this is
-        always ``None`` since the only codec is ``"text"``).
+        The strict-JSON flag; ``None`` when unset or the codec is not JSON.
     ``structured_exec``
         ``True`` for the structured ``exec`` form (target is ``ExecResult``):
         returns the raw result record, does not parse stdout, does not raise
         on nonzero exit.  ``False`` (the default) for all other calls.
-        must branch on this flag to skip the codec/parse pipeline entirely.
     """
 
     target_type: Type
@@ -323,8 +378,9 @@ class OutputContractSpec:
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ArgumentBindings:
+class ArgumentBindings(_Record):
     """Checker-computed argument bindings for call-like constructs, keyed by node_id.
 
     The checker is the single source of truth for how each construct's
@@ -354,8 +410,9 @@ class ArgumentBindings:
     constructor_patterns: dict[int, tuple[tuple[str, Pattern], ...]]
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class PartialCallSpec:
+class PartialCallSpec(_Record):
     """Checker-computed routing metadata for a call that produces a function.
 
     ``callee_kind`` identifies which lowering path the underlying call uses.
@@ -411,8 +468,9 @@ def dereference_slot_constructor_ref(
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class CheckedModule:
+class CheckedModule(_Record):
     """Output of the type-checking pass.
 
     ``resolved``
@@ -431,6 +489,11 @@ class CheckedModule:
         Maps ``AgentCall.node_id`` → ``OutputContractSpec`` for call sites that
         parse output. ``unit`` agent calls are omitted because they have no
         output contract.
+    ``target_contract_specs``
+        Maps the node id of each type-directed extern occurrence (call,
+        reference, method projection, partial application) → one strict JSON
+        ``OutputContractSpec`` per target parameter of the callee
+        (``FunctionSignature.target_params``), in declaration order.
     ``call_sites``
         Tuple of ``CallSiteRecord`` — one per agent-call/exec site, in source
         order — captured by the checker.  The ``--dry-run`` inventory is
@@ -518,6 +581,7 @@ class CheckedModule:
     program_config_targets: dict[int, tuple[ModuleId, tuple[str, ...], str]] = field(
         default_factory=dict
     )
+    target_contract_specs: dict[int, tuple[OutputContractSpec, ...]] = field(default_factory=dict)
 
     def binding_for(self, node_id: int) -> BindingRef | None:
         """Return *node_id*'s checked binding, dereferencing a pattern slot."""
@@ -560,40 +624,25 @@ class CheckedModule:
         """Closed type metadata this module contributes to importers."""
         return self.type_env.module_interface()
 
+    @property
+    def environment_facts(self) -> EnvironmentFacts:
+        """This module's own-facts journal, as its image persists it."""
+        return self.type_env.own_facts()
+
     def image(self) -> CheckedModuleImage:
         """Build a data-only image for cache persistence and rehydration.
 
-        Retains every field except ``resolved``/``type_env``/``import_env``/
-        ``source_text`` — recovered from the current ``ResolvedModule`` on
-        rehydration — plus the module's closed type interface and its
-        environment's own-facts journal. Raises if ``type_env`` never started
-        an own-facts journal (the single-module and REPL-seed paths never do).
+        Every image field is this module's member of the same name: the
+        checked side tables directly, ``interface`` and ``environment_facts``
+        through the type environment. The four members with no image field —
+        ``resolved``, ``type_env``, ``import_env``, ``source_text`` — are
+        recovered from the current ``ResolvedModule`` on rehydration. Raises
+        if ``type_env`` never started an own-facts journal (the single-module
+        and REPL-seed paths never do).
         """
-        return CheckedModuleImage(
-            node_types=self.node_types,
-            contract_specs=self.contract_specs,
-            call_sites=self.call_sites,
-            warnings=self.warnings,
-            function_signatures=self.function_signatures,
-            cast_specs=self.cast_specs,
-            argument_bindings=self.argument_bindings,
-            pattern_classifications=self.pattern_classifications,
-            partial_calls=self.partial_calls,
-            interface=self.interface,
-            environment_facts=self.type_env.own_facts(),
-            published_signatures=self.published_signatures,
-            published_binding_types=self.published_binding_types,
-            module_id=self.module_id,
-            slot_resolution=self.slot_resolution,
-            slot_constructor_refs=self.slot_constructor_refs,
-            is_test_constructor_refs=self.is_test_constructor_refs,
-            pattern_binding_refs=self.pattern_binding_refs,
-            pattern_constructor_refs=self.pattern_constructor_refs,
-            pattern_constructor_owners=self.pattern_constructor_owners,
-            method_selections=self.method_selections,
-            explicit_builtin_targets=self.explicit_builtin_targets,
-            program_config_targets=self.program_config_targets,
-        )
+        image = object.__new__(CheckedModuleImage)
+        image.__setstate__(_member_values(self, CheckedModuleImage.__match_args__))
+        return image
 
 
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:
@@ -606,6 +655,7 @@ def assert_checked_output_closed(
     *,
     node_types: Mapping[int, Type],
     contract_specs: Mapping[int, OutputContractSpec],
+    target_contract_specs: Mapping[int, tuple[OutputContractSpec, ...]],
     call_sites: Iterable[CallSiteRecord],
     function_signatures: Mapping[str, FunctionSignature],
     cast_specs: Mapping[int, CastSpec],
@@ -627,6 +677,7 @@ def assert_checked_output_closed(
         (
             *node_types.values(),
             *(spec.target_type for spec in contract_specs.values()),
+            *(spec.target_type for specs in target_contract_specs.values() for spec in specs),
             *(site.target_type for site in call_sites),
             *(signature.result for signature in function_signatures.values()),
             *(
@@ -651,6 +702,7 @@ def assert_checked_module_closed(checked: CheckedModule) -> None:
     assert_checked_output_closed(
         node_types=checked.node_types,
         contract_specs=checked.contract_specs,
+        target_contract_specs=checked.target_contract_specs,
         call_sites=checked.call_sites,
         function_signatures=checked.function_signatures,
         cast_specs=checked.cast_specs,
@@ -670,8 +722,9 @@ def assert_checked_module_closed(checked: CheckedModule) -> None:
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ModuleTypeInterface:
+class ModuleTypeInterface(_Record):
     """Closed declarations a compiled module contributes to its importers."""
 
     types: dict[DeclKey, Type]
@@ -709,106 +762,132 @@ class PublishedModuleSurface(Protocol):
 # ---------------------------------------------------------------------------
 
 
+class EnvironmentFact(_Record):
+    """One recorded ``TypeEnvironment`` mutator call, replayable onto another.
+
+    ``_MUTATOR`` names the method the call went to, and a fact's fields are
+    that method's arguments spelled with its parameter names, so replaying one
+    is a keyword call. A fact whose replay is more than that forward overrides
+    :meth:`apply`.
+    """
+
+    __slots__ = ()
+    _MUTATOR: ClassVar[str]
+
+    def apply(self, env: TypeEnvironment) -> None:
+        """Replay this call on *env*."""
+        mutator: Callable[..., None] = getattr(env, self._MUTATOR)
+        mutator(**dict(zip(self.__match_args__, _member_values(self, self.__match_args__))))
+
+
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class BindingTypeFact:
+class BindingTypeFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.set_binding_type` call."""
+
+    _MUTATOR = "set_binding_type"
 
     node_id: int
     typ: Type
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.set_binding_type(node_id=self.node_id, typ=self.typ)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class FunctionSignatureFact:
+class FunctionSignatureFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_function_signature` call."""
+
+    _MUTATOR = "register_function_signature"
 
     name: str
     sig: FunctionSignature
     scope_path: ScopePath
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_function_signature(name=self.name, sig=self.sig, scope_path=self.scope_path)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class FunctionSignatureByNodeIdFact:
+class FunctionSignatureByNodeIdFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_function_signature_by_node_id` call."""
+
+    _MUTATOR = "register_function_signature_by_node_id"
 
     node_id: int
     sig: FunctionSignature
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_function_signature_by_node_id(node_id=self.node_id, sig=self.sig)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ExternNodeIdFact:
+class ExternNodeIdFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_extern_node_id` call."""
+
+    _MUTATOR = "register_extern_node_id"
 
     node_id: int
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_extern_node_id(node_id=self.node_id)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class TypeFact:
+class TypeFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_type` call."""
+
+    _MUTATOR = "register_type"
 
     name: str
     typ: Type
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_type(name=self.name, typ=self.typ)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class GenericTypeFact:
+class GenericTypeFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_generic_type` call."""
+
+    _MUTATOR = "register_generic_type"
 
     name: str
     gdef: GenericTypeDef
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_generic_type(name=self.name, gdef=self.gdef)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class AliasFact:
+class AliasFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_alias` call."""
+
+    _MUTATOR = "register_alias"
 
     name: str
     target_expr: TypeExpr
     type_params: tuple[str, ...]
 
     def apply(self, env: TypeEnvironment) -> None:
-        # Structural == on syntax type nodes: skipping an identical one keeps a frozen alias.
+        """Replay the registration, unless it is already in place.
+
+        Structural ``==`` on syntax type nodes: skipping an identical
+        registration keeps a frozen alias frozen.
+        """
         if env.has_alias_registration(self.name, self.target_expr, self.type_params):
             return
-        env.register_alias(
-            name=self.name, target_expr=self.target_expr, type_params=self.type_params
-        )
+        super().apply(env)
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ConstructorSignatureFact:
+class ConstructorSignatureFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_constructor_signature` call."""
+
+    _MUTATOR = "register_constructor_signature"
 
     sig: ConstructorSignature
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_constructor_signature(sig=self.sig)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class ConstructorFieldKindsFact:
+class ConstructorFieldKindsFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_constructor_field_kinds` call.
 
     ``module_id`` is always the resolved owner module (never ``None``), so
     replay never re-derives it from the replaying environment.
     """
+
+    _MUTATOR = "register_constructor_field_kinds"
 
     owner_name: str
     fields: tuple[tuple[str, ParamZone], ...]
@@ -816,67 +895,43 @@ class ConstructorFieldKindsFact:
     module_id: ModuleId
     decl_id: int | None
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_constructor_field_kinds(
-            owner_name=self.owner_name,
-            fields=self.fields,
-            scope_path=self.scope_path,
-            module_id=self.module_id,
-            decl_id=self.decl_id,
-        )
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class UnregisteredNameFact:
+class UnregisteredNameFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.unregister_name` call."""
+
+    _MUTATOR = "unregister_name"
 
     name: str
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.unregister_name(self.name)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class FrozenAliasFact:
+class FrozenAliasFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.freeze_alias` call."""
+
+    _MUTATOR = "freeze_alias"
 
     name: str
     template: Type
     type_params: tuple[str, ...]
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.freeze_alias(self.name, self.template, type_params=self.type_params)
 
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class MethodHeaderFact:
+class MethodHeaderFact(EnvironmentFact):
     """Journaled :meth:`TypeEnvironment.register_method_def` call."""
+
+    _MUTATOR = "register_method_def"
 
     receiver: NominalOwner | str
     method: MethodDef
 
-    def apply(self, env: TypeEnvironment) -> None:
-        env.register_method_def(self.receiver, self.method)
 
-
-EnvironmentFact = (
-    BindingTypeFact
-    | FunctionSignatureFact
-    | FunctionSignatureByNodeIdFact
-    | ExternNodeIdFact
-    | TypeFact
-    | GenericTypeFact
-    | AliasFact
-    | ConstructorSignatureFact
-    | ConstructorFieldKindsFact
-    | UnregisteredNameFact
-    | FrozenAliasFact
-    | MethodHeaderFact
-)
-
-
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class EnvironmentFacts:
+class EnvironmentFacts(_Record):
     """Ordered journal of a ``TypeEnvironment``'s journaled mutator calls.
 
     Data only, so it serializes under the artifact allow-list.
@@ -897,8 +952,9 @@ class EnvironmentFacts:
 # ---------------------------------------------------------------------------
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class CheckedModuleImage:
+class CheckedModuleImage(_Record):
     """Data-only image of a ``CheckedModule``, ready to persist and rehydrate.
 
     Every ``CheckedModule`` field except ``resolved``, ``type_env``,
@@ -907,6 +963,8 @@ class CheckedModuleImage:
     module's closed type contribution) and ``environment_facts`` (its
     environment's own-facts journal). Built by :meth:`CheckedModule.image`;
     turned back into an equivalent ``CheckedModule`` by :meth:`rehydrate`.
+    Both directions move a field by its name, so every field here names the
+    ``CheckedModule`` member it mirrors.
     """
 
     node_types: dict[int, Type]
@@ -932,6 +990,7 @@ class CheckedModuleImage:
     method_selections: dict[int, MethodDef]
     explicit_builtin_targets: dict[int, Type]
     program_config_targets: dict[int, tuple[ModuleId, tuple[str, ...], str]]
+    target_contract_specs: dict[int, tuple[OutputContractSpec, ...]]
 
     def rehydrate(self, resolved_module: ResolvedModule, env: TypeEnvironment) -> CheckedModule:
         """Reconstruct an equivalent ``CheckedModule`` over a freshly prepared *env*.
@@ -948,37 +1007,29 @@ class CheckedModuleImage:
         env.begin_facts()
         env.replay(self.environment_facts)
         env.seal()
-        return CheckedModule(
-            resolved=resolved_module.resolved,
-            node_types=self.node_types,
-            contract_specs=self.contract_specs,
-            call_sites=self.call_sites,
-            warnings=self.warnings,
-            type_env=env,
-            function_signatures=self.function_signatures,
-            cast_specs=self.cast_specs,
-            argument_bindings=self.argument_bindings,
-            pattern_classifications=self.pattern_classifications,
-            partial_calls=self.partial_calls,
-            published_signatures=self.published_signatures,
-            published_binding_types=self.published_binding_types,
-            module_id=self.module_id,
-            import_env=resolved_module.import_env,
-            source_text=resolved_module.source_text,
-            slot_resolution=self.slot_resolution,
-            slot_constructor_refs=self.slot_constructor_refs,
-            is_test_constructor_refs=self.is_test_constructor_refs,
-            pattern_binding_refs=self.pattern_binding_refs,
-            pattern_constructor_refs=self.pattern_constructor_refs,
-            pattern_constructor_owners=self.pattern_constructor_owners,
-            method_selections=self.method_selections,
-            explicit_builtin_targets=self.explicit_builtin_targets,
-            program_config_targets=self.program_config_targets,
-        )
+        # The live members an image cannot carry; every other field of the
+        # rehydrated module is this image's field of the same name.
+        live: dict[str, object] = {
+            "resolved": resolved_module.resolved,
+            "type_env": env,
+            "import_env": resolved_module.import_env,
+            "source_text": resolved_module.source_text,
+        }
+        state: list[object] = []
+        for name in CheckedModule.__match_args__:
+            if name in live:
+                state.append(live[name])
+                continue
+            retained: object = getattr(self, name)
+            state.append(retained)
+        module = object.__new__(CheckedModule)
+        module.__setstate__(tuple(state))
+        return module
 
 
+@_pickles_by_name
 @dataclass(frozen=True, slots=True)
-class DeclaredHeaderSeed:
+class DeclaredHeaderSeed(_Record):
     """The declared-header tables every module environment in a program starts from.
 
     The whole-program function-signature pre-pass yields the same declared
@@ -1158,15 +1209,16 @@ class TypeEnvironment:
         # full path; this frame only maps a bare source spelling to that path.
         self._type_scope: tuple[str, ...] = ()
         self._sealed = False
-        # Mutation journal, active from begin_facts() until end_facts() takes it
-        # or seal() snapshots it into _own_facts. restore_*, remove_binding_types
-        # and seed_from never run in either window; not journaled.
+        # Mutation journal, active from begin_facts() until end_facts() takes
+        # it; seal() leaves it in place, where no further mutator can reach it,
+        # so own_facts() keeps answering from it. rewind_from,
+        # restore_binding_types, remove_binding_types and seed_from never run
+        # in either window; not journaled.
         # ``_resolve_name_type`` does write ``_resolved_aliases`` directly (a memo
         # re-derivable from ``_alias_targets``) on a query path, but every declared
         # alias is frozen during header preparation, so that write is unreachable
         # once the body-check window opens.
         self._journal: list[EnvironmentFact] | None = None
-        self._own_facts: EnvironmentFacts | None = None
         # Memo for the own-type-name enumeration, which rebuilds a whole-namespace
         # answer and is asked for repeatedly (once per owner-form resolution).  It
         # is populated only once ``seal`` has frozen the declaration namespace, so
@@ -1258,14 +1310,12 @@ class TypeEnvironment:
 
         Validates the environment first when self-validation is enabled; sealing
         itself — the functional state that gates further mutation and memoization
-        (see :attr:`is_sealed`) — always happens, regardless of the flag. Closes
-        an active journal into a stable snapshot :meth:`own_facts` returns.
+        (see :attr:`is_sealed`) — always happens, regardless of the flag. It also
+        closes an active journal: no journaled mutator runs on a sealed
+        environment, so what :meth:`own_facts` reports can no longer change.
         """
         if self_validation_enabled():
             self.assert_closed()
-        if self._journal is not None:
-            self._own_facts = EnvironmentFacts(tuple(self._journal))
-            self._journal = None
         self._sealed = True
 
     # --- Mutation journal ---
@@ -1291,18 +1341,15 @@ class TypeEnvironment:
         return facts
 
     def own_facts(self) -> EnvironmentFacts:
-        """Return this environment's own-facts journal.
+        """Return a snapshot of this environment's own-facts journal.
 
-        The sealed snapshot once :meth:`seal` has run, else the active
-        journal. Raises if :meth:`begin_facts` was never called: such an
-        environment (module path, REPL seed) never journaled anything and has
-        no own facts to persist.
+        Raises if :meth:`begin_facts` was never called, or if
+        :meth:`end_facts` already took the journal: such an environment
+        (module path, REPL seed) has no own facts to persist.
         """
-        if self._own_facts is not None:
-            return self._own_facts
-        if self._journal is not None:
-            return EnvironmentFacts(tuple(self._journal))
-        raise AssertionError("own-facts journal was never started")
+        if self._journal is None:
+            raise AssertionError("own-facts journal was never started")
+        return EnvironmentFacts(tuple(self._journal))
 
     def has_alias_registration(
         self, name: str, target_expr: TypeExpr, type_params: tuple[str, ...]
@@ -1904,39 +1951,6 @@ class TypeEnvironment:
             self._function_signatures_by_node_id.pop(node_id, None)
             self._extern_node_ids.discard(node_id)
 
-    def restore_binding_metadata_from(
-        self,
-        other: "TypeEnvironment",
-        node_ids: Iterable[int],
-        function_names: Iterable[str],
-    ) -> None:
-        """Restore selected binding/signature metadata from an earlier environment.
-
-        Incremental hosts may check a whole entry before a runtime failure
-        determines which declarations were actually installed.  This removes
-        metadata for declarations that did not commit, then restores any
-        pre-existing entries (normally none because declaration ids are
-        globally unique).  Function names need separate handling because their
-        convenient name-keyed signature table is not keyed by declaration id.
-        """
-        self._assert_mutable()
-        node_id_set = set(node_ids)
-        self.remove_binding_types(node_id_set)
-        for node_id in node_id_set:
-            binding_type = other._binding_types.get(node_id)
-            if binding_type is not None:
-                self._binding_types[node_id] = binding_type
-            signature = other._function_signatures_by_node_id.get(node_id)
-            if signature is not None:
-                self._function_signatures_by_node_id[node_id] = signature
-            if node_id in other._extern_node_ids:
-                self._extern_node_ids.add(node_id)
-        for name in function_names:
-            self._function_signatures.pop(name, None)
-            signature = other._function_signatures.get(name)
-            if signature is not None:
-                self._function_signatures[name] = signature
-
     def assert_closed(self) -> None:
         """Assert that this env's module-local metadata has no solver variables.
 
@@ -2265,10 +2279,8 @@ class TypeEnvironment:
         """
         if qualifier.anchor is QualifierAnchor.MODULE:
             return None
-        bases = (
-            ((),)
-            if qualifier.anchor is QualifierAnchor.CURRENT_MODULE
-            else tuple(self._type_scope[:end] for end in range(len(self._type_scope), -1, -1))
+        bases = enclosing_scope_bases(
+            self._type_scope, rooted=qualifier.anchor is QualifierAnchor.CURRENT_MODULE
         )
         for base in bases:
             candidate = "::".join((*base, *qualifier.route_segments, name))
@@ -2280,10 +2292,8 @@ class TypeEnvironment:
         """Whether a local scope begins the qualifier in an active lexical layer."""
         if qualifier.anchor is QualifierAnchor.MODULE:
             return False
-        bases = (
-            ((),)
-            if qualifier.anchor is QualifierAnchor.CURRENT_MODULE
-            else tuple(self._type_scope[:end] for end in range(len(self._type_scope), -1, -1))
+        bases = enclosing_scope_bases(
+            self._type_scope, rooted=qualifier.anchor is QualifierAnchor.CURRENT_MODULE
         )
         for base in bases:
             path = (*base, *qualifier.route_segments)
@@ -3294,42 +3304,61 @@ class TypeEnvironment:
         self._function_signatures_by_node_id.update(other._function_signatures_by_node_id)
         self._extern_node_ids.update(other._extern_node_ids)
 
-    def restore_type_names_from(self, other: TypeEnvironment, names: Iterable[str]) -> None:
-        """Restore selected type-namespace names from *other*.
+    def rewind_from(
+        self,
+        previous: TypeEnvironment,
+        *,
+        type_names: Iterable[str],
+        binding_node_ids: Iterable[int],
+        functions: Mapping[int, str],
+    ) -> None:
+        """Undo what an incremental entry's UNPROMOTED declarations wrote, restoring *previous*.
 
-        Used by the REPL after partial runtime failure: checking an entry builds
-        metadata for every declaration in the entry, but only declarations before
-        the failure are promoted. For each unpromoted type name, remove the
-        checked-entry metadata and restore the previous session definition when
-        one existed.
+        Checking an entry builds metadata for every declaration in it, but a
+        runtime failure promotes only the declarations before the failure.
+        This takes the three forms a declaration reaches this environment
+        under — a type name, a value binding's node id, and a function's
+        node id and name — and, for each, drops what the checked entry
+        registered and puts back the definition *previous* held. The
+        seed-forward counterpart is :meth:`seed_from`; a table added here
+        later is rewound only once this method rewinds it.
 
-        *names* normally comes from this entry's OWN declarations (see the
-        REPL's promotion bookkeeping). A failed enum redeclaration also adds
-        previously retained inline-member names whose namespace metadata the
-        new enum cleared, so those survivors are restored in the same staged
-        pass. A reserved built-in exception/prelude name can appear only when
-        this entry itself wrote a ``builtin`` declaration of that name — the
-        reserved names are non-shadowable other than by one. That declaration
-        is rolled back exactly like any other unpromoted one below: no
-        special-casing is needed, and none is applied, unlike :meth:`seed_from`,
-        which instead has to tell a program's own carried-forward declaration
-        apart from the canonical default it must not clobber.
+        *type_names* normally comes from the entry's OWN declarations. A
+        failed enum redeclaration also adds previously retained inline-member
+        names whose namespace metadata the new enum cleared, so those
+        survivors are restored in the same pass. A reserved built-in
+        exception/prelude name can appear only when this entry itself wrote a
+        ``builtin`` declaration of that name — the reserved names are
+        non-shadowable other than by one — and is rolled back like any other
+        unpromoted declaration, unlike in :meth:`seed_from`, which instead has
+        to tell a program's own carried-forward declaration apart from the
+        canonical default it must not clobber.
 
         The shared ``type_table`` is keyed by declaration identity, not name,
-        so the unpromoted declaration stays registered under its own identity
+        so an unpromoted declaration stays registered under its own identity
         exactly as a superseded one does — the link image derives its nominal
         descriptors from this table on every lowering and needs the entry to
-        correct the descriptor the failed entry already linked. What does
-        need saying is that the declaration never took effect
+        correct the descriptor the failed entry already linked. What does need
+        saying is that the declaration never took effect
         (:meth:`TypeTable.orphan`): unlike a superseded declaration, whose
         surviving values keep its members meaningful, an unpromoted one must
         answer no whole-table query about what the session declares. The
         previous declaration's own identity, methods, and base chain were
         never touched by the redeclaration, so restoring it is just
         ``register`` below reclaiming its name.
+
+        Node ids are globally unique, so a binding normally has nothing to put
+        back. Functions carry both forms because their convenient name-keyed
+        signature table is not keyed by declaration id, while their methods
+        are.
+
+        *previous* is read while this environment is written, so it must be a
+        separate environment with its own ``type_table`` -- the caller's
+        accumulated state itself, since a fresh environment already seeds
+        every reserved name and a copy of it would answer identically.
         """
         self._assert_mutable()
-        for name in names:
+        for name in type_names:
             self.unregister_name(name)
             scope_path, declared_name = _split_scoped_type_name(name)
             # Read the unpromoted declaration before ``register`` repoints the
@@ -3337,7 +3366,7 @@ class TypeEnvironment:
             # to the checked entry's own declaration, which is the one being
             # rolled back.
             unpromoted = self._type_table.get(self._module_id, declared_name, scope_path)
-            typedef = other._type_table.get(other._module_id, declared_name, scope_path)
+            typedef = previous._type_table.get(previous._module_id, declared_name, scope_path)
             if typedef is not None:
                 self._type_table.register(typedef)
             # A failed enum redeclaration can clear a prior inline member's
@@ -3348,19 +3377,37 @@ class TypeEnvironment:
                 typedef is None or unpromoted.decl_node_id != typedef.decl_node_id
             ):
                 self._type_table.orphan(unpromoted.decl_node_id)
-            if name in other._types:
-                self._types[name] = other._types[name]
-            if name in other._alias_targets:
-                self._alias_targets[name] = other._alias_targets[name]
-            if name in other._resolved_aliases:
-                self._resolved_aliases[name] = other._resolved_aliases[name]
-            if name in other._generic_types:
-                self._generic_types[name] = other._generic_types[name]
-            if name in other._alias_type_params:
-                self._alias_type_params[name] = other._alias_type_params[name]
-            for key, sig in other._constructor_sigs.items():
-                if key == (other._module_id, scope_path, declared_name):
-                    self._constructor_sigs[key] = sig
-            for key, kinds in other._constructor_field_kinds.items():
-                if key == (other._module_id, scope_path, declared_name):
-                    self._constructor_field_kinds[key] = kinds
+            if name in previous._types:
+                self._types[name] = previous._types[name]
+            if name in previous._alias_targets:
+                self._alias_targets[name] = previous._alias_targets[name]
+            if name in previous._resolved_aliases:
+                self._resolved_aliases[name] = previous._resolved_aliases[name]
+            if name in previous._generic_types:
+                self._generic_types[name] = previous._generic_types[name]
+            if name in previous._alias_type_params:
+                self._alias_type_params[name] = previous._alias_type_params[name]
+            declaration_key = (previous._module_id, scope_path, declared_name)
+            sig = previous._constructor_sigs.get(declaration_key)
+            if sig is not None:
+                self._constructor_sigs[declaration_key] = sig
+            kinds = previous._constructor_field_kinds.get(declaration_key)
+            if kinds is not None:
+                self._constructor_field_kinds[declaration_key] = kinds
+        node_id_set = set(binding_node_ids)
+        self.remove_binding_types(node_id_set)
+        for node_id in node_id_set:
+            binding_type = previous._binding_types.get(node_id)
+            if binding_type is not None:
+                self._binding_types[node_id] = binding_type
+            signature = previous._function_signatures_by_node_id.get(node_id)
+            if signature is not None:
+                self._function_signatures_by_node_id[node_id] = signature
+            if node_id in previous._extern_node_ids:
+                self._extern_node_ids.add(node_id)
+        for function_name in functions.values():
+            self._function_signatures.pop(function_name, None)
+            function_signature = previous._function_signatures.get(function_name)
+            if function_signature is not None:
+                self._function_signatures[function_name] = function_signature
+        self._type_table.rewind_methods_from(previous._type_table, functions.keys())

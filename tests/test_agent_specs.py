@@ -11,7 +11,7 @@ from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, Agent
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.runtime.agents import decode_agent_value
 from agm.agl.semantics.values import IntValue, RecordValue
-from agm.config.general import RunConfig
+from agm.config.general import CommandSetting, RunConfig
 from agm.sandbox.prepare import SandboxContext, SandboxRun
 from agm.sandbox.request import PreparedSandboxCommand, SandboxSpec
 from tests._agl_helpers import agent_value
@@ -27,13 +27,10 @@ def _sandbox_context(
     cwd.mkdir(parents=True, exist_ok=True)
     (home / ".agm" / "sandbox" / "default.json").write_text("{}", encoding="utf-8")
     run_config = RunConfig(
-        aliases={},
-        default_memory_limit=memory,
-        command_memory_limits={},
-        default_swap_limit=swap,
-        command_swap_limits={},
-        default_pty=True,
-        command_ptys={},
+        alias=CommandSetting(default=None, overrides={}),
+        memory=CommandSetting(default=memory, overrides={}),
+        swap=CommandSetting(default=swap, overrides={}),
+        pty=CommandSetting(default=True, overrides={}),
     )
     return SandboxContext(home=home, proj_dir=None, cwd=cwd, run_config=run_config)
 

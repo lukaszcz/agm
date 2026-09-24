@@ -1,4 +1,6 @@
-record Point(x: decimal, y: decimal)
+record Point
+  x: decimal
+  y: decimal
 
 def sqrt(value: decimal) -> decimal = value
 
@@ -21,7 +23,7 @@ scope Point
 end Point
 
 scope Tools
-  record Token()
+  record Token
   enum Signal
     | ready
   let helper: Agent = AgentCommand("helper")

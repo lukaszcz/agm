@@ -1,1 +1,1 @@
-exception Stop extends Exception()
+exception Stop extends Exception

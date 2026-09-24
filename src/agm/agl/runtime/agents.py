@@ -118,8 +118,10 @@ def agent_spec_type(value: RecordValue, nominals: BuiltinNominals) -> type[Agent
 
 def decode_agent_value(value: RecordValue, nominals: BuiltinNominals) -> AgentSpec:
     """Decode an ``Agent`` member record into its host-side specification."""
+    from agm.agent.spec import payload_fields
+
     spec_cls = agent_spec_type(value, nominals)
-    return spec_cls(*(_text_field(value, name) for name in spec_cls.PAYLOAD_FIELDS))
+    return spec_cls(*(_text_field(value, name) for name in payload_fields(spec_cls)))
 
 
 def agent_value(spec: AgentSpec, nominals: BuiltinNominals) -> RecordValue:
@@ -128,10 +130,11 @@ def agent_value(spec: AgentSpec, nominals: BuiltinNominals) -> RecordValue:
     The inverse of :func:`decode_agent_value`, used where a host hands a spec
     it already holds back to AgL (e.g. a default session's snapshot agent).
     """
+    from agm.agent.spec import payload_items
+
     declared = nominals.resolve_standard_member("Agent", type(spec).__name__)
     fields: dict[str, Value] = {
-        name: TextValue(value)
-        for name, value in zip(type(spec).PAYLOAD_FIELDS, spec.payload_values(), strict=True)
+        name: TextValue(value) for name, value in payload_items(spec).items()
     }
     return RecordValue(nominal=declared.nominal, fields=fields)
 

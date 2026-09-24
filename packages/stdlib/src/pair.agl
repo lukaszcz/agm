@@ -1,4 +1,6 @@
-record Pair[A, B](first: A, second: B)
+record Pair[A, B]
+  first: A
+  second: B
 
 def Pair::map-first[A, B, C](self, f: (A) -> C) -> Pair[C, B] =
   Pair(f(self.first), self.second)

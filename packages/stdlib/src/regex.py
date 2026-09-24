@@ -6,7 +6,7 @@ import re
 from functools import lru_cache
 from typing import NoReturn
 
-from agl import AglException, array, dict, nominals, option_none, option_some
+from agl import AglException, array, dict, nominals, option, option_none, option_some
 
 Match = nominals.std.regex.Match
 RegexError = nominals.std.regex.RegexError
@@ -26,9 +26,7 @@ def _compile(pattern: str) -> re.Pattern[str]:
 
 
 def _match(match: re.Match[str]) -> object:
-    groups = array(
-        [option_some(value) if value is not None else option_none() for value in match.groups()]
-    )
+    groups = array([option(value, value is not None) for value in match.groups()])
     named_groups = dict(
         {name: value for name, value in match.groupdict().items() if value is not None}
     )

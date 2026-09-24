@@ -5,7 +5,8 @@
 # trial-convert these casts rather than short-circuit to a value: a cyclic
 # value yields `None`, while an acyclic value still converts.
 
-record Node(children: array[Node])
+record Node
+  children: array[Node]
 
 program def main(close-cycle: bool) -> unit =
   var xs: array[Node] = [Node(children = [])]

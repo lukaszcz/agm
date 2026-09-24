@@ -11,7 +11,9 @@
 # be cyclic. A shared (diamond) non-cyclic structure is always compared too,
 # to confirm sharing alone is never mistaken for a cycle in either mode.
 
-record Node(children: array[Node], tag: int)
+record Node
+  children: array[Node]
+  tag: int
 
 program def main(close-cycle: bool) -> unit =
   var xs1: array[Node] = [Node(children = [], tag = 1)]

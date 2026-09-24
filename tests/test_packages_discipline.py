@@ -25,6 +25,7 @@ from agm.packages.manifest import (
 )
 from agm.packages.model import PackageInfo, owning_package
 from agm.packages.source_commands import package_with_source_commands
+from tests._package_helpers import package_info
 from tests._timeouts import fail_if_slow
 
 FIXTURES = Path(__file__).parent / "agl" / "packages"
@@ -32,7 +33,7 @@ FIXTURES = Path(__file__).parent / "agl" / "packages"
 
 def _package(name: str) -> PackageInfo:
     root = FIXTURES / name
-    return PackageInfo(root=root, manifest=load_manifest(root / "package.toml"))
+    return package_info(root)
 
 
 def _custom_package(
@@ -460,12 +461,12 @@ class TestPackageDiscipline:
     @pytest.mark.parametrize(
         ("declaration", "constructor"),
         (
-            ("record resource(value: text)", "resource"),
+            ("record resource\n  value: text", "resource"),
             ("enum Value | resource(value: text)", "resource"),
-            ("exception resource(value: text)", "resource"),
-            ("record resource-dir(value: text)", "resource-dir"),
+            ("exception resource\n  value: text", "resource"),
+            ("record resource-dir\n  value: text", "resource-dir"),
             ("enum Value | resource-dir(value: text)", "resource-dir"),
-            ("exception resource-dir(value: text)", "resource-dir"),
+            ("exception resource-dir\n  value: text", "resource-dir"),
         ),
     )
     def test_accepts_constructor_named_like_resource_builtin(
@@ -625,7 +626,7 @@ class TestPackageDiscipline:
         (root / MODULE_TREE_DIRNAME / "main.agl").write_text(
             "program def main() -> unit = ()\n", encoding="utf-8"
         )
-        package = PackageInfo(root=root, manifest=load_manifest(root / "package.toml"))
+        package = package_info(root)
 
         with pytest.raises(DisciplineError):
             validate_package(package)

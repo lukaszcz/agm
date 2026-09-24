@@ -1,8 +1,19 @@
 import std/env
 
+def shout(value: text) -> text = "[%{value}]"
+
 program def main(mode: int) -> unit =
   case mode of
     | 1 =>
         print "value=${VALUE}; computed=%{1 + 2}"
+    | 3 =>
+        print "${FIRST}${SECOND}"
+        let combined = shout("${FIRST}") ++ "${SECOND}"
+        print combined
+        print "literal \${FIRST}"
+        print """
+        first=${FIRST}
+        second=${SECOND}
+        """
     | _ =>
         print "missing=${MISSING}"

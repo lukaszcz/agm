@@ -97,7 +97,8 @@ def test_enum_referencing_a_scoped_record_keeps_the_record_companion_visible(
     """
     source = (
         "scope M\n"
-        "  record Go(amount: int)\n"
+        "  record Go\n"
+        "    amount: int\n"
         "end M\n"
         "\n"
         "enum Step\n"
@@ -127,7 +128,8 @@ def test_enum_member_classes_never_subclass_their_enum_class(tmp_path: Path) -> 
     """
     source = (
         "scope M\n"
-        "  record Go(amount: int)\n"
+        "  record Go\n"
+        "    amount: int\n"
         "end M\n"
         "\n"
         "enum Step\n"

@@ -6,7 +6,8 @@ infixr ++ at prio + + 0
 
 # Mutable chunk storage for incremental text construction. Aliases share chunks;
 # copy detaches them and shallow-copy shares them, as for other records.
-record TextBuilder(chunks: array[text])
+record TextBuilder
+  chunks: array[text]
 
 # Each call creates an independent empty builder.
 def builder() -> TextBuilder = TextBuilder([])

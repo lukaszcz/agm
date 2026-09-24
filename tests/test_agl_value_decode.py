@@ -82,7 +82,7 @@ _RECORD_SRC = (
 )
 
 _QUALIFIED_RECORD_SRC = (
-    "scope Q\n  record Point(x: int)\nend Q\n\nlet p: Q::Point = Q::Point(x = 1)\np"
+    "scope Q\n  record Point\n    x: int\nend Q\n\nlet p: Q::Point = Q::Point(x = 1)\np"
 )
 
 _INLINE_MEMBER_RECORD_SRC = (
@@ -99,7 +99,8 @@ _NESTED_SCOPE_RECORD_SRC = (
     "scope A\n"
     "\n"
     "  scope B\n"
-    "    record Point(x: int)\n"
+    "    record Point\n"
+    "      x: int\n"
     "  end B\n"
     "end A\n"
     "\n"
@@ -107,11 +108,12 @@ _NESTED_SCOPE_RECORD_SRC = (
     "p"
 )
 
-_STANDALONE_RECORD_SRC = "record Point(x: int)\nlet p: Point = Point(x = 1)\np"
+_STANDALONE_RECORD_SRC = "record Point\n  x: int\nlet p: Point = Point(x = 1)\np"
 
 _REFERENCED_MEMBER_ENUM_SRC = (
     "scope Data\n"
-    "  record Saved(id: int)\n"
+    "  record Saved\n"
+    "    id: int\n"
     "end Data\n"
     "\n"
     "enum Stored = ::Data::Saved | Fresh(value: int)\n"

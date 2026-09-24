@@ -61,8 +61,9 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
@@ -76,12 +77,12 @@ from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph
-from agm.agl.modules.roots import RootSet
+from agm.agl.modules.roots import RootSet, assemble_roots
 from agm.agl.pipeline import ArgumentPreflight, PreparedProgram, ProgramDiscovery, RunResult
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.engine_config import restamp_engine_setting
-from agm.agl.runtime.types import ProgramDeclInfo
+from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
@@ -125,6 +126,9 @@ from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.agl.zones import ParamZone
 from agm.config.context import ConfigContext
 from agm.sandbox.prepare import SandboxContext, lazy_sandbox_context
+
+if TYPE_CHECKING:
+    from agm.packages.model import PackageInfo
 
 # Declaration identities for ad-hoc test TypeDefs, distinct from real AST node
 # ids (which start at 0) and from every reserved identity (<= -2, see
@@ -780,6 +784,39 @@ def agl_roots(*paths: Path, include_stdlib: bool = True) -> RootSet:
     )
 
 
+def repl_session_with_root(
+    root: Path,
+    *,
+    param_seed_resolver: (
+        Callable[[ModuleId, tuple[ParamBindingInfo, ...]], Mapping[StaticBindingKey, object]] | None
+    ) = None,
+) -> ReplSession:
+    """Build a REPL session whose only module search root besides the stdlib is *root*."""
+    session = ReplSession(param_seed_resolver=param_seed_resolver)
+    session._roots = assemble_roots(
+        invocation_root=root,
+        stdlib_root=REPO_STDLIB_ROOT,
+        lib_root=None,
+        configured=[],
+        cli=[],
+        cwd=root,
+    )
+    return session
+
+
+def package_roots(*packages: PackageInfo, cwd: Path, paths: Iterable[Path] = ()) -> RootSet:
+    """Roots mounting *packages* over the repository standard library, with CLI *paths*."""
+    return assemble_roots(
+        invocation_root=None,
+        stdlib_root=REPO_STDLIB_ROOT,
+        lib_root=None,
+        configured=[],
+        cli=(str(path) for path in paths),
+        cwd=cwd,
+        package_roots=packages,
+    )
+
+
 def agl_std_package_roots(*paths: Path) -> RootSet:
     """Assemble roots that also mount the repository standard library as a package.
 
@@ -788,20 +825,9 @@ def agl_std_package_roots(*paths: Path) -> RootSet:
     declares rather than anonymously.  A test that reaches such a file without
     mounting its package compiles a configuration production never runs.
     """
-    from agm.agl.modules.roots import assemble_roots
-    from agm.packages.manifest import load_manifest
-    from agm.packages.model import PackageInfo
+    from tests._package_helpers import package_info
 
-    std_package = PackageInfo(REPO_STDLIB_ROOT, load_manifest(REPO_STDLIB_ROOT / "package.toml"))
-    return assemble_roots(
-        invocation_root=None,
-        stdlib_root=REPO_STDLIB_ROOT,
-        lib_root=None,
-        configured=[],
-        cli=(str(path) for path in paths),
-        cwd=REPO_STDLIB_ROOT,
-        package_roots=(std_package,),
-    )
+    return package_roots(package_info(REPO_STDLIB_ROOT), cwd=REPO_STDLIB_ROOT, paths=paths)
 
 
 def run_program(

@@ -2,7 +2,7 @@ enum Result
   | Ok
   | Err
 
-record Other()
+record Other
 
 program def main() -> unit =
   let result: Result = Ok

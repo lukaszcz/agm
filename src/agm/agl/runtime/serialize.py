@@ -50,6 +50,7 @@ from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
     ConstructorValue,
+    ContractValue,
     DecimalValue,
     DictValue,
     ExceptionValue,
@@ -350,6 +351,8 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
         raise AglNonDataValue("function")
     if isinstance(value, IteratorValue):
         raise AglNonDataValue("iterator")
+    if isinstance(value, ContractValue):
+        raise AglNonDataValue("contract")
     assert_never(value)  # pragma: no cover
 
 

@@ -1015,6 +1015,70 @@ class TestDeclarations:
         assert alias.is_builtin is False
 
 
+class TestBodylessTypeDeclarations:
+    """A record or exception written without a body declares no fields."""
+
+    @pytest.mark.parametrize(
+        ("bare", "parenthesized"),
+        [
+            ("record Token", "record Token()"),
+            ("record Phantom[T]", "record Phantom[T]()"),
+            ("exception Oops", "exception Oops()"),
+            ("exception AuthError extends ApiError", "exception AuthError extends ApiError()"),
+            ("builtin record Token", "builtin record Token()"),
+            ("builtin\nrecord Token", "builtin record Token()"),
+            ("builtin exception Oops", "builtin exception Oops()"),
+            ('@doc("A token.") record Token', '@doc("A token.") record Token()'),
+            ('@doc("A token.")\nrecord Token', '@doc("A token.") record Token()'),
+            (
+                '@doc("Failed.")\nexception Oops extends Base',
+                '@doc("Failed.") exception Oops extends Base()',
+            ),
+            ('@doc("A token.")\nbuiltin record Token', '@doc("A token.") builtin record Token()'),
+        ],
+    )
+    def test_bare_declaration_matches_the_empty_parenthesized_form(
+        self, bare: str, parenthesized: str
+    ) -> None:
+        bare_decl = first(parse(bare))
+        assert isinstance(bare_decl, (RecordDef, ExceptionDef))
+        assert bare_decl.fields == ()
+        assert bare_decl == first(parse(parenthesized))
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "record Token\nlet x = 1",
+            "exception Oops\nlet x = 1",
+            "exception Oops extends Base\nlet x = 1",
+            "record Token; let x = 1",
+            "record Phantom[T]\n# comment\n\nlet x = 1",
+        ],
+    )
+    def test_bare_declaration_leaves_the_next_line_alone(self, source: str) -> None:
+        decl, binder = items(parse(source))
+        assert isinstance(decl, (RecordDef, ExceptionDef))
+        assert decl.fields == ()
+        assert isinstance(binder, LetDecl)
+
+    def test_bare_declarations_inside_a_scope_region(self) -> None:
+        region = first(parse("scope Api\n  record Token\n  exception Oops\nend Api"))
+        assert isinstance(region, ScopeRegion)
+        token, oops = region.items
+        assert isinstance(token, RecordDef)
+        assert isinstance(oops, ExceptionDef)
+        assert token.fields == oops.fields == ()
+        assert [segment.name for segment in token.scope_path] == ["Api"]
+
+    @pytest.mark.parametrize(
+        "source",
+        ["record R =", "record R =\nlet x = 1", "exception E extends", "record R[]"],
+    )
+    def test_incomplete_declaration_head_is_rejected(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
+
+
 # ---------------------------------------------------------------------------
 # Scope regions
 # ---------------------------------------------------------------------------
@@ -1721,6 +1785,21 @@ class TestFuncDef:
         fd = first(parse("def Point::x(self: Point) -> int = 1"))
         assert isinstance(fd, FuncDef)
         assert isinstance(fd.params[0].type_expr, NameT)
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        (
+            ("def Point::x(self) -> int = 1", True),
+            ("def Point::x(self: Point) -> int = 1", True),
+            ("def add(x: int, y: int) -> int = x", False),
+            ("def greet() -> int = 1", False),
+        ),
+        ids=("bare-self", "annotated-self", "plain-params", "no-params"),
+    )
+    def test_leading_self_marks_a_method(self, source: str, expected: bool) -> None:
+        fd = first(parse(source))
+        assert isinstance(fd, FuncDef)
+        assert fd.is_method is expected
 
     def test_bare_self_has_the_same_ast_in_declaration_and_region_forms(self) -> None:
         direct = first(parse("def Point::x(self) -> int = 1"))
@@ -3200,15 +3279,22 @@ class TestTemplates:
         assert interpolation.expr.callee.name == "getenv"
         assert interpolation.expr.callee.qualifier is not None
         assert interpolation.expr.callee.qualifier.route_segments == ("std", "prelude")
-        qualifier_segment = interpolation.expr.callee.qualifier.segments[0]
-        name_offset = source.index("HOME")
-        assert (
-            qualifier_segment.span.start_offset,
-            qualifier_segment.span.end_offset,
-        ) == (name_offset, name_offset)
         argument = interpolation.expr.args[0]
         assert isinstance(argument, StringLit)
         assert argument.value == "HOME"
+        # Every node the hole stands for spans the hole the author wrote.
+        hole = (source.index("${"), source.index("}") + 1)
+        assert {
+            (span.start_offset, span.end_offset)
+            for span in (
+                interpolation.span,
+                interpolation.expr.span,
+                interpolation.expr.callee.span,
+                interpolation.expr.callee.qualifier.span,
+                interpolation.expr.callee.qualifier.segments[0].span,
+                argument.span,
+            )
+        } == {hole}
 
     def test_escaped_environment_interpolation_is_literal(self) -> None:
         text = first(parse(r'"\${HOME}"'))
@@ -3348,8 +3434,24 @@ class TestReplSeam:
         assert is_incomplete_source("let x =")
 
     def test_is_incomplete_source_open_block(self) -> None:
-        # record header without body
-        assert is_incomplete_source("record R")
+        # enum header without members
+        assert is_incomplete_source("enum E")
+
+    @pytest.mark.parametrize(
+        "source",
+        ["record R", "record R[T]", "exception E extends B", '@doc("d")\nbuiltin exception E'],
+    )
+    def test_is_incomplete_source_trailing_bare_declaration(self, source: str) -> None:
+        # Complete, but it can still take an indented field block.
+        parse_program(source)
+        assert is_incomplete_source(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        ["record R()", "record R\nlet x = 1", "scope S\n  record R\nend S", "record R x: int"],
+    )
+    def test_is_incomplete_source_closed_declaration(self, source: str) -> None:
+        assert not is_incomplete_source(source)
 
     @pytest.mark.parametrize("source", ["", "   ", "# just a comment"])
     def test_is_incomplete_source_items_free_entry(self, source: str) -> None:
@@ -3583,6 +3685,14 @@ class TestPipingHint:
             parse_program("program def main() -> unit =\n  f x $ y\n")
         assert "pipe" in str(exc_info.value)
 
+    @pytest.mark.parametrize("operand", ("true", "false", "null", "3", "3.5"))
+    def test_dollar_literal_chained_after_a_literal_gets_a_hint(self, operand: str) -> None:
+        """A literal ends an operand under the grammar spelling it reaches the
+        error path with, reserved words (`true`/`false`/`null`) included."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(f"program def main() -> unit =\n  f {operand} $ y\n")
+        assert "pipe" in str(exc_info.value)
+
     def test_dollar_literal_opener_not_preceded_by_two_operands_gets_no_hint(self) -> None:
         """`let $ = 1`: only `let` (a keyword) precedes the `$` opener."""
         with pytest.raises(AglSyntaxError) as exc_info:
@@ -3761,7 +3871,7 @@ class TestLarkErrorMapping:
         [
             "def f(",
             "let x =",
-            "record R",
+            "record R =",
             "1 +",
             "case 1 of",
             "f(1,",

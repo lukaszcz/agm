@@ -10,7 +10,8 @@
 # raises `Plain`, whose fields are all ordinary data and none degrade to a
 # marker.
 
-record Node(x: int)
+record Node
+  x: int
 
 exception Boom extends Exception
   handler: (int) -> int

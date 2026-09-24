@@ -1,4 +1,5 @@
-record Shared(value: int)
+record Shared
+  value: int
 def Shared::double(self) -> int = self.value * 2
 
 enum First = ::Shared | FirstOnly

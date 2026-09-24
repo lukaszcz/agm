@@ -117,6 +117,35 @@ program def main() -> unit = ()
     ]
 
 
+def test_sibling_programs_share_one_module_closure(tmp_path: Path) -> None:
+    """Programs of one module report the closure their module was walked for once."""
+    (tmp_path / "library.agl").write_text("@param let library: int = 1\n", encoding="utf-8")
+
+    discovery = _discover(
+        "import library\nprogram def one() -> unit = ()\nprogram def two() -> unit = ()\n",
+        tmp_path,
+    )
+    one, two = discovery.programs
+
+    assert one.closure == (one.module, ModuleId(("library",)))
+    assert one.closure is two.closure
+
+
+def test_discovery_marks_params_annotated_through_an_imported_path_alias(tmp_path: Path) -> None:
+    (tmp_path / "shared.agl").write_text("type location = path\n", encoding="utf-8")
+
+    discovery = _discover(
+        "import shared\n"
+        '@param let out: shared::location = "/tmp"\n'
+        'program def main(target: shared::location = "/tmp") -> unit = ()\n',
+        tmp_path,
+    )
+    program = discovery.programs[0]
+
+    assert [param.is_path for param in discovery.module_params[program.module]] == [True]
+    assert [param.is_path for param in program.parameters] == [True]
+
+
 def test_imported_program_uses_its_own_source_reachable_closure(tmp_path: Path) -> None:
     (tmp_path / "library.agl").write_text(
         "import dependency\n@param let library: int = 1\nprogram def run() -> unit = ()\n",

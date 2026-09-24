@@ -45,12 +45,19 @@ class EngineKeyConsumer(Enum):
 
 @dataclass(frozen=True)
 class EngineKeySpec:
-    """One engine key: its shape, config accessor, and host default.
+    """One engine key: its shape, config accessor, host default, and relations.
 
     ``config_attr`` names the corresponding ``ExecConfig`` attribute without
     making this pure data leaf import the config layer. ``has_default``
     distinguishes an absent host default from an ``Option`` default whose value
     is ``None``.
+
+    ``register`` names a host register several keys share: a write to any of
+    them repoints the same store, and the register's own on/off switch is the
+    key whose ``name`` is that register. ``enables_register`` marks a key whose
+    ``Some`` value implies the switch is on. ``is_path`` marks a key whose
+    value is a filesystem path, so the config layer interpolates, expands and
+    anchors it like any other path-valued field.
     """
 
     name: str
@@ -59,7 +66,13 @@ class EngineKeySpec:
     config_attr: str | None = None
     default: object = None
     has_default: bool = True
+    register: str | None = None
+    enables_register: bool = False
+    is_path: bool = False
 
+
+#: The register backing the trace destination, named after its on/off switch.
+TRACE_REGISTER = "trace"
 
 # Ordered catalog of every engine key.  This is the one place a key is declared;
 # every projection below is derived from it.
@@ -70,6 +83,7 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
         EngineKeyConsumer.HOST_CONSUMED,
         config_attr="trace",
         default=False,
+        register=TRACE_REGISTER,
     ),
     EngineKeySpec(
         "strict-json",
@@ -98,6 +112,9 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
         EngineKeyConsumer.HOST_CONSUMED,
         config_attr="trace_file",
         default=None,
+        register=TRACE_REGISTER,
+        enables_register=True,
+        is_path=True,
     ),
     EngineKeySpec(
         "timeout",
@@ -128,19 +145,33 @@ RUNTIME_LIVE_ENGINE_KEYS: frozenset[str] = engine_keys_for(EngineKeyConsumer.RUN
 # Keys backed by a host-owned register.
 HOST_CONSUMED_ENGINE_KEYS: frozenset[str] = engine_keys_for(EngineKeyConsumer.HOST_CONSUMED)
 
-#: The register pair backing the trace destination. A write to either repoints
-#: the same trace store; see ``IrInterpreter._reconfigure_host_service``.
-TRACE_ENGINE_KEYS: frozenset[str] = frozenset(
-    spec.name
-    for spec in ENGINE_KEYS
-    if spec.consumer is EngineKeyConsumer.HOST_CONSUMED and spec.name in {"trace", "trace-file"}
+#: Every declared register name.
+ENGINE_REGISTERS: tuple[str, ...] = tuple(
+    sorted({spec.register for spec in ENGINE_KEYS if spec.register is not None})
 )
+
+
+def engine_keys_for_register(register: str) -> frozenset[str]:
+    """Return the names of every engine key sharing *register*."""
+    return frozenset(spec.name for spec in ENGINE_KEYS if spec.register == register)
+
+
+#: The key pair backing the trace destination. A write to either repoints the
+#: same trace store; see ``IrInterpreter._reconfigure_host_service``.
+TRACE_ENGINE_KEYS: frozenset[str] = engine_keys_for_register(TRACE_REGISTER)
+
+_TRACE_ENABLING_KEYS: frozenset[str] = frozenset(
+    spec.name for spec in ENGINE_KEYS if spec.register == TRACE_REGISTER and spec.enables_register
+)
+
+#: Ordered names of the engine keys whose value is a filesystem path.
+PATH_ENGINE_KEYS: tuple[str, ...] = tuple(spec.name for spec in ENGINE_KEYS if spec.is_path)
 
 
 def trace_write_implies_enabled(key: str, value_is_some: bool) -> bool:
     """Return whether a trace-register write also enables trace logging.
 
-    A ``Some`` write to ``trace-file`` supplies a trace destination and therefore
-    implies the ``trace`` register is enabled.
+    A ``Some`` write to a key marked ``enables_register`` supplies a trace
+    destination and therefore implies the ``trace`` switch is on.
     """
-    return key == "trace-file" and value_is_some
+    return value_is_some and key in _TRACE_ENABLING_KEYS

@@ -2,7 +2,8 @@
 # method. Neither pair shares a level with the other enum, so both
 # declarations are legal, but Shared's own level counts both current owners,
 # so calling `f` on a Shared-typed receiver is ambiguous.
-record Shared(id: int)
+record Shared
+  id: int
 
 enum A = ::Shared | X
 

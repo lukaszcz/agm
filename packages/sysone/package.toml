@@ -1,0 +1,10 @@
+[package]
+name = "sysone"
+version = "0.1.0"
+description = "TypeSafe System One (Jev) questions as typed AgL calls"
+
+[dependencies]
+std = "0.1"
+
+[python]
+dependencies = ["typesafe-sdk>=0.7,<1"]

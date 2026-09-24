@@ -1,7 +1,9 @@
 # A binder's `=` opens an indented suite, exactly as a function's does; the
 # suite's value is its last item.
 
-record Point(x: int, y: int)
+record Point
+  x: int
+  y: int
 
 program def main(a: int, b: int, label: text) -> unit =
   let scaled =

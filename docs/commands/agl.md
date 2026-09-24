@@ -581,8 +581,9 @@ In both front ends:
 
 - Multiline editing is **AgL-aware**: Enter on an unterminated block (`record`, `enum`, `if`,
   `case`, `try`, `do`, …) or a `$` literal header with nothing after it (`exec $`,
-  `ask $`) opens a `...>` continuation; a complete entry submits.
-  Enter on a blank continuation line force-submits. The plain front end applies the same
+  `ask $`) opens a `...>` continuation; a complete entry submits. A trailing body-less
+  `record`/`exception` header also continues, since it can still take an indented field
+  block; a blank line submits it as fieldless. Enter on a blank continuation line force-submits. The plain front end applies the same
   completeness test to stdin lines, except that an entry whose latest line is indented stays
   open until a blank line or end of input, since an indented block parses after every line yet
   can always take one more.

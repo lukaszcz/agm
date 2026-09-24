@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from agm.config.general import RunConfig
+from agm.config.general import CommandSetting, RunConfig
 from agm.core import dry_run
 from agm.sandbox import srt as srt_module
 from agm.sandbox.backend import (
@@ -55,13 +55,10 @@ def _run_config(
     command_ptys: dict[str, bool] | None = None,
 ) -> RunConfig:
     return RunConfig(
-        aliases=aliases or {},
-        default_memory_limit=memory_limit,
-        command_memory_limits=command_memory_limits or {},
-        default_swap_limit=swap_limit,
-        command_swap_limits=command_swap_limits or {},
-        default_pty=pty,
-        command_ptys=command_ptys or {},
+        alias=CommandSetting(default=None, overrides=aliases or {}),
+        memory=CommandSetting(default=memory_limit, overrides=command_memory_limits or {}),
+        swap=CommandSetting(default=swap_limit, overrides=command_swap_limits or {}),
+        pty=CommandSetting(default=pty, overrides=command_ptys or {}),
     )
 
 
@@ -284,22 +281,18 @@ class TestPrepareArgvComposition:
         finally:
             prepared.close()
 
-    def test_pty_wrapper_between_backend_wrapper_and_command(
-        self, home_with_default_settings: Path
-    ) -> None:
+    def test_pty_wrapper_outside_backend_wrapper(self, home_with_default_settings: Path) -> None:
         request = _request(tmp_path=home_with_default_settings, pty=True)
         run_config = _run_config()
         prepared = prepare(request, run_config=run_config)
         try:
-            srt_index = prepared.argv.index("srt")
-            dashdash_index = prepared.argv.index("--", srt_index)
-            pty_index = prepared.argv.index(sys.executable, dashdash_index)
-            assert prepared.argv[pty_index : pty_index + 4] == [
+            assert prepared.argv[:4] == [
                 sys.executable,
                 "-m",
                 "agm.sandbox.pty",
                 "--",
             ]
+            assert prepared.argv.index("srt") > 3
             assert prepared.argv[-2:] == ["echo", "hi"]
         finally:
             prepared.close()

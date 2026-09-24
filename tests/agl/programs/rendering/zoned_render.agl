@@ -16,10 +16,15 @@ record Span
 # Declaration-level positional-only default with no override: every field
 # is positional-only.
 @arg-pos
-record Triple(a: int, b: int, c: text)
+record Triple
+  a: int
+  b: int
+  c: text
 
 # A generic record with one positional-only and one named-only field.
-record Boxed[T](@arg-pos value: T, @arg-named tag: text)
+record Boxed[T]
+  @arg-pos value: T
+  @arg-named tag: text
 
 # A generic enum with an `@arg-pos` inline member: the same zone rule applies
 # regardless of the type argument.
@@ -34,7 +39,9 @@ enum Shape
 
 # A qualified-form enum member: the record is declared on its own and keeps
 # its own display form wherever it appears, enum-typed slot included.
-record Corner(@arg-pos x: int, @arg-pos y: int)
+record Corner
+  @arg-pos x: int
+  @arg-pos y: int
 
 enum Frame = ::Corner | Blank
 

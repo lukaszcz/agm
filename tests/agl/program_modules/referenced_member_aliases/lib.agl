@@ -1,3 +1,4 @@
-record Shared[T](value: T)
+record Shared[T]
+  value: T
 type Alias[T] = Shared[T]
 enum E[T] = ::Alias[T]

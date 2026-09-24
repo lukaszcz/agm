@@ -128,7 +128,9 @@ has room for one line only, such as a listing of commands, it shows the
 opening paragraph.
 An inline enum member's `@doc`, or a referenced member record's own `@doc`, is
 the `description` of that member's `oneOf` alternative in a
-[derived JSON Schema](agent-calls.md#derived-json-schema).
+[derived JSON Schema](agent-calls.md#derived-json-schema). A record's, enum's,
+member's, or field's `@doc` also reaches a type-directed extern's companion
+through its [target contract](ffi.md#target-type-parameters).
 
 ## `@extern-name`
 

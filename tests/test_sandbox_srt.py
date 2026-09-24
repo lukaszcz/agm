@@ -13,20 +13,17 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from agm.config.general import RunConfig
+from agm.config.general import CommandSetting, RunConfig
 from agm.sandbox.prepare import prepare
 from agm.sandbox.request import SandboxRequest, SandboxSpec
 
 
 def _run_config() -> RunConfig:
     return RunConfig(
-        aliases={},
-        default_memory_limit=None,
-        command_memory_limits={},
-        default_swap_limit=None,
-        command_swap_limits={},
-        default_pty=True,
-        command_ptys={},
+        alias=CommandSetting(default=None, overrides={}),
+        memory=CommandSetting(default=None, overrides={}),
+        swap=CommandSetting(default=None, overrides={}),
+        pty=CommandSetting(default=True, overrides={}),
     )
 
 

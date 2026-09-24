@@ -2,18 +2,23 @@
 
 Builds and streams one request through a pooled session, classifies transport
 failures into a small typed error, and applies the strict charset-decoding
-rule the standard library's HTTP companion relies on.
+rule the standard library's HTTP companion relies on. A saved body may also
+be digested and size-capped as it streams, which is what the package fetcher
+verifies an archive with.
 """
 
 from __future__ import annotations
 
 import codecs
+import email.message
+import email.utils
+import hashlib
 import http.cookiejar
 import re
 import time
 import warnings
 import weakref
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +29,7 @@ import requests
 import requests.auth
 import requests.cookies
 import requests.exceptions
+import requests.utils
 import urllib3.exceptions
 
 from agm.core import fs
@@ -34,10 +40,6 @@ _CHUNK_SIZE = 64 * 1024
 
 # RFC 9110 tchar: the only characters a method token may contain.
 _METHOD_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
-
-# The same header validity rules ``requests.utils.check_header_validity`` applies.
-_HEADER_NAME = re.compile(r"^[^:\s][^:\r\n]*$")
-_HEADER_VALUE = re.compile(r"^\S[^\r\n]*$|^$")
 
 # Canonical Python codec names for every WHATWG Encoding Standard text encoding,
 # excluding its ``replacement``/``x-user-defined`` pseudo-encodings. A label the
@@ -187,9 +189,17 @@ class Ignore:
 
 @dataclass(frozen=True, slots=True)
 class Save:
-    """Stream the response body to ``path``, overwriting it atomically."""
+    """Stream the response body to ``path``, overwriting it atomically.
+
+    ``max_bytes`` caps the transfer: :class:`SizeLimitExceeded` is raised
+    before the first byte past the cap is written, so an oversized body is
+    never completed nor left behind. ``sha256`` digests the body as it
+    streams, into :attr:`StreamedResponse.body_sha256`.
+    """
 
     path: Path
+    max_bytes: int | None = None
+    sha256: bool = False
 
 
 ReceiveSpec = Decode | Ignore | Save
@@ -202,6 +212,15 @@ class SaveFailure(Exception):
         super().__init__(str(error))
         self.path = path
         self.error = error
+
+
+class SizeLimitExceeded(Exception):
+    """A ``Save`` body that grew past its declared ``max_bytes``."""
+
+    def __init__(self, path: Path, limit: int) -> None:
+        super().__init__(f"response body exceeds {limit} bytes")
+        self.path = path
+        self.limit = limit
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -245,6 +264,7 @@ class StreamedResponse:
     cookies: dict[str, str]
     elapsed: float
     encoding: str
+    body_sha256: str
 
 
 class TransportError(Exception):
@@ -278,28 +298,20 @@ class DecodeFailure(Exception):
 def resolve_charset(content_type: str | None) -> str:
     """The charset declared in a ``Content-Type`` header, else UTF-8.
 
-    Never guesses statistically: an unlabelled body is always read as UTF-8.
+    Never guesses statistically: only a body with no ``charset`` parameter at
+    all is read as UTF-8. A present but empty one is returned empty, and fails
+    to decode rather than falling back. ``email.message`` parses the
+    parameters, covering a quoted value, an escaped quote and an RFC 2231
+    extended parameter; a single-quoted value, which that grammar has no
+    place for, is unwrapped here. The label keeps its case: only
+    ``codecs.lookup`` reads it.
     """
-    if content_type is not None:
-        start = 0
-        quoted = False
-        escaped = False
-        for index, char in enumerate(f"{content_type};"):
-            if quoted:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    quoted = False
-            elif char == '"':
-                quoted = True
-            elif char == ";":
-                name, separator, value = content_type[start:index].partition("=")
-                if separator and name.strip().casefold() == "charset":
-                    return value.strip().strip("\"'")
-                start = index + 1
-    return "utf-8"
+    if content_type is None:
+        return "utf-8"
+    message = email.message.Message()
+    message["Content-Type"] = content_type
+    charset = email.utils.collapse_rfc2231_value(message.get_param("charset", "utf-8"))
+    return charset.strip("'")
 
 
 def _response_headers(response: requests.Response) -> dict[str, str]:
@@ -316,18 +328,17 @@ def _validate_method(method: str) -> None:
 def _validate_headers(headers: Mapping[str, str]) -> None:
     """Raise a ``request``-kind failure naming only the header NAME for an invalid entry.
 
-    Checked before any header reaches ``requests``, whose own validator
-    raises an exception that quotes the value -- unsafe when the value is a
-    credential such as a bearer token or session cookie.
+    Applies ``requests``' own header rules before any header reaches it, but
+    reports only the name: ``requests``' exception quotes the value -- unsafe
+    when that value is a credential such as a bearer token or session cookie.
     """
     for name, value in headers.items():
         try:
             name.encode("ascii")
             value.encode("latin-1")
-        except UnicodeEncodeError:
+            requests.utils.check_header_validity((name, value))
+        except (UnicodeEncodeError, requests.exceptions.InvalidHeader):
             raise TransportError("request", f"invalid HTTP header: {name!r}") from None
-        if not _HEADER_NAME.fullmatch(name) or not _HEADER_VALUE.fullmatch(value):
-            raise TransportError("request", f"invalid HTTP header: {name!r}")
 
 
 def _cookie_header(cookies: Mapping[str, str]) -> str:
@@ -343,7 +354,9 @@ def _validate_cookies(cookies: Mapping[str, str]) -> str:
     return cookie_header
 
 
-def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
+def perform(
+    session: requests.Session, spec: RequestSpec, *, on_headers: Callable[[], None] | None = None
+) -> StreamedResponse:
     """Send *spec* through *session* and stream its body per ``spec.receive``.
 
     Uses ``timeout=(t, t)``: both the connect and every subsequent read are
@@ -355,6 +368,13 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
     ``Session.request`` does) rather than through ``Session.request``, whose
     ``Request`` construction upper-cases the method; this seam sends it
     verbatim instead.
+
+    *on_headers* marks the boundary between the two phases of an exchange: it
+    runs once the final response's headers are in -- after ``requests`` has
+    resolved the whole redirect chain, so every connect and name resolution
+    the exchange performs is behind it -- and before a single body byte is
+    streamed. A caller bounding the connect phase by something other than the
+    transport's own timeout releases that bound here.
     """
     _validate_method(spec.method)
     headers = _headers_for(spec)
@@ -394,9 +414,11 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
                 **settings,
             )
             try:
+                if on_headers is not None:
+                    on_headers()
                 final_request = cast(requests.PreparedRequest, response.request)
                 final_method = final_request.method
-                text, body_bytes, encoding = _consume(response, spec.receive, final_method)
+                body = _consume(response, spec.receive, final_method)
             finally:
                 response.close()
     except requests.exceptions.RequestException as exc:
@@ -408,13 +430,14 @@ def perform(session: requests.Session, spec: RequestSpec) -> StreamedResponse:
     return StreamedResponse(
         status=response.status_code,
         headers=_response_headers(response),
-        text=text,
-        body_bytes=body_bytes,
+        text=body.text,
+        body_bytes=body.byte_count,
         url=response.url,
         method=final_method,
         cookies=cookies,
         elapsed=elapsed,
-        encoding=encoding,
+        encoding=body.encoding,
+        body_sha256=body.sha256,
     )
 
 
@@ -428,39 +451,30 @@ def _headers_for(spec: RequestSpec) -> dict[str, str]:
     return headers
 
 
-def _consume(
-    response: requests.Response, receive: ReceiveSpec, method: str
-) -> tuple[str, int, str]:
-    """Stream *response*'s body per *receive*; returns (text, byte count, encoding).
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Body:
+    """One consumed response body, before the response is assembled."""
+
+    text: str = ""
+    byte_count: int = 0
+    encoding: str = ""
+    sha256: str = ""
+
+
+def _consume(response: requests.Response, receive: ReceiveSpec, method: str) -> _Body:
+    """Stream *response*'s body per *receive*.
 
     A ``HEAD`` response body is never read, regardless of *receive*: a server
     may still send one, but ``HEAD`` has none by definition, so it is forced
     empty rather than decoded, dropped, or saved.
     """
     if method == "HEAD":
-        return "", 0, ""
+        return _Body()
     if isinstance(receive, Ignore):
         body_bytes = sum(len(chunk) for chunk in response.iter_content(chunk_size=_CHUNK_SIZE))
-        return "", body_bytes, ""
+        return _Body(byte_count=body_bytes)
     if isinstance(receive, Save):
-        body_bytes = 0
-
-        def chunks() -> Iterator[bytes]:
-            nonlocal body_bytes
-            for chunk in response.iter_content(chunk_size=_CHUNK_SIZE):
-                body_bytes += len(chunk)
-                yield chunk
-
-        try:
-            fs.write_bytes_atomic(receive.path, chunks())
-        except requests.exceptions.RequestException:
-            # ``requests.exceptions.RequestException`` is itself an ``OSError``
-            # subclass; a network failure raised while iterating *chunks* must
-            # still reach :func:`perform`'s own classifier, not this catch.
-            raise
-        except OSError as exc:
-            raise SaveFailure(receive.path, exc) from exc
-        return "", body_bytes, ""
+        return _save(response, receive)
     data = response.content
     encoding = resolve_charset(response.headers.get("Content-Type"))
     try:
@@ -474,7 +488,38 @@ def _consume(
             encoding=encoding,
             url=response.url,
         ) from exc
-    return text, len(data), encoding
+    return _Body(text=text, byte_count=len(data), encoding=encoding)
+
+
+def _save(response: requests.Response, receive: Save) -> _Body:
+    """Stream *response*'s body to *receive*'s path, digesting and capping it as it goes.
+
+    The cap is enforced on the way in, so the atomic write is abandoned --
+    leaving the destination untouched -- before an oversized body is committed.
+    """
+    digest = hashlib.sha256() if receive.sha256 else None
+    body_bytes = 0
+
+    def chunks() -> Iterator[bytes]:
+        nonlocal body_bytes
+        for chunk in response.iter_content(chunk_size=_CHUNK_SIZE):
+            body_bytes += len(chunk)
+            if receive.max_bytes is not None and body_bytes > receive.max_bytes:
+                raise SizeLimitExceeded(receive.path, receive.max_bytes)
+            if digest is not None:
+                digest.update(chunk)
+            yield chunk
+
+    try:
+        fs.write_bytes_atomic(receive.path, chunks())
+    except requests.exceptions.RequestException:
+        # ``requests.exceptions.RequestException`` is itself an ``OSError``
+        # subclass; a network failure raised while iterating *chunks* must
+        # still reach :func:`perform`'s own classifier, not this catch.
+        raise
+    except OSError as exc:
+        raise SaveFailure(receive.path, exc) from exc
+    return _Body(byte_count=body_bytes, sha256="" if digest is None else digest.hexdigest())
 
 
 _CLASSIFIERS: tuple[tuple[type[requests.exceptions.RequestException], TransportErrorKind], ...] = (

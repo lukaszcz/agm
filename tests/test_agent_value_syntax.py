@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agent.spec import AgentClaude, AgentCodex, AgentPi
+from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
 from agm.agent.values import agent_spec_shape, parse_agent_shorthand
 from agm.agl.runtime.value_decode import host_text_to_json
 from agm.agl.semantics.type_table import create_seeded_type_table
@@ -47,6 +47,29 @@ def test_agent_shorthand_selects_a_native_agent(text: str, expected: object) -> 
 )
 def test_incomplete_or_noncanonical_shorthand_does_not_match(text: str) -> None:
     assert parse_agent_shorthand(text) is None
+
+
+def test_spec_shape_tags_each_variant_with_its_own_fields() -> None:
+    assert agent_spec_shape(AgentCommand("run me")) == {
+        "$case": "AgentCommand",
+        "command": "run me",
+    }
+    assert agent_spec_shape(AgentClaude("sonnet", "high")) == {
+        "$case": "AgentClaude",
+        "model": "sonnet",
+        "thinking": "high",
+    }
+    assert agent_spec_shape(AgentCodex("o3", "high")) == {
+        "$case": "AgentCodex",
+        "model": "o3",
+        "thinking": "high",
+    }
+    assert agent_spec_shape(AgentPi("anthropic", "claude-opus", "custom")) == {
+        "$case": "AgentPi",
+        "provider": "anthropic",
+        "model": "claude-opus",
+        "thinking": "custom",
+    }
 
 
 def test_shorthand_text_decodes_through_host_text_to_json() -> None:

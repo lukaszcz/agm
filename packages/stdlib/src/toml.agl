@@ -3,7 +3,7 @@ import std/result::Result
 exception TomlParseError extends Exception
   raw: text
 
-exception TomlRenderError extends Exception()
+exception TomlRenderError extends Exception
 
 extern def parse(value: text) -> json
 def try-parse(value: text) -> Result[json, TomlParseError] =

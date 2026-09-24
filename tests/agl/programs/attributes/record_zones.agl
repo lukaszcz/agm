@@ -19,10 +19,14 @@ record Rect
   name: text
 
 # No attribute anywhere: both fields are standard.
-record Tally(label: text, count: int)
+record Tally
+  label: text
+  count: int
 
 # A generic record with one field per zone.
-record Boxed[T](@arg-pos value: T, @arg-named tag: text)
+record Boxed[T]
+  @arg-pos value: T
+  @arg-named tag: text
 
 program def main(base: int) -> unit =
   let planner: Agent = AgentCommand("planner")

@@ -5,7 +5,9 @@
 
 import libs/settings
 
-record Budget(cap: int, label: text)
+record Budget
+  cap: int
+  label: text
 
 @param let retries: int = 1
 @param let plan: Budget = Budget(cap = 1, label = "base")

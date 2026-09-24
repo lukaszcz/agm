@@ -6,7 +6,6 @@ import base64
 import time
 from decimal import Decimal
 from pathlib import Path
-from threading import TIMEOUT_MAX
 from urllib.parse import urlencode
 
 from agl import AglException, nominals, runtime
@@ -15,7 +14,7 @@ from agl import dict as agl_dict
 from agm.agl.runtime.serialize import dumps_exact
 from agm.core import http as core_http
 from agm.core.fs import fs_error_message
-from agm.core.parse import parse_timeout
+from agm.core.parse import parse_positive_timeout
 
 Option = nominals.std.option.Option
 Headers = nominals.std.http.Headers
@@ -50,13 +49,15 @@ _RECEIVE_NAMES = {
     core_http.Save: "save",
 }
 
-_TRANSPORT_ERROR_NAMES = {
-    "url": "HttpUrlError",
-    "request": "HttpRequestError",
-    "connection": "HttpConnectionError",
-    "timeout": "HttpTimeoutError",
-    "tls": "HttpTlsError",
-    "redirect": "HttpRedirectError",
+# Each transport kind's ``HttpError`` subtype, with the one extra field that
+# subtype carries beyond the shared base -- ``None`` when it carries none.
+_TRANSPORT_ERRORS = {
+    "url": (HttpUrlError, None),
+    "request": (HttpRequestError, "cause"),
+    "connection": (HttpConnectionError, "cause"),
+    "timeout": (HttpTimeoutError, "timeout"),
+    "tls": (HttpTlsError, "cause"),
+    "redirect": (HttpRedirectError, "redirects"),
 }
 
 
@@ -129,14 +130,9 @@ def _unwrap_timeout(timeout: object) -> tuple[float | None, str | None]:
     if isinstance(timeout, Option.Some):
         text = timeout.value
         try:
-            seconds = parse_timeout(text)
+            return parse_positive_timeout(text), text
         except ValueError as exc:
             raise AglException(TypeError(message=f"invalid timeout: {exc}")) from exc
-        if not 0 < seconds <= TIMEOUT_MAX:
-            raise AglException(
-                TypeError(message=f"invalid timeout: {text!r} is not positive and representable")
-            )
-        return seconds, text
     return None, None
 
 
@@ -153,21 +149,22 @@ def _redact_all(values: dict[str, str]) -> dict[str, str]:
 def _transport_exception(
     exc: core_http.TransportError, *, url: str, method: object, timeout_text: str | None
 ) -> AglException:
-    """Map one classified transport failure onto its ``HttpError`` subtype."""
-    base = {"url": url, "method": method, "message": exc.message}
+    """Map one classified transport failure onto its ``HttpError`` subtype.
+
+    Every subtype's extra field follows from the failure itself, except
+    ``redirects``, which only the classifier counts.
+    """
+    nominal, extra = _TRANSPORT_ERRORS[exc.kind]
+    fields: dict[str, object] = {"url": url, "method": method, "message": exc.message}
     if isinstance(exc, core_http.RedirectError):
-        return AglException(HttpRedirectError(redirects=exc.redirects, **base))
-    if exc.kind == "url":
-        return AglException(HttpUrlError(**base))
-    if exc.kind == "request":
-        return AglException(HttpRequestError(cause=exc.message, **base))
-    if exc.kind == "connection":
-        return AglException(HttpConnectionError(cause=exc.message, **base))
-    if exc.kind == "timeout":
-        # Empty when the inactivity timeout was disabled (``timeout = None``).
-        timeout_field = timeout_text if timeout_text is not None else ""
-        return AglException(HttpTimeoutError(timeout=timeout_field, **base))
-    return AglException(HttpTlsError(cause=exc.message, **base))
+        fields["redirects"] = exc.redirects
+    elif extra is not None:
+        fields[extra] = {
+            "cause": exc.message,
+            # Empty when the inactivity timeout was disabled (``timeout = None``).
+            "timeout": timeout_text if timeout_text is not None else "",
+        }[extra]
+    return AglException(nominal(**fields))
 
 
 def _trace_failure(error_type: str, message: str, elapsed: float) -> None:
@@ -201,25 +198,28 @@ def request(
 
     session = runtime.state(_SESSION_KEY, core_http.open_session, close=lambda s: s.close())
 
-    traced_headers = dict(headers_dict)
-    if content_type is not None:
-        traced_headers["content-type"] = content_type
-    if auth_header is not None:
-        traced_headers["authorization"] = auth_header
-    runtime.trace(
-        "http_request",
-        {
-            "method": method_text,
-            "url": url,
-            "query": query_dict,
-            "headers": _redact(traced_headers, _REDACT_REQUEST_HEADERS),
-            "body": body_text,
-            "timeout": timeout_text,
-            "follow_redirects": follow_redirects,
-            "verify_tls": verify_tls,
-            "cookies": _redact_all(cookies_dict),
-        },
-    )
+    # Tracing is off by default, and each payload rebuilds several dicts, so
+    # both payloads here are built only when a record will actually be written.
+    if runtime.tracing():
+        traced_headers = dict(headers_dict)
+        if content_type is not None:
+            traced_headers["content-type"] = content_type
+        if auth_header is not None:
+            traced_headers["authorization"] = auth_header
+        runtime.trace(
+            "http_request",
+            {
+                "method": method_text,
+                "url": url,
+                "query": query_dict,
+                "headers": _redact(traced_headers, _REDACT_REQUEST_HEADERS),
+                "body": body_text,
+                "timeout": timeout_text,
+                "follow_redirects": follow_redirects,
+                "verify_tls": verify_tls,
+                "cookies": _redact_all(cookies_dict),
+            },
+        )
 
     spec = core_http.RequestSpec(
         method=method_text,
@@ -240,7 +240,8 @@ def request(
     try:
         streamed = core_http.perform(session, spec)
     except core_http.TransportError as exc:
-        _trace_failure(_TRANSPORT_ERROR_NAMES[exc.kind], exc.message, time.monotonic() - started)
+        nominal, _ = _TRANSPORT_ERRORS[exc.kind]
+        _trace_failure(nominal.__name__, exc.message, time.monotonic() - started)
         raise _transport_exception(exc, url=url, method=method, timeout_text=timeout_text) from exc
     except core_http.DecodeFailure as exc:
         _trace_failure("HttpDecodeError", str(exc), time.monotonic() - started)
@@ -263,21 +264,22 @@ def request(
             )
         ) from exc
 
-    save_path = receive_spec.path if isinstance(receive_spec, core_http.Save) else None
-    runtime.trace(
-        "http_response",
-        {
-            "status": streamed.status,
-            "url": streamed.url,
-            "headers": _redact(streamed.headers, _REDACT_RESPONSE_HEADERS),
-            "body": streamed.text if isinstance(receive_spec, core_http.Decode) else None,
-            "body_bytes": streamed.body_bytes,
-            "elapsed": streamed.elapsed,
-            "receive": _RECEIVE_NAMES[type(receive_spec)],
-            "save_path": str(save_path) if save_path is not None else None,
-            "cookies": _redact_all(streamed.cookies),
-        },
-    )
+    if runtime.tracing():
+        save_path = receive_spec.path if isinstance(receive_spec, core_http.Save) else None
+        runtime.trace(
+            "http_response",
+            {
+                "status": streamed.status,
+                "url": streamed.url,
+                "headers": _redact(streamed.headers, _REDACT_RESPONSE_HEADERS),
+                "body": streamed.text if isinstance(receive_spec, core_http.Decode) else None,
+                "body_bytes": streamed.body_bytes,
+                "elapsed": streamed.elapsed,
+                "receive": _RECEIVE_NAMES[type(receive_spec)],
+                "save_path": str(save_path) if save_path is not None else None,
+                "cookies": _redact_all(streamed.cookies),
+            },
+        )
 
     return Response(
         status=streamed.status,

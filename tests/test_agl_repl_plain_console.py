@@ -245,9 +245,27 @@ class TestPlainMultiline:
         assert "R declared" in output
 
     def test_blank_continuation_line_force_submits_incomplete(self) -> None:
-        output = drive_plain("record R\n\n")
+        output = drive_plain("enum E\n\n")
         assert "declared" not in output
         assert ": error:" in output.lower()
+
+    def test_bare_record_header_submits_fieldless_on_blank_line(self) -> None:
+        output = drive_plain("record R\n\nR == R()\n")
+        assert "R declared" in output
+        assert "true" in output
+        assert ": error:" not in output.lower()
+
+    def test_bare_record_header_accepts_a_following_field_block(self) -> None:
+        output = drive_plain("record R\n  x: int\n\nR(x = 1).x\n")
+        assert "R declared" in output
+        assert "1" in output
+        assert ": error:" not in output.lower()
+
+    def test_bare_exception_header_followed_by_an_item_is_one_entry(self) -> None:
+        output = drive_plain('exception Oops\nlet e = Oops(message = "m")\ne.message\n')
+        assert "agl> ...> " in output
+        assert '"m"' in output
+        assert ": error:" not in output.lower()
 
     def test_editor_sent_block_is_read_as_one_entry(
         self, capsys: pytest.CaptureFixture[str]

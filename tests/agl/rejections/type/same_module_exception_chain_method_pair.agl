@@ -1,9 +1,9 @@
 # Problem::label and Detailed::label share a selection level in one module:
 # the later declaration is rejected here, not merely ambiguous at a call site.
 
-exception Problem extends Exception()
+exception Problem extends Exception
 
-exception Detailed extends Problem()
+exception Detailed extends Problem
 
 def Problem::label(self) -> text = "problem"
 

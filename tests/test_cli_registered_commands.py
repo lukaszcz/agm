@@ -226,7 +226,7 @@ def test_plain_registered_command_does_not_discover_during_outer_parsing(
     assert calls == [["input"]]
 
 
-def test_registered_command_treats_only_standalone_dry_run_as_global(
+def test_registered_command_passes_dry_run_spelling_to_program(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import agm.commands.exec_program as exec_program
@@ -252,14 +252,17 @@ def test_registered_command_treats_only_standalone_dry_run_as_global(
 
     assert value_result.exit_code == 0
     assert flag_result.exit_code == 0
-    assert calls == [(["--level=--dry-run"], False), (["--level", "strict"], True)]
+    assert calls == [
+        (["--level=--dry-run"], False),
+        (["--level", "strict", "--dry-run"], False),
+    ]
 
 
-def test_registered_command_preserves_a_host_looking_program_option_value(
+def test_registered_command_clears_stale_dry_run_mode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import agm.commands.exec_program as exec_program
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from agm.core import dry_run
 
     context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
     index = ActivationIndex(
@@ -267,21 +270,70 @@ def test_registered_command_preserves_a_host_looking_program_option_value(
     )
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
-    (program,) = discover_program_declarations_from_source(
-        "program def main(message: text) -> unit = ()"
+    calls: list[tuple[list[str], bool]] = []
+    monkeypatch.setattr(
+        exec_program,
+        "run_registered",
+        lambda _program, argument_tokens, **_kwargs: calls.append(
+            (argument_tokens, dry_run.enabled())
+        ),
     )
-    monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
-    calls: list[list[str]] = []
+    dry_run.set_enabled(True)
 
-    def run_registered(_program: str, argument_tokens: list[str], **_kwargs: object) -> None:
-        calls.append(argument_tokens)
+    result = invoke(CliRunner(), ["tools", "lint", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert calls == [(["--dry-run"], False)]
+
+
+def test_registered_command_preserves_a_host_looking_program_option_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agm.commands.exec_program as exec_program
+
+    home = tmp_path / "home"
+    context = ConfigContext(home=home, proj_dir=None, cwd=tmp_path)
+    write_installed_package(
+        home,
+        "tools",
+        source="program def main(message: text) -> unit = ()\n",
+        commands={"tools lint": "tools/lint::main"},
+        module_path="lint",
+    )
+    index = ActivationIndex(
+        commands={"tools lint": CommandRegistration("tools", "tools/lint::main")}
+    )
+    monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
+    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
+    monkeypatch.setattr(exec_program, "current_config_context", lambda: context)
+    calls: list[tuple[list[str], object]] = []
+
+    def run_registered(_program: str, argument_tokens: list[str], **kwargs: object) -> None:
+        calls.append((argument_tokens, kwargs["pipeline_cache"]))
 
     monkeypatch.setattr(exec_program, "run_registered", run_registered)
 
-    result = invoke(CliRunner(), ["tools", "lint", "--message", "--dry-run"])
+    result = invoke(CliRunner(), ["tools", "lint", "--message", "--no-timeout"])
 
-    assert result.exit_code == 0
-    assert calls == [["--message", "--dry-run"]]
+    assert result.exit_code == 0, result.output
+    assert calls[0][1] is not None, calls
+    assert calls[0][0] == ["--message", "--no-timeout"]
+
+    conflict_result = invoke(
+        CliRunner(),
+        [
+            "tools",
+            "lint",
+            "--message",
+            "--no-timeout",
+            "--trace",
+            "--trace-file",
+            "trace.log",
+        ],
+    )
+
+    assert conflict_result.exit_code != 0
+    assert len(calls) == 1
 
 
 def _record_registered_exec_args(
@@ -539,7 +591,7 @@ def test_registered_command_help_does_not_dispatch_program(
     assert value_result.exit_code == 0
     assert "agm tools lint" in result.output
     assert "Lint package inputs" in result.output
-    assert "--dry-run" in result.output
+    assert "--dry-run" not in result.output
     assert "agm tools lint" in value_option_result.output
     assert "agm tools lint" in bool_option_result.output
     assert calls == [("tools/lint::main", ["--message", "-h"])]

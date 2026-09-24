@@ -67,7 +67,7 @@ class HostEnvironment:
 
 @dataclass(frozen=True, slots=True)
 class CallSiteInfo:
-    """Static summary of one agent-call or exec site (--dry-run inventory).
+    """Static summary of one agent-call or exec site for check-only inspection.
 
     ``callee``        Agent or executor name (``"ask"`` or ``"exec"``).
     ``target_type``   The target type name (e.g. ``"text"``, ``"Review"``).

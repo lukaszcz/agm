@@ -45,7 +45,7 @@ def prepare_trace_log_from_decision(decision: TraceDecision, *, command_name: st
 
     ``agm exec`` and ``agm repl`` take the decision from their engine seed
     tiers — the same resolution that seeds their engine-setting registers — and
-    hand it here.  Callers handle the ``--dry-run`` short-circuit before
+    hand it here.  Callers handle the check-only short-circuit before
     calling.
     """
     return prepare_trace_log(
@@ -155,7 +155,7 @@ def prepare_trace_log(
     starts from a clean file.  An unwritable path exits 1 with a clean
     ``Error: ...`` BEFORE any program runs instead of crashing mid-run.
     Returns ``None`` when *enabled* is ``False``; callers that suppress tracing
-    for other reasons (e.g. ``--dry-run``) short-circuit before calling.
+    for other reasons (e.g. check-only execution) short-circuit before calling.
     Shared by ``agm exec`` and ``agm repl``.
     """
     if not enabled:

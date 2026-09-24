@@ -12,7 +12,6 @@ agm <command> [options] [args]
 
 Global options:
 
-- `--dry-run`
 - `--install-completion`
 - `--show-completion`
 

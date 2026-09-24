@@ -582,7 +582,6 @@ _HELP_TEXTS: dict[str, str] = {
         agm exec [--strict-json|--no-strict-json] [--max-call-depth N]
                  [--default-agent AGENT] [--default-sandbox SANDBOX]
                  [--timeout DURATION|--no-timeout]
-                 [--dry-run]
                  [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
                  [--no-stdlib] [-I DIR]... [-p PATH]
                  (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [ARG]... [--NAME VALUE]...
@@ -646,8 +645,6 @@ _HELP_TEXTS: dict[str, str] = {
           --no-timeout          Remove configured initial shell-exec and agent timeouts;
                                 seed std/config::timeout to None. Mutually exclusive
                                 with --timeout.
-          --dry-run             Run the full static pipeline and validate program
-                                arguments, but do not execute the workflow.
           --trace               Enable trace logging (auto timestamped path).
           --trace-file PATH     Write trace log to PATH.
           --no-trace-file       Clear the CLI trace-file seed only; use --no-trace
@@ -677,7 +674,7 @@ _HELP_TEXTS: dict[str, str] = {
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-call-depth N]
                  [--default-agent AGENT] [--default-sandbox SANDBOX]
-                 [--dry-run] [--no-stdlib]
+                 [--no-stdlib]
                  [--quiet] [--trace|--trace-file PATH|--no-trace] [--plain]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is parsed,
@@ -725,9 +722,6 @@ _HELP_TEXTS: dict[str, str] = {
           --trace-file PATH     Write a JSONL trace log to PATH.
           --no-trace            Disable trace logging.
           --trace, --trace-file, and --no-trace are mutually exclusive.
-          --dry-run             Statically check only: run the full static pipeline
-                                for each entry but never evaluate it (no agent/exec
-                                calls, no persisted bindings); echo the inferred type.
           --plain               Force the plain, non-interactive line front end
                                 (auto-detected otherwise).
 
@@ -1135,7 +1129,6 @@ def _overview_text() -> str:
         [
             "",
             "Global options:",
-            "  --dry-run             Print planned commands and AGM operations only.",
             "  --install-completion  Install shell completion for the current shell.",
             "  --show-completion     Print the shell completion script.",
             "",

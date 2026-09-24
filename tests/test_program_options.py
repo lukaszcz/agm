@@ -484,12 +484,13 @@ class TestBuildProgramCommand:
 
         assert isinstance(result, ProgramCommand)
 
-    def test_registered_command_reserves_its_own_dry_run_flag(self) -> None:
-        result = build_program_command(
-            _program(_param("dry-run", BoolType())), REGISTERED_RESERVED_FLAGS
-        )
+    @pytest.mark.parametrize("reserved", [EXEC_RESERVED_FLAGS, REGISTERED_RESERVED_FLAGS])
+    def test_dry_run_spelling_is_available_to_program_parameters(
+        self, reserved: frozenset[str]
+    ) -> None:
+        result = build_program_command(_program(_param("dry-run", BoolType())), reserved)
 
-        assert result == ReservedFlagError(parameter="dry-run", flag="--dry-run")
+        assert isinstance(result, ProgramCommand)
 
     @pytest.mark.parametrize("reserved", [EXEC_RESERVED_FLAGS, REGISTERED_RESERVED_FLAGS])
     def test_help_flags_are_reserved_on_every_surface(self, reserved: frozenset[str]) -> None:
@@ -1317,13 +1318,13 @@ class TestCompletionQueries:
 
     @pytest.mark.parametrize(
         ("tokens", "expected"),
-        [(["--trace-file", "trace.jsonl", "--dry-run"], "source"), (["--trace-file"], None)],
+        [(["--trace-file", "trace.jsonl", "--no-stdlib"], "source"), (["--trace-file"], None)],
     )
     def test_host_options_and_their_values_fill_no_slot(
         self, tokens: list[str], expected: str | None
     ) -> None:
         slot = self._command().next_positional(
-            tokens, "b.txt", host_options={"--trace-file": True, "--dry-run": False}
+            tokens, "b.txt", host_options={"--trace-file": True, "--no-stdlib": False}
         )
 
         assert (None if slot is None else slot.name) == expected
@@ -1757,7 +1758,7 @@ class TestModuleParameterOptions:
         command = _command_with_module_params(program, message, enabled)
 
         assert command.value_token_indexes(
-            ["--message", "--dry-run", "-m", "--no-stdlib", "--enabled"]
+            ["--message", "--no-stdlib", "-m", "--no-stdlib", "--enabled"]
         ) == frozenset({1, 3})
 
     def test_value_options_include_path_typed_module_parameters(self) -> None:
@@ -1839,7 +1840,7 @@ class TestHostLookingProgramValues:
             "word",
             "--verbose",
             "--message",
-            "--dry-run",
+            "--no-stdlib",
             "--region",
             "--no-stdlib",
             "--no-region",
@@ -1863,11 +1864,11 @@ class TestHostLookingProgramValues:
         command = _command(_param("message", TextType()))
 
         protected, replacements = protect_host_option_values(
-            ["--message", "--dry-run"], command, frozenset({"--dry-run"})
+            ["--message", "--no-stdlib"], command, frozenset({"--no-stdlib"})
         )
 
         assert protected == ["--message", "agm-program-value-1"]
-        assert replacements == {"agm-program-value-1": "--dry-run"}
+        assert replacements == {"agm-program-value-1": "--no-stdlib"}
 
     @pytest.mark.parametrize("value", ["-pnot-a-program", "-csource", "-Idir"])
     def test_protection_recognizes_attached_host_short_option_values(self, value: str) -> None:
@@ -1884,30 +1885,30 @@ class TestHostLookingProgramValues:
         command = _command(_param("message", TextType()))
 
         protected, replacements = protect_host_option_values(
-            ["--trace-file", "--message", "--dry-run"],
+            ["--trace-file", "--message", "--no-stdlib"],
             command,
-            {"--trace-file": True, "--dry-run": False},
+            {"--trace-file": True, "--no-stdlib": False},
         )
 
-        assert protected == ["--trace-file", "--message", "--dry-run"]
+        assert protected == ["--trace-file", "--message", "--no-stdlib"]
         assert replacements == {}
 
     def test_bare_marker_used_as_a_program_value_is_protected(self) -> None:
         command = _command(_param("message", TextType()))
 
         protected, replacements = protect_host_option_values(
-            ["--message", "--", "--dry-run"], command, {"--dry-run": False}
+            ["--message", "--", "--no-stdlib"], command, {"--no-stdlib": False}
         )
 
-        assert protected == ["--message", "agm-program-value-1", "--dry-run"]
+        assert protected == ["--message", "agm-program-value-1", "--no-stdlib"]
         assert replacements == {"agm-program-value-1": "--"}
 
     def test_preview_placeholder_does_not_collide_with_a_literal_token(self) -> None:
         from agm.cli_support.program_options import protect_potential_program_values
 
         assert protect_potential_program_values(
-            ["--message", "--dry-run", "agm-program-preview-1"],
-            {"--dry-run": False},
+            ["--message", "--no-stdlib", "agm-program-preview-1"],
+            {"--no-stdlib": False},
         ) == ["--message", "agm-program-preview-1-1", "agm-program-preview-1"]
 
     def test_value_scan_walks_past_a_short_flag_in_a_bundle(self) -> None:
@@ -1922,27 +1923,27 @@ class TestHostLookingProgramValues:
         command = _command(_param("message", TextType()))
 
         protected, replacements = protect_host_option_values(
-            ["--message", "--dry-run", "agm-program-value-1"],
+            ["--message", "--no-stdlib", "agm-program-value-1"],
             command,
-            frozenset({"--dry-run"}),
+            frozenset({"--no-stdlib"}),
         )
 
         assert protected == ["--message", "agm-program-value-1-1", "agm-program-value-1"]
-        assert replacements == {"agm-program-value-1-1": "--dry-run"}
+        assert replacements == {"agm-program-value-1-1": "--no-stdlib"}
 
     def test_protection_leaves_unselected_and_non_host_values_unchanged(self) -> None:
         command = _command(_param("message", TextType()))
 
         assert protect_host_option_values(
-            ["--message", "value"], command, frozenset({"--dry-run"})
+            ["--message", "value"], command, frozenset({"--no-stdlib"})
         ) == (
             ["--message", "value"],
             {},
         )
         assert protect_host_option_values(
-            ["--message", "--dry-run"], None, frozenset({"--dry-run"})
+            ["--message", "--no-stdlib"], None, frozenset({"--no-stdlib"})
         ) == (
-            ["--message", "--dry-run"],
+            ["--message", "--no-stdlib"],
             {},
         )
 

@@ -344,8 +344,8 @@ def registered_command_positional_completion(
 ) -> list[CompletionItem]:
     """Complete the positional slot of the registered program *command_path* runs.
 
-    The tokens after the command path fill slots except where ``--dry-run``,
-    ``agm exec``'s run-time options, or their values occupy them.
+    The tokens after the command path fill slots except where ``agm exec``'s
+    run-time options or their values occupy them.
     """
     from agm.cli_dispatch import registered_run_options
     from agm.cli_support.program_options import option_value_map
@@ -356,7 +356,7 @@ def registered_command_positional_completion(
     resolution, program_command = resolved
     if program_command is None:
         return []
-    host_options = {"--dry-run": False, **option_value_map(registered_run_options(ctx))}
+    host_options = option_value_map(registered_run_options(ctx))
     return [
         CompletionItem(candidate)
         for candidate in _positional_candidates(
@@ -371,8 +371,8 @@ def registered_command_param_completion(
 ) -> list[CompletionItem]:
     """Complete parameters for an already resolved registered command.
 
-    *ctx* is a context under the ``agm`` group. Combines ``--dry-run`` and
-    ``agm exec``'s run-time options with the
+    *ctx* is a context under the ``agm`` group. Combines ``agm exec``'s
+    run-time options with the
     referenced program's own value-parameter option flags (and their ``--no-``
     forms), the same mechanism ``registered_command_help`` renders.
     """
@@ -385,7 +385,6 @@ def registered_command_param_completion(
     if resolution.registration.program is None:
         return [CompletionItem("--help")] if "--help".startswith(incomplete) else []
     flags = (
-        "--dry-run",
         *(
             flag
             for option in registered_run_options(ctx)
@@ -764,7 +763,7 @@ class ExecCommand(TyperCommand):
         )
 
         preview = copy(self)
-        preview.params = [param for param in self.params if param.name != "_dry_run"]
+        preview.params = list(self.params)
         preview_ctx = click.Context(
             cast(click.Command, preview),
             info_name=ctx.info_name,

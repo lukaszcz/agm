@@ -48,8 +48,8 @@ Each surface a program runs under reserves its own flag inventory.
 ``EXEC_RESERVED_FLAGS`` is ``agm exec``'s: the flags it declares itself
 (``--help``, ``-p``, ``--program``, …) union every engine-key
 flag. ``REGISTERED_RESERVED_FLAGS`` is a package-registered command's: its
-``agm exec`` run-time options (``REGISTERED_RUN_FLAGS``) and ``--dry-run``
-beside the help flags every program command owns. A program
+``agm exec`` run-time options (``REGISTERED_RUN_FLAGS``) beside the help
+flags every program command owns. A program
 parameter can never be projected onto its surface's reserved flags —
 :func:`build_program_command` reports the collision instead.
 
@@ -390,7 +390,6 @@ _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
         # ``--param`` tokens pass through to it, and recognises these itself.
         "--help",
         "-h",
-        "--dry-run",
         "--no-stdlib",
     }
 )
@@ -405,12 +404,10 @@ EXEC_RESERVED_FLAGS: frozenset[str] = _BUILTIN_EXEC_FLAGS | engine_key_flags()
 # themselves from ``agm exec``'s command by these spellings.
 REGISTERED_RUN_FLAGS: frozenset[str] = engine_key_flags() | {"--max-call-depth"}
 
-# A package-registered command's reserved flag strings: its run-time options,
-# ``--dry-run`` and help. Its program may claim ``agm exec``'s other spellings
+# A package-registered command's reserved flag strings: its run-time options
+# and help. Its program may claim ``agm exec``'s other spellings
 # (``-p``, ``--module-path``, …), which select sources a registration fixes.
-REGISTERED_RESERVED_FLAGS: frozenset[str] = (
-    frozenset({*HELP_FLAGS, "--dry-run"}) | REGISTERED_RUN_FLAGS
-)
+REGISTERED_RESERVED_FLAGS: frozenset[str] = frozenset(HELP_FLAGS) | REGISTERED_RUN_FLAGS
 
 # The end-of-options marker. ``agm exec`` consumes one only when it is what
 # names the FILE; any other marker belongs to the program and reaches it.
@@ -1575,7 +1572,7 @@ class ProgramCommand:
         supplies one of the host's own (a package manifest's, say); and the
         options are this program's visible flags with their own ``@doc`` and
         metavars, followed by *extra_options* — flags the host adds around the
-        program, such as ``--dry-run`` — and the help flags themselves.
+        program, such as ``--trace`` — and the help flags themselves.
         """
         command = _build_click_command(
             program_name,

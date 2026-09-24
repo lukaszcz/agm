@@ -537,7 +537,7 @@ def run_prepared_prompt(
 
     Never prepared with a sandbox: its only callers (``review``/``revise``)
     build ``prepared`` through ``prepare_prompt_run``, which never sets
-    ``sandbox``, and AgL's own ``--dry-run`` stops before execution, so
+    ``sandbox``, and AgL's check-only execution path stops before dispatch, so
     neither reaches this function with one.
     """
 

@@ -929,7 +929,7 @@ class TestExecNoLog:
 
 class TestDryRunNoTrace:
     def test_dry_run_does_not_write_trace(self, tmp_path: Path) -> None:
-        """check_only=True (--dry-run) must produce no trace output."""
+        """check_only=True must produce no trace output."""
         trace_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, "let x = 1\nx", trace_file=trace_path, check_only=True)

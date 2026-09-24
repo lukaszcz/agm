@@ -73,6 +73,62 @@ def make_recorder(
 
 
 class TestConfigCopy:
+    def test_commands_without_dry_run_behavior_reject_the_option(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.check as check_command
+        import agm.commands.config.env as config_env_command
+        import agm.commands.dep.list as dep_list_command
+        import agm.commands.pkg.check as pkg_check_command
+        import agm.commands.pkg.info as pkg_info_command
+        import agm.commands.pkg.list as pkg_list_command
+        import agm.commands.workspace.list as workspace_list_command
+
+        calls: list[bool] = []
+
+        def record(*args: object, **kwargs: object) -> None:
+            calls.append(True)
+
+        for command in (
+            check_command,
+            config_env_command,
+            dep_list_command,
+            pkg_check_command,
+            pkg_info_command,
+            pkg_list_command,
+            workspace_list_command,
+        ):
+            monkeypatch.setattr(command, "run", record)
+
+        for argv in (
+            ["check", "source.agl", "--dry-run"],
+            ["config", "env", "--dry-run"],
+            ["dep", "list", "--dry-run"],
+            ["pkg", "check", "--dry-run"],
+            ["pkg", "info", "alpha", "--dry-run"],
+            ["pkg", "list", "--dry-run"],
+            ["workspace", "list", "--dry-run"],
+        ):
+            result = invoke(runner, argv)
+            assert result.exit_code != 0, argv
+
+        assert calls == []
+
+    def test_read_only_groups_and_root_reject_dry_run(self, runner: CliRunner) -> None:
+        for argv in (
+            ["help", "--dry-run"],
+            ["--dry-run", "check", "source.agl"],
+            ["config", "--dry-run", "env"],
+            ["dep", "--dry-run", "list"],
+            ["pkg", "--dry-run", "list"],
+            ["sync", "--dry-run", "fetch"],
+            ["tmux", "--dry-run", "open"],
+            ["workspace", "--dry-run", "list"],
+            ["worktree", "--dry-run", "new", "branch"],
+        ):
+            result = invoke(runner, argv)
+            assert result.exit_code != 0, argv
+
     def test_config_cp(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, config_copy_command)
         result = invoke(runner, ["config", "cp", "mydir"])
@@ -560,7 +616,7 @@ class TestSync:
         assert result.exit_code == 0
         assert len(calls) == 1
 
-    def test_sync_fetch_accepts_global_dry_run(
+    def test_sync_fetch_accepts_dry_run(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         observed: list[bool] = []
@@ -570,7 +626,7 @@ class TestSync:
             observed.append(dry_run_state.enabled())
 
         monkeypatch.setattr(sync_fetch_command, "run", record)
-        result = invoke(runner, ["--dry-run", "sync", "fetch"])
+        result = invoke(runner, ["sync", "fetch", "--dry-run"])
         assert result.exit_code == 0
         assert observed == [True]
 
@@ -590,7 +646,7 @@ class TestSync:
         assert result.exit_code == 0
         assert len(calls) == 1
 
-    def test_sync_pull_accepts_global_dry_run(
+    def test_sync_pull_accepts_dry_run(
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         observed: list[bool] = []
@@ -600,7 +656,7 @@ class TestSync:
             observed.append(dry_run_state.enabled())
 
         monkeypatch.setattr(sync_pull_command, "run", record)
-        result = invoke(runner, ["--dry-run", "sync", "pull"])
+        result = invoke(runner, ["sync", "pull", "--dry-run"])
         assert result.exit_code == 0
         assert observed == [True]
 

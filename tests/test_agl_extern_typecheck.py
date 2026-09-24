@@ -203,6 +203,13 @@ class TestExternCallableSignatures:
     def test_function_typed_return_is_checked_at_the_runtime_boundary(self) -> None:
         check_extern("extern def f(x: int) -> (int) -> int\n0")
 
+    def test_extern_returned_function_keeps_its_call_target(self) -> None:
+        cp = check_extern("extern def choose() -> (int) -> int\nlet maker = choose\nmaker()(1)")
+
+        sites = [site for site in cp.call_sites if site.callee == "choose"]
+        assert len(sites) == 1
+        assert sites[0].target_type == IntType()
+
     def test_function_type_nested_in_array_is_accepted(self) -> None:
         check_extern("extern def f(cbs: array[(int) -> int]) -> int\n0")
 

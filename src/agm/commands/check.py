@@ -22,14 +22,14 @@ program-discovery/selection/preflight machinery
 path that still reaches lowering without binding or validating any host
 argument is ``PipelineDriver.parse_entry`` → ``PipelineDriver.
 prepare_parsed_entry`` → ``PipelineDriver.check_prepared(...)`` directly.
-Lowering (rather than stopping at match compilation, as the REPL's own
-``--dry-run`` does) is required here because some static errors — an invalid
+Lowering (rather than stopping at match compilation, as the REPL's internal
+check-only entry path does) is required here because some static errors — an invalid
 ``resource``/``resource-dir`` path, an unmaterializable output contract —
 surface only during contract materialization and lowering, not during type
 checking. ``check_prepared`` reaches exactly that far and no further: it
 never resolves or validates a program's arguments, so a required ``program
 def`` value parameter with no default is silently accepted, unlike under
-``agm exec --dry-run``.
+``agm exec``.
 
 Warnings (on ``RunResult.warnings``) are a separate channel from error
 diagnostics, printed to stderr but never affecting the exit code — the same

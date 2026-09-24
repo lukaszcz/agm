@@ -52,7 +52,6 @@ from agm.config.module_roots import (
     resolve_lib_root,
     resolve_stdlib_root,
 )
-from agm.core import dry_run
 from agm.core.cleanup import preserve_primary_error
 from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
 from agm.core.toml import toml_dict
@@ -110,13 +109,8 @@ def run(args: ReplArgs) -> None:
 
     # Resolve and validate the trace log file up front so an unwritable
     # ``--trace-file`` exits 1 BEFORE the loop starts rather than crashing
-    # mid-session.  ``--dry-run`` is side-effect-free (no eval, no trace),
-    # mirroring ``agm exec``.
-    trace_path = (
-        None
-        if dry_run.enabled()
-        else prepare_trace_log_from_decision(trace_decision, command_name="repl")
-    )
+    # mid-session.
+    trace_path = prepare_trace_log_from_decision(trace_decision, command_name="repl")
 
     # Built once and shared by every sandboxing consumer this session
     # dispatches through, so they all resolve sandbox configuration from the
@@ -196,10 +190,6 @@ def run(args: ReplArgs) -> None:
         # persisted (or default) ``[repl] echo`` applies.
         echo = repl_config.echo and not args.quiet
 
-        # ``--dry-run`` means type-check only in the REPL: every entry runs the full
-        # static pipeline but is never evaluated, so no agent/exec calls fire and no
-        # bindings are persisted.  It reads the same global flag ``agm exec`` honours.
-        #
         # The front end is chosen once, here: ``--plain`` forces the plain line
         # front end; otherwise ``plain_mode_engaged`` auto-detects it from
         # stdin/stdout (a pipe, redirected file, or a dumb terminal). There is no
@@ -216,7 +206,6 @@ def run(args: ReplArgs) -> None:
                 session,
                 echo=echo,
                 echo_unit=repl_config.echo_unit,
-                check_only=dry_run.enabled(),
                 theme=repl_config.theme,
                 on_setting_save=on_setting_save,
                 stdin=sys.stdin,
@@ -230,7 +219,6 @@ def run(args: ReplArgs) -> None:
             session,
             echo=echo,
             echo_unit=repl_config.echo_unit,
-            check_only=dry_run.enabled(),
             history_path=history_path,
             theme=repl_config.theme,
             on_setting_save=on_setting_save,

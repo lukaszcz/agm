@@ -15,7 +15,8 @@ source.
 | `agm pkg info NAME` | Show an active package's metadata and dependency status |
 | `agm pkg sync` | Install the active packages' unsatisfied Python requirements |
 
-`DIR` defaults to the current directory. Every command honors the global `--dry-run` flag.
+`DIR` defaults to the current directory. `--dry-run` is available on commands that report
+planned operations; read-only `check`, `list`, and `info` do not accept it.
 
 ## Quick start: a package with a command
 
@@ -210,7 +211,7 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
   Help groups visible module parameters by declaring module, and completion offers their resolving
   spellings. See [Program arguments](agl.md#program-arguments) and
   [Module parameters](agl.md#module-parameters). A registered command reserves its run-time
-  options, `--dry-run`, and `-h`/`--help`; its parameters may reuse other spellings `agm exec`
+  options and `-h`/`--help`; its parameters may reuse other spellings `agm exec`
   reserves, such as `--module-path` or `-p`, which `agm exec` still rejects.
 - **Run-time options.** `agm exec`'s engine-setting flags (`--strict-json`/`--no-strict-json`,
   `--default-agent`, `--default-sandbox`, `--timeout`/`--no-timeout`, `--trace`/`--no-trace`,
@@ -228,8 +229,6 @@ An active package's commands run as `agm COMMAND ...` (longest matching path win
   both. CLI values win over all of them; `@opt-env` reaches a module parameter the same way, but
   not an engine setting, which only a source `std/config` write outranks. See
   [Configuration](agl.md#configuration).
-- **`--dry-run`**, before or after the command path, runs the static pipeline and host-input
-  validation without executing.
 - **Conflicts.** Two active packages cannot own the same command path; install the later one with
   `--shadow` to make it the owner. Shadowing is recorded per store tree, so a rebuilt activation
   index preserves it.
@@ -317,8 +316,9 @@ platform-tools = "1.0.0+linux"
 Pins live in any layered `config.toml` (install prefix, AGM home, project `config/config.toml`,
 then `.agm/config.toml`), merge by name with later layers winning, and select an exact identity that
 must already be a valid stored version. A pin affects module roots, command dispatch, help, and
-completion for the invocation only; it never installs or fetches, and `list`/`info` ignore it. A
-development checkout of the same name discovered from the execution root still takes precedence.
+completion for the invocation only; it never installs or fetches. The `list` and `info` commands
+report the active package set. A development checkout of the same name discovered from the
+execution root still takes precedence.
 
 ## The `std` package
 

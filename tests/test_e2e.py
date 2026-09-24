@@ -3364,7 +3364,7 @@ class TestInit:
     ) -> None:
         project = tmp_path / "sample"
 
-        result = run_agm(["--dry-run", "init", "sample"], env=env, cwd=str(tmp_path))
+        result = run_agm(["init", "sample", "--dry-run"], env=env, cwd=str(tmp_path))
 
         assert result.returncode == 0
         assert not project.exists()
@@ -4032,7 +4032,7 @@ class TestSandbox:
         (work / ".sandbox" / "printf.json").write_text(json.dumps(_settings(enabled=True)))
         env["PROJ_DIR"] = str(proj_dir)
 
-        result = run_agm(["--dry-run", "run", "echo", "hi"], env=env, cwd=str(work))
+        result = run_agm(["run", "--dry-run", "echo", "hi"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "dry-run: run configuration" in result.stdout
@@ -4064,7 +4064,7 @@ class TestSandbox:
         work.mkdir()
 
         result = run_agm(
-            ["--dry-run", "run", "--no-sandbox", "echo", "hi"],
+            ["run", "--dry-run", "--no-sandbox", "echo", "hi"],
             env=env,
             cwd=str(work),
         )
@@ -5653,7 +5653,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["--dry-run", "loop", "run"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--dry-run", "run"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "Logging to .agent-files/loop-" in result.stdout
@@ -5706,7 +5706,7 @@ class TestLoop:
         work.mkdir()
 
         result = run_agm(
-            ["--dry-run", "loop", "run", "--no-selector", "--runner", "runner"],
+            ["loop", "--dry-run", "run", "--no-selector", "--runner", "runner"],
             env=env,
             cwd=str(work),
         )
@@ -6127,7 +6127,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["--dry-run", "loop", "select"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--dry-run", "select"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "dry-run: loop-select configuration" in result.stdout
@@ -6166,7 +6166,7 @@ class TestLoop:
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(["--dry-run", "loop", "select"], env=env, cwd=str(work))
+        result = run_agm(["loop", "--dry-run", "select"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert "dry-run: loop-select configuration" in result.stdout
@@ -8086,14 +8086,14 @@ class TestPackageInstall:
         installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
         published = run_agm(["publish", "--subject", "flag"], env=env, cwd=tmp_path)
         configured = run_agm(["publish"], env=env, cwd=tmp_path)
-        dry_run = run_agm(["publish", "--dry-run"], env=env, cwd=tmp_path)
+        removed_dry_run = run_agm(["publish", "--dry-run"], env=env, cwd=tmp_path, check=False)
         uninstalled = run_agm(["pkg", "uninstall", "tools"], env=env, cwd=tmp_path)
         unknown = run_agm(["publish"], env=env, cwd=tmp_path, check=False)
 
         assert installed.returncode == 0
         assert published.stdout == "flag\ntrue\n"
         assert configured.stdout == "configured\ntrue\n"
-        assert "call-sites:" in dry_run.stdout
+        assert removed_dry_run.returncode != 0
         assert uninstalled.returncode == 0
         assert unknown.returncode != 0
 
@@ -8303,14 +8303,14 @@ class TestPackageInstall:
         archive = tmp_path / "alpha.agmpkg"
 
         created = run_agm(
-            ["--dry-run", "pkg", "create", str(source), "-o", str(archive)],
+            ["pkg", "create", str(source), "-o", str(archive), "--dry-run"],
             env=env,
             cwd=tmp_path,
         )
         write_archive = run_agm(
             ["pkg", "create", str(source), "-o", str(archive)], env=env, cwd=tmp_path
         )
-        installed = run_agm(["--dry-run", "pkg", "install", str(archive)], env=env, cwd=tmp_path)
+        installed = run_agm(["pkg", "install", str(archive), "--dry-run"], env=env, cwd=tmp_path)
 
         assert created.returncode == 0
         assert "dry-run: agm create-package-archive" in created.stdout
@@ -8347,7 +8347,7 @@ class TestPackageInstall:
         env["AGM_HOME"] = str(tmp_path / "agm-home")
         package = _write_store_test_package(tmp_path / "alpha-source", "alpha", "1.0.0")
 
-        dry_run = run_agm(["--dry-run", "pkg", "install", str(package)], env=env, cwd=tmp_path)
+        dry_run = run_agm(["pkg", "install", str(package), "--dry-run"], env=env, cwd=tmp_path)
         editable = run_agm(["pkg", "install", "--editable", str(package)], env=env, cwd=tmp_path)
         program = tmp_path / "program.agl"
         program.write_text("import alpha/main\nprogram def main() -> unit = ()\n", encoding="utf-8")
@@ -8371,7 +8371,7 @@ class TestPackageInstall:
         root = tmp_path / "isolated-agm-home" / "packages" / "alpha" / "1.0.0"
 
         installed = run_agm(["pkg", "install", str(package)], env=env, cwd=tmp_path)
-        dry_run = run_agm(["--dry-run", "pkg", "uninstall", "alpha"], env=env, cwd=tmp_path)
+        dry_run = run_agm(["pkg", "uninstall", "alpha", "--dry-run"], env=env, cwd=tmp_path)
         listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
 
         assert installed.returncode == 0
@@ -9976,7 +9976,7 @@ class TestCheckCommand:
     def test_check_library_module_without_program_def_succeeds(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        """Unlike `agm exec --dry-run`, `agm check` accepts a file with no `program def`."""
+        """Unlike `agm exec`, `agm check` accepts a file with no `program def`."""
         work = tmp_path / "work"
         work.mkdir()
         module = work / "lib.agl"

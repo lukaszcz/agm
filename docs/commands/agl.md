@@ -9,7 +9,7 @@ the [AgL language reference](../agl/reference/index.md).
 ```text
 agm exec [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
-         [--timeout DURATION|--no-timeout] [--dry-run]
+         [--timeout DURATION|--no-timeout]
          [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
          [--no-stdlib]
          [-I DIR]... [-p PATH]
@@ -107,23 +107,6 @@ a direct `agm repl` entry is a static error.
   These set the initial state; a `std/config::trace := true` write still enables tracing.
 - `--no-trace-file`: Clear only the initial `trace-file` value; an `[exec] trace-file` path or
   `--trace`'s auto path still applies. Use `--no-trace` to disable tracing.
-- `--dry-run`: Run the static pipeline, program-argument validation, and contract
-  materialization, but evaluate nothing: static errors exit 1, a clean check exits 0 with no
-  program output. `extern def` companions are not imported (no side effects), so a broken
-  companion does not fail a dry run. If the check succeeds and the program has agent-call,
-  `exec`, or extern-call sites, their static inventory goes to stdout:
-
-  ```
-  call-sites:
-    line N:C: <callee> → <target-type> [<codec>[, schema: yes][, policy: <policy>]]
-  ```
-
-  `N:C` is the 1-based line and column; `<callee>` is `ask`, `exec`, or an extern's declared
-  name; `<codec>` is `text`, `json`, or `extern`; `schema: yes` marks an attached JSON Schema;
-  `<policy>` is the parse-failure policy, `abort` or `retry[N]` (not for extern calls).
-  Extern-backed standard-library methods (`[1].size()`, `"a".trim()`) are listed at your call
-  site; the standard library's internal calls are listed only for modules the program imports
-  explicitly.
 
 ### Program arguments
 
@@ -175,13 +158,13 @@ program for execution fails, while `--help` and shell completion silently fall b
 `agm exec`'s own help and no completions. `agm exec` reserves:
 
 - its own options: `--help`/`-h`, `--program`/`-p`, `--command`/`-c`, `--module-path`/`-I`,
-  `--max-call-depth`, `--no-stdlib`, `--dry-run`;
+  `--max-call-depth`, `--no-stdlib`;
 - every engine-setting flag in both polarities: `--default-agent`, `--default-sandbox`,
   `--strict-json`/`--no-strict-json`, `--timeout`/`--no-timeout`,
   `--trace`/`--no-trace`, `--trace-file`/`--no-trace-file` (so `no-trace: text` collides);
 - other parameters' projected flags (`cache: bool`'s `--no-cache` vs `no-cache: bool`).
 
-A [registered package command](pkg.md#registered-commands) reserves `--dry-run`, `-h`/`--help`,
+A [registered package command](pkg.md#registered-commands) reserves `-h`/`--help`,
 and its run-time options: the engine-setting flags and `--max-call-depth`. Because of the help
 fallback, `agm exec FILE --nope -h` prints `agm exec`'s help (exit 0) for a colliding program, but
 is a usage error (exit 1) when the program's own parser exists to reject `--nope`.
@@ -455,8 +438,8 @@ compilation, lowering) on each `FILE` and print GNU-style diagnostics, never eva
 or running an agent. Every `FILE` is checked independently, in argument order, even after a
 failure; a clean `FILE` prints nothing.
 
-No `program def` is required, so library modules (which `agm exec --dry-run` rejects) can be
-checked. A `program def` is validated with its module, including that each value parameter's
+No `program def` is required, so `agm check` can check library modules directly. `agm exec`
+requires an entry `program def`. A `program def` is validated with its module, including that each value parameter's
 type can cross the host/JSON boundary (`text` verbatim, or a finite, JSON-decodable data type;
 a function type is rejected) and that no name-addressable parameter uses a reserved
 engine-setting name. `check` never selects, configures, or runs an entry: no argument
@@ -476,7 +459,6 @@ fresh per `FILE`, since they anchor at the checked file.
 
 - `-I DIR`, `--module-path DIR`, `--no-stdlib`: As for `agm exec`, per checked file and its
   library modules.
-- `--dry-run`: Accepted like on every command, but a no-op: `check` has no side effects.
 
 ### Exit codes
 
@@ -525,7 +507,7 @@ $ echo $?
 ```text
 agm repl [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
-         [--quiet] [--dry-run] [--no-stdlib] [--trace|--trace-file PATH|--no-trace] [--plain]
+         [--quiet] [--no-stdlib] [--trace|--trace-file PATH|--no-trace] [--plain]
 ```
 
 Interactive AgL. Unlike `agm exec`, which runs a whole program in a fresh environment, the REPL
@@ -636,11 +618,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library
   modules); explicit imports still work. `:reset` keeps this choice.
 - `--trace` / `--trace-file PATH` / `--no-trace`: As for `agm exec`; with `--trace-file`, each evaluated
-  entry appends its JSONL records to `PATH` as one trace *run*. `--dry-run` writes no trace.
-- `--dry-run`: Run each entry through the static pipeline (parse, resolve, typecheck, match
-  compilation) but **never evaluate** it: no agent or `exec` calls, no persisted bindings. The
-  inferred type is echoed (`name : Type` for a binding, `: Type` for an expression), for
-  exploring types.
+  entry appends its JSONL records to `PATH` as one trace *run*.
 - `--plain`: Force the plain [front end](#front-ends). There is no `--no-plain`.
 
 ### Evaluation notes
@@ -697,8 +675,7 @@ agl> :bindings
 greeting : text = hello
 agl> :quit
 
-# Explore types only — no agent or exec calls fire, nothing is persisted.
-agm repl --dry-run
-agl> 1 + 2
-: int
+# Inspect an expression's type without evaluating it.
+agl> :type 1 + 2
+int
 ```

@@ -363,25 +363,6 @@ class TestConfigTimeoutValidation:
         assert exc_info.value.code == 1
 
 
-class TestConfigDryRun:
-    def test_dry_run_applies_config_without_executing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """A valid ``@config`` engine value never breaks ``--dry-run``, and the
-        static-only pass still never executes the program body."""
-        from agm.core import dry_run
-
-        monkeypatch.setattr(dry_run, "_ENABLED", True)
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            'import std/config\n\n@config(config::timeout = Some("5s"))\n'
-            'program def main() -> unit = print "ran"\n',
-        )
-        assert exec_command.run(_exec_args_no_trace(agl_file)) is None
-        assert capsys.readouterr().out == ""
-
-
 class TestConfigDefaultAgent:
     def test_config_default_agent_is_seeded(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

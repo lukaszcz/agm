@@ -3,8 +3,8 @@
 Behaviour: read the ``.agl`` source — either from the inline ``-c/--command``
 argument or from the source file (exit 1 if unreadable), load the
 ``[exec]`` configuration, construct a ``PipelineDriver`` with the resolved
-settings, call ``runtime.run`` (or a static-only dry run under ``--dry-run``),
-print diagnostics to stderr, invoke a selected ``program def`` after linked
+settings and call ``runtime.run``. Print diagnostics to stderr, invoke a
+selected ``program def`` after linked
 initializers when the entry declares one, and exit per the exit-code contract.
 
 Warnings (``result.warnings``) and error diagnostics (``result.diagnostics``)
@@ -15,7 +15,7 @@ diagnostic severity is included in compiler-style output, e.g.
 ``-c/--command`` source.
 
 Exit-code contract:
-    0  success (or a clean ``--dry-run`` static check)
+    0  success
     1  pre-execution failure (unreadable file, static errors, argument validation)
     2  program executed but ended with an uncaught AgL exception
 
@@ -50,10 +50,6 @@ Flag notes:
       from its program point onward and overrides the CLI flag, which overrides
       the config-file layer.  ``--max-call-depth`` remains a host/runtime
       recursion guard.
-    - ``--dry-run`` (global flag) runs only the static pipeline + contract
-      materialization and never writes a trace.  Evaluation and extern
-      companion imports are skipped, so broken companion Python files do not
-      fail a dry run.
 """
 
 from __future__ import annotations
@@ -114,7 +110,6 @@ from agm.config.qualified_keys import (
     QualifiedConfigLookupError,
     resolve_qualified_values,
 )
-from agm.core import dry_run
 from agm.core.cleanup import preserve_primary_error
 from agm.core.fs import read_text_arg
 from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
@@ -697,14 +692,10 @@ def run(
         get_sandbox_context=get_sandbox_context,
     )
 
-    # Resolve + validate the trace log file up front.  --dry-run is
-    # side-effect-free: no trace is written regardless of --trace-file.  A source
+    # Resolve and validate the trace log file up front. A source
     # ``std/config::trace``/``trace-file`` write takes effect at runtime via the
     # host reconfigurer, not here.
-    if dry_run.enabled():
-        trace_file = None
-    else:
-        trace_file = prepare_trace_log_from_decision(trace_decision, command_name="exec")
+    trace_file = prepare_trace_log_from_decision(trace_decision, command_name="exec")
 
     policy = HostSettingsPolicy(
         resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=trace_file),
@@ -735,7 +726,6 @@ def run(
     with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
         result = runtime.run_prepared(
             prepared,
-            check_only=dry_run.enabled(),
             trace_file=trace_file,
             compiled=discovery.compiled,
             executable=executable,
@@ -763,19 +753,6 @@ def run(
                 )
 
         if result.ok:
-            # Print the static call-site inventory when running under --dry-run.
-            if dry_run.enabled() and result.call_sites:
-                print("call-sites:")
-                for site in result.call_sites:
-                    schema_tag = ", schema: yes" if site.has_schema else ""
-                    policy_tag = (
-                        f", policy: {site.parse_policy}" if site.parse_policy != "default" else ""
-                    )
-                    print(
-                        f"  line {site.line}:{site.col}: {site.callee} "
-                        f"→ {site.target_type} "
-                        f"[{site.codec_name}{schema_tag}{policy_tag}]"
-                    )
             return
 
         # Pre-execution failure: print error diagnostics and exit 1.

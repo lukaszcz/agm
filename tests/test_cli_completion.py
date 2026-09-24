@@ -100,7 +100,7 @@ review-tools = { program = "tools/review::main" }
         item.value for item in shell_complete.get_completions(["tools", "lint"], "--")
     ]
     assert "--level" in registered_options
-    assert "--dry-run" in registered_options
+    assert "--dry-run" not in registered_options
     assert shell_complete.get_completions(["tools", "lint", "--level"], "") == []
     assert completion.complete_help_path(_make_ctx(help_command=[]), "to") == ["tools"]
     assert completion.complete_help_path(_make_ctx(help_command=["tools"]), "li") == ["lint"]
@@ -278,7 +278,7 @@ def test_registered_command_completes_path_parameter_values(
     assert _completion_values(["tools", "lint"], f"--journal={files}/d") == [expected]
     assert expected in _completion_values(["tools", "lint"], f"{files}/d")
     assert expected in _completion_values(
-        ["tools", "lint", "--trace-file", "trace.jsonl", "--dry-run"], f"{files}/d"
+        ["tools", "lint", "--trace-file", "trace.jsonl", "--no-trace"], f"{files}/d"
     )
     assert _completion_values(["tools", "lint", "--name"], f"{files}/d") == []
     assert _completion_values(["tools", "lint", "--timeout"], f"{files}/d") == []
@@ -497,7 +497,7 @@ version = "1.0.0"
     assert "--no-verbose" in values
     assert "--tools.lint.module-verbose" in values
     assert "--no-tools.lint.module-verbose" in values
-    assert "--dry-run" in values
+    assert "--dry-run" not in values
     assert "--trace-file" in values
     assert "--no-timeout" in values
     assert "--module-path" not in values

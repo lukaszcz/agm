@@ -110,7 +110,6 @@ agm <command> [options] [args]
 
 Use `agm help` for the command list and `agm help <command>` for detailed help. Global options:
 
-- `--dry-run`
 - `--install-completion`
 - `--show-completion`
 
@@ -274,7 +273,7 @@ any configured `[modules] roots` for imported modules.
 agm exec workflow.agl
 agm exec workflow.agl --name Alice   # --<name> per declared program parameter
 agm exec -c 'print "hello"'       # run inline program text instead of a file
-agm exec --dry-run workflow.agl   # static check only — no agent calls
+agm check workflow.agl            # static check only — no program execution
 ```
 
 See `agm help exec` for options, exit codes, and config. The AgL language itself is

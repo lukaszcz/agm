@@ -319,7 +319,7 @@ class CallSiteRecord(_Record):
 
     Captured in ``_check_agent_call`` — the one place where the call's resolved
     callee kind, parse policy, and source span are all already in hand — so the
-    ``--dry-run`` inventory is derived from the checker's work
+    check-only inventory is derived from the checker's work
     rather than from a second AST walk.
 
     ``node_id``
@@ -496,7 +496,7 @@ class CheckedModule(_Record):
         (``FunctionSignature.target_params``), in declaration order.
     ``call_sites``
         Tuple of ``CallSiteRecord`` — one per agent-call/exec site, in source
-        order — captured by the checker.  The ``--dry-run`` inventory is
+        order — captured by the checker.  The check-only inventory is
         built from this plus ``contract_specs``; it is never re-derived by
         re-walking the AST.
     ``warnings``

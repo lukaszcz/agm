@@ -91,6 +91,15 @@ class TestReplArgsParsing:
         result = invoke(runner, ["repl", "--input", "a=1"])
         assert result.exit_code != 0  # unknown option
 
+    def test_dry_run_option_removed(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["repl", "--dry-run"])
+        assert result.exit_code != 0
+
+    def test_help_omits_dry_run_option(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["repl", "--help"])
+        assert result.exit_code == 0
+        assert "--dry-run" not in result.output
+
     def test_strict_json_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--strict-json"]).exit_code == 0
         assert getattr(recorded_runs[0], "strict_json") is True
@@ -837,20 +846,18 @@ class TestReplRun:
             assert isinstance(trace_file, RecordValue)
             assert trace_file.fields["value"] == TextValue(expected_file)
 
-    def test_dry_run_runs_console_in_check_only_mode(
+    def test_shared_dry_run_state_does_not_change_console_mode(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         fake_plain_console: list[dict[str, object]],
     ) -> None:
-        # ``--dry-run`` sets the shared global flag; the REPL honours it by
-        # driving the console in type-check-only mode.
         from agm.core import dry_run
 
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
         repl_command.run(_args())
-        assert fake_plain_console[0]["check_only"] is True
+        assert fake_plain_console[0]["check_only"] is False
 
     def test_quiet_disables_echo(
         self,
@@ -1424,7 +1431,7 @@ class TestReplTrace:
         # Nothing under .agent-files was created for a --no-trace session.
         assert not (tmp_path / ".agent-files").exists()
 
-    def test_dry_run_writes_no_trace(
+    def test_shared_dry_run_state_does_not_suppress_trace_setup(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -1435,9 +1442,16 @@ class TestReplTrace:
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
         trace_file = tmp_path / "trace.log"
+
+        prepared: list[bool] = []
+
+        def prepare_trace(*args: object, **kwargs: object) -> Path:
+            prepared.append(True)
+            return trace_file
+
+        monkeypatch.setattr(repl_command, "prepare_trace_log_from_decision", prepare_trace)
         repl_command.run(_args(trace_file=str(trace_file)))
-        # Dry-run is side-effect-free: the trace path is never touched.
-        assert not trace_file.exists()
+        assert prepared == [True]
 
     def test_unwritable_trace_file_exits_1(
         self,

@@ -78,33 +78,6 @@ def _path_length(item: tuple[str, CommandRegistration]) -> int:
     return len(item[0].split())
 
 
-DRY_RUN_HELP = "Statically check the program without executing it."
-
-
-def _dry_run_option() -> TyperOption:
-    """Return the eager ``--dry-run`` flag a dispatched command parses."""
-    return TyperOption(
-        param_decls=["--dry-run"],
-        default=False,
-        is_flag=True,
-        is_eager=True,
-        expose_value=False,
-        callback=set_dry_run,
-        help=DRY_RUN_HELP,
-    )
-
-
-def _dry_run_help_option() -> click.Option:
-    """Return the ``--dry-run`` entry a registered command's help lists.
-
-    The parsed flag is eager and carries a callback that help rendering must
-    not run, so the listed entry is a plain option — derived from the parsed
-    declaration, spellings and help alike, so the two cannot drift apart.
-    """
-    parsed = _dry_run_option()
-    return click.Option([*parsed.opts, *parsed.secondary_opts], is_flag=True, help=parsed.help)
-
-
 def registered_run_options(ctx: click.Context) -> tuple[TyperOption, ...]:
     """Return ``agm exec``'s run-time options, which a registered command parses too.
 
@@ -166,10 +139,10 @@ def registered_command_help(
 
     The help is the referenced program's own command help, spelled for the
     command the reader invokes rather than the ``program def`` behind it: its
-    usage line names ``agm <path>`` and the program's positional slots, its
-    options are the program's own plus *run_options* and ``--dry-run``. Its
-    prose is the program's ``@doc`` in full, falling back to the summary the
-    activation index cached when the program itself cannot be read.
+    usage line names ``agm <path>`` and the program's positional slots, and
+    its options are the program's own plus *run_options*. Its prose is the
+    program's ``@doc`` in full, falling back to the summary the activation
+    index cached when the program itself cannot be read.
     """
     from agm.cli_support.program_options import render_program_help
 
@@ -178,7 +151,7 @@ def registered_command_help(
         command,
         program_name=f"agm {path_name}",
         description=description or "Run the registered AgL program.",
-        extra_options=(*run_options, _dry_run_help_option()),
+        extra_options=run_options,
     )
 
 
@@ -300,7 +273,6 @@ class RegisteredProgramCommand(TyperCommand):
         }
         super().__init__(name="registered-program", context_settings=context_settings)
         self.params.extend(run_options)
-        self.params.append(_dry_run_option())
         self._run_options = tuple(run_options)
         self._path_name = path_name
         self._registration = registration
@@ -367,6 +339,7 @@ class RegisteredProgramCommand(TyperCommand):
         from agm.cli_support.run_options import exec_option_conflict
 
         metadata = cast(dict[str, object], ctx.meta)
+        dry_run.set_enabled(False)
         cached_program = cast("ProgramDeclInfo | None", metadata.pop("registered_program", None))
         cached_pipeline = cast(
             "ProgramDiscoveryArtifacts | None", metadata.pop("registered_pipeline_cache", None)

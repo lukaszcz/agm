@@ -513,10 +513,8 @@ tmux_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_c
 def main_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx)
 
 
@@ -528,10 +526,8 @@ def help(
         autocompletion=completion.complete_help_path,
     ),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     if not help_command:
         print_overview()
         raise typer.Exit()
@@ -683,10 +679,8 @@ def close(
 def config_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "config")
 
 
@@ -735,12 +729,10 @@ def config_copy(
 @config_app.command(name="env")
 def config_env(
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     import agm.commands.config.env as config_env_command
 
     del _help
-    del _dry_run
     config_env_command.run(ConfigEnvArgs())
 
 
@@ -760,10 +752,8 @@ def config_update(
 def workspace_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, ctx.info_name or "workspace")
 
 
@@ -869,12 +859,10 @@ def workspace_setup(
 def workspace_list(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show workspace directories."),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     import agm.commands.workspace.list as workspace_list_command
 
     del _help
-    del _dry_run
     workspace_list_command.run(verbose=verbose)
 
 
@@ -901,10 +889,8 @@ def workspace_shell_regen(
 def worktree_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, ctx.info_name or "worktree")
 
 
@@ -1077,7 +1063,6 @@ def exec_cmd(
             "tracing entirely.  Mutually exclusive with --trace-file."
         ),
     ),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
     # (``help_option_names: []``) and lets unknown options through, so the whole
@@ -1090,6 +1075,7 @@ def exec_cmd(
     # One discovery for the whole invocation: the tail split probes candidate
     # FILE tokens with it, and the help surface below then asks about the
     # token it settled on, without paying for a second static pipeline pass.
+    set_dry_run(ctx, None, False)
     metadata = cast(_ContextWithMetadata, ctx).meta
     cached_discovery = metadata.pop("exec_program_discovery", None)
     discovery = (
@@ -1116,7 +1102,6 @@ def exec_cmd(
         program=program,
     ):
         raise SystemExit(0)
-    del _dry_run
     if command is not None and file is not None:
         exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--command")
     if command is None and file is None:
@@ -1150,6 +1135,7 @@ def exec_cmd(
 
 @app.command(name="repl")
 def repl_cmd(
+    ctx: typer.Context,
     strict_json: bool | None = _strict_json_option(),
     max_call_depth: int | None = _max_call_depth_option(),
     default_agent: str | None = _default_agent_option(),
@@ -1179,10 +1165,9 @@ def repl_cmd(
         ),
     ),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
+    set_dry_run(ctx, None, False)
     _reject_run_option_conflict(
         "repl", trace_option_conflict(no_trace=no_trace, trace=trace, trace_file=trace_file)
     )
@@ -1219,11 +1204,8 @@ def check_cmd(
         "(entry and library modules)."
     ),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    # ``--dry-run`` is meaningless here: ``check`` is already side-effect free.
-    del _dry_run
     if not file:
         _missing_arguments(["check"], ["FILE"])
     # Imported lazily: pulls in the AgL DSL (runtime, jsonschema), which would
@@ -1293,10 +1275,8 @@ def worktree_remove(
 def dep_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "dep")
 
 
@@ -1305,12 +1285,10 @@ def dep_list(
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show checkout paths."),
     list_all: bool = typer.Option(False, "--all", help="List all dependency checkouts on disk."),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     import agm.commands.dep.list as dep_list_command
 
     del _help
-    del _dry_run
     dep_list_command.run(verbose=verbose, all_checkouts=list_all)
 
 
@@ -1428,10 +1406,8 @@ def _run_dep_remove(*, command_path: list[str], target: str | None, all: bool) -
 def pkg_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "pkg")
 
 
@@ -1443,10 +1419,8 @@ def pkg_check(
         autocompletion=completion.complete_dir_argument,
     ),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     import agm.commands.pkg.check as pkg_check_command
 
     pkg_check_command.run(PkgCheckArgs(directory=directory))
@@ -1534,10 +1508,8 @@ def pkg_uninstall(
 @pkg_app.command(name="list")
 def pkg_list(
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     import agm.commands.pkg.list as pkg_list_command
 
     pkg_list_command.run(PkgListArgs())
@@ -1547,10 +1519,8 @@ def pkg_list(
 def pkg_info(
     name: str | None = typer.Argument(None, metavar="NAME"),
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     import agm.commands.pkg.info as pkg_info_command
 
     pkg_info_command.run(
@@ -1574,10 +1544,8 @@ def pkg_sync(
 def sync_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "sync")
 
 
@@ -2055,10 +2023,8 @@ def run(
 def tmux_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
-    _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
-    del _dry_run
     _group_help(ctx, "tmux")
 
 

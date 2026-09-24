@@ -24,7 +24,7 @@ Package companions run in AGM's own interpreter, so one module classifies PEP 50
 
 ## Dry Run and Cleanup
 
-Dry-run is a global mode set from `--dry-run`. Because the process and filesystem primitives consult it, every command inherits dry-run support without implementing it. The cleanup helper releases resources without masking an exception already in flight; the AgL interpreter and the `exec`/`repl` hosts use it when closing agent sessions.
+Commands that support `--dry-run` set an invocation mode consulted by the process and filesystem primitives, so planned operations share one implementation. The cleanup helper releases resources without masking an exception already in flight; the AgL interpreter and the `exec`/`repl` hosts use it when closing agent sessions.
 
 ## Generic Utilities
 

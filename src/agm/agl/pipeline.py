@@ -3,7 +3,7 @@
 Drives the full ``parse → scope → typecheck → matchcompile → lower/link → IR eval`` pipeline:
 registers agents/codecs, validates host-supplied program arguments, materializes
 output contracts, and executes the program (or stops after static checking for
-``agm exec --dry-run``).  Structured outputs use the JSON codec with
+``agm check``). Structured outputs use the JSON codec with
 lenient-by-default recovery.
 
 ``agm.agl.runtime`` is the eval-free services layer (agents, codecs, arguments,
@@ -326,11 +326,11 @@ class RunResult:
         Empty for failed runs.
     ``call_sites``
         Static call-site inventory populated when ``check_only=True``
-        (``agm exec --dry-run``).  One entry per agent-call/exec site in
+        (internal check-only execution).  One entry per agent-call/exec site in
         source order.  Empty for ordinary runs.
     ``trace_path``
         Path of the JSONL trace file written during this run, or ``None``
-        when tracing was disabled (``--no-trace``) or the run was a dry-run.
+        when tracing was disabled (``--no-trace``) or execution was check-only.
         This handle identifies the prepared program.
     """
 
@@ -514,11 +514,10 @@ class PipelineDriver:
         host_env: HostEnvironment,
         warnings: list[Diagnostic],
     ) -> RunResult:
-        """Run a freshly lowered ``executable`` — the shared tail of the
-        shared pipeline tail.
+        """Run a freshly lowered ``executable`` through the shared pipeline tail.
 
-        Materializes host codec contracts, honours the ``check_only`` dry-run
-        stop (call-site inventory, no execution), then builds and runs the
+        Materializes host codec contracts, honours the ``check_only`` stop
+        (call-site inventory, no execution), then builds and runs the
         :class:`IrInterpreter`, mapping an uncaught ``AglRaise`` to a failing
         ``RunResult``. All return paths carry *warnings*.
 
@@ -611,7 +610,7 @@ class PipelineDriver:
             )
 
         # ----------------------------------------------------------------
-        # [check_only] --dry-run stop: the full static pipeline, program-argument
+        # [check_only] stop: the full static pipeline, program-argument
         # validation, and contract materialization have all succeeded.  Stop
         # before executing any statement — no program output, no evaluation
         # side effects, no extern companion imports, and no trace is written.
@@ -2315,7 +2314,7 @@ def exception_value_to_run_error(
 
 
 def _build_call_inventory_from_ir(entries: "tuple[object, ...]") -> list[CallSiteInfo]:
-    """Convert lowering-owned dry-run metadata to the public runtime shape."""
+    """Convert lowering-owned check-only metadata to the public runtime shape."""
     from agm.agl.ir.program import DryRunEntry
 
     return [

@@ -4,7 +4,7 @@
 |---|---|
 | `agm dep list [-v\|--verbose] [--all]` | List dependency checkouts |
 | `agm dep new [-b\|--branch BRANCH] REPO_URL` | Clone a new dependency checkout |
-| `agm dep switch [-b\|--branch] DEP BRANCH` | Select or add a dependency checkout |
+| `agm dep switch [-b\|--branch] [--no-fetch] DEP BRANCH` | Select or add a dependency checkout |
 | `agm dep rm --all DEP` | Remove an entire dependency directory |
 | `agm dep rm DEP/NAME_OR_BRANCH \| DEP/repo \| DEP/MAIN_CHECKOUT` | Remove a dependency checkout or worktree |
 | `agm dep remove --all DEP` | Alias form of `agm dep rm --all` |
@@ -17,6 +17,7 @@
 `agm dep switch` options:
 
 - `-b`, `--branch`: create `DEP`'s `BRANCH` from the dependency's default branch before adding the worktree; without this flag, `BRANCH` must already exist
+- `--no-fetch`: skip fetching Git remotes; resolve existing remote branches from refs already available locally
 
 Dependency commands track selected checkout names in `config.toml`'s `[deps]` table. Environment loading turns each entry into a `_DIR` path variable before `.env` and `env.sh` load, e.g. `[deps].vyper-automation = "feat/app"` provides `VYPER_AUTOMATION_DIR=/path/to/proj/deps/vyper-automation/feat/app`. Opening a branch materializes only dependencies inherited from that branch's parent or the main config; checkouts present on disk aren't added to unrelated branch configs unless declared there.
 

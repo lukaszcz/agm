@@ -922,6 +922,7 @@ def new(
         help="Create the worktree under DIR.",
         autocompletion=completion.complete_path_argument,
     ),
+    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -933,6 +934,7 @@ def new(
         WorktreeNewArgs(
             worktrees_dir=str(worktrees_dir) if worktrees_dir is not None else None,
             branch=_require_value(branch, command_path=["worktree", "new"], name="branch"),
+            no_fetch=no_fetch,
         )
     )
 
@@ -1355,6 +1357,7 @@ def dep_switch(
         "--branch",
         help="Create DEP's BRANCH from the dependency's default branch before adding it.",
     ),
+    no_fetch: bool = typer.Option(False, "--no-fetch", help="Skip fetching Git remotes."),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
@@ -1364,7 +1367,14 @@ def dep_switch(
     del _dry_run
     if dep is None or branch is None:
         _missing_arguments(["dep", "switch"], ["dep", "branch"])
-    dep_switch_command.run(DepSwitchArgs(dep=dep, branch=branch, create_branch=create_branch))
+    dep_switch_command.run(
+        DepSwitchArgs(
+            dep=dep,
+            branch=branch,
+            create_branch=create_branch,
+            no_fetch=no_fetch,
+        )
+    )
 
 
 @dep_app.command(name="rm")

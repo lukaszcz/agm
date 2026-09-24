@@ -121,10 +121,16 @@ class TestWorktreeNewRun:
     ) -> None:
         fake_worktree_path = tmp_path / "worktrees" / "feature"
         fake_project_dir = tmp_path / "project"
+        worktree_calls: list[dict[str, object]] = []
+
+        def fake_ensure_worktree(**kwargs: object) -> Path:
+            worktree_calls.append(kwargs)
+            return fake_worktree_path
+
         monkeypatch.setattr(
             worktree_new_cmd,
             "ensure_worktree",
-            lambda **kw: fake_worktree_path,
+            fake_ensure_worktree,
         )
         monkeypatch.setattr(
             worktree_new_cmd,
@@ -142,8 +148,9 @@ class TestWorktreeNewRun:
             "project_config_dir",
             lambda pd: pd / "config",
         )
-        worktree_new_cmd.run(WorktreeNewArgs(branch="feature", worktrees_dir=None))
+        worktree_new_cmd.run(WorktreeNewArgs(branch="feature", worktrees_dir=None, no_fetch=True))
         assert len(commit_calls) == 1
+        assert worktree_calls[0]["fetch"] is False
 
     def test_skips_config_commit_outside_project(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

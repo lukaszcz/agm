@@ -282,6 +282,19 @@ class TestWorktreeNew:
         assert calls[0].worktrees_dir == "/custom"
         assert calls[0].branch == "feat/z"
 
+    @pytest.mark.parametrize("command", [["worktree", "new"], ["wt", "new"]])
+    def test_wt_new_no_fetch(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+        command: list[str],
+    ) -> None:
+        calls = make_recorder(monkeypatch, worktree_new_command)
+        result = invoke(runner, [*command, "--no-fetch", "feat/z"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_fetch is True
+
     def test_wt_new_missing_branch(self, runner: CliRunner) -> None:
         result = invoke(runner, ["wt", "new"])
         assert result.exit_code != 0
@@ -494,6 +507,13 @@ class TestDep:
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].create_branch is True
+
+    def test_dep_switch_no_fetch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = make_recorder(monkeypatch, dep_switch_command)
+        result = invoke(runner, ["dep", "switch", "--no-fetch", "mylib", "feat/x"])
+        assert result.exit_code == 0
+        assert len(calls) == 1
+        assert calls[0].no_fetch is True
 
     def test_dep_rm(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, dep_remove_command)

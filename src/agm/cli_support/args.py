@@ -69,6 +69,7 @@ class ConfigUpdateArgs:
 class WorktreeNewArgs:
     worktrees_dir: str | None
     branch: str
+    no_fetch: bool = False
 
 
 @dataclass(slots=True)
@@ -94,6 +95,7 @@ class DepSwitchArgs:
     dep: str
     branch: str
     create_branch: bool
+    no_fetch: bool = False
 
 
 @dataclass(slots=True)

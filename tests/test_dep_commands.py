@@ -645,10 +645,10 @@ class TestDepSwitchRun:
 
         monkeypatch.setattr(dep_switch, "update_dependency_config", fake_update_config)
 
-        args = DepSwitchArgs(dep="mylib", branch="feature", create_branch=False)
+        args = DepSwitchArgs(dep="mylib", branch="feature", create_branch=False, no_fetch=True)
         dep_switch.run(args)
 
-        assert fetched == [repo_path]
+        assert fetched == []
         assert len(worktree_add_calls) == 1
         assert worktree_add_calls[0]["branch"] == "feature"
         assert worktree_add_calls[0]["path"] == dep_dir / "feature"

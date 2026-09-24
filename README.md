@@ -429,6 +429,7 @@ agm dep new https://github.com/org/lib.git
 agm dep new --branch develop https://github.com/org/lib.git
 agm dep switch mylib feat/update
 agm dep switch --branch mylib feat/new-work
+agm dep switch --no-fetch mylib feat/update
 agm dep rm mylib/feat/update
 agm dep rm --all mylib
 ```
@@ -439,6 +440,7 @@ Low-level worktree operations for the main project repo.
 
 ```bash
 agm worktree new feat/search
+agm worktree new --no-fetch feat/search
 agm wt new --dir /tmp/worktrees feat/search
 agm worktree remove --force old-branch
 agm wt rm old-branch

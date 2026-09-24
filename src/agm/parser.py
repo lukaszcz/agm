@@ -412,9 +412,9 @@ _HELP_TEXTS: dict[str, str] = {
           eval "$(agm config env)"
     """),
     "worktree": textwrap.dedent("""\
-        agm worktree new      [-d|--dir DIR] BRANCH
+        agm worktree new      [-d|--dir DIR] [--no-fetch] BRANCH
         agm worktree remove   [-f|--force] BRANCH
-        agm wt new            [-d|--dir DIR] BRANCH
+        agm wt new            [-d|--dir DIR] [--no-fetch] BRANCH
         agm wt rm             [-f|--force] BRANCH
 
         Low-level git worktree management.
@@ -423,6 +423,8 @@ _HELP_TEXTS: dict[str, str] = {
           agm worktree new --dir DIR BRANCH
               Create the worktree under DIR instead of the default project
               worktrees directory.
+          agm worktree new --no-fetch BRANCH
+              Skip fetching Git remotes; use refs already available locally.
           agm worktree remove --force BRANCH
               Force removal even when git reports uncommitted or locked state.
     """),
@@ -431,7 +433,7 @@ _HELP_TEXTS: dict[str, str] = {
         agm dep new    [-b|--branch BRANCH] REPO_URL
         agm dep rm     --all DEP
         agm dep rm     DEP/NAME_OR_BRANCH | DEP/repo | DEP/MAIN_CHECKOUT
-        agm dep switch [-b|--branch] DEP BRANCH
+        agm dep switch [-b|--branch] [--no-fetch] DEP BRANCH
 
         Manage dependency repos and dependency Git worktrees under deps/.
         AGM tracks dependency checkout names in config.toml [deps] tables.
@@ -452,6 +454,8 @@ _HELP_TEXTS: dict[str, str] = {
               Create DEP's BRANCH from the dependency's default branch, then
               add a worktree for it. Without this flag, BRANCH must already
               exist in the dependency repo.
+          agm dep switch --no-fetch DEP BRANCH
+              Skip fetching Git remotes; use refs already available locally.
 
         Targets:
           DEP/NAME_OR_BRANCH Remove a dependency checkout by directory name
@@ -883,9 +887,10 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         config directory.
     """),
     ("wt", "new"): textwrap.dedent("""\
-        agm wt new [-d|--dir DIR] BRANCH
+        agm wt new [-d|--dir DIR] [--no-fetch] BRANCH
 
-        Create a bare Git worktree or check out an existing branch.
+        Create a bare Git worktree or check out an existing branch. --no-fetch
+        skips fetching Git remotes and uses refs already available locally.
     """),
     ("wt", "rm"): textwrap.dedent("""\
         agm wt rm [-f|--force] BRANCH
@@ -957,9 +962,10 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         ``agm help loop`` for details.
     """),
     ("worktree", "new"): textwrap.dedent("""\
-        agm worktree new [-d|--dir DIR] BRANCH
+        agm worktree new [-d|--dir DIR] [--no-fetch] BRANCH
 
-        Create a bare Git worktree or check out an existing branch.
+        Create a bare Git worktree or check out an existing branch. --no-fetch
+        skips fetching Git remotes and uses refs already available locally.
     """),
     ("worktree", "remove"): textwrap.dedent("""\
         agm worktree remove [-f|--force] BRANCH
@@ -984,13 +990,15 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         Clone a dependency into deps/ using its default branch or BRANCH.
     """),
     ("dep", "switch"): textwrap.dedent("""\
-        agm dep switch [-b|--branch] DEP BRANCH
+        agm dep switch [-b|--branch] [--no-fetch] DEP BRANCH
 
         Select an existing dependency checkout by directory name or checked-out
         branch name. If neither exists, add a worktree at deps/DEP/BRANCH for
         an existing dependency branch. With -b/--branch, create DEP's BRANCH
         from the dependency's default branch first. Updates the relevant
         config.toml [deps] entry with the dependency checkout directory name.
+        --no-fetch skips fetching Git remotes and uses refs already available
+        locally.
     """),
     ("dep", "rm"): textwrap.dedent("""\
         agm dep rm --all DEP

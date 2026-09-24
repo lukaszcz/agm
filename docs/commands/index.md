@@ -28,7 +28,7 @@ for a single command or command group. Each command also accepts `--help`.
 | [Agent workflows](agents.md) | `agm review`, `agm revise`, `agm refine` |
 | [Loop automation](loop.md) | `agm loop` run/step/select, prompts, selectors, logging |
 | [AgL workflow DSL](agl.md) | `agm exec`, `agm check`, `agm repl` |
-| [Packages](pkg.md) | `agm pkg` check/create/install/uninstall/list/info |
+| [Packages](pkg.md) | `agm pkg` check/create/install/switch/uninstall/list/info |
 | [Configuration](config.md) | `agm config` copy/env/update |
 | [Dependencies](dependencies.md) | `agm dep` |
 | [Sandboxing](run.md) | `agm run` |

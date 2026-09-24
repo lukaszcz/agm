@@ -9,8 +9,10 @@ from agm.cli_support.args import PkgInstallArgs
 from agm.config.context import current_config_context
 from agm.packages.install import (
     PackageInstallError,
+    activate_installed_package_with_plan,
     install_archive_with_plan,
     install_directory_with_plan,
+    parse_versioned_package_target,
 )
 
 
@@ -19,20 +21,28 @@ def run(args: PkgInstallArgs) -> None:
 
     context = current_config_context()
     try:
-        source = Path(args.source)
-        if source.is_file() and not args.editable:
-            plan = install_archive_with_plan(
-                source,
-                home=context.home,
-                shadow=args.shadow,
+        if "@" in args.source and not Path(args.source).exists():
+            name, version = parse_versioned_package_target(args.source)
+            if args.editable:
+                raise PackageInstallError("an installed version cannot be activated editable")
+            plan = activate_installed_package_with_plan(
+                name, version, home=context.home, shadow=args.shadow
             )
         else:
-            plan = install_directory_with_plan(
-                source,
-                home=context.home,
-                editable=args.editable,
-                shadow=args.shadow,
-            )
+            source = Path(args.source)
+            if source.is_file() and not args.editable:
+                plan = install_archive_with_plan(
+                    source,
+                    home=context.home,
+                    shadow=args.shadow,
+                )
+            else:
+                plan = install_directory_with_plan(
+                    source,
+                    home=context.home,
+                    editable=args.editable,
+                    shadow=args.shadow,
+                )
     # A user-supplied source path can fail at the operating-system boundary
     # before any package rule applies; report it like every other bad source.
     except (OSError, PackageInstallError) as exc:

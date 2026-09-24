@@ -33,6 +33,7 @@ from agm.cli_support.args import (
     PkgInitArgs,
     PkgInstallArgs,
     PkgListArgs,
+    PkgSwitchArgs,
     PkgSyncArgs,
     PkgUninstallArgs,
     RefineArgs,
@@ -1551,6 +1552,21 @@ def pkg_uninstall(
 
     pkg_uninstall_command.run(
         PkgUninstallArgs(name=_require_value(name, command_path=["pkg", "uninstall"], name="name"))
+    )
+
+
+@pkg_app.command(name="switch")
+def pkg_switch(
+    target: str | None = typer.Argument(None, metavar="NAME@VERSION"),
+    _help: bool = _help_option(),
+    _dry_run: bool = _dry_run_option(),
+) -> None:
+    del _help
+    del _dry_run
+    import agm.commands.pkg.switch as pkg_switch_command
+
+    pkg_switch_command.run(
+        PkgSwitchArgs(target=_require_value(target, command_path=["pkg", "switch"], name="target"))
     )
 
 

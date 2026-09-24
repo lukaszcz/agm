@@ -472,8 +472,9 @@ _HELP_TEXTS: dict[str, str] = {
         agm pkg init [DIR] [--name NAME] [--version VERSION]
         agm pkg check [DIR]
         agm pkg create [DIR] [-o FILE]
-        agm pkg install [--editable] [--shadow] SRC
-        agm pkg uninstall NAME
+        agm pkg install [--editable] [--shadow] SRC|NAME@VERSION
+        agm pkg switch NAME@VERSION
+        agm pkg uninstall NAME[@VERSION]
         agm pkg list
         agm pkg info NAME
         agm pkg sync
@@ -1041,10 +1042,11 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         DIR defaults to the current directory and -o selects the output file.
     """),
     ("pkg", "install"): textwrap.dedent("""\
-        agm pkg install [--editable] [--shadow] SRC
+        agm pkg install [--editable] [--shadow] SRC|NAME@VERSION
 
         Install a package directory or .agmpkg archive into AGM's versioned store and activate its
-        version. --editable mounts a directory SRC directly. Conflicting registered commands refuse
+        version. NAME@VERSION activates an exact version already in the store. --editable mounts a
+        directory SRC directly. Conflicting registered commands refuse
         installation unless --shadow replaces the existing registration. URL dependencies are
         fetched with their declared SHA-256 hash before install. When a [python] requirement of the
         active packages is unsatisfied, all of their [python] requirements are installed jointly
@@ -1052,10 +1054,15 @@ _PATH_HELP_TEXTS: dict[tuple[str, ...], str] = {
         install, including a conflict between packages, fails the package install.
     """),
     ("pkg", "uninstall"): textwrap.dedent("""\
-        agm pkg uninstall NAME
+        agm pkg uninstall NAME[@VERSION]
 
-        Verify the active package RECORD, remove its installed tree, and clear its activation.
-        Editable packages only have their activation cleared.
+        Verify and remove the named stored version, clearing activation if selected. Without a
+        version, remove the active package. Editable packages only have their activation cleared.
+    """),
+    ("pkg", "switch"): textwrap.dedent("""\
+        agm pkg switch NAME@VERSION
+
+        Select an exact version already in the package store as globally active.
     """),
     ("pkg", "list"): textwrap.dedent("""\
         agm pkg list

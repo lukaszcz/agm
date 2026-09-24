@@ -7910,6 +7910,33 @@ class TestPackageInstall:
         assert missing_import.returncode == 1
         assert unknown.returncode == 1
 
+    def test_switch_and_uninstall_exact_package_versions(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        env["AGM_HOME"] = str(tmp_path / "agm-home")
+        for version in ("1.0.1", "1.0.2"):
+            source = _write_store_test_package(tmp_path / version, "alpha", version)
+            manifest = source / "package.toml"
+            manifest.write_text(
+                manifest.read_text()
+                + '\n[commands]\nalpha-version = { program = "alpha/main::main" }\n'
+            )
+            (source / "src" / "main.agl").write_text(
+                f'program def main() -> unit = print("{version}")\n'
+            )
+            run_agm(["pkg", "install", str(source)], env=env, cwd=tmp_path)
+
+        run_agm(["pkg", "switch", "alpha@1.0.1"], env=env, cwd=tmp_path)
+        selected = run_agm(["alpha-version"], env=env, cwd=tmp_path)
+        listing = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+        run_agm(["pkg", "uninstall", "alpha@1.0.2"], env=env, cwd=tmp_path)
+        final = run_agm(["pkg", "list"], env=env, cwd=tmp_path)
+
+        assert "alpha 1.0.1 active" in listing.stdout
+        assert "alpha 1.0.2 installed" in listing.stdout
+        assert selected.stdout == "1.0.1\n"
+        assert final.stdout.strip() == "alpha 1.0.1 active"
+
     def test_info_reports_python_requirements_and_whether_they_hold(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

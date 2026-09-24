@@ -46,6 +46,11 @@ class PkgUninstallArgs:
 
 
 @dataclass(slots=True)
+class PkgSwitchArgs:
+    target: str
+
+
+@dataclass(slots=True)
 class PkgListArgs:
     pass
 

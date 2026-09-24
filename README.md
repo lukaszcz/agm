@@ -132,9 +132,12 @@ agm pkg create [DIR] [-o package.agmpkg]
 agm pkg install path/to/package
 agm pkg install package.agmpkg
 agm pkg install --editable path/to/package
+agm pkg install package-name@1.0.1
+agm pkg switch package-name@1.0.2
 agm pkg list
 agm pkg info package-name
 agm pkg uninstall package-name
+agm pkg uninstall package-name@1.0.1
 agm pkg sync
 ```
 

@@ -210,6 +210,60 @@ def install_directory_with_plan(
     )
 
 
+def parse_package_target(target: str) -> tuple[str, semver.Version | None]:
+    """Parse a package name with an optional exact installed version."""
+
+    if "@" not in target:
+        return target, None
+    name, version_text = target.rsplit("@", 1)
+    try:
+        version = semver.Version.parse(version_text)
+    except ValueError as exc:
+        raise PackageInstallError(f"invalid package version in {target!r}") from exc
+    if not name or "@" in name:
+        raise PackageInstallError(f"invalid package target {target!r}")
+    return name, version
+
+
+def parse_versioned_package_target(target: str) -> tuple[str, semver.Version]:
+    """Require a package target with an exact semantic version."""
+
+    name, version = parse_package_target(target)
+    if version is None:
+        raise PackageInstallError("expected NAME@VERSION")
+    return name, version
+
+
+def activate_installed_package_with_plan(
+    name: str,
+    version: semver.Version,
+    *,
+    home: Path,
+    env: Mapping[str, str] | None = None,
+    shadow: bool = False,
+) -> PackageInstallPlan:
+    """Activate an exact version already present in the package store."""
+
+    def activate(state: _InstallState) -> PackageInfo:
+        if is_std_package_name(name):
+            raise PackageInstallError("the AGM-managed std package cannot be installed or switched")
+        package = next(
+            (
+                package
+                for package in _transaction_installed_packages(state)
+                if canonical_package_identity(package.manifest.name, package.manifest.version)
+                == (name, str(version))
+            ),
+            None,
+        )
+        if package is None:
+            raise PackageInstallError(f"package {name!r} version {version} is not installed")
+        _activate_package(package, state, editable_root=None, shadow=shadow)
+        return package
+
+    return _install_with_plan(activate, home=home, env=env, shadow=shadow)
+
+
 def _install_with_plan(
     install: Callable[[_InstallState], PackageInfo],
     *,
@@ -321,18 +375,19 @@ def install_archive_with_plan(
     )
 
 
-def uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
-    """Remove the active package tree by its verified ``RECORD``.
+def uninstall_package(target: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
+    """Remove an exact stored version, or the active package when unqualified.
 
     Editable packages have no copied tree or record, so removal only drops
     their activation selection.
     """
 
     with _package_operation_lock(home=home, env=env):
-        _uninstall_package(name, home=home, env=env)
+        _uninstall_package(target, home=home, env=env)
 
 
-def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
+def _uninstall_package(target: str, *, home: Path, env: Mapping[str, str] | None = None) -> None:
+    name, version = parse_package_target(target)
     try:
         index = load_activation_index(home=home, env=env)
     except PackageActivationError as exc:
@@ -352,6 +407,9 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
     except ValueError as exc:
         raise PackageInstallError(f"package store path is invalid for {name!r}: {exc}") from exc
     active = index.packages.get(name)
+    if version is not None and (active is None or active.version != version):
+        _uninstall_inactive_version(name, version, home=home, env=env)
+        return
     if active is None:
         if tombstone.exists():
             _finish_uninstall(name, tombstone, home=home, env=env)
@@ -406,6 +464,39 @@ def _uninstall_package(name: str, *, home: Path, env: Mapping[str, str] | None =
             ) from activation_error
         raise
     _finish_uninstall(name, tombstone, version=active.version, home=home, env=env)
+
+
+def _uninstall_inactive_version(
+    name: str, version: semver.Version, *, home: Path, env: Mapping[str, str] | None
+) -> None:
+    """Remove an unselected stored tree without changing activation."""
+
+    try:
+        root = canonical_package_store_path(name, version, home=home, env=env)
+    except ValueError as exc:
+        raise PackageInstallError(f"package store path is invalid for {name!r}: {exc}") from exc
+    tombstone = root.parent / f".uninstalling-{version}"
+    if tombstone.exists():
+        if not dry_run.enabled():
+            _finish_uninstall(name, tombstone, home=home, env=env)
+            if not root.exists():
+                return
+    if not root.is_dir():
+        raise PackageInstallError(f"package {name!r} version {version} is not installed")
+    try:
+        manifest = load_manifest(root / "package.toml")
+        if canonical_package_identity(manifest.name, manifest.version) != (name, str(version)):
+            raise RecordError("installed package identity does not match its store location")
+        read_record(root)
+    except (ManifestError, OSError, RecordError) as exc:
+        raise PackageInstallError(f"package integrity check failed for {name!r}: {exc}") from exc
+    if dry_run.enabled():
+        return
+    try:
+        root.replace(tombstone)
+    except OSError as exc:
+        raise PackageInstallError(f"cannot remove package {name!r}: {exc}") from exc
+    _finish_uninstall(name, tombstone, version=version, home=home, env=env)
 
 
 def _validated_directory_package(source: Path) -> PackageInfo:

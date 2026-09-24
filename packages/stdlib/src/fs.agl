@@ -6,11 +6,14 @@ exception FsError extends Exception
   operation: text
 
 extern def read(path: path) -> text
+# Creates missing parent directories.
 extern def write(path: path, content: text) -> unit
+# Creates a missing file and any missing parent directories.
 extern def append(path: path, content: text) -> unit
 extern def exists(path: path) -> bool
 # Raises `FsError` if any entry's name is not valid Unicode.
 extern def list(path: path) -> array[path]
+# Creates *path* and any missing parent directories.
 extern def mkdir(path: path) -> unit
 extern def remove(path: path) -> unit
 extern def copy(source: path, destination: path) -> unit

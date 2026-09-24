@@ -16,6 +16,11 @@
       "expect": {"stdout": "Option::Some(value = \"not an instant\")\ntrue\nOption::Some(value = \"2024-01-02T03:04:05+00:00\")\nOption::Some(value = \"2024-01-02T00:00:00+00:00\")\n", "calls": {}}
     },
     {
+      "name": "timestamp_returns_a_parseable_microsecond_timestamp",
+      "params": {"mode": 5},
+      "expect": {"stdout": "true\ntrue\n", "calls": {}}
+    },
+    {
       "name": "clock_operations_have_stable_shape_and_a_monotonic_elapsed_clock",
       "params": {"mode": 3},
       "expect": {"stdout": "true\ntrue\ntrue\ntrue\ntrue\n", "calls": {}}

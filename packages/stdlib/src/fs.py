@@ -37,6 +37,11 @@ def _run(path: str, operation: str, action: Callable[[], T]) -> T:
         _raise_fs_error(path, operation)
 
 
+def _ensure_parent_directory(path: Path) -> None:
+    if not path.parent.exists():
+        fs.mkdir(path.parent, parents=True, exist_ok=True)
+
+
 def _scalar_entries(path: str, operation: str, names: Iterable[str]) -> list[str]:
     """Return *names* as a list, raising ``FsError`` naming the first undecodable entry.
 
@@ -63,13 +68,25 @@ def read(path: str) -> str:
 
 
 def write(path: str, content: str) -> None:
-    """Write UTF-8 *content* to *path*."""
-    _run(path, "write", lambda: fs.write_text(Path(path), content))
+    """Write UTF-8 *content* to *path*, creating missing parent directories."""
+
+    def do() -> None:
+        destination = Path(path)
+        _ensure_parent_directory(destination)
+        fs.write_text(destination, content)
+
+    _run(path, "write", do)
 
 
 def append(path: str, content: str) -> None:
-    """Append UTF-8 *content* to *path*."""
-    _run(path, "append", lambda: fs.append_text(Path(path), content))
+    """Append UTF-8 *content*, creating *path* and missing parent directories."""
+
+    def do() -> None:
+        destination = Path(path)
+        _ensure_parent_directory(destination)
+        fs.append_text(destination, content)
+
+    _run(path, "append", do)
 
 
 def exists(path: str) -> bool:

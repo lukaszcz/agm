@@ -68,8 +68,6 @@ program def main() -> unit =
     ("call", "path", "operation"),
     (
         ('fs::read("missing.txt")', "missing.txt", "read"),
-        ('fs::write("missing/child.txt", "content")', "missing/child.txt", "write"),
-        ('fs::append("missing/child.txt", "content")', "missing/child.txt", "append"),
         ('fs::list("missing")', "missing", "list"),
         ('fs::remove("missing.txt")', "missing.txt", "remove"),
         ('fs::copy("missing.txt", "other.txt")', "missing.txt", "copy"),
@@ -264,6 +262,32 @@ program def main() -> unit =
     assert capsys.readouterr().out == (
         f'true\ntrue\ntrue\n["{os.path.join("nested", "source.txt")}"]\n[]\n'
     )
+
+
+def test_fs_write_append_and_mkdir_create_missing_parent_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_file(
+        """import std/fs
+program def main() -> unit =
+  fs::write("created/by/write/deep/file.txt", "contents")
+  fs::append("created/by/append/deep/file.txt", "appended")
+  fs::mkdir("created/by/mkdir/deep")
+  print(fs::read("created/by/write/deep/file.txt"))
+  print(fs::read("created/by/append/deep/file.txt"))
+  print(fs::is-dir("created/by/mkdir/deep"))
+""",
+        tmp_path / "main.agl",
+        roots=agl_roots(),
+    )
+
+    assert result.ok
+    assert (tmp_path / "created" / "by" / "write" / "deep" / "file.txt").is_file()
+    assert (tmp_path / "created" / "by" / "append" / "deep" / "file.txt").is_file()
+    assert (tmp_path / "created" / "by" / "mkdir" / "deep").is_dir()
+    assert capsys.readouterr().out == "contents\nappended\ntrue\n"
 
 
 def test_fs_writes_are_suppressed_and_logged_in_dry_run(

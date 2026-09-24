@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -154,6 +155,8 @@ def run_sandboxed(
 ) -> None:
     require_srt_installed(env.get("PATH"))
     resolved_process_prefix = [] if process_prefix is None else list(process_prefix)
+    # SRT joins its command arguments with spaces before running them in a shell.
+    shell_command = [shlex.quote(part) for part in command]
 
     # Node.js's built-in fetch() does not respect HTTP_PROXY/HTTPS_PROXY
     # environment variables by default (unlike curl, wget, etc.).  Inside
@@ -172,7 +175,7 @@ def run_sandboxed(
             cwd=cwd,
             home=home,
             proj_dir=proj_dir,
-            command=command,
+            command=shell_command,
             command_name=command_name,
             alias_command_name=alias_command_name,
             settings_file=settings_file,
@@ -207,7 +210,7 @@ def run_sandboxed(
             "--settings",
             str(selected_settings),
             "--",
-            *command,
+            *shell_command,
         ]
         try:
             raise SystemExit(

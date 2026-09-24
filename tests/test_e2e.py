@@ -3938,6 +3938,40 @@ class TestSandbox:
         )
         assert _srt_command(result) == "npm test --coverage"
 
+    def test_run_preserves_srt_command_arguments(self, tmp_path: Path, env: dict[str, str]) -> None:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        srt = bin_dir / "srt"
+        srt.write_text(
+            '#!/bin/bash\nwhile [[ "$1" != "--" ]]; do shift; done\nshift\nbash -c "$*"\n'
+        )
+        srt.chmod(0o755)
+        env["PATH"] = f"{bin_dir}:{env['PATH']}"
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps(_settings(enabled=True)))
+        script = tmp_path / "args.py"
+        script.write_text(
+            "#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n"
+        )
+        script.chmod(0o755)
+        arguments = ["AA BB CC", "", "it's $HOME; echo hi", "x*y", "--flag", "plain"]
+
+        result = run_agm(
+            [
+                "run",
+                "--no-memory-limit",
+                "--no-swap-limit",
+                "-f",
+                str(settings),
+                str(script),
+                *arguments,
+            ],
+            env=env,
+            cwd=str(tmp_path),
+        )
+
+        assert json.loads(result.stdout) == arguments
+
     def test_run_memory_flag_overrides_config(self, tmp_path: Path, env: dict[str, str]) -> None:
         self._make_fake_systemd_run(tmp_path / "bin", env)
         self._make_fake_srt(tmp_path / "bin", env)

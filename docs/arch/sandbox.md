@@ -4,7 +4,7 @@
 
 ## Sandbox Runtime
 
-Isolation is delegated to SRT, the external sandbox-runtime tool; AGM implements none itself. `agm run` resolves a merged settings file, invokes SRT with it, and passes the target command through. The sandbox can be bypassed explicitly for commands that need full access.
+Isolation is delegated to SRT, the external sandbox-runtime tool; AGM implements none itself. `agm run` resolves a merged settings file and invokes SRT with the target command's arguments shell-quoted, because SRT joins them into a shell command string. Direct execution bypasses both SRT and shell quoting for commands that need full access.
 
 ## Settings Resolution
 

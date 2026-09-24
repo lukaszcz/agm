@@ -1,0 +1,12 @@
+# A `{Hashable K}` bound lifts the non-empty-literal hashing requirement at
+# an abstract key type: the literal type-checks, and two equal computed keys
+# (never constant, since they read the generic function's own parameters)
+# raise `DuplicateKeyError` at run time only.
+def f[K]{Hashable K}(k: K, j: K) -> dict[K, int] = {k: 1, j: 2}
+
+program def main() -> unit =
+  print(f(1, 2)[2])
+  try
+    print(f(1, 1)[1])
+  catch DuplicateKeyError as e =>
+    print "dup: %{e.key}"

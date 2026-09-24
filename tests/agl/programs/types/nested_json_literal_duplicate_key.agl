@@ -1,0 +1,10 @@
+# A computed key inside a nested json object literal is checked for
+# duplicates at run time, exactly like a top-level dict literal:
+# `IrMakeJsonObject` raises `DuplicateKeyError` rather than silently
+# overwriting the earlier entry.
+program def main(k: text) -> unit =
+  try
+    let doc: json = {"outer": {k: 1, "b": 2}}
+    print doc
+  catch DuplicateKeyError as e =>
+    print "dup: %{e.key}"

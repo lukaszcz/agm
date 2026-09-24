@@ -91,11 +91,33 @@ let metadata: dict[text, json] = {
 }
 ```
 
-Keys are literal strings; an unquoted identifier key is shorthand for the same
-string. Interpolated keys are rejected. Duplicate keys are a static error. An
-empty dictionary may obtain its value type from an expected dictionary type or
-another constraint in the same enclosing expression; otherwise it needs an
-annotation:
+A key is an ordinary expression of the dictionary's key type — a literal,
+interpolated text, a constructor application, an arithmetic expression, or a
+variable; a bare name is a reference, not a shorthand key. Under an expected
+type of `json`, keys are always `text`. A non-empty literal's key type must
+satisfy `Hashable`.
+
+Two entries are a static error when both keys are [constant
+expressions](bindings-and-scope.md#constant-expressions) with a comparable
+constant value: `null`, `bool`, int and decimal literals compare
+numerically (`1` and `1.0` collide), text compares after folding templates
+and constant references to the text each renders (`"%{prefix}-a"` collides
+with the text it folds to), and a constructor application — direct or
+reached through a constant alias — compares by constructor identity with
+its arguments normalized to field names, positional and named alike
+(`Point(1, 2)` collides with `Point(x = 1, y = 2)`). Folding a reference
+never crosses a `var`, whose value can still change, or a module parameter,
+whose value the host settles at run time, nor an annotation other than the
+referenced constant's own scalar type (`text`, `int`, `decimal`, `bool`) —
+a `json`-typed constant renders through `json`'s own rules, not scalar
+text, so a hole reading one is never comparable this way either. A constant
+key with no comparable value under these rules is left to run time, like
+any pair of genuinely computed keys: two entries whose keys compute an
+equal value at run time raise catchable `DuplicateKeyError` instead.
+
+An empty dictionary may obtain its value type from an expected dictionary
+type or another constraint in the same enclosing expression; otherwise it
+needs an annotation:
 
 ```agl
 let metadata: dict[text, json] = {}

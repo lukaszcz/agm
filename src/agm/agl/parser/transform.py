@@ -3250,33 +3250,14 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def dict_entry_str(self, meta: Meta, args: _Args) -> syntax.DictEntry:
-        """dict_entry: template COLON expr — quoted string key."""
+    def dict_entry(self, meta: Meta, args: _Args) -> syntax.DictEntry:
+        """dict_entry: arg_expr COLON arg_expr — key and value are both ordinary expressions."""
         non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
-        assert len(non_tokens) >= 2, f"dict_entry_str: expected key + expr, got {args!r}"
-        key_lit = _require_literal_string(
-            non_tokens[0],
-            "dict keys must be literal strings (no interpolation).",
-        )
+        assert len(non_tokens) == 2, f"dict_entry: expected key + value expr, got {args!r}"
+        key_expr = cast(syntax.Expr, non_tokens[0])
         val_expr = cast(syntax.Expr, non_tokens[1])
         return syntax.DictEntry(
-            key=key_lit,
-            value=val_expr,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def dict_entry_name(self, meta: Meta, args: _Args) -> syntax.DictEntry:
-        """dict_entry: field_name COLON expr — identifier shorthand key."""
-        name_tok = _find_name_token(args)
-        val_expr = _find_expr(args[1:])
-        key_lit = syntax.StringLit(
-            value=str(name_tok),
-            span=self._span_from_token(name_tok),
-            node_id=self._next_id(),
-        )
-        return syntax.DictEntry(
-            key=key_lit,
+            key=key_expr,
             value=val_expr,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -4003,7 +3984,11 @@ def _rewrite_dict_entry(
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
     builder: AstBuilder,
 ) -> syntax.DictEntry:
-    return replace(entry, value=_rewrite_expr(entry.value, table, builder))
+    return replace(
+        entry,
+        key=_rewrite_expr(entry.key, table, builder),
+        value=_rewrite_expr(entry.value, table, builder),
+    )
 
 
 def _resolve_infix_chain(

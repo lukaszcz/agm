@@ -16,11 +16,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from agm.agl.attributes import is_param_declaration
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope import ModuleResolution
 from agm.agl.scope.bindings import ModuleBindingReferences
 from agm.agl.syntax.constants import is_constant_expression
-from agm.agl.syntax.nodes import Expr, static_binding_node_id
+from agm.agl.syntax.nodes import Expr, VarDecl, static_binding_node_id
+from agm.agl.syntax.types import TypeExpr
 from agm.agl.typecheck.env import AglTypeError
 
 __all__ = ["ModuleConstantBindings"]
@@ -64,6 +66,30 @@ class ModuleConstantBindings:
             is_constant_builtin=self._is_constant_builtin,
             is_module_constant=self.is_constant_reference,
         )
+
+    def initializer_for(self, node_id: int) -> tuple[Expr, TypeExpr | None] | None:
+        """Return the initializer and declared type *node_id* (a ``VarRef``) names.
+
+        ``None`` when the reference names no declaration this module tracks,
+        or names a ``var`` or an ``@param let`` — a fixed binding only, since
+        a ``var`` may be reassigned and an ``@param let``'s value varies per
+        run, so neither is safe to fold as a compile-time constant even
+        though its own initializer is otherwise constant-shaped. Applied at
+        each step of a chase, so a chain through one (``let a = k``) is
+        covered too.
+
+        *node_id* is assumed already known constant
+        (``is_constant_expression``/``is_constant_reference``, the same
+        classification a caller has already used to decide whether to look
+        here at all) — calling this on a reference that is not is the
+        caller's error.
+        """
+        declaration = self._references.declaration_for(node_id)
+        if declaration is None:
+            return None
+        if isinstance(declaration, VarDecl) or is_param_declaration(declaration.attributes):
+            return None
+        return declaration.value, declaration.type_ann
 
     def dependencies(self, expr: Expr) -> frozenset[int]:
         """Return the declarations of this module that *expr* reads."""

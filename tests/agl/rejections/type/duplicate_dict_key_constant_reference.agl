@@ -1,0 +1,7 @@
+# A bare reference to a module constant is itself a constant key; it
+# collides statically with an equal literal spelling.
+let a = "x"
+
+program def main() -> unit =
+  let m = {a: 1, "x": 2}
+  print m

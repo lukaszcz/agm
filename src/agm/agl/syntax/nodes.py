@@ -852,9 +852,9 @@ class ArrayLit:
 
 @dataclass(frozen=True, slots=True)
 class DictEntry:
-    """A single key/value entry in a dict literal."""
+    """A single key/value entry in a dict literal: ``key: value``, both ordinary expressions."""
 
-    key: StringLit
+    key: Expr
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)

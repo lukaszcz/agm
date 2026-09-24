@@ -964,6 +964,7 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
         "MatchError",
         "IndexError",
         "KeyError",
+        "DuplicateKeyError",
         "TypeError",
         "ArithmeticError",
         # Statically prevented by scope/typecheck (assignment to immutable bindings

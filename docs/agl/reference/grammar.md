@@ -749,8 +749,7 @@ constructors) and is triggered solely by the parameter's zone.
 array_literal ::= "[" (element_expr ("," element_expr)* ","?)? "]"
 
 dict_literal ::= "{" (dict_entry ("," dict_entry)* ","?)? "}"
-dict_entry   ::= STRING ":" element_expr    (* no interpolation in keys *)
-               | field_name ":" element_expr (* shorthand for the string key *)
+dict_entry   ::= element_expr ":" element_expr
 ```
 
 `element_expr` excludes bare record updates — see [Calls](#calls).

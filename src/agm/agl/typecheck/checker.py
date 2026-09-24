@@ -40,7 +40,7 @@ The checker raises ``AglTypeError`` on the first error (first-error abort).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
@@ -118,6 +118,7 @@ from agm.agl.semantics.types import (
     substitute,
     transform_type,
 )
+from agm.agl.syntax.module_constants import constant_key
 from agm.agl.syntax.nodes import (
     ArrayLit,
     AsPattern,
@@ -136,6 +137,7 @@ from agm.agl.syntax.nodes import (
     ConstructorPattern,
     Continue,
     DecimalLit,
+    DictEntry,
     DictLit,
     ElseSentinel,
     EnumDef,
@@ -190,7 +192,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck.arguments import bind_call_args, bind_pattern_args
+from agm.agl.typecheck.arguments import bind_call_args, bind_constructor_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.builtins import (
@@ -812,6 +814,9 @@ def is_constant_builtin_call(resolved: ModuleResolution, node_id: int) -> bool:
     return resolved.builtin_calls.get(node_id) in {BuiltinKind.RESOURCE, BuiltinKind.RESOURCE_DIR}
 
 
+#: A constant builtin's own declared field names, in call order — from
+#: ``resource(path: path)``/``resource-dir()`` (``packages/stdlib/src/package.agl``)
+#: — for ``constant_key``'s call-binding key.
 def require_static_root_constant(
     expr: Expr, resolved: ModuleResolution, *, constants: ModuleConstantBindings
 ) -> None:
@@ -4752,8 +4757,10 @@ class _Checker:
             for elem in expr.elements:
                 self._check_template_literal_child(elem)
             return ArrayType(elem=JsonType())
-        # DictLit — caller guarantees non-empty.
-        self._check_dict_literal_keys(expr)
+        # DictLit — caller guarantees non-empty. Keys are always text, always
+        # Hashable, so no constraint check gates the duplicate check here.
+        self._check_dict_keys_against(expr.entries, TextType())
+        self._check_dict_literal_duplicate_keys(expr.entries)
         for entry in expr.entries:
             self._check_template_literal_child(entry.value)
         return DictType(key=TextType(), value=JsonType())
@@ -6103,14 +6110,109 @@ class _Checker:
         )
         return ArrayType(elem=unified)
 
-    def _check_dict_literal_keys(self, node: DictLit) -> None:
-        """Reject duplicate keys in a dict literal."""
-        seen_keys: dict[str, SourceSpan] = {}
-        for entry in node.entries:
-            key = entry.key.value
-            if key in seen_keys:
-                raise AglTypeError(f"Duplicate key '{key}' in dict literal.", span=entry.span)
-            seen_keys[key] = entry.span
+    def _constructor_ref_for_key(self, ref: VarRef) -> Hashable | None:
+        """Constructor identity for a bare constructor reference, for ``constant_key``.
+
+        ``None`` when *ref* does not denote a constructor. The identity is the
+        normalized ``ConstructorRef`` itself, already canonical across
+        occurrences of the same constructor.
+        """
+        return self._constructor_ref_for(ref.node_id)
+
+    def _resolve_constructor_alias(self, ref: VarRef) -> ConstructorRef | None:
+        """Follow *ref* through fixed-binding initializers to a constructor identity.
+
+        Direct when *ref* itself names a constructor; otherwise chases a
+        chain of constant ``let`` aliases (``let make = Point``) through the
+        same fixed-bindings resolver ``constant_key`` uses elsewhere, so an
+        alias to a constructor is itself provably a constructor for static
+        duplicate detection.
+        """
+        ctor = self._constructor_ref_for(ref.node_id)
+        if ctor is not None:
+            return ctor
+        resolved = self._constant_bindings.initializer_for(ref.node_id)
+        if resolved is None:
+            return None
+        target, _annotation = resolved
+        return self._resolve_constructor_alias(target) if isinstance(target, VarRef) else None
+
+    def _call_binding_for_key(self, call: Call) -> tuple[Hashable, Mapping[str, Expr]] | None:
+        """Identity and field bindings for a constant call, for ``constant_key``.
+
+        A constructor call — direct or through a chain of constant aliases —
+        binds with the same ``bind_constructor_args`` the call itself was
+        already checked with, so a positional and a named spelling of the
+        same arguments bind to the same field names and compare equal. A
+        constant builtin call (``resource``, ``resource-dir``) binds by argument
+        position — neither admits a named argument (see ``resource_path``). ``None``
+        when *call*'s callee denotes neither.
+        """
+        assert isinstance(call.callee, VarRef)
+        ctor = self._resolve_constructor_alias(call.callee)
+        if ctor is not None:
+            owner = self._constructors.resolve_constructor_owner(ctor, call.callee.span)
+            field_kinds = self._env.get_constructor_field_kinds_for_type(owner, owner.name)
+            assert field_kinds is not None, f"field kinds not registered for {owner.name}"
+            bound = bind_constructor_args(
+                field_kinds,
+                call.args,
+                call.named_args,
+                call_span=call.span,
+                context_desc=f"constructor '{owner.name}'",
+            )
+            return ctor, bound
+        kind = self._resolved.builtin_calls.get(call.node_id)
+        if kind is None:
+            return None
+        return kind, {str(index): arg for index, arg in enumerate(call.args)}
+
+    def _check_dict_literal_duplicate_keys(self, entries: tuple[DictEntry, ...]) -> None:
+        """Static error for two dict-literal entries with an equal constant key.
+
+        Only pairs of entries whose keys are constant expressions
+        (``self._is_constant_expr``) and whose constant value has a comparable
+        canonical key (``constant_key``) are checked here; every other key (a
+        ``var``, an ``@param`` binding, an interpolated hole reading something
+        uncomparable, ...) may only collide at runtime, where
+        ``IrMakeDict``/``IrMakeJsonObject`` raise ``DuplicateKeyError``. The
+        caller requires the key type ``Hashable`` first, so a non-hashable
+        key (``unit``, a record with a non-hashable field) is reported as
+        that, never as a spurious duplicate.
+        """
+        seen: dict[Hashable, SourceSpan] = {}
+        for entry in entries:
+            if not self._is_constant_expr(entry.key):
+                continue
+            signature = constant_key(
+                entry.key,
+                initializer_for=self._constant_bindings.initializer_for,
+                constructor_ref_for=self._constructor_ref_for_key,
+                call_binding=self._call_binding_for_key,
+            )
+            if signature is None:
+                continue
+            if signature in seen:
+                raise AglTypeError("Duplicate key in dict literal.", span=entry.span)
+            seen[signature] = entry.span
+
+    def _check_dict_keys_against(self, entries: tuple[DictEntry, ...], key_type: Type) -> None:
+        """Check each entry's key against *key_type*.
+
+        Shared by an ordinary dict literal whose key type is already known and
+        a ``json``-typed literal, whose keys are always ``text``.
+        """
+        for entry in entries:
+            kt = self._check_expr(entry.key, expected=key_type)
+            self._assert_assignable_from(kt, key_type, entry.key.span, entry.key)
+
+    def _expected_key_type(self, expected: Type | None) -> Type | None:
+        """Return the key type a dict/json expectation implies, or ``None`` when it implies none."""
+        if isinstance(expected, DictType):
+            return expected.key
+        if isinstance(expected, JsonType):
+            return TextType()
+        return None
 
     def _check_dict_lit(self, node: DictLit, *, expected: Type | None) -> Type:
         if not node.entries:
@@ -6120,8 +6222,6 @@ class _Checker:
                 literal_name="empty dict literal",
                 span=node.span,
             )
-        self._check_dict_literal_keys(node)
-        val_expected = self._expected_value_type(expected)
         if not node.entries:
             if not isinstance(expected, (DictType, JsonType)):
                 raise AglTypeError(
@@ -6129,18 +6229,34 @@ class _Checker:
                     span=node.span,
                 )
             return expected
+        key_expected = self._expected_key_type(expected)
+        if key_expected is not None and not contains_inference_var(key_expected):
+            self._check_dict_keys_against(node.entries, key_expected)
+            key_type = key_expected
+        else:
+            keys = tuple(entry.key for entry in node.entries)
+            with self._frame_direct_candidate_use(exprs=keys):
+                key_type = self._unify_elements(keys, kind="Dict key", span=node.span)
+        # Hashable is required before a static duplicate is even looked for:
+        # a non-hashable key type (unit, a record with a non-hashable field)
+        # must report that, not a spurious duplicate.
+        self._require_constraint(
+            ConstraintKind.HASHABLE, key_type, node.span, subject="dict literal"
+        )
+        self._check_dict_literal_duplicate_keys(node.entries)
+        val_expected = self._expected_value_type(expected)
         if val_expected is not None and not contains_inference_var(val_expected):
             for entry in node.entries:
                 et = self._check_expr(entry.value, expected=val_expected)
                 self._assert_assignable_from(et, val_expected, entry.span, entry.value)
-            return self._literal_result_type(expected, DictType(key=TextType(), value=val_expected))
+            return self._literal_result_type(expected, DictType(key=key_type, value=val_expected))
         values = tuple(entry.value for entry in node.entries)
         with self._frame_direct_candidate_use(exprs=values):
             unified = self._unify_elements(values, kind="Dict", span=node.span)
         self._set_inferred_return_expr_provenance(
             node.node_id, self._provenance_for_result(unified, values)
         )
-        return DictType(key=TextType(), value=unified)
+        return DictType(key=key_type, value=unified)
 
     def _enum_annotation_hint(self, *types: Type, noun: str = "literal") -> str:
         """Prompt an explicit enum slot for compatible sibling member records."""

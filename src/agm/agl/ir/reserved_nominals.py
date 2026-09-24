@@ -69,6 +69,7 @@ RESERVED_NOMINAL_NAMES: tuple[str, ...] = (
     "MatchError",
     "IndexError",
     "KeyError",
+    "DuplicateKeyError",
     "TypeError",
     "ArithmeticError",
     "UndefinedVariableError",

@@ -423,8 +423,9 @@ def member[T]{Hashable T}(x: T, xs: array[T]) -> bool = x in xs
 on `==`/`!=` and `in` for that parameter — and for any type that mentions
 it, such as `array[T]` or `Option[T]` — wherever it appears in the
 declaration's body, including its receiver's parameters for a method. A
-`Hashable` bound on `T` additionally lifts dict hashing operations
-(indexing, indexed assignment, `in`) at a `dict[T, V]` key position.
+`Hashable` bound on `T` additionally lifts dict hashing operations (a
+non-empty literal, indexing, indexed assignment, `in`) at a `dict[T, V]` key
+position.
 Without a bound, those operations remain rejected on the parameter at any
 depth. A constraint names only a type parameter already in scope from the
 declaration or its receiver; naming the same parameter twice, or pairing it

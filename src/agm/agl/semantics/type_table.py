@@ -2741,6 +2741,14 @@ _EXCEPTION_SHAPES: Mapping[str, TypeDef] = {
         base=_EXCEPTION_ROOT_ID,
         field_kinds=_standard(_fields),
     ),
+    "DuplicateKeyError": TypeDef(
+        kind="exception",
+        name="DuplicateKeyError",
+        module_id=RESERVED_ID,
+        fields=(_fields := (("key", TextType()),)),
+        base=_EXCEPTION_ROOT_ID,
+        field_kinds=_standard(_fields),
+    ),
     "TypeError": TypeDef(
         kind="exception",
         name="TypeError",

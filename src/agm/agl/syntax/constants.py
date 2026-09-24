@@ -69,7 +69,7 @@ def is_constant_expression(
     if isinstance(expr, ArrayLit):
         return all(recur(element) for element in expr.elements)
     if isinstance(expr, DictLit):
-        return all(recur(entry.value) for entry in expr.entries)
+        return all(recur(entry.key) and recur(entry.value) for entry in expr.entries)
     if isinstance(expr, (UnaryNeg, UnaryNot)):
         return recur(expr.operand)
     if isinstance(expr, Template):

@@ -2114,11 +2114,13 @@ class _Lowerer:
         return IrMakeArray(location=self._loc(node.span), items=items)
 
     def _lower_dict_lit(self, node: DictLit) -> IrExpr:
-        """Lower a ``DictLit``, applying value-level coercions.
+        """Lower a ``DictLit``, applying key- and value-level coercions.
 
         See ``_lower_array_lit`` for the ``json``-typed literal case: it
         lowers to ``IrMakeJsonObject`` directly rather than building a
-        ``DictValue`` and coercing it.
+        ``DictValue`` and coercing it. A ``json``-typed literal's keys are
+        checked ``text`` (``_check_dict_lit``/``_check_template_literal``), so
+        each key lowers directly with no coercion to apply.
         """
         own_type = self._node_type(node.node_id)
         if isinstance(own_type, JsonType):
@@ -2131,7 +2133,7 @@ class _Lowerer:
             f"compiler bug: DictLit has node_type {own_type!r}, expected DictType"
         )
         ir_entries = tuple(
-            (self.lower_expr(e.key), self.lower_coerced(e.value, own_type.value))
+            (self.lower_coerced(e.key, own_type.key), self.lower_coerced(e.value, own_type.value))
             for e in node.entries
         )
         return IrMakeDict(location=self._loc(node.span), entries=ir_entries)

@@ -69,13 +69,13 @@ An inline enum member may also be selected from an applied enum owner:
 application; use `Source::Member[T]` when applying the member directly.
 
 `dict[K, T]` admits any key type `K` structurally. A *hashing operation* on
-a concrete key — indexing (`d[k]`), indexed assignment (`d[k] := v`), and
-`k in d` — requires `K` to be `Hashable`
-([Constraint blocks](generics.md#constraint-blocks)); every other operation
-(the type itself, empty `{}`, `for`, rendering, `==`, `copy`/`shallow-copy`)
-accepts any `K`, including a structurally non-hashable one such as `array`.
-A non-empty dict literal `{k: v, …}` is always `text`-keyed, and casting or
-parsing into a dict requires a `text` key
+a concrete key — a non-empty dict literal `{k: v, …}`, indexing (`d[k]`),
+indexed assignment (`d[k] := v`), and `k in d` — requires `K` to be
+`Hashable` ([Constraint blocks](generics.md#constraint-blocks)); every other
+operation (the type itself, empty `{}`, `for`, rendering, `==`,
+`copy`/`shallow-copy`) accepts any `K`, including a structurally
+non-hashable one such as `array`. Casting or parsing into a dict from `text`
+or `json` requires a `text` key
 (see [Casts and convertibility](#casts-and-convertibility)). There are no
 union types, no string-literal types, and no optional/nullable types; model
 alternatives and optionality with enums.

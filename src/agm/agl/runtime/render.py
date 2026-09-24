@@ -170,11 +170,14 @@ def _render(
         active = enter_value(id(value), active)
         try:
             items = []
-            for key, child in value.text_items():
+            for key, child in value.items():
+                rendered_key = _render_child(
+                    key, descriptors, pretty=pretty, level=level + 1, active=active
+                )
                 rendered = _render_child(
                     child, descriptors, pretty=pretty, level=level + 1, active=active
                 )
-                items.append(f"{quote_text(key)}: {rendered}")
+                items.append(f"{rendered_key}: {rendered}")
         finally:
             active.discard(id(value))
         return _render_sequence("{", "}", items, level=level, pretty=pretty)
@@ -234,3 +237,13 @@ def render_value(
         top_level=True,
         level=0,
     )
+
+
+def render_key_value_syntax(value: Value, descriptors: ValueDescriptors) -> str:
+    """Render a dict key in AgL value syntax: text quoted, every other kind its own spelling.
+
+    Used to render a raised exception's ``key`` field (``KeyError``,
+    ``DuplicateKeyError``), so it always shows in the syntax it would parse
+    back from.
+    """
+    return render_value(value, descriptors, quote_strings=True)

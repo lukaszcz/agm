@@ -152,7 +152,7 @@ from agm.agl.runtime.externs import (
     active_call_span,
 )
 from agm.agl.runtime.option import none_value, option_text, some_value
-from agm.agl.runtime.render import render_value
+from agm.agl.runtime.render import render_key_value_syntax, render_value
 from agm.agl.runtime.serialize import encode_value
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.trace import TraceStore, noop_trace
@@ -741,7 +741,7 @@ class IrInterpreter:
                     ),
                 )
             case AglMissingKey():
-                rendered_key = render_value(err.key, self._descriptors, quote_strings=True)
+                rendered_key = render_key_value_syntax(err.key, self._descriptors)
                 # KeyError.key is text-typed: a text key crosses verbatim, and
                 # any other key is rendered in AgL value syntax.
                 key_field = err.key if isinstance(err.key, TextValue) else TextValue(rendered_key)
@@ -757,6 +757,18 @@ class IrInterpreter:
                 )
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    def _duplicate_key_failure(self, key: Value) -> AglRaise:
+        """Build the ``AglRaise`` for a dict literal key computed twice at runtime."""
+        rendered_key = render_key_value_syntax(key, self._descriptors)
+        return AglRaise(
+            _make_exc_value(
+                "DuplicateKeyError",
+                f"Duplicate dict key {rendered_key}",
+                nominals=self._program.builtin_nominals,
+                fields={"key": TextValue(rendered_key)},
+            ),
+        )
 
     def _cyclic_failure(self) -> AglRaise:
         """Convert a detected reference cycle into an ``AglRaise(CyclicValueError)``.
@@ -1435,7 +1447,9 @@ class IrInterpreter:
                 dict_value = DictValue()
                 for key_expr, val_expr in entries:
                     key_val = self._eval(key_expr)
-                    dict_value.insert(key_val, self._eval(val_expr))
+                    val_val = self._eval(val_expr)
+                    if not dict_value.insert(key_val, val_val):
+                        raise self._duplicate_key_failure(key_val)
                 return dict_value
 
             # `IrMakeJsonArray`/`IrMakeJsonObject`: every item/value here is already
@@ -1458,6 +1472,8 @@ class IrInterpreter:
                             f"IrMakeJsonObject key must evaluate to TextValue,"
                             f" got {type(key_val).__name__}"
                         )
+                    if key_val.value in json_result:
+                        raise self._duplicate_key_failure(key_val)
                     json_result[key_val.value] = encode_value(
                         _SCALAR_ENCODE_PLAN, self._eval(val_expr)
                     )

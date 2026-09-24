@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from agm.agl.parser import parse_program
-from agm.agl.syntax.module_constants import FoldFailure, ModuleConstants
-from agm.agl.syntax.nodes import FuncDef, LetDecl, static_items
+from agm.agl.syntax.module_constants import FoldFailure, ModuleConstants, constant_key
+from agm.agl.syntax.nodes import Expr, FuncDef, LetDecl, static_items
 
 
 def _fold(source: str, expression: str, *, scope: str = "") -> str | FoldFailure:
@@ -19,6 +19,48 @@ def _fold(source: str, expression: str, *, scope: str = "") -> str | FoldFailure
         if isinstance(item, LetDecl) and item.name == "probe"
     )
     return constants.fold_text(probe.value, scope_path=(scope,) if scope else ())
+
+
+def _probe_expr(expression: str) -> Expr:
+    """Parse *expression* as a module-root constant's initializer, unchecked.
+
+    Bypasses typecheck entirely, so a syntactically valid but ill-typed
+    expression (an undeclared callee) parses fine: :func:`constant_key` is a
+    pure structural function over an ``Expr``, documented to answer ``None``
+    for a shape it cannot compare, independent of whether the expression
+    would type-check.
+    """
+    program = parse_program(f"let probe = {expression}\nprogram def main() -> unit = ()\n")
+    (probe,) = (
+        item
+        for item in static_items(program.body.items)
+        if isinstance(item, LetDecl) and item.name == "probe"
+    )
+    return probe.value
+
+
+class TestConstantKeyNoneCases:
+    """``constant_key`` on shapes no real, already-typechecked program reaches.
+
+    Every dict-literal key ``constant_key`` sees in the checker already
+    type-checked, so these structural ``None`` cases -- documented as part of
+    ``constant_key``'s own contract -- are exercised directly against the
+    pure function, with hand-fed callbacks, rather than through a rejected or
+    accepted AgL program.
+    """
+
+    @staticmethod
+    def _key(expr: Expr) -> object:
+        return constant_key(
+            expr,
+            initializer_for=lambda _node_id: None,
+            constructor_ref_for=lambda _ref: None,
+            call_binding=lambda _call: None,
+        )
+
+    def test_a_call_with_no_comparable_binding_is_none(self) -> None:
+        """Neither a constructor nor a constant builtin: no comparable key."""
+        assert self._key(_probe_expr("foo(1)")) is None
 
 
 class TestScalarHoles:

@@ -1,0 +1,8 @@
+# A `json`-typed constant renders through `json`'s own rules at run time,
+# not scalar text rendering, so a template hole reading one is not a
+# constant text argument even though its own initializer is otherwise
+# scalar-shaped.
+let j: json = "a"
+
+@doc("j: %{j}")
+program def main() -> unit = print j

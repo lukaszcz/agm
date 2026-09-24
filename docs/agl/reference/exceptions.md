@@ -486,6 +486,18 @@ other key type is rendered in AgL value syntax (e.g. a missing
 key: text
 ```
 
+### `DuplicateKeyError`
+
+Raised by a dict literal whose key expressions compute an equal key twice at
+run time (two constant keys that are equal are a static error instead). `key`
+is always `text`, rendered in AgL value syntax: a `text` key quoted, any
+other key type in its own spelling (e.g. a duplicate `dict[Point, V]` key
+renders `"Point(x = 1, y = 2)"`).
+
+```text
+key: text
+```
+
 ### `UndefinedVariableError`
 
 ```text
@@ -623,6 +635,7 @@ how equality and tracing treat one.
 | ------ | --------- |
 | Out-of-range array/text index access, array indexed assignment, or an absent `array::index-of`/`text::index-of` search | `IndexError` |
 | Missing dictionary key access or assignment | `KeyError` |
+| A dict literal computes an equal key twice at run time | `DuplicateKeyError` |
 | Agent transport failure, including agent output that is not valid UTF-8 | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |
 | Failing shell command (parsed or unit form), or shell output that is not valid UTF-8 (any form) | `ExecError` |

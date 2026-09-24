@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "json_text_hole_quotes_distinguish",
+      "params": { "mode": 1 },
+      "expect": { "stdout": "{\"\\\"a\\\"\": 1, \"a\": 2}\n" }
+    },
+    {
+      "name": "json_decimal_hole_literal_digits_distinguish",
+      "params": { "mode": 2 },
+      "expect": { "stdout": "{\"1.50\": 1, \"1.5\": 2}\n" }
+    }
+  ]
+}

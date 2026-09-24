@@ -29,6 +29,10 @@ exception KeyError extends Exception
   key: text
 
 builtin
+exception DuplicateKeyError extends Exception
+  key: text
+
+builtin
 exception TypeError extends Exception
 
 builtin

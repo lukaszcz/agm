@@ -1,0 +1,6 @@
+# Two identical constant builtin calls are the same constant key; two
+# `resource-dir()` keys collide statically, without ever resolving either
+# call (that only happens once the program runs).
+program def main() -> unit =
+  let m = {resource-dir(): 1, resource-dir(): 2}
+  print m

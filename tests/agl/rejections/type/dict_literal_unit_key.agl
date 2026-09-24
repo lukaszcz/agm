@@ -1,0 +1,5 @@
+# unit is not data and is never Hashable, so it can never be a dict-literal
+# key, even where the same key repeats and would otherwise be a duplicate.
+program def main() -> unit =
+  let d = {(): 1, (): 2}
+  print d

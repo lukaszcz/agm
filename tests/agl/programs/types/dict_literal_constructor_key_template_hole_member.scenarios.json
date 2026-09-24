@@ -1,0 +1,8 @@
+{
+  "scenarios": [
+    {
+      "name": "collide_at_runtime",
+      "expect": { "stdout": "dup: Tag(label = \"Color::Red\")\n" }
+    }
+  ]
+}

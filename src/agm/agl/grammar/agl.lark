@@ -837,11 +837,10 @@ lit_array: LSQB (arg_expr (COMMA arg_expr)* COMMA?)? RSQB
 
 // dict_literal: "{" (dict_entry ("," dict_entry)* ","?)? "}"
 // Inside LBRACE…RBRACE paren_level>0 (implicit continuation).
-// dict_entry key is either a template (quoted string) or a NAME identifier shorthand.
+// dict_entry key is an ordinary expression of the dict's key type.
 lit_dict: LBRACE (dict_entry (COMMA dict_entry)* COMMA?)? RBRACE
 
-dict_entry: template COLON arg_expr     -> dict_entry_str
-          | field_name COLON arg_expr   -> dict_entry_name
+dict_entry: arg_expr COLON arg_expr
 
 // ---------------------------------------------------------------------------
 // Patterns

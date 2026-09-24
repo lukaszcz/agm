@@ -29,17 +29,40 @@ participates: a reference in a constant position names a static binding.
 Only scalars fold. Rendering an array, dict, or constructor needs the value
 descriptors of a linked program, which this leaf has no access to, so naming
 one in a hole is a fold failure rather than a second renderer.
+
+``fold_scalar`` is the shared mechanics behind that folding — literal shape,
+negation, ``not``, and template substitution — factored out so a caller with
+its own reference resolution (a checked module's constant bindings, not just
+this AST-only one) can fold a scalar the same way. Both resolvers gate a
+reference on its binding's declared type before folding through it: absent,
+or a scalar type (``text``/``int``/``decimal``/``bool``) directly, since any
+other annotation (``json``, an alias, a generic instantiation, ...) may
+render the binding's value differently from its initializer literal's own
+text (coercion, wrapping) — folding through it would silently mis-render.
+
+``constant_key`` builds on the same mechanics: the canonical, hashable
+comparison key for a dict-literal key expression known to be constant, used
+to detect a static duplicate key. Two keys compare equal exactly when AgL
+equality would consider them equal — ``null`` is a singleton key, bool never
+equals a number, int and decimal compare numerically, text compares after
+folding (which includes ``not`` and negation over a folded operand), a
+constant reference follows structurally to its initializer (a constructor
+reference chases through a chain of constant aliases too), and a call
+compares by its identity (a constructor or a constant builtin) with its
+arguments normalized to field names.
 """
 
 from __future__ import annotations
 
 import decimal
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 
 from agm.agl.syntax.nodes import (
     ArrayLit,
     BoolLit,
     BuiltinVarDecl,
+    Call,
     DecimalLit,
     DictLit,
     EnumDef,
@@ -65,12 +88,23 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import BoolT, DecimalT, IntT, TextT, TypeExpr, render_type_expr
 from agm.agl.value_syntax.lexical import scalar_text
 
-__all__ = ["FoldFailure", "ModuleConstants", "Scalar"]
+__all__ = ["FoldFailure", "ModuleConstants", "Scalar", "constant_key", "fold_scalar"]
 
 #: What a hole may fold to: the value kinds AgL spells as plain text.
 Scalar = str | int | decimal.Decimal | bool
+
+#: The type-expression shapes a binding's annotation may carry and still
+#: permit folding through it — see module docstring.
+_SCALAR_TYPE_EXPRS = (TextT, IntT, DecimalT, BoolT)
+
+
+def _scalar_fold_annotation_ok(annotation: TypeExpr | None) -> bool:
+    """Whether a binding's declared type still permits folding its initializer as a scalar."""
+    return annotation is None or isinstance(annotation, _SCALAR_TYPE_EXPRS)
+
 
 #: A binding's declaration path: its scope path, then its name.
 _BindingKey = tuple[tuple[str, ...], str]
@@ -100,6 +134,191 @@ class FoldFailure:
 
     message: str
     span: SourceSpan
+
+
+def fold_scalar(
+    expr: Expr, *, resolve_ref: Callable[[VarRef], Scalar | FoldFailure]
+) -> Scalar | FoldFailure:
+    """Fold *expr* to the scalar it denotes, or say why it does not fold.
+
+    Handles the mechanics common to every caller: literal shape, negation,
+    ``not``, and template substitution (a non-text hole renders through
+    ``scalar_text``, exactly like interpolation). ``resolve_ref`` is the
+    caller's own reference resolution — an AST-only same-module scope walk
+    (:class:`ModuleConstants`) or a checked module's constant bindings — which
+    may chase a chain of further references, with its own cycle detection,
+    before returning the scalar a ``VarRef`` ultimately denotes, or a failure
+    explaining why it names none.
+    """
+    if isinstance(expr, StringLit):
+        return expr.value
+    if isinstance(expr, (IntLit, DecimalLit, BoolLit)):
+        return expr.value
+    if isinstance(expr, UnaryNeg):
+        operand = fold_scalar(expr.operand, resolve_ref=resolve_ref)
+        if isinstance(operand, FoldFailure):
+            return operand
+        if isinstance(operand, bool) or not isinstance(operand, (int, decimal.Decimal)):
+            return FoldFailure("'-' applies to a number only", expr.span)
+        return -operand
+    if isinstance(expr, UnaryNot):
+        operand = fold_scalar(expr.operand, resolve_ref=resolve_ref)
+        if isinstance(operand, FoldFailure):
+            return operand
+        if not isinstance(operand, bool):
+            return FoldFailure("'not' applies to a bool only", expr.span)
+        return not operand
+    if isinstance(expr, Template):
+        parts: list[str] = []
+        for segment in expr.segments:
+            if not isinstance(segment, InterpSegment):
+                parts.append(segment.text)
+                continue
+            hole = fold_scalar(segment.expr, resolve_ref=resolve_ref)
+            if isinstance(hole, FoldFailure):
+                return hole
+            parts.append(hole if isinstance(hole, str) else scalar_text(hole))
+        return "".join(parts)
+    if isinstance(expr, VarRef):
+        return resolve_ref(expr)
+    if isinstance(expr, (ArrayLit, DictLit, NullLit, UnitLit)):
+        return FoldFailure("only a text, int, decimal, or bool constant folds into text", expr.span)
+    return FoldFailure("it is not a constant expression", expr.span)
+
+
+@dataclass(frozen=True, slots=True)
+class _BoolKey:
+    value: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _NumKey:
+    value: decimal.Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class _NullKey:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _TextKey:
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class _CallKey:
+    """A constructor application or a constant builtin call: identity plus bound fields."""
+
+    identity: Hashable
+    fields: tuple[tuple[str, Hashable], ...]
+
+
+def _field_name(item: tuple[str, Hashable]) -> str:
+    """Sort key for a ``(field_name, key)`` pair, typed to avoid an ``Any`` lambda."""
+    return item[0]
+
+
+def constant_key(
+    expr: Expr,
+    *,
+    initializer_for: Callable[[int], tuple[Expr, TypeExpr | None] | None],
+    constructor_ref_for: Callable[[VarRef], Hashable | None],
+    call_binding: Callable[[Call], tuple[Hashable, Mapping[str, Expr]] | None],
+) -> Hashable | None:
+    """Canonical comparison key for a constant dict-literal key expression.
+
+    Two constant keys compare equal under this key exactly when AgL equality
+    would consider them equal: ``null`` is a singleton key; a bool never
+    equals a number; int and decimal literals compare numerically; text
+    compares after folding templates and constant references (through
+    negation and ``not``, via ``fold_scalar``); a reference to a constant of
+    the module follows to its initializer structurally; a call — a
+    constructor application, direct or through a chain of constant aliases,
+    or a constant builtin call — compares by its identity with its arguments
+    normalized to field names (positional and named alike, via
+    ``call_binding``).
+
+    Returns ``None`` when *expr* has no comparable structural form (an
+    interpolation hole reading something other than a scalar-annotated
+    constant, an ordinary function call, ...), leaving such a key to a
+    runtime ``DuplicateKeyError`` only — this never produces a false
+    positive.
+
+    Must be called only on an expression already known constant
+    (``is_constant_expression``): a module-constant reference it reaches is
+    then guaranteed acyclic, since classifying the whole expression constant
+    already walked — and would have rejected — any cycle.
+
+    ``initializer_for`` resolves a constant ``VarRef``'s ``node_id`` to its
+    initializer expression and declared type, or ``None`` when it does not
+    name a fixed (non-``var``, non-``@param``) binding.
+    ``constructor_ref_for`` resolves a bare constructor-denoting ``VarRef`` to
+    its identity, or ``None`` when it does not denote a constructor.
+    ``call_binding`` resolves a call whose callee is a ``VarRef`` — a
+    constructor call (direct or through an alias) or a constant builtin call
+    — to its identity and its arguments already bound to field names, or
+    ``None`` when the callee denotes neither.
+    """
+
+    def recur(sub_expr: Expr) -> Hashable | None:
+        return constant_key(
+            sub_expr,
+            initializer_for=initializer_for,
+            constructor_ref_for=constructor_ref_for,
+            call_binding=call_binding,
+        )
+
+    def resolve_ref(ref: VarRef) -> Scalar | FoldFailure:
+        resolved = initializer_for(ref.node_id)
+        if resolved is None:
+            return FoldFailure(f"{_spelling(ref)!r} names no constant", ref.span)
+        target, annotation = resolved
+        if annotation is not None and not _scalar_fold_annotation_ok(annotation):
+            return FoldFailure(
+                f"{_spelling(ref)!r} is annotated {render_type_expr(annotation)!r}, not a "
+                "text, int, decimal, or bool constant",
+                ref.span,
+            )
+        return fold_scalar(target, resolve_ref=resolve_ref)
+
+    if isinstance(expr, NullLit):
+        return _NullKey()
+    if isinstance(expr, VarRef):
+        ctor_id = constructor_ref_for(expr)
+        if ctor_id is not None:
+            return _CallKey(ctor_id, ())
+        resolved = initializer_for(expr.node_id)
+        return None if resolved is None else recur(resolved[0])
+    if isinstance(expr, Call) and isinstance(expr.callee, VarRef):
+        binding = call_binding(expr)
+        if binding is None:
+            return None
+        identity, bound = binding
+        return _call_key(identity, bound, recur)
+    folded = fold_scalar(expr, resolve_ref=resolve_ref)
+    if isinstance(folded, FoldFailure):
+        return None
+    if isinstance(folded, bool):
+        return _BoolKey(folded)
+    if isinstance(folded, str):
+        return _TextKey(folded)
+    return _NumKey(decimal.Decimal(folded))
+
+
+def _call_key(
+    identity: Hashable,
+    bound: Mapping[str, Expr],
+    recur: Callable[[Expr], Hashable | None],
+) -> Hashable | None:
+    """A call's key: its identity plus each bound field's key, sorted by name."""
+    values: dict[str, Hashable] = {}
+    for name, arg in bound.items():
+        sig = recur(arg)
+        if sig is None:
+            return None
+        values[name] = sig
+    return _CallKey(identity, tuple(sorted(values.items(), key=_field_name)))
 
 
 class ModuleConstants:
@@ -138,88 +357,53 @@ class ModuleConstants:
         declared type would be. A number or bool folds only inside a hole,
         where interpolation renders it.
         """
-        folded = self._fold(expr, scope_path, ())
+        folded = fold_scalar(expr, resolve_ref=self._resolver(scope_path, ()))
         if isinstance(folded, FoldFailure):
             return folded
         if not isinstance(folded, str):
             return FoldFailure("it is not a text constant", expr.span)
         return folded
 
-    def _fold(
-        self, expr: Expr, scope_path: tuple[str, ...], pending: tuple[_BindingKey, ...]
-    ) -> Scalar | FoldFailure:
-        """Fold one expression to a scalar, or say why it does not fold.
+    def _resolver(
+        self, scope_path: tuple[str, ...], pending: tuple[_BindingKey, ...]
+    ) -> Callable[[VarRef], Scalar | FoldFailure]:
+        """Build the ``fold_scalar`` reference resolver rooted at *scope_path*.
 
         ``pending`` is the chain of bindings whose initializers are being
         folded, so a constant that names itself is reported as the cycle it is
-        rather than recursing.
+        rather than recursing. Resolving a reference to another binding
+        recurses through a fresh resolver rooted at that binding's own scope,
+        since an unqualified name inside its initializer resolves from there.
         """
-        if isinstance(expr, StringLit):
-            return expr.value
-        if isinstance(expr, (IntLit, DecimalLit, BoolLit)):
-            return expr.value
-        if isinstance(expr, UnaryNeg):
-            return self._negate(expr, scope_path, pending)
-        if isinstance(expr, UnaryNot):
-            operand = self._fold(expr.operand, scope_path, pending)
-            if isinstance(operand, FoldFailure):
-                return operand
-            if not isinstance(operand, bool):
-                return FoldFailure("'not' applies to a bool only", expr.span)
-            return not operand
-        if isinstance(expr, Template):
-            return self._fold_template(expr, scope_path, pending)
-        if isinstance(expr, VarRef):
-            return self._fold_reference(expr, scope_path, pending)
-        if isinstance(expr, (ArrayLit, DictLit, NullLit, UnitLit)):
-            return FoldFailure(
-                "only a text, int, decimal, or bool constant folds into text", expr.span
-            )
-        return FoldFailure("it is not a constant expression", expr.span)
 
-    def _negate(
-        self, expr: UnaryNeg, scope_path: tuple[str, ...], pending: tuple[_BindingKey, ...]
-    ) -> Scalar | FoldFailure:
-        operand = self._fold(expr.operand, scope_path, pending)
-        if isinstance(operand, FoldFailure):
-            return operand
-        if isinstance(operand, bool) or not isinstance(operand, (int, decimal.Decimal)):
-            return FoldFailure("'-' applies to a number only", expr.span)
-        return -operand
+        def resolve(expr: VarRef) -> Scalar | FoldFailure:
+            qualifier = expr.qualifier
+            if qualifier is not None and (
+                qualifier.anchored or any("/" in segment.name for segment in qualifier.segments)
+            ):
+                return FoldFailure(
+                    f"{_spelling(expr)!r} names another module; a constant may name only "
+                    "constants of its own module",
+                    expr.span,
+                )
+            key = self._resolve(expr, scope_path)
+            if key is None:
+                return FoldFailure(
+                    f"{_spelling(expr)!r} names no constant of this module", expr.span
+                )
+            if key in pending:
+                return FoldFailure(f"{_spelling(expr)!r} is defined in terms of itself", expr.span)
+            binding = self._bindings[key]
+            annotation = binding.type_ann
+            if annotation is not None and not _scalar_fold_annotation_ok(annotation):
+                return FoldFailure(
+                    f"{_spelling(expr)!r} is annotated {render_type_expr(annotation)!r}, "
+                    "not a text, int, decimal, or bool constant",
+                    expr.span,
+                )
+            return fold_scalar(binding.value, resolve_ref=self._resolver(key[0], (*pending, key)))
 
-    def _fold_template(
-        self, expr: Template, scope_path: tuple[str, ...], pending: tuple[_BindingKey, ...]
-    ) -> str | FoldFailure:
-        parts: list[str] = []
-        for segment in expr.segments:
-            if not isinstance(segment, InterpSegment):
-                parts.append(segment.text)
-                continue
-            hole = self._fold(segment.expr, scope_path, pending)
-            if isinstance(hole, FoldFailure):
-                return hole
-            parts.append(hole if isinstance(hole, str) else scalar_text(hole))
-        return "".join(parts)
-
-    def _fold_reference(
-        self, expr: VarRef, scope_path: tuple[str, ...], pending: tuple[_BindingKey, ...]
-    ) -> Scalar | FoldFailure:
-        qualifier = expr.qualifier
-        if qualifier is not None and (
-            qualifier.anchored or any("/" in segment.name for segment in qualifier.segments)
-        ):
-            return FoldFailure(
-                f"{_spelling(expr)!r} names another module; a constant may name only "
-                "constants of its own module",
-                expr.span,
-            )
-        key = self._resolve(expr, scope_path)
-        if key is None:
-            return FoldFailure(f"{_spelling(expr)!r} names no constant of this module", expr.span)
-        if key in pending:
-            return FoldFailure(f"{_spelling(expr)!r} is defined in terms of itself", expr.span)
-        binding = self._bindings[key]
-        return self._fold(binding.value, key[0], (*pending, key))
+        return resolve
 
     def _resolve(self, expr: VarRef, scope_path: tuple[str, ...]) -> _BindingKey | None:
         """Resolve one reference to a static binding of this module.

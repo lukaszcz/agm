@@ -1,0 +1,7 @@
+# A bool key and a numerically-equal int key are distinct constant keys:
+# AgL equality never equates a bool with a number, so the literal below is
+# not a duplicate, statically or at run time.
+program def main() -> unit =
+  let m: dict[json, int] = {true: 1, 1: 2}
+  print(m[true])
+  print(m[1])

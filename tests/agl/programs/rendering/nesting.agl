@@ -43,6 +43,13 @@ program def main() -> unit =
   let scores: dict[text, int] = {"Bo": 0, "Ada": 3}
   print scores
 
+  # --- non-text dict keys render in their own syntax, not just their values ---
+  let counts: dict[int, text] = {1: "one", 2: "two"}
+  print counts
+
+  let by-status: dict[Status, int] = {Open: 1, Closed(by = "Ada", reason = "fixed"): 2}
+  print by-status
+
   # --- enum variants ---
   let s1: Status = Open
   let s2: Status = Closed(by = "Ada", reason = "fixed")

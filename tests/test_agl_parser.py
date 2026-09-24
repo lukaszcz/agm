@@ -338,10 +338,16 @@ class TestLiterals:
         assert isinstance(d, DictLit) and len(d.entries) == 2
         assert all(isinstance(e, DictEntry) for e in d.entries)
 
-    def test_dict_shorthand_key(self) -> None:
+    def test_dict_bare_name_key_is_a_reference(self) -> None:
+        """A bare name key names a variable/constructor -- it is not a string shorthand."""
         d = first(parse("{name: 1}"))
         assert isinstance(d, DictLit)
-        assert d.entries[0].key.value == "name"
+        assert isinstance(d.entries[0].key, VarRef) and d.entries[0].key.name == "name"
+
+    def test_dict_expression_key(self) -> None:
+        d = first(parse("{1 + 1: 2}"))
+        assert isinstance(d, DictLit)
+        assert isinstance(d.entries[0].key, BinaryOp)
 
 
 # ---------------------------------------------------------------------------

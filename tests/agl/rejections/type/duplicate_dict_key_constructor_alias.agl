@@ -1,0 +1,13 @@
+# A call through a `let`-bound alias of a constructor is itself provably a
+# constructor call, so two such entries with the same constant arguments
+# are caught as a duplicate even though only one of them names the
+# constructor directly.
+record Point
+  x: int
+  y: int
+
+let make = Point
+
+program def main() -> unit =
+  let d = {make(1, 2): 1, Point(1, 2): 2}
+  print d

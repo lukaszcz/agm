@@ -1,0 +1,39 @@
+{
+  "scenarios": [
+    {
+      "name": "literal_key_expressions",
+      "params": {"mode": 1, "a": 0, "b": 0},
+      "expect": {
+        "stdout": "1\n2\none\ntwo\norigin\n1\n"
+      }
+    },
+    {
+      "name": "int_literal_key_coerced_into_decimal",
+      "params": {"mode": 2, "a": 0, "b": 0},
+      "expect": {
+        "stdout": "one\ntwo\n"
+      }
+    },
+    {
+      "name": "computed_keys_no_duplicate",
+      "params": {"mode": 3, "a": 3, "b": 4},
+      "expect": {
+        "stdout": "a\n"
+      }
+    },
+    {
+      "name": "computed_duplicate_key_raises",
+      "params": {"mode": 3, "a": 3, "b": 3},
+      "expect": {
+        "stdout": "dup: 3\n"
+      }
+    },
+    {
+      "name": "bool_json_and_positional_constructor_keys",
+      "params": {"mode": 4, "a": 0, "b": 0},
+      "expect": {
+        "stdout": "1\n2\n1\n2\n3\n"
+      }
+    }
+  ]
+}

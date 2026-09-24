@@ -1,0 +1,7 @@
+# A template hole that reads a module constant is itself constant;
+# folding it makes a differently-spelled text key collide statically.
+let prefix = "k"
+
+program def main() -> unit =
+  let m = {"%{prefix}-a": 1, "k-a": 2}
+  print m

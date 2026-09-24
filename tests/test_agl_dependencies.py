@@ -123,6 +123,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         (
             "typecheck",
             (
+                "agm.agl.attributes",
                 "agm.agl.capabilities",
                 "agm.agl.constraints",
                 "agm.agl.diagnostics",

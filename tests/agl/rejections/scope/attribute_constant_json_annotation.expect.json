@@ -1,0 +1,6 @@
+{
+  "diagnostic": {
+    "line": 7,
+    "message_contains": ["doc", "not a text, int, decimal, or bool constant"]
+  }
+}

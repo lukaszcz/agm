@@ -1,0 +1,4 @@
+# A non-empty dict literal in an interpolation hole is text-keyed, exactly
+# like a top-level json-typed literal.
+program def main() -> unit =
+  print "%{ {1: 2} }"

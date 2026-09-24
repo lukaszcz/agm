@@ -207,9 +207,10 @@ class IrMakeArray:
 class IrMakeDict:
     """IR dict construction: ``{k: v, ...}``.
 
-    Each entry is a ``(key_expr, value_expr)`` pair evaluated left-to-right.
-    Mirrors the AST ``DictLit`` node (whose ``DictEntry.key`` is a
-    ``StringLit``; at IR level keys are already resolved to ``IrExpr``).
+    Each entry is a ``(key_expr, value_expr)`` pair evaluated left-to-right;
+    a key equal to one already inserted is a ``DuplicateKeyError``. Mirrors
+    the AST ``DictLit`` node, whose ``DictEntry.key`` is an ordinary
+    expression.
     """
 
     location: Location

@@ -1,0 +1,17 @@
+# A constructor-application key whose bound field is itself constant but
+# not statically comparable (a template hole reading a nullary constructor,
+# not a `let` constant) has no comparable canonical key even though the
+# constructor's own type is Hashable: two such keys collide only at run
+# time.
+enum Color
+  | Red
+
+record Tag
+  label: text
+
+program def main() -> unit =
+  try
+    let tags: dict[Tag, int] = {Tag("%{Red}"): 1, Tag("%{Red}"): 2}
+    print tags
+  catch DuplicateKeyError as e =>
+    print "dup: %{e.key}"

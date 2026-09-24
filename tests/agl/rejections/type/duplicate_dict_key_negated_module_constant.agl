@@ -1,0 +1,8 @@
+# A negation of a module constant is itself a constant key: it folds
+# through the constant's value, so two identically negated spellings
+# collide statically instead of only at run time.
+let five = 5
+
+program def main() -> unit =
+  let m = {-five: "a", -five: "b"}
+  print m

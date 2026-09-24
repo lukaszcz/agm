@@ -1,0 +1,6 @@
+# Common utility functions
+
+import std/time
+
+def logfile-path(prefix: text, extension: text = ".log") -> path =
+  ".agent-files/" ++ prefix ++ "-" ++ time::timestamp() ++ extension

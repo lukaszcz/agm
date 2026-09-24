@@ -3,12 +3,13 @@
 import std/config
 import std/fs
 import std/log
+import devel/utils
 
 enum Severity = LOW | MEDIUM | HIGH | CRITICAL
 
 record Issue
   severity: Severity
-  @doc("location - file, lines, columns")
+  @doc("location - file:line:column")
   location: text
   description: text
 
@@ -78,12 +79,14 @@ def Agent::revise-review-text(self, review: text) -> bool =
   """
   self.ask prompt
 
-def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent, max-steps: int) -> unit =
+def refine(scope: text, aspects: text, review-agent: Agent, revise-agent: Agent, max-steps: int, save-review: bool) -> unit =
   var n: int = 1
   do[max-steps]
     log::info-heading "Step %{n}"
     n := n + 1
     let review = review-agent.review(scope, aspects)
+    if save-review =>
+      fs::write(utils::logfile-path("review", ".json"), "%{review as json}")
     let ct = revise-agent.revise-review(review)
   until not ct
 
@@ -103,7 +106,7 @@ program def review-main(
   agent: Agent = config::default-agent)
   -> unit =
   let sep = if extra-aspects == "" => "" else => ", "
-  print <| agent.review(scope, aspects ++ sep ++ extra-aspects)
+  print <| agent.review(scope, aspects ++ sep ++ extra-aspects) as json
 
 @command("devel revise")
 @doc("Revise based on a review.")
@@ -113,11 +116,15 @@ program def revise-main(
   agent: Agent = config::default-agent)
   -> unit =
   let txt: text = fs::read(file)
-  case txt as? Review of
-    | Some(value) =>
-      print <| agent.revise-review(value)
-    | None =>
-      print <| agent.revise-review-text(txt)
+  let high-valid: bool =
+    case txt as? Review of
+      | Some(value) =>
+        agent.revise-review(value)
+      | None =>
+        agent.revise-review-text(txt)
+  if
+    | high-valid => print "At least one HIGH or CRITICAL issue was valid."
+    | else => print "There were no valid HIGH or CRITICAL issues."
 
 @command("devel refine")
 @doc("""
@@ -132,7 +139,8 @@ program def refine-main(
   extra-aspects: text = "",
   review-agent: Agent = config::default-agent,
   revise-agent: Agent = config::default-agent,
-  max-steps: int = 8)
+  max-steps: int = 8,
+  save-review: bool = true)
   -> unit =
   let sep = if extra-aspects == "" => "" else => ", "
-  print <| refine(scope, aspects ++ sep ++ extra-aspects, review-agent, revise-agent, max-steps)
+  refine(scope, aspects ++ sep ++ extra-aspects, review-agent, revise-agent, max-steps, save-review)

@@ -37,9 +37,9 @@ def Optional::or-else[T](self, f: () -> Optional[T]) -> Optional[T] =
     | Some(_) => self
     | Default => Default
 
-def Optional::unwrap-or[T](self, default: T, x: T) -> T =
+def Optional::unwrap-or[T](self, default: T, other: T) -> T =
   case self of
-    | None => x
+    | None => other
     | Some(value) => value
     | Default => default
 

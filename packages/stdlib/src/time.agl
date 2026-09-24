@@ -19,6 +19,8 @@ def parse-iso?(value: text) -> Option[decimal] =
 @extern-name("format_iso")
 extern def format-iso(epoch: decimal) -> text
 extern def format(epoch: decimal, fmt: text) -> text
+# Return a UTC timestamp at microsecond precision.
+def timestamp() -> text = format(now(), "%Y%m%d-%H%M%S-%f")
 extern def parse(value: text, fmt: text) -> decimal
 def try-parse(value: text, fmt: text) -> Result[decimal, TimeParseError] =
   try Ok(parse(value, fmt)) catch TimeParseError as e => Err(e)

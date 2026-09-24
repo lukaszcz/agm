@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "missing_key_reports_imported_module_source_and_line",
+      "module_roots": [
+        "program_modules/modules/uncaught_location_cross_module"
+      ],
+      "expect": {
+        "stdout": "",
+        "raises": {
+          "type": "KeyError",
+          "line": 4,
+          "source_contains": "uncaught_location_cross_module/lib.agl"
+        }
+      }
+    }
+  ]
+}

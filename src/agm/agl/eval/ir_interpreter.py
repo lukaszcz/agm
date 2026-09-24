@@ -1260,12 +1260,14 @@ class IrInterpreter:
 
         Reuses :meth:`_resolve_defaults_and_invoke`, the same tail an ordinary
         direct call uses, so the entry point binds exactly like a call to the
-        same function descriptor, with an entry-point error span attached to
-        any depth-limit or body error. The pushed call site uses the program
-        body's own location -- there is no real caller expression -- so a
-        default or an extern call reached only through this entry still has
-        a concrete site to report if the whole chain proves to be inside one
-        other package (:meth:`_extern_trace_span`).
+        same function descriptor. A depth-limit error (no span of its own) is
+        attributed to the program body's own location here; a body error
+        already carries its innermost failing node's span from :meth:`_eval`.
+        The pushed call site uses the program body's own location -- there is
+        no real caller expression -- so a default or an extern call reached
+        only through this entry still has a concrete site to report if the
+        whole chain proves to be inside one other package
+        (:meth:`_extern_trace_span`).
         """
         desc, impl = self._program_entry(symbol)
         location = impl.body.location
@@ -1356,13 +1358,13 @@ class IrInterpreter:
                 raise self._recursion_error() from None
 
     def _eval_and_record_initializer(self, module_id: ModuleId, node: IrExpr) -> None:
-        """Evaluate one initializer, retaining its result for result collection."""
-        try:
-            value = self._eval_initializer(node)
-        except AglRaise as exc:
-            if exc.span is None:
-                exc.span = node.location
-            raise
+        """Evaluate one initializer, retaining its result for result collection.
+
+        ``_eval_initializer``'s only raising path is :meth:`_eval`, which
+        already attributes an unspanned raise to its own failing node, so
+        nothing here needs to backfill a span.
+        """
+        value = self._eval_initializer(node)
         self.initializer_values.append(value)
         self.module_initializer_values.setdefault(module_id, []).append(value)
         self.module_completed_initializer_indices.setdefault(module_id, set()).add(
@@ -1396,633 +1398,638 @@ class IrInterpreter:
     def _eval_session_effect(
         self, node: IrSessionOpen | IrSessionDefault | IrSessionAsk | IrSessionOp
     ) -> Value:
-        try:
-            if isinstance(node, IrSessionOpen):
-                return self._effects.eval_ir_session_open(node)
-            if isinstance(node, IrSessionDefault):
-                return self._effects.eval_ir_session_default(
-                    node, self._load_builtin_setting("default-agent")
-                )
-            if isinstance(node, IrSessionAsk):
-                return self._effects.eval_ir_session_ask(node)
-            return self._effects.eval_ir_session_op(node)
-        except AglRaise as exc:
-            if exc.span is None:
-                exc.span = node.location
-            raise
+        if isinstance(node, IrSessionOpen):
+            return self._effects.eval_ir_session_open(node)
+        if isinstance(node, IrSessionDefault):
+            return self._effects.eval_ir_session_default(
+                node, self._load_builtin_setting("default-agent")
+            )
+        if isinstance(node, IrSessionAsk):
+            return self._effects.eval_ir_session_ask(node)
+        return self._effects.eval_ir_session_op(node)
 
     def _eval(self, node: IrExpr) -> Value:
         """Evaluate *node* in the current frame and return its value.
 
-        Dispatches over the closed ``IrExpr`` union with a structural ``match``
-        whose final arm is ``assert_never`` so mypy exhaustiveness makes a
-        missing case a compile-time error.
+        Dispatches over the closed ``IrExpr`` union with a structural
+        ``match`` whose final arm is ``assert_never`` so mypy exhaustiveness
+        makes a missing case a compile-time error.
+
+        Also the sole span-attribution point: an ``AglRaise`` that reaches
+        here without a span already (a raise site with no closer location of
+        its own, e.g. index/key/duplicate-key/cast/arithmetic failures) is
+        stamped with *node*'s own location as it unwinds through this frame.
+        Recursive evaluation means the innermost failing (sub-)expression's
+        ``_eval`` call is always the first to see the exception, so it is
+        stamped there -- never with an enclosing statement's or the whole
+        function body's location -- and a deeper, already-attributed span is
+        never overwritten. The dispatch and the attribution share one frame
+        (no separate dispatch helper) so this hot recursive path costs no
+        extra Python stack frame per AgL evaluation step.
         """
-        match node:
-            case IrConstInt(value=v):
-                return IntValue(v)
+        try:
+            match node:
+                case IrConstInt(value=v):
+                    return IntValue(v)
 
-            case IrConstDecimal(value=v):
-                return DecimalValue(v)
+                case IrConstDecimal(value=v):
+                    return DecimalValue(v)
 
-            case IrConstBool(value=v):
-                return BoolValue(v)
+                case IrConstBool(value=v):
+                    return BoolValue(v)
 
-            case IrConstText(value=v):
-                return TextValue(v)
+                case IrConstText(value=v):
+                    return TextValue(v)
 
-            case IrResource(path=path):
-                return TextValue(path)
+                case IrResource(path=path):
+                    return TextValue(path)
 
-            case IrConstUnit():
-                return UNIT_VALUE
+                case IrConstUnit():
+                    return UNIT_VALUE
 
-            case IrConstJsonNull():
-                return JsonValue(None)
+                case IrConstJsonNull():
+                    return JsonValue(None)
 
-            case IrMakeArray(items=items):
-                return ArrayValue([self._eval(item) for item in items])
+                case IrMakeArray(items=items):
+                    return ArrayValue([self._eval(item) for item in items])
 
-            case IrMakeDict(entries=entries):
-                dict_value = DictValue()
-                for key_expr, val_expr in entries:
-                    key_val = self._eval(key_expr)
-                    val_val = self._eval(val_expr)
-                    if not dict_value.insert(key_val, val_val):
-                        raise self._duplicate_key_failure(key_val)
-                return dict_value
+                case IrMakeDict(entries=entries):
+                    dict_value = DictValue()
+                    for key_expr, val_expr in entries:
+                        key_val = self._eval(key_expr)
+                        val_val = self._eval(val_expr)
+                        if not dict_value.insert(key_val, val_val):
+                            raise self._duplicate_key_failure(key_val)
+                    return dict_value
 
-            # `IrMakeJsonArray`/`IrMakeJsonObject`: every item/value here is already
-            # scalar or `JsonValue` (never a raw array/dict): the checker requires an
-            # explicit `as json` cast to embed a container in a json literal, and that
-            # cast's own `IrConvert` handling is what detects a cyclic source. So
-            # The scalar encode plan in both arms below is a leaf conversion, never a
-            # walk that could re-enter a container — no cycle guard needed in either.
-            case IrMakeJsonArray(items=json_items):
-                return JsonValue(
-                    [encode_value(_SCALAR_ENCODE_PLAN, self._eval(item)) for item in json_items]
-                )
+                # `IrMakeJsonArray`/`IrMakeJsonObject`: every item/value here is already
+                # scalar or `JsonValue` (never a raw array/dict): the checker requires an
+                # explicit `as json` cast to embed a container in a json literal, and that
+                # cast's own `IrConvert` handling is what detects a cyclic source. So
+                # The scalar encode plan in both arms below is a leaf conversion, never a
+                # walk that could re-enter a container — no cycle guard needed in either.
+                case IrMakeJsonArray(items=json_items):
+                    return JsonValue(
+                        [encode_value(_SCALAR_ENCODE_PLAN, self._eval(item)) for item in json_items]
+                    )
 
-            case IrMakeJsonObject(entries=json_entries):
-                json_result: dict[str, object] = {}
-                for key_expr, val_expr in json_entries:
-                    key_val = self._eval(key_expr)
-                    if not isinstance(key_val, TextValue):
-                        raise InvalidIrError(
-                            f"IrMakeJsonObject key must evaluate to TextValue,"
-                            f" got {type(key_val).__name__}"
+                case IrMakeJsonObject(entries=json_entries):
+                    json_result: dict[str, object] = {}
+                    for key_expr, val_expr in json_entries:
+                        key_val = self._eval(key_expr)
+                        if not isinstance(key_val, TextValue):
+                            raise InvalidIrError(
+                                f"IrMakeJsonObject key must evaluate to TextValue,"
+                                f" got {type(key_val).__name__}"
+                            )
+                        if key_val.value in json_result:
+                            raise self._duplicate_key_failure(key_val)
+                        json_result[key_val.value] = encode_value(
+                            _SCALAR_ENCODE_PLAN, self._eval(val_expr)
                         )
-                    if key_val.value in json_result:
-                        raise self._duplicate_key_failure(key_val)
-                    json_result[key_val.value] = encode_value(
-                        _SCALAR_ENCODE_PLAN, self._eval(val_expr)
+                    return JsonValue(json_result)
+
+                case IrLoad(symbol=sym):
+                    slot = next(
+                        (frame[sym] for frame in reversed(self._frames) if sym in frame),
+                        None,
                     )
-                return JsonValue(json_result)
+                    if slot is None:
+                        raise InvalidIrError(
+                            f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"
+                        )
+                    if isinstance(slot, Cell):
+                        return slot.value
+                    return slot
 
-            case IrLoad(symbol=sym):
-                slot = next(
-                    (frame[sym] for frame in reversed(self._frames) if sym in frame),
-                    None,
-                )
-                if slot is None:
-                    raise InvalidIrError(
-                        f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"
-                    )
-                if isinstance(slot, Cell):
-                    return slot.value
-                return slot
-
-            case IrBind(symbol=sym, value=val_expr):
-                value = self._eval(val_expr)
-                desc = self._program.symbols.get(sym)
-                if desc is not None and desc.mutable:
-                    self._frame[sym] = Cell(value)
-                else:
-                    self._frame[sym] = value
-                return value
-
-            case IrAssign(symbol=sym, value=val_expr):
-                slot = self._frame.get(sym)
-                if slot is None and self._frames[0] is not self._frame:
-                    # Module vars live in the base frame and are intentionally
-                    # not closure captures.
-                    slot = self._frames[0].get(sym)
-                if not isinstance(slot, Cell):
+                case IrBind(symbol=sym, value=val_expr):
+                    value = self._eval(val_expr)
                     desc = self._program.symbols.get(sym)
-                    if desc is None:
+                    if desc is not None and desc.mutable:
+                        self._frame[sym] = Cell(value)
+                    else:
+                        self._frame[sym] = value
+                    return value
+
+                case IrAssign(symbol=sym, value=val_expr):
+                    slot = self._frame.get(sym)
+                    if slot is None and self._frames[0] is not self._frame:
+                        # Module vars live in the base frame and are intentionally
+                        # not closure captures.
+                        slot = self._frames[0].get(sym)
+                    if not isinstance(slot, Cell):
+                        desc = self._program.symbols.get(sym)
+                        if desc is None:
+                            raise InvalidIrError(
+                                f"IrAssign: symbol_id={sym.value!r} is not in program.symbols"
+                            )
                         raise InvalidIrError(
-                            f"IrAssign: symbol_id={sym.value!r} is not in program.symbols"
+                            f"IrAssign: symbol_id={sym.value!r}"
+                            f" (public_name={desc.public_name!r}) is not a mutable var"
                         )
-                    raise InvalidIrError(
-                        f"IrAssign: symbol_id={sym.value!r}"
-                        f" (public_name={desc.public_name!r}) is not a mutable var"
+                    # A simple var-cell store.  An assignment statement yields unit;
+                    # the mutation is the side effect.
+                    slot.value = self._eval(val_expr)
+                    return UNIT_VALUE
+
+                case IrFieldSet(value=value_expr, nominal=nominal, field=field, new=new_expr):
+                    # Evaluate the receiver before the replacement. The identity
+                    # guard protects superseded same-named declarations from
+                    # writes; validation already proved the field is declared, so
+                    # matching identity is all the store needs.
+                    value = self._eval(value_expr)
+                    if not isinstance(value, RecordValue):
+                        raise InvalidIrError(
+                            f"IrFieldSet: expected RecordValue, got {type(value).__name__}"
+                        )
+                    if value.nominal != nominal:
+                        raise InvalidIrError(
+                            f"IrFieldSet: expected nominal {nominal!r}, got {value.nominal!r}"
+                        )
+                    value.fields[field] = self._eval(new_expr)
+                    return UNIT_VALUE
+
+                # Plain left-to-right evaluation order: container, then index,
+                # then the right-hand side, then the checked in-place store.
+                case IrIndexSet(
+                    container=container_expr, kind=kind, index=idx_expr, value=val_expr
+                ):
+                    container = self._eval(container_expr)
+                    index_val = self._eval(idx_expr)
+                    new_value = self._eval(val_expr)
+                    try:
+                        index_set(kind, container, index_val, new_value)
+                    except (AglIndexOutOfRange, AglMissingKey) as e:
+                        raise self._index_failure(e)
+                    return UNIT_VALUE
+
+                case IrCoerce(value=val_expr, operation=op):
+                    value = self._eval(val_expr)
+                    return _apply_coercion(value, op)
+
+                case IrSequence(items=items) | IrBlock(items=items):
+                    last: Value = UNIT_VALUE
+                    for item in items:
+                        last = self._eval(item)
+                    return last
+
+                case IrArith(op=arith_op, kind=kind, lhs=lhs_expr, rhs=rhs_expr):
+                    lhs_val = self._eval(lhs_expr)
+                    rhs_val = self._eval(rhs_expr)
+                    try:
+                        match arith_op:
+                            case ArithOp.ADD:
+                                return add(kind, lhs_val, rhs_val)
+                            case ArithOp.SUB:
+                                return sub(kind, lhs_val, rhs_val)
+                            case ArithOp.MUL:
+                                return mul(kind, lhs_val, rhs_val)
+                            case ArithOp.DIV:
+                                return div(lhs_val, rhs_val)
+                            case _ as unreachable:  # pragma: no cover
+                                assert_never(unreachable)
+                    except AglDivisionByZero:
+                        raise AglRaise(
+                            _make_exc_value(
+                                "ArithmeticError",
+                                "Division by zero",
+                                nominals=self._program.builtin_nominals,
+                                fields={
+                                    "operation": TextValue("/"),
+                                },
+                            )
+                        )
+
+                case IrCompare(op=cmp_op, kind=_kind, lhs=lhs_expr, rhs=rhs_expr):
+                    lhs_val = self._eval(lhs_expr)
+                    rhs_val = self._eval(rhs_expr)
+                    match cmp_op:
+                        case CmpOp.EQ:
+                            return BoolValue(value_eq(lhs_val, rhs_val))
+                        case CmpOp.NEQ:
+                            return BoolValue(not value_eq(lhs_val, rhs_val))
+                        case CmpOp.LT | CmpOp.LE | CmpOp.GT | CmpOp.GE:
+                            return BoolValue(order(cmp_op, lhs_val, rhs_val))
+                        case _ as _unreachable_cmp:  # pragma: no cover
+                            assert_never(_unreachable_cmp)
+
+                case IrContains(kind=kind, item=item_expr, container=container_expr):
+                    item_val = self._eval(item_expr)
+                    container_val = self._eval(container_expr)
+                    return BoolValue(contains(kind, item_val, container_val))
+
+                case IrAnd(lhs=lhs_expr, rhs=rhs_expr):
+                    lhs_val = self._eval(lhs_expr)
+                    if not isinstance(lhs_val, BoolValue):
+                        raise InvalidIrError(
+                            f"IrAnd: lhs is not BoolValue, got {type(lhs_val).__name__}"
+                        )
+                    if not lhs_val.value:
+                        return BoolValue(False)
+                    rhs_val = self._eval(rhs_expr)
+                    if not isinstance(rhs_val, BoolValue):
+                        raise InvalidIrError(
+                            f"IrAnd: rhs is not BoolValue, got {type(rhs_val).__name__}"
+                        )
+                    return BoolValue(rhs_val.value)
+
+                case IrOr(lhs=lhs_expr, rhs=rhs_expr):
+                    lhs_val = self._eval(lhs_expr)
+                    if not isinstance(lhs_val, BoolValue):
+                        raise InvalidIrError(
+                            f"IrOr: lhs is not BoolValue, got {type(lhs_val).__name__}"
+                        )
+                    if lhs_val.value:
+                        return BoolValue(True)
+                    rhs_val = self._eval(rhs_expr)
+                    if not isinstance(rhs_val, BoolValue):
+                        raise InvalidIrError(
+                            f"IrOr: rhs is not BoolValue, got {type(rhs_val).__name__}"
+                        )
+                    return BoolValue(rhs_val.value)
+
+                case IrUnary(op=unary_op, kind=kind, value=val_expr):
+                    val = self._eval(val_expr)
+                    match unary_op:
+                        case UnaryOp.NOT:
+                            if not isinstance(val, BoolValue):
+                                raise InvalidIrError(
+                                    f"IrUnary NOT: expected BoolValue, got {type(val).__name__}"
+                                )
+                            return logical_not(val)
+                        case UnaryOp.NEG:
+                            if kind is None:
+                                raise InvalidIrError("IrUnary NEG: kind must not be None")
+                            if not isinstance(val, (IntValue, DecimalValue)):
+                                raise InvalidIrError(
+                                    f"IrUnary NEG: expected numeric, got {type(val).__name__}"
+                                )
+                            return negate(kind, val)
+                        case _ as _unreachable_unary:  # pragma: no cover
+                            assert_never(_unreachable_unary)
+
+                case IrField(value=val_expr, nominal=nominal, field=field_name, mode=mode):
+                    value = self._eval(val_expr)
+                    return _project_nominal_field(value, nominal, field_name, mode)
+
+                case IrUpdateRecord(value=val_expr, updates=updates):
+                    target = self._eval(val_expr)
+                    if not isinstance(target, (RecordValue, ExceptionValue)):
+                        raise InvalidIrError(
+                            "IrUpdateRecord: expected RecordValue or ExceptionValue, "
+                            f"got {type(target).__name__}"
+                        )
+                    updated_fields: dict[str, Value] = dict(target.fields)
+                    for fname, fexpr in updates:
+                        updated_fields[fname] = self._eval(fexpr)
+                    if isinstance(target, RecordValue):
+                        return RecordValue(nominal=target.nominal, fields=updated_fields)
+                    return ExceptionValue(nominal=target.nominal, fields=updated_fields)
+
+                case IrIndex(kind=kind, value=val_expr, index=idx_expr):
+                    container = self._eval(val_expr)
+                    index_val = self._eval(idx_expr)
+                    try:
+                        return index_get(kind, container, index_val)
+                    except (AglIndexOutOfRange, AglMissingKey) as e:
+                        raise self._index_failure(e)
+
+                case IrRenderTemplate(segments=segs):
+                    # The lexer has already applied the shared ``%{...}`` surface
+                    # rules, so splicing here is plain concatenation.
+                    parts: list[str] = []
+                    for seg in segs:
+                        match seg:
+                            case IrTemplateText(text=text):
+                                parts.append(text)
+                            case IrTemplateValue(value=value_expr):
+                                parts.append(self._render_or_raise(self._eval(value_expr)))
+                            case _ as unreachable_seg:  # pragma: no cover
+                                assert_never(unreachable_seg)
+                    return TextValue("".join(parts))
+
+                case IrMakeRecord(nominal=nominal, fields=fields):
+                    record_fields: dict[str, Value] = {
+                        fname: self._eval(fexpr) for fname, fexpr in fields
+                    }
+                    return RecordValue(nominal=nominal, fields=record_fields)
+
+                case IrMakeException(nominal=nominal, fields=fields):
+                    exc_fields: dict[str, Value] = {
+                        fname: self._eval(field_expr) for fname, field_expr in fields
+                    }
+                    return ExceptionValue(nominal=nominal, fields=exc_fields)
+
+                case IrMakeConstructor(nominal=nominal):
+                    return ConstructorValue(nominal=nominal)
+
+                case IrNominalCast(
+                    nominals=nominals,
+                    value=val_expr,
+                    test_only=test_only,
+                    source_label=source_label,
+                    target_label=target_label,
+                ):
+                    value = self._eval(val_expr)
+                    if not isinstance(value, (RecordValue, ExceptionValue)):
+                        raise InvalidIrError(
+                            "IrNominalCast: value is not a record or exception,"
+                            f" got {type(value).__name__}"
+                        )
+                    matched = value.nominal in nominals or (
+                        isinstance(value, ExceptionValue)
+                        and nominal_conforms(self._program.nominals, value.nominal, nominals)
                     )
-                # A simple var-cell store.  An assignment statement yields unit;
-                # the mutation is the side effect.
-                slot.value = self._eval(val_expr)
-                return UNIT_VALUE
-
-            case IrFieldSet(value=value_expr, nominal=nominal, field=field, new=new_expr):
-                # Evaluate the receiver before the replacement. The identity
-                # guard protects superseded same-named declarations from
-                # writes; validation already proved the field is declared, so
-                # matching identity is all the store needs.
-                value = self._eval(value_expr)
-                if not isinstance(value, RecordValue):
-                    raise InvalidIrError(
-                        f"IrFieldSet: expected RecordValue, got {type(value).__name__}"
-                    )
-                if value.nominal != nominal:
-                    raise InvalidIrError(
-                        f"IrFieldSet: expected nominal {nominal!r}, got {value.nominal!r}"
-                    )
-                value.fields[field] = self._eval(new_expr)
-                return UNIT_VALUE
-
-            # Plain left-to-right evaluation order: container, then index,
-            # then the right-hand side, then the checked in-place store.
-            case IrIndexSet(container=container_expr, kind=kind, index=idx_expr, value=val_expr):
-                container = self._eval(container_expr)
-                index_val = self._eval(idx_expr)
-                new_value = self._eval(val_expr)
-                try:
-                    index_set(kind, container, index_val, new_value)
-                except (AglIndexOutOfRange, AglMissingKey) as e:
-                    raise self._index_failure(e)
-                return UNIT_VALUE
-
-            case IrCoerce(value=val_expr, operation=op):
-                value = self._eval(val_expr)
-                return _apply_coercion(value, op)
-
-            case IrSequence(items=items) | IrBlock(items=items):
-                last: Value = UNIT_VALUE
-                for item in items:
-                    last = self._eval(item)
-                return last
-
-            case IrArith(op=arith_op, kind=kind, lhs=lhs_expr, rhs=rhs_expr):
-                lhs_val = self._eval(lhs_expr)
-                rhs_val = self._eval(rhs_expr)
-                try:
-                    match arith_op:
-                        case ArithOp.ADD:
-                            return add(kind, lhs_val, rhs_val)
-                        case ArithOp.SUB:
-                            return sub(kind, lhs_val, rhs_val)
-                        case ArithOp.MUL:
-                            return mul(kind, lhs_val, rhs_val)
-                        case ArithOp.DIV:
-                            return div(lhs_val, rhs_val)
-                        case _ as unreachable:  # pragma: no cover
-                            assert_never(unreachable)
-                except AglDivisionByZero:
+                    if matched:
+                        return self._option_some(value) if test_only else value
+                    if test_only:
+                        return self._option_none()
                     raise AglRaise(
                         _make_exc_value(
-                            "ArithmeticError",
-                            "Division by zero",
+                            "CastError",
+                            f"cannot cast '{source_label}' to '{target_label}'",
                             nominals=self._program.builtin_nominals,
                             fields={
-                                "operation": TextValue("/"),
+                                "source-type": TextValue(source_label),
+                                "target-type": TextValue(target_label),
+                                "raw": TextValue(self._cast_raw(value)),
                             },
                         )
                     )
 
-            case IrCompare(op=cmp_op, kind=_kind, lhs=lhs_expr, rhs=rhs_expr):
-                lhs_val = self._eval(lhs_expr)
-                rhs_val = self._eval(rhs_expr)
-                match cmp_op:
-                    case CmpOp.EQ:
-                        return BoolValue(value_eq(lhs_val, rhs_val))
-                    case CmpOp.NEQ:
-                        return BoolValue(not value_eq(lhs_val, rhs_val))
-                    case CmpOp.LT | CmpOp.LE | CmpOp.GT | CmpOp.GE:
-                        return BoolValue(order(cmp_op, lhs_val, rhs_val))
-                    case _ as _unreachable_cmp:  # pragma: no cover
-                        assert_never(_unreachable_cmp)
-
-            case IrContains(kind=kind, item=item_expr, container=container_expr):
-                item_val = self._eval(item_expr)
-                container_val = self._eval(container_expr)
-                return BoolValue(contains(kind, item_val, container_val))
-
-            case IrAnd(lhs=lhs_expr, rhs=rhs_expr):
-                lhs_val = self._eval(lhs_expr)
-                if not isinstance(lhs_val, BoolValue):
-                    raise InvalidIrError(
-                        f"IrAnd: lhs is not BoolValue, got {type(lhs_val).__name__}"
-                    )
-                if not lhs_val.value:
-                    return BoolValue(False)
-                rhs_val = self._eval(rhs_expr)
-                if not isinstance(rhs_val, BoolValue):
-                    raise InvalidIrError(
-                        f"IrAnd: rhs is not BoolValue, got {type(rhs_val).__name__}"
-                    )
-                return BoolValue(rhs_val.value)
-
-            case IrOr(lhs=lhs_expr, rhs=rhs_expr):
-                lhs_val = self._eval(lhs_expr)
-                if not isinstance(lhs_val, BoolValue):
-                    raise InvalidIrError(
-                        f"IrOr: lhs is not BoolValue, got {type(lhs_val).__name__}"
-                    )
-                if lhs_val.value:
-                    return BoolValue(True)
-                rhs_val = self._eval(rhs_expr)
-                if not isinstance(rhs_val, BoolValue):
-                    raise InvalidIrError(
-                        f"IrOr: rhs is not BoolValue, got {type(rhs_val).__name__}"
-                    )
-                return BoolValue(rhs_val.value)
-
-            case IrUnary(op=unary_op, kind=kind, value=val_expr):
-                val = self._eval(val_expr)
-                match unary_op:
-                    case UnaryOp.NOT:
-                        if not isinstance(val, BoolValue):
-                            raise InvalidIrError(
-                                f"IrUnary NOT: expected BoolValue, got {type(val).__name__}"
-                            )
-                        return logical_not(val)
-                    case UnaryOp.NEG:
-                        if kind is None:
-                            raise InvalidIrError("IrUnary NEG: kind must not be None")
-                        if not isinstance(val, (IntValue, DecimalValue)):
-                            raise InvalidIrError(
-                                f"IrUnary NEG: expected numeric, got {type(val).__name__}"
-                            )
-                        return negate(kind, val)
-                    case _ as _unreachable_unary:  # pragma: no cover
-                        assert_never(_unreachable_unary)
-
-            case IrField(value=val_expr, nominal=nominal, field=field_name, mode=mode):
-                value = self._eval(val_expr)
-                return _project_nominal_field(value, nominal, field_name, mode)
-
-            case IrUpdateRecord(value=val_expr, updates=updates):
-                target = self._eval(val_expr)
-                if not isinstance(target, (RecordValue, ExceptionValue)):
-                    raise InvalidIrError(
-                        "IrUpdateRecord: expected RecordValue or ExceptionValue, "
-                        f"got {type(target).__name__}"
-                    )
-                updated_fields: dict[str, Value] = dict(target.fields)
-                for fname, fexpr in updates:
-                    updated_fields[fname] = self._eval(fexpr)
-                if isinstance(target, RecordValue):
-                    return RecordValue(nominal=target.nominal, fields=updated_fields)
-                return ExceptionValue(nominal=target.nominal, fields=updated_fields)
-
-            case IrIndex(kind=kind, value=val_expr, index=idx_expr):
-                container = self._eval(val_expr)
-                index_val = self._eval(idx_expr)
-                try:
-                    return index_get(kind, container, index_val)
-                except (AglIndexOutOfRange, AglMissingKey) as e:
-                    raise self._index_failure(e)
-
-            case IrRenderTemplate(segments=segs):
-                # The lexer has already applied the shared ``%{...}`` surface
-                # rules, so splicing here is plain concatenation.
-                parts: list[str] = []
-                for seg in segs:
-                    match seg:
-                        case IrTemplateText(text=text):
-                            parts.append(text)
-                        case IrTemplateValue(value=value_expr):
-                            parts.append(self._render_or_raise(self._eval(value_expr)))
-                        case _ as unreachable_seg:  # pragma: no cover
-                            assert_never(unreachable_seg)
-                return TextValue("".join(parts))
-
-            case IrMakeRecord(nominal=nominal, fields=fields):
-                record_fields: dict[str, Value] = {
-                    fname: self._eval(fexpr) for fname, fexpr in fields
-                }
-                return RecordValue(nominal=nominal, fields=record_fields)
-
-            case IrMakeException(nominal=nominal, fields=fields):
-                exc_fields: dict[str, Value] = {
-                    fname: self._eval(field_expr) for fname, field_expr in fields
-                }
-                return ExceptionValue(nominal=nominal, fields=exc_fields)
-
-            case IrMakeConstructor(nominal=nominal):
-                return ConstructorValue(nominal=nominal)
-
-            case IrNominalCast(
-                nominals=nominals,
-                value=val_expr,
-                test_only=test_only,
-                source_label=source_label,
-                target_label=target_label,
-            ):
-                value = self._eval(val_expr)
-                if not isinstance(value, (RecordValue, ExceptionValue)):
-                    raise InvalidIrError(
-                        "IrNominalCast: value is not a record or exception,"
-                        f" got {type(value).__name__}"
-                    )
-                matched = value.nominal in nominals or (
-                    isinstance(value, ExceptionValue)
-                    and nominal_conforms(self._program.nominals, value.nominal, nominals)
-                )
-                if matched:
-                    return self._option_some(value) if test_only else value
-                if test_only:
-                    return self._option_none()
-                raise AglRaise(
-                    _make_exc_value(
-                        "CastError",
-                        f"cannot cast '{source_label}' to '{target_label}'",
-                        nominals=self._program.builtin_nominals,
-                        fields={
-                            "source-type": TextValue(source_label),
-                            "target-type": TextValue(target_label),
-                            "raw": TextValue(self._cast_raw(value)),
-                        },
-                    )
-                )
-
-            case IrNominalIs(nominal=nominal, value=val_expr, negated=negated):
-                value = self._eval(val_expr)
-                if not isinstance(value, (RecordValue, ExceptionValue)):
-                    raise InvalidIrError(
-                        f"IrNominalIs: value is not nominal, got {type(value).__name__}"
-                    )
-                matched = value.nominal == nominal or (
-                    isinstance(value, ExceptionValue)
-                    and nominal_conforms(self._program.nominals, value.nominal, (nominal,))
-                )
-                return BoolValue(matched != negated)
-
-            case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
-                source_value = self._eval(val_expr)
-                try:
-                    converted = run_recipe(recipe, source_value, self._descriptors)
-                except AglCastConversion as exc:
-                    return self._on_cast_failure(failure_mode, exc)
-                except AglCyclicValue:
-                    # A conversion test reports a cycle as failure; ordinary
-                    # `as` still reports the catchable CyclicValueError.
-                    if failure_mode is ConversionFailureMode.RETURN_OPTION:
-                        return self._option_none()
-                    raise self._cyclic_failure()
-                if failure_mode is ConversionFailureMode.RETURN_OPTION:
-                    return self._option_some(converted)
-                return converted
-
-            case IrIf(branches=branches, has_else=has_else):
-                for branch in branches:
-                    if branch.cond is None:
-                        # Else branch — always taken.
-                        branch_val = self._eval(branch.body)
-                        return branch_val if has_else else UNIT_VALUE
-                    cond_val = self._eval(branch.cond)
-                    if not isinstance(cond_val, BoolValue):
+                case IrNominalIs(nominal=nominal, value=val_expr, negated=negated):
+                    value = self._eval(val_expr)
+                    if not isinstance(value, (RecordValue, ExceptionValue)):
                         raise InvalidIrError(
-                            f"IrIf: branch condition evaluated to"
-                            f" {type(cond_val).__name__}, expected BoolValue"
+                            f"IrNominalIs: value is not nominal, got {type(value).__name__}"
                         )
-                    if cond_val.value:
-                        branch_val = self._eval(branch.body)
-                        return branch_val if has_else else UNIT_VALUE
-                # No branch matched and no else: return unit.
-                return UNIT_VALUE
-
-            case IrRaise(exc=exc_expr):
-                exc_val = self._eval(exc_expr)
-                if not isinstance(exc_val, ExceptionValue):
-                    raise InvalidIrError(
-                        f"IrRaise: exc evaluated to {type(exc_val).__name__},"
-                        " expected ExceptionValue"
+                    matched = value.nominal == nominal or (
+                        isinstance(value, ExceptionValue)
+                        and nominal_conforms(self._program.nominals, value.nominal, (nominal,))
                     )
-                raise AglRaise(exc_val, span=node.location)
+                    return BoolValue(matched != negated)
 
-            case IrReturn(value=value_expr):
-                raise _ReturnSignal(self._eval(value_expr))
-
-            case IrTry(body=body_expr, handlers=handlers):
-                try:
-                    return self._eval(body_expr)
-                except RecursionError:
-                    # Python's limit was hit before the AgL guard (its limit is
-                    # capped); surface it as the same catchable AgL exception so
-                    # a `catch RecursionError` handler still fires.
-                    pending = self._recursion_error()
-                except AglRaise as exc:
-                    pending = exc
-                for handler in handlers:
-                    if (
-                        handler.nominal is None
-                        or handler.nominal == pending.exc.nominal
-                        or nominal_conforms(
-                            self._program.nominals, pending.exc.nominal, (handler.nominal,)
-                        )
-                    ):
-                        if handler.symbol is not None:
-                            self._frame[handler.symbol] = pending.exc
-                        return self._eval(handler.body)
-                raise pending
-
-            case IrCase(subject=subject_expr, arms=arms, default=default):
-                subject_val = self._eval(subject_expr)
-                # The subject's identity is invariant across the arm scan, so it
-                # is read once here rather than per arm.
-                subject_nominal = (
-                    subject_val.nominal
-                    if isinstance(subject_val, (RecordValue, ExceptionValue))
-                    else None
-                )
-                for arm in arms:
-                    key = arm.key
-                    if isinstance(key, IrNominalCaseKey):
-                        selected = subject_nominal == key.nominal
-                    else:
-                        selected = value_eq(subject_val, _literal_key_value(key))
-                    if not selected:
-                        continue
-                    if arm.field_bindings:
-                        if not isinstance(subject_val, (RecordValue, ExceptionValue)):
-                            raise InvalidIrError(
-                                "IrCase: selected payload arm for a non-nominal subject"
-                            )
-                        assert isinstance(key, IrNominalCaseKey)
-                        for field_name, symbol in arm.field_bindings:
-                            self._frame[symbol] = _project_nominal_field(
-                                subject_val,
-                                key.nominal,
-                                field_name,
-                                IrFieldMode.EXACT,
-                            )
-                    return self._eval(arm.body)
-                if default is not None:
-                    return self._eval(default)
-                raise InvalidIrError("IrCase has no matching key and no default")
-
-            case IrLoop(body=body_expr):
-                # Unconditional repeat — all loop logic (bound checks, until
-                # guards, for/while clauses) is desugared into the body by the
-                # lowerer.  The only exits are IrBreak (leave the loop)
-                # and IrContinue (next iteration).  Both signals propagate through
-                # IrTry bodies (which catch only AglRaise) to reach this handler.
-                while True:
+                case IrConvert(value=val_expr, recipe=recipe, failure_mode=failure_mode):
+                    source_value = self._eval(val_expr)
                     try:
-                        self._eval(body_expr)
-                    except _BreakSignal:
-                        return UNIT_VALUE
-                    except _ContinueSignal:
-                        continue
+                        converted = run_recipe(recipe, source_value, self._descriptors)
+                    except AglCastConversion as exc:
+                        return self._on_cast_failure(failure_mode, exc)
+                    except AglCyclicValue:
+                        # A conversion test reports a cycle as failure; ordinary
+                        # `as` still reports the catchable CyclicValueError.
+                        if failure_mode is ConversionFailureMode.RETURN_OPTION:
+                            return self._option_none()
+                        raise self._cyclic_failure()
+                    if failure_mode is ConversionFailureMode.RETURN_OPTION:
+                        return self._option_some(converted)
+                    return converted
 
-            case IrBreak():
-                raise _BreakSignal()
-
-            case IrContinue():
-                raise _ContinueSignal()
-
-            case IrIterInit(collection=collection_expr):
-                coll = self._eval(collection_expr)
-                if isinstance(coll, ArrayValue):
-                    # Keep the live element list so mutations ahead of the
-                    # cursor remain visible. IteratorValue captures its entry
-                    # length so structural growth cannot extend the loop.
-                    return IteratorValue(elements=coll.elements)
-                if isinstance(coll, DictValue):
-                    # The key set is fixed for the collection's lifetime, so a
-                    # one-time tuple of keys is sound even though the values
-                    # behind those keys may still be mutated.
-                    return IteratorValue(elements=tuple(coll.keys()))
-                if isinstance(coll, TextValue):
-                    return IteratorValue(elements=coll.value)
-                raise InvalidIrError(  # pragma: no cover
-                    f"IrIterInit: unexpected collection type {type(coll)!r}"
-                )
-
-            case IrIterHasNext(iterator=iter_expr):
-                it = self._eval(iter_expr)
-                if not isinstance(it, IteratorValue):  # pragma: no cover
-                    raise InvalidIrError(f"IrIterHasNext: expected IteratorValue, got {type(it)!r}")
-                return BoolValue(it.pos < it.entry_length and it.pos < len(it.elements))
-
-            case IrIterNext(iterator=iter_expr):
-                it = self._eval(iter_expr)
-                if not isinstance(it, IteratorValue):  # pragma: no cover
-                    raise InvalidIrError(f"IrIterNext: expected IteratorValue, got {type(it)!r}")
-                elem = it.elements[it.pos]
-                it.pos += 1
-                return TextValue(elem) if isinstance(elem, str) else elem
-
-            case IrMakeClosure(function_id=fn_id, captures=captures):
-                cap_slots: list[tuple[SymbolId, Value | Cell]] = []
-                for cap in captures:
-                    slot = self._frame.get(cap.symbol)
-                    if slot is None:
-                        raise InvalidIrError(
-                            f"IrMakeClosure: capture symbol_id={cap.symbol.value!r} not in frame"
-                        )
-                    if cap.by_cell:
-                        if not isinstance(slot, Cell):
+                case IrIf(branches=branches, has_else=has_else):
+                    for branch in branches:
+                        if branch.cond is None:
+                            # Else branch — always taken.
+                            branch_val = self._eval(branch.body)
+                            return branch_val if has_else else UNIT_VALUE
+                        cond_val = self._eval(branch.cond)
+                        if not isinstance(cond_val, BoolValue):
                             raise InvalidIrError(
-                                f"IrMakeClosure: by_cell capture symbol_id={cap.symbol.value!r}"
-                                " but slot is not Cell"
+                                f"IrIf: branch condition evaluated to"
+                                f" {type(cond_val).__name__}, expected BoolValue"
                             )
-                        cap_slots.append((cap.symbol, slot))
-                    else:
-                        val = slot.value if isinstance(slot, Cell) else slot
-                        cap_slots.append((cap.symbol, val))
-                return IrClosureValue(function_id=fn_id, captures=tuple(cap_slots))
+                        if cond_val.value:
+                            branch_val = self._eval(branch.body)
+                            return branch_val if has_else else UNIT_VALUE
+                    # No branch matched and no else: return unit.
+                    return UNIT_VALUE
 
-            case IrDirectCall() | IrIndirectCall():
-                # A call unwinding an AglRaise surfaces its own site's location
-                # when the error does not already carry a more specific span.
-                # Both call kinds share this defaulting; keeping it in one arm
-                # also avoids an extra Python stack frame per call, which the
-                # recursive hot path (see DEFAULT_MAX_CALL_DEPTH) cannot spare.
-                try:
+                case IrRaise(exc=exc_expr):
+                    exc_val = self._eval(exc_expr)
+                    if not isinstance(exc_val, ExceptionValue):
+                        raise InvalidIrError(
+                            f"IrRaise: exc evaluated to {type(exc_val).__name__},"
+                            " expected ExceptionValue"
+                        )
+                    raise AglRaise(exc_val, span=node.location)
+
+                case IrReturn(value=value_expr):
+                    raise _ReturnSignal(self._eval(value_expr))
+
+                case IrTry(body=body_expr, handlers=handlers):
+                    try:
+                        return self._eval(body_expr)
+                    except RecursionError:
+                        # Python's limit was hit before the AgL guard (its limit is
+                        # capped); surface it as the same catchable AgL exception so
+                        # a `catch RecursionError` handler still fires.
+                        pending = self._recursion_error()
+                    except AglRaise as exc:
+                        pending = exc
+                    for handler in handlers:
+                        if (
+                            handler.nominal is None
+                            or handler.nominal == pending.exc.nominal
+                            or nominal_conforms(
+                                self._program.nominals, pending.exc.nominal, (handler.nominal,)
+                            )
+                        ):
+                            if handler.symbol is not None:
+                                self._frame[handler.symbol] = pending.exc
+                            return self._eval(handler.body)
+                    raise pending
+
+                case IrCase(subject=subject_expr, arms=arms, default=default):
+                    subject_val = self._eval(subject_expr)
+                    # The subject's identity is invariant across the arm scan, so it
+                    # is read once here rather than per arm.
+                    subject_nominal = (
+                        subject_val.nominal
+                        if isinstance(subject_val, (RecordValue, ExceptionValue))
+                        else None
+                    )
+                    for arm in arms:
+                        key = arm.key
+                        if isinstance(key, IrNominalCaseKey):
+                            selected = subject_nominal == key.nominal
+                        else:
+                            selected = value_eq(subject_val, _literal_key_value(key))
+                        if not selected:
+                            continue
+                        if arm.field_bindings:
+                            if not isinstance(subject_val, (RecordValue, ExceptionValue)):
+                                raise InvalidIrError(
+                                    "IrCase: selected payload arm for a non-nominal subject"
+                                )
+                            assert isinstance(key, IrNominalCaseKey)
+                            for field_name, symbol in arm.field_bindings:
+                                self._frame[symbol] = _project_nominal_field(
+                                    subject_val,
+                                    key.nominal,
+                                    field_name,
+                                    IrFieldMode.EXACT,
+                                )
+                        return self._eval(arm.body)
+                    if default is not None:
+                        return self._eval(default)
+                    raise InvalidIrError("IrCase has no matching key and no default")
+
+                case IrLoop(body=body_expr):
+                    # Unconditional repeat — all loop logic (bound checks, until
+                    # guards, for/while clauses) is desugared into the body by the
+                    # lowerer.  The only exits are IrBreak (leave the loop)
+                    # and IrContinue (next iteration).  Both signals propagate through
+                    # IrTry bodies (which catch only AglRaise) to reach this handler.
+                    while True:
+                        try:
+                            self._eval(body_expr)
+                        except _BreakSignal:
+                            return UNIT_VALUE
+                        except _ContinueSignal:
+                            continue
+
+                case IrBreak():
+                    raise _BreakSignal()
+
+                case IrContinue():
+                    raise _ContinueSignal()
+
+                case IrIterInit(collection=collection_expr):
+                    coll = self._eval(collection_expr)
+                    if isinstance(coll, ArrayValue):
+                        # Keep the live element list so mutations ahead of the
+                        # cursor remain visible. IteratorValue captures its entry
+                        # length so structural growth cannot extend the loop.
+                        return IteratorValue(elements=coll.elements)
+                    if isinstance(coll, DictValue):
+                        # The key set is fixed for the collection's lifetime, so a
+                        # one-time tuple of keys is sound even though the values
+                        # behind those keys may still be mutated.
+                        return IteratorValue(elements=tuple(coll.keys()))
+                    if isinstance(coll, TextValue):
+                        return IteratorValue(elements=coll.value)
+                    raise InvalidIrError(  # pragma: no cover
+                        f"IrIterInit: unexpected collection type {type(coll)!r}"
+                    )
+
+                case IrIterHasNext(iterator=iter_expr):
+                    it = self._eval(iter_expr)
+                    if not isinstance(it, IteratorValue):  # pragma: no cover
+                        raise InvalidIrError(
+                            f"IrIterHasNext: expected IteratorValue, got {type(it)!r}"
+                        )
+                    return BoolValue(it.pos < it.entry_length and it.pos < len(it.elements))
+
+                case IrIterNext(iterator=iter_expr):
+                    it = self._eval(iter_expr)
+                    if not isinstance(it, IteratorValue):  # pragma: no cover
+                        raise InvalidIrError(
+                            f"IrIterNext: expected IteratorValue, got {type(it)!r}"
+                        )
+                    elem = it.elements[it.pos]
+                    it.pos += 1
+                    return TextValue(elem) if isinstance(elem, str) else elem
+
+                case IrMakeClosure(function_id=fn_id, captures=captures):
+                    cap_slots: list[tuple[SymbolId, Value | Cell]] = []
+                    for cap in captures:
+                        slot = self._frame.get(cap.symbol)
+                        if slot is None:
+                            raise InvalidIrError(
+                                f"IrMakeClosure: capture symbol_id={cap.symbol.value!r}"
+                                " not in frame"
+                            )
+                        if cap.by_cell:
+                            if not isinstance(slot, Cell):
+                                raise InvalidIrError(
+                                    f"IrMakeClosure: by_cell capture symbol_id={cap.symbol.value!r}"
+                                    " but slot is not Cell"
+                                )
+                            cap_slots.append((cap.symbol, slot))
+                        else:
+                            val = slot.value if isinstance(slot, Cell) else slot
+                            cap_slots.append((cap.symbol, val))
+                    return IrClosureValue(function_id=fn_id, captures=tuple(cap_slots))
+
+                case IrDirectCall() | IrIndirectCall():
+                    # Both call kinds share this arm, which also avoids an extra
+                    # Python stack frame per call -- the recursive hot path (see
+                    # DEFAULT_MAX_CALL_DEPTH) cannot spare it. An AglRaise from
+                    # deeper in the callee already carries its own span by the
+                    # time it unwinds this far; :meth:`_eval` attributes any that
+                    # still doesn't to this call node.
                     if isinstance(node, IrDirectCall):
                         return self._execute_direct_call(
                             node.function_id, node.arguments, node.location
                         )
                     return self._execute_indirect_call(node.callee, node.arguments, node.location)
-                except AglRaise as exc:
-                    if exc.span is None:
-                        exc.span = node.location
-                    raise
 
-            case IrContract(contract_id=contract_id):
-                return ContractValue(contract_id)
+                case IrContract(contract_id=contract_id):
+                    return ContractValue(contract_id)
 
-            case IrPrint(value=val_expr):
-                rendered = self._render_or_raise(self._eval(val_expr))
-                print(rendered)
-                self._trace.print_stmt(rendered=rendered, span=node.location)
-                return UNIT_VALUE
+                case IrPrint(value=val_expr):
+                    rendered = self._render_or_raise(self._eval(val_expr))
+                    print(rendered)
+                    self._trace.print_stmt(rendered=rendered, span=node.location)
+                    return UNIT_VALUE
 
-            case IrRenderValue(
-                value=val_expr,
-                pretty=pretty_expr,
-                quote_strings=quote_strings_expr,
-            ):
-                pretty = (
-                    self._eval_render_bool_option(pretty_expr, "pretty")
-                    if pretty_expr is not None
-                    else True
-                )
-                quote_strings = (
-                    self._eval_render_bool_option(quote_strings_expr, "quote_strings")
-                    if quote_strings_expr is not None
-                    else True
-                )
-                return TextValue(
-                    self._render_or_raise(
-                        self._eval(val_expr), pretty=pretty, quote_strings=quote_strings
+                case IrRenderValue(
+                    value=val_expr,
+                    pretty=pretty_expr,
+                    quote_strings=quote_strings_expr,
+                ):
+                    pretty = (
+                        self._eval_render_bool_option(pretty_expr, "pretty")
+                        if pretty_expr is not None
+                        else True
                     )
-                )
+                    quote_strings = (
+                        self._eval_render_bool_option(quote_strings_expr, "quote_strings")
+                        if quote_strings_expr is not None
+                        else True
+                    )
+                    return TextValue(
+                        self._render_or_raise(
+                            self._eval(val_expr), pretty=pretty, quote_strings=quote_strings
+                        )
+                    )
 
-            case IrCopyValue(kind=kind, value=val_expr):
-                value = self._eval(val_expr)
-                return (
-                    deep_copy_value(value) if kind is CopyKind.DEEP else shallow_copy_value(value)
-                )
+                case IrCopyValue(kind=kind, value=val_expr):
+                    value = self._eval(val_expr)
+                    if kind is CopyKind.DEEP:
+                        return deep_copy_value(value)
+                    return shallow_copy_value(value)
 
-            case IrAsk(
-                agent=agent_expr,
-                prompt=prompt_expr,
-                contract_id=contract_id,
-                max_attempts=max_attempts,
-            ):
-                try:
+                case IrAsk(
+                    agent=agent_expr,
+                    prompt=prompt_expr,
+                    contract_id=contract_id,
+                    max_attempts=max_attempts,
+                ):
                     return self._effects.eval_ir_ask(
                         node, agent_expr, prompt_expr, contract_id, max_attempts
                     )
-                except AglRaise as exc:
-                    if exc.span is None:
-                        exc.span = node.location
-                    raise
 
-            case IrSessionOpen() | IrSessionDefault() | IrSessionAsk() | IrSessionOp():
-                return self._eval_session_effect(node)
+                case IrSessionOpen() | IrSessionDefault() | IrSessionAsk() | IrSessionOp():
+                    return self._eval_session_effect(node)
 
-            case IrAskRequest(
-                agent=agent_expr,
-                prompt=prompt_expr,
-                contract_id=contract_id,
-                max_attempts=max_attempts,
-            ):
-                return self._effects.eval_ir_ask_request(
-                    node, agent_expr, prompt_expr, contract_id, max_attempts
-                )
+                case IrAskRequest(
+                    agent=agent_expr,
+                    prompt=prompt_expr,
+                    contract_id=contract_id,
+                    max_attempts=max_attempts,
+                ):
+                    return self._effects.eval_ir_ask_request(
+                        node, agent_expr, prompt_expr, contract_id, max_attempts
+                    )
 
-            case IrExec(
-                command=command_expr,
-                env=env_expr,
-                cwd=cwd_expr,
-                timeout=timeout_expr,
-                contract_id=contract_id,
-                max_attempts=max_attempts,
-            ):
-                try:
+                case IrExec(
+                    command=command_expr,
+                    env=env_expr,
+                    cwd=cwd_expr,
+                    timeout=timeout_expr,
+                    contract_id=contract_id,
+                    max_attempts=max_attempts,
+                ):
                     return self._effects.eval_ir_exec(
                         node,
                         command_expr,
@@ -2032,25 +2039,21 @@ class IrInterpreter:
                         contract_id,
                         max_attempts,
                     )
-                except AglRaise as exc:
-                    if exc.span is None:
-                        exc.span = node.location
-                    raise
 
-            case IrBuiltinLoad(key=key):
-                return self._load_builtin_setting(key)
+                case IrBuiltinLoad(key=key):
+                    return self._load_builtin_setting(key)
 
-            case IrBuiltinStore(key=key, value=value_expr):
-                stored = self._eval(value_expr)
-                try:
+                case IrBuiltinStore(key=key, value=value_expr):
+                    stored = self._eval(value_expr)
                     self._store_builtin_setting(key, stored)
-                except AglRaise as exc:
-                    exc.span = node.location
-                    raise
-                return UNIT_VALUE
+                    return UNIT_VALUE
 
-            case _ as unreachable:  # pragma: no cover
-                assert_never(unreachable)
+                case _ as unreachable:  # pragma: no cover
+                    assert_never(unreachable)
+        except AglRaise as exc:
+            if exc.span is None:
+                exc.span = node.location
+            raise
 
     def _check_default_agent_dispatchable(self, value: RecordValue) -> None:
         """Eagerly validate a materialized ``default-agent`` value's command shape.

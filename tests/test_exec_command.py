@@ -5118,7 +5118,7 @@ class TestExecProgramSelection:
             exec_command.run(_exec_args_no_trace(agl_file))
 
         assert exc_info.value.code == 2
-        assert "at line 1" in capsys.readouterr().err
+        assert f"{agl_file.name}:1:" in capsys.readouterr().err
 
 
 class TestProgramLogFilePathResolution:

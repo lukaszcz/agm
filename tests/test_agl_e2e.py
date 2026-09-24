@@ -987,6 +987,11 @@ def _assert_outcome(result: Any, expect: dict[str, Any]) -> None:
         spec = expect["raises"]
         assert result.error is not None, f"expected uncaught {spec['type']}, got none"
         assert result.error.type_name == spec["type"]
+        if "line" in spec:
+            assert result.error.line == spec["line"]
+        if "source_contains" in spec:
+            assert result.error.source is not None
+            assert spec["source_contains"] in result.error.source
         for key, value in spec.get("fields", {}).items():
             actual = result.error.fields[key]
             assert _fields_match(actual, value), (

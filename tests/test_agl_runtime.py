@@ -489,7 +489,7 @@ class TestUncaughtAgentCallErrorSpan:
         tmp_path: "pathlib.Path",
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """End to end: ``agm exec`` prints ``at line N`` to stderr (exit 2)."""
+        """End to end: ``agm exec`` prints ``at <file>:N:C`` to stderr (exit 2)."""
         from agm.agl.runtime.agents import AgentCallHostError
         from agm.cli_support.args import ExecArgs
         from agm.commands.exec import run as exec_run
@@ -524,7 +524,7 @@ class TestUncaughtAgentCallErrorSpan:
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
         assert "AgentCallError" in err
-        assert "line 3" in err
+        assert f"{agl_file.name}:3:" in err
 
 
 class TestDiagnosticType:
@@ -2154,6 +2154,57 @@ class TestRuntimeErrorPaths:
         assert error.fields["enum_val"] == {}
         assert error.fields["cyclic_record"] == "<cyclic value>"
         assert isinstance(error.fields["exc_val"], dict)
+
+    def test_run_error_source_unset_when_location_source_id_unmapped(self) -> None:
+        """A ``Location`` span with no matching ``sources`` entry leaves ``source`` unset.
+
+        ``line``/``col`` are still populated from the span; only the display
+        name resolution is skipped (e.g. a caller with no sources table).
+        """
+        from agm.agl.ir.ids import Location, SourceId
+        from agm.agl.pipeline import exception_value_to_run_error
+        from agm.agl.semantics.values import ExceptionValue, TextValue
+
+        exc = ExceptionValue(nominal=NominalId(1), fields={"message": TextValue("bad")})
+        nominals = {NominalId(1): _named(NominalId(1), "ValidationError")}
+        span = Location(
+            source_id=SourceId(0), start_offset=0, end_offset=1, start_line=3, start_col=5
+        )
+
+        error = exception_value_to_run_error(exc, nominals=nominals, span=span)
+
+        assert error.line == 3
+        assert error.col == 5
+        assert error.source is None
+
+    def test_run_error_source_from_frontend_span_label(self) -> None:
+        """A ``SourceSpan`` span (a caller with only a frontend span) reports its own label.
+
+        Unlike a ``Location``, a ``SourceSpan`` already carries its display
+        label directly, so no ``sources`` table is needed to resolve it.
+        """
+        from agm.agl.pipeline import exception_value_to_run_error
+        from agm.agl.semantics.values import ExceptionValue, TextValue
+        from agm.agl.syntax.spans import SourceId as FrontendSourceId
+        from agm.agl.syntax.spans import SourceSpan
+
+        exc = ExceptionValue(nominal=NominalId(1), fields={"message": TextValue("bad")})
+        nominals = {NominalId(1): _named(NominalId(1), "ValidationError")}
+        span = SourceSpan(
+            start_line=2,
+            start_col=3,
+            end_line=2,
+            end_col=8,
+            start_offset=10,
+            end_offset=15,
+            source=FrontendSourceId("/tmp/mod.agl"),
+        )
+
+        error = exception_value_to_run_error(exc, nominals=nominals, span=span)
+
+        assert error.line == 2
+        assert error.col == 3
+        assert error.source == "/tmp/mod.agl"
 
     def test_convert_host_value_json_type_accepts_any(self) -> None:
         from agm.agl.runtime.engine_config import convert_host_value

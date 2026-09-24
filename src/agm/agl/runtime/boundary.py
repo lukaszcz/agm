@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import NoReturn, Protocol, Self, SupportsIndex, cast, overload
 
-from agm.agl.ir.ids import NominalId
+from agm.agl.ir.ids import Location, NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
 from agm.agl.runtime.render import render_value
 from agm.agl.semantics.exceptions import exception_message
@@ -73,9 +73,15 @@ class AglException(Exception):
     class. Callbacks construct it from their already-materialized
     :class:`ExceptionValue`. In either case, it carries the resulting AgL
     exception value rather than turning it into a Python exception.
+
+    ``span`` carries a callback raise's own ``AglRaise.span`` across the
+    companion boundary (``None`` for a companion-declared raise, which has no
+    AgL source site of its own), so the extern invocation that re-raises it
+    as ``AglRaise`` on the way back out preserves the innermost location
+    instead of defaulting to the extern call site.
     """
 
-    def __init__(self, value: ExceptionValue | object) -> None:
+    def __init__(self, value: ExceptionValue | object, *, span: Location | None = None) -> None:
         try:
             decoded = value if isinstance(value, ExceptionValue) else decode_boundary_value(value)
         except BoundaryViolation as exc:
@@ -84,6 +90,7 @@ class AglException(Exception):
             raise TypeError("AglException requires an AgL exception value")
         super().__init__(exception_message(decoded))
         self.value = decoded
+        self.span = span
 
 
 class AglExceptionClass(Protocol):

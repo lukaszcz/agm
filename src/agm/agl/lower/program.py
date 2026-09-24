@@ -327,7 +327,12 @@ def lower_program(
             continue
         source_id = SourceId(cm.resolved.program.node_id if _link is None else link.next_source)
         link.next_source += 1
-        display_name = mid.display()
+        # The module's own frontend span already carries the exact label
+        # static diagnostics use for it (canonical file path, "<repl>",
+        # "<command>", ...; see ``modules.loader.entry_source_id``) -- reuse
+        # it rather than the module identity's internal display spelling, so
+        # a runtime raise's source (``RunError.source``) matches.
+        display_name = cm.resolved.program.span.source.label
         module_source_text = (
             _entry_source_text
             if mid == checked.entry_id and _entry_source_text is not None

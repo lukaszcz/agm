@@ -23,7 +23,12 @@ from agm.agl.artifact_cache import (
     retained_match_sites,
     retained_module_sources,
 )
-from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
+from agm.agl.diagnostics import (
+    AglError,
+    Diagnostic,
+    diagnostic_from_span,
+    format_diagnostic_location,
+)
 from agm.agl.eval.ir_interpreter import (
     HostConfigurationError,
     IrInterpreter,
@@ -50,8 +55,13 @@ if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
-    from agm.agl.ir.ids import FunctionId, NominalId, SymbolId
-    from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, NominalDescriptor
+    from agm.agl.ir.ids import FunctionId, NominalId, SourceId, SymbolId
+    from agm.agl.ir.program import (
+        ExecutableProgram,
+        FunctionDescriptor,
+        NominalDescriptor,
+        SourceFile,
+    )
     from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
@@ -264,27 +274,49 @@ class RunError:
 
     ``type_name`` is the exception's declared type name (e.g. ``"AgentParseError"``).
     ``fields`` is a mapping from field names to JSON-shaped Python values.
-    ``line`` is the 1-based source line of the raise site when known; ``None`` when
-    the span was not threaded through (e.g. arithmetic errors inside expressions).
-    ``col`` is the 1-based source column of the raise site; ``None`` when unknown.
+    ``source`` is the raise site's source file display name (e.g. a canonical
+    module path, or ``"<repl>"``/``"<command>"``) when the span is known;
+    ``None`` in the same rare case as ``line``.
+    ``line`` is the 1-based source line of the raise site when known; ``None``
+    only for the raw Python-recursion-limit backstop that can escape module
+    initialization before any call site is recorded (see
+    ``IrInterpreter.run``'s outer ``except RecursionError``) -- every other
+    raise, including one with no span of its own, is attributed to the
+    innermost node it unwound through.
+    ``col`` is the 1-based source column of the raise site; ``None`` in that
+    same case.
     ``notes`` are cleanup-failure notes attached to the raise (e.g. a companion
     state closer failing while this exception was already propagating).
     """
 
     type_name: str
     fields: dict[str, object]
+    source: str | None = None
     line: int | None = None
     col: int | None = None
     notes: tuple[str, ...] = ()
 
     def to_message(self) -> str:
-        """Render the ``AgL exception: ...`` report, then each note on its own line."""
+        """Render the ``AgL exception: ...`` report, then each note on its own line.
+
+        The location, when known, is rendered the same ``path:line:col`` way
+        static diagnostics are (:func:`format_diagnostic_location`) when its
+        source file is known, falling back to the bare ``at line N[, col C]``
+        form otherwise.
+        """
         parts: list[str] = [f"AgL exception: {self.type_name}"]
         message = self.fields.get("message")
         if isinstance(message, str) and message:
             parts.append(message)
         if self.line is not None:
-            if self.col is not None:
+            if self.source is not None:
+                location = format_diagnostic_location(
+                    Diagnostic(
+                        message="", line=self.line, column=self.col, source_label=self.source
+                    )
+                )
+                parts.append(f"at {location}")
+            elif self.col is not None:
                 parts.append(f"at line {self.line}, col {self.col}")
             else:
                 parts.append(f"at line {self.line}")
@@ -677,6 +709,7 @@ class PipelineDriver:
                 exc.exc,
                 nominals=executable.nominals,
                 span=exc.span,
+                sources=executable.sources,
                 exception_field_encodes=executable.exception_field_encodes,
                 notes=notes_of(exc),
             )
@@ -2207,7 +2240,8 @@ def exception_value_to_run_error(
     exc: "ExceptionValue",
     *,
     nominals: "Mapping[NominalId, NominalDescriptor]",
-    span: "object" = None,  # SourceSpan | None — avoids import cycle
+    span: "object" = None,  # Location | SourceSpan | None — avoids import cycle
+    sources: "Mapping[SourceId, SourceFile] | None" = None,
     exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] | None" = None,
     notes: tuple[str, ...] = (),
 ) -> RunError:
@@ -2233,9 +2267,16 @@ def exception_value_to_run_error(
     ``nominals`` resolves *exc*'s display spelling for ``RunError.type_name``
     from the running program's own descriptor table.
 
-    *span* is the optional raise-site source span threaded from ``AglRaise``;
-    when present, ``RunError.line`` and ``RunError.col`` are populated from it
-    so the CLI can include the source location in its exit-2 error output.
+    *span* is the optional raise-site source span threaded from ``AglRaise``
+    (an IR ``Location``, or a ``SourceSpan`` for a caller that has only a
+    frontend span); when present, ``RunError.line`` and ``RunError.col`` are
+    populated from it so the CLI can include the source location in its
+    exit-2 error output.
+
+    *sources* resolves a ``Location``'s ``source_id`` to its display name for
+    ``RunError.source`` (a ``SourceSpan`` already carries its own label).
+    ``None``, or a span with no matching entry, leaves ``RunError.source``
+    unset -- reporting falls back to the bare line/column form.
 
     *notes* carries the caught ``AglRaise``'s ``__notes__`` (e.g. a companion
     state closer that failed while this exception was already propagating)
@@ -2249,7 +2290,7 @@ def exception_value_to_run_error(
         value_to_json_obj,
     )
     from agm.agl.semantics.cycles import AglCyclicValue
-    from agm.agl.syntax.spans import SourceSpan
+    from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
     encodes = {
         encode.field_name: encode
@@ -2274,11 +2315,24 @@ def exception_value_to_run_error(
             fields[json_key] = degraded_marker(field_exc)
     line: int | None = None
     col: int | None = None
-    if isinstance(span, (SourceSpan, Location)):
+    source: str | None = None
+    if isinstance(span, Location):
         line = span.start_line
         col = span.start_col
+        if sources is not None and span.source_id in sources:
+            source = sources[span.source_id].display_name
+    elif isinstance(span, SourceSpan):
+        line = span.start_line
+        col = span.start_col
+        if span.source is not UNKNOWN_SOURCE:
+            source = span.source.label
     return RunError(
-        type_name=nominals[exc.nominal].display_name, fields=fields, line=line, col=col, notes=notes
+        type_name=nominals[exc.nominal].display_name,
+        fields=fields,
+        source=source,
+        line=line,
+        col=col,
+        notes=notes,
     )
 
 

@@ -10,7 +10,8 @@ source filename:
 
 - error diagnostics  → ``N:C: error: message``
 - warnings           → ``N:C: warning: message``
-- runtime raise      → ``AgL exception: <Type>: <message> at line L, col C``
+- runtime raise      → ``AgL exception: <Type>: <message> at path:L:C`` (falls
+  back to ``at line L[, col C]`` when the raise site's source is unknown)
 
 On success, when ``echo`` is on, an entry's outcome is echoed Python-REPL style:
 

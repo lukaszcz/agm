@@ -105,7 +105,8 @@ Layout:
         ],
         "raises": {"type": "MaxIterationsExceeded",
                    "fields": {"limit": 3},
-                   "message_contains": ["fragment"]},
+                   "message_contains": ["fragment"],
+                   "line": 7},
         "exit_code": 42,
         "host_error": {"message_contains": ["spec"]}
       }
@@ -215,6 +216,9 @@ Field notes:
   dict-shaped field value (a nested record) is itself an exact-match subset of
   its keys, recursively — useful for asserting part of a nested field (e.g. a
   status and body) while ignoring a nondeterministic one (e.g. elapsed time).
+  An optional `line` asserts the 1-based source line the raise is attributed to.
+  An optional `source_contains` asserts a substring of the raise's source file
+  display name (e.g. an imported module's path), for a multi-module program.
 - `expect.exit_code` — the program must terminate through `SystemExit` with this
   status; it is used for host-termination workflows such as `std/process::exit`.
 - `expect.host_error` — the run must fail pre-execution (program argument

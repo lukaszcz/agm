@@ -1173,9 +1173,16 @@ class TestSourcesTable:
         assert len(prog.sources) == 1
 
     def test_source_display_name(self) -> None:
+        """An inline entry with no backing file gets the frontend's own label.
+
+        Matches ``modules.loader.entry_source_id``'s default label for a
+        source with no file -- the same label static diagnostics for this
+        module would carry -- rather than the module identity's internal
+        ``"<entry>"`` spelling.
+        """
         prog = _lower("()")
         (src_id,) = prog.sources
-        assert prog.sources[src_id].display_name == "<entry>"
+        assert prog.sources[src_id].display_name == "<command>"
 
     def test_source_normalized_text(self) -> None:
         src = "()"

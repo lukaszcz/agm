@@ -688,6 +688,7 @@ class EntryPipeline:
                 exc.exc,
                 nominals=lowered.program.nominals,
                 span=exc.span,
+                sources=lowered.program.sources,
                 exception_field_encodes=lowered.program.exception_field_encodes,
                 notes=notes_of(exc),
             )
@@ -881,6 +882,7 @@ class EntryPipeline:
                 exc.exc,
                 nominals=lowered.program.nominals,
                 span=exc.span,
+                sources=lowered.program.sources,
                 exception_field_encodes=lowered.program.exception_field_encodes,
                 notes=notes_of(exc),
             )

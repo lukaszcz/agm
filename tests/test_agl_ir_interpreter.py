@@ -1866,15 +1866,16 @@ class TestFunctionEvaluation:
 
         assert exc_info.value.span == raise_loc
 
-    def test_uncaught_internal_error_reports_innermost_call_site(self) -> None:
-        """A spanless internal error surfaces at its innermost enclosing call site.
+    def test_uncaught_internal_error_reports_innermost_failing_node(self) -> None:
+        """A spanless internal error surfaces at its own innermost failing node.
 
         ``f`` calls ``g``; ``g``'s body triggers an out-of-range ``IndexError``,
-        which ``_index_failure`` raises with no span of its own.  The
-        ``IrDirectCall`` dispatch arm for the ``g(...)`` call inside ``f``
-        backfills that span first, so it wins over the outer top-level
-        ``f()`` call site — an uncaught internal error reports where it was
-        invoked from, not where the top-level call happened.
+        which ``_index_failure`` raises with no span of its own. ``_eval``
+        backfills that span as the exception first unwinds out of evaluating
+        ``g``'s body node itself -- the failing ``IrIndex`` -- so it wins over
+        both the ``g(...)`` call site inside ``f`` and the outer top-level
+        ``f()`` call site: an uncaught internal error reports exactly where it
+        happened, not where it was called from.
         """
         from agm.agl.semantics.exceptions import AglRaise
 
@@ -1920,7 +1921,7 @@ class TestFunctionEvaluation:
         with pytest.raises(AglRaise) as exc_info:
             IrInterpreter(prog).run()
 
-        assert exc_info.value.span == g_call_loc
+        assert exc_info.value.span == g_body.location
 
     def test_direct_call_with_param(self) -> None:
         """IrDirectCall with an argument evaluates correctly."""

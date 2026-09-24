@@ -1,0 +1,16 @@
+# An uncaught failure that unwinds through a call is attributed to its own
+# failing line, never the call site that invoked it -- whether the call is
+# an ordinary user function or an extern-implemented callback (e.g. `map`).
+def divide(n: int, d: int) -> decimal =
+  n / d
+
+program def main(mode: text) -> unit =
+  if
+    | mode == "function" =>
+        print(divide(10, 0))
+    | mode == "callback" =>
+        let xs: array[int] = [1, 0]
+        print(xs.map(fn x =>
+          10 / x
+        ))
+    | else => ()

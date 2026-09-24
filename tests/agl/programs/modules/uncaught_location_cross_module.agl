@@ -1,0 +1,6 @@
+# A missing-key failure inside an imported module's function is reported
+# with that module's own source and line, never the entry file's.
+import lib
+
+program def main() -> unit =
+  print(lib::lookup({}, "missing"))

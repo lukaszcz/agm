@@ -14,6 +14,8 @@ Collection iterators retain live array indexing so mutations ahead of the cursor
 
 `break`, `continue`, and `return` propagate as internal Python signals caught only by their owning construct, so they unwind through `try`/`catch`, which catches only AgL raises. A specific `catch` matches by nominal conformance (exact identity, then the value's `base` chain on a miss). `IrCase` dispatches on member-record identity or literal key; a switch with no matching arm is malformed IR, never a runtime match failure. Recursion is bounded by `max_call_depth`, raising a catchable `RecursionError`; the Python limit is raised so the AgL guard fires first.
 
+An `AglRaise` created without a span takes the location of the innermost IR node it unwinds through (`_eval`), including across companion callbacks.
+
 ## Host-Backed Operations
 
 Effects are dispatched by contract identity through `eval/effects.py`, the seam that composes prompts and records every request and response for tracing:

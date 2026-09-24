@@ -424,7 +424,7 @@ class AglCallableProxy:
         try:
             return encode_boundary_value(self._invoke(values), current_descriptors())
         except AglRaise as exc:
-            raise AglException(exc.exc) from exc
+            raise AglException(exc.exc, span=exc.span) from exc
 
 
 class ExternCallable(Protocol):
@@ -781,7 +781,7 @@ class ExternRegistry:
                 ):
                     result = fn(*encoded_args)
             except AglException as exc:
-                raise AglRaise(exc.value) from exc
+                raise AglRaise(exc.value, span=exc.span) from exc
             except AglCyclicValue as exc:
                 raise cyclic_value_raise(nominals=nominals) from exc
             except Exception as exc:

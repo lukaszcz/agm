@@ -1,0 +1,44 @@
+{
+  "scenarios": [
+    {
+      "name": "missing_dict_key_reports_its_own_line",
+      "params": {"mode": "key"},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "KeyError", "line": 18}
+      }
+    },
+    {
+      "name": "duplicate_dict_literal_key_reports_its_own_line",
+      "params": {"mode": "duplicate-key"},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "DuplicateKeyError", "line": 22}
+      }
+    },
+    {
+      "name": "array_index_out_of_range_reports_its_own_line",
+      "params": {"mode": "index"},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "IndexError", "line": 26}
+      }
+    },
+    {
+      "name": "division_by_zero_reports_its_own_line",
+      "params": {"mode": "division"},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "ArithmeticError", "line": 30}
+      }
+    },
+    {
+      "name": "failed_cast_reports_its_own_line",
+      "params": {"mode": "cast"},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "CastError", "line": 34}
+      }
+    }
+  ]
+}

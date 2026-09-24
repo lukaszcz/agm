@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -122,6 +123,10 @@ class SrtBackend:
 
     def wrap(self, request: SandboxRequest, resolved: ResolvedSettings) -> list[str]:
         return ["srt", "--settings", str(resolved.path), "--"]
+
+    def format_command(self, request: SandboxRequest, command: list[str]) -> list[str]:
+        # SRT joins the command arguments into a shell string before execution.
+        return [shlex.quote(part) for part in command]
 
     def dry_run_wrap(self, request: SandboxRequest) -> list[str]:
         return ["srt", "--settings", DRY_RUN_SETTINGS_PLACEHOLDER, "--"]

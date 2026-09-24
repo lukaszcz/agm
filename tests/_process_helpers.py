@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -94,6 +95,17 @@ def _assert_sandbox_wrapped_argv(
     )
 
 
+def shell_command_from_argv(args: list[str]) -> str:
+    """Return the command passed to ``sh -c``, decoding SRT's joined argv first."""
+    command_argv = args
+    if "srt" in args:
+        srt_index = args.index("srt")
+        separator_index = args.index("--", srt_index + 1)
+        command_argv = shlex.split(" ".join(args[separator_index + 1 :]))
+    assert command_argv[-2] == "-c"
+    return command_argv[-1]
+
+
 @dataclass
 class FakeShell:
     """Fake ``sh -c`` boundary, in one of two modes.
@@ -123,11 +135,7 @@ class FakeShell:
         interrupt_cleanup_cmd: list[str] | None = None,
     ) -> ProcessCaptureResult:
         del isolate_process_group
-        # The command is always the final argv element, with "-c" right
-        # before it -- true whether or not a sandbox wrapper (with its own
-        # "-c"-taking bootstrap steps) prefixes the plain ``sh -c <cmd>`` tail.
-        assert args[-2] == "-c"
-        command = args[-1]
+        command = shell_command_from_argv(args)
         index = len(self.commands)
         self.commands.append(command)
         self.argvs.append(list(args))

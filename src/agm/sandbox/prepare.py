@@ -361,6 +361,8 @@ def prepare(
     temp_files: list[Path] = []
     tracked_artifacts: list[Path] = []
 
+    pty_wrapper = [sys.executable, "-m", "agm.sandbox.pty", "--"] if request.pty else []
+    command = [*pty_wrapper, *request.command]
     if request.sandboxed:
         active_backend = backend or default_backend()
         active_backend.require_available(env)
@@ -372,10 +374,10 @@ def prepare(
             wrapper = active_backend.wrap(request, resolved)
         else:
             wrapper = active_backend.dry_run_wrap(request)
+        command = active_backend.format_command(request, command)
         env = active_backend.prepare_env(request, env)
 
-    pty_wrapper = [sys.executable, "-m", "agm.sandbox.pty", "--"] if request.pty else []
-    argv = [*process_prefix, *wrapper, *pty_wrapper, *request.command]
+    argv = [*process_prefix, *wrapper, *command]
 
     return PreparedSandboxCommand(
         argv=argv,

@@ -2,6 +2,8 @@
 
 A command runs inside a sandbox with an explicit filesystem/network policy and optional memory limits, giving agent-driven and untrusted commands least privilege by default. `agm run` is the CLI entry point; the preparation library below is a reusable in-process API for any caller (agent invocation, `exec`) needing a sandboxed command without a CLI subprocess round trip.
 
+SRT joins command arguments into a shell string, so its backend quotes the prepared command before handoff.
+
 ## Preparation Library
 
 `sandbox/request.py` is the leaf: the plain data types and `cleanup_artifacts()`, importing nothing else from `agm.sandbox` so the rest of the package layers above it with no cycle. `SandboxLimits` (`LimitSpec`-valued `memory`/`swap`, an optional `settings_file`, `patch`) is the shape statable without naming a command — the shape an AgL `Sandbox` record decodes directly to; `SandboxSpec` extends it with the `profile_name`, bound by the caller that knows the command. `PreparedSandboxCommand.close()` removes the run's temp settings files and empty tracked artifacts; idempotent, never gated by dry-run.
@@ -10,7 +12,7 @@ A command runs inside a sandbox with an explicit filesystem/network policy and o
 
 ## Backends
 
-`backend.py` defines the `SandboxBackend` protocol (availability, settings resolution, argv wrapping, env adjustment) and a `default_backend()` registry seam for future methods. `srt.py::SrtBackend` is the shipped implementation, delegating isolation to the external `srt` tool: settings resolution/merging, git write-access patching, bwrap-artifact cleanup tracking, and a Node fetch-proxy env default.
+`backend.py` defines the `SandboxBackend` protocol (availability, settings resolution, argv wrapping, command formatting, env adjustment) and a `default_backend()` registry seam for future methods. `srt.py::SrtBackend` is the shipped implementation, delegating isolation to the external `srt` tool: settings resolution/merging, git write-access patching, bwrap-artifact cleanup tracking, and a Node fetch-proxy env default.
 
 `profile.py::profile_name()` derives a sandbox profile name from an executable path, selecting both the per-command settings file and the `[run.<name>]` limit overrides; a `run`-only alias never affects it. `profile_name_for_shell()` derives the same name from a shell command string's first word (via `shlex.split`), for a caller — `exec` — that only has the rendered command line, never a resolved executable path; an unsplittable or empty command selects no name, falling through to the unqualified default. The config layer takes a profile name only pre-normalized this way, never deriving one itself.
 

@@ -1237,6 +1237,9 @@ class _FakeBackend:
     def wrap(self, request: SandboxRequest, resolved: ResolvedSettings) -> list[str]:
         return ["fake-sandbox", "--settings", str(resolved.path), "--"]
 
+    def format_command(self, request: SandboxRequest, command: list[str]) -> list[str]:
+        return command
+
     def dry_run_wrap(self, request: SandboxRequest) -> list[str]:
         return ["fake-sandbox", "--settings", DRY_RUN_SETTINGS_PLACEHOLDER, "--"]
 

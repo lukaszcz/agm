@@ -1134,6 +1134,7 @@ def _overview_text() -> str:
             "",
             "Global options:",
             "  --dry-run             Print planned commands and AGM operations only.",
+            "  --version             Show the AGM and AgL standard-library versions.",
             "  --install-completion  Install shell completion for the current shell.",
             "  --show-completion     Print the shell completion script.",
             "",

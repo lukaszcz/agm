@@ -111,6 +111,20 @@ def _print_context_help(ctx: typer.Context, param: object, value: bool) -> None:
     raise typer.Exit()
 
 
+def _print_versions(ctx: typer.Context, param: object, value: bool) -> None:
+    del param
+    if not value or ctx.resilient_parsing:
+        return
+    from agm.packages.manifest import load_manifest
+    from agm.stdlib_locator import shipped_stdlib_root
+    from agm.version import AGM_VERSION
+
+    stdlib_manifest = load_manifest(shipped_stdlib_root() / "package.toml")
+    print(f"AGM version: {AGM_VERSION}")
+    print(f"AgL stdlib version: {stdlib_manifest.version}")
+    raise typer.Exit()
+
+
 def _group_help(ctx: typer.Context, *command_path: str) -> None:
     """Print a command group's own help when it is invoked with no subcommand.
 
@@ -129,6 +143,17 @@ def _help_option() -> bool:
         callback=_print_context_help,
         expose_value=False,
         is_eager=True,
+    )
+
+
+def _version_option() -> bool:
+    return typer.Option(
+        False,
+        "--version",
+        callback=_print_versions,
+        expose_value=False,
+        is_eager=True,
+        help="Show the AGM and AgL standard-library versions.",
     )
 
 
@@ -513,9 +538,11 @@ tmux_app = typer.Typer(context_settings=_BASE_CONTEXT_SETTINGS, invoke_without_c
 def main_callback(
     ctx: typer.Context,
     _help: bool = _help_option(),
+    _version: bool = _version_option(),
     _dry_run: bool = _dry_run_option(),
 ) -> None:
     del _help
+    del _version
     del _dry_run
     _group_help(ctx)
 

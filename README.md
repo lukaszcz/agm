@@ -111,6 +111,7 @@ agm <command> [options] [args]
 Use `agm help` for the command list and `agm help <command>` for detailed help. Global options:
 
 - `--dry-run`
+- `--version` prints the AGM and AgL standard-library versions.
 - `--install-completion`
 - `--show-completion`
 

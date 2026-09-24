@@ -13,6 +13,7 @@ agm <command> [options] [args]
 Global options:
 
 - `--dry-run`
+- `--version` prints the AGM and AgL standard-library versions.
 - `--install-completion`
 - `--show-completion`
 

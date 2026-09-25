@@ -135,7 +135,6 @@ class TestReplArgsParsing:
         [
             (["--timeout", "5s"], "timeout", "5s"),
             (["--no-timeout"], "no_timeout", True),
-            (["--no-trace-file"], "no_trace_file", True),
         ],
     )
     def test_accepts_every_exec_execution_option(
@@ -151,6 +150,12 @@ class TestReplArgsParsing:
 
 
 class TestReplMutualExclusion:
+    def test_rejects_removed_no_trace_file_flag(
+        self, runner: CliRunner, recorded_runs: list[object]
+    ) -> None:
+        assert invoke(runner, ["repl", "--no-trace-file"]).exit_code != 0
+        assert recorded_runs == []
+
     def test_no_trace_and_trace_file_conflict(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
@@ -162,7 +167,7 @@ class TestReplMutualExclusion:
         "argv",
         [
             ["--timeout", "5s", "--no-timeout"],
-            ["--trace-file", "x.jsonl", "--no-trace-file"],
+            ["--trace-file", "x.jsonl", "--trace"],
         ],
     )
     def test_exclusive_execution_options_conflict(
@@ -276,7 +281,6 @@ def _args(
     no_trace: bool = False,
     trace: bool = False,
     trace_file: str | None = None,
-    no_trace_file: bool = False,
     timeout: str | None = None,
     no_timeout: bool = False,
     default_agent: str | None = None,
@@ -297,7 +301,6 @@ def _args(
         no_trace=no_trace,
         trace=trace,
         trace_file=trace_file,
-        no_trace_file=no_trace_file,
         timeout=timeout,
         no_timeout=no_timeout,
         default_agent=default_agent,
@@ -820,30 +823,6 @@ class TestReplRun:
             assert result.value.fields["value"] == TextValue(expected_seed)
         assert idle_timeouts == [expected_seconds]
         assert session._shell_exec_timeout == expected_seconds
-
-    def test_cli_no_trace_file_clears_visible_seed_not_configured_trace(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_plain_console: list[dict[str, object]],
-    ) -> None:
-        from agm.agl.semantics.values import RecordValue
-
-        home = _isolated_home(monkeypatch, tmp_path)
-        trace_path = tmp_path / "configured.jsonl"
-        (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            f'[exec]\ntrace = true\ntrace-file = "{trace_path}"\n'
-        )
-
-        repl_command.run(_args(no_trace_file=True))
-        session: ReplSession = fake_plain_console[0]["session"]
-
-        result = session.eval_entry("import std/config\nstd/config::trace-file")
-        assert result.ok
-        assert isinstance(result.value, RecordValue)
-        assert result.value.fields == {}
-        assert session._trace_path == trace_path
 
     def test_exec_config_seeds_each_configured_engine_setting(
         self,

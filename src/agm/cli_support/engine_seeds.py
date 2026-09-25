@@ -48,8 +48,7 @@ __all__ = [
 def execution_cli_values(args: "ExecutionOptionValues") -> dict[str, object | None]:
     """Return the engine settings *args*' execution flags explicitly set.
 
-    A present ``None`` is an explicit empty ``Option`` (``--no-timeout``,
-    ``--no-trace-file``).
+    A present ``None`` is an explicit empty ``Option`` (``--no-timeout``).
     """
     values: dict[str, object | None] = {}
     if args.strict_json is not None:
@@ -64,8 +63,6 @@ def execution_cli_values(args: "ExecutionOptionValues") -> dict[str, object | No
         values["trace"] = True
     if args.trace_file is not None:
         values["trace-file"] = args.trace_file
-    elif args.no_trace_file:
-        values["trace-file"] = None
     if args.default_agent is not None:
         values["default-agent"] = args.default_agent
     if args.default_sandbox is not None:
@@ -152,12 +149,8 @@ def _decode_engine_value(
 class EngineSeedTiers:
     """``cli`` (explicit CLI flags) above ``upper`` (primary table) above ``lower`` (fallback).
 
-    The three tiers are independent: ``upper``/``lower`` always reflect the
-    config tables, whether or not ``cli`` also names the same key — this
-    matters for ``trace-file``, where ``--no-trace-file`` clears only the CLI
-    seed and must not hide a config-table path from the derived ``trace`` rule
-    (see :meth:`merged`). ``cli`` still wins the actual seeded value for a
-    key it names.
+    A config value the CLI overrides is absent from ``upper``/``lower``.
+    ``cli_trace`` is the derived ``trace`` setting an explicit CLI flag fixes.
     """
 
     cli: "Mapping[str, Value]"
@@ -234,17 +227,13 @@ class EngineSeedTiers:
     def _resolve_trace(self, config_result: "Mapping[str, Value]") -> "Value | None":
         """Recompute the derived ``trace`` setting.
 
-        An explicit CLI ``trace``, or a non-``None`` CLI ``trace-file``, wins
-        outright. Otherwise ``trace`` is derived from *config_result* alone
+        An explicit CLI ``trace`` or ``trace-file`` wins outright. Otherwise
+        ``trace`` is derived from *config_result* alone
         (``lower``/*middle*/``upper``, ``cli`` excluded): when it names
         ``trace`` or ``trace-file`` at all, ``trace`` is true iff its ``trace``
         is true or its ``trace-file`` resolves to a real path (``Some``) — each
         key independently carrying whichever tier won that merge. Left
         unconfigured everywhere, ``trace`` stays absent (``None``).
-
-        Excluding ``cli`` here (beyond its own fast path) is deliberate:
-        ``--no-trace-file`` clears only the CLI seed, not a trace a config
-        table independently establishes.
         """
         if self.cli_trace is not None:
             raw, origin = self.cli_trace
@@ -277,12 +266,10 @@ def build_host_engine_seeds(
     ``cli`` holds every explicitly supplied CLI value; ``upper`` holds every
     *primary_table* value; ``lower`` holds every *fallback_table* value not
     already covered by *primary_table*. A table value the CLI overrides is
-    not decoded, except ``trace-file``, which the derived ``trace`` rule still
-    reads from the config tiers. A setting
-    left to its default in every source stays absent from every tier, so a
-    ``builtin var`` initializer supplies it instead of being suppressed by a
-    host-side floor. ``cli_values`` contains only explicitly supplied CLI
-    values; its present ``None`` values represent an explicit empty
+    not decoded. A setting left to its default in every source stays absent
+    from every tier, so a ``builtin var`` initializer supplies it instead of
+    being suppressed by a host-side floor. ``cli_values`` contains only
+    explicitly supplied CLI values; a present ``None`` is an explicit empty
     ``Option``. ``trace`` is seeded like any other key here;
     :meth:`EngineSeedTiers.merged` recomputes it once the ``trace-file``
     implication and any caller-supplied middle tier are folded in.
@@ -309,10 +296,7 @@ def build_host_engine_seeds(
             cli[spec.name] = _decode_engine_value(
                 spec.name, cli_values[spec.name], f"--{spec.name}", type_table
             )
-            # An overridden table value is never decoded, except ``trace-file``:
-            # ``--no-trace-file`` leaves a configured trace path enabling ``trace``.
-            if spec.name != "trace-file":
-                continue
+            continue
         if spec.name in primary_table:
             tier = upper
         elif spec.name in fallback:
@@ -329,7 +313,7 @@ def build_host_engine_seeds(
 
     if "trace" in cli_values:
         cli_trace: tuple[object, str] | None = (cli_values["trace"], "--trace")
-    elif cli_values.get("trace-file") is not None:
+    elif "trace-file" in cli_values:
         cli_trace = (True, "--trace-file")
     else:
         cli_trace = None

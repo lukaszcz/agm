@@ -118,14 +118,6 @@ class TestTraceDecisionCliLayer:
         )
         assert decision.explicit_path == "/cli/path.jsonl"
 
-    def test_cleared_cli_trace_file_keeps_the_configured_destination(self) -> None:
-        """``--no-trace-file`` clears only the CLI seed, not a configured path."""
-        decision = _decision(
-            cli={"trace-file": None}, exec_table={"trace-file": "/config/path.jsonl"}
-        )
-        assert decision.enabled is True
-        assert decision.explicit_path == "/config/path.jsonl"
-
 
 class TestTraceDecisionConfigLayer:
     """Config layer: lowest priority."""

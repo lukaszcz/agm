@@ -430,13 +430,6 @@ of the run without rolling back the assigned `trace` or `trace-file` value.
 - Reading `timeout` returns the exact `Option[text]` value assigned or supplied
   initially; duration parsing does not normalize its text.
 
-### `--no-trace-file` semantics
-
-`--no-trace-file` clears the initial `trace-file` value. It does **not**
-suppress a trace configured elsewhere — a `[exec] trace-file` path or an auto
-path from `--trace` still applies. Use `--no-trace` to disable tracing
-entirely.
-
 ### Other host-configurable defaults
 
 | Setting | Portable default | Used when |

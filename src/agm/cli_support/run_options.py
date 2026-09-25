@@ -14,35 +14,24 @@ def _exclusive_flag_groups() -> tuple[tuple[str, ...], ...]:
     """Return the engine-key flag groups of which at most one may be supplied.
 
     Keys sharing a register come first: together they name one destination, so
-    ``--trace-file`` excludes ``--trace``/``--no-trace``.  A key that only
-    *implies* the register is enabled keeps its own negative out of that group,
-    since clearing it does not turn the register off.  Every key then excludes
-    the negative the projection generates for it (``--timeout`` /
-    ``--no-timeout``).
+    ``--trace-file`` excludes ``--trace``/``--no-trace``.  Every key then
+    excludes its own negative (``--timeout`` / ``--no-timeout``).
     """
-    from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
-    from agm.cli_support.program_options import project_option
+    from agm.cli_support.program_options import engine_key_option_flags
     from agm.config.engine_keys import ENGINE_KEYS, ENGINE_REGISTERS
 
-    projected = {
-        spec.name: project_option(spec.name, ENGINE_KEY_TYPES[spec.name]) for spec in ENGINE_KEYS
-    }
-    groups: list[tuple[str, ...]] = []
-    for register in ENGINE_REGISTERS:
-        group: list[str] = []
-        for spec in ENGINE_KEYS:
-            if spec.register != register:
-                continue
-            option = projected[spec.name]
-            group.append(option.flag)
-            if not spec.enables_register and option.negative_flag is not None:
-                group.append(option.negative_flag)
-        groups.append(tuple(group))
-    groups.extend(
-        (option.flag, option.negative_flag)
-        for option in projected.values()
-        if option.negative_flag is not None
-    )
+    flags = {spec.name: engine_key_option_flags(spec) for spec in ENGINE_KEYS}
+    groups = [
+        tuple(
+            flag
+            for spec in ENGINE_KEYS
+            if spec.register == register
+            for flag in flags[spec.name]
+            if flag is not None
+        )
+        for register in ENGINE_REGISTERS
+    ]
+    groups.extend((flag, negative) for flag, negative in flags.values() if negative is not None)
     return tuple(groups)
 
 
@@ -68,7 +57,6 @@ def execution_option_conflict(args: ExecutionOptionValues) -> str | None:
             ("--trace", args.trace),
             ("--no-trace", args.no_trace),
             ("--trace-file", args.trace_file is not None),
-            ("--no-trace-file", args.no_trace_file),
             ("--timeout", args.timeout is not None),
             ("--no-timeout", args.no_timeout),
         )

@@ -39,7 +39,6 @@ EXECUTION_OPTION_SPECS: tuple[ExecutionOptionSpec, ...] = (
     ExecutionOptionSpec("trace", ("--trace",), None, "trace"),
     ExecutionOptionSpec("no_trace", ("--no-trace",), None, "trace"),
     ExecutionOptionSpec("trace_file", ("--trace-file",), "PATH", "trace_file"),
-    ExecutionOptionSpec("no_trace_file", ("--no-trace-file",), None, "no_trace_file"),
 )
 
 _SPEC_BY_NAME = {spec.name: spec for spec in EXECUTION_OPTION_SPECS}
@@ -54,7 +53,6 @@ _HELP_GROUPS: tuple[_HelpGroup, ...] = (
     _HelpGroup("timeout", "Shell-exec/agent idle timeout, or none."),
     _HelpGroup("trace", "Enable or disable trace logging."),
     _HelpGroup("trace_file", "Write the JSONL trace to PATH."),
-    _HelpGroup("no_trace_file", "Clear only std/config::trace-file."),
 )
 
 

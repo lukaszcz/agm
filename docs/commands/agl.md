@@ -10,7 +10,7 @@ the [AgL language reference](../agl/reference/index.md).
 agm exec [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
          [--timeout DURATION|--no-timeout]
-         [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
+         [--trace|--trace-file PATH|--no-trace]
          [--no-stdlib]
          [-I DIR]... [-p PATH]
          (FILE | PACKAGE/MODULE::PROGRAM | -c SOURCE) [ARG]... [--NAME VALUE]...
@@ -105,8 +105,6 @@ a direct `agm repl` entry is a static error.
   default**. `--trace` writes to an auto-timestamped path under `.agent-files/`; `--trace-file`
   writes a JSONL trace to `PATH`; `--no-trace` disables it, overriding `[exec] trace = true`.
   These set the initial state; a `std/config::trace := true` write still enables tracing.
-- `--no-trace-file`: Clear only the initial `trace-file` value; an `[exec] trace-file` path or
-  `--trace`'s auto path still applies. Use `--no-trace` to disable tracing.
 
 ### Program arguments
 
@@ -161,7 +159,7 @@ program for execution fails, while `--help` and shell completion silently fall b
   `--max-call-depth`, `--no-stdlib`;
 - every engine-setting flag in both polarities: `--default-agent`, `--default-sandbox`,
   `--strict-json`/`--no-strict-json`, `--timeout`/`--no-timeout`,
-  `--trace`/`--no-trace`, `--trace-file`/`--no-trace-file` (so `no-trace: text` collides);
+  `--trace`/`--no-trace`, `--trace-file` (so `no-trace: text` collides);
 - other parameters' projected flags (`cache: bool`'s `--no-cache` vs `no-cache: bool`).
 
 A [registered package command](pkg.md#registered-commands) reserves `-h`/`--help`,
@@ -508,7 +506,7 @@ $ echo $?
 agm repl [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
          [--timeout DURATION|--no-timeout]
-         [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
+         [--trace|--trace-file PATH|--no-trace]
          [--quiet] [--no-stdlib] [--plain]
 ```
 
@@ -614,8 +612,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 ### Options
 
 - `--strict-json` / `--no-strict-json`, `--max-call-depth N`, `--default-agent AGENT`,
-  `--default-sandbox SANDBOX`, `--timeout DURATION` / `--no-timeout`, `--no-trace-file`: As for
-  `agm exec`.
+  `--default-sandbox SANDBOX`, `--timeout DURATION` / `--no-timeout`: As for `agm exec`.
 - `--quiet`: Do not echo entry results, for this session only (does not persist and overrides a
   saved `echo = true`).
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library

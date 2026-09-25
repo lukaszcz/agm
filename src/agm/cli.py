@@ -258,16 +258,6 @@ def _no_timeout_option() -> bool:
     )
 
 
-def _no_trace_file_option() -> bool:
-    option = execution_option_spec("no_trace_file")
-    return typer.Option(
-        False,
-        *option.declarations,
-        metavar=option.metavar,
-        help="Clear only std/config::trace-file.",
-    )
-
-
 def _module_path_option() -> list[str]:
     return typer.Option(
         [],
@@ -1103,7 +1093,6 @@ def exec_cmd(
     no_stdlib: bool = _no_stdlib_option(),
     timeout: str | None = _timeout_option(),
     no_timeout: bool = _no_timeout_option(),
-    no_trace_file: bool = _no_trace_file_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
     # (``help_option_names: []``) and lets unknown options through, so the whole
@@ -1162,7 +1151,6 @@ def exec_cmd(
         no_stdlib=no_stdlib,
         timeout=timeout,
         no_timeout=no_timeout,
-        no_trace_file=no_trace_file,
         pipeline_cache=discovery.cached_artifacts(file),
     )
     _reject_run_option_conflict("exec", execution_option_conflict(exec_args))
@@ -1190,7 +1178,6 @@ def repl_cmd(
     no_stdlib: bool = _no_stdlib_option(),
     timeout: str | None = _timeout_option(),
     no_timeout: bool = _no_timeout_option(),
-    no_trace_file: bool = _no_trace_file_option(),
     plain: bool = typer.Option(
         False,
         "--plain",
@@ -1210,7 +1197,6 @@ def repl_cmd(
         trace=trace,
         timeout=timeout,
         no_timeout=no_timeout,
-        no_trace_file=no_trace_file,
         no_stdlib=no_stdlib,
         plain=plain,
     )

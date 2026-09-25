@@ -109,7 +109,6 @@ class _RunOptionValues(TypedDict):
     trace: bool
     timeout: str | None
     no_timeout: bool
-    no_trace_file: bool
 
 
 def _command_summary(path: str, command: CommandRegistration) -> str:

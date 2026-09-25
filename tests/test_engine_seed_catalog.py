@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import (
     require_reserved_enum_member_id,
@@ -15,7 +14,6 @@ from agm.agl.runtime.engine_config import (
     engine_default_settings,
     raw_option_str,
 )
-from agm.agl.runtime.option import option_text
 from agm.agl.semantics.values import BoolValue, RecordValue, TextValue
 from agm.cli_support.engine_seeds import build_host_engine_seeds
 from agm.config.engine_keys import (
@@ -333,22 +331,15 @@ def test_none_config_values_do_not_suppress_a_builtin_initializer(
     assert set(seeds) == set()
 
 
-@pytest.mark.parametrize("key", ["timeout", "trace-file"])
-def test_explicit_empty_option_cli_value_remains_a_seed(key: str) -> None:
-    """Commands encode their negation flags as a present ``None`` value.
-
-    A bare ``trace-file`` negation, with no config-table ``trace``/``trace-file``
-    to derive from, leaves the derived ``trace`` key absent -- it does not
-    manufacture an explicit ``false``.
-    """
+def test_explicit_empty_option_cli_value_remains_a_seed() -> None:
+    """``--no-timeout`` is encoded as a present ``None`` value."""
     seeds = build_host_engine_seeds(
-        config=_config_for(key, configured=False),
+        config=_config_for("timeout", configured=False),
         primary_table={},
-        cli_values={key: None},
+        cli_values={"timeout": None},
     ).merged()
 
-    assert key in seeds
-    assert set(seeds) == {key}
+    assert set(seeds) == {"timeout"}
 
 
 def test_invalid_raw_option_value_is_absent() -> None:
@@ -627,52 +618,16 @@ def test_a_middle_trace_file_of_none_hides_a_lower_tier_trace_file() -> None:
 
 
 @pytest.mark.parametrize(
-    ("primary", "fallback"),
-    [
-        ({"trace-file": "path.jsonl"}, {}),
-        ({}, {"trace-file": "path.jsonl"}),
-    ],
-    ids=["program_table_trace_file", "exec_trace_file"],
-)
-def test_cli_no_trace_file_does_not_suppress_a_configured_trace_file(
-    primary: dict[str, object], fallback: dict[str, object]
-) -> None:
-    """``--no-trace-file`` clears only the CLI seed; a configured path still traces.
-
-    Documented in docs/agl/reference/host-environment.md ("--no-trace-file
-    semantics") and docs/commands/agl.md: ``--no-trace-file`` clears the
-    initial CLI ``trace-file`` value only -- it does not suppress a trace a
-    program-table or ``[exec]`` ``trace-file`` configures. The seeded
-    ``trace-file`` register still reflects the CLI negation (``None``); the
-    derived ``trace`` register still comes on because the config value
-    independently enables tracing.
-    """
-    config = exec_config_from_merged({"exec": fallback}, program_table=primary)
-    tiers = build_host_engine_seeds(
-        config=config,
-        primary_table=primary,
-        fallback_table=fallback,
-        cli_values={"trace-file": None},
-    )
-
-    merged = tiers.merged()
-    assert merged["trace"] == BoolValue(True)
-    assert option_text(merged["trace-file"], nominals=NO_BUILTIN_DECLARATIONS) is None
-
-
-@pytest.mark.parametrize(
     ("primary", "fallback", "cli_values"),
     [
         ({"trace": "yes"}, {}, {}),
         ({}, {"trace-file": "   "}, {}),
         ({"trace": False}, {"trace-file": "trace.jsonl"}, {}),
-        ({}, {"trace": True}, {"trace-file": None}),
     ],
     ids=[
         "invalid_trace_value_in_program_table",
         "whitespace_only_trace_file_in_exec",
         "program_trace_false_and_exec_trace_file",
-        "cli_trace_file_negation_with_configured_trace",
     ],
 )
 def test_merged_trace_matches_config_trace_or_trace_file_is_set(

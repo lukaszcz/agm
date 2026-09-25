@@ -303,28 +303,7 @@ class TestConfigLogFileDerivesLog:
 
 
 class TestConfigLogFlagInteractions:
-    """Documented contract: ``--no-trace-file`` clears only the CLI seed and never
-    hides a config-table-established trace; ``--no-trace`` always disables."""
-
-    def test_no_trace_file_does_not_suppress_a_config_trace_file(self, tmp_path: Path) -> None:
-        trace_path = tmp_path / "trace.jsonl"
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file,
-            f'import std/config\n\n@config(config::trace-file = Some("{trace_path}"))\n'
-            'program def main() -> unit = print "hi"\n',
-        )
-        exec_command.run(
-            ExecArgs(
-                file=str(agl_file),
-                argument_tokens=[],
-                strict_json=None,
-                no_trace=False,
-                trace_file=None,
-                no_trace_file=True,
-            )
-        )
-        assert trace_path.exists()
+    """``--no-trace`` always disables a config-table-established trace."""
 
     def test_no_trace_suppresses_a_config_trace_file(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"

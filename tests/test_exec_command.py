@@ -2383,7 +2383,7 @@ class TestExecAgentValues:
 
 
 class TestExecTimeoutAndLogFileFlags:
-    """CLI ``--timeout`` / ``--no-timeout`` / ``--no-trace-file`` resolution."""
+    """CLI ``--timeout`` / ``--no-timeout`` resolution."""
 
     def _capture_timeout(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         from collections.abc import Mapping
@@ -2514,33 +2514,6 @@ class TestExecTimeoutAndLogFileFlags:
         exec_command.run(_exec_args_no_trace(agl_file))
 
         assert capsys.readouterr().out == 'Option::Some(value = "0.0001s")\n'
-
-    def test_cli_no_trace_file_clears_visible_seed_not_configured_trace(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        from agm.config.context import ConfigContext
-
-        trace_path = tmp_path / "configured.jsonl"
-        home = tmp_path / "home"
-        (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            f'[exec]\ntrace = true\ntrace-file = "{trace_path}"\n'
-        )
-        agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "import std/config\nprint std/config::trace-file\n")
-        monkeypatch.setattr(
-            exec_engine,
-            "current_config_context",
-            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-        )
-
-        exec_command.run(_exec_args_no_trace(agl_file, no_trace=False, no_trace_file=True))
-
-        assert capsys.readouterr().out == "Option::None\n"
-        assert trace_path.exists()
 
 
 class TestExecSourceConfigPrecedence:

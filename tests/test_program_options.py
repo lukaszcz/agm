@@ -310,6 +310,12 @@ class TestEngineKeyFlags:
         assert "--default-agent" in flags
         assert "--no-default-agent" not in flags
 
+    def test_register_enabling_engine_key_contributes_only_its_positive_flag(self) -> None:
+        """``--no-trace`` turns tracing off; ``trace-file`` has no negative of its own."""
+        flags = engine_key_flags()
+        assert "--trace-file" in flags
+        assert "--no-trace-file" not in flags
+
     def test_exec_reserves_every_engine_key_flag(self) -> None:
         assert engine_key_flags() <= EXEC_RESERVED_FLAGS
 

@@ -112,6 +112,7 @@ from agm.cli_support.execution_options import (
     EXECUTION_OPTION_NAMES,
     write_execution_options,
 )
+from agm.config.engine_keys import ENGINE_KEYS, EngineKeySpec
 
 if TYPE_CHECKING:
     from agm.agl.ir.static_keys import StaticBindingKey
@@ -136,6 +137,7 @@ __all__ = [
     "build_program_command",
     "contains_help_flag",
     "engine_key_flags",
+    "engine_key_option_flags",
     "exec_program_help",
     "exec_program_name",
     "native_raw_value",
@@ -353,19 +355,27 @@ def project_option(name: str, type_: "AglType") -> ProjectedOption:
     )
 
 
+def engine_key_option_flags(spec: EngineKeySpec) -> tuple[str, str | None]:
+    """Return one engine key's CLI flag and its negative, if any.
+
+    The key runs through :func:`project_option` against its AgL type, exactly
+    like a program parameter. A key whose value turns its register on has no
+    negative: the register's own (``--no-trace``) turns it off.
+    """
+    projected = project_option(spec.name, ENGINE_KEY_TYPES[spec.name])
+    return projected.flag, None if spec.enables_register else projected.negative_flag
+
+
 def engine_key_flags() -> frozenset[str]:
     """Return the CLI flags the engine-key catalog reserves.
 
-    Every engine key runs through :func:`project_option` against its AgL
-    type, exactly like a program parameter — the single derivation shared
-    with :data:`EXEC_RESERVED_FLAGS`, so the two can never disagree. Iterates
-    ``semantics.engine_keys.ENGINE_KEY_TYPES``, whose keys are exactly the
-    engine-key names, so the lookup is total by construction.
+    The single derivation shared with :data:`EXEC_RESERVED_FLAGS`, so the two
+    can never disagree.
     """
     flags: set[str] = set()
-    for name, agl_type in ENGINE_KEY_TYPES.items():
-        projected = project_option(name, agl_type)
-        flags.update((projected.flag, *_spelling_tuple(projected.negative_flag)))
+    for spec in ENGINE_KEYS:
+        flag, negative_flag = engine_key_option_flags(spec)
+        flags.update((flag, *_spelling_tuple(negative_flag)))
     return frozenset(flags)
 
 

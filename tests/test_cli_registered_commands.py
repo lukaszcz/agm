@@ -364,7 +364,7 @@ def test_registered_command_forwards_exec_run_time_options(
             "trace.jsonl",
         ],
     )
-    negated = invoke(CliRunner(), ["tools", "lint", "--trace", "--no-timeout", "--no-trace-file"])
+    negated = invoke(CliRunner(), ["tools", "lint", "--trace", "--no-timeout"])
     plain = invoke(CliRunner(), ["tools", "lint", "--no-trace", "--level=--timeout"])
 
     assert [result.exit_code for result in (full, negated, plain)] == [0, 0, 0]
@@ -387,7 +387,6 @@ def test_registered_command_forwards_exec_run_time_options(
             trace_file=None,
             trace=True,
             no_timeout=True,
-            no_trace_file=True,
         ),
         ExecArgs(
             file="tools/lint::main",
@@ -404,7 +403,7 @@ def test_registered_command_forwards_exec_run_time_options(
     [
         ["--trace", "--no-trace"],
         ["--trace", "--trace-file", "trace.jsonl"],
-        ["--trace-file", "trace.jsonl", "--no-trace-file"],
+        ["--trace-file", "trace.jsonl", "--no-trace"],
         ["--timeout", "5s", "--no-timeout"],
     ],
 )
@@ -1156,7 +1155,6 @@ def test_exec_installed_reference_preserves_all_file_options(
         max_call_depth=4,
         timeout="5s",
         no_timeout=True,
-        no_trace_file=True,
         default_agent='AgentCommand("fake")',
     )
 

@@ -266,7 +266,6 @@ class ExecutionOptionValues(Protocol):
     trace: bool
     no_trace: bool
     trace_file: str | None
-    no_trace_file: bool
 
 
 @dataclass(slots=True)
@@ -285,7 +284,6 @@ class ExecArgs:
     max_call_depth: int | None = None
     timeout: str | None = None
     no_timeout: bool = False
-    no_trace_file: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
     default_agent: str | None = None
     # An AgL ``AgentSandbox`` literal used to seed std/config::default-sandbox.
@@ -305,7 +303,6 @@ class ReplArgs:
     max_call_depth: int | None = None
     timeout: str | None = None
     no_timeout: bool = False
-    no_trace_file: bool = False
     no_stdlib: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
     default_agent: str | None = None

@@ -2262,7 +2262,6 @@ class TestParserHelpers:
             "--default-agent",
             "--timeout",
             "--no-timeout",
-            "--no-trace-file",
         ):
             assert option in result
         assert "--runner" not in result
@@ -2526,14 +2525,10 @@ class TestExecModulePathOption:
 class TestExecEngineFlagExclusivity:
     """Parser-contract tests for exec's mutually exclusive engine flags."""
 
-    def test_exec_rejects_trace_file_with_no_trace_file(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_exec_rejects_trace_file_with_no_trace(self, runner: CliRunner, tmp_path: Path) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("let x = 1\n")
-        result = invoke(
-            runner, ["exec", str(agl_file), "--trace-file", "out.log", "--no-trace-file"]
-        )
+        result = invoke(runner, ["exec", str(agl_file), "--trace-file", "out.log", "--no-trace"])
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
@@ -2544,19 +2539,25 @@ class TestExecEngineFlagExclusivity:
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
+    def test_exec_rejects_removed_no_trace_file_flag(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("let x = 1\n")
+        assert invoke(runner, ["exec", str(agl_file), "--no-trace-file"]).exit_code != 0
+
     def test_every_negatable_engine_key_excludes_its_own_negative(self) -> None:
         """The rule is derived from the projection, so a new key brings its own."""
-        from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
-        from agm.cli_support.program_options import project_option
+        from agm.cli_support.program_options import engine_key_option_flags
         from agm.cli_support.run_options import _exclusive_flag_groups
         from agm.config.engine_keys import ENGINE_KEYS
 
         groups = _exclusive_flag_groups()
         for spec in ENGINE_KEYS:
-            option = project_option(spec.name, ENGINE_KEY_TYPES[spec.name])
-            if option.negative_flag is None:
+            flag, negative_flag = engine_key_option_flags(spec)
+            if negative_flag is None:
                 continue
-            both = {option.flag, option.negative_flag}
+            both = {flag, negative_flag}
             assert any(both <= set(group) for group in groups), spec.name
 
     def test_register_members_exclude_the_registers_switch(self) -> None:

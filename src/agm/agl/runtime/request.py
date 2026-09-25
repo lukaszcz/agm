@@ -10,7 +10,7 @@ from agm.agl.ir.ids import Location
 
 if TYPE_CHECKING:
     from agm.agent.spec import AgentSpec
-    from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
+    from agm.agl.runtime.contract import OutputContract
 
 ValidationErrorCategory = Literal[
     "missing_field", "unknown_field", "wrong_type", "bad_case", "invalid_json"
@@ -93,7 +93,7 @@ class AgentRequest:
     previous_invalid_output: str | None = None
     validation_errors: list[ValidationError] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
-    output_contract: "OutputContract | TypelessOutputContract | None" = None
+    output_contract: "OutputContract | None" = None
 
 
 @dataclass(slots=True)

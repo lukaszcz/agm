@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import assert_never, cast
+from typing import Literal, assert_never, cast
 
 from agm.agent.spec import AgentCommand
 from agm.agent.values import agent_spec_shape, parse_agent_shorthand
@@ -40,6 +40,7 @@ from agm.agl.ir.contracts import (
     VariantDecode,
 )
 from agm.agl.runtime.convert import (
+    ResolvedDecode,
     StrictJsonParseError,
     parse_json_strict,
     resolve_decode_ref,
@@ -91,7 +92,7 @@ class ValueDecodeError(ValueError):
         super().__init__(text)
 
 
-def _resolve(schema: DecodeSchema, defs: DefsMap) -> DecodeSchema:
+def _resolve(schema: DecodeSchema, defs: DefsMap) -> ResolvedDecode:
     """Resolve a possible ``RefDecode`` root to its non-reference body."""
     if not isinstance(schema, RefDecode):
         return schema
@@ -137,23 +138,23 @@ def value_node_to_json(
     :raises ValueDecodeError: on any type/shape mismatch.
     """
     resolved = _resolve(schema, defs)
-    if isinstance(resolved, ScalarDecode):
-        return _convert_scalar(node, resolved.kind)
-    if isinstance(resolved, ArrayDecode):
-        if not isinstance(node, ArrayNode):
-            raise ValueDecodeError(f"expected an array, got {_node_kind(node)}", node.start)
-        return [value_node_to_json(item, resolved.elem, defs) for item in node.items]
-    if isinstance(resolved, DictDecode):
-        if not isinstance(node, DictNode):
-            raise ValueDecodeError(f"expected a dict, got {_node_kind(node)}", node.start)
-        return _convert_dict_entries(node, lambda v: value_node_to_json(v, resolved.value, defs))
-    if isinstance(resolved, RecordDecode):
-        return _convert_record(node, resolved, defs)
-    if isinstance(resolved, EnumDecode):
-        return _convert_enum(node, resolved, defs)
-    raise AssertionError(  # pragma: no cover -- _resolve never returns a RefDecode
-        f"value_decode: unresolved schema {resolved!r}"
-    )
+    match resolved:
+        case ScalarDecode(kind=kind):
+            return _convert_scalar(node, kind)
+        case ArrayDecode(elem=elem):
+            if not isinstance(node, ArrayNode):
+                raise ValueDecodeError(f"expected an array, got {_node_kind(node)}", node.start)
+            return [value_node_to_json(item, elem, defs) for item in node.items]
+        case DictDecode(value=value_schema):
+            if not isinstance(node, DictNode):
+                raise ValueDecodeError(f"expected a dict, got {_node_kind(node)}", node.start)
+            return _convert_dict_entries(node, lambda v: value_node_to_json(v, value_schema, defs))
+        case RecordDecode():
+            return _convert_record(node, resolved, defs)
+        case EnumDecode():
+            return _convert_enum(node, resolved, defs)
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 def _convert_scalar(node: ValueNode, kind: ScalarKind) -> object:
@@ -298,11 +299,22 @@ def _convert_ctor_args(
         raise _binding_error(exc, node, positional, named, type_label) from exc
     result: dict[str, object] = {}
     for field, bound_arg in zip(fields, bound, strict=True):
-        assert bound_arg is not None, (
-            "has_default=False: bind_arguments never defers a required field"
+        # has_default=False on every field: bind_arguments never defers one.
+        result[field.json_name] = value_node_to_json(
+            cast(ValueArg, bound_arg).value, field.schema, defs
         )
-        result[field.json_name] = value_node_to_json(bound_arg.value, field.schema, defs)
     return result
+
+
+#: `_convert_ctor_args` checks a named argument against the field alias map
+#: before calling `bind_arguments`, so UNKNOWN_NAME never reaches `_binding_error`.
+type _CtorBindingErrorKind = Literal[
+    ArgumentBindingErrorKind.MISSING_REQUIRED,
+    ArgumentBindingErrorKind.DUPLICATE,
+    ArgumentBindingErrorKind.POSITIONAL_ONLY_BY_NAME,
+    ArgumentBindingErrorKind.TOO_MANY_POSITIONAL,
+    ArgumentBindingErrorKind.POSITIONAL_IN_NAMED_ONLY,
+]
 
 
 def _binding_error(
@@ -319,7 +331,10 @@ def _binding_error(
         offset = named[exc.named_index][1].start
     else:
         offset = node.start
-    match exc.kind:
+    # Every named argument's name is checked against the field alias map
+    # before `bind_arguments` runs, so UNKNOWN_NAME never reaches here.
+    kind = cast(_CtorBindingErrorKind, exc.kind)
+    match kind:
         case ArgumentBindingErrorKind.MISSING_REQUIRED:
             message = f"{type_label} is missing field {exc.name!r}"
         case ArgumentBindingErrorKind.DUPLICATE:
@@ -330,9 +345,6 @@ def _binding_error(
             message = f"{type_label} given too many arguments"
         case ArgumentBindingErrorKind.POSITIONAL_IN_NAMED_ONLY:
             message = f"{type_label} arguments must be supplied by name"
-        case ArgumentBindingErrorKind.UNKNOWN_NAME:  # pragma: no cover
-            # Unreachable: names are resolved against the field alias map before binding.
-            message = f"{type_label} has no field {exc.name!r}"
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
     return ValueDecodeError(message, offset)

@@ -54,7 +54,7 @@ class _EventCompanion(Protocol):
 _next_nominal = itertools.count(80_000_000)
 
 #: An empty descriptor view for tests that never check a rendered spelling.
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 def _next_id() -> NominalId:
@@ -75,7 +75,9 @@ def _record_class(
         mutable_fields=frozenset({fields[0]}) if mutable else frozenset(),
     )
     record_cls = cast(type[_RecordCompanion], synthesize_nominal_classes((descriptor,))[nominal])
-    descriptors = ValueDescriptors(nominals={nominal: descriptor}, functions={})
+    descriptors = ValueDescriptors(
+        nominals={nominal: descriptor}, functions={}, exception_field_encodes={}
+    )
     return nominal, record_cls, descriptors
 
 
@@ -428,10 +430,12 @@ def test_two_programs_reusing_a_function_id_render_each_views_own_spelling() -> 
     first_descriptors = ValueDescriptors(
         nominals={nominal: descriptor},
         functions={function_id: function_descriptor(("int",), "int")},
+        exception_field_encodes={},
     )
     second_descriptors = ValueDescriptors(
         nominals={nominal: descriptor},
         functions={function_id: function_descriptor(("text",), "bool")},
+        exception_field_encodes={},
     )
     value = RecordValue(nominal, {"fn": IrClosureValue(function_id, ())})
 

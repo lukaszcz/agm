@@ -63,7 +63,11 @@ class LinkImage:
         so a live value read back from a persisted frame (e.g. ``:bindings``)
         renders correctly regardless of which entry produced it.
         """
-        return ValueDescriptors(nominals=self._state.nominals, functions=self._state.functions)
+        return ValueDescriptors(
+            nominals=self._state.nominals,
+            functions=self._state.functions,
+            exception_field_encodes=self._state.exception_field_encodes,
+        )
 
     def mark_linked(self, module_ids: "Iterable[ModuleId]") -> None:
         """Record initialized library modules as persistently linked.
@@ -93,6 +97,8 @@ class LinkImage:
             builtin_nominals=state.builtin_nominals,
             sources=dict(state.sources),
             contracts=dict(state.contracts),
+            target_contracts=dict(state.target_contracts),
+            exception_field_encodes=dict(state.exception_field_encodes),
             initializer_origins=dict(state.initializer_origins),
         )
 

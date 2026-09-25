@@ -20,7 +20,7 @@ offending parameter is reported in one pass.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, assert_never, cast
+from typing import TYPE_CHECKING, Literal, assert_never, cast
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.ir.nodes import UseDefault
@@ -157,11 +157,7 @@ class ProgramSignature:
         infos_by_name = {info.name: info for info in infos}
         parameters = []
         for param in params:
-            info = infos_by_name.pop(param.name, None)
-            assert info is not None, (
-                f"compiler bug: program parameter {param.name!r} has a signature "
-                "decoder but no declaration info"
-            )
+            info = infos_by_name[param.name]
             parameters.append(
                 ProgramParameter(
                     name=param.name,
@@ -172,10 +168,6 @@ class ProgramSignature:
                     decoder=param.external_decoder,
                 )
             )
-        assert not infos_by_name, (
-            "compiler bug: program declaration info has parameters absent from its signature: "
-            f"{sorted(infos_by_name)}"
-        )
         return cls(parameters=tuple(parameters), span=span)
 
 
@@ -218,7 +210,7 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
         parse_json_strict,
         validator_for_schema,
     )
-    from agm.agl.runtime.serialize import dumps_exact
+    from agm.agl.runtime.serialize import JsonShaped, dumps_exact
     from agm.agl.runtime.value_decode import (
         host_text_to_json,
         option_some_field_schema,
@@ -238,7 +230,7 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
         """
         if not _is_json_shaped(value):
             raise ValueError(f"expected a JSON-compatible value, got {type(value).__name__}")
-        return parse_json_strict(dumps_exact(value, indent=None))
+        return parse_json_strict(dumps_exact(cast(JsonShaped, value), indent=None))
 
     defs = dict(decoder.defs)
     if isinstance(raw, OptionSome):
@@ -396,12 +388,8 @@ def bind_param_values(
                 f"Module parameter {module_id.display()}::{declaration_path}: "
                 f"could not parse as {decoder.target_type_label}: {exc}"
             )
-            span = executable.param_spans.get(key)
-            diagnostics.append(
-                diagnostic_from_span(message, cast("SourceSpan", span))
-                if span is not None
-                else Diagnostic(message, line=1)
-            )
+            span = cast("SourceSpan", executable.param_spans[key])
+            diagnostics.append(diagnostic_from_span(message, span))
     if diagnostics:
         return {}, tuple(diagnostics)
     return values, ()
@@ -434,29 +422,37 @@ def default_program_arguments(
     return tuple(UseDefault(param_index=i) for i in range(len(signature))), ()
 
 
+#: `bind_program_arguments` always passes `has_default=True` for every
+#: parameter, so its binder never short-circuits on a missing required one —
+#: they accumulate and are reported per parameter there instead. This is the
+#: remaining, structural subset `_diagnose_binding_error` classifies.
+type StructuralBindingErrorKind = Literal[
+    ArgumentBindingErrorKind.UNKNOWN_NAME,
+    ArgumentBindingErrorKind.POSITIONAL_ONLY_BY_NAME,
+    ArgumentBindingErrorKind.DUPLICATE,
+    ArgumentBindingErrorKind.TOO_MANY_POSITIONAL,
+    ArgumentBindingErrorKind.POSITIONAL_IN_NAMED_ONLY,
+]
+
+
 def _diagnose_binding_error(exc: ArgumentBindingError, signature: ProgramSignature) -> Diagnostic:
     """Translate one structural zone-binding violation into a pre-execution diagnostic."""
-    match exc.kind:
-        case ArgumentBindingErrorKind.MISSING_REQUIRED:  # pragma: no cover
-            # Unreachable: `bind_program_arguments` always passes
-            # `has_default=True`, so the binder never short-circuits on a
-            # missing required parameter — they accumulate and are reported
-            # per parameter there instead. Listed only for exhaustiveness.
-            raise AssertionError("binder never short-circuits on a missing required parameter")
+    kind = cast(StructuralBindingErrorKind, exc.kind)
+    match kind:
         case ArgumentBindingErrorKind.UNKNOWN_NAME:
-            assert exc.name is not None, "binder always names an unknown argument"
-            return diagnostic_from_span(f"Unknown program argument: {exc.name!r}", signature.span)
+            name = cast(str, exc.name)
+            return diagnostic_from_span(f"Unknown program argument: {name!r}", signature.span)
         case ArgumentBindingErrorKind.POSITIONAL_ONLY_BY_NAME:
-            assert exc.name is not None, "binder always names a positional-only argument"
+            name = cast(str, exc.name)
             return diagnostic_from_span(
-                f"Program argument {exc.name!r} is positional-only and cannot be supplied by name",
-                _span_for(signature, exc.name),
+                f"Program argument {name!r} is positional-only and cannot be supplied by name",
+                _span_for(signature, name),
             )
         case ArgumentBindingErrorKind.DUPLICATE:
-            assert exc.name is not None, "binder always names a duplicate argument"
+            name = cast(str, exc.name)
             return diagnostic_from_span(
-                f"Program argument {exc.name!r} supplied more than once",
-                _span_for(signature, exc.name),
+                f"Program argument {name!r} supplied more than once",
+                _span_for(signature, name),
             )
         case ArgumentBindingErrorKind.TOO_MANY_POSITIONAL:
             return diagnostic_from_span("Too many positional program arguments", signature.span)

@@ -8,7 +8,7 @@ from pathlib import Path
 from agm.agl import artifact_serialization
 from agm.agl.artifact_cache import retain_lowered_module, retained_lowered_module
 from agm.agl.ir.builtin_vars import BuiltinVarKey
-from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.contracts import ContractRequest, TargetContractRequest
 from agm.agl.ir.ids import ContractId, FunctionId, SymbolId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import ExecutableModule, FunctionDescriptor, SymbolDescriptor
@@ -25,6 +25,7 @@ class LoweredModule:
     symbols: dict[SymbolId, SymbolDescriptor]
     functions: dict[FunctionId, FunctionDescriptor]
     contracts: dict[ContractId, ContractRequest]
+    target_contracts: dict[ContractId, TargetContractRequest]
     declarations: dict[int, SymbolId]
     function_symbols: dict[int, SymbolId]
     function_ids: dict[int, FunctionId]
@@ -37,6 +38,7 @@ class LoweredModule:
         link.symbols.update(self.symbols)
         link.functions.update(self.functions)
         link.contracts.update(self.contracts)
+        link.target_contracts.update(self.target_contracts)
         link.decl_to_sym.update(self.declarations)
         link.fn_node_to_sym.update(self.function_symbols)
         link.fn_node_to_id.update(self.function_ids)
@@ -65,6 +67,11 @@ def capture(
         {
             cid: value
             for cid, value in link.contracts.items()
+            if contract_start <= cid.value < contract_end
+        },
+        {
+            cid: value
+            for cid, value in link.target_contracts.items()
             if contract_start <= cid.value < contract_end
         },
         {nid: sid for nid, sid in link.decl_to_sym.items() if sid in symbols},

@@ -219,11 +219,8 @@ class _InhabitationSolver:
             return True
         if typedef.base in extends_stack:
             return False
-        base_def = self._defs.get(typedef.base)
-        if base_def is None or base_def.kind != "exception":
-            return False
         return self._exception_fields_inhabited(
-            base_def,
+            self._defs[typedef.base],
             env,
             stack=stack,
             extends_stack=extends_stack | frozenset({typedef.base}),
@@ -244,9 +241,7 @@ class _InhabitationSolver:
                 decl_id = t.decl_id
                 if any(stack_id == decl_id for stack_id, _args in stack):
                     return False
-                target = self._defs.get(decl_id)
-                if target is None:
-                    return decl_id in self._inhabited
+                target = self._defs[decl_id]
                 args = tuple(substitute(arg, env) for arg in t.type_args)
                 instantiation = (decl_id, args)
                 memo_key = (instantiation, stack)
@@ -370,7 +365,7 @@ def compute_declaration_flags(table: TypeTable, policy: LeafPolicy) -> Declarati
     defs = table.defs
     exception_children: dict[DeclId, set[DeclId]] = {decl_id: set() for decl_id in defs}
     for decl_id, typedef in defs.items():
-        if typedef.kind == "exception" and typedef.base in exception_children:
+        if typedef.kind == "exception" and typedef.base is not None:
             exception_children[typedef.base].add(decl_id)
 
     field_flagged = set(table.host_minted_declaration_ids()) if policy.non_data_bad else set()
@@ -508,10 +503,8 @@ def _template_is_flagged(
             decl_id = t.decl_id
             if decl_id in flagged:
                 return True
-            target = defs.get(decl_id)
-            if target is None:
-                return False
-            own_relevant = relevant.get(decl_id, set())
+            target = defs[decl_id]
+            own_relevant = relevant[decl_id]
             return any(
                 _template_is_flagged(arg, policy, flagged, relevant, own_params, defs)
                 for pname, arg in zip(target.type_params, t.type_args)
@@ -557,10 +550,8 @@ def _template_relevant_params(
             return result
         case RecordType() | EnumType():
             decl_id = t.decl_id
-            target = defs.get(decl_id)
-            if target is None:
-                return set()
-            own_relevant = relevant.get(decl_id, set())
+            target = defs[decl_id]
+            own_relevant = relevant[decl_id]
             result = set()
             for pname, arg in zip(target.type_params, t.type_args):
                 if pname in own_relevant:
@@ -619,10 +610,8 @@ def _template_key_params(
             return result
         case RecordType() | EnumType():
             decl_id = t.decl_id
-            target = defs.get(decl_id)
-            if target is None:
-                return set()
-            target_key = key_params.get(decl_id, set())
+            target = defs[decl_id]
+            target_key = key_params[decl_id]
             result = set()
             for pname, arg in zip(target.type_params, t.type_args):
                 if pname in target_key and isinstance(arg, TypeVarType) and arg.name in own_params:
@@ -789,10 +778,8 @@ def nominal_references_for_schema(
     match t:
         case RecordType() | EnumType():
             yield t
-            typedef = defs.get(t.decl_id)
-            if typedef is None:
-                return
-            relevant = relevant_params.get(t.decl_id, frozenset())
+            typedef = defs[t.decl_id]
+            relevant = relevant_params[t.decl_id]
             for pname, arg in zip(typedef.type_params, t.type_args):
                 if pname in relevant:
                     yield from nominal_references_for_schema(arg, defs, relevant_params)
@@ -871,29 +858,13 @@ def _scc_has_growing_cycle(
     adjacency: dict[ParamKey, list[ParamKey]] = {}
     growing_edges: set[tuple[ParamKey, ParamKey]] = set()
     for source_id in members:
-        # A member of an SCC is normally a registered declaration, but a
-        # dangling reference (a field naming a declaration that was never
-        # registered — an internal-invariant violation, defensively handled
-        # the same way as the non-data-reachability fixpoint) can surface here
-        # as its own singleton SCC; treat it as contributing no edges rather
-        # than crashing.
-        source_def = defs.get(source_id)
-        if source_def is None:
-            continue
-        for ref_edge in edges.get(source_id, ()):
+        source_def = defs[source_id]
+        for ref_edge in edges[source_id]:
             target_id = ref_edge.target
             if target_id not in members:
                 continue
-            target_def = defs.get(target_id)
-            if target_def is None:  # pragma: no cover
-                # Unreachable by construction: a dangling (never-registered)
-                # target has no outgoing edges of its own, so it can only
-                # ever form its own singleton SCC — never share "members"
-                # with a distinct source_id that has an edge into it. Kept
-                # as a defensive guard, matching the dangling-source check
-                # above, in case that invariant ever stops holding.
-                continue
-            target_relevant = relevant_params.get(target_id, set())
+            target_def = defs[target_id]
+            target_relevant = relevant_params[target_id]
             for param_name, arg_template in zip(target_def.type_params, ref_edge.arg_templates):
                 if param_name not in target_relevant:
                     continue
@@ -970,18 +941,13 @@ def _param_occurrences(
             )
             return merged
         case RecordType() | EnumType():
-            target = defs.get(t.decl_id)
-            if target is None:
-                relevant_args = t.type_args
-            else:
-                target_relevant = relevant_params.get(t.decl_id, set())
-                relevant_args = tuple(
-                    arg
-                    for pname, arg in zip(target.type_params, t.type_args)
-                    if pname in target_relevant
-                )
-                if len(t.type_args) > len(target.type_params):
-                    relevant_args += t.type_args[len(target.type_params) :]
+            target = defs[t.decl_id]
+            target_relevant = relevant_params[t.decl_id]
+            relevant_args = tuple(
+                arg
+                for pname, arg in zip(target.type_params, t.type_args)
+                if pname in target_relevant
+            )
             merged = {}
             for arg in relevant_args:
                 merged = _merge_growing(

@@ -16,7 +16,7 @@ from agm.agl.runtime.externs import AglCallableProxy, ExternCallWindow, ExternRe
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import ExceptionValue, IrClosureValue, TextValue, Value
 
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 class _NominalConstructor(Protocol):

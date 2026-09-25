@@ -105,25 +105,12 @@ _Constraint: TypeAlias = _ConstructorConstraint | _OpenConstraint
 _Constraints: TypeAlias = tuple[tuple[OccurrenceId, _Constraint], ...]
 
 
-def _constructor_index(constructor: Constructor, signature: ClosedSignature) -> int:
-    index = signature.index_of(constructor)
-    if index is None:
-        raise MatchCompileInvariantError(
-            "observed constructor is absent from its occurrence's closed signature"
-        )
-    return index
-
-
 def _ordered_heads(matrix: PatternMatrix, column: int) -> tuple[Constructor, ...]:
     observed = head_constructors(matrix, column)
     signature = signature_for_type(matrix.occurrences[column].type, matrix.type_table)
     if isinstance(signature, OpenSignature):
         return observed
-
-    def constructor_index(constructor: Constructor) -> int:
-        return _constructor_index(constructor, signature)
-
-    return tuple(sorted(observed, key=constructor_index))
+    return tuple(sorted(observed, key=signature.index_of))
 
 
 def _signature_is_complete(observed: tuple[Constructor, ...], signature: ClosedSignature) -> bool:
@@ -136,20 +123,10 @@ def _signature_is_complete(observed: tuple[Constructor, ...], signature: ClosedS
 def _finalize_binders(matrix: PatternMatrix, row: MatrixRow) -> tuple[BinderAssignment, ...]:
     assignments = list(row.binder_assignments)
     for cell, occurrence in zip(row.cells, matrix.occurrences, strict=True):
-        if not isinstance(cell, WildcardCell):
-            raise MatchCompileInvariantError("leaf finalization requires an irrefutable first row")
-        assignments.extend(BinderAssignment(occurrence.id, binder) for binder in cell.binders)
+        binders = cast(WildcardCell, cell).binders
+        assignments.extend(BinderAssignment(occurrence.id, binder) for binder in binders)
 
     available = {occurrence.id: occurrence for occurrence in matrix.available_occurrences}
-    binder_ids: set[int] = set()
-    for assignment in assignments:
-        if assignment.occurrence not in available:
-            raise MatchCompileInvariantError(
-                f"leaf binder refers to unavailable occurrence {assignment.occurrence.value}"
-            )
-        if assignment.binder.node_id in binder_ids:
-            raise MatchCompileInvariantError("leaf assigns the same source binder more than once")
-        binder_ids.add(assignment.binder.node_id)
 
     def assignment_key(item: BinderAssignment) -> tuple[int, int, int]:
         return _binder_assignment_sort_key(item, available)
@@ -167,8 +144,6 @@ def _decompose_free_occurrences(
     required = {occurrence.id}
     required.update(set(child.free_occurrences) - {field.id for field in children})
     by_id = index.by_id
-    if any(identifier not in by_id for identifier in required):
-        raise MatchCompileInvariantError("decision free interface names an unknown occurrence")
 
     def occurrence_key(identifier: OccurrenceId) -> tuple[int, int]:
         return _occurrence_sort_key(by_id[identifier])
@@ -204,8 +179,6 @@ def _switch_free_occurrences(
     if default is not None:
         required.update(default.free_occurrences)
     by_id = index.by_id
-    if any(identifier not in by_id for identifier in required):
-        raise MatchCompileInvariantError("decision free interface names an unknown occurrence")
 
     def occurrence_key(identifier: OccurrenceId) -> tuple[int, int]:
         return _occurrence_sort_key(by_id[identifier])
@@ -336,21 +309,13 @@ def _default_constraint(decision: DecisionSwitch, type_table: TypeTable) -> _Con
     signature = signature_for_type(decision.occurrence.type, type_table)
     observed = tuple(branch.constructor for branch in decision.keyed_children)
     if isinstance(signature, ClosedSignature):
+        # A switch over a closed signature has a default only when it is incomplete.
         missing = next(
-            (constructor for constructor in signature.constructors if constructor not in observed),
-            None,
+            constructor for constructor in signature.constructors if constructor not in observed
         )
-        if missing is None:
-            raise MatchCompileInvariantError("complete closed switch unexpectedly has a default")
         return _ConstructorConstraint(missing)
-    excluded: list[LiteralConstructor] = []
-    for constructor in observed:
-        if not isinstance(constructor, LiteralConstructor):
-            raise MatchCompileInvariantError(
-                "an open-domain switch contains a non-literal constructor"
-            )
-        excluded.append(constructor)
-    return _OpenConstraint(tuple(excluded))
+    # An open domain's switch keys are literals.
+    return _OpenConstraint(cast(tuple[LiteralConstructor, ...], observed))
 
 
 def _first_failure_constraints(root: Decision, type_table: TypeTable) -> _Constraints | None:
@@ -360,12 +325,9 @@ def _first_failure_constraints(root: Decision, type_table: TypeTable) -> _Constr
     paths are exponential in its node count still costs one visit per node.
     """
     memo: dict[int, _Constraints | None] = {}
-    active: set[int] = set()
 
     def visit(decision: Decision) -> _Constraints | None:
         identifier = id(decision)
-        if identifier in active:
-            raise MatchCompileInvariantError("decision graph contains a cycle")
         if identifier in memo:
             return memo[identifier]
         if isinstance(decision, DecisionFail):
@@ -375,63 +337,47 @@ def _first_failure_constraints(root: Decision, type_table: TypeTable) -> _Constr
             memo[identifier] = None
             return None
         if isinstance(decision, DecisionDecompose):
-            active.add(identifier)
-            try:
-                suffix = visit(decision.child)
-                if suffix is None:
-                    memo[identifier] = None
-                    return None
-                if any(occurrence_id == decision.occurrence.id for occurrence_id, _ in suffix):
-                    raise MatchCompileInvariantError(
-                        "a failure path processes an occurrence more than once"
-                    )
-                result = (
-                    (decision.occurrence.id, _ConstructorConstraint(decision.constructor)),
-                    *suffix,
-                )
-                memo[identifier] = result
-                return result
-            finally:
-                active.remove(identifier)
-        active.add(identifier)
-        try:
-            signature = signature_for_type(decision.occurrence.type, type_table)
-            edges: list[tuple[int, Decision, _Constraint]] = []
-            for branch_index, branch in enumerate(decision.keyed_children):
-                order = (
-                    _constructor_index(branch.constructor, signature)
-                    if isinstance(signature, ClosedSignature)
-                    else branch_index
-                )
-                edges.append((order, branch.decision, _ConstructorConstraint(branch.constructor)))
-            if decision.default is not None:
-                constraint = _default_constraint(decision, type_table)
-                order = (
-                    _constructor_index(constraint.constructor, signature)
-                    if isinstance(signature, ClosedSignature)
-                    and isinstance(constraint, _ConstructorConstraint)
-                    else len(edges)
-                )
-                edges.append((order, decision.default, constraint))
+            suffix = visit(decision.child)
+            if suffix is None:
+                memo[identifier] = None
+                return None
+            result = (
+                (decision.occurrence.id, _ConstructorConstraint(decision.constructor)),
+                *suffix,
+            )
+            memo[identifier] = result
+            return result
+        signature = signature_for_type(decision.occurrence.type, type_table)
+        edges: list[tuple[int, Decision, _Constraint]] = []
+        for branch_index, branch in enumerate(decision.keyed_children):
+            order = (
+                signature.index_of(branch.constructor)
+                if isinstance(signature, ClosedSignature)
+                else branch_index
+            )
+            edges.append((order, branch.decision, _ConstructorConstraint(branch.constructor)))
+        if decision.default is not None:
+            constraint = _default_constraint(decision, type_table)
+            order = (
+                signature.index_of(constraint.constructor)
+                if isinstance(signature, ClosedSignature)
+                and isinstance(constraint, _ConstructorConstraint)
+                else len(edges)
+            )
+            edges.append((order, decision.default, constraint))
 
-            def edge_order(edge: tuple[int, Decision, _Constraint]) -> int:
-                return edge[0]
+        def edge_order(edge: tuple[int, Decision, _Constraint]) -> int:
+            return edge[0]
 
-            for _, child, constraint in sorted(edges, key=edge_order):
-                suffix = visit(child)
-                if suffix is None:
-                    continue
-                if any(occurrence_id == decision.occurrence.id for occurrence_id, _ in suffix):
-                    raise MatchCompileInvariantError(
-                        "a failure path tests an occurrence more than once"
-                    )
-                result = ((decision.occurrence.id, constraint), *suffix)
-                memo[identifier] = result
-                return result
-            memo[identifier] = None
-            return None
-        finally:
-            active.remove(identifier)
+        for _, child, constraint in sorted(edges, key=edge_order):
+            suffix = visit(child)
+            if suffix is None:
+                continue
+            result = ((decision.occurrence.id, constraint), *suffix)
+            memo[identifier] = result
+            return result
+        memo[identifier] = None
+        return None
 
     return visit(root)
 
@@ -502,7 +448,9 @@ def _short_spelling_blocked(
     """
     if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
         return False
-    return variant in case_context.blocked_enum_variants.get((form.owner_name or "",), frozenset())
+    return variant in case_context.blocked_enum_variants.get(
+        (cast(str, form.owner_name),), frozenset()
+    )
 
 
 def _source_spelling(
@@ -531,9 +479,9 @@ def _source_spelling(
     def candidate_key(
         candidate: EnumOwnerForm,
     ) -> tuple[int, str, bool]:
-        assert candidate.owner_name is not None
+        # Only owner-named forms carry the type template a match requires.
         text = qualified_owner_name(
-            candidate.owner_name,
+            cast(str, candidate.owner_name),
             candidate.module_qualifier,
             anchored=candidate.qualifier_anchored,
         )

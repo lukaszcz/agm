@@ -28,7 +28,7 @@ from agm.agl.semantics.values import IntValue, TextValue, Value
 
 # A descriptor view with no nominal/function entries: enough for every test
 # value here, none of which is a record/enum/exception or closure.
-_EMPTY_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_EMPTY_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 def _open_session(**kwargs: object) -> ReplSession:
@@ -171,6 +171,7 @@ class TestRenderEntryResult:
                 )
             },
             functions={},
+            exception_field_encodes={},
         )
         result = _result(
             kind="expression",

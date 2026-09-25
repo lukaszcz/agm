@@ -40,12 +40,12 @@ from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key, is_engine_builtin_var_key
 from agm.agl.ir.contracts import (
-    ContractRequest,
     ConversionFailureMode,
-    EncodePlan,
-    ScalarEncode,
+    CustomContractRequest,
+    JsonContractRequest,
+    TextContractRequest,
 )
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, SymbolId
 from agm.agl.ir.nodes import (
     IrAnd,
     IrArith,
@@ -75,7 +75,6 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
-    IrFieldMode,
     IrFieldSet,
     IrFunctionParam,
     IrIf,
@@ -97,9 +96,11 @@ from agm.agl.ir.nodes import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNeg,
     IrNominalCaseKey,
     IrNominalCast,
     IrNominalIs,
+    IrNot,
     IrOr,
     IrPrint,
     IrRaise,
@@ -115,7 +116,6 @@ from agm.agl.ir.nodes import (
     IrTemplateText,
     IrTemplateValue,
     IrTry,
-    IrUnary,
     IrUpdateRecord,
     UseDefault,
 )
@@ -126,7 +126,6 @@ from agm.agl.ir.operations import (
     CopyKind,
     IntToDecimal,
     ToJson,
-    UnaryOp,
 )
 from agm.agl.ir.program import (
     ExecutableProgram,
@@ -137,7 +136,6 @@ from agm.agl.ir.program import (
     nominal_conforms,
 )
 from agm.agl.ir.static_keys import StaticBindingKey
-from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_ENV_ID, ModuleId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
@@ -151,7 +149,7 @@ from agm.agl.runtime.externs import (
 )
 from agm.agl.runtime.option import none_value, option_text, some_value
 from agm.agl.runtime.render import render_key_value_syntax, render_value
-from agm.agl.runtime.serialize import encode_value
+from agm.agl.runtime.serialize import AglNonDataValue, encode_scalar
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.trace import TraceStore, noop_trace
 from agm.agl.semantics.arithmetic import (
@@ -209,8 +207,6 @@ __all__ = [
 ]
 
 
-_SCALAR_ENCODE_PLAN = EncodePlan(ScalarEncode())
-
 _ArgT = TypeVar("_ArgT")
 
 
@@ -242,7 +238,7 @@ class _FlexibleParse(Protocol):
 
 def _call_custom_codec_parse(
     host_contract: "OutputContract",
-    request: ContractRequest,
+    request: CustomContractRequest,
     raw: str,
     *,
     effective_strict: bool,
@@ -315,50 +311,12 @@ def _literal_key_value(key: IrLiteralCaseKey) -> Value:
 def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
     """Build the runtime value for one typeless scalar key (uncached)."""
     if key.kind is IrLiteralKind.NUMERIC:
-        assert isinstance(key.scalar_value, decimal.Decimal)
-        return DecimalValue(key.scalar_value)
+        return DecimalValue(cast(decimal.Decimal, key.scalar_value))
     if key.kind is IrLiteralKind.BOOL:
-        assert isinstance(key.scalar_value, bool)
-        return BoolValue(key.scalar_value)
+        return BoolValue(cast(bool, key.scalar_value))
     if key.kind is IrLiteralKind.TEXT:
-        assert isinstance(key.scalar_value, str)
-        return TextValue(key.scalar_value)
-    assert key.scalar_value is None
+        return TextValue(cast(str, key.scalar_value))
     return JsonValue(None)
-
-
-def _project_nominal_field(
-    value: Value,
-    nominal: NominalId,
-    field: str,
-    mode: IrFieldMode,
-) -> Value:
-    """Read one declared field from a nominal runtime value.
-
-    Records, enum payloads, and exceptions all retain their nominal identity and
-    field mapping at runtime, so this is the one typeless projection mechanism.
-    Exact projections require identity equality; upper-bound projections do not
-    check identity because the static layer already proved the field exists on
-    every value admitted by the bound.
-    """
-    if not isinstance(value, (RecordValue, ExceptionValue)):
-        raise InvalidIrError(
-            f"IrField: expected RecordValue or ExceptionValue, got {type(value).__name__}"
-        )
-    match mode:
-        case IrFieldMode.EXACT:
-            if value.nominal != nominal:
-                raise InvalidIrError(
-                    f"IrField: expected nominal {nominal!r}, got {value.nominal!r}"
-                )
-        case IrFieldMode.UPPER_BOUND:
-            pass
-        case _ as _unreachable_mode:  # pragma: no cover
-            assert_never(_unreachable_mode)
-    try:
-        return value.fields[field]
-    except KeyError:
-        raise InvalidIrError(f"IrField: nominal value lacks field {field!r}") from None
 
 
 # The tree-walking evaluator descends through several Python stack frames per AgL
@@ -425,20 +383,13 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
     typed ``json`` lowers to ``IrMakeJsonArray``/``IrMakeJsonObject`` instead,
     so ``value`` here is never already a ``JsonValue``, an ``ArrayValue``, or
     a ``DictValue``.
-
-    Raises ``InvalidIrError`` when the value tag does not match the coercion
-    (cannot occur in well-lowered IR; defensive check only).
     """
     match coercion:
         case IntToDecimal(operation=operation):
-            if not isinstance(value, IntValue):
-                raise InvalidIrError(
-                    f"IntToDecimal coercion requires IntValue, got {type(value).__name__}"
-                )
-            return DecimalValue(int_to_decimal(value.value, operation))
+            return DecimalValue(int_to_decimal(cast(IntValue, value).value, operation))
 
         case ToJson():
-            return JsonValue(encode_value(_SCALAR_ENCODE_PLAN, value))
+            return JsonValue(encode_scalar(value))
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
@@ -553,10 +504,8 @@ class IrInterpreter:
         strict_key = builtin_var_key(STD_CONFIG_ID, (), "strict-json")
         strict_setting = seed.get(strict_key)
         if strict_setting is None:
-            strict_default = defaults[strict_key]
-            assert isinstance(strict_default, BoolValue)
+            strict_default = cast(BoolValue, defaults[strict_key])
             strict_setting = BoolValue(strict_json or strict_default.value)
-        assert isinstance(strict_setting, BoolValue)
         self._apply_config_effect("strict-json", strict_setting)
 
         timeout_key = builtin_var_key(STD_CONFIG_ID, (), "timeout")
@@ -570,7 +519,6 @@ class IrInterpreter:
                 if shell_exec_timeout is not None
                 else defaults[timeout_key]
             )
-        assert isinstance(timeout_setting, RecordValue)
         timeout_setting = cast(
             RecordValue,
             restamp_engine_setting(
@@ -586,7 +534,8 @@ class IrInterpreter:
         # Host-consumed registers use the host seed when one is provided and
         # otherwise the ``builtin var`` declaration's default. A key with
         # neither gets no register at all rather than a fabricated value;
-        # reading it is then a hard error (see ``_load_builtin_setting``).
+        # a well-typed program never reads one that has no register (see
+        # ``_load_builtin_setting``).
         effective = {**defaults, **seed}
         self._builtin_host_settings = {
             key: effective[builtin_var_key(STD_CONFIG_ID, (), key)]
@@ -609,10 +558,9 @@ class IrInterpreter:
             )
             self._builtin_host_settings["default-agent"] = default_agent
             self._check_default_agent_dispatchable(default_agent)
-        trace_file = self._builtin_host_settings.get("trace-file")
         # ``trace-file`` always has a declared default (unlike ``default-agent``),
         # so it is always present here.
-        assert isinstance(trace_file, RecordValue)
+        trace_file = cast(RecordValue, self._builtin_host_settings["trace-file"])
         self._builtin_host_settings["trace-file"] = restamp_engine_setting(
             "trace-file",
             trace_file,
@@ -620,7 +568,7 @@ class IrInterpreter:
             to_table=self._program.builtin_nominals,
         )
         if self._host_reconfigurer is not None:
-            self._reconfigure_host_service()
+            self._reconfigure_host_service(self._host_reconfigurer)
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
         )
@@ -632,20 +580,27 @@ class IrInterpreter:
         self._effects = EffectHandlers(self)
 
     def _parse_host_output(
-        self, raw: str, contract_id: ContractId, *, effective_strict: bool
+        self,
+        raw: str,
+        contract_id: ContractId,
+        contract: TextContractRequest | JsonContractRequest | CustomContractRequest,
+        *,
+        effective_strict: bool,
     ) -> ParseResult:
-        contract = self._program.contracts[contract_id]
-        host_contract = self._host_contracts.get(contract_id)
-        if host_contract is None or contract.codec_name in {"text", "json"}:
-            return _parse_contract_output(raw, contract, effective_strict=effective_strict)
-        schema = host_contract.json_schema if isinstance(host_contract.json_schema, dict) else None
-        return _call_custom_codec_parse(
-            host_contract,
-            contract,
-            raw,
-            effective_strict=effective_strict,
-            schema=schema,
-        )
+        """Parse *raw* per contract *contract_id*, whose non-unit request is *contract*."""
+        if isinstance(contract, CustomContractRequest):
+            host_contract = self._host_contracts[contract_id]
+            schema = (
+                host_contract.json_schema if isinstance(host_contract.json_schema, dict) else None
+            )
+            return _call_custom_codec_parse(
+                host_contract,
+                contract,
+                raw,
+                effective_strict=effective_strict,
+                schema=schema,
+            )
+        return _parse_contract_output(raw, contract, effective_strict=effective_strict)
 
     @property
     def _frame(self) -> Frame:
@@ -669,14 +624,15 @@ class IrInterpreter:
         needs it recognizable once this run's own compiled program is gone --
         see :func:`~agm.agl.runtime.engine_config.restamp_engine_setting`.
         """
-        value = restamp_engine_setting(
-            "timeout",
-            self._timeout_setting,
-            from_table=self._program.builtin_nominals,
-            to_table=NO_BUILTIN_DECLARATIONS,
+        return cast(
+            RecordValue,
+            restamp_engine_setting(
+                "timeout",
+                self._timeout_setting,
+                from_table=self._program.builtin_nominals,
+                to_table=NO_BUILTIN_DECLARATIONS,
+            ),
         )
-        assert isinstance(value, RecordValue)
-        return value
 
     @property
     def shell_exec_timeout(self) -> float | None:
@@ -714,16 +670,6 @@ class IrInterpreter:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-
-    def _eval_expecting_bool(self, expr: IrExpr, context: str) -> bool:
-        """Evaluate ``expr`` and require its result to be a ``BoolValue``."""
-        value = self._eval(expr)
-        if not isinstance(value, BoolValue):
-            raise InvalidIrError(f"{context} expected BoolValue, got {type(value).__name__}")
-        return value.value
-
-    def _eval_render_bool_option(self, expr: IrExpr, option_name: str) -> bool:
-        return self._eval_expecting_bool(expr, f"IrRenderValue: {option_name}")
 
     def _index_failure(self, err: AglIndexOutOfRange | AglMissingKey) -> AglRaise:
         """Convert an index/key sentinel into an ``AglRaise`` with the appropriate fields.
@@ -858,24 +804,12 @@ class IrInterpreter:
         """Look up a direct-call closure in its lexical evaluation frame."""
         desc = self._program.functions[fn_id]
         slot = next(
-            (
-                frame[desc.function_symbol]
-                for frame in reversed(self._frames)
-                if desc.function_symbol in frame
-            ),
-            None,
+            frame[desc.function_symbol]
+            for frame in reversed(self._frames)
+            if desc.function_symbol in frame
         )
-        if slot is None:
-            raise InvalidIrError(
-                f"IrDirectCall: function_symbol for fn_id={fn_id!r} not in any evaluation frame"
-            )
         val = slot.value if isinstance(slot, Cell) else slot
-        if not isinstance(val, IrClosureValue):
-            raise InvalidIrError(
-                f"IrDirectCall: function_symbol slot is not IrClosureValue,"
-                f" got {type(val).__name__}"
-            )
-        return val
+        return cast(IrClosureValue, val)
 
     def _enter_call(self, module_id: ModuleId, location: Location | None) -> ModuleId:
         """Push *location* as this call's site and switch to *module_id*.
@@ -949,8 +883,7 @@ class IrInterpreter:
                         symbol=sym,
                         value=IrMakeClosure(function_id=fn_id, captures=()) as closure_node,
                     ):
-                        desc = self._program.functions.get(fn_id)
-                        if desc is None or desc.function_symbol != sym:
+                        if self._program.functions[fn_id].function_symbol != sym:
                             continue
                         value = self._eval(closure_node)
                         self._frames[0][sym] = value
@@ -984,10 +917,9 @@ class IrInterpreter:
 
     def _eval_default_in_frame(self, param: "IrFunctionParam", frame: Frame) -> Value:
         """Evaluate an omitted argument's default expression in *frame*."""
-        assert param.default is not None, "arg omitted but param has no default (lowerer bug)"
         self._frames.append(frame)
         try:
-            return self._eval(param.default)
+            return self._eval(cast(IrExpr, param.default))
         finally:
             self._frames.pop()
 
@@ -1185,7 +1117,7 @@ class IrInterpreter:
         1. Evaluate the callee in the current frame.
         2. Depth-limit check (AFTER callee eval, BEFORE arg binding).
         3. Evaluate each positional arg in the caller frame, NO coercion.
-        4. Defensive: use ``desc.params[i].default`` for omitted trailing params
+        4. Use ``desc.params[i].default`` for omitted trailing params
            (evaluated in a captures frame).
         5. ``_bind_and_invoke``.
         """
@@ -1197,26 +1129,18 @@ class IrInterpreter:
                 for name, argument in zip(constructor_desc.fields, arguments, strict=True)
             }
             return RecordValue(nominal=callee_val.nominal, fields=fields)
-        if not isinstance(callee_val, IrClosureValue):
-            raise InvalidIrError(
-                f"IrIndirectCall: callee evaluated to {type(callee_val).__name__},"
-                " expected IrClosureValue"
-            )
+        callee_val = cast(IrClosureValue, callee_val)
 
         desc = self._program.functions[callee_val.function_id]
         match desc.impl:
             case ExternFunctionBody() as extern:
                 extern_bound_values: list[Value] = []
                 for i, param in enumerate(desc.params):
-                    if i < len(arguments):
-                        val = self._eval(arguments[i])
-                    elif param.default is not None:
-                        val = self._eval_extern_default(param)
-                    else:
-                        raise InvalidIrError(
-                            f"IrIndirectCall: missing argument for parameter {i!r}"
-                            " and no default available (lowerer bug)"
-                        )
+                    val = (
+                        self._eval(arguments[i])
+                        if i < len(arguments)
+                        else self._eval_extern_default(param)
+                    )
                     extern_bound_values.append(val)
                 return self._effects.eval_extern_call(
                     desc.module_id, extern, extern_bound_values, location=location
@@ -1232,18 +1156,12 @@ class IrInterpreter:
                 for i, param in enumerate(desc.params):
                     if i < len(arguments):
                         val = self._eval(arguments[i])
-                    elif param.default is not None:
-                        # Defensive: evaluate default in a captures frame.
+                    else:
                         previous_module = self._enter_call(desc.module_id, location)
                         try:
                             val = self._eval_default_in_frame(param, dict(callee_val.captures))
                         finally:
                             self._exit_call(previous_module)
-                    else:
-                        raise InvalidIrError(
-                            f"IrIndirectCall: missing argument for parameter {i!r}"
-                            " and no default available (lowerer bug)"
-                        )
                     bound_values.append(val)
 
                 previous_module = self._enter_call(desc.module_id, location)
@@ -1261,8 +1179,7 @@ class IrInterpreter:
     def _program_entry(self, symbol: SymbolId) -> "tuple[FunctionDescriptor, IrFunctionBody]":
         """Look up a selected ``program def``'s descriptor and body."""
         descriptor = self._program.functions[self._program.program_functions[symbol]]
-        assert isinstance(descriptor.impl, IrFunctionBody)
-        return descriptor, descriptor.impl
+        return descriptor, cast(IrFunctionBody, descriptor.impl)
 
     def _program_entry_location(self, symbol: SymbolId) -> Location:
         """Return the selected ``program def`` body's source location."""
@@ -1390,18 +1307,19 @@ class IrInterpreter:
         match node:
             case IrBind(symbol=sym) if sym in self._seeded_symbols:
                 value = self._seeded_symbols[sym]
-                seed_desc = self._program.symbols.get(sym)
-                if seed_desc is not None and seed_desc.mutable:
+                if self._program.symbols[sym].mutable:
                     self._frame[sym] = Cell(value)
                 else:
                     self._frame[sym] = value
                 return value
             case IrBind(symbol=sym, value=IrMakeClosure(function_id=fn_id)):
-                desc = self._program.functions.get(fn_id)
-                if desc is not None and desc.function_symbol == sym:
-                    slot = self._frames[0].get(sym)
-                    if slot is not None:
-                        return slot.value if isinstance(slot, Cell) else slot
+                if self._program.functions[fn_id].function_symbol == sym:
+                    # A root FuncDef's closure always has empty captures (a
+                    # module binding is never captured, see lowerer
+                    # `_compute_captures_for`), so `_install_function_closures`
+                    # has already installed this exact symbol into frame 0.
+                    slot = self._frames[0][sym]
+                    return slot.value if isinstance(slot, Cell) else slot
             case _:
                 pass
         return self._eval(node)
@@ -1484,83 +1402,46 @@ class IrInterpreter:
                 # The scalar encode plan in both arms below is a leaf conversion, never a
                 # walk that could re-enter a container — no cycle guard needed in either.
                 case IrMakeJsonArray(items=json_items):
-                    return JsonValue(
-                        [encode_value(_SCALAR_ENCODE_PLAN, self._eval(item)) for item in json_items]
-                    )
+                    return JsonValue([encode_scalar(self._eval(item)) for item in json_items])
 
                 case IrMakeJsonObject(entries=json_entries):
                     json_result: dict[str, object] = {}
                     for key_expr, val_expr in json_entries:
-                        key_val = self._eval(key_expr)
-                        if not isinstance(key_val, TextValue):
-                            raise InvalidIrError(
-                                f"IrMakeJsonObject key must evaluate to TextValue,"
-                                f" got {type(key_val).__name__}"
-                            )
+                        key_val = cast(TextValue, self._eval(key_expr))
                         if key_val.value in json_result:
                             raise self._duplicate_key_failure(key_val)
-                        json_result[key_val.value] = encode_value(
-                            _SCALAR_ENCODE_PLAN, self._eval(val_expr)
-                        )
+                        json_result[key_val.value] = encode_scalar(self._eval(val_expr))
                     return JsonValue(json_result)
 
                 case IrLoad(symbol=sym):
-                    slot = next(
-                        (frame[sym] for frame in reversed(self._frames) if sym in frame),
-                        None,
-                    )
-                    if slot is None:
-                        raise InvalidIrError(
-                            f"IrLoad: symbol_id={sym.value!r} is not bound in the frame"
-                        )
+                    slot = next(frame[sym] for frame in reversed(self._frames) if sym in frame)
                     if isinstance(slot, Cell):
                         return slot.value
                     return slot
 
                 case IrBind(symbol=sym, value=val_expr):
                     value = self._eval(val_expr)
-                    desc = self._program.symbols.get(sym)
-                    if desc is not None and desc.mutable:
+                    if self._program.symbols[sym].mutable:
                         self._frame[sym] = Cell(value)
                     else:
                         self._frame[sym] = value
                     return value
 
                 case IrAssign(symbol=sym, value=val_expr):
-                    slot = self._frame.get(sym)
-                    if slot is None and self._frames[0] is not self._frame:
+                    var_slot = self._frame.get(sym)
+                    if var_slot is None and self._frames[0] is not self._frame:
                         # Module vars live in the base frame and are intentionally
                         # not closure captures.
-                        slot = self._frames[0].get(sym)
-                    if not isinstance(slot, Cell):
-                        desc = self._program.symbols.get(sym)
-                        if desc is None:
-                            raise InvalidIrError(
-                                f"IrAssign: symbol_id={sym.value!r} is not in program.symbols"
-                            )
-                        raise InvalidIrError(
-                            f"IrAssign: symbol_id={sym.value!r}"
-                            f" (public_name={desc.public_name!r}) is not a mutable var"
-                        )
+                        var_slot = self._frames[0].get(sym)
                     # A simple var-cell store.  An assignment statement yields unit;
                     # the mutation is the side effect.
-                    slot.value = self._eval(val_expr)
+                    cast(Cell, var_slot).value = self._eval(val_expr)
                     return UNIT_VALUE
 
-                case IrFieldSet(value=value_expr, nominal=nominal, field=field, new=new_expr):
-                    # Evaluate the receiver before the replacement. The identity
-                    # guard protects superseded same-named declarations from
-                    # writes; validation already proved the field is declared, so
-                    # matching identity is all the store needs.
-                    value = self._eval(value_expr)
-                    if not isinstance(value, RecordValue):
-                        raise InvalidIrError(
-                            f"IrFieldSet: expected RecordValue, got {type(value).__name__}"
-                        )
-                    if value.nominal != nominal:
-                        raise InvalidIrError(
-                            f"IrFieldSet: expected nominal {nominal!r}, got {value.nominal!r}"
-                        )
+                case IrFieldSet(value=value_expr, field=field, new=new_expr):
+                    # Plain left-to-right evaluation order: receiver, then
+                    # replacement, then store.
+                    value = cast(RecordValue, self._eval(value_expr))
                     value.fields[field] = self._eval(new_expr)
                     return UNIT_VALUE
 
@@ -1603,7 +1484,7 @@ class IrInterpreter:
                             case ArithOp.MUL:
                                 return mul(kind, lhs_val, rhs_val)
                             case ArithOp.DIV:
-                                return div(lhs_val, rhs_val)
+                                return div(cast(DecimalValue, lhs_val), cast(DecimalValue, rhs_val))
                             case _ as unreachable:  # pragma: no cover
                                 assert_never(unreachable)
                     except decimal.DecimalException as exc:
@@ -1630,68 +1511,33 @@ class IrInterpreter:
                     return BoolValue(contains(kind, item_val, container_val))
 
                 case IrAnd(lhs=lhs_expr, rhs=rhs_expr):
-                    lhs_val = self._eval(lhs_expr)
-                    if not isinstance(lhs_val, BoolValue):
-                        raise InvalidIrError(
-                            f"IrAnd: lhs is not BoolValue, got {type(lhs_val).__name__}"
-                        )
+                    lhs_val = cast(BoolValue, self._eval(lhs_expr))
                     if not lhs_val.value:
                         return BoolValue(False)
-                    rhs_val = self._eval(rhs_expr)
-                    if not isinstance(rhs_val, BoolValue):
-                        raise InvalidIrError(
-                            f"IrAnd: rhs is not BoolValue, got {type(rhs_val).__name__}"
-                        )
+                    rhs_val = cast(BoolValue, self._eval(rhs_expr))
                     return BoolValue(rhs_val.value)
 
                 case IrOr(lhs=lhs_expr, rhs=rhs_expr):
-                    lhs_val = self._eval(lhs_expr)
-                    if not isinstance(lhs_val, BoolValue):
-                        raise InvalidIrError(
-                            f"IrOr: lhs is not BoolValue, got {type(lhs_val).__name__}"
-                        )
+                    lhs_val = cast(BoolValue, self._eval(lhs_expr))
                     if lhs_val.value:
                         return BoolValue(True)
-                    rhs_val = self._eval(rhs_expr)
-                    if not isinstance(rhs_val, BoolValue):
-                        raise InvalidIrError(
-                            f"IrOr: rhs is not BoolValue, got {type(rhs_val).__name__}"
-                        )
+                    rhs_val = cast(BoolValue, self._eval(rhs_expr))
                     return BoolValue(rhs_val.value)
 
-                case IrUnary(op=unary_op, kind=kind, value=val_expr):
-                    val = self._eval(val_expr)
-                    match unary_op:
-                        case UnaryOp.NOT:
-                            if not isinstance(val, BoolValue):
-                                raise InvalidIrError(
-                                    f"IrUnary NOT: expected BoolValue, got {type(val).__name__}"
-                                )
-                            return logical_not(val)
-                        case UnaryOp.NEG:
-                            if kind is None:
-                                raise InvalidIrError("IrUnary NEG: kind must not be None")
-                            if not isinstance(val, (IntValue, DecimalValue)):
-                                raise InvalidIrError(
-                                    f"IrUnary NEG: expected numeric, got {type(val).__name__}"
-                                )
-                            # `negate` negates a decimal exactly (`copy_negate`),
-                            # so this can never raise.
-                            return negate(kind, val)
-                        case _ as _unreachable_unary:  # pragma: no cover
-                            assert_never(_unreachable_unary)
+                case IrNot(value=val_expr):
+                    return logical_not(cast(BoolValue, self._eval(val_expr)))
 
-                case IrField(value=val_expr, nominal=nominal, field=field_name, mode=mode):
+                case IrNeg(kind=kind, value=val_expr):
+                    # `negate` negates a decimal exactly (`copy_negate`), so
+                    # this can never raise.
+                    return negate(kind, self._eval(val_expr))
+
+                case IrField(value=val_expr, field=field_name):
                     value = self._eval(val_expr)
-                    return _project_nominal_field(value, nominal, field_name, mode)
+                    return cast("RecordValue | ExceptionValue", value).fields[field_name]
 
                 case IrUpdateRecord(value=val_expr, updates=updates):
-                    target = self._eval(val_expr)
-                    if not isinstance(target, (RecordValue, ExceptionValue)):
-                        raise InvalidIrError(
-                            "IrUpdateRecord: expected RecordValue or ExceptionValue, "
-                            f"got {type(target).__name__}"
-                        )
+                    target = cast("RecordValue | ExceptionValue", self._eval(val_expr))
                     updated_fields: dict[str, Value] = dict(target.fields)
                     for fname, fexpr in updates:
                         updated_fields[fname] = self._eval(fexpr)
@@ -1743,12 +1589,7 @@ class IrInterpreter:
                     source_label=source_label,
                     target_label=target_label,
                 ):
-                    value = self._eval(val_expr)
-                    if not isinstance(value, (RecordValue, ExceptionValue)):
-                        raise InvalidIrError(
-                            "IrNominalCast: value is not a record or exception,"
-                            f" got {type(value).__name__}"
-                        )
+                    value = cast("RecordValue | ExceptionValue", self._eval(val_expr))
                     matched = value.nominal in nominals or (
                         isinstance(value, ExceptionValue)
                         and nominal_conforms(self._program.nominals, value.nominal, nominals)
@@ -1771,11 +1612,7 @@ class IrInterpreter:
                     )
 
                 case IrNominalIs(nominal=nominal, value=val_expr, negated=negated):
-                    value = self._eval(val_expr)
-                    if not isinstance(value, (RecordValue, ExceptionValue)):
-                        raise InvalidIrError(
-                            f"IrNominalIs: value is not nominal, got {type(value).__name__}"
-                        )
+                    value = cast("RecordValue | ExceptionValue", self._eval(val_expr))
                     matched = value.nominal == nominal or (
                         isinstance(value, ExceptionValue)
                         and nominal_conforms(self._program.nominals, value.nominal, (nominal,))
@@ -1794,6 +1631,19 @@ class IrInterpreter:
                         if failure_mode is ConversionFailureMode.RETURN_OPTION:
                             return self._option_none()
                         raise self._cyclic_failure()
+                    except AglNonDataValue as exc:
+                        # `as json` on a runtime exception subtype whose own
+                        # field has no JSON form fails like any other cast.
+                        return self._on_cast_failure(
+                            failure_mode,
+                            AglCastConversion(
+                                f"cannot cast '{recipe.source_label}' to"
+                                f" '{recipe.target_label}': {exc}",
+                                source_label=recipe.source_label,
+                                target_label=recipe.target_label,
+                                raw=self._cast_raw(source_value),
+                            ),
+                        )
                     except AglArithmeticSignal as exc:
                         # `as decimal` on an int too large for the pinned
                         # context (``WIDEN_INT_TO_DECIMAL``) mirrors the cycle
@@ -1812,12 +1662,7 @@ class IrInterpreter:
                             # Else branch — always taken.
                             branch_val = self._eval(branch.body)
                             return branch_val if has_else else UNIT_VALUE
-                        cond_val = self._eval(branch.cond)
-                        if not isinstance(cond_val, BoolValue):
-                            raise InvalidIrError(
-                                f"IrIf: branch condition evaluated to"
-                                f" {type(cond_val).__name__}, expected BoolValue"
-                            )
+                        cond_val = cast(BoolValue, self._eval(branch.cond))
                         if cond_val.value:
                             branch_val = self._eval(branch.body)
                             return branch_val if has_else else UNIT_VALUE
@@ -1825,12 +1670,7 @@ class IrInterpreter:
                     return UNIT_VALUE
 
                 case IrRaise(exc=exc_expr):
-                    exc_val = self._eval(exc_expr)
-                    if not isinstance(exc_val, ExceptionValue):
-                        raise InvalidIrError(
-                            f"IrRaise: exc evaluated to {type(exc_val).__name__},"
-                            " expected ExceptionValue"
-                        )
+                    exc_val = cast(ExceptionValue, self._eval(exc_expr))
                     raise AglRaise(exc_val, span=node.location)
 
                 case IrReturn(value=value_expr):
@@ -1877,22 +1717,13 @@ class IrInterpreter:
                         if not selected:
                             continue
                         if arm.field_bindings:
-                            if not isinstance(subject_val, (RecordValue, ExceptionValue)):
-                                raise InvalidIrError(
-                                    "IrCase: selected payload arm for a non-nominal subject"
-                                )
-                            assert isinstance(key, IrNominalCaseKey)
+                            subject_val = cast("RecordValue | ExceptionValue", subject_val)
                             for field_name, symbol in arm.field_bindings:
-                                self._frame[symbol] = _project_nominal_field(
-                                    subject_val,
-                                    key.nominal,
-                                    field_name,
-                                    IrFieldMode.EXACT,
-                                )
+                                self._frame[symbol] = subject_val.fields[field_name]
                         return self._eval(arm.body)
-                    if default is not None:
-                        return self._eval(default)
-                    raise InvalidIrError("IrCase has no matching key and no default")
+                    # Exhaustiveness is proven statically (match compilation): an
+                    # arm always matches, or `default` is present.
+                    return self._eval(cast(IrExpr, default))
 
                 case IrLoop(body=body_expr):
                     # Unconditional repeat — all loop logic (bound checks, until
@@ -1926,26 +1757,15 @@ class IrInterpreter:
                         # one-time tuple of keys is sound even though the values
                         # behind those keys may still be mutated.
                         return IteratorValue(elements=tuple(coll.keys()))
-                    if isinstance(coll, TextValue):
-                        return IteratorValue(elements=coll.value)
-                    raise InvalidIrError(  # pragma: no cover
-                        f"IrIterInit: unexpected collection type {type(coll)!r}"
-                    )
+                    coll = cast(TextValue, coll)
+                    return IteratorValue(elements=coll.value)
 
                 case IrIterHasNext(iterator=iter_expr):
-                    it = self._eval(iter_expr)
-                    if not isinstance(it, IteratorValue):  # pragma: no cover
-                        raise InvalidIrError(
-                            f"IrIterHasNext: expected IteratorValue, got {type(it)!r}"
-                        )
+                    it = cast(IteratorValue, self._eval(iter_expr))
                     return BoolValue(it.pos < it.entry_length and it.pos < len(it.elements))
 
                 case IrIterNext(iterator=iter_expr):
-                    it = self._eval(iter_expr)
-                    if not isinstance(it, IteratorValue):  # pragma: no cover
-                        raise InvalidIrError(
-                            f"IrIterNext: expected IteratorValue, got {type(it)!r}"
-                        )
+                    it = cast(IteratorValue, self._eval(iter_expr))
                     elem = it.elements[it.pos]
                     it.pos += 1
                     return TextValue(elem) if isinstance(elem, str) else elem
@@ -1953,19 +1773,9 @@ class IrInterpreter:
                 case IrMakeClosure(function_id=fn_id, captures=captures):
                     cap_slots: list[tuple[SymbolId, Value | Cell]] = []
                     for cap in captures:
-                        slot = self._frame.get(cap.symbol)
-                        if slot is None:
-                            raise InvalidIrError(
-                                f"IrMakeClosure: capture symbol_id={cap.symbol.value!r}"
-                                " not in frame"
-                            )
+                        slot = self._frame[cap.symbol]
                         if cap.by_cell:
-                            if not isinstance(slot, Cell):
-                                raise InvalidIrError(
-                                    f"IrMakeClosure: by_cell capture symbol_id={cap.symbol.value!r}"
-                                    " but slot is not Cell"
-                                )
-                            cap_slots.append((cap.symbol, slot))
+                            cap_slots.append((cap.symbol, cast(Cell, slot)))
                         else:
                             val = slot.value if isinstance(slot, Cell) else slot
                             cap_slots.append((cap.symbol, val))
@@ -1999,12 +1809,12 @@ class IrInterpreter:
                     quote_strings=quote_strings_expr,
                 ):
                     pretty = (
-                        self._eval_render_bool_option(pretty_expr, "pretty")
+                        cast(BoolValue, self._eval(pretty_expr)).value
                         if pretty_expr is not None
                         else True
                     )
                     quote_strings = (
-                        self._eval_render_bool_option(quote_strings_expr, "quote_strings")
+                        cast(BoolValue, self._eval(quote_strings_expr)).value
                         if quote_strings_expr is not None
                         else True
                     )
@@ -2134,11 +1944,8 @@ class IrInterpreter:
         """Return the current value of the host-backed binding *key*.
 
         The runtime-live keys read the live interpreter fields; the
-        host-consumed keys read their register in ``_builtin_host_settings``.
-        A host-consumed key with neither a host seed nor a declared default has
-        no register, and no value to produce.
-
-        :raises InvalidIrError: if *key* has no host-consumed register.
+        host-consumed keys read their register in ``_builtin_host_settings``,
+        always present there by the time a well-typed program reads it.
         """
         key = self._builtin_var_key(key)
         _, _, name = key
@@ -2151,11 +1958,6 @@ class IrInterpreter:
             return BoolValue(self._strict_json)
         if name == "timeout":
             return self._timeout_setting
-        if name not in self._builtin_host_settings:
-            raise InvalidIrError(
-                f"builtin var {name!r} has no host-consumed register value: it was neither "
-                "seeded by the host nor given a declaration default"
-            )
         return self._builtin_host_settings[name]
 
     def _store_builtin_setting(self, key: BuiltinVarKey | str, value: Value) -> None:
@@ -2176,8 +1978,7 @@ class IrInterpreter:
         if name in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(name, value)
             if name == "timeout":
-                assert isinstance(value, RecordValue)
-                self._timeout_setting = value
+                self._timeout_setting = cast(RecordValue, value)
             return
 
         previous = dict(self._builtin_host_settings)
@@ -2191,23 +1992,20 @@ class IrInterpreter:
         if self._host_reconfigurer is None or name not in TRACE_ENGINE_KEYS:
             return
         try:
-            self._reconfigure_host_service()
+            self._reconfigure_host_service(self._host_reconfigurer)
         except Exception:
             self._builtin_host_settings = previous
             raise
 
-    def _reconfigure_host_service(self) -> None:
+    def _reconfigure_host_service(self, reconfigurer: "HostSettingsReconfigurer") -> None:
         """Reflect a host-consumed register write into the live host service.
 
         ``trace``/``trace-file`` recompute the trace destination from the
         current register pair (either write repoints the same trace store).
         """
-        assert self._host_reconfigurer is not None
-        trace = self._builtin_host_settings["trace"]
-        assert isinstance(trace, BoolValue)
-        trace_file_reg = self._builtin_host_settings["trace-file"]
-        assert isinstance(trace_file_reg, RecordValue)
-        self._host_reconfigurer.reconfigure_trace(
+        trace = cast(BoolValue, self._builtin_host_settings["trace"])
+        trace_file_reg = cast(RecordValue, self._builtin_host_settings["trace-file"])
+        reconfigurer.reconfigure_trace(
             enabled=trace.value,
             trace_file=option_text(trace_file_reg, nominals=self._program.builtin_nominals),
         )
@@ -2223,11 +2021,9 @@ class IrInterpreter:
         interpreter state; all other keys are inert here.
         """
         if public_name == "strict-json":
-            assert isinstance(config_value, BoolValue)
-            self._strict_json = config_value.value
+            self._strict_json = cast(BoolValue, config_value).value
         else:
-            assert public_name == "timeout"
-            assert isinstance(config_value, RecordValue)
+            config_value = cast(RecordValue, config_value)
             raw = option_text(config_value, nominals=self._program.builtin_nominals)
             if raw is None:
                 self._shell_exec_timeout = None

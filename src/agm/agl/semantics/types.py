@@ -425,6 +425,24 @@ Type = (
     | InferenceVarType
 )
 
+# A checked program's semantic type: checking solves every inference variable away.
+CheckedType = (
+    TextType
+    | JsonType
+    | BoolType
+    | IntType
+    | DecimalType
+    | ArrayType
+    | DictType
+    | RecordType
+    | EnumType
+    | ExceptionType
+    | UnitType
+    | FunctionType
+    | BottomType
+    | TypeVarType
+)
+
 
 @dataclass(frozen=True, slots=True)
 class TypeTemplate:

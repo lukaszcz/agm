@@ -763,9 +763,9 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
     import json
 
     from agm.agl.ir.contracts import (
-        ContractRequest,
         EnumDecode,
         FieldDecode,
+        JsonContractRequest,
         ScalarDecode,
         ScalarKind,
         VariantDecode,
@@ -822,7 +822,7 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
             },
         ]
     }
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=json.dumps(schema, sort_keys=True),
@@ -830,7 +830,6 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
         target_type_label="Status",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Unknown $case.
     result = _parse_contract_output('{"$case": "Unknown"}', contract, effective_strict=False)
@@ -918,7 +917,7 @@ def test_validate_ir_ask_missing_contract(request_only: bool) -> None:
 def test_validate_ir_ask_max_attempts_zero(request_only: bool) -> None:
     """validate_ir: an ask node with max_attempts=0 → InvalidIrError."""
 
-    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.contracts import TextContractRequest
     from agm.agl.ir.ids import ContractId, Location, SourceId
     from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrConstText
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
@@ -928,15 +927,12 @@ def test_validate_ir_ask_max_attempts_zero(request_only: bool) -> None:
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
-    req = ContractRequest(
+    req = TextContractRequest(
         codec_name="text",
         strict_json=None,
-        json_schema=None,
-        decode=None,
         target_type_label="text",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
     ask_node = node_type(
@@ -956,51 +952,6 @@ def test_validate_ir_ask_max_attempts_zero(request_only: bool) -> None:
     )
     with pytest.raises(InvalidIrError, match="max_attempts"):
         validate_ir(prog, deep=True)
-
-
-def test_validate_contract_request_json_missing_schema() -> None:
-    """_validate_contract_request: json codec but no schema → InvalidIrError."""
-
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrConstUnit
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    bad_req = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=None,  # missing!
-        decode=None,
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(
-                module_id=ENTRY_ID,
-                initializers=(IrConstUnit(location=dummy_loc),),
-            )
-        },
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: bad_req},
-    )
-    with pytest.raises(InvalidIrError, match="json_schema"):
-        validate_ir(prog, deep=True)
-
-
-# ---------------------------------------------------------------------------
-# ask-request via lowerer BuiltinKind.ASK_REQUEST path
-# ---------------------------------------------------------------------------
 
 
 def test_ask_request_builds_a_text_request_record() -> None:
@@ -1023,32 +974,12 @@ prompt-text
 # ---------------------------------------------------------------------------
 
 
-def test_parse_contract_output_json_schema_none() -> None:
-    """_parse_contract_output: json codec but json_schema is None → failure."""
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.runtime.codec import _parse_contract_output
-
-    contract = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    result = _parse_contract_output("42", contract, effective_strict=False)
-    assert not result.ok
-    assert "json_schema" in result.error_msg
-
-
 def test_parse_contract_output_ambiguous_multi_value() -> None:
     """_parse_contract_output: lenient mode with ambiguous multi-value → failure."""
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.runtime.codec import _parse_contract_output
 
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=_json.dumps({"type": "integer"}),
@@ -1056,7 +987,6 @@ def test_parse_contract_output_ambiguous_multi_value() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Two bare JSON values → _extract_json_text returns _AMBIGUOUS_MULTI_VALUE.
     result = _parse_contract_output("1 2", contract, effective_strict=False)
@@ -1066,10 +996,10 @@ def test_parse_contract_output_ambiguous_multi_value() -> None:
 
 def test_parse_contract_output_lenient_no_json_found() -> None:
     """_parse_contract_output: lenient mode with no JSON at all → failure."""
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.runtime.codec import _parse_contract_output
 
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=_json.dumps({"type": "integer"}),
@@ -1077,58 +1007,17 @@ def test_parse_contract_output_lenient_no_json_found() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     result = _parse_contract_output("no json here at all!@#$%", contract, effective_strict=False)
     assert not result.ok
 
 
-def test_parse_contract_output_schema_not_dict() -> None:
-    """_parse_contract_output: json_schema that parses to a non-dict → failure."""
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
-    from agm.agl.runtime.codec import _parse_contract_output
-
-    contract = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema="[]",  # a list, not a dict
-        decode=ScalarDecode(ScalarKind.INT),
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    result = _parse_contract_output("42", contract, effective_strict=False)
-    assert not result.ok
-    assert "not a JSON object" in result.error_msg
-
-
-def test_parse_contract_output_decode_none() -> None:
-    """_parse_contract_output: decode=None with valid schema → failure."""
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.runtime.codec import _parse_contract_output
-
-    contract = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=_json.dumps({"type": "integer"}),
-        decode=None,  # deliberately None
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    result = _parse_contract_output("42", contract, effective_strict=False)
-    assert not result.ok
-    assert "decode" in result.error_msg
-
-
 def test_parse_contract_output_strict_parse_failure() -> None:
     """_parse_contract_output: strict mode with invalid JSON → failure."""
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.runtime.codec import _parse_contract_output
 
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=_json.dumps({"type": "integer"}),
@@ -1136,7 +1025,6 @@ def test_parse_contract_output_strict_parse_failure() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     result = _parse_contract_output("not json!", contract, effective_strict=True)
     assert not result.ok
@@ -1146,8 +1034,8 @@ def test_parse_contract_output_strict_parse_failure() -> None:
 def test_parse_agent_output_required_field_error() -> None:
     """parse_agent_output: missing required field on record → missing_field error."""
     from agm.agl.ir.contracts import (
-        ContractRequest,
         FieldDecode,
+        JsonContractRequest,
         RecordDecode,
         ScalarDecode,
         ScalarKind,
@@ -1186,7 +1074,7 @@ def test_parse_agent_output_required_field_error() -> None:
         ),
         alias=None,
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -1194,7 +1082,6 @@ def test_parse_agent_output_required_field_error() -> None:
         target_type_label="Point",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Missing 'y' field.
     result = _parse_contract_output('{"x": 1}', contract, effective_strict=False)
@@ -1206,8 +1093,8 @@ def test_parse_agent_output_required_field_error() -> None:
 def test_parse_agent_output_additional_properties_error() -> None:
     """parse_agent_output: extra field on record → unknown_field error."""
     from agm.agl.ir.contracts import (
-        ContractRequest,
         FieldDecode,
+        JsonContractRequest,
         RecordDecode,
         ScalarDecode,
         ScalarKind,
@@ -1239,7 +1126,7 @@ def test_parse_agent_output_additional_properties_error() -> None:
         ),
         alias=None,
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -1247,7 +1134,6 @@ def test_parse_agent_output_additional_properties_error() -> None:
         target_type_label="Point",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     result = _parse_contract_output('{"x": 1, "extra": true}', contract, effective_strict=False)
     assert not result.ok
@@ -1256,10 +1142,10 @@ def test_parse_agent_output_additional_properties_error() -> None:
 
 def test_parse_agent_output_wrong_type_error() -> None:
     """parse_agent_output: wrong JSON type (string vs integer) → wrong_type error."""
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.runtime.codec import _parse_contract_output
 
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=_json.dumps({"type": "integer"}),
@@ -1267,7 +1153,6 @@ def test_parse_agent_output_wrong_type_error() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     result = _parse_contract_output('"not an int"', contract, effective_strict=False)
     assert not result.ok
@@ -1276,12 +1161,12 @@ def test_parse_agent_output_wrong_type_error() -> None:
 
 def test_parse_agent_output_unknown_validator_fallback() -> None:
     """parse_agent_output: schema with minimum validator → wrong_type fallback."""
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.runtime.codec import _parse_contract_output
 
     # Use a "minimum" constraint that fails — falls through to default ValidationError.
     schema = _json.dumps({"type": "integer", "minimum": 100})
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -1289,7 +1174,6 @@ def test_parse_agent_output_unknown_validator_fallback() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     result = _parse_contract_output("5", contract, effective_strict=False)
     assert not result.ok
@@ -1310,11 +1194,7 @@ def test_make_validation_error_non_error_object() -> None:
 
 def test_enum_instance_not_dict_bad_case() -> None:
     """_classify_enum_failure: non-dict instance → bad_case error."""
-    from agm.agl.ir.contracts import (
-        ContractRequest,
-        EnumDecode,
-        VariantDecode,
-    )
+    from agm.agl.ir.contracts import EnumDecode, JsonContractRequest, VariantDecode
     from agm.agl.ir.ids import NominalId
     from agm.agl.runtime.codec import _parse_contract_output
 
@@ -1361,7 +1241,7 @@ def test_enum_instance_not_dict_bad_case() -> None:
             ]
         }
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -1369,7 +1249,6 @@ def test_enum_instance_not_dict_bad_case() -> None:
         target_type_label="Flag",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Pass a non-dict (string) → instance not dict path.
     result = _parse_contract_output('"not-a-dict"', contract, effective_strict=False)
@@ -1379,11 +1258,7 @@ def test_enum_instance_not_dict_bad_case() -> None:
 
 def test_enum_no_case_tag_bad_case() -> None:
     """_classify_enum_failure: dict missing $case → bad_case error."""
-    from agm.agl.ir.contracts import (
-        ContractRequest,
-        EnumDecode,
-        VariantDecode,
-    )
+    from agm.agl.ir.contracts import EnumDecode, JsonContractRequest, VariantDecode
     from agm.agl.ir.ids import NominalId
 
     nominal = NominalId(1)
@@ -1429,7 +1304,7 @@ def test_enum_no_case_tag_bad_case() -> None:
             ]
         }
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -1437,7 +1312,6 @@ def test_enum_no_case_tag_bad_case() -> None:
         target_type_label="Flag",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     from agm.agl.runtime.codec import _parse_contract_output
 
@@ -1449,7 +1323,7 @@ def test_enum_no_case_tag_bad_case() -> None:
 
 def test_enum_bad_case_no_decode_schema() -> None:
     """decode=None in ContractRequest → failure (no decode schema check before validation)."""
-    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.contracts import JsonContractRequest
     from agm.agl.runtime.codec import _parse_contract_output
 
     schema = _json.dumps(
@@ -1465,7 +1339,7 @@ def test_enum_bad_case_no_decode_schema() -> None:
         }
     )
     # decode=None: _find_enum_decode_at_path returns None.
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -1473,7 +1347,6 @@ def test_enum_bad_case_no_decode_schema() -> None:
         target_type_label="Flag",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     result = _parse_contract_output('{"$case": "Unknown"}', contract, effective_strict=False)
     assert not result.ok  # decode=None → failure before schema validation
@@ -1481,12 +1354,7 @@ def test_enum_bad_case_no_decode_schema() -> None:
 
 def test_find_enum_decode_at_path_through_array() -> None:
     """_find_enum_decode_at_path: navigate through ArrayDecode to find EnumDecode."""
-    from agm.agl.ir.contracts import (
-        ArrayDecode,
-        ContractRequest,
-        EnumDecode,
-        VariantDecode,
-    )
+    from agm.agl.ir.contracts import ArrayDecode, EnumDecode, JsonContractRequest, VariantDecode
     from agm.agl.ir.ids import NominalId
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
@@ -1508,7 +1376,7 @@ def test_find_enum_decode_at_path_through_array() -> None:
         ),
     )
     array_dec = ArrayDecode(elem=enum_dec)
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema="{}",
@@ -1516,7 +1384,6 @@ def test_find_enum_decode_at_path_through_array() -> None:
         target_type_label="array[Status]",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Navigate into element 0 of array.
     result = _find_enum_decode_at_path(contract.decode, [0])
@@ -1526,12 +1393,7 @@ def test_find_enum_decode_at_path_through_array() -> None:
 
 def test_find_enum_decode_at_path_through_dict() -> None:
     """_find_enum_decode_at_path: navigate through DictDecode to find EnumDecode."""
-    from agm.agl.ir.contracts import (
-        ContractRequest,
-        DictDecode,
-        EnumDecode,
-        VariantDecode,
-    )
+    from agm.agl.ir.contracts import DictDecode, EnumDecode, JsonContractRequest, VariantDecode
     from agm.agl.ir.ids import NominalId
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
@@ -1553,7 +1415,7 @@ def test_find_enum_decode_at_path_through_dict() -> None:
         ),
     )
     dict_dec = DictDecode(value=enum_dec)
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema="{}",
@@ -1561,7 +1423,6 @@ def test_find_enum_decode_at_path_through_dict() -> None:
         target_type_label="dict[Status]",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     result = _find_enum_decode_at_path(contract.decode, ["somekey"])
     assert isinstance(result, EnumDecode)
@@ -1570,9 +1431,9 @@ def test_find_enum_decode_at_path_through_dict() -> None:
 def test_find_enum_decode_at_path_through_record() -> None:
     """_find_enum_decode_at_path: navigate through RecordDecode fields to find EnumDecode."""
     from agm.agl.ir.contracts import (
-        ContractRequest,
         EnumDecode,
         FieldDecode,
+        JsonContractRequest,
         RecordDecode,
         ScalarDecode,
         ScalarKind,
@@ -1615,7 +1476,7 @@ def test_find_enum_decode_at_path_through_record() -> None:
         ),
         alias=None,
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema="{}",
@@ -1623,7 +1484,6 @@ def test_find_enum_decode_at_path_through_record() -> None:
         target_type_label="Wrapper",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Navigate into record field "status".
     result = _find_enum_decode_at_path(contract.decode, ["status"])
@@ -1640,11 +1500,7 @@ def test_find_enum_decode_at_path_through_record() -> None:
 
 def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
     """_find_enum_decode_at_path: enum at top level navigated deeper → None."""
-    from agm.agl.ir.contracts import (
-        ContractRequest,
-        EnumDecode,
-        VariantDecode,
-    )
+    from agm.agl.ir.contracts import EnumDecode, JsonContractRequest, VariantDecode
     from agm.agl.ir.ids import NominalId
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
@@ -1665,7 +1521,7 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
             ),
         ),
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema="{}",
@@ -1673,7 +1529,6 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
         target_type_label="Status",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Path goes inside the enum (invalid) → None.
     result = _find_enum_decode_at_path(contract.decode, ["something"])
@@ -1682,14 +1537,10 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
 
 def test_find_enum_decode_at_path_scalar_navigated_into() -> None:
     """_find_enum_decode_at_path: scalar navigated into → None (else branch)."""
-    from agm.agl.ir.contracts import (
-        ContractRequest,
-        ScalarDecode,
-        ScalarKind,
-    )
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema="{}",
@@ -1697,7 +1548,6 @@ def test_find_enum_decode_at_path_scalar_navigated_into() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Scalar can't be navigated into.
     result = _find_enum_decode_at_path(contract.decode, ["key"])
@@ -1707,8 +1557,8 @@ def test_find_enum_decode_at_path_scalar_navigated_into() -> None:
 def test_find_enum_decode_at_path_end_at_scalar() -> None:
     """_find_enum_decode_at_path: path ends at scalar → None (not EnumDecode)."""
     from agm.agl.ir.contracts import (
-        ContractRequest,
         FieldDecode,
+        JsonContractRequest,
         RecordDecode,
         ScalarDecode,
         ScalarKind,
@@ -1732,7 +1582,7 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
         ),
         alias=None,
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema="{}",
@@ -1740,7 +1590,6 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
         target_type_label="Point",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Navigate to "x" which is a ScalarDecode, not EnumDecode → None.
     result = _find_enum_decode_at_path(contract.decode, ["x"])
@@ -1750,9 +1599,9 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
 def test_enum_known_case_with_additional_props_error() -> None:
     """_classify_enum_failure: known case but extra field → unknown_field."""
     from agm.agl.ir.contracts import (
-        ContractRequest,
         EnumDecode,
         FieldDecode,
+        JsonContractRequest,
         ScalarDecode,
         ScalarKind,
         VariantDecode,
@@ -1810,7 +1659,7 @@ def test_enum_known_case_with_additional_props_error() -> None:
             ]
         }
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -1818,7 +1667,6 @@ def test_enum_known_case_with_additional_props_error() -> None:
         target_type_label="Status",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     from agm.agl.runtime.codec import _parse_contract_output
 
@@ -1828,49 +1676,9 @@ def test_enum_known_case_with_additional_props_error() -> None:
     assert any(e.category == "unknown_field" for e in result.errors)
 
 
-def test_validate_contract_request_json_missing_decode() -> None:
-    """validate.py: json codec with json_schema set but decode=None → InvalidIrError."""
-
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrConstUnit
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    bad_req = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=_json.dumps({"type": "integer"}),  # schema is present!
-        decode=None,  # but decode is missing!
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(
-                module_id=ENTRY_ID,
-                initializers=(IrConstUnit(location=dummy_loc),),
-            )
-        },
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: bad_req},
-    )
-    with pytest.raises(InvalidIrError, match="decode"):
-        validate_ir(prog, deep=True)
-
-
 def test_validate_contract_request_json_decode_check_nominals() -> None:
     """validate.py: json codec with decode→_check_decode_nominals is called (808→exit path)."""
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.ir.ids import ContractId, Location, SourceId
     from agm.agl.ir.nodes import IrConstUnit
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
@@ -1880,7 +1688,7 @@ def test_validate_contract_request_json_decode_check_nominals() -> None:
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
-    req = ContractRequest(
+    req = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=_json.dumps({"type": "integer"}),
@@ -1888,7 +1696,6 @@ def test_validate_contract_request_json_decode_check_nominals() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -1910,9 +1717,9 @@ def test_validate_contract_request_json_decode_check_nominals() -> None:
 def test_validate_contract_request_recursive_decode_defs() -> None:
     """validate.py accepts a ContractRequest whose decode is a recursive RefDecode + defs table."""
     from agm.agl.ir.contracts import (
-        ContractRequest,
         EnumDecode,
         FieldDecode,
+        JsonContractRequest,
         RefDecode,
         ScalarDecode,
         ScalarKind,
@@ -1966,7 +1773,7 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
         host_agent=False,
     )
     cid = ContractId(0)
-    req = ContractRequest(
+    req = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=_json.dumps({"$ref": "#/$defs/Tree"}),
@@ -1974,7 +1781,6 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
         target_type_label="Tree",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
         defs=(("Tree", tree_body),),
     )
     prog = ExecutableProgram(
@@ -2018,7 +1824,7 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
 
 def test_validate_contract_request_recursive_decode_unknown_defs_key() -> None:
     """An unresolvable RefDecode key in a ContractRequest's decode → InvalidIrError."""
-    from agm.agl.ir.contracts import ContractRequest, RefDecode
+    from agm.agl.ir.contracts import JsonContractRequest, RefDecode
     from agm.agl.ir.ids import ContractId, Location, SourceId
     from agm.agl.ir.nodes import IrConstUnit
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
@@ -2028,7 +1834,7 @@ def test_validate_contract_request_recursive_decode_unknown_defs_key() -> None:
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
-    req = ContractRequest(
+    req = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=_json.dumps({"$ref": "#/$defs/Tree"}),
@@ -2036,7 +1842,6 @@ def test_validate_contract_request_recursive_decode_unknown_defs_key() -> None:
         target_type_label="Tree",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
         defs=(),  # missing the "Tree" entry
     )
     prog = ExecutableProgram(
@@ -2101,10 +1906,10 @@ n
 
 def test_parse_lenient_json_parse_failure_after_repair() -> None:
     """_parse_contract_output lenient: json_text found but json.loads fails → failure."""
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.runtime.codec import _parse_contract_output
 
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=_json.dumps({"type": "integer"}),
@@ -2112,7 +1917,6 @@ def test_parse_lenient_json_parse_failure_after_repair() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Strict mode parse failure.
     result = _parse_contract_output("this is not json at all!!", contract, effective_strict=True)
@@ -2122,11 +1926,11 @@ def test_parse_lenient_json_parse_failure_after_repair() -> None:
 
 def test_parse_value_conversion_failure() -> None:
     """_parse_contract_output: schema valid but decode raises ValueError → failure."""
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.runtime.codec import _parse_contract_output
 
     schema = _json.dumps({"type": "string"})
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -2134,7 +1938,6 @@ def test_parse_value_conversion_failure() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     result = _parse_contract_output('"not-a-number"', contract, effective_strict=False)
     # Either schema validation fails (wrong_type) or decode fails (value conversion)
@@ -2143,7 +1946,7 @@ def test_parse_value_conversion_failure() -> None:
 
 def test_validate_ir_ask_deep_valid_contract() -> None:
     """validate_ir: IrAsk with valid contract passes deep validation (656->exit path)."""
-    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.contracts import TextContractRequest
     from agm.agl.ir.ids import ContractId, Location, SourceId
     from agm.agl.ir.nodes import IrAsk, IrConstText
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
@@ -2153,15 +1956,12 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
-    req = ContractRequest(
+    req = TextContractRequest(
         codec_name="text",
         strict_json=None,
-        json_schema=None,
-        decode=None,
         target_type_label="text",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     node = IrAsk(
         location=dummy_loc,
@@ -2184,7 +1984,7 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
 
 def test_validate_ir_ask_request_deep_valid_contract() -> None:
     """validate_ir: a well-formed IrAskRequest passes deep validation."""
-    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.contracts import TextContractRequest
     from agm.agl.ir.ids import ContractId, Location, SourceId
     from agm.agl.ir.nodes import IrAskRequest, IrConstText
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
@@ -2208,15 +2008,12 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
         nominals={},
         sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
         contracts={
-            cid: ContractRequest(
+            cid: TextContractRequest(
                 codec_name="text",
                 strict_json=None,
-                json_schema=None,
-                decode=None,
                 target_type_label="text",
                 structured_exec=False,
                 format_instructions="",
-                is_unit=False,
             )
         },
     )
@@ -2291,46 +2088,6 @@ def test_validate_ir_ask_shallow_does_not_check_contracts(request_only: bool) ->
     )
     # deep=False → skips contract_id check (covers 656->exit branch).
     validate_ir(prog, deep=False)
-
-
-def test_validate_contract_request_json_is_unit_decode_none() -> None:
-    """validate.py: json codec with is_unit=True and decode=None → no error (808->exit path)."""
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrConstUnit
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    # json codec, is_unit=True, decode=None → 800 skipped, 804 skipped, 808 decode is None
-    req = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="unit",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=True,  # is_unit bypasses json_schema/decode required checks
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(
-                module_id=ENTRY_ID,
-                initializers=(IrConstUnit(location=dummy_loc),),
-            )
-        },
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    # Should pass validation (decode is None, is_unit=True → 808->exit path).
-    validate_ir(prog, deep=True)
 
 
 def _make_span() -> "SourceSpan":
@@ -2448,9 +2205,9 @@ def test_lower_extract_max_attempts_field_access_non_retry() -> None:
 def test_enum_required_field_loop_partial_coverage() -> None:
     """_classify_enum_failure: known case with missing field → missing_field (loop covers all)."""
     from agm.agl.ir.contracts import (
-        ContractRequest,
         EnumDecode,
         FieldDecode,
+        JsonContractRequest,
         ScalarDecode,
         ScalarKind,
         VariantDecode,
@@ -2498,7 +2255,7 @@ def test_enum_required_field_loop_partial_coverage() -> None:
             ]
         }
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -2506,7 +2263,6 @@ def test_enum_required_field_loop_partial_coverage() -> None:
         target_type_label="Pair",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     from agm.agl.runtime.codec import _parse_contract_output
 
@@ -2521,10 +2277,10 @@ def test_parse_lenient_extracted_json_fails_decode() -> None:
     """_parse_contract_output lenient: extracted JSON text fails json.loads."""
     from unittest.mock import patch
 
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+    from agm.agl.ir.contracts import JsonContractRequest, ScalarDecode, ScalarKind
     from agm.agl.runtime.codec import _parse_contract_output
 
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=_json.dumps({"type": "integer"}),
@@ -2532,7 +2288,6 @@ def test_parse_lenient_extracted_json_fails_decode() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     # Patch _extract_json_text in codec to return a non-ambiguous broken string.
     with patch("agm.agl.runtime.codec._extract_json_text", return_value="{broken: !}"):
@@ -2589,9 +2344,9 @@ def test_make_validation_error_required_all_present() -> None:
 def test_classify_enum_sub_error_type_only_fallback() -> None:
     """_classify_enum_failure: known case, type-mismatch payload → defensive bad_case fallback."""
     from agm.agl.ir.contracts import (
-        ContractRequest,
         EnumDecode,
         FieldDecode,
+        JsonContractRequest,
         ScalarDecode,
         ScalarKind,
         VariantDecode,
@@ -2644,7 +2399,7 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
             ]
         }
     )
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema=schema,
@@ -2652,7 +2407,6 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
         target_type_label="Status",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     from agm.agl.runtime.codec import _parse_contract_output
 
@@ -2951,58 +2705,3 @@ status
         f"Message mismatch:\n  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
     )
     assert ir_first.get("field") == first_err.get("field")
-
-
-@pytest.mark.parametrize("request_only", (False, True))
-def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
-    """Malformed IR cannot expose an AgentRequest whose agent is not an Agent value."""
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrConstInt, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.modules.ids import ENTRY_ID
-
-    source_id = SourceId(0)
-    location = Location(
-        source_id=source_id,
-        start_offset=0,
-        end_offset=1,
-        start_line=1,
-        start_col=0,
-    )
-    contract_id = ContractId(0)
-    node: IrAsk | IrAskRequest
-    node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
-    node = node_type(
-        location=location,
-        agent=IrConstInt(location=location, value=1),
-        prompt=IrConstText(location=location, value="prompt"),
-        contract_id=contract_id,
-        max_attempts=1,
-    )
-    contracts: dict[ContractId, ContractRequest] = {
-        contract_id: ContractRequest(
-            codec_name="text",
-            strict_json=None,
-            json_schema=None,
-            decode=None,
-            target_type_label="text",
-            structured_exec=False,
-            format_instructions="",
-            is_unit=False,
-        )
-    }
-    program = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,)),
-        },
-        symbols={},
-        nominals={},
-        sources={source_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts=contracts,
-    )
-
-    with pytest.raises(TypeError, match="Agent member record"):
-        IrInterpreter(program).run()

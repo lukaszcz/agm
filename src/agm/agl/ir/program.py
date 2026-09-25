@@ -24,7 +24,12 @@ from types import MappingProxyType
 from agm.agl.constraints import ConstraintBounds
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.builtin_vars import BuiltinVarKey
-from agm.agl.ir.contracts import ContractRequest, ExceptionFieldEncode, ParamDecoder
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    ExceptionFieldEncode,
+    ParamDecoder,
+    TargetContractRequest,
+)
 from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.ir.static_keys import StaticBindingKey
@@ -287,14 +292,23 @@ class ValueDescriptors:
     ``functions[closure.function_id].param_labels``/``.result_label`` for a
     closure. Built directly from ``ExecutableProgram.nominals``/``.functions``
     (see ``ValueDescriptors.from_program``).
+
+    ``exception_field_encodes`` mirrors ``ExecutableProgram.exception_field_encodes``:
+    ``as json`` selects an exception value's own field-encode plans from it
+    by the value's runtime nominal (``runtime.serialize.encode_value``).
     """
 
     nominals: Mapping[NominalId, NominalDescriptor]
     functions: Mapping[FunctionId, FunctionDescriptor]
+    exception_field_encodes: Mapping[NominalId, tuple[ExceptionFieldEncode, ...]]
 
     @classmethod
     def from_program(cls, program: "ExecutableProgram") -> "ValueDescriptors":
-        return cls(nominals=program.nominals, functions=program.functions)
+        return cls(
+            nominals=program.nominals,
+            functions=program.functions,
+            exception_field_encodes=program.exception_field_encodes,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +430,9 @@ class ExecutableProgram:
         decoders, compiled alongside program parameter signatures.
       ``param_spans`` — static ``@param`` identities -> declaration spans,
         retained to anchor host-value decode diagnostics in their source file.
+      ``contracts`` — ask/exec output contracts, keyed by ``ContractId``.
+      ``target_contracts`` — type-directed extern target contracts, which
+        ``IrContract`` operands name; they share the ``ContractId`` space.
       ``builtin_nominals`` — bare built-in type name -> the ``NominalId`` a
         host mints for it (see ``agm.agl.ir.builtin_nominals``), built during
         lowering from the program's ``builtin`` declarations. Defaults to
@@ -458,6 +475,7 @@ class ExecutableProgram:
     param_decoders: dict[StaticBindingKey, ParamDecoder] = field(default_factory=dict)
     param_spans: Mapping[StaticBindingKey, object] = field(default_factory=dict)
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
+    target_contracts: dict["ContractId", TargetContractRequest] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     builtin_var_declarations: frozenset[BuiltinVarKey] = frozenset()

@@ -19,7 +19,7 @@ The decode plan (a :class:`~agm.agl.ir.contracts.DecodeSchema` root plus its
 ``$defs`` table) is used by the IR evaluator to reconstruct typed ``Value``
 objects from validated JSON without holding checker ``Type`` references.
 
-:func:`derive_schema_decode_and_tree` also describes a type-directed extern's
+:func:`derive_schema_and_tree` describes a type-directed extern's
 target as a typeless :class:`~agm.agl.ir.contracts.TypeTree` from the same
 recursion plan, keyed and ordered like the decode plan's ``$defs``.
 
@@ -69,7 +69,7 @@ import re
 from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import assert_never
+from typing import assert_never, cast
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
@@ -84,6 +84,7 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     EnumEncode,
     ExceptionEncode,
+    ExceptionFieldEncode,
     FieldDecode,
     FieldEncode,
     ParamDecoder,
@@ -106,7 +107,7 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.external_names import NO_EXTERNAL_NAME
-from agm.agl.semantics.type_table import TypeTable
+from agm.agl.semantics.type_table import TypeTable, is_json_convertible
 from agm.agl.semantics.types import (
     ArrayType,
     BoolType,
@@ -129,8 +130,10 @@ from agm.agl.semantics.types import (
 from agm.util.graph import sccs
 
 # A concrete nominal instantiation — a graph node in the instantiation graph
-# below. Record/enum equality includes type_args; exceptions are non-generic.
-Instantiation = RecordType | EnumType | ExceptionType
+# below. Record/enum equality includes type_args. An exception is never a node:
+# it encodes by its runtime nominal (``ExceptionEncode``), so a plan never
+# descends into its fields.
+Instantiation = RecordType | EnumType
 
 
 def _member_tag(member: RecordType, name: str, type_table: TypeTable) -> str:
@@ -159,11 +162,11 @@ def _emit_field_decodes(
 
 
 def _emit_field_encodes(
-    handle: RecordType | ExceptionType,
+    handle: RecordType,
     type_table: TypeTable,
     emit_field: "Callable[[Type], EncodeSchema]",
 ) -> tuple[FieldEncode, ...]:
-    """Build one record/exception's field encoders via *emit_field*, JSON-keyed."""
+    """Build one record/member's field encoders via *emit_field*, JSON-keyed."""
     return tuple(
         FieldEncode(name, json_name, emit_field(ftype))
         for name, json_name, ftype in type_table.json_fields(handle)
@@ -222,18 +225,15 @@ def derive_schema_and_decode(
     return _emit_schema_with_plan(typ, type_table, plan), _build_decode_plan(typ, type_table, plan)
 
 
-def derive_schema_decode_and_tree(
-    typ: Type, type_table: TypeTable
-) -> tuple[dict[str, object], DecodePlan, TypeTree]:
-    """Derive *typ*'s JSON Schema, decode plan, and ``TypeTree`` from one shared recursion plan.
+def derive_schema_and_tree(typ: Type, type_table: TypeTable) -> tuple[dict[str, object], TypeTree]:
+    """Derive *typ*'s JSON Schema and ``TypeTree`` from one shared recursion plan.
 
     See :func:`derive_schema_and_decode`; the tree's ``defs`` are keyed and
-    ordered like the decode plan's.
+    ordered like the schema's ``$defs``.
     """
     plan = _wire_plan(typ, type_table)
     return (
         _emit_schema_with_plan(typ, type_table, plan),
-        _build_decode_plan(typ, type_table, plan),
         _build_type_tree(typ, type_table, plan),
     )
 
@@ -446,7 +446,7 @@ def _build_instantiation_plan(
 ]:
     """Breadth-first expand the concrete record/enum instantiation graph reachable from *roots*.
 
-    Nodes are concrete ``RecordType``/``EnumType``/``ExceptionType`` handles (memoized on handle
+    Nodes are concrete ``RecordType``/``EnumType`` handles (memoized on handle
     equality); an edge from a node to another is a nominal handle occurring
     anywhere in the node's OWN substituted fields/variants (including nested
     under ``array``/``dict``, or in another reference's own type arguments —
@@ -469,7 +469,7 @@ def _build_instantiation_plan(
         ref
         for root in roots
         for ref in type_table.schema_relevant_nominal_references(root)
-        if isinstance(ref, (RecordType, EnumType, ExceptionType))
+        if isinstance(ref, (RecordType, EnumType))
     ]
     for ref in root_refs:
         occurrences[ref] = occurrences.get(ref, 0) + 1
@@ -503,19 +503,17 @@ def _direct_references(handle: Instantiation, type_table: TypeTable) -> tuple[In
     """
     if isinstance(handle, RecordType):
         field_types: list[Type] = list(type_table.record_fields(handle).values())
-    elif isinstance(handle, EnumType):
+    else:
         field_types = [
             ftype
             for member in type_table.enum_members(handle)
             for ftype in type_table.record_fields(member).values()
         ]
-    else:
-        field_types = list(type_table.exception_fields(handle).values())
     return tuple(
         ref
         for ftype in field_types
         for ref in type_table.schema_relevant_nominal_references(ftype)
-        if isinstance(ref, (RecordType, EnumType, ExceptionType))
+        if isinstance(ref, (RecordType, EnumType))
     )
 
 
@@ -528,12 +526,11 @@ def _instantiation_sort_key(handle: Instantiation) -> tuple[object, ...]:
     to a frozenset's hash-randomized iteration order — nondeterministic
     across process runs, unlike every other component here.
     """
-    type_args = handle.type_args if isinstance(handle, (RecordType, EnumType)) else ()
     return (
         handle.module_id.segments,
         handle.scope_path,
         handle.name,
-        tuple(repr(arg) for arg in type_args),
+        tuple(repr(arg) for arg in handle.type_args),
         handle.decl_id,
     )
 
@@ -546,13 +543,9 @@ _UNSAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 
 def _bare_display(handle: Instantiation, type_table: TypeTable | None = None) -> str:
     """*handle*'s display form WITHOUT its module qualifier (bare name[, args])."""
-    type_args: tuple[Type, ...] = ()
-    if isinstance(handle, (RecordType, EnumType)):
-        type_args = (
-            type_table.schema_relevant_type_args(handle)
-            if type_table is not None
-            else handle.type_args
-        )
+    type_args = (
+        type_table.schema_relevant_type_args(handle) if type_table is not None else handle.type_args
+    )
     if type_args:
         args = ", ".join(repr(arg) for arg in type_args)
         return f"{'::'.join((*handle.scope_path, handle.name))}[{args}]"
@@ -837,6 +830,29 @@ def build_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
     return _build_template_encode_plan(typ, type_table)
 
 
+def build_exception_field_encodes(
+    handle: ExceptionType, type_table: TypeTable
+) -> tuple[ExceptionFieldEncode, ...]:
+    """Compile one exception's own field encodes, the entries ``ExceptionEncode`` selects.
+
+    Each field's JSON name is its effective external name (``@json-name`` ??
+    ``@name`` ?? declared), covering every field so no two can collide. A
+    field with no JSON form carries no plan: a cast of it fails, and an
+    uncaught-exception report falls back to the value-directed walk (see
+    ``runtime.serialize``).
+    """
+    return tuple(
+        ExceptionFieldEncode(
+            field_name,
+            json_name,
+            build_encode_plan(field_type, type_table)
+            if is_json_convertible(field_type, type_table)
+            else None,
+        )
+        for field_name, json_name, field_type in type_table.json_fields(handle)
+    )
+
+
 def _build_finite_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
     """Compile a plan over the concrete instantiations a finite source reaches.
 
@@ -897,24 +913,27 @@ def _build_template_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
             if index is None:
                 raise AssertionError(f"unbound encode type parameter {current.name!r}")
             return TypeParameterEncode(index)
-        if isinstance(current, (RecordType, EnumType, ExceptionType)):
+        if isinstance(current, ExceptionType):
+            return ExceptionEncode(NominalId(current.decl_id))
+        if isinstance(current, (RecordType, EnumType)):
             nominal = NominalId(current.decl_id)
             ensure_definition(current)
-            args = current.type_args if isinstance(current, (RecordType, EnumType)) else ()
-            return RefEncode(_template_key(nominal), tuple(emit(arg, parameters) for arg in args))
+            return RefEncode(
+                _template_key(nominal), tuple(emit(arg, parameters) for arg in current.type_args)
+            )
         raise AssertionError(f"build a dynamic JSON encode plan: unencodable type {current!r}")
 
-    def ensure_definition(handle: RecordType | EnumType | ExceptionType) -> None:
+    def ensure_definition(handle: RecordType | EnumType) -> None:
         nominal = NominalId(handle.decl_id)
         if nominal in definitions:
             return
         typedef = type_table.get_by_id(handle.decl_id)
         if typedef is None:
             raise AssertionError(f"dynamic encode plan references unknown nominal {nominal!r}")
-        if typedef.kind == "exception":
-            template: RecordType | EnumType | ExceptionType = typedef.handle()
-        else:
-            template = typedef.handle(tuple(TypeVarType(name) for name in typedef.type_params))
+        template = cast(
+            "RecordType | EnumType",
+            typedef.handle(tuple(TypeVarType(name) for name in typedef.type_params)),
+        )
         parameters = {name: index for index, name in enumerate(typedef.type_params)}
         key = _template_key(nominal)
         # Register first so a recursive template can refer to itself while its
@@ -922,10 +941,6 @@ def _build_template_encode_plan(typ: Type, type_table: TypeTable) -> EncodePlan:
         definitions[nominal] = EncodeDefinition(key, len(parameters), ScalarEncode())
         if isinstance(template, RecordType):
             body: EncodeSchema = RecordEncode(
-                nominal, _emit_field_encodes(template, type_table, lambda ft: emit(ft, parameters))
-            )
-        elif isinstance(template, ExceptionType):
-            body = ExceptionEncode(
                 nominal, _emit_field_encodes(template, type_table, lambda ft: emit(ft, parameters))
             )
         else:
@@ -981,12 +996,7 @@ def _emit_encode_body(
             ),
         )
     if isinstance(typ, ExceptionType):
-        return ExceptionEncode(
-            nominal=NominalId(typ.decl_id),
-            fields=_emit_field_encodes(
-                typ, type_table, lambda ftype: _emit_encode(ftype, type_table, plan, memo)
-            ),
-        )
+        return ExceptionEncode(NominalId(typ.decl_id))
     if isinstance(typ, EnumType):
         return EnumEncode(
             nominal=NominalId(typ.decl_id),

@@ -22,7 +22,7 @@ from agm.agl.value_syntax.nodes import TextNode
 from agm.agl.value_syntax.reader import read_value
 from agm.util.interp import INTERP_OPEN, INTERP_TRIGGER
 
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 _TEXT_CORPUS = (
     '"',

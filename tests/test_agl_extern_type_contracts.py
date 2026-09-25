@@ -18,7 +18,7 @@ from types import ModuleType
 
 import pytest
 
-from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.contracts import TargetContractRequest
 from agm.agl.ir.ids import ContractId
 from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.boundary import BoundaryViolation, encode_boundary_value
@@ -235,7 +235,7 @@ class TestDeliveredContents:
         program = lower_extern_program(
             _DECLS + _TREE + 'let tree: Tree = capture("q")\n0', _COMPANION, tmp_path
         )
-        (request,) = program.contracts.values()
+        (request,) = program.target_contracts.values()
         classes = defaultdict(lambda: object)
         contract = build_type_contract(
             dataclasses.replace(request, target_type_label="Forest"), classes
@@ -369,7 +369,10 @@ class TestRepl:
 class TestContractValueIsNotData:
     def test_render_rejects(self) -> None:
         with pytest.raises(AglNonDataValue):
-            render_value(ContractValue(ContractId(0)), ValueDescriptors(nominals={}, functions={}))
+            render_value(
+                ContractValue(ContractId(0)),
+                ValueDescriptors(nominals={}, functions={}, exception_field_encodes={}),
+            )
 
     def test_serialize_rejects(self) -> None:
         with pytest.raises(AglNonDataValue):
@@ -383,7 +386,8 @@ class TestContractValueIsNotData:
     def test_crosses_only_into_an_extern_call(self) -> None:
         with pytest.raises(BoundaryViolation):
             encode_boundary_value(
-                ContractValue(ContractId(0)), ValueDescriptors(nominals={}, functions={})
+                ContractValue(ContractId(0)),
+                ValueDescriptors(nominals={}, functions={}, exception_field_encodes={}),
             )
 
     def test_companion_cannot_return_a_contract(self, tmp_path: Path) -> None:
@@ -398,13 +402,14 @@ class TestContractValueIsNotData:
 def test_nested_ordinary_extern_call_resolves_no_outer_contract(tmp_path: Path) -> None:
     """A contract reaching a nested non-type-directed call is a boundary violation."""
     program = lower_extern_program(_DECLS + 'let n: int = capture("q")\n0', _COMPANION, tmp_path)
-    (contract_id,) = program.contracts
+    (contract_id,) = program.target_contracts
     registry = ExternRegistry()
-    descriptors = ValueDescriptors(nominals={}, functions={})
+    descriptors = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
     nested: list[object] = []
 
     def invoke(
-        fn: Callable[..., object], contracts: Mapping[ContractId, ContractRequest] | None = None
+        fn: Callable[..., object],
+        contracts: Mapping[ContractId, TargetContractRequest] | None = None,
     ) -> Value:
         return registry.invoke(
             "call",
@@ -421,6 +426,6 @@ def test_nested_ordinary_extern_call_resolves_no_outer_contract(tmp_path: Path) 
         except AglRaise as exc:
             nested.append(exc)
 
-    assert isinstance(invoke(outer, program.contracts), UnitValue)
+    assert isinstance(invoke(outer, program.target_contracts), UnitValue)
     (outcome,) = nested
     assert isinstance(outcome, AglRaise)

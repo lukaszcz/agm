@@ -18,7 +18,7 @@ One Python class is synthesized per nominal identity, once, carrying its own des
 
 ## Target Contracts
 
-A type-directed extern's leading `IrContract` operands ([lowering.md](lowering.md)) evaluate to opaque `ContractValue`s (`semantics/values.py`): non-data, never rendered, serialized, or crossed except into their extern call. The evaluator hands the program's contract table to `ExternRegistry.invoke`, which publishes a contract encoder for the call's extent (a contextvar in `runtime/boundary.py`, like the closure encoder). It encodes each value as an immutable `agl.TypeContract` (`runtime/type_contracts.py`) built from the request's `TypeTree` and the registry's synthesized nominal classes, cached per request in the registry; a recursive target is a cyclic graph, one object per `$defs` key. The companion's return is trusted like any extern's.
+A type-directed extern's leading `IrContract` operands ([lowering.md](lowering.md)) evaluate to opaque `ContractValue`s (`semantics/values.py`): non-data, never rendered, serialized, or crossed except into their extern call. The evaluator hands the program's `target_contracts` table to `ExternRegistry.invoke`, which publishes a contract encoder for the call's extent (a contextvar in `runtime/boundary.py`, like the closure encoder). It encodes each value as an immutable `agl.TypeContract` (`runtime/type_contracts.py`) built from the request's `TypeTree` and the registry's synthesized nominal classes, cached per request in the registry; a recursive target is a cyclic graph, one object per `$defs` key. The companion's return is trusted like any extern's.
 
 ## Callables and Exceptions
 

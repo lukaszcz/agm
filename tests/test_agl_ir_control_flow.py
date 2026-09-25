@@ -10,7 +10,6 @@ Covers IrIf, IrRaise, IrTry with all cases:
 - first-match ordering in try handlers
 - try body does not raise → body value
 - no handler matches → re-raise
-- defensive evaluator tests (hand-built IR)
 - negative validate tests
 - golden lowering tests
 
@@ -786,42 +785,6 @@ def test_lower_try_catch_of_exception_declared_without_extends_keeps_its_own_nom
     handler = ir_try.handlers[0]
     assert isinstance(handler, IrCatchHandler)
     assert handler.nominal == nominal_id_for(prog, "Plain")
-
-
-# ---------------------------------------------------------------------------
-# Defensive evaluator tests (hand-built IR)
-# ---------------------------------------------------------------------------
-
-
-def test_ir_if_non_bool_cond_raises_invalid() -> None:
-    """Defensive: IrIf with non-bool cond raises InvalidIrError."""
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-
-    loc = _DUMMY_LOC
-    ir_if = IrIf(
-        location=loc,
-        branches=(IrIfBranch(cond=IrConstInt(location=loc, value=1), body=IrConstUnit(loc)),),
-        has_else=False,
-    )
-    prog = _make_program((ir_if,))
-    interp = IrInterpreter(prog)
-    with pytest.raises(InvalidIrError, match="BoolValue"):
-        interp.run()
-
-
-def test_ir_raise_non_exc_raises_invalid() -> None:
-    """Defensive: IrRaise with non-ExceptionValue raises InvalidIrError."""
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-
-    loc = _DUMMY_LOC
-    ir_raise = IrRaise(
-        location=loc,
-        exc=IrConstInt(location=loc, value=42),
-    )
-    prog = _make_program((ir_raise,))
-    interp = IrInterpreter(prog)
-    with pytest.raises(InvalidIrError, match="ExceptionValue"):
-        interp.run()
 
 
 def test_ir_try_handler_binding_stored_in_frame() -> None:

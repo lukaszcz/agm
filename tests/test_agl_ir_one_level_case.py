@@ -336,18 +336,7 @@ def test_direct_literal_dispatch_uses_numeric_value_equality_and_default() -> No
     }
 
 
-def test_direct_malformed_no_match_raises_invalid_ir_not_match_error() -> None:
-    case = IrCase(
-        _LOC,
-        IrConstText(_LOC, "no"),
-        (IrCaseArm(IrLiteralCaseKey(IrLiteralKind.TEXT, "yes"), (), IrConstInt(_LOC, 1)),),
-        None,
-    )
-    with pytest.raises(InvalidIrError):
-        IrInterpreter(_program(case)).run()
-
-
-def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> None:
+def test_direct_enum_dispatch_copies_fields() -> None:
     subject = IrMakeRecord(
         _LOC,
         _WITH,
@@ -374,22 +363,6 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
         "result": IntValue(42)
     }
 
-    missing_field_subject = IrMakeRecord(_LOC, _WITH, ())
-    malformed = IrCase(
-        _LOC,
-        missing_field_subject,
-        (
-            IrCaseArm(
-                IrNominalCaseKey(_WITH),
-                (("value", _PAYLOAD),),
-                IrConstInt(_LOC, 1),
-            ),
-        ),
-        None,
-    )
-    with pytest.raises(InvalidIrError):
-        IrInterpreter(_program(malformed)).run()
-
 
 def test_enum_dispatch_defaults_for_an_unmatched_member_record() -> None:
     """Case dispatch compares direct member identities without enum fallback."""
@@ -401,23 +374,6 @@ def test_enum_dispatch_defaults_for_an_unmatched_member_record() -> None:
     )
 
     assert IrInterpreter(_program(malformed, nominals=_color_nominals())).run() == {}
-
-
-def test_direct_malformed_literal_payload_binding_rejects_non_enum_subject() -> None:
-    malformed = IrCase(
-        _LOC,
-        IrConstText(_LOC, "x"),
-        (
-            IrCaseArm(
-                IrLiteralCaseKey(IrLiteralKind.TEXT, "x"),
-                (("value", _PAYLOAD),),
-                IrConstInt(_LOC, 1),
-            ),
-        ),
-        None,
-    )
-    with pytest.raises(InvalidIrError):
-        IrInterpreter(_program(malformed)).run()
 
 
 def test_direct_literal_key_rejects_invalid_scalar_kind_pair() -> None:

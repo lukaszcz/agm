@@ -14,7 +14,6 @@ Coverage targets:
   ``_apply_coercion`` level, container — the compiler only ever emits it for a
   scalar source, but the interpreter arm itself has no shape restriction).
 - Decimal context: IntToDecimal of a large int is exact (no float).
-- Defensive InvalidIrError on a malformed coercion.
 - Import-scan: IrInterpreter must NOT import syntax/scope/typecheck modules.
 """
 
@@ -42,7 +41,6 @@ from agm.agl.ir import (
     IrBlock,
     IrBuiltinLoad,
     IrBuiltinStore,
-    IrCapture,
     IrCase,
     IrCaseArm,
     IrCoerce,
@@ -55,7 +53,6 @@ from agm.agl.ir import (
     IrDirectCall,
     IrExpr,
     IrField,
-    IrFieldMode,
     IrFieldSet,
     IrFunctionBody,
     IrFunctionParam,
@@ -476,29 +473,6 @@ class TestVarCell:
         )
         assert result == {"x": IntValue(3)}
 
-    def test_assign_to_missing_symbol_raises(self) -> None:
-        """IrAssign to an unbound symbol raises InvalidIrError."""
-        sym = SymbolId(99)
-        prog = _make_program(
-            (IrAssign(_LOC, sym, IrConstInt(_LOC, 1)),),
-            symbols={},
-        )
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(prog).run()
-
-    def test_assign_to_let_symbol_raises(self) -> None:
-        """IrAssign to a non-mutable let symbol raises InvalidIrError."""
-        sym, desc = _let_sym(0, "x")
-        prog = _make_program(
-            (
-                IrBind(_LOC, sym, IrConstInt(_LOC, 5)),
-                IrAssign(_LOC, sym, IrConstInt(_LOC, 10)),
-            ),
-            {sym: desc},
-        )
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(prog).run()
-
 
 # ---------------------------------------------------------------------------
 # Sequence and Block (value-of-last)
@@ -594,22 +568,6 @@ class TestCoerceIntToDecimal:
         # Exact — repr round trips without loss.
         assert result["big"] == DecimalValue(decimal.Decimal(str(big)))
 
-    def test_int_to_decimal_wrong_type_raises(self) -> None:
-        """IntToDecimal on a non-int value raises InvalidIrError."""
-        sym, desc = _let_sym(0, "x")
-        prog = _make_program(
-            (
-                IrBind(
-                    _LOC,
-                    sym,
-                    IrCoerce(_LOC, IrConstBool(_LOC, True), IntToDecimal()),
-                ),
-            ),
-            {sym: desc},
-        )
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(prog).run()
-
     def test_int_to_decimal_overflow_raises_arithmetic_error(self) -> None:
         """IntToDecimal outside the pinned context's range raises ArithmeticError.
 
@@ -664,25 +622,6 @@ class TestCoerceToJson:
             {sym: desc},
         )
         assert result == {"j": JsonValue(True)}
-
-    def test_to_json_array_rejects_malformed_scalar_coercion(self) -> None:
-        """ToJson is a scalar lowering contract, never a container walk."""
-        sym, desc = _let_sym(0, "j")
-        with pytest.raises(AssertionError, match="scalar encode"):
-            _run(
-                (
-                    IrBind(
-                        _LOC,
-                        sym,
-                        IrCoerce(
-                            _LOC,
-                            IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2))),
-                            ToJson(),
-                        ),
-                    ),
-                ),
-                {sym: desc},
-            )
 
     def test_to_json_already_json_is_idempotent(self) -> None:
         """ToJson on a JsonValue returns as-is (idempotent defensively)."""
@@ -783,11 +722,12 @@ class TestRunReturnValues:
 
 
 # ---------------------------------------------------------------------------
-# Defensive InvalidIrError on additional malformed inputs
+# Additional evaluator behavior: dict keys, in-place index set, unary NEG,
+# and nominal cast/is base-chain conformance
 # ---------------------------------------------------------------------------
 
 
-class TestDefensiveErrors:
+class TestAdditionalEvaluatorBehavior:
     def test_make_dict_non_text_key_builds_a_token_keyed_dict(self) -> None:
         """IrMakeDict key that evaluates to a non-TextValue builds a token-keyed dict.
 
@@ -813,36 +753,6 @@ class TestDefensiveErrors:
         assert isinstance(d, DictValue)
         assert d.lookup(IntValue(99)) == IntValue(1)
 
-    def test_make_json_object_non_text_key_raises(self) -> None:
-        """IrMakeJsonObject key that evaluates to a non-TextValue raises InvalidIrError."""
-        sym, desc = _let_sym(0, "d")
-        prog = _make_program(
-            (
-                IrBind(
-                    _LOC,
-                    sym,
-                    IrMakeJsonObject(
-                        _LOC,
-                        ((IrConstInt(_LOC, 99), IrConstInt(_LOC, 1)),),
-                    ),
-                ),
-            ),
-            {sym: desc},
-        )
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(prog).run()
-
-    def test_load_unbound_symbol_raises(self) -> None:
-        """IrLoad of a symbol not yet bound in the frame raises InvalidIrError."""
-        sym, desc = _let_sym(0, "x")
-        # Register the symbol in program.symbols but never IrBind it.
-        prog = _make_program(
-            (IrLoad(_LOC, sym),),
-            {sym: desc},
-        )
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(prog).run()
-
     def test_index_set_mutates_array_in_place(self) -> None:
         """IrIndexSet performs an in-place indexed assignment on an array."""
         from agm.agl.semantics.values import ArrayValue, IntValue
@@ -864,88 +774,11 @@ class TestDefensiveErrors:
         result = IrInterpreter(prog).run()
         assert result["v"] == ArrayValue([IntValue(99), IntValue(20)])
 
-    def test_ir_and_non_bool_lhs_raises(self) -> None:
-        """IrAnd with a non-BoolValue lhs raises InvalidIrError."""
-        from agm.agl.ir import IrAnd
-
-        prog = _make_program(
-            (IrAnd(_LOC, lhs=IrConstInt(_LOC, 1), rhs=IrConstBool(_LOC, True)),),
-        )
-        with pytest.raises(InvalidIrError, match="IrAnd: lhs"):
-            IrInterpreter(prog).run()
-
-    def test_ir_and_non_bool_rhs_raises(self) -> None:
-        """IrAnd with a non-BoolValue rhs raises InvalidIrError."""
-        from agm.agl.ir import IrAnd
-
-        prog = _make_program(
-            (IrAnd(_LOC, lhs=IrConstBool(_LOC, True), rhs=IrConstInt(_LOC, 1)),),
-        )
-        with pytest.raises(InvalidIrError, match="IrAnd: rhs"):
-            IrInterpreter(prog).run()
-
-    def test_ir_or_non_bool_lhs_raises(self) -> None:
-        """IrOr with a non-BoolValue lhs raises InvalidIrError."""
-        from agm.agl.ir import IrOr
-
-        prog = _make_program(
-            (IrOr(_LOC, lhs=IrConstInt(_LOC, 1), rhs=IrConstBool(_LOC, False)),),
-        )
-        with pytest.raises(InvalidIrError, match="IrOr: lhs"):
-            IrInterpreter(prog).run()
-
-    def test_ir_or_non_bool_rhs_raises(self) -> None:
-        """IrOr with a non-BoolValue rhs raises InvalidIrError."""
-        from agm.agl.ir import IrOr
-
-        prog = _make_program(
-            (IrOr(_LOC, lhs=IrConstBool(_LOC, False), rhs=IrConstInt(_LOC, 1)),),
-        )
-        with pytest.raises(InvalidIrError, match="IrOr: rhs"):
-            IrInterpreter(prog).run()
-
-    def test_ir_unary_not_non_bool_raises(self) -> None:
-        """IrUnary NOT with a non-BoolValue raises InvalidIrError."""
-        from agm.agl.ir import IrUnary, UnaryOp
-
-        prog = _make_program(
-            (IrUnary(_LOC, op=UnaryOp.NOT, kind=None, value=IrConstInt(_LOC, 1)),),
-        )
-        with pytest.raises(InvalidIrError, match="IrUnary NOT"):
-            IrInterpreter(prog).run()
-
-    def test_ir_unary_neg_none_kind_raises(self) -> None:
-        """IrUnary NEG with kind=None raises InvalidIrError at runtime."""
-        from agm.agl.ir import IrUnary, UnaryOp
-
-        prog = _make_program(
-            (IrUnary(_LOC, op=UnaryOp.NEG, kind=None, value=IrConstInt(_LOC, 5)),),
-        )
-        with pytest.raises(InvalidIrError, match="IrUnary NEG: kind must not be None"):
-            IrInterpreter(prog).run()
-
-    def test_ir_unary_neg_non_numeric_raises(self) -> None:
-        """IrUnary NEG with non-numeric value raises InvalidIrError."""
-        from agm.agl.ir import IrUnary, NumericKind, UnaryOp
-
-        prog = _make_program(
-            (
-                IrUnary(
-                    _LOC,
-                    op=UnaryOp.NEG,
-                    kind=NumericKind.INT,
-                    value=IrConstText(_LOC, "not-a-number"),
-                ),
-            ),
-        )
-        with pytest.raises(InvalidIrError, match="IrUnary NEG: expected numeric"):
-            IrInterpreter(prog).run()
-
     def test_ir_unary_neg_decimal_is_exact_past_28_digits(self) -> None:
-        """IrUnary NEG on a decimal negates exactly (``copy_negate``), never
+        """IrNeg on a decimal negates exactly (``copy_negate``), never
         rounding to the ambient context's 28-digit precision -- a
         31-significant-digit operand stays exact rather than being clipped."""
-        from agm.agl.ir import IrUnary, NumericKind, UnaryOp
+        from agm.agl.ir import IrNeg, NumericKind
 
         big = decimal.Decimal(10**30 + 7)
         sym, desc = _let_sym(0, "n")
@@ -954,9 +787,8 @@ class TestDefensiveErrors:
                 IrBind(
                     _LOC,
                     sym,
-                    IrUnary(
+                    IrNeg(
                         _LOC,
-                        op=UnaryOp.NEG,
                         kind=NumericKind.DECIMAL,
                         value=IrConstDecimal(_LOC, big),
                     ),
@@ -965,42 +797,6 @@ class TestDefensiveErrors:
             {sym: desc},
         )
         assert result["n"] == DecimalValue(big.copy_negate())
-
-    def test_ir_variant_is_on_non_enum_raises(self) -> None:
-        """IrNominalIs on a non-enum value raises InvalidIrError (defensive)."""
-        from agm.agl.ir import IrNominalIs, NominalId
-
-        prog = _make_program(
-            (
-                IrNominalIs(
-                    _LOC,
-                    nominal=NominalId(1),
-                    value=IrConstInt(_LOC, 1),
-                    negated=False,
-                ),
-            ),
-        )
-        with pytest.raises(InvalidIrError, match="IrNominalIs"):
-            IrInterpreter(prog).run()
-
-    def test_ir_nominal_cast_on_non_record_non_exception_raises(self) -> None:
-        """IrNominalCast accepts only record or exception values."""
-        from agm.agl.ir import IrNominalCast, NominalId
-
-        prog = _make_program(
-            (
-                IrNominalCast(
-                    _LOC,
-                    nominals=(NominalId(1),),
-                    value=IrConstInt(_LOC, 1),
-                    test_only=False,
-                    source_label="int",
-                    target_label="Record",
-                ),
-            ),
-        )
-        with pytest.raises(InvalidIrError, match="IrNominalCast"):
-            IrInterpreter(prog).run()
 
     def test_ir_nominal_cast_accepts_an_exact_exception_value(self) -> None:
         """IrNominalCast succeeds on an ExceptionValue whose nominal is accepted exactly."""
@@ -1234,7 +1030,6 @@ class TestIrField:
         *,
         x_val: int,
         y_val: int,
-        expected_nominal: NominalId | None = None,
     ) -> Value:
         """Run an IrField read by constructing a RecordValue via IrMakeRecord.
 
@@ -1262,7 +1057,7 @@ class TestIrField:
                     IrField(
                         _LOC,
                         value=IrLoad(_LOC, rec_sym),
-                        nominal=expected_nominal if expected_nominal is not None else nominal,
+                        nominal=nominal,
                         field=field_name,
                     ),
                 ),
@@ -1290,16 +1085,6 @@ class TestIrField:
         """IrField returns the correct value when multiple fields are present."""
         result = self._run_with_record_via_make("y", x_val=3, y_val=7)
         assert result == IntValue(7)
-
-    def test_ir_field_with_wrong_nominal_raises(self) -> None:
-        """IrField rejects a nominal value outside its projection contract."""
-        with pytest.raises(InvalidIrError, match="expected nominal"):
-            self._run_with_record_via_make(
-                "x",
-                x_val=3,
-                y_val=4,
-                expected_nominal=NominalId(3),
-            )
 
     def test_ir_field_set_evaluates_receiver_then_replacement_then_stores(self) -> None:
         """A successful store observes receiver evaluation before its replacement."""
@@ -1353,44 +1138,8 @@ class TestIrField:
         )
         assert IrInterpreter(prog).run()["result"] == IntValue(7)
 
-    def test_ir_field_set_checks_identity_before_evaluating_replacement(self) -> None:
-        """A mismatched receiver rejects the store without evaluating its replacement."""
-        record_nominal = NominalId(2)
-        store_nominal = NominalId(3)
-        prog = _make_program(
-            (
-                IrFieldSet(
-                    _LOC,
-                    IrMakeRecord(
-                        _LOC,
-                        record_nominal,
-                        (("x", IrConstInt(_LOC, 1)),),
-                    ),
-                    store_nominal,
-                    "x",
-                    IrRaise(
-                        _LOC,
-                        IrMakeException(
-                            _LOC,
-                            NominalId(4),
-                            (),
-                        ),
-                    ),
-                ),
-            )
-        )
-        with pytest.raises(InvalidIrError, match="expected nominal"):
-            IrInterpreter(prog).run()
-
-    def test_ir_field_set_rejects_a_non_record_receiver(self) -> None:
-        prog = _make_program(
-            (IrFieldSet(_LOC, IrConstInt(_LOC, 1), NominalId(2), "x", IrConstInt(_LOC, 2)),)
-        )
-        with pytest.raises(InvalidIrError, match="RecordValue"):
-            IrInterpreter(prog).run()
-
-    def _run_with_exception_field(self, field: str, mode: IrFieldMode) -> Value:
-        """Project *field* from a concrete exception using *mode*."""
+    def _run_with_exception_field(self, field: str) -> Value:
+        """Project *field* from a concrete exception through a base nominal."""
         exception_nominal = NominalId(4)
         base_nominal = NominalId(5)
         rec_sym, rec_desc = _let_sym(0, "exc")
@@ -1414,7 +1163,6 @@ class TestIrField:
                         IrLoad(_LOC, rec_sym),
                         base_nominal,
                         field,
-                        mode=mode,
                     ),
                 ),
             ),
@@ -1422,21 +1170,9 @@ class TestIrField:
         )
         return IrInterpreter(prog).run()["out"]
 
-    def test_ir_field_exact_rejects_exception_subtype_as_base(self) -> None:
-        """Exact projections do not use exception hierarchy relationships."""
-        with pytest.raises(InvalidIrError, match="expected nominal"):
-            self._run_with_exception_field("message", IrFieldMode.EXACT)
-
-    def test_ir_field_upper_bound_reads_base_exception_field(self) -> None:
-        """Upper-bound projections read fields declared by the static bound."""
-        assert self._run_with_exception_field("message", IrFieldMode.UPPER_BOUND) == TextValue(
-            "stop"
-        )
-
-    def test_ir_field_upper_bound_rejects_absent_field(self) -> None:
-        """Upper-bound mode still rejects a field absent from the runtime value."""
-        with pytest.raises(InvalidIrError, match="lacks field"):
-            self._run_with_exception_field("detail", IrFieldMode.UPPER_BOUND)
+    def test_ir_field_reads_field_through_a_base_nominal(self) -> None:
+        """A field projection through a base nominal reads the concrete value's field."""
+        assert self._run_with_exception_field("message") == TextValue("stop")
 
     def test_ir_field_reads_enum_payload_field(self) -> None:
         """IrField uses the same nominal projection contract for enum payloads."""
@@ -1482,34 +1218,6 @@ class TestIrField:
             },
         )
         assert IrInterpreter(prog).run()["out"] == IntValue(9)
-
-    def test_ir_field_on_non_nominal_raises(self) -> None:
-        """IrField on a non-nominal value raises InvalidIrError."""
-        prog = _make_program(
-            (
-                IrBind(_LOC, SymbolId(0), IrConstInt(_LOC, 42)),
-                IrBind(
-                    _LOC,
-                    SymbolId(1),
-                    IrField(
-                        _LOC,
-                        value=IrLoad(_LOC, SymbolId(0)),
-                        nominal=NominalId(7),
-                        field="x",
-                    ),
-                ),
-            ),
-            {
-                SymbolId(0): SymbolDescriptor(
-                    symbol_id=SymbolId(0), mutable=False, public_name="n", owner=ENTRY_ID
-                ),
-                SymbolId(1): SymbolDescriptor(
-                    symbol_id=SymbolId(1), mutable=False, public_name="out", owner=ENTRY_ID
-                ),
-            },
-        )
-        with pytest.raises(InvalidIrError, match="IrField"):
-            IrInterpreter(prog).run()
 
 
 # ---------------------------------------------------------------------------
@@ -1565,33 +1273,6 @@ class TestIrUpdateRecord:
         original = bindings["rec"]
         assert isinstance(original, RecordValue)
         assert original.fields == {"x": IntValue(1), "y": IntValue(2)}
-
-    def test_ir_update_record_on_non_record_raises(self) -> None:
-        """IrUpdateRecord on a non-Record/non-Exception value raises InvalidIrError."""
-        prog = _make_program(
-            (
-                IrBind(_LOC, SymbolId(0), IrConstInt(_LOC, 42)),
-                IrBind(
-                    _LOC,
-                    SymbolId(1),
-                    IrUpdateRecord(
-                        _LOC,
-                        value=IrLoad(_LOC, SymbolId(0)),
-                        updates=(("x", IrConstInt(_LOC, 7)),),
-                    ),
-                ),
-            ),
-            {
-                SymbolId(0): SymbolDescriptor(
-                    symbol_id=SymbolId(0), mutable=False, public_name="n", owner=ENTRY_ID
-                ),
-                SymbolId(1): SymbolDescriptor(
-                    symbol_id=SymbolId(1), mutable=False, public_name="out", owner=ENTRY_ID
-                ),
-            },
-        )
-        with pytest.raises(InvalidIrError, match="IrUpdateRecord"):
-            IrInterpreter(prog).run()
 
 
 # ---------------------------------------------------------------------------
@@ -2059,100 +1740,8 @@ class TestFunctionEvaluation:
         assert result["result2"] == IntValue(55)
 
 
-class TestDirectCallInterpreterDefensivePaths:
-    """Defensive error paths in IrMakeClosure and IrDirectCall evaluation."""
-
-    def test_get_closure_for_symbol_not_in_frame_raises(self) -> None:
-        """_get_closure_for raises InvalidIrError when function symbol not bound."""
-        body = IrConstInt(_LOC, 0)
-        fn_desc = _make_fn_descriptor(body)
-        # IrDirectCall without binding the closure first — symbol not in frame
-        result_sym = SymbolId(200)
-        symbols = {
-            _FN_SID: _fn_sym_desc(),
-            result_sym: SymbolDescriptor(
-                symbol_id=result_sym, mutable=False, public_name="result", owner=ENTRY_ID
-            ),
-        }
-        prog = _make_program(
-            initializers=(
-                # No IrBind for _FN_SID — so slot will be None when IrDirectCall executes
-                IrBind(_LOC, result_sym, IrDirectCall(_LOC, _FN_ID, ())),
-            ),
-            symbols=symbols,
-            functions={_FN_ID: fn_desc},
-        )
-        with pytest.raises(InvalidIrError, match="not in any evaluation frame"):
-            IrInterpreter(prog).run()
-
-    def test_get_closure_for_slot_not_ir_closure_value_raises(self) -> None:
-        """_get_closure_for raises InvalidIrError when slot holds a non-IrClosureValue."""
-        body = IrConstInt(_LOC, 0)
-        fn_desc = _make_fn_descriptor(body)
-        result_sym = SymbolId(200)
-        symbols = {
-            _FN_SID: _fn_sym_desc(),
-            result_sym: SymbolDescriptor(
-                symbol_id=result_sym, mutable=False, public_name="result", owner=ENTRY_ID
-            ),
-        }
-        prog = _make_program(
-            initializers=(
-                # Bind an IntValue (not IrClosureValue) into the function symbol slot
-                IrBind(_LOC, _FN_SID, IrConstInt(_LOC, 42)),
-                IrBind(_LOC, result_sym, IrDirectCall(_LOC, _FN_ID, ())),
-            ),
-            symbols=symbols,
-            functions={_FN_ID: fn_desc},
-        )
-        with pytest.raises(InvalidIrError, match="not IrClosureValue"):
-            IrInterpreter(prog).run()
-
-    def test_ir_make_closure_capture_not_in_frame_raises(self) -> None:
-        """IrMakeClosure raises InvalidIrError when a capture symbol is not in frame."""
-        missing_sym = SymbolId(999)
-        bad_cap = IrCapture(symbol=missing_sym, by_cell=False)
-        body = IrConstInt(_LOC, 0)
-        fn_desc = _make_fn_descriptor(body)
-        symbols = {_FN_SID: _fn_sym_desc()}
-        prog = _make_program(
-            initializers=(
-                # Try to close over missing_sym which is not bound
-                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, (bad_cap,))),
-            ),
-            symbols=symbols,
-            functions={_FN_ID: fn_desc},
-        )
-        with pytest.raises(InvalidIrError, match="not in frame"):
-            IrInterpreter(prog).run()
-
-    def test_ir_make_closure_by_cell_not_cell_raises(self) -> None:
-        """IrMakeClosure with by_cell=True raises when slot is not a Cell."""
-        # Bind an immutable (non-cell) symbol and try to capture it by_cell
-        cap_sym = SymbolId(200)
-        bad_cap = IrCapture(symbol=cap_sym, by_cell=True)  # by_cell but cap_sym is immutable
-        body = IrConstInt(_LOC, 0)
-        fn_desc = _make_fn_descriptor(body)
-        symbols = {
-            _FN_SID: _fn_sym_desc(),
-            cap_sym: SymbolDescriptor(
-                symbol_id=cap_sym, mutable=False, public_name="c", owner=ENTRY_ID
-            ),
-        }
-        prog = _make_program(
-            initializers=(
-                IrBind(_LOC, cap_sym, IrConstInt(_LOC, 5)),  # immutable, not a Cell
-                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, (bad_cap,))),
-            ),
-            symbols=symbols,
-            functions={_FN_ID: fn_desc},
-        )
-        with pytest.raises(InvalidIrError, match="not Cell"):
-            IrInterpreter(prog).run()
-
-
 # ---------------------------------------------------------------------------
-# IrIndirectCall evaluation + defensive error paths
+# IrIndirectCall evaluation
 # ---------------------------------------------------------------------------
 
 
@@ -2256,36 +1845,8 @@ class TestSelectedProgramExecution:
         assert exc_info.value.span is None
 
 
-class TestIndirectCallInterpreterDefensivePaths:
-    """Defensive error paths in IrIndirectCall evaluation."""
-
-    def test_indirect_call_non_closure_callee_raises(self) -> None:
-        """IrIndirectCall raises InvalidIrError when callee evaluates to a non-closure."""
-        # Build: let val_sym = 42; let result_sym = IrIndirectCall(IrLoad(val_sym), ())
-        val_sym = SymbolId(300)
-        result_sym = SymbolId(301)
-        body = IrConstInt(_LOC, 0)
-        fn_desc = _make_fn_descriptor(body)
-        symbols = {
-            _FN_SID: _fn_sym_desc(),
-            val_sym: SymbolDescriptor(
-                symbol_id=val_sym, mutable=False, public_name="val", owner=ENTRY_ID
-            ),
-            result_sym: SymbolDescriptor(
-                symbol_id=result_sym, mutable=False, public_name="result", owner=ENTRY_ID
-            ),
-        }
-        prog = _make_program(
-            initializers=(
-                IrBind(_LOC, val_sym, IrConstInt(_LOC, 42)),
-                # Try to call an int as a function — callee is not IrClosureValue
-                IrBind(_LOC, result_sym, IrIndirectCall(_LOC, IrLoad(_LOC, val_sym), ())),
-            ),
-            symbols=symbols,
-            functions={_FN_ID: fn_desc},
-        )
-        with pytest.raises(InvalidIrError, match="expected IrClosureValue"):
-            IrInterpreter(prog).run()
+class TestIndirectCallInterpreter:
+    """IrIndirectCall evaluation: depth limit and param-default fallback."""
 
     def test_indirect_call_depth_limit_raises(self) -> None:
         """IrIndirectCall with max_call_depth=1 raises AglRaise(RecursionError) on reentry."""
@@ -2361,37 +1922,6 @@ class TestIndirectCallInterpreterDefensivePaths:
         result = IrInterpreter(prog).run()
         assert result["r"] == IntValue(77)
 
-    def test_indirect_call_missing_arg_no_default_raises(self) -> None:
-        """IrIndirectCall raises InvalidIrError when arg is missing and no default exists."""
-        # Function has a required param (no default); call it with zero args.
-        param = IrFunctionParam(symbol=_PARAM_SID, default=None)
-        body = IrLoad(_LOC, _PARAM_SID)
-        fn_desc = _make_fn_descriptor(body, params=(param,))
-        result_sym = SymbolId(600)
-        fn_closure_sym = SymbolId(601)
-        symbols = {
-            _FN_SID: _fn_sym_desc(),
-            _PARAM_SID: _param_sym_desc(),
-            fn_closure_sym: SymbolDescriptor(
-                symbol_id=fn_closure_sym, mutable=False, public_name="fn_ref2", owner=ENTRY_ID
-            ),
-            result_sym: SymbolDescriptor(
-                symbol_id=result_sym, mutable=False, public_name="r2", owner=ENTRY_ID
-            ),
-        }
-        prog = _make_program(
-            initializers=(
-                IrBind(_LOC, _FN_SID, IrMakeClosure(_LOC, _FN_ID, ())),
-                IrBind(_LOC, fn_closure_sym, IrLoad(_LOC, _FN_SID)),
-                # Call with 0 args but fn expects 1 required param — should raise
-                IrBind(_LOC, result_sym, IrIndirectCall(_LOC, IrLoad(_LOC, fn_closure_sym), ())),
-            ),
-            symbols=symbols,
-            functions={_FN_ID: fn_desc},
-        )
-        with pytest.raises(InvalidIrError, match="missing argument"):
-            IrInterpreter(prog).run()
-
 
 # ===========================================================================
 # IrPrint evaluator tests
@@ -2412,24 +1942,6 @@ class TestPrintParseJsonParam:
         assert capsys.readouterr().out == "()\n"
         assert interp.initializer_values == [UNIT_VALUE]
 
-    def test_ir_render_non_bool_option_raises_invalid_ir_error(self) -> None:
-        """IrRenderValue with a non-bool option raises InvalidIrError (bad IR)."""
-        from agm.agl.ir.nodes import IrRenderValue
-
-        sym, desc = _let_sym(0, "r")
-        node = IrBind(
-            _LOC,
-            sym,
-            IrRenderValue(
-                _LOC,
-                IrConstText(_LOC, "x"),
-                pretty=IrConstText(_LOC, "yes"),
-            ),
-        )
-        prog = _make_program(initializers=(node,), symbols={sym: desc})
-        with pytest.raises(InvalidIrError, match="pretty"):
-            IrInterpreter(prog).run()
-
 
 # ===========================================================================
 # Agent-call evaluator unit tests
@@ -2439,7 +1951,7 @@ class TestPrintParseJsonParam:
 class TestIrAsk:
     def test_ir_ask_preserves_a_prompt_expression_raise_span(self) -> None:
         """An ask node does not replace an exception's source span."""
-        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.contracts import TextContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrAsk
         from agm.agl.semantics.exceptions import AglRaise
@@ -2472,15 +1984,12 @@ class TestIrAsk:
         program = dataclasses.replace(
             program,
             contracts={
-                contract_id: ContractRequest(
+                contract_id: TextContractRequest(
                     codec_name="text",
                     strict_json=None,
-                    json_schema=None,
-                    decode=None,
                     target_type_label="text",
                     structured_exec=False,
                     format_instructions="",
-                    is_unit=False,
                 )
             },
         )
@@ -2503,27 +2012,21 @@ class TestIrExec:
         self,
         command: "IrExpr",
         *,
-        codec_name: str = "text",
         structured_exec: bool = False,
         max_attempts: int = 1,
-        is_unit: bool = False,
         location: Location = _LOC,
     ) -> ExecutableProgram:
-        """Build a minimal program with a single IrExec initializer."""
-        from agm.agl.ir.contracts import ContractRequest
+        """Build a minimal program with a single IrExec initializer (text contract)."""
+        from agm.agl.ir.contracts import TextContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
 
         cid = ContractId(value=0)
-        contract = ContractRequest(
-            codec_name=codec_name,
+        contract = TextContractRequest(
             strict_json=None,
-            json_schema=None,
-            decode=None,
             target_type_label="text",
             structured_exec=structured_exec,
             format_instructions="",
-            is_unit=is_unit,
         )
         node = IrExec(
             location=location,
@@ -2577,7 +2080,7 @@ class TestIrExec:
         command test above); rendering a self-referential array must raise
         rather than recurse forever, before any shell command is spawned.
         """
-        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.contracts import UnitContractRequest
         from agm.agl.ir.ids import ContractId, SymbolId
         from agm.agl.ir.nodes import IrConstInt, IrExec, IrIndexSet, IrLoad, IrMakeArray
         from agm.agl.ir.operations import IndexKind
@@ -2585,16 +2088,7 @@ class TestIrExec:
         from agm.agl.semantics.exceptions import AglRaise
 
         cid = ContractId(value=0)
-        contract = ContractRequest(
-            codec_name="text",
-            strict_json=None,
-            json_schema=None,
-            decode=None,
-            target_type_label="unit",
-            structured_exec=False,
-            format_instructions="",
-            is_unit=True,
-        )
+        contract = UnitContractRequest()
         sym_xs = SymbolId(0)
         array_lit = IrMakeArray(location=_LOC, items=(IrConstInt(_LOC, 0),))
         bind_xs = IrBind(location=_LOC, symbol=sym_xs, value=array_lit)
@@ -2678,7 +2172,7 @@ class TestIrExec:
         # Use int codec so parse fails and retry triggers
         import json
 
-        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.contracts import JsonContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.type_table import create_seeded_type_table
@@ -2687,7 +2181,7 @@ class TestIrExec:
 
         cid = ContractId(value=0)
         decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
-        contract = ContractRequest(
+        contract = JsonContractRequest(
             codec_name="json",
             strict_json=False,
             json_schema=json.dumps({"type": "integer"}),
@@ -2695,7 +2189,6 @@ class TestIrExec:
             target_type_label="int",
             structured_exec=False,
             format_instructions="",
-            is_unit=False,
         )
         node = IrExec(
             location=_LOC,
@@ -2815,7 +2308,7 @@ class TestIrExec:
         import json
         import unittest.mock
 
-        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.contracts import JsonContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.exceptions import AglRaise
@@ -2857,7 +2350,7 @@ class TestIrExec:
 
         cid = ContractId(value=0)
         decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
-        contract = ContractRequest(
+        contract = JsonContractRequest(
             codec_name="json",
             strict_json=False,
             json_schema=json.dumps({"type": "integer"}),
@@ -2865,7 +2358,6 @@ class TestIrExec:
             target_type_label="int",
             structured_exec=False,
             format_instructions="",
-            is_unit=False,
         )
         node = IrExec(
             location=_LOC,
@@ -2898,7 +2390,7 @@ class TestIrExec:
         import json
         import unittest.mock
 
-        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.contracts import JsonContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.exceptions import AglRaise
@@ -2940,7 +2432,7 @@ class TestIrExec:
 
         cid = ContractId(value=0)
         decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
-        contract = ContractRequest(
+        contract = JsonContractRequest(
             codec_name="json",
             strict_json=False,
             json_schema=json.dumps({"type": "integer"}),
@@ -2948,7 +2440,6 @@ class TestIrExec:
             target_type_label="int",
             structured_exec=False,
             format_instructions="",
-            is_unit=False,
         )
         node = IrExec(
             location=_LOC,
@@ -2978,7 +2469,7 @@ class TestIrExec:
         import json
         import unittest.mock
 
-        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.contracts import JsonContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
         from agm.agl.semantics.exceptions import AglRaise
@@ -3009,7 +2500,7 @@ class TestIrExec:
 
         cid = ContractId(value=0)
         decode_schema = build_decode_schema(IntType(), create_seeded_type_table()).root
-        contract = ContractRequest(
+        contract = JsonContractRequest(
             codec_name="json",
             strict_json=True,
             json_schema=json.dumps({"type": "integer"}),
@@ -3017,7 +2508,6 @@ class TestIrExec:
             target_type_label="int",
             structured_exec=False,
             format_instructions="",
-            is_unit=False,
         )
         node = IrExec(
             location=_LOC,
@@ -3041,21 +2531,6 @@ class TestIrExec:
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
         assert exc_info.value.exc.nominal == NominalId(require_reserved_nominal_id("ExecError"))
-
-
-class TestHostConsumedSettingRegister:
-    """A host-consumed ``builtin var`` register with no seed and no declaration.
-
-    ``default-agent`` is declared by the shipped ``std/config`` module, not by
-    the interpreter itself; a hand-built program that reads it without either
-    a host seed or that declaration has no value to produce.
-    """
-
-    def test_reading_an_unseeded_undeclared_setting_raises_invalid_ir_error(self) -> None:
-        program = _make_program((IrBuiltinLoad(_LOC, "default-agent"),))
-
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(program).run()
 
 
 class TestCallDepthBoundary:

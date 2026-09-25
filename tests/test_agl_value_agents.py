@@ -253,14 +253,15 @@ def test_composed_prompt_is_unchanged_when_no_output_contract(
 def test_composed_prompt_appends_format_instructions_after_the_prompt(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
-    from agm.agl.runtime.contract import TypelessOutputContract
+    from agm.agl.runtime.codec import JsonCodec
+    from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
     agent = AgentCommand(command="runner")
-    contract = TypelessOutputContract(
-        target_type="int",
-        codec_name="json",
+    contract = OutputContract(
+        target_type_label="int",
+        codec=JsonCodec(),
         strict_json=True,
         format_instructions="Return only valid JSON matching the schema.",
         json_schema=None,
@@ -280,14 +281,15 @@ def test_composed_prompt_omits_format_instructions_when_the_contract_has_none(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
     """An empty ``format_instructions`` (e.g. the text codec) adds nothing."""
-    from agm.agl.runtime.contract import TypelessOutputContract
+    from agm.agl.runtime.codec import TextCodec
+    from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.request import AgentRequest
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
     agent = AgentCommand(command="runner")
-    contract = TypelessOutputContract(
-        target_type="text",
-        codec_name="text",
+    contract = OutputContract(
+        target_type_label="text",
+        codec=TextCodec(),
         strict_json=None,
         format_instructions="",
         json_schema=None,
@@ -346,14 +348,15 @@ def test_composed_prompt_orders_format_instructions_before_retry_feedback(
     fake_agent_transport: FakeAgentTransport,
 ) -> None:
     """Ordering: prompt, then format_instructions, then the retry-feedback block."""
-    from agm.agl.runtime.contract import TypelessOutputContract
+    from agm.agl.runtime.codec import JsonCodec
+    from agm.agl.runtime.contract import OutputContract
     from agm.agl.runtime.request import AgentRequest, compose_agent_prompt
 
     dispatch = value_driven_agent_factory(idle_timeout=None)
     agent = AgentCommand(command="runner")
-    contract = TypelessOutputContract(
-        target_type="int",
-        codec_name="json",
+    contract = OutputContract(
+        target_type_label="int",
+        codec=JsonCodec(),
         strict_json=True,
         format_instructions="Return JSON.",
         json_schema=None,

@@ -22,6 +22,7 @@ import pytest
 
 from agm.agl import AglError, PipelineDriver, SourceSpan
 from agm.agl.diagnostics import Diagnostic, format_diagnostic, format_diagnostic_location
+from agm.agl.ir.contracts import EncodePlan, ExceptionFieldEncode, ScalarEncode
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
 from agm.agl.modules.ids import ENTRY_ID
@@ -29,6 +30,7 @@ from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.contract import OutputContract
 from agm.agl.semantics.types import Type
+from agm.agl.semantics.values import ExceptionValue
 from agm.agl.typecheck import AglTypeError
 from agm.commands import exec_program as exec_engine
 from tests._agl_helpers import (
@@ -48,7 +50,7 @@ if TYPE_CHECKING:
 # Rendering helpers: build a minimal ValueDescriptors for ad-hoc test values.
 # ---------------------------------------------------------------------------
 
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 def _named(
@@ -72,7 +74,20 @@ def _named(
 
 def _descriptors(*named_nominals: NominalDescriptor) -> ValueDescriptors:
     """A ValueDescriptors view over the given nominal descriptors, no functions."""
-    return ValueDescriptors(nominals={d.nominal: d for d in named_nominals}, functions={})
+    return ValueDescriptors(
+        nominals={d.nominal: d for d in named_nominals}, functions={}, exception_field_encodes={}
+    )
+
+
+def _scalar_field_encodes(
+    exc: ExceptionValue,
+) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
+    """The field-encode table of a hand-built exception whose fields are all scalars."""
+    return {
+        exc.nominal: tuple(
+            ExceptionFieldEncode(name, name, EncodePlan(ScalarEncode())) for name in exc.fields
+        )
+    }
 
 
 def _preflight_builtin_nominal(
@@ -963,7 +978,9 @@ class TestDecimalSerialization:
             },
         )
         nominals = {NominalId(1): _named(NominalId(1), "ValidationError")}
-        err = exception_value_to_run_error(exc, nominals=nominals)
+        err = exception_value_to_run_error(
+            exc, nominals=nominals, exception_field_encodes=_scalar_field_encodes(exc)
+        )
         assert err.fields["amount"] == decimal.Decimal("0.1")
         assert isinstance(err.fields["amount"], decimal.Decimal)
 
@@ -1295,7 +1312,9 @@ class TestRenderValue:
             result_label="int",
         )
         closure = IrClosureValue(function_id=function_id, captures=())
-        descriptors = ValueDescriptors(nominals={}, functions={function_id: function_desc})
+        descriptors = ValueDescriptors(
+            nominals={}, functions={function_id: function_desc}, exception_field_encodes={}
+        )
 
         assert render_value(closure, descriptors) == "<function: (?, ?) -> int>"
 
@@ -2168,7 +2187,17 @@ class TestRuntimeErrorPaths:
                 _named(NominalId(5), "Node"),
             )
         }
-        error = exception_value_to_run_error(exc_val, nominals=nominals)
+        # No field of this hand-built exception has a JSON plan, so each is
+        # reported through the value-directed walk.
+        error = exception_value_to_run_error(
+            exc_val,
+            nominals=nominals,
+            exception_field_encodes={
+                exc_val.nominal: tuple(
+                    ExceptionFieldEncode(name, name, None) for name in exc_val.fields
+                )
+            },
+        )
         assert isinstance(error, RunError)
         assert error.type_name == "AgentParseError"
         assert error.fields["message"] == "failed"
@@ -2200,7 +2229,9 @@ class TestRuntimeErrorPaths:
             source_id=SourceId(0), start_offset=0, end_offset=1, start_line=3, start_col=5
         )
 
-        error = exception_value_to_run_error(exc, nominals=nominals, span=span)
+        error = exception_value_to_run_error(
+            exc, nominals=nominals, span=span, exception_field_encodes=_scalar_field_encodes(exc)
+        )
 
         assert error.line == 3
         assert error.col == 5
@@ -2229,7 +2260,9 @@ class TestRuntimeErrorPaths:
             source=FrontendSourceId("/tmp/mod.agl"),
         )
 
-        error = exception_value_to_run_error(exc, nominals=nominals, span=span)
+        error = exception_value_to_run_error(
+            exc, nominals=nominals, span=span, exception_field_encodes=_scalar_field_encodes(exc)
+        )
 
         assert error.line == 2
         assert error.col == 3
@@ -2858,7 +2891,7 @@ class TestBuildFormatInstructions:
 
 
 class TestSerializeOpaqueValues:
-    """Unit, agent, constructor, function, and iterator values have no JSON
+    """Unit, agent, constructor, and function values have no JSON
     representation — each raises :class:`AglNonDataValue` with the matching
     user-facing ``kind``."""
 
@@ -2889,14 +2922,6 @@ class TestSerializeOpaqueValues:
         with pytest.raises(AglNonDataValue) as exc_info:
             value_to_json_obj(ir_closure)
         assert exc_info.value.kind == "function"
-
-    def test_iterator_value_raises(self) -> None:
-        from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
-        from agm.agl.semantics.values import IteratorValue
-
-        with pytest.raises(AglNonDataValue) as exc_info:
-            value_to_json_obj(IteratorValue(elements=[]))
-        assert exc_info.value.kind == "iterator"
 
     def test_marker_text_matches_kind(self) -> None:
         """``degraded_marker`` produces the same text every degrade site relies on."""
@@ -2931,13 +2956,13 @@ class TestIrHostMetadata:
         assert "JSON" in json_result.diagnostics[0].message
 
     def test_missing_ir_codec_materialization_is_diagnostic(self) -> None:
-        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.contracts import CustomContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.program import ExecutableProgram
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.contract import materialize_ir_contracts
 
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="missing",
             strict_json=None,
             json_schema=None,

@@ -31,7 +31,8 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        there; extern boundary contracts are checked for internal consistency
        (registered nominals, type-variable positions matching their declared
        type parameters). A direct call to an extern leads with one
-       ``IrContract`` per target parameter, registered in ``program.contracts``;
+       ``IrContract`` per target parameter, registered in
+       ``program.target_contracts``;
        ``IrContract`` appears nowhere else, and no ``IrLoad`` reads the function
        symbol of an extern with target parameters. A contract's type tree
        references only its own definitions and registered nominals.
@@ -72,7 +73,8 @@ from agm.agl.ir.contracts import (
     ArrayDecode,
     ArrayEncode,
     ContractRequest,
-    ConversionStrategy,
+    CustomContractRequest,
+    DecodeConversionRecipe,
     DecodeSchema,
     DictDecode,
     DictEncode,
@@ -83,12 +85,14 @@ from agm.agl.ir.contracts import (
     ExceptionEncode,
     FieldDecode,
     FieldEncode,
+    JsonContractRequest,
     RecordDecode,
     RecordEncode,
     RefDecode,
     RefEncode,
     ScalarDecode,
     ScalarEncode,
+    ToJsonRecipe,
     TypeNodeRef,
     TypeParameterEncode,
     TypeTree,
@@ -127,7 +131,6 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
-    IrFieldMode,
     IrFieldSet,
     IrIf,
     IrIndex,
@@ -148,9 +151,11 @@ from agm.agl.ir.nodes import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNeg,
     IrNominalCaseKey,
     IrNominalCast,
     IrNominalIs,
+    IrNot,
     IrOr,
     IrPrint,
     IrRaise,
@@ -167,12 +172,11 @@ from agm.agl.ir.nodes import (
     IrTemplateText,
     IrTemplateValue,
     IrTry,
-    IrUnary,
     IrUpdateRecord,
     UseDefault,
     is_canonical_literal_scalar,
 )
-from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind, UnaryOp
+from agm.agl.ir.operations import ArithKind, ArithOp, CmpOp, CompareKind
 from agm.agl.ir.program import (
     ExecutableProgram,
     ExternFunctionBody,
@@ -337,23 +341,11 @@ def _check_nominal_in_table(nominal: NominalId, ctx: _Context) -> None:
         )
 
 
-def _check_nominal_field(
-    nominal: NominalId, field: str, mode: IrFieldMode, ctx: _Context, node_name: str
-) -> None:
-    """Reject a field reference outside the declaring nominal's field shape.
-
-    Exact and upper-bound projections use the same declaration descriptor for
-    field existence. The mode changes runtime identity checking, not which
-    fields the statically selected nominal declares.
-    """
+def _check_nominal_field(nominal: NominalId, field: str, ctx: _Context, node_name: str) -> None:
+    """Reject a field reference outside the declaring nominal's field shape."""
     desc = ctx.program.nominals.get(nominal)
     if desc is None:  # pragma: no cover
         return  # already caught by _check_nominal_in_table
-    match mode:
-        case IrFieldMode.EXACT | IrFieldMode.UPPER_BOUND:
-            pass
-        case _ as _unreachable_mode:  # pragma: no cover
-            assert_never(_unreachable_mode)
     if desc.kind is NominalKind.ENUM:
         known_fields = {name for variant in desc.variants for name in variant.fields}
     else:
@@ -397,47 +389,10 @@ def _check_nominal_is_target(nominal: NominalId, ctx: _Context, node_name: str) 
 def _check_mutable_record_field(nominal: NominalId, field: str, ctx: _Context) -> None:
     """Require a mutable field on the precise record declaration for a store."""
     _check_record_nominal(nominal, ctx, "IrFieldSet")
-    _check_nominal_field(nominal, field, IrFieldMode.EXACT, ctx, "IrFieldSet")
+    _check_nominal_field(nominal, field, ctx, "IrFieldSet")
     if field not in ctx.program.nominals[nominal].mutable_fields:
         raise InvalidIrError(
             f"IrFieldSet references immutable field {field!r} of nominal {nominal!r}"
-        )
-
-
-_DECODE_STRATEGIES = frozenset(
-    {
-        ConversionStrategy.NARROW_DECIMAL_TO_INT,
-        ConversionStrategy.PARSE_TEXT_THEN_DECODE,
-        ConversionStrategy.DECODE_JSON,
-    }
-)
-
-
-def _check_recipe_consistency(
-    strategy: ConversionStrategy,
-    json_schema: str | None,
-    decode: DecodeSchema | None,
-    defs: "tuple[tuple[str, DecodeSchema], ...]",
-    encode: EncodeSchema | None,
-    encode_definitions: "tuple[EncodeDefinition, ...]",
-) -> None:
-    """Require only the conversion metadata selected by each strategy."""
-    needs_decode = strategy in _DECODE_STRATEGIES
-    has_decode = json_schema is not None and decode is not None
-    if needs_decode and not has_decode:
-        raise InvalidIrError(
-            f"ConversionRecipe strategy {strategy.value!r} requires json_schema and decode"
-        )
-    if not needs_decode and (json_schema is not None or decode is not None or defs):
-        raise InvalidIrError(
-            f"ConversionRecipe strategy {strategy.value!r} must not carry json_schema/decode/defs"
-        )
-    needs_encode = strategy is ConversionStrategy.TO_JSON
-    if needs_encode and encode is None:
-        raise InvalidIrError("ConversionRecipe strategy 'to_json' requires encode")
-    if not needs_encode and (encode is not None or encode_definitions):
-        raise InvalidIrError(
-            f"ConversionRecipe strategy {strategy.value!r} must not carry encode/encode_definitions"
         )
 
 
@@ -555,16 +510,12 @@ def _walk_encode_schema(encode: EncodeSchema, walk: _EncodeWalk, parameter_count
             _check_nominal_fields(fields, desc.fields, "RecordEncode")
             for fenc in fields:
                 _walk_encode_schema(fenc.schema, walk, parameter_count)
-        case ExceptionEncode(nominal=nominal, fields=fields):
+        case ExceptionEncode(nominal=nominal):
             _check_nominal_in_table(nominal, ctx)
-            desc = ctx.program.nominals[nominal]
-            if desc.kind is not NominalKind.EXCEPTION:
+            if ctx.program.nominals[nominal].kind is not NominalKind.EXCEPTION:
                 raise InvalidIrError(
                     f"ExceptionEncode references non-exception nominal {nominal!r}"
                 )
-            _check_nominal_fields(fields, desc.fields, "ExceptionEncode")
-            for fenc in fields:
-                _walk_encode_schema(fenc.schema, walk, parameter_count)
         case EnumEncode(nominal=nominal, variants=variants):
             _check_nominal_in_table(nominal, ctx)
             desc = ctx.program.nominals[nominal]
@@ -1051,22 +1002,21 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_expr(lhs, ctx)
             _validate_expr(rhs, ctx)
 
-        case IrUnary(op=op, kind=kind, value=val):
+        case IrNot(value=val):
             _validate_location(node.location, ctx)
-            # NOT requires kind=None; NEG requires kind set
-            if op is UnaryOp.NOT and kind is not None:
-                raise InvalidIrError(f"IrUnary NOT: kind must be None, got kind={kind!r}")
-            if op is UnaryOp.NEG and kind is None:
-                raise InvalidIrError("IrUnary NEG: kind must not be None")
             _validate_expr(val, ctx)
 
-        case IrField(value=val, nominal=nominal, field=field, mode=mode):
+        case IrNeg(value=val):
+            _validate_location(node.location, ctx)
+            _validate_expr(val, ctx)
+
+        case IrField(value=val, nominal=nominal, field=field):
             _validate_location(node.location, ctx)
             if not field:
                 raise InvalidIrError("IrField field must be non-empty")
             if ctx.deep:
                 _check_nominal_in_table(nominal, ctx)
-                _check_nominal_field(nominal, field, mode, ctx, "IrField")
+                _check_nominal_field(nominal, field, ctx, "IrField")
             _validate_expr(val, ctx)
 
         case IrFieldSet(value=val, nominal=nominal, field=field, new=new):
@@ -1141,17 +1091,9 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
 
         case IrConvert(value=val, recipe=recipe):
             _validate_location(node.location, ctx)
-            _check_recipe_consistency(
-                recipe.strategy,
-                recipe.json_schema,
-                recipe.decode,
-                recipe.defs,
-                recipe.encode,
-                recipe.encode_definitions,
-            )
-            if ctx.deep and recipe.decode is not None:
+            if ctx.deep and isinstance(recipe, DecodeConversionRecipe):
                 _check_decode_nominals(recipe.decode, recipe.defs, ctx)
-            if ctx.deep and recipe.encode is not None:
+            if ctx.deep and isinstance(recipe, ToJsonRecipe):
                 _check_encode_nominals(recipe.encode, recipe.encode_definitions, ctx)
             _validate_expr(val, ctx)
 
@@ -1224,10 +1166,10 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             for contract in arguments[:targets]:
                 assert isinstance(contract, IrContract)
                 _validate_location(contract.location, ctx)
-                if ctx.deep and contract.contract_id not in ctx.program.contracts:
+                if ctx.deep and contract.contract_id not in ctx.program.target_contracts:
                     raise InvalidIrError(
                         f"IrContract references contract_id={contract.contract_id!r}"
-                        " which is not in program.contracts"
+                        " which is not in program.target_contracts"
                     )
             if ctx.deep:
                 params = ctx.program.functions[fn_id].params
@@ -1673,6 +1615,8 @@ def _validate_program_tables(ctx: _Context) -> None:
     # 6. contracts table — each ContractRequest must be consistent.
     for cid, contract_req in program.contracts.items():
         _validate_contract_request(cid, contract_req, ctx)
+    for target_request in program.target_contracts.values():
+        _check_type_tree(target_request.type_tree, ctx)
 
     # (Sources table has no key/id consistency invariant beyond being keyed by
     # SourceId; key consistency is structural to dict construction.)
@@ -1692,27 +1636,22 @@ def _validate_contract_request(
     req: ContractRequest,
     ctx: _Context,
 ) -> None:
-    """Validate a ContractRequest entry (deep tier)."""
-    has_decode_fields = req.json_schema is not None or req.decode is not None or bool(req.defs)
-    if req.is_unit or req.codec_name == "text":
-        if has_decode_fields:
-            raise InvalidIrError(f"ContractRequest {cid!r} must not carry json_schema/decode/defs")
-        return
-    if req.codec_name == "json":
-        if req.json_schema is None:
-            raise InvalidIrError(
-                f"ContractRequest {cid!r} has codec_name='json' but json_schema is None"
-            )
-        if req.decode is None:
-            raise InvalidIrError(
-                f"ContractRequest {cid!r} has codec_name='json' but decode is None"
-            )
-    elif req.defs and req.decode is None:
-        raise InvalidIrError(f"ContractRequest {cid!r} has defs but decode is None")
-    if req.decode is not None:
+    """Validate a ContractRequest entry (deep tier).
+
+    A ``UnitContractRequest`` or ``TextContractRequest`` carries no schema to
+    check. A ``JsonContractRequest`` always carries ``decode`` (the type split
+    makes that state unrepresentable), so only its nominals need checking. A
+    ``CustomContractRequest``'s ``decode`` stays
+    genuinely optional (a host codec's ``make_contract`` may not derive one),
+    so its ``defs``/``decode`` pairing is still checked here.
+    """
+    if isinstance(req, JsonContractRequest):
         _check_decode_nominals(req.decode, req.defs, ctx)
-    if req.type_tree is not None:
-        _check_type_tree(req.type_tree, ctx)
+    elif isinstance(req, CustomContractRequest):
+        if req.defs and req.decode is None:
+            raise InvalidIrError(f"ContractRequest {cid!r} has defs but decode is None")
+        if req.decode is not None:
+            _check_decode_nominals(req.decode, req.defs, ctx)
 
 
 def _check_type_tree(tree: TypeTree, ctx: _Context) -> None:
@@ -1756,6 +1695,52 @@ def _check_payload_dominance(ctx: _Context) -> None:
             )
 
 
+def _validate_exception_field_encodes(program: ExecutableProgram, ctx: _Context) -> None:
+    """Check every exception nominal has a complete, well-formed field-encode table entry."""
+    unencoded = sorted(
+        nominal.value
+        for nominal, descriptor in program.nominals.items()
+        if descriptor.kind is NominalKind.EXCEPTION
+        and nominal not in program.exception_field_encodes
+    )
+    if unencoded:
+        raise InvalidIrError(f"exception nominals {unencoded!r} lack field encodes")
+    for nominal, field_encodes in program.exception_field_encodes.items():
+        descriptor = program.nominals.get(nominal)
+        if descriptor is None or descriptor.kind is not NominalKind.EXCEPTION:
+            raise InvalidIrError(
+                "exception field encodes reference an unregistered non-exception nominal "
+                f"{nominal!r}"
+            )
+        field_names: set[str] = set()
+        json_names: set[str] = set()
+        for field_encode in field_encodes:
+            if field_encode.field_name in field_names:
+                raise InvalidIrError(
+                    f"exception field encodes duplicate field {field_encode.field_name!r}"
+                )
+            field_names.add(field_encode.field_name)
+            if field_encode.field_name not in descriptor.fields:
+                raise InvalidIrError(
+                    "exception field encodes reference unknown field "
+                    f"{field_encode.field_name!r} of nominal {nominal!r}"
+                )
+            if field_encode.json_name in json_names:
+                raise InvalidIrError(
+                    "exception field encodes duplicate JSON name "
+                    f"{field_encode.json_name!r} of nominal {nominal!r}"
+                )
+            json_names.add(field_encode.json_name)
+            if field_encode.plan is not None:
+                _check_encode_nominals(field_encode.plan.root, field_encode.plan.definitions, ctx)
+        missing_fields = set(descriptor.fields) - field_names
+        if missing_fields:
+            raise InvalidIrError(
+                f"exception field encodes for nominal {nominal!r} omit fields "
+                f"{sorted(missing_fields)!r}"
+            )
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -1774,42 +1759,6 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
 
     if deep:
         _validate_program_tables(ctx)
-        for nominal, field_encodes in program.exception_field_encodes.items():
-            descriptor = program.nominals.get(nominal)
-            if descriptor is None or descriptor.kind is not NominalKind.EXCEPTION:
-                raise InvalidIrError(
-                    "exception field encodes reference an unregistered non-exception nominal "
-                    f"{nominal!r}"
-                )
-            field_names: set[str] = set()
-            json_names: set[str] = set()
-            for field_encode in field_encodes:
-                if field_encode.field_name in field_names:
-                    raise InvalidIrError(
-                        f"exception field encodes duplicate field {field_encode.field_name!r}"
-                    )
-                field_names.add(field_encode.field_name)
-                if field_encode.field_name not in descriptor.fields:
-                    raise InvalidIrError(
-                        "exception field encodes reference unknown field "
-                        f"{field_encode.field_name!r} of nominal {nominal!r}"
-                    )
-                if field_encode.json_name in json_names:
-                    raise InvalidIrError(
-                        "exception field encodes duplicate JSON name "
-                        f"{field_encode.json_name!r} of nominal {nominal!r}"
-                    )
-                json_names.add(field_encode.json_name)
-                if field_encode.plan is not None:
-                    _check_encode_nominals(
-                        field_encode.plan.root, field_encode.plan.definitions, ctx
-                    )
-            missing_fields = set(descriptor.fields) - field_names
-            if missing_fields:
-                raise InvalidIrError(
-                    f"exception field encodes for nominal {nominal!r} omit fields "
-                    f"{sorted(missing_fields)!r}"
-                )
 
     for _module_id, em in program.modules.items():
         for node in em.initializers:
@@ -1818,4 +1767,5 @@ def validate_ir(program: ExecutableProgram, *, deep: bool = True) -> None:
         _validate_expr(default, ctx)
 
     if deep:
+        _validate_exception_field_encodes(program, ctx)
         _check_payload_dominance(ctx)

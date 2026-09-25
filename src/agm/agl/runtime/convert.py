@@ -32,7 +32,7 @@ import re
 from collections.abc import Mapping
 from decimal import Decimal
 from types import MappingProxyType
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, assert_never, cast
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
@@ -236,11 +236,9 @@ def decode_value(
     ``$defs`` table built alongside *schema* by ``type_schema.derive_schema_and_decode``
     (see ``DecodePlan``); empty for a non-recursive *schema*, which then never
     contains a ``RefDecode`` node. Ref resolution follows chains until a
-    non-ref body is reached, then decodes that body; this allows ordinary
-    recursive bodies while rejecting malformed ref-only cycles. An unknown key
-    or ref-only cycle indicates an inconsistent decode plan (a lowering bug,
-    not a user-facing condition) since a well-formed plan's keys always match
-    its own ``RefDecode`` occurrences one-to-one and always name real bodies.
+    non-ref body is reached, then decodes that body: a well-formed plan's keys
+    always match its own ``RefDecode`` occurrences one-to-one and always name
+    real, eventually non-ref bodies.
     """
     match schema:
         case RefDecode(key=key):
@@ -296,14 +294,22 @@ def decode_value(
             assert_never(unreachable)
 
 
-def resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> DecodeSchema:
-    """Resolve a ``RefDecode`` key to a non-ref body, rejecting malformed cycles."""
-    return resolve_schema_ref(
+#: A ``DecodeSchema`` known not to be a ``RefDecode`` -- what
+#: :func:`resolve_decode_ref` (and :func:`~agm.agl.runtime.value_decode._resolve`)
+#: return, having already followed every ``$defs`` reference.
+type ResolvedDecode = ScalarDecode | ArrayDecode | DictDecode | RecordDecode | EnumDecode
+
+
+def resolve_decode_ref(key: str, defs: Mapping[str, DecodeSchema]) -> ResolvedDecode:
+    """Resolve a ``RefDecode`` key to its non-ref body."""
+    resolved = resolve_schema_ref(
         key,
         defs,
         lambda schema: schema.key if isinstance(schema, RefDecode) else None,
-        subject="decode_value: RefDecode",
     )
+    # resolve_schema_ref stops exactly when forwarded_key returns None, i.e.
+    # when resolved is not itself a RefDecode.
+    return cast(ResolvedDecode, resolved)
 
 
 def _decode_scalar(kind: ScalarKind, obj: object) -> Value:

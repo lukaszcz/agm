@@ -50,7 +50,7 @@ from tests.agl.ir_harness import (
 #: An empty descriptor view for tests that build or encode a boundary value
 #: without a real compiled program behind it -- rendering shows no display
 #: spellings, which none of these tests check.
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 class TestValueDirectedBoundary:
@@ -816,6 +816,7 @@ def test_encode_boundary_value_names_a_known_but_unsynthesized_nominal_in_its_me
             )
         },
         functions={},
+        exception_field_encodes={},
     )
     with pytest.raises(BoundaryViolation, match="Ghost"):
         encode_boundary_value(RecordValue(_UNREGISTERED_NOMINAL, {}), known_descriptors)

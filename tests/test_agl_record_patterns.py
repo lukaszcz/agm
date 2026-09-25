@@ -203,7 +203,7 @@ def test_record_and_enum_constructor_spelling_collision_is_scrutinee_directed() 
     assert isinstance(case, Case)
     pattern = case.branches[0].pattern
     assert isinstance(pattern, ConstructorPattern)
-    selected = checked.pattern_constructor_ref_for(pattern.node_id)
+    selected = checked.pattern_constructor_refs.get(pattern.node_id)
     assert selected is not None
     assert selected.owner_name == "Token"
 
@@ -260,7 +260,7 @@ def test_unqualified_pattern_selects_a_nominal_declared_in_the_same_scope() -> N
     assert isinstance(case, Case)
     case_pattern = case.branches[0].pattern
     assert isinstance(case_pattern, ConstructorPattern)
-    selected = checked.pattern_constructor_ref_for(case_pattern.node_id)
+    selected = checked.pattern_constructor_refs.get(case_pattern.node_id)
     assert selected is not None
     assert (selected.owner_path, selected.owner_name) == (("Config",), "Bounds")
 
@@ -314,7 +314,7 @@ def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
     assert isinstance(case, Case)
     pattern = case.branches[0].pattern
     assert isinstance(pattern, ConstructorPattern)
-    selected = checked.pattern_constructor_ref_for(pattern.node_id)
+    selected = checked.pattern_constructor_refs.get(pattern.node_id)
     assert selected is not None
     assert selected.owner_name == "Retry"
 

@@ -45,6 +45,7 @@ from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
     IntValue,
+    JsonValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -256,6 +257,41 @@ class TestPersistence:
 
         assert is_result.ok, is_result.diagnostics
         assert is_result.value == BoolValue(True)
+
+    def test_json_cast_encodes_a_later_entrys_subtype_by_its_own_fields(self) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "exception Base extends Exception\n  code: int\ndef enc(e: Base) -> json = e as json"
+        ).ok
+        assert session.eval_entry("exception Kid extends Base\n  extra: text").ok
+
+        result = session.eval_entry('enc(Kid(message = "m", code = 1, extra = "x"))')
+
+        assert result.ok, result.diagnostics
+        assert result.value == JsonValue({"message": "m", "code": 1, "extra": "x"})
+
+    def test_json_cast_of_a_later_entrys_subtype_with_a_function_field_fails(self) -> None:
+        session = open_session()
+        assert session.eval_entry(
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            "def enc(e: Base) -> json = e as json\n"
+            "def try-enc(e: Base) -> Option[json] = e as? json"
+        ).ok
+        assert session.eval_entry("exception Kid extends Base\n  f: (int) -> int").ok
+        assert session.eval_entry('let kid = Kid(message = "m", code = 1, f = fn(x) => x)').ok
+
+        raised = session.eval_entry("enc(kid)")
+        caught = session.eval_entry('try enc(kid) catch CastError => "cast failed" as json')
+        tested = session.eval_entry("try-enc(kid).is-some()")
+
+        assert not raised.ok
+        assert raised.error is not None
+        assert raised.error.type_name == "CastError"
+        assert caught.ok, caught.diagnostics
+        assert caught.value == JsonValue("cast failed")
+        assert tested.ok, tested.diagnostics
+        assert tested.value == BoolValue(False)
 
     def test_exception_downcast_keeps_its_identity_across_a_redeclaration(self) -> None:
         session = open_session()
@@ -6647,6 +6683,26 @@ class TestImports:
         )
         assert not r.ok
         assert any("bad contract" in d.message for d in r.diagnostics)
+
+    def test_unmaterializable_linked_contract_fails_the_entry_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A linked contract the host cannot materialize rejects the entry before
+        # it runs; the session stays usable afterwards.
+        import agm.agl.runtime.contract as contract_mod
+
+        def unmaterializable(request: object, codecs: object) -> object:
+            raise ValueError("unmaterializable")
+
+        s = repl_session_with_root(tmp_path)
+        with monkeypatch.context() as patched:
+            patched.setattr(contract_mod, "materialize_ir_contract", unmaterializable)
+            failed = s.eval_entry('let n = 1\nexec("true")\nn')
+        assert not failed.ok
+        assert failed.diagnostics
+        retried = s.eval_entry("let n = 2\nn")
+        assert retried.ok, retried.diagnostics
+        assert _int(retried.value) == 2
 
     def test_parse_error_in_imported_module_has_source_label(self, tmp_path: Path) -> None:
         # Regression: parse error in an imported module must surface

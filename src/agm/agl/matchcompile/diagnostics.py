@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import decimal
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 from agm.agl.scope.imports import render_qualifier
 from agm.agl.semantics.types import EnumType, RecordType, Type
@@ -141,12 +141,10 @@ MatchIssue: TypeAlias = NonExhaustiveIssue | RedundantArmIssue
 
 def _render_literal(kind: LiteralKind, value: decimal.Decimal | str | None) -> str:
     if kind is LiteralKind.TEXT:
-        assert isinstance(value, str)
-        return quote_text(value)
+        return quote_text(cast(str, value))
     if kind is LiteralKind.NULL:
         return "null"
-    assert isinstance(value, decimal.Decimal)
-    return format(value, "f")
+    return format(cast(decimal.Decimal, value), "f")
 
 
 def render_witness(witness: MatchWitness) -> str:

@@ -6,7 +6,7 @@ import decimal
 
 import pytest
 
-from agm.agl.eval.arith import contains, div, order, value_eq
+from agm.agl.eval.arith import contains, order, value_eq
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import CmpOp, ContainsKind
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
@@ -23,7 +23,6 @@ from agm.agl.semantics.values import (
     DictValue,
     ExceptionValue,
     IntValue,
-    IteratorValue,
     JsonValue,
     RecordValue,
     TextValue,
@@ -35,7 +34,7 @@ from tests._agl_helpers import type_table_for
 from tests.agl.ir_harness import evaluate_ir
 
 
-def test_arithmetic_mixed_and_defensive_edges() -> None:
+def test_arithmetic_mixed_edges() -> None:
     one = IntValue(1)
     decimal_one = DecimalValue(decimal.Decimal(1))
     # value_eq (structural equality) still widens int<->decimal directly; a
@@ -46,10 +45,6 @@ def test_arithmetic_mixed_and_defensive_edges() -> None:
     assert order(CmpOp.LE, decimal_one, decimal_one)
     assert order(CmpOp.GE, decimal_one, decimal_one)
     assert not contains(ContainsKind.DICT, one, DictValue({"1": one}))
-    with pytest.raises(AssertionError, match="cannot compare"):
-        order(CmpOp.LT, TextValue("x"), one)
-    with pytest.raises(AssertionError, match="expected DecimalValue"):
-        div(TextValue("x"), one)
 
 
 def test_runtime_value_notimplemented_and_unhashable_edges() -> None:
@@ -96,13 +91,12 @@ def test_constructor_render_and_serialization_edges() -> None:
             ),
         },
         functions={},
+        exception_field_encodes={},
     )
     assert render_value(record, descriptors) == "<constructor Thing>"
     assert render_value(variant, descriptors) == "<constructor Thing::Case>"
     with pytest.raises(AglNonDataValue, match="constructor"):
         value_to_json_obj(record)
-    with pytest.raises(AglNonDataValue, match="iterator"):
-        value_to_json_obj(IteratorValue(elements=[]))
 
 
 def test_param_conversion_direct_success_edges() -> None:

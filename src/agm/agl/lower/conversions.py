@@ -27,7 +27,15 @@ from __future__ import annotations
 import json
 from typing import assert_never
 
-from agm.agl.ir.contracts import ConversionRecipe, ConversionStrategy
+from agm.agl.ir.contracts import (
+    ConversionRecipe,
+    ConversionStrategy,
+    DecodeConversionKind,
+    DecodeConversionRecipe,
+    SimpleConversionKind,
+    SimpleConversionRecipe,
+    ToJsonRecipe,
+)
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     BottomType,
@@ -61,7 +69,7 @@ def compile_recipe(
     # against an expected target type, so make the unreachable conversion
     # explicit before any target-specific planning.
     if isinstance(source, BottomType):
-        return ConversionRecipe(
+        return SimpleConversionRecipe(
             strategy=ConversionStrategy.NOOP,
             source_label=source_label,
             target_label=target_label,
@@ -71,15 +79,16 @@ def compile_recipe(
         case CastKind.TOTAL_NOOP:
             # int → decimal is the only widening no-op; everything else returns
             # the value unchanged (identity / already-assignable).
+            strategy: SimpleConversionKind
             if isinstance(source, IntType) and isinstance(target, DecimalType):
                 strategy = ConversionStrategy.WIDEN_INT_TO_DECIMAL
             else:
                 strategy = ConversionStrategy.NOOP
-            return ConversionRecipe(
+            return SimpleConversionRecipe(
                 strategy=strategy, source_label=source_label, target_label=target_label
             )
         case CastKind.TOTAL_RENDER:
-            return ConversionRecipe(
+            return SimpleConversionRecipe(
                 strategy=ConversionStrategy.RENDER_TO_TEXT,
                 source_label=source_label,
                 target_label=target_label,
@@ -89,26 +98,26 @@ def compile_recipe(
             # JSON representation even though no finite set of concrete
             # instantiations covers it; build_encode_plan picks the plan shape.
             encode_plan = build_encode_plan(source, type_table)
-            return ConversionRecipe(
-                strategy=ConversionStrategy.TO_JSON,
+            return ToJsonRecipe(
                 source_label=source_label,
                 target_label=target_label,
                 encode=encode_plan.root,
                 encode_definitions=encode_plan.definitions,
             )
         case CastKind.FALLIBLE:
+            decode_strategy: DecodeConversionKind
             if isinstance(source, DecimalType) and isinstance(target, IntType):
-                strategy = ConversionStrategy.NARROW_DECIMAL_TO_INT
+                decode_strategy = ConversionStrategy.NARROW_DECIMAL_TO_INT
             elif isinstance(source, TextType):
-                strategy = ConversionStrategy.PARSE_TEXT_THEN_DECODE
+                decode_strategy = ConversionStrategy.PARSE_TEXT_THEN_DECODE
             else:
                 # cast_classification only yields FALLIBLE for decimal→int or a
                 # text/json source; the remaining case is a json source.
                 assert isinstance(source, JsonType), f"unexpected fallible cast source {source!r}"
-                strategy = ConversionStrategy.DECODE_JSON
+                decode_strategy = ConversionStrategy.DECODE_JSON
             schema, decode_plan = derive_schema_and_decode(target, type_table)
-            return ConversionRecipe(
-                strategy=strategy,
+            return DecodeConversionRecipe(
+                strategy=decode_strategy,
                 source_label=source_label,
                 target_label=target_label,
                 # Serialize the schema to a canonical JSON string so the recipe
@@ -118,7 +127,7 @@ def compile_recipe(
                 defs=decode_plan.defs,
             )
         case CastKind.IDENTITY_UPCAST:
-            return ConversionRecipe(
+            return SimpleConversionRecipe(
                 strategy=ConversionStrategy.NOOP,
                 source_label=source_label,
                 target_label=target_label,

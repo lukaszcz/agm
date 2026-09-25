@@ -41,8 +41,12 @@ from agm.agl.ir.contracts import (
     ContractPayload,
     ContractRequest,
     ConversionFailureMode,
-    DecodePlan,
-    TypeTree,
+    CustomContractRequest,
+    ExceptionFieldEncode,
+    JsonContractRequest,
+    TargetContractRequest,
+    TextContractRequest,
+    UnitContractRequest,
 )
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
@@ -78,7 +82,6 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
-    IrFieldMode,
     IrFieldSet,
     IrFunctionParam,
     IrIf,
@@ -101,9 +104,11 @@ from agm.agl.ir.nodes import (
     IrMakeJsonArray,
     IrMakeJsonObject,
     IrMakeRecord,
+    IrNeg,
     IrNominalCaseKey,
     IrNominalCast,
     IrNominalIs,
+    IrNot,
     IrOr,
     IrPrint,
     IrRaise,
@@ -120,7 +125,6 @@ from agm.agl.ir.nodes import (
     IrTemplateText,
     IrTemplateValue,
     IrTry,
-    IrUnary,
     IrUpdateRecord,
     UseDefault,
 )
@@ -133,8 +137,8 @@ from agm.agl.ir.operations import (
     CopyKind,
     IndexKind,
     IterKind,
+    MutableIndexKind,
     NumericKind,
-    UnaryOp,
 )
 from agm.agl.ir.program import (
     ExternFunctionBody,
@@ -275,7 +279,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
     build_format_instructions,
     derive_schema_and_decode,
-    derive_schema_decode_and_tree,
+    derive_schema_and_tree,
 )
 from agm.agl.typecheck.env import (
     CheckedModule,
@@ -287,16 +291,6 @@ from agm.util.graph import toposort
 from agm.util.text import normalize_newlines
 
 __all__ = ["InitializerOrigin", "_LinkState", "builtin_nominals_from_declarations"]
-
-
-def _json_payload(schema: dict[str, object], decode_plan: DecodePlan) -> ContractPayload:
-    """Build the JSON codec payload of a derived *schema* and *decode_plan*."""
-    return ContractPayload(
-        json_schema=json.dumps(schema),
-        decode=decode_plan.root,
-        format_instructions=build_format_instructions(schema),
-        defs=decode_plan.defs,
-    )
 
 
 def _contract_has_schema(
@@ -462,6 +456,10 @@ class _LinkState:
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
+    target_contracts: dict[ContractId, TargetContractRequest] = field(default_factory=dict)
+    exception_field_encodes: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = field(
+        default_factory=dict
+    )
     # Lowering's published initializer-to-source-item mapping is the sole
     # source of that correspondence. REPL promotion reads it rather than
     # re-classifying source items; the entry mapping is overwritten before
@@ -749,66 +747,84 @@ class _Lowerer:
         self._allocation.next_fn += 1
         return fn_id
 
-    def _alloc_contract(self, request: ContractRequest) -> ContractId:
-        """Allocate a fresh ContractId and register the ContractRequest."""
+    def _next_contract_id(self) -> ContractId:
+        """Allocate a fresh ``ContractId``, shared by output and target contracts."""
         cid = ContractId(self._allocation.next_contract)
         self._allocation.next_contract += 1
+        return cid
+
+    def _alloc_contract(self, request: ContractRequest) -> ContractId:
+        """Allocate a fresh ContractId and register the ContractRequest."""
+        cid = self._next_contract_id()
         self._link.contracts[cid] = request
         return cid
 
-    def _derived_contract_payload(self, spec: OutputContractSpec) -> ContractPayload:
-        """Derive the codec payload of *spec* from its target type."""
-        if spec.codec_name != "json":
-            return ContractPayload(json_schema=None, decode=None, format_instructions="")
-        return _json_payload(*derive_schema_and_decode(spec.target_type, self._type_table))
+    def _contract_request_for_spec(self, node_id: int, *, structured_exec: bool) -> ContractRequest:
+        """Build the typeless contract request for node *node_id*'s checked output contract.
 
-    def _contract_request_for_spec(
-        self,
-        spec: OutputContractSpec,
-        *,
-        structured_exec: bool,
-        payload: ContractPayload | None,
-        type_tree: TypeTree | None = None,
-    ) -> ContractRequest:
-        """Build the typeless contract request for one checked output contract spec.
-
-        *payload* replaces the one derived from *spec* when given.
+        A custom codec's request carries the payload the host materialized for
+        the node before lowering. A unit target maps to ``UnitContractRequest``
+        whatever the spec's codec name says.
         """
-        if payload is None:
-            payload = self._derived_contract_payload(spec)
-        return ContractRequest(
+        spec = self._checked.contract_specs[node_id]
+        target = spec.target_type
+        if isinstance(target, UnitType):
+            return UnitContractRequest()
+        if spec.codec_name == "json":
+            schema, decode_plan = derive_schema_and_decode(target, self._type_table)
+            return JsonContractRequest(
+                strict_json=spec.strict_json,
+                json_schema=json.dumps(schema),
+                decode=decode_plan.root,
+                target_type_label=repr(target),
+                structured_exec=structured_exec,
+                format_instructions=build_format_instructions(schema),
+                target_type_kind=target.kind,
+                target_type=target,
+                defs=decode_plan.defs,
+            )
+        if spec.codec_name == "text":
+            # "text" is a reserved codec name (see `BUILTIN_CODEC_NAMES`): a
+            # host codec can never register under it.
+            return TextContractRequest(
+                strict_json=spec.strict_json,
+                target_type_label=repr(target),
+                structured_exec=structured_exec,
+                format_instructions="",
+                target_type_kind=target.kind,
+                target_type=target,
+            )
+        payload = self._contract_payloads[node_id]
+        return CustomContractRequest(
             codec_name=spec.codec_name,
             strict_json=spec.strict_json,
             json_schema=payload.json_schema,
             decode=payload.decode,
-            target_type_label=repr(spec.target_type),
+            target_type_label=repr(target),
             structured_exec=structured_exec,
             format_instructions=payload.format_instructions,
-            is_unit=isinstance(spec.target_type, UnitType),
-            target_type_kind=spec.target_type.kind,
-            target_type=spec.target_type,
+            target_type_kind=target.kind,
+            target_type=target,
             defs=payload.defs,
-            type_tree=type_tree,
         )
 
-    def _target_contract_request(self, spec: OutputContractSpec) -> ContractRequest:
-        """Build a type-directed extern's contract request, carrying its target's type tree."""
-        schema_dict, decode_plan, tree = derive_schema_decode_and_tree(
-            spec.target_type, self._type_table
-        )
-        return self._contract_request_for_spec(
-            spec,
-            structured_exec=False,
-            payload=_json_payload(schema_dict, decode_plan),
+    def _alloc_target_contract(self, spec: OutputContractSpec) -> ContractId:
+        """Register a type-directed extern's target contract, carrying its type tree."""
+        schema, tree = derive_schema_and_tree(spec.target_type, self._type_table)
+        cid = self._next_contract_id()
+        self._link.target_contracts[cid] = TargetContractRequest(
+            target_type_label=repr(spec.target_type),
+            json_schema=json.dumps(schema),
             type_tree=tree,
         )
+        return cid
 
     def _target_contracts(self, node_id: int, span: SourceSpan) -> tuple[IrContract, ...]:
         """Register and lower an extern occurrence's target contracts; empty for any other."""
         return tuple(
             IrContract(
                 location=self._loc(span),
-                contract_id=self._alloc_contract(self._target_contract_request(spec)),
+                contract_id=self._alloc_target_contract(spec),
             )
             for spec in self._checked.target_contract_specs.get(node_id, ())
         )
@@ -1437,9 +1453,7 @@ class _Lowerer:
                     node_typ = self._node_type(nid)
                     if isinstance(node_typ, FunctionType):
                         # Constructor with fields used as a value → IrMakeConstructor.
-                        nominal = self._nominal_for_constructor_result(
-                            self._constructor_result_type(nid)
-                        )
+                        nominal = NominalId(self._constructor_result_type(nid).decl_id)
                         return IrMakeConstructor(location=self._loc(span), nominal=nominal)
                     # Fieldless constructor used as a value → construct immediately.
                     return self._lower_nullary_constructor(nid, span)
@@ -1488,19 +1502,16 @@ class _Lowerer:
                 return self._lower_operator_ref(node)
 
             case UnaryNot(operand=operand_expr, span=span):
-                return IrUnary(
+                return IrNot(
                     location=self._loc(span),
-                    op=UnaryOp.NOT,
-                    kind=None,
                     value=self.lower_expr(operand_expr),
                 )
 
             case UnaryNeg(operand=operand_expr, span=span):
                 op_type = self._node_type(operand_expr.node_id)
                 nkind = NumericKind.INT if isinstance(op_type, IntType) else NumericKind.DECIMAL
-                return IrUnary(
+                return IrNeg(
                     location=self._loc(span),
-                    op=UnaryOp.NEG,
                     kind=nkind,
                     value=self.lower_expr(operand_expr),
                 )
@@ -1512,14 +1523,14 @@ class _Lowerer:
                 selected_method = self._checked.method_selection_for(node.node_id)
                 if selected_method is not None:
                     return self._lower_bound_method(node, selected_method)
-                obj_type = self._node_type(obj_expr.node_id)
-                nominal, mode = self._nominal_for_field_projection(obj_type)
+                obj_type = cast(
+                    "RecordType | EnumType | ExceptionType", self._node_type(obj_expr.node_id)
+                )
                 return IrField(
                     location=self._loc(span),
                     value=self.lower_expr(obj_expr),
-                    nominal=nominal,
+                    nominal=NominalId(obj_type.decl_id),
                     field=field_name,
-                    mode=mode,
                 )
 
             # ----------------------------------------------------------
@@ -1928,10 +1939,8 @@ class _Lowerer:
                         location=loc,
                         branches=(
                             IrIfBranch(
-                                cond=IrUnary(
+                                cond=IrNot(
                                     location=loc,
-                                    op=UnaryOp.NOT,
-                                    kind=None,
                                     value=IrIterHasNext(
                                         location=loc,
                                         iterator=IrLoad(location=loc, symbol=it_sym),
@@ -1964,10 +1973,8 @@ class _Lowerer:
                     location=loc,
                     branches=(
                         IrIfBranch(
-                            cond=IrUnary(
+                            cond=IrNot(
                                 location=loc,
-                                op=UnaryOp.NOT,
-                                kind=None,
                                 value=self.lower_coerced(while_cond_expr, BoolType()),
                             ),
                             body=IrBreak(location=loc),
@@ -2298,27 +2305,6 @@ class _Lowerer:
     # ------------------------------------------------------------------
     # Constructor lowering helpers
     # ------------------------------------------------------------------
-
-    def _nominal_for_constructor_result(self, typ: Type) -> NominalId:
-        """Return the record or exception identity constructed by a callable."""
-        if isinstance(typ, (RecordType, ExceptionType)):
-            return NominalId(typ.decl_id)
-        raise AssertionError(f"constructor function has non-nominal result {typ!r}")
-
-    def _nominal_for_field_projection(self, typ: Type) -> tuple[NominalId, IrFieldMode]:
-        """Return a nominal and mode from declaration metadata, never a name test."""
-        nominal = self._nominal_for_constructor_result(typ)
-        assert isinstance(typ, (RecordType, EnumType, ExceptionType))
-        typedef = self._checked.type_env.type_table.get_by_id(typ.decl_id)
-        assert typedef is not None, (
-            f"compiler bug: no nominal declaration for field projection {nominal!r}"
-        )
-        mode = (
-            IrFieldMode.UPPER_BOUND
-            if typedef.abstract or isinstance(typ, ExceptionType)
-            else IrFieldMode.EXACT
-        )
-        return nominal, mode
 
     def _constructor_result_type(self, ref_node_id: int) -> RecordType | ExceptionType:
         """Return a constructor's declared result, before any contextual widening."""
@@ -3567,7 +3553,6 @@ class _Lowerer:
                         IrLoad(location, symbol_for_occurrence(parent)),
                         nominal,
                         occurrence.provenance.field_name,
-                        mode=IrFieldMode.EXACT,
                     ),
                 )
                 for occurrence in demanded_children(parent, constructor, demanded)
@@ -3670,26 +3655,11 @@ class _Lowerer:
     ) -> IrExpr:
         """Build an ask operation from already-lowered direct or closure operands."""
         loc = self._loc(span)
-        is_unit = isinstance(target_type, UnitType)
-        spec = self._checked.contract_specs.get(node_id)
-        if is_unit or spec is None:
-            contract_req = ContractRequest(
-                codec_name="text",
-                strict_json=None,
-                json_schema=None,
-                decode=None,
-                target_type_label="unit" if is_unit else "text",
-                structured_exec=False,
-                format_instructions="",
-                is_unit=True,
-                target_type_kind="unit",
-            )
-        else:
-            contract_req = self._contract_request_for_spec(
-                spec,
-                structured_exec=False,
-                payload=self._contract_payloads.get(node_id),
-            )
+        contract_req: ContractRequest = (
+            UnitContractRequest()
+            if isinstance(target_type, UnitType)
+            else self._contract_request_for_spec(node_id, structured_exec=False)
+        )
         contract_id = self._alloc_contract(contract_req)
 
         if is_request:
@@ -3752,12 +3722,8 @@ class _Lowerer:
         max_attempts: int,
     ) -> IrExec:
         """Build an exec operation from already-lowered direct or closure operands."""
-        spec = self._checked.contract_specs.get(node_id)
-        assert spec is not None, "exec always has a contract spec after checking"
         contract_req = self._contract_request_for_spec(
-            spec,
-            structured_exec=spec.structured_exec,
-            payload=self._contract_payloads.get(node_id),
+            node_id, structured_exec=self._checked.contract_specs[node_id].structured_exec
         )
         return IrExec(
             location=self._loc(span),
@@ -3933,7 +3899,7 @@ class _Lowerer:
             # for a nested one), so `m["a"]["b"] := v` falls out for free
             # because IrIndex returns the inner container by reference.
             container_type = self._node_type(target.obj.node_id)
-            kind = self._kind_for_container(container_type)
+            kind = self._mutable_kind_for_container(container_type)
             slot_type = self._node_type(target.node_id)
             ir_val = self.lower_coerced(rhs, slot_type)
             return IrIndexSet(
@@ -3986,6 +3952,14 @@ class _Lowerer:
         if isinstance(t, TextType):
             return IndexKind.TEXT
         raise AssertionError(f"compiler bug: non-indexable type in index path: {t!r}")
+
+    def _mutable_kind_for_container(self, t: Type) -> MutableIndexKind:
+        """Return MutableIndexKind for an ``IrIndexSet`` target's container type.
+
+        Text is immutable, so a checked program's index-assignment target is
+        always an array or a dict.
+        """
+        return IndexKind.ARRAY if isinstance(t, ArrayType) else IndexKind.DICT
 
     # ------------------------------------------------------------------
     # Top-level entry point

@@ -8271,7 +8271,7 @@ class TestConstructorRefDispatch:
         assert isinstance(enum_pattern, ConstructorPattern)
 
         enum_checked = check_resolved(replace(enum_resolved, pattern_constructor_candidates={}))
-        assert enum_checked.pattern_constructor_ref_for(enum_pattern.node_id) is not None
+        assert enum_checked.pattern_constructor_refs.get(enum_pattern.node_id) is not None
 
         member_resolved = resolve_inline_entry(
             "enum Option[T]\n  | some(value: T)\n"
@@ -8284,7 +8284,7 @@ class TestConstructorRefDispatch:
         assert isinstance(member_pattern, ConstructorPattern)
 
         member_checked = check_resolved(replace(member_resolved, pattern_constructor_candidates={}))
-        assert member_checked.pattern_constructor_ref_for(member_pattern.node_id) is not None
+        assert member_checked.pattern_constructor_refs.get(member_pattern.node_id) is not None
 
     def test_applied_pattern_rejects_a_stale_resolved_spelling(self) -> None:
         resolved = resolve_inline_entry(

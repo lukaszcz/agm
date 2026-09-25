@@ -40,8 +40,8 @@ from agm.agl.ir.operations import (
     CopyKind,
     IndexKind,
     IterKind,
+    MutableIndexKind,
     NumericKind,
-    UnaryOp,
 )
 
 __all__ = [
@@ -85,7 +85,6 @@ __all__ = [
     "IrDirectCall",
     "IrExpr",
     "IrField",
-    "IrFieldMode",
     "IrFieldSet",
     "IrFunctionParam",
     "IrIf",
@@ -117,8 +116,9 @@ __all__ = [
     "IrTemplateSegment",
     "IrTemplateText",
     "IrTemplateValue",
+    "IrNeg",
+    "IrNot",
     "IrTry",
-    "IrUnary",
     "IrUpdateRecord",
     "IrNominalCast",
     "IrNominalIs",
@@ -412,15 +412,19 @@ class IrOr:
 
 
 @dataclass(frozen=True, slots=True)
-class IrUnary:
-    """IR unary: NOT (logical) or NEG (numeric).
-
-    ``kind`` is ``None`` for NOT, and a ``NumericKind`` for NEG.
-    """
+class IrNot:
+    """IR logical negation."""
 
     location: Location
-    op: UnaryOp
-    kind: "NumericKind | None"
+    value: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrNeg:
+    """IR numeric negation."""
+
+    location: Location
+    kind: NumericKind
     value: "IrExpr"
 
 
@@ -429,31 +433,19 @@ class IrUnary:
 # ---------------------------------------------------------------------------
 
 
-class IrFieldMode(enum.Enum):
-    """Nominal identity rule for an ``IrField`` projection."""
-
-    EXACT = "exact"
-    UPPER_BOUND = "upper_bound"
-
-
 @dataclass(frozen=True, slots=True)
 class IrField:
     """IR nominal field projection from a record, enum payload, or exception.
 
     ``nominal`` identifies the field-bearing nominal shape used for static
-    field validation. ``mode`` records whether runtime identity must match that
-    nominal exactly or whether it is a static upper bound for the runtime
-    nominal. Lowering chooses the mode because it knows whether the receiver
-    was discriminated; the source-level declaration supplies the bound.
-    Enum fields are validated against the union of their variant payload
-    shapes. The default preserves exact checking for hand-built IR.
+    field validation. Enum fields are validated against the union of their
+    variant payload shapes.
     """
 
     location: Location
     value: "IrExpr"
     nominal: NominalId
     field: str
-    mode: IrFieldMode = IrFieldMode.EXACT
 
 
 @dataclass(frozen=True, slots=True)
@@ -515,7 +507,7 @@ class IrIndexSet:
 
     location: Location
     container: "IrExpr"
-    kind: IndexKind
+    kind: MutableIndexKind
     index: "IrExpr"
     value: "IrExpr"
 
@@ -1235,7 +1227,8 @@ IrExpr = (
     | IrContains
     | IrAnd
     | IrOr
-    | IrUnary
+    | IrNot
+    | IrNeg
     | IrField
     | IrFieldSet
     | IrUpdateRecord

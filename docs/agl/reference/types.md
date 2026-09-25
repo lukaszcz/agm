@@ -1220,8 +1220,8 @@ conversion:
   effective JSON tag, plus one key per member-record field, each by its
   effective JSON name. The same record in a record-typed slot has no
   `"$case"` key.
-- **exception** → a JSON object with all fields in declaration order, each
-  keyed by its effective JSON name.
+- **exception** → a JSON object with every field of the value's runtime
+  exception type, in declaration order, each keyed by its effective JSON name.
 - **`array[E]`/`dict[text, V]`** → the JSON array/object obtained by
   converting each element/value the same way — so `array[R] as json` is a
   JSON array of record objects, and a nested `array[array[R]]` or

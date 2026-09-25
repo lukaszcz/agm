@@ -33,7 +33,7 @@ from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import (
     ArrayDecode,
-    ContractRequest,
+    CustomContractRequest,
     DecodeSchema,
     DictDecode,
     EnumDecode,
@@ -936,12 +936,6 @@ class TestRecursiveSchemaDerivation:
         assert keys[h1] == "X_A_B"
         assert keys[h2] == "X_A_B_2"
         assert keys[h3] == "X_A_B_3"
-
-    def test_assign_defs_keys_displays_non_generic_exception_handles(self) -> None:
-        from agm.agl.type_schema import _assign_defs_keys
-
-        handle = ExceptionType("Problem", module_id=ENTRY_ID)
-        assert _assign_defs_keys((handle,), type_table_for()) == {handle: "Problem"}
 
     def test_defs_key_order_is_deterministic_for_mutually_recursive_hub(self) -> None:
         # Hub has three direct neighbours (Alpha, Mike, Zulu) discovered off
@@ -2808,7 +2802,6 @@ program def main(issue: Issue) -> unit =
     def test_unsupported_type_in_convert_host_value_raises(self) -> None:
         """ExceptionType is not a supported param type."""
         from agm.agl.runtime.engine_config import convert_host_value
-        from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(ValueError, match="unsupported type"):
             convert_host_value("e", "val", ExceptionType(name="Boom"), type_table_for())
@@ -3001,13 +2994,12 @@ class TestDecodeValueRejectsMismatchedPayloads:
 
 class TestSchemaExceptionType:
     def test_exception_type_raises_type_error(self) -> None:
-        from agm.agl.semantics.types import ExceptionType
 
         with pytest.raises(TypeError, match="ExceptionType"):
             derive_schema(ExceptionType(name="Boom"), type_table_for())
 
     def test_record_containing_exception_type_raises_type_error(self) -> None:
-        from agm.agl.semantics.types import EXCEPTION_BASE, ExceptionType
+        from agm.agl.semantics.types import EXCEPTION_BASE
 
         boom_id = next_decl_id()
         boom = ExceptionType(name="Boom", decl_id=boom_id)
@@ -3238,17 +3230,6 @@ class TestValidationErrorClassification:
         decode = build_decode_schema(IntType(), type_table_for()).root
         assert _find_enum_decode_at_path(decode, ["deeper"]) is None
 
-    def test_unresolvable_reference_matches_no_enum(self) -> None:
-        """An unresolvable RefDecode (unknown key) fails soft: no crash, no match found.
-
-        Classification walkers only refine an already-failed validation's
-        message; an inconsistent contract must never turn that into a crash.
-        """
-        from agm.agl.ir.contracts import RefDecode
-        from agm.agl.runtime.codec import _find_enum_decode_at_path
-
-        assert _find_enum_decode_at_path(RefDecode("NoSuchKey"), [], {}) is None
-
     def test_recursive_reference_resolves_to_the_enum_it_names(self) -> None:
         """A root RefDecode that DOES resolve reaches the EnumDecode it points to."""
         from agm.agl.ir.contracts import RefDecode
@@ -3260,6 +3241,15 @@ class TestValidationErrorClassification:
         defs = dict(plan.defs)
         found = _find_enum_decode_at_path(plan.root, [], defs)
         assert found is defs["Tree"]
+
+    def test_resolve_decode_ref_follows_a_multi_hop_defs_chain(self) -> None:
+        """A ``$defs`` entry that is itself a reference forwards to the next hop."""
+        from agm.agl.ir.contracts import RefDecode, ScalarDecode, ScalarKind
+        from agm.agl.runtime.convert import resolve_decode_ref
+
+        body = ScalarDecode(ScalarKind.INT)
+        defs = {"A": RefDecode("B"), "B": body}
+        assert resolve_decode_ref("A", defs) is body
 
     def test_oneof_failure_without_an_enum_at_the_path_is_a_bad_case(self) -> None:
         """A oneOf failure with no enum at the failing path still reports a bad ``$case``."""
@@ -4119,7 +4109,7 @@ class TestRegisterCodec:
             ("", "unit", UnitType),
         ]
         for kind, label, expected_type in cases:
-            request = ContractRequest(
+            request = CustomContractRequest(
                 codec_name="capture",
                 strict_json=None,
                 json_schema=None,
@@ -4173,7 +4163,7 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.failure(raw)
 
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="capture",
             strict_json=None,
             json_schema='{"type": "integer"}',
@@ -4225,7 +4215,7 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.failure(raw)
 
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="schema-less",
             strict_json=None,
             json_schema='{"type": "object"}',
@@ -4270,7 +4260,7 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.failure(raw)
 
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="recursive",
             strict_json=None,
             json_schema='{"$ref": "#/$defs/Node"}',
@@ -4330,7 +4320,7 @@ class TestRegisterCodec:
                 return ParseResult.success(JsonValue({"ok": True}))
 
         contract_id = ContractId(0)
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="capture-defs",
             strict_json=False,
             json_schema=None,
@@ -4360,7 +4350,7 @@ class TestRegisterCodec:
         )
         interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
 
-        result = interpreter._parse_host_output("{}", contract_id, effective_strict=False)
+        result = interpreter._parse_host_output("{}", contract_id, request, effective_strict=False)
 
         assert result.ok
         assert seen_defs == dict(defs)
@@ -4400,7 +4390,7 @@ class TestRegisterCodec:
                 )
 
         contract_id = ContractId(0)
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="fallback-parse",
             strict_json=False,
             json_schema=None,
@@ -4427,7 +4417,7 @@ class TestRegisterCodec:
         )
         interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
 
-        result = interpreter._parse_host_output("ok", contract_id, effective_strict=False)
+        result = interpreter._parse_host_output("ok", contract_id, request, effective_strict=False)
 
         assert result.ok
         assert result.value == TextValue("fallback::ok")
@@ -4470,7 +4460,7 @@ class TestRegisterCodec:
                 raise TypeError("codec parse bug")
 
         contract_id = ContractId(0)
-        request = ContractRequest(
+        request = CustomContractRequest(
             codec_name="broken",
             strict_json=False,
             json_schema=None,
@@ -4498,7 +4488,7 @@ class TestRegisterCodec:
         interpreter = IrInterpreter(program, host_contracts={contract_id: host_contract})
 
         with pytest.raises(TypeError, match="codec parse"):
-            interpreter._parse_host_output("{}", contract_id, effective_strict=False)
+            interpreter._parse_host_output("{}", contract_id, request, effective_strict=False)
 
 
 class TestRuntimeBuildsCodecKinds:

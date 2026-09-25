@@ -384,19 +384,19 @@ def test_precompiled_extern_type_trees_round_trip(
         'def tree() -> Tree = query("q")\n'
     )
     (tmp_path / "library.py").write_text("def query(*args):\n    return args[0]\n")
-    trees: list[list[TypeTree | None]] = []
+    trees: list[list[TypeTree]] = []
     artifacts: dict[Path, int] = {}
     for _ in range(2):
         result = compile_again('import library::*\ndef ticket() -> Ticket = query("t")\n0')
         assert result.ok, result.diagnostics
-        trees.append([request.type_tree for request in executables[-1].contracts.values()])
+        trees.append([request.type_tree for request in executables[-1].target_contracts.values()])
         if not artifacts:
             artifacts = {path: path.stat().st_mtime_ns for path in tmp_path.rglob("*.ir")}
     assert artifacts
     assert {path: path.stat().st_mtime_ns for path in artifacts} == artifacts
     first, second = trees
     assert first == second
-    by_defs = {tuple(key for key, _node in tree.defs): tree for tree in first if tree is not None}
+    by_defs = {tuple(key for key, _node in tree.defs): tree for tree in first}
     assert len(first) == 2 and set(by_defs) == {("Tree",), ()}
     ticket = by_defs[()].root
     assert isinstance(ticket, TypeNode)

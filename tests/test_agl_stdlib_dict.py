@@ -26,7 +26,7 @@ _OPTION = NominalId(9_200_002)
 _PAIR = NominalId(9_200_003)
 _OPTION_NONE = NominalId(9_200_004)
 _OPTION_SOME = NominalId(9_200_005)
-_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_NO_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 
 class _DictCompanion(Protocol):

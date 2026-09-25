@@ -366,7 +366,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
     import unittest.mock
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.contracts import JsonContractRequest
     from agm.agl.ir.ids import ContractId, NominalId, SourceId
     from agm.agl.ir.nodes import IrConstText, IrExec, IrMakeDict, IrMakeRecord
     from agm.agl.ir.program import (
@@ -390,7 +390,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         start_col=0,
     )
     cid = ContractId(value=0)
-    contract = ContractRequest(
+    contract = JsonContractRequest(
         codec_name="json",
         strict_json=False,
         json_schema='{"type":"integer"}',
@@ -398,7 +398,6 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         target_type_label="int",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
     node = IrExec(
         location=loc,

@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "runtime_subtype_keeps_every_own_field",
+      "params": {
+        "close-cycle": false
+      },
+      "expect": {
+        "stdout": "{\"message\": \"direct\", \"code\": 1, \"extra\": \"x\"}\n{\"err\": {\"message\": \"nested\", \"code\": 2, \"extra\": \"y\"}}\n{\"$case\": \"Deeper\", \"next\": {\"$case\": \"Flat\", \"value\": {\"left\": {\"message\": \"direct\", \"code\": 1, \"extra\": \"x\"}, \"right\": {\"message\": \"b\", \"code\": 0}}}}\n[{\"message\": \"plain\", \"code\": 3}, {\"message\": \"mixed\", \"code\": 4, \"extra\": \"z\"}]\n{\"message\": \"chain\", \"code\": 5, \"extra\": \"w\", \"grand\": \"gg\"}\n{\"message\": \"caught\", \"code\": 6, \"extra\": \"v\"}\n{\"message\": \"tagged\", \"code\": 7, \"tag-label\": \"l\"}\nOption::Some(value = {\"err\": {\"message\": \"tagged\", \"code\": 7, \"tag-label\": \"l\"}})\nOption::Some(value = {\"message\": \"looped\", \"code\": 8, \"node\": {\"next\": []}})\nOption::Some(value = [{\"message\": \"looped\", \"code\": 8, \"node\": {\"next\": []}}])\n{\"message\": \"looped\", \"code\": 8, \"node\": {\"next\": []}}\n"
+      }
+    },
+    {
+      "name": "cyclic_subtype_field_fails_the_cast",
+      "params": {
+        "close-cycle": true
+      },
+      "expect": {
+        "stdout": "{\"message\": \"direct\", \"code\": 1, \"extra\": \"x\"}\n{\"err\": {\"message\": \"nested\", \"code\": 2, \"extra\": \"y\"}}\n{\"$case\": \"Deeper\", \"next\": {\"$case\": \"Flat\", \"value\": {\"left\": {\"message\": \"direct\", \"code\": 1, \"extra\": \"x\"}, \"right\": {\"message\": \"b\", \"code\": 0}}}}\n[{\"message\": \"plain\", \"code\": 3}, {\"message\": \"mixed\", \"code\": 4, \"extra\": \"z\"}]\n{\"message\": \"chain\", \"code\": 5, \"extra\": \"w\", \"grand\": \"gg\"}\n{\"message\": \"caught\", \"code\": 6, \"extra\": \"v\"}\n{\"message\": \"tagged\", \"code\": 7, \"tag-label\": \"l\"}\nOption::Some(value = {\"err\": {\"message\": \"tagged\", \"code\": 7, \"tag-label\": \"l\"}})\nOption::None\nOption::None\ncyclic\n"
+      }
+    }
+  ]
+}

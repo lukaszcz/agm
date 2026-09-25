@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping
+from typing import cast
 
 from agm.agl.ir.builtin_vars import BuiltinVarKey, builtin_var_key
 from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode, ParamDecoder
@@ -42,7 +43,7 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_ENV_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.arguments import positional_field_names
-from agm.agl.semantics.type_table import TypeDef, TypeTable, is_json_convertible
+from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
@@ -54,7 +55,7 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.type_schema import build_encode_plan, build_param_decoder
+from agm.agl.type_schema import build_exception_field_encodes, build_param_decoder
 from agm.agl.typecheck.env import CheckedModule, FunctionSignature
 from agm.agl.typecheck.program import program_funcdefs
 from agm.util.text import normalize_newlines
@@ -160,36 +161,23 @@ def _add_missing_exception_base_descriptors(
         pending.append(descriptor.base)
 
 
-def _exception_field_encodes(
+def _add_exception_field_encodes(
+    encodes: dict[NominalId, tuple[ExceptionFieldEncode, ...]],
+    nominals: Mapping[NominalId, NominalDescriptor],
     type_table: TypeTable,
-) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
-    """Compile reporting provenance for every exception field, JSON-convertible or not.
+) -> None:
+    """Compile every registered exception's field encodes not yet in *encodes*.
 
-    Each field's JSON name is its effective external name (``@json-name`` ??
-    ``@name`` ?? declared) — the uncaught-exception report is keyed by it,
-    covering every field so no two fields can collide on a fallback declared
-    key. A field with no JSON form carries no encode plan and is reported via
-    the value-directed serializer instead (see ``pipeline.exception_value_to_run_error``).
+    An exception's fields are fixed by its declaration identity, so a REPL
+    link state keeps earlier entries' encodes.
     """
-    result: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
-    for typedef in type_table.entries():
-        if typedef.kind != "exception":
+    for nominal, descriptor in nominals.items():
+        if descriptor.kind is not NominalKind.EXCEPTION or nominal in encodes:
             continue
-        if _superseded_reserved(typedef, type_table):
-            continue
-        handle = typedef.handle()
-        assert isinstance(handle, ExceptionType)
-        result[NominalId(typedef.decl_node_id)] = tuple(
-            ExceptionFieldEncode(
-                field_name,
-                json_name,
-                build_encode_plan(field_type, type_table)
-                if is_json_convertible(field_type, type_table)
-                else None,
-            )
-            for field_name, json_name, field_type in type_table.json_fields(handle)
+        typedef = cast(TypeDef, type_table.get_by_id(nominal.value))
+        encodes[nominal] = build_exception_field_encodes(
+            cast(ExceptionType, typedef.handle()), type_table
         )
-    return result
 
 
 def _program_signature(sig: FunctionSignature, type_table: TypeTable) -> tuple[IrProgramParam, ...]:
@@ -594,7 +582,7 @@ def lower_program(
                 )
             )
     dry_run_inventory = tuple(dry_run_entries)
-    exception_field_encodes = _exception_field_encodes(type_table)
+    _add_exception_field_encodes(link.exception_field_encodes, link.nominals, type_table)
     live_functions, live_symbols = _live_functions_and_symbols(link, executable_modules)
     program_symbols = {
         item.node_id: link.fn_node_to_sym[item.node_id]
@@ -629,10 +617,11 @@ def lower_program(
         param_decoders=param_decoders,
         param_spans=param_spans,
         contracts=dict(link.contracts),
+        target_contracts=dict(link.target_contracts),
         dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,
         builtin_var_declarations=builtin_var_declarations,
-        exception_field_encodes=exception_field_encodes,
+        exception_field_encodes=dict(link.exception_field_encodes),
         builtin_setting_defaults=builtin_setting_defaults,
         program_configs=program_configs,
     )

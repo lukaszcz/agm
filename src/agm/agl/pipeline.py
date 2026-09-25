@@ -55,12 +55,12 @@ if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.ir.builtin_vars import BuiltinVarKey
     from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode
-    from agm.agl.ir.ids import FunctionId, NominalId, SourceId, SymbolId
+    from agm.agl.ir.ids import NominalId, SourceId, SymbolId
     from agm.agl.ir.program import (
         ExecutableProgram,
-        FunctionDescriptor,
         NominalDescriptor,
         SourceFile,
+        ValueDescriptors,
     )
     from agm.agl.ir.static_keys import StaticBindingKey
     from agm.agl.matchcompile import MatchCompiledProgram
@@ -1179,8 +1179,7 @@ class PipelineDriver:
         host_env: HostEnvironment,
         prepared: PreparedProgram,
         module_ids: "set[ModuleId]",
-        nominals: "Mapping[NominalId, NominalDescriptor]",
-        functions: "Mapping[FunctionId, FunctionDescriptor]",
+        descriptors: "ValueDescriptors",
         on_failure: "Callable[[list[Diagnostic]], _ResultT]",
     ) -> "_ResultT | None":
         """Import and resolve every extern companion, or build a failure result.
@@ -1196,8 +1195,7 @@ class PipelineDriver:
             companion_paths=prepared.companion_paths,
             packages=prepared.roots.packages,
             module_ids=module_ids,
-            nominals=nominals,
-            functions=functions,
+            descriptors=descriptors,
         )
         if extern_diagnostics:
             return on_failure(extern_diagnostics)
@@ -1553,14 +1551,15 @@ class PipelineDriver:
             # and after every static pass (so a static error elsewhere is reported
             # instead, with no companion import side effect). Dry-run stops before
             # this host-side import step to preserve its no-side-effects contract.
+            from agm.agl.ir.program import ValueDescriptors
+
             run_failure = self._wire_externs_or_fail(
                 checked=checked,
                 capabilities=capabilities,
                 host_env=host_env,
                 prepared=prepared,
                 module_ids=set(executable.modules),
-                nominals=executable.nominals,
-                functions=executable.functions,
+                descriptors=ValueDescriptors.from_program(executable),
                 on_failure=lambda extern_diagnostics: RunResult(
                     ok=False,
                     diagnostics=extern_diagnostics,
@@ -2064,8 +2063,7 @@ def _wire_extern_registry(
     companion_paths: "Mapping[ModuleId, Path | None]",
     packages: "tuple[PackageInfo, ...]",
     module_ids: "set[ModuleId] | None" = None,
-    nominals: "Mapping[NominalId, NominalDescriptor] | None" = None,
-    functions: "Mapping[FunctionId, FunctionDescriptor] | None" = None,
+    descriptors: "ValueDescriptors | None" = None,
 ) -> list[Diagnostic]:
     """Import every companion and resolve every declared extern, up front.
 
@@ -2102,8 +2100,12 @@ def _wire_extern_registry(
             )
         ]
     declarations = _extern_declarations(checked, module_ids)
-    if nominals is not None:
-        registry.set_nominals(dict(nominals), functions=functions)
+    if descriptors is not None:
+        registry.set_nominals(
+            dict(descriptors.nominals),
+            functions=descriptors.functions,
+            exception_field_encodes=descriptors.exception_field_encodes,
+        )
 
     diagnostics: list[Diagnostic] = []
     loaded_modules: set["ModuleId"] = set()
@@ -2242,27 +2244,16 @@ def exception_value_to_run_error(
     nominals: "Mapping[NominalId, NominalDescriptor]",
     span: "object" = None,  # Location | SourceSpan | None — avoids import cycle
     sources: "Mapping[SourceId, SourceFile] | None" = None,
-    exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] | None" = None,
+    exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]]",
     notes: tuple[str, ...] = (),
 ) -> RunError:
     """Convert an ``ExceptionValue`` to a ``RunError`` for ``RunResult``.
 
-    Every field is reported under its effective JSON name (``@json-name`` ??
-    ``@name`` ?? declared), from ``exception_field_encodes`` — including a
-    field with no JSON form, so no two fields can collide on a shared
-    fallback declared key. A field with an encode plan is converted through
-    it, matching ``e as json``; one without (not JSON-convertible) goes
-    through the shared value-directed serializer instead. Both preserve
-    ``Decimal`` exactness (never routed through binary ``float``). When
-    ``exception_field_encodes`` has no entry for the exception (e.g. no
-    lowering data), every field falls back to its declared name. This runs
-    while reporting an error already in flight, so a field that is
-    itself cyclic (including one closed through mutable record fields), or
-    a field of a kind with no JSON representation (``unit``, ``agent``,
-    ``constructor``, ``function``, ``iterator`` — legal on an exception field
-    even though a cast to ``json`` of such a type is statically rejected),
-    must not raise and mask the real error — that one field is reported as a
-    marker instead.
+    Fields are encoded by ``runtime.serialize.report_exception_fields`` from
+    *exception_field_encodes*, selected by *exc*'s own nominal like ``e as
+    json``. Unlike the cast, a field with no JSON representation or a cyclic
+    one degrades to a marker rather than raising, since this reports an error
+    already in flight and must never mask it.
 
     ``nominals`` resolves *exc*'s display spelling for ``RunError.type_name``
     from the running program's own descriptor table.
@@ -2283,36 +2274,10 @@ def exception_value_to_run_error(
     straight onto ``RunError.notes``.
     """
     from agm.agl.ir.ids import Location
-    from agm.agl.runtime.serialize import (
-        AglNonDataValue,
-        degraded_marker,
-        encode_value,
-        value_to_json_obj,
-    )
-    from agm.agl.semantics.cycles import AglCyclicValue
+    from agm.agl.runtime.serialize import report_exception_fields
     from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
-    encodes = {
-        encode.field_name: encode
-        for encode in (
-            () if exception_field_encodes is None else exception_field_encodes.get(exc.nominal, ())
-        )
-    }
-    fields: dict[str, object] = {}
-    for k, v in exc.fields.items():
-        encode = encodes.get(k)
-        # No entry (no lowering data for this exception) falls back to the
-        # declared name; an entry always carries its effective JSON name,
-        # whether or not it carries a plan.
-        json_key = encode.json_name if encode is not None else k
-        try:
-            fields[json_key] = (
-                encode_value(encode.plan, v)
-                if encode is not None and encode.plan is not None
-                else value_to_json_obj(v)
-            )
-        except (AglCyclicValue, AglNonDataValue) as field_exc:
-            fields[json_key] = degraded_marker(field_exc)
+    fields = report_exception_fields(exc, exception_field_encodes)
     line: int | None = None
     col: int | None = None
     source: str | None = None

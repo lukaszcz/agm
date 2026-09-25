@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+from typing import Literal
 
 __all__ = [
     "ArithKind",
@@ -30,9 +31,9 @@ __all__ = [
     "IndexKind",
     "IntToDecimal",
     "IterKind",
+    "MutableIndexKind",
     "NumericKind",
     "ToJson",
-    "UnaryOp",
 ]
 
 
@@ -110,18 +111,17 @@ class IndexKind(enum.Enum):
     TEXT = "text"
 
 
+#: Kind tag for an indexed assignment target: text is immutable and never
+#: reaches one, so ``IrIndexSet.kind`` is narrowed to this subset of
+#: ``IndexKind``.
+MutableIndexKind = Literal[IndexKind.ARRAY, IndexKind.DICT]
+
+
 class CopyKind(enum.Enum):
     """Kind tag for value copying: deep or shallow."""
 
     DEEP = "deep"
     SHALLOW = "shallow"
-
-
-class UnaryOp(enum.Enum):
-    """Kind tag for unary operations: NOT (logical negation) or NEG (numeric negation)."""
-
-    NOT = "not"
-    NEG = "neg"
 
 
 class IterKind(enum.Enum):

@@ -56,6 +56,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
+from tests._agl_helpers import plan_less_exception_field_encodes
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,7 @@ def _make_minimal_program(
         },
         symbols=symbols or {},
         nominals=nominals,
+        exception_field_encodes=plan_less_exception_field_encodes(nominals),
         sources={_SRC_ID: SourceFile(display_name="<test>", normalized_text=source_text)},
     )
 

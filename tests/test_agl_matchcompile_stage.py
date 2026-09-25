@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import decimal
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,11 +21,9 @@ from agm.agl.matchcompile import (
     MatchCompilationResult,
     MatchCompiledModule,
     MatchCompiledProgram,
-    MatchIssue,
     NonExhaustiveIssue,
     RedundantArmIssue,
     compile_program_matches,
-    diagnostic_from_match_issue,
     diagnostics_from_match_issues,
 )
 from agm.agl.matchcompile.compiler import compile_match_site, validate_compiled_case
@@ -363,9 +361,6 @@ def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
     assert any("false" in diagnostic.message for diagnostic in diagnostics)
     assert any("Redundant" in diagnostic.message for diagnostic in diagnostics)
 
-    with pytest.raises(AssertionError, match="unsupported"):
-        diagnostic_from_match_issue(cast(MatchIssue, object()))
-
 
 def test_program_match_compilation_orders_issues_by_source_location() -> None:
     checked = _checked(
@@ -683,24 +678,6 @@ def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path
 
     assert right.default is left.default
     MatchCompiledProgram(checked, compiled.sites_by_module)
-
-
-def test_duplicate_source_case_ids_are_rejected_by_compilation_and_validation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    checked = _checked("case true of | true => 1 | false => 2")
-    source_case = _first_case(checked)
-
-    def walk_one_case_twice(_program: object, visit: Callable[[object], None]) -> None:
-        visit(source_case)
-        visit(source_case)
-
-    monkeypatch.setattr(stage_module, "walk", walk_one_case_twice)
-
-    with pytest.raises(MatchCompileInvariantError, match="duplicate"):
-        stage_module._source_sites(checked.resolved.program)
-    with pytest.raises(MatchCompileInvariantError, match="duplicate"):
-        _compile_module_matches(checked)
 
 
 def test_graph_compiles_imported_cases_and_rejects_wrong_module_provenance(

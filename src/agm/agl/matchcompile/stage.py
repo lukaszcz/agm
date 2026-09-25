@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TypeAlias
+from typing import TypeAlias, assert_never
 
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ModuleId
@@ -111,13 +111,8 @@ def _source_sites(program: Program) -> dict[int, SourceMatchSite]:
     sites: dict[int, SourceMatchSite] = {}
 
     def collect(node: object) -> None:
-        if not isinstance(node, Case):
-            return
-        if node.node_id in sites:
-            raise MatchCompileInvariantError(
-                f"duplicate source match-site node id {node.node_id} in one program"
-            )
-        sites[node.node_id] = node
+        if isinstance(node, Case):
+            sites[node.node_id] = node
 
     walk(program, collect)
     return sites
@@ -209,12 +204,13 @@ def compile_program_matches(
 
 def diagnostic_from_match_issue(issue: MatchIssue) -> Diagnostic:
     """Adapt one structured compiler issue to the ordinary static diagnostic channel."""
-    if isinstance(issue, NonExhaustiveIssue):
-        message = f"Non-exhaustive case; missing pattern: {render_witness(issue.witness)}."
-    elif isinstance(issue, RedundantArmIssue):
-        message = "Redundant case arm; this pattern can never be selected."
-    else:
-        raise AssertionError(f"unsupported match issue: {type(issue).__name__}")
+    match issue:
+        case NonExhaustiveIssue():
+            message = f"Non-exhaustive case; missing pattern: {render_witness(issue.witness)}."
+        case RedundantArmIssue():
+            message = "Redundant case arm; this pattern can never be selected."
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
     return diagnostic_from_span(message, issue.span)
 
 

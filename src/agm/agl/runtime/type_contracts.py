@@ -7,7 +7,12 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import NamedTuple, cast
 
-from agm.agl.ir.contracts import ContractRequest, TypeNode, TypeNodeRef, TypeTreeEntry
+from agm.agl.ir.contracts import (
+    TargetContractRequest,
+    TypeNode,
+    TypeNodeRef,
+    TypeTreeEntry,
+)
 from agm.agl.ir.ids import NominalId
 
 
@@ -76,7 +81,7 @@ class TypeContract:
 
 
 def build_type_contract(
-    request: ContractRequest, classes: Mapping[NominalId, type[object]]
+    request: TargetContractRequest, classes: Mapping[NominalId, type[object]]
 ) -> TypeContract:
     """Build *request*'s ``TypeContract`` graph, one object per ``$defs`` key.
 
@@ -86,7 +91,6 @@ def build_type_contract(
     otherwise a distinct object carrying the target's own label.
     """
     tree = request.type_tree
-    assert tree is not None and request.json_schema is not None
     root_defs = _load_object(request.json_schema).get("$defs")
     defs = None if root_defs is None else json.dumps(root_defs)
     bodies = dict(tree.defs)

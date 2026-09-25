@@ -20,10 +20,6 @@ Two materialization entry points feed the same ``OutputContract`` shape:
 Both produce ``OutputContract`` objects exposing the same runtime surface
 (``target_type_label``, ``codec``, ``strict_json``, ``format_instructions``,
 ``json_schema``, ``decode``, ``structured_exec``).
-
-``TypelessOutputContract`` is a separate, lighter carrier for the same
-display fields (no live ``codec``) used where no host codec registry is in
-scope at all (see ``eval/effects.py``'s ``ask``-display fallback).
 """
 
 from __future__ import annotations
@@ -35,7 +31,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.ir.contracts import ContractRequest, DecodeSchema
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    CustomContractRequest,
+    DecodeSchema,
+    JsonContractRequest,
+    UnitContractRequest,
+)
 from agm.agl.runtime.codec import OutputCodec
 from agm.agl.semantics.types import (
     ArrayType,
@@ -56,18 +58,6 @@ if TYPE_CHECKING:
     from agm.agl.ir.ids import ContractId
     from agm.agl.ir.program import ExecutableProgram
     from agm.agl.semantics.type_table import TypeTable
-
-
-@dataclass(frozen=True, slots=True)
-class TypelessOutputContract:
-    """Agent-facing contract materialized from typeless execution IR metadata."""
-
-    target_type: str
-    codec_name: str
-    strict_json: bool | None
-    format_instructions: str
-    json_schema: object
-    structured_exec: bool = False
 
 
 @dataclass(slots=True)
@@ -125,7 +115,7 @@ def materialize_ir_contract(
     typeless payload, and this execution-time path merely pairs that payload
     with the live codec implementation.
     """
-    if request.is_unit:
+    if isinstance(request, UnitContractRequest):
         return None
     codec = codecs.get(request.codec_name)
     if codec is None:
@@ -134,9 +124,16 @@ def materialize_ir_contract(
             "This is a host-configuration error."
         )
     format_instructions = request.format_instructions
-    schema = None if request.json_schema is None else cast(object, json.loads(request.json_schema))
-    decode = request.decode
-    defs = request.defs
+    if isinstance(request, JsonContractRequest | CustomContractRequest):
+        schema = (
+            None if request.json_schema is None else cast(object, json.loads(request.json_schema))
+        )
+        decode = request.decode
+        defs = request.defs
+    else:
+        schema = None
+        decode = None
+        defs = ()
     return OutputContract(
         target_type_label=request.target_type_label,
         codec=codec,
@@ -197,7 +194,7 @@ def _call_make_contract(
     return codec.make_contract(type_ref, type_table)
 
 
-def _target_type_for_request(request: ContractRequest) -> Type:
+def _target_type_for_request(request: CustomContractRequest) -> Type:
     """Return the checked target type for legacy custom-codec parse hooks."""
     if request.target_type is not None:
         return cast(Type, request.target_type)

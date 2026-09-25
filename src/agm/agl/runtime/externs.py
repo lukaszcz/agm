@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 from agm.agl.artifact_storage import artifact_entry, read_payload, write_payload
 from agm.agl.diagnostics import AglError
 from agm.agl.ir.builtin_nominals import BuiltinNominals
-from agm.agl.ir.contracts import ContractRequest
+from agm.agl.ir.contracts import ExceptionFieldEncode, TargetContractRequest
 from agm.agl.ir.ids import ContractId, FunctionId, NominalId
 from agm.agl.ir.program import FunctionDescriptor, NominalDescriptor, ValueDescriptors
 from agm.agl.modules.ids import ModuleId
@@ -466,14 +466,16 @@ class ExternRegistry:
         self._nominal_classes: dict[NominalId, type[object]] = {}
         self._nominal_by_id: dict[NominalId, NominalDescriptor] = {}
         self._function_by_id: dict[FunctionId, FunctionDescriptor] = {}
+        self._exception_field_encodes: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
         # Keyed by request identity; the entry pins its request so the id stays unique.
-        self._type_contracts: dict[int, tuple[ContractRequest, TypeContract]] = {}
+        self._type_contracts: dict[int, tuple[TargetContractRequest, TypeContract]] = {}
 
     def set_nominals(
         self,
         descriptors: dict[NominalId, NominalDescriptor],
         *,
         functions: Mapping[FunctionId, FunctionDescriptor] | None = None,
+        exception_field_encodes: Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] | None = None,
     ) -> None:
         """Materialize this program's companion-visible nominal classes, insert-only.
 
@@ -491,12 +493,13 @@ class ExternRegistry:
         :meth:`_agl_module` consults that snapshot to decide which identity a
         companion's bare/dotted nominal lookup resolves to at import time.
 
-        *functions* accumulates alongside *descriptors* into the same program
-        descriptor view :meth:`_program_descriptors` publishes for a companion
-        import (see :meth:`load_companion`), so a view a companion builds at
-        import time renders correctly. Omitted by direct-registry callers that
-        never need that view -- companion import without it still succeeds,
-        just with no nominal/function spellings recorded yet.
+        *functions* and *exception_field_encodes* accumulate alongside
+        *descriptors* into the same program descriptor view
+        :meth:`_program_descriptors` publishes for a companion import (see
+        :meth:`load_companion`), so a view a companion builds at import time
+        renders correctly. Omitted by direct-registry callers that never need
+        that view -- companion import without it still succeeds, just with no
+        nominal/function spellings recorded yet.
         """
         if self_validation_enabled():
             for nominal, descriptor in descriptors.items():
@@ -516,6 +519,8 @@ class ExternRegistry:
         self._nominal_by_id.update(descriptors)
         if functions is not None:
             self._function_by_id.update(functions)
+        if exception_field_encodes is not None:
+            self._exception_field_encodes.update(exception_field_encodes)
 
     def _program_descriptors(self) -> ValueDescriptors:
         """The program descriptor view accumulated by :meth:`set_nominals`.
@@ -526,7 +531,11 @@ class ExternRegistry:
         real, non-empty descriptor slot rather than the detached one in
         :mod:`agm.agl.runtime.boundary`.
         """
-        return ValueDescriptors(nominals=self._nominal_by_id, functions=self._function_by_id)
+        return ValueDescriptors(
+            nominals=self._nominal_by_id,
+            functions=self._function_by_id,
+            exception_field_encodes=self._exception_field_encodes,
+        )
 
     def _agl_module(self) -> ModuleType:
         """Build the temporary ``agl`` module exposed while importing a companion.
@@ -625,15 +634,11 @@ class ExternRegistry:
             f"agm_agl_extern_companion__{module_id.synthetic_name_component()}"
             f"__{len(self._by_path)}"
         )
-        spec = importlib.util.spec_from_file_location(
-            synthetic_name,
-            canonical,
-            loader=_CompanionBytecodeLoader(synthetic_name, str(canonical), stamp),
-        )
-        # A supplied source-file loader always yields a spec; ``None`` would
-        # mean the location carries a suffix no loader recognizes.
-        assert spec is not None and spec.loader is not None, (
-            f"cannot build an import spec for companion {canonical}"
+        loader = _CompanionBytecodeLoader(synthetic_name, str(canonical), stamp)
+        # A supplied source-file loader always yields a spec with that loader set.
+        spec = cast(
+            importlib.machinery.ModuleSpec,
+            importlib.util.spec_from_file_location(synthetic_name, canonical, loader=loader),
         )
         module = importlib.util.module_from_spec(spec)
         sys.modules[synthetic_name] = module
@@ -641,7 +646,7 @@ class ExternRegistry:
         sys.modules["agl"] = self._agl_module()
         try:
             with active_descriptors(self._program_descriptors()):
-                spec.loader.exec_module(module)
+                loader.exec_module(module)
         except Exception as exc:
             raise self._import_error(module_id, canonical, exc) from exc
         finally:
@@ -692,11 +697,8 @@ class ExternRegistry:
         if cached is not None:
             return cached
 
-        module = self._by_module.get(module_id)
-        assert module is not None, (
-            f"module {module_id.display()!r} has no loaded companion; "
-            "load_companion must be called before resolve"
-        )
+        # load_companion is always called for module_id before resolve.
+        module = self._by_module[module_id]
         if not hasattr(module, name):
             raise ExternResolutionError(module_id, name)
         value: object = cast(object, getattr(module, name))
@@ -715,7 +717,7 @@ class ExternRegistry:
         descriptors: ValueDescriptors,
         function_encoder: Callable[[IrClosureValue], object] | None = None,
         active_call: ActiveCall | None = None,
-        contracts: Mapping[ContractId, ContractRequest] | None = None,
+        contracts: Mapping[ContractId, TargetContractRequest] | None = None,
     ) -> Value:
         """Cross the boundary for one extern call: encode, call, and decode.
 
@@ -814,7 +816,7 @@ class ExternRegistry:
                 ) from exc
 
     def _type_contract(
-        self, contracts: Mapping[ContractId, ContractRequest], value: ContractValue
+        self, contracts: Mapping[ContractId, TargetContractRequest], value: ContractValue
     ) -> TypeContract:
         """Return *value*'s ``TypeContract``, built once per request alongside the classes."""
         request = contracts[value.contract_id]

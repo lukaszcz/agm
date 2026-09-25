@@ -16,6 +16,8 @@ as AgL surface syntax.  A record or exception renders its nominal's
 
 from __future__ import annotations
 
+from typing import assert_never, cast
+
 from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.serialize import AglNonDataValue, dumps_exact, value_to_json_obj
 from agm.agl.semantics.cycles import enter_value
@@ -30,6 +32,7 @@ from agm.agl.semantics.values import (
     IntValue,
     IrClosureValue,
     JsonValue,
+    ObservableValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -60,7 +63,7 @@ def _render_child(
     active: "set[int] | None",
 ) -> str:
     return _render(
-        value,
+        cast(ObservableValue, value),
         descriptors,
         pretty=pretty,
         quote_strings=False,
@@ -122,7 +125,7 @@ def _render_function_signature(param_labels: tuple[str, ...], result_label: str)
 
 
 def _render(
-    value: Value,
+    value: ObservableValue,
     descriptors: ValueDescriptors,
     *,
     pretty: bool,
@@ -212,7 +215,7 @@ def _render(
     if isinstance(value, ContractValue):
         raise AglNonDataValue("contract")
 
-    raise RuntimeError(f"render: unhandled value type {type(value).__name__}")  # pragma: no cover
+    assert_never(value)  # pragma: no cover
 
 
 def render_value(
@@ -230,7 +233,7 @@ def render_value(
     nested text is always quoted. ``unit`` always renders ``()``.
     """
     return _render(
-        value,
+        cast(ObservableValue, value),
         descriptors,
         pretty=pretty,
         quote_strings=quote_strings,

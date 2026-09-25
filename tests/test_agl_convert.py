@@ -794,16 +794,6 @@ class TestDecodeValueRefDecode:
         assert isinstance(first, RecordValue) and first.nominal == NominalId(2)
         assert isinstance(second, RecordValue) and second.nominal == NominalId(3)
 
-    def test_unknown_defs_key_is_internal_error(self) -> None:
-        """An unresolvable RefDecode key is an internal-invariant violation, not a user error."""
-        with pytest.raises(AssertionError, match="unknown \\$defs key"):
-            decode_value(RefDecode("NoSuchKey"), {"$case": "Leaf"}, {})
-
-    def test_ref_only_defs_cycle_is_internal_error(self) -> None:
-        """A malformed defs table must not make RefDecode resolution recurse forever."""
-        with pytest.raises(AssertionError, match=r"\$defs reference cycle"):
-            decode_value(RefDecode("A"), {}, {"A": RefDecode("B"), "B": RefDecode("A")})
-
     def test_defs_defaults_to_empty_for_non_recursive_schemas(self) -> None:
         """Calling decode_value with the historical 2-arg form still works (defs defaults empty)."""
         schema = ScalarDecode(kind=ScalarKind.INT)

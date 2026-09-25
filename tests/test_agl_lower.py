@@ -21,7 +21,12 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.constraints import ConstraintKind
-from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy, RecordEncode
+from agm.agl.ir.contracts import (
+    ConversionFailureMode,
+    ConversionStrategy,
+    RecordEncode,
+    ToJsonRecipe,
+)
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import (
     IrArith,
@@ -44,7 +49,6 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrDirectCall,
     IrField,
-    IrFieldMode,
     IrIf,
     IrIndex,
     IrIndirectCall,
@@ -61,13 +65,13 @@ from agm.agl.ir.nodes import (
     IrMakeJsonObject,
     IrMakeRecord,
     IrNominalCaseKey,
+    IrNot,
     IrRaise,
     IrRenderTemplate,
     IrSequence,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
-    IrUnary,
     UseDefault,
 )
 from agm.agl.ir.operations import (
@@ -79,7 +83,6 @@ from agm.agl.ir.operations import (
     IntToDecimal,
     IterKind,
     ToJson,
-    UnaryOp,
 )
 from agm.agl.ir.program import (
     ExecutableProgram,
@@ -471,14 +474,6 @@ def test_capture_scan_captures_enclosing_field_assignment_receiver() -> None:
     assert lowerer._compute_captures_for(
         update.value.body, update.value.params, update.value.node_id, set()
     ) == (IrCapture(box_symbol, by_cell=False),)
-
-
-def test_constructor_result_nominal_rejects_non_nominal_type() -> None:
-    source = "1"
-    lowerer = _make_lowerer(_check(source), source)
-
-    with pytest.raises(AssertionError, match="non-nominal result"):
-        lowerer._nominal_for_constructor_result(IntType())
 
 
 def test_lowering_erases_flexible_state_from_generic_direct_nested_and_partial_calls() -> None:
@@ -1650,10 +1645,9 @@ class TestIrFieldLowering:
 
         assert isinstance(result, IrField)
         assert result.field == "myfield"
-        assert result.mode is IrFieldMode.EXACT
 
-    def test_abstract_exception_field_access_uses_upper_bound_mode(self) -> None:
-        """Field access on abstract Exception records a static upper bound."""
+    def test_abstract_exception_field_access_projects_the_base_nominal(self) -> None:
+        """Field access on abstract Exception projects against Exception's own nominal."""
         from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
         from agm.agl.modules.ids import STD_PRELUDE_ID
         from agm.agl.syntax.nodes import FieldAccess, UnitLit
@@ -1674,17 +1668,22 @@ class TestIrFieldLowering:
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="message", span=span, node_id=fake_node_id)
 
+        exception_decl_id = require_reserved_nominal_id("Exception")
         checked.node_types[unit_lit.node_id] = ExceptionType(
-            "Exception", STD_PRELUDE_ID, decl_id=require_reserved_nominal_id("Exception")
+            "Exception", STD_PRELUDE_ID, decl_id=exception_decl_id
         )
         lowerer = _make_lowerer(checked, source)
         result = lowerer.lower_expr(field_access)
 
         assert isinstance(result, IrField)
-        assert result.mode is IrFieldMode.UPPER_BOUND
+        assert result.nominal == NominalId(exception_decl_id)
 
-    def test_base_exception_catch_field_access_lowers_to_upper_bound(self) -> None:
-        """A source catch binder uses the abstract declaration as its bound."""
+    def test_base_exception_catch_field_access_projects_the_declared_catch_type(self) -> None:
+        """A source catch binder projects fields against its declared catch type.
+
+        ``error`` is declared ``Exception``, not the concretely raised ``Abort``;
+        the projection's nominal must follow the declared type, not the runtime one.
+        """
         source = """\
 let result = try
   raise Abort(message = "failed")
@@ -1692,7 +1691,15 @@ catch Exception as error =>
   error.message
 result
 """
-        program = _lower(source)
+        checked = _check(source)
+        (exception_decl_id,) = {
+            t.decl_id for t in checked.node_types.values() if isinstance(t, ExceptionType)
+        } - {
+            t.decl_id
+            for t in checked.node_types.values()
+            if isinstance(t, ExceptionType) and t.name == "Abort"
+        }
+        program = lower_compiled_module(compile_checked_module(checked), source_text=source)
         projections = tuple(
             field
             for initializer in program.modules[program.entry_module].initializers
@@ -1701,7 +1708,7 @@ result
         )
 
         assert projections
-        assert all(field.mode is IrFieldMode.UPPER_BOUND for field in projections)
+        assert all(field.nominal == NominalId(exception_decl_id) for field in projections)
 
     def test_kind_for_non_container_raises_assertion(self) -> None:
         """_kind_for_container raises AssertionError for a non-container type.
@@ -2769,6 +2776,7 @@ class TestHostOpLowering:
         assert len(exec_nodes) == 1, f"Expected 1 IrExec, found {len(exec_nodes)}"
 
     def test_unit_exec_lowers_to_outputless_contract(self) -> None:
+        from agm.agl.ir.contracts import UnitContractRequest
         from agm.agl.ir.nodes import IrExec
 
         prog = _lower('exec("emit")\n()')
@@ -2779,8 +2787,7 @@ class TestHostOpLowering:
         ]
         contract = prog.contracts[node.contract_id]
 
-        assert contract.codec_name == "none"
-        assert contract.is_unit is True
+        assert isinstance(contract, UnitContractRequest)
 
     def test_ask_request_lowers_to_ir_ask_request_with_its_contract(self) -> None:
         """ask-request lowers to IrAskRequest carrying the contract it describes."""
@@ -3227,6 +3234,7 @@ class TestIrConvertLowering:
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
         assert isinstance(conv, IrConvert)
+        assert isinstance(conv.recipe, ToJsonRecipe)
         assert isinstance(conv.recipe.encode, RecordEncode)
 
     def test_json_as_test_lowers_to_ir_convert_return_bool(self) -> None:
@@ -3238,7 +3246,7 @@ class TestIrConvertLowering:
             f"'as? json' must emit IrConvert, not {type(conv).__name__}"
         )
         assert conv.failure_mode is ConversionFailureMode.RETURN_OPTION
-        assert conv.recipe.strategy is ConversionStrategy.TO_JSON
+        assert isinstance(conv.recipe, ToJsonRecipe)
 
 
 # ---------------------------------------------------------------------------
@@ -3654,9 +3662,8 @@ class TestLoopDesugar:
         assert len(item1.branches) == 1
         assert item1.has_else is False
         cond1 = item1.branches[0].cond
-        assert isinstance(cond1, IrUnary), "item 1 condition must be IrUnary (not)"
-        assert cond1.op is UnaryOp.NOT
-        assert isinstance(cond1.value, IrIterHasNext), "item 1 IrUnary.value must be IrIterHasNext"
+        assert isinstance(cond1, IrNot), "item 1 condition must be IrNot"
+        assert isinstance(cond1.value, IrIterHasNext), "item 1 IrNot.value must be IrIterHasNext"
         assert isinstance(item1.branches[0].body, IrBreak), "item 1 branch body must be IrBreak"
 
         # Item 2: for-var bind — IrBind(for_var, IrIterNext(__it))
@@ -3672,8 +3679,7 @@ class TestLoopDesugar:
         assert len(item3.branches) == 1
         assert item3.has_else is False
         cond3 = item3.branches[0].cond
-        assert isinstance(cond3, IrUnary), "item 3 condition must be IrUnary (not)"
-        assert cond3.op is UnaryOp.NOT
+        assert isinstance(cond3, IrNot), "item 3 condition must be IrNot"
         assert isinstance(item3.branches[0].body, IrBreak), "item 3 branch body must be IrBreak"
 
         # Item 4: bound check — IrIf (GE outer)
@@ -3981,8 +3987,7 @@ class TestRangeForDesugar:
         assert isinstance(item3, IrIf)
         assert item3.has_else is False
         cond3 = item3.branches[0].cond
-        assert isinstance(cond3, IrUnary)
-        assert cond3.op is UnaryOp.NOT
+        assert isinstance(cond3, IrNot)
 
     def test_range_with_until_guard(self) -> None:
         """``for i in 1 to 10 until i > 7`` body includes range items + until guard."""
@@ -4079,7 +4084,7 @@ class TestRangeForDesugar:
         item1 = body.items[0]
         assert isinstance(item1, IrIf)
         cond = item1.branches[0].cond
-        assert isinstance(cond, IrUnary)
+        assert isinstance(cond, IrNot)
         assert isinstance(cond.value, IrIterHasNext), "collection for item 1 must use IrIterHasNext"
         item2 = body.items[1]
         assert isinstance(item2, IrBind)

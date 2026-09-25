@@ -607,11 +607,6 @@ class TestTypeDefHandle:
         typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700003)
         assert typedef.handle() == ExceptionType(name="Boom", module_id=ENTRY_ID, decl_id=700003)
 
-    def test_exception_handle_rejects_type_args(self) -> None:
-        typedef = TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700003)
-        with pytest.raises(ValueError, match="does not accept type_args"):
-            typedef.handle(type_args=(IntType(),))
-
     def test_record_handle_stamps_decl_id_from_decl_node_id(self) -> None:
         typedef = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=42)
         assert typedef.handle().decl_id == 42
@@ -705,40 +700,6 @@ class TestNonGenericAccessors:
             "Red": {},
             "Custom": {"hex": TextType()},
         }
-
-    def test_record_fields_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.record_fields(handle)
-
-    def test_enum_members_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = EnumType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            _enum_fields(table, handle)
-
-    def test_record_fields_raises_when_key_registered_as_enum(self) -> None:
-        table = TypeTable()
-        register_typedef(table, enum_typedef("Color", {"Red": {}}, decl_id=700001))
-        handle = RecordType(name="Color", module_id=ENTRY_ID, decl_id=700001)
-        with pytest.raises(AssertionError):
-            table.record_fields(handle)
-
-    def test_enum_members_raises_when_key_registered_as_record(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700000,
-            )
-        )
-        handle = EnumType(name="Point", module_id=ENTRY_ID, decl_id=700000)
-        with pytest.raises(AssertionError):
-            _enum_fields(table, handle)
 
 
 # ---------------------------------------------------------------------------
@@ -943,54 +904,6 @@ class TestExceptionAccessors:
             ("own", ParamZone.NAMED_ONLY),
         )
 
-    def test_exception_fields_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.exception_fields(handle)
-
-    def test_exception_fields_raises_when_key_registered_as_record(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700000,
-            )
-        )
-        handle = ExceptionType(name="Point", module_id=ENTRY_ID, decl_id=700000)
-        with pytest.raises(AssertionError):
-            table.exception_fields(handle)
-
-    def test_exception_fields_raises_on_cyclic_base_chain(self) -> None:
-        """Internal robustness guard: a cyclic ``base`` chain cannot occur via the
-        builder (the temporary recursion ban rejects it first), but the table
-        itself still guards against infinite recursion."""
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="A",
-                module_id=ENTRY_ID,
-                base=700015,
-                decl_node_id=700014,
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="B",
-                module_id=ENTRY_ID,
-                base=700014,
-                decl_node_id=700015,
-            )
-        )
-        handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014)
-        with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.exception_fields(handle)
-
     def test_exception_def_returns_abstract_and_base(self) -> None:
         table = TypeTable()
         table.register(
@@ -1023,19 +936,6 @@ class TestExceptionAccessors:
         )
         assert child_def.abstract is False
         assert child_def.base == 700008
-
-    def test_exception_def_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.exception_def(handle)
-
-    def test_exception_def_raises_when_key_registered_as_enum(self) -> None:
-        table = TypeTable()
-        register_typedef(table, enum_typedef("Color", {"Red": {}}, decl_id=700001))
-        handle = ExceptionType(name="Color", module_id=ENTRY_ID, decl_id=700001)
-        with pytest.raises(AssertionError):
-            table.exception_def(handle)
 
 
 # ---------------------------------------------------------------------------
@@ -1169,32 +1069,6 @@ class TestMethodIndex:
         table.register_method(base, status)
 
         assert _selected_method(table, child, "status") == status
-
-    def test_exception_lookup_rejects_a_cyclic_base_chain(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="A",
-                module_id=ENTRY_ID,
-                base=700015,
-                decl_node_id=700014,
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="B",
-                module_id=ENTRY_ID,
-                base=700014,
-                decl_node_id=700015,
-            )
-        )
-
-        with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.method_candidates(
-                ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014), "missing"
-            )
 
     def test_lookup_miss_returns_none_for_owner_with_no_methods(self) -> None:
         table = TypeTable()
@@ -1788,51 +1662,6 @@ class TestExceptionFieldKinds:
         second = table.field_kinds(handle)
         assert first is second
 
-    def test_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = ExceptionType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.field_kinds(handle)
-
-    def test_raises_when_key_registered_as_record(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700000,
-            )
-        )
-        handle = ExceptionType(name="Point", module_id=ENTRY_ID, decl_id=700000)
-        with pytest.raises(AssertionError):
-            table.field_kinds(handle)
-
-    def test_raises_on_cyclic_base_chain(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="A",
-                module_id=ENTRY_ID,
-                base=700015,
-                decl_node_id=700014,
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="B",
-                module_id=ENTRY_ID,
-                base=700014,
-                decl_node_id=700015,
-            )
-        )
-        handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014)
-        with pytest.raises(AssertionError, match="cyclic exception base chain"):
-            table.field_kinds(handle)
-
 
 # ---------------------------------------------------------------------------
 # TypeTable.field_kinds (record branch) — a record/enum-member's own zones,
@@ -1895,21 +1724,6 @@ class TestRecordFieldKinds:
             ("w", ParamZone.POSITIONAL_ONLY),
             ("h", ParamZone.POSITIONAL_ONLY),
         )
-
-    def test_missing_def_raises_keyerror(self) -> None:
-        table = TypeTable()
-        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
-        with pytest.raises(KeyError):
-            table.field_kinds(handle)
-
-    def test_raises_when_key_registered_as_exception(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(kind="exception", name="Boom", module_id=ENTRY_ID, decl_node_id=700034)
-        )
-        handle = RecordType(name="Boom", module_id=ENTRY_ID, decl_id=700034)
-        with pytest.raises(AssertionError):
-            table.field_kinds(handle)
 
 
 # ---------------------------------------------------------------------------
@@ -1993,15 +1807,6 @@ class TestRecordMutableFields:
             RecordType(name="Pair", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700020)
         ) == frozenset({"mutable"})
         assert dict(table.record_fields(handle)) == {"mutable": TextType(), "fixed": IntType()}
-
-    def test_accessor_rejects_missing_and_non_record_definitions(self) -> None:
-        table = TypeTable()
-        with pytest.raises(KeyError):
-            table.record_mutable_fields(RecordType(name="Missing", module_id=ENTRY_ID))
-
-        table.register(TypeDef(kind="enum", name="Kind", module_id=ENTRY_ID, decl_node_id=700023))
-        with pytest.raises(AssertionError):
-            table.record_mutable_fields(RecordType(name="Kind", module_id=ENTRY_ID, decl_id=700023))
 
     def test_builder_registers_standalone_and_enum_member_mutability(self) -> None:
         checked = _check(
@@ -2875,32 +2680,6 @@ class TestComparableTypesTableAware:
         handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700027)
         assert comparable_types(handle, handle, table, bounds={}) is False
 
-    def test_dangling_field_reference_defaults_to_comparable(self) -> None:
-        # Y's field references a declaration that was never registered (an
-        # internal-invariant violation that should not happen for a
-        # well-formed table); the fixpoint treats an unresolvable reference
-        # as comparable rather than raising, defensively.
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Y",
-                module_id=ENTRY_ID,
-                fields=(("ghost", RecordType(name="Ghost", module_id=ENTRY_ID)),),
-                decl_node_id=700027,
-            )
-        )
-        handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700027)
-        assert comparable_types(handle, handle, table, bounds={}) is True
-
-    def test_unregistered_handle_defaults_to_comparable(self) -> None:
-        # Querying comparability of a handle whose own declaration was never
-        # registered at all (as opposed to one merely referenced by a field)
-        # is likewise defensive rather than a crash.
-        table = TypeTable()
-        handle = RecordType(name="Ghost", module_id=ENTRY_ID)
-        assert comparable_types(handle, handle, table, bounds={}) is True
-
     def test_recursive_tree_is_comparable(self) -> None:
         # A self-referential enum (array/dict guard not even needed for
         # equality — only for inhabitation): the non-data-reachability fixpoint
@@ -3576,20 +3355,6 @@ class TestSatisfiesHashable:
         handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700117)
         assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is False
 
-    def test_dangling_field_reference_defaults_to_hashable(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Y",
-                module_id=ENTRY_ID,
-                fields=(("ghost", RecordType(name="Ghost", module_id=ENTRY_ID)),),
-                decl_node_id=700118,
-            )
-        )
-        handle = RecordType(name="Y", module_id=ENTRY_ID, decl_id=700118)
-        assert satisfies(handle, ConstraintKind.HASHABLE, table, {}) is True
-
     def test_exception_extends_inherited_function_field_does_not_satisfy_hashable(self) -> None:
         table = TypeTable()
         fn_type = FunctionType(params=(), result=IntType())
@@ -3967,6 +3732,16 @@ class TestCastClassification:
         table = _bad_record_table()
         bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID, decl_id=700029))
         assert cast_classification(bad, JsonType(), table) == CastKind.STATIC_ERROR
+
+    def test_unresolved_type_var_target_static_error(self) -> None:
+        """Casting to a generic function's own bare type parameter is a static error.
+
+        ``x as T`` inside ``def f[T](x: json) -> T`` resolves the target to
+        ``TypeVarType("T")`` -- a real program shape, not an internal artifact.
+        """
+        assert (
+            cast_classification(JsonType(), TypeVarType("T"), TypeTable()) == CastKind.STATIC_ERROR
+        )
 
 
 def _exception_hierarchy_table() -> TypeTable:
@@ -4438,36 +4213,6 @@ class TestInhabitationAnalysis:
 
         assert compute_uninhabited(table) == frozenset({bad.decl_id})
 
-    def test_dangling_nominal_reference_stays_uninhabited(self) -> None:
-        """A malformed table with a missing target does not mark the source inhabited."""
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="R",
-                module_id=ENTRY_ID,
-                fields=(("missing", RecordType("Missing", module_id=ENTRY_ID)),),
-                decl_node_id=700035,
-            )
-        )
-
-        assert compute_uninhabited(table) == frozenset({700035})
-
-    def test_exception_with_missing_base_stays_uninhabited(self) -> None:
-        """A malformed exception base link is not treated as constructible evidence."""
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="E",
-                module_id=ENTRY_ID,
-                base=999_999_999,  # never registered: a dangling base identity
-                decl_node_id=700031,
-            )
-        )
-
-        assert compute_uninhabited(table) == frozenset({700031})
-
 
 class TestFiniteClosure:
     def test_nominal_references_walks_nested_type_shapes(self) -> None:
@@ -4829,12 +4574,6 @@ class TestFiniteClosure:
             is True
         )
 
-    def test_unregistered_declaration_defaults_to_finite(self) -> None:
-        table = TypeTable()
-        assert (
-            table.has_finite_schema(RecordType("Ghost", module_id=ENTRY_ID, decl_id=999999)) is True
-        )
-
     def test_has_finite_schema_reports_infinite_for_nested_perfect_field(self) -> None:
         # A non-recursive record containing a Perfect[int] field: the
         # reachability query must walk INTO the field's own type_args (not
@@ -5014,89 +4753,6 @@ class TestFiniteClosure:
                 EnumType("E", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700031)
             )
             is True
-        )
-
-    def test_unknown_nested_nominal_argument_counts_as_schema_growth(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="R",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(
-                    ("value", TypeVarType("T")),
-                    (
-                        "child",
-                        RecordType(
-                            "R",
-                            type_args=(
-                                RecordType(
-                                    "Unknown",
-                                    type_args=(ArrayType(TypeVarType("T")),),
-                                    module_id=ENTRY_ID,
-                                ),
-                            ),
-                            module_id=ENTRY_ID,
-                            decl_id=700035,
-                        ),
-                    ),
-                ),
-                decl_node_id=700035,
-            )
-        )
-        assert (
-            table.has_finite_schema(
-                RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035)
-            )
-            is False
-        )
-
-    def test_extra_nested_nominal_argument_counts_as_schema_growth(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-                decl_node_id=700002,
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="R",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(
-                    ("value", TypeVarType("T")),
-                    (
-                        "child",
-                        RecordType(
-                            "R",
-                            type_args=(
-                                RecordType(
-                                    "Box",
-                                    type_args=(TypeVarType("T"), ArrayType(TypeVarType("T"))),
-                                    module_id=ENTRY_ID,
-                                    decl_id=700002,
-                                ),
-                            ),
-                            module_id=ENTRY_ID,
-                            decl_id=700035,
-                        ),
-                    ),
-                ),
-                decl_node_id=700035,
-            )
-        )
-        assert (
-            table.has_finite_schema(
-                RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=700035)
-            )
-            is False
         )
 
     def test_has_finite_schema_reports_finite_for_nested_tree_field(self) -> None:
@@ -5357,51 +5013,6 @@ class TestFiniteClosure:
             table.has_finite_schema(ExceptionType("Derived", module_id=ENTRY_ID, decl_id=700045))
             is True
         )
-
-    def test_dangling_reference_defaults_to_finite(self) -> None:
-        # A field referencing a declaration that was never registered (same
-        # defensive scenario as the non-data-reachability fixpoint): the
-        # dangling reference must not crash finiteness analysis, and
-        # defaults permissively to finite.
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Y",
-                module_id=ENTRY_ID,
-                fields=(("ghost", RecordType("Ghost", module_id=ENTRY_ID)),),
-                decl_node_id=700027,
-            )
-        )
-        assert table.has_finite_schema(RecordType("Y", module_id=ENTRY_ID, decl_id=700027)) is True
-
-    def test_schema_canonical_type_preserves_unregistered_reference_args(self) -> None:
-        table = TypeTable()
-        ghost = RecordType(
-            "Ghost",
-            type_args=(ArrayType(IntType()),),
-            module_id=ENTRY_ID,
-        )
-        assert table.canonical_schema_type(ghost) == ghost
-        assert table.schema_relevant_type_args(ghost) == (ArrayType(IntType()),)
-
-    def test_schema_canonical_type_preserves_extra_defensive_args(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Weird",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-                decl_node_id=700046,
-            )
-        )
-        weird = RecordType(
-            "Weird", type_args=(IntType(), TextType()), module_id=ENTRY_ID, decl_id=700046
-        )
-        assert table.canonical_schema_type(weird) == weird
-        assert table.schema_relevant_type_args(weird) == (IntType(), TextType())
 
     def test_schema_canonical_type_collapses_phantom_argument_in_dict_key(self) -> None:
         # A dict KEY position is canonicalized too: a nominal reference

@@ -601,6 +601,10 @@ class EntryPipeline:
                 else Diagnostic(message=str(exc), line=1)
             )
             return self._ctx._fail([diagnostic], warnings)
+        host_contracts, contract_errors = materialize_ir_contracts(lowered.program, host_env.codecs)
+        if contract_errors:
+            self._ctx._link_image.restore_state(link_snapshot)
+            return self._ctx._fail(contract_errors, warnings)
         from agm.agl.runtime.arguments import bind_param_values, diagnose_process_environment
 
         pending_raw_param_values = {
@@ -631,8 +635,7 @@ class EntryPipeline:
             registry=host_env.extern_registry,
             companion_paths=companion_paths,
             packages=self._ctx._ensure_roots().packages,
-            nominals=lowered.program.nominals,
-            functions=lowered.program.functions,
+            descriptors=ValueDescriptors.from_program(lowered.program),
         )
         if extern_diagnostics:
             # A pre-execution rejection: nothing ran and nothing promoted, but
@@ -646,7 +649,6 @@ class EntryPipeline:
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
             return self._ctx._fail(extern_diagnostics, warnings)
-        host_contracts, _ = materialize_ir_contracts(lowered.program, host_env.codecs)
         trace = TraceStore(path=self._ctx._trace_path)
         trace.run_start()
         if self._ctx._host_settings_policy is not None:

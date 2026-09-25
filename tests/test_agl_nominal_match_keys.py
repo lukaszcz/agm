@@ -6,7 +6,6 @@ import pytest
 
 import agm.agl.matchcompile.compiler as compiler_module
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.matchcompile.matrix import constructor_inhabits_type
 from agm.agl.matchcompile.model import (
     ClosedSignature,
     NominalConstructor,
@@ -15,7 +14,6 @@ from agm.agl.matchcompile.model import (
     RootOccurrenceProvenance,
 )
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError, signature_for_type
-from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, RecordType
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.spans import SourceSpan
@@ -65,11 +63,3 @@ def test_record_and_enum_member_signatures_use_nominal_record_constructors() -> 
             ),
             checked.type_env.type_table,
         )
-
-
-def test_nominal_constructor_invariants_require_resolved_enum_members() -> None:
-    unknown_enum = EnumType("Unknown", decl_id=999)
-    constructor = NominalConstructor(RecordType("Member", decl_id=1000), ())
-
-    with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
-        constructor_inhabits_type(constructor, unknown_enum, TypeTable())

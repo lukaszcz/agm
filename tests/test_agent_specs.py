@@ -10,7 +10,7 @@ from agm.agent.runner import PromptDelivery
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.runtime.agents import decode_agent_value
-from agm.agl.semantics.values import IntValue, RecordValue
+from agm.agl.semantics.values import RecordValue
 from tests._agl_helpers import agent_value
 
 
@@ -34,19 +34,6 @@ from tests._agl_helpers import agent_value
 )
 def test_decode_round_trips_runtime_agent_enum(value: RecordValue, expected: AgentSpec) -> None:
     assert decode_agent_value(value, NO_BUILTIN_DECLARATIONS) == expected
-
-
-def test_decode_rejects_unknown_variant() -> None:
-    with pytest.raises(ValueError):
-        decode_agent_value(agent_value("Other", command="runner"), NO_BUILTIN_DECLARATIONS)
-
-
-def test_decode_rejects_non_text_payload_field() -> None:
-    value = agent_value("AgentCommand", command="runner")
-    value.fields["command"] = IntValue(1)
-
-    with pytest.raises(ValueError):
-        decode_agent_value(value, NO_BUILTIN_DECLARATIONS)
 
 
 def test_agent_argv_includes_all_configured_flags_verbatim() -> None:

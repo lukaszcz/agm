@@ -616,14 +616,6 @@ class CheckedModule(_Record):
         """Return the immutable binding selected for one pattern occurrence."""
         return self.pattern_binding_refs.get(node_id)
 
-    def pattern_constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
-        """Return the constructor selected for one pattern occurrence."""
-        return self.pattern_constructor_refs.get(node_id)
-
-    def pattern_constructor_owner_for(self, node_id: int) -> NominalId | None:
-        """Return the resolved nominal owner, distinct from source spelling."""
-        return self.pattern_constructor_owners.get(node_id)
-
     @property
     def interface(self) -> ModuleTypeInterface:
         """Closed type metadata this module contributes to importers."""

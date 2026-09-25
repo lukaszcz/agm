@@ -151,8 +151,13 @@ CastError(message = "cannot parse \"x\" as int", source-type = "text", target-ty
 ```
 
 See [Strings and interpolation](strings-and-interpolation.md) for the uniform
-rendering rules. Use `e as json` to obtain the JSON object of the exception's
-fields; use `e as text` to obtain the same AgL-form string.
+rendering rules. Use `e as json` to obtain the JSON object of the fields of
+*e*'s runtime exception type (see [Nominal types
+`as json`](types.md#nominal-types-as-json--structural-encoding)); use `e as
+text` to obtain the same AgL-form string. A field value with no JSON
+representation (such as a function or a cyclic value) makes the cast raise
+`CastError` (`as?` yields `None`); only the report of an uncaught exception
+replaces such a field with a marker.
 
 ## `try` / `catch`
 

@@ -137,8 +137,8 @@ class ClosedSignature:
         hash=False,
     )
 
-    def index_of(self, constructor: Constructor) -> int | None:
-        """Return the declaration index of *constructor*, or ``None`` when absent.
+    def index_of(self, constructor: Constructor) -> int:
+        """Return the declaration index of *constructor*, one of this signature's.
 
         The index is built once per signature so declaration-order lookups and
         completeness tests never rescan the constructor tuple.
@@ -149,7 +149,7 @@ class ClosedSignature:
             for index, candidate in enumerate(self.constructors):
                 indices.setdefault(candidate, index)
             object.__setattr__(self, "_indices", indices)
-        return indices.get(constructor)
+        return indices[constructor]
 
 
 @dataclass(frozen=True, slots=True)

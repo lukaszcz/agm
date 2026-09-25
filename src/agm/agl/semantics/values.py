@@ -709,6 +709,23 @@ Value: TypeAlias = (
     | ContractValue
 )
 
+# Every value a program can observe: an iterator is internal to loop lowering.
+ObservableValue: TypeAlias = (
+    TextValue
+    | IntValue
+    | DecimalValue
+    | BoolValue
+    | JsonValue
+    | ArrayValue
+    | DictValue
+    | RecordValue
+    | ExceptionValue
+    | UnitValue
+    | ConstructorValue
+    | IrClosureValue
+    | ContractValue
+)
+
 # ---------------------------------------------------------------------------
 # Frame and cell model
 # ---------------------------------------------------------------------------

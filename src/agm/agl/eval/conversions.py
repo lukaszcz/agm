@@ -22,12 +22,15 @@ host text/value-syntax decode boundary).  No ``syntax`` / ``scope`` /
 
 from __future__ import annotations
 
-from typing import assert_never
+from typing import assert_never, cast
 
 from agm.agl.ir.contracts import (
     ConversionRecipe,
     ConversionStrategy,
+    DecodeConversionRecipe,
     EncodePlan,
+    SimpleConversionRecipe,
+    ToJsonRecipe,
 )
 from agm.agl.ir.program import ValueDescriptors
 from agm.agl.runtime.convert import (
@@ -66,65 +69,66 @@ class AglCastConversion(Exception):
 
 
 def run_recipe(recipe: ConversionRecipe, value: Value, descriptors: ValueDescriptors) -> Value:
-    """Execute *recipe* against *value*; raise ``AglCastConversion`` on failure."""
-    match recipe.strategy:
-        case ConversionStrategy.NOOP:
-            return value
-        case ConversionStrategy.WIDEN_INT_TO_DECIMAL:
-            if not isinstance(value, IntValue):
-                raise AssertionError(  # pragma: no cover
-                    f"WIDEN_INT_TO_DECIMAL expected IntValue, got {type(value).__name__}"
-                )
-            return DecimalValue(int_to_decimal(value.value))
-        case ConversionStrategy.RENDER_TO_TEXT:
-            return TextValue(render_value(value, descriptors))
-        case ConversionStrategy.TO_JSON:
-            if recipe.encode is None:
-                raise AssertionError("TO_JSON strategy requires an encode plan")
+    """Execute *recipe* against *value*; raise ``AglCastConversion`` on failure.
+
+    An ``as json`` encode instead propagates the serializer's own
+    ``AglCyclicValue``/``AglNonDataValue`` sentinels for the caller to map.
+    """
+    match recipe:
+        case SimpleConversionRecipe(strategy=simple_strategy):
+            match simple_strategy:
+                case ConversionStrategy.NOOP:
+                    return value
+                case ConversionStrategy.WIDEN_INT_TO_DECIMAL:
+                    value = cast(IntValue, value)
+                    return DecimalValue(int_to_decimal(value.value))
+                case ConversionStrategy.RENDER_TO_TEXT:
+                    return TextValue(render_value(value, descriptors))
+                case _ as unreachable_simple:  # pragma: no cover
+                    assert_never(unreachable_simple)
+        case ToJsonRecipe(encode=encode, encode_definitions=encode_definitions):
             return JsonValue(
-                encode_value(EncodePlan(recipe.encode, recipe.encode_definitions), value)
+                encode_value(
+                    EncodePlan(encode, encode_definitions),
+                    value,
+                    descriptors.exception_field_encodes,
+                )
             )
-        case ConversionStrategy.NARROW_DECIMAL_TO_INT:
-            if not isinstance(value, DecimalValue):
-                raise AssertionError(  # pragma: no cover
-                    f"NARROW_DECIMAL_TO_INT expected DecimalValue, got {type(value).__name__}"
-                )
-            return _decode_from_json(recipe, value.value, value, descriptors)
-        case ConversionStrategy.PARSE_TEXT_THEN_DECODE:
-            if not isinstance(value, TextValue):
-                raise AssertionError(  # pragma: no cover
-                    f"PARSE_TEXT_THEN_DECODE expected TextValue, got {type(value).__name__}"
-                )
-            if recipe.decode is None:  # pragma: no cover
-                raise AssertionError("PARSE_TEXT_THEN_DECODE strategy requires a decode schema")
-            try:
-                parsed = host_text_to_json(
-                    value.value, recipe.decode, dict(recipe.defs), agent_command_fallback=False
-                )
-            except ValueError as exc:
-                raise AglCastConversion(
-                    f"Failed to parse text: {exc}",
-                    source_label=recipe.source_label,
-                    target_label=recipe.target_label,
-                    raw=render_value(value, descriptors),
-                ) from exc
-            return _decode_from_json(recipe, parsed, value, descriptors)
-        case ConversionStrategy.DECODE_JSON:
-            if not isinstance(value, JsonValue):
-                raise AssertionError(  # pragma: no cover
-                    f"DECODE_JSON expected JsonValue, got {type(value).__name__}"
-                )
-            return _decode_from_json(recipe, value.raw, value, descriptors)
+        case DecodeConversionRecipe(strategy=decode_strategy):
+            match decode_strategy:
+                case ConversionStrategy.NARROW_DECIMAL_TO_INT:
+                    value = cast(DecimalValue, value)
+                    return _decode_from_json(recipe, value.value, value, descriptors)
+                case ConversionStrategy.PARSE_TEXT_THEN_DECODE:
+                    value = cast(TextValue, value)
+                    try:
+                        parsed = host_text_to_json(
+                            value.value,
+                            recipe.decode,
+                            dict(recipe.defs),
+                            agent_command_fallback=False,
+                        )
+                    except ValueError as exc:
+                        raise AglCastConversion(
+                            f"Failed to parse text: {exc}",
+                            source_label=recipe.source_label,
+                            target_label=recipe.target_label,
+                            raw=render_value(value, descriptors),
+                        ) from exc
+                    return _decode_from_json(recipe, parsed, value, descriptors)
+                case ConversionStrategy.DECODE_JSON:
+                    value = cast(JsonValue, value)
+                    return _decode_from_json(recipe, value.raw, value, descriptors)
+                case _ as unreachable_decode:  # pragma: no cover
+                    assert_never(unreachable_decode)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
 
 def _decode_from_json(
-    recipe: ConversionRecipe, obj: object, value: Value, descriptors: ValueDescriptors
+    recipe: DecodeConversionRecipe, obj: object, value: Value, descriptors: ValueDescriptors
 ) -> Value:
     """JSON-Schema validate → decode."""
-    if recipe.json_schema is None:  # pragma: no cover
-        raise AssertionError("decode strategy requires a json_schema")
     errors = list(validator_for_schema(recipe.json_schema).iter_errors(obj))
     if errors:
         msgs = "; ".join(_clean_validation_message(e) for e in errors)
@@ -135,8 +139,6 @@ def _decode_from_json(
             raw=render_value(value, descriptors),
         )
 
-    if recipe.decode is None:  # pragma: no cover
-        raise AssertionError("decode strategy requires a decode schema")
     try:
         return decode_value(recipe.decode, obj, dict(recipe.defs))
     except ValueError as exc:

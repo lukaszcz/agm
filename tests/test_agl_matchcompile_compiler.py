@@ -36,15 +36,12 @@ from agm.agl.matchcompile.compiler import (
 )
 from agm.agl.matchcompile.matrix import (
     OccurrenceAllocator,
-    OccurrenceIndex,
     matrix_from_normalized,
 )
 from agm.agl.matchcompile.model import (
-    BinderAssignment,
     BoolConstructor,
     CaseSite,
     ClosedSignature,
-    ConstructorCell,
     Decision,
     DecisionBranch,
     DecisionDecompose,
@@ -59,7 +56,6 @@ from agm.agl.matchcompile.model import (
     Occurrence,
     OccurrenceId,
     Signature,
-    WildcardCell,
 )
 from agm.agl.matchcompile.normalize import (
     MatchCompileInvariantError,
@@ -417,13 +413,6 @@ def test_decomposition_self_validation_rejects_forged_interfaces_and_replay_node
         compiled.normalized, compiled.occurrences
     )
 
-    with pytest.raises(MatchCompileInvariantError, match="unknown occurrence"):
-        compiler_module._decompose_free_occurrences(
-            root.occurrence,
-            DecisionFail(),
-            (),
-            OccurrenceIndex.for_occurrences(()),
-        )
     with pytest.raises(MatchCompileInvariantError, match="exact ledger occurrence"):
         compiler_module._validate_compiled_decisions(
             replace(compiled, root=replace(root, occurrence=replace(root.occurrence))),
@@ -466,16 +455,6 @@ def test_decomposition_self_validation_rejects_forged_interfaces_and_replay_node
         with pytest.raises(MatchCompileInvariantError, match=message):
             validate_decision_dag(malformed)
 
-    same_occurrence_failure = DecisionSwitch(
-        root.occurrence,
-        (DecisionBranch(root.constructor, DecisionFail()),),
-        None,
-        (root.occurrence.id,),
-    )
-    with pytest.raises(MatchCompileInvariantError, match="more than once"):
-        compiler_module._first_failure_constraints(
-            replace(root, child=same_occurrence_failure), compiled.normalized.type_table
-        )
     with pytest.raises(MatchCompileInvariantError, match="requires a singleton nominal"):
         compiler_module._validate_semantic_replay(replace(compiled, root=root.child))
     with pytest.raises(MatchCompileInvariantError, match="incompatible singleton"):
@@ -1954,7 +1933,7 @@ def test_decision_interning_does_not_recursively_hash_shared_children() -> None:
     assert compiler.intern(decision) is decision
 
 
-def test_private_compiler_guards_reject_malformed_internal_states() -> None:
+def test_case_compiler_memoizes_states_and_witnesses_without_spellings() -> None:
     _, _, compiled = _compile("let value = false\ncase value of | false => 0 | true => 1")
     normalized = compiled.normalized
     matrix = matrix_from_normalized(normalized)
@@ -1964,50 +1943,6 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
     second_root, same_allocator = case_compiler.compile(matrix, evolved)
     assert second_root is first_root
     assert same_allocator is evolved
-
-    with pytest.raises(MatchCompileInvariantError, match="absent"):
-        compiler_module._constructor_index(
-            BoolConstructor(False), ClosedSignature((BoolConstructor(True),))
-        )
-
-    refutable_row = matrix.rows[0]
-    assert isinstance(refutable_row.cells[0], ConstructorCell)
-    with pytest.raises(MatchCompileInvariantError, match="irrefutable"):
-        compiler_module._finalize_binders(matrix, refutable_row)
-
-    binder_checked, _, binder_compiled = _compile(
-        "let value = 1\ncase value of | _ as captured => captured"
-    )
-    del binder_checked
-    binder_matrix = matrix_from_normalized(binder_compiled.normalized)
-    binder_row = binder_matrix.rows[0]
-    binder_cell = cast(WildcardCell, binder_row.cells[0])
-    binder = binder_cell.binders[0]
-    unavailable = replace(
-        binder_row,
-        cells=(replace(binder_cell, binders=()),),
-        binder_assignments=(BinderAssignment(OccurrenceId(999), binder),),
-    )
-    with pytest.raises(MatchCompileInvariantError, match="unavailable"):
-        compiler_module._finalize_binders(binder_matrix, unavailable)
-    duplicate = replace(
-        binder_row,
-        binder_assignments=(BinderAssignment(binder_compiled.normalized.root.id, binder),),
-    )
-    with pytest.raises(MatchCompileInvariantError, match="more than once"):
-        compiler_module._finalize_binders(binder_matrix, duplicate)
-
-    unknown_leaf = DecisionLeaf(
-        1,
-        (BinderAssignment(OccurrenceId(999), binder),),
-    )
-    with pytest.raises(MatchCompileInvariantError, match="unknown occurrence"):
-        compiler_module._switch_free_occurrences(
-            normalized.root,
-            (DecisionBranch(BoolConstructor(False), unknown_leaf),),
-            None,
-            OccurrenceIndex.for_occurrences(normalized.occurrences),
-        )
 
     _, _, enum_compiled = _compile(
         "enum Choice\n  | empty\n  | item(value: int)\n"
@@ -2366,48 +2301,6 @@ def test_normalization_uses_checked_pattern_metadata_without_scope_provenance() 
     normalize_case(case, checked)
 
 
-def test_private_diagnostic_guards_reject_malformed_switches() -> None:
-    _, _, compiled = _compile("let value = false\ncase value of | false => 0 | true => 1")
-    normalized = compiled.normalized
-    fail = DecisionFail()
-    leaf = DecisionLeaf(normalized.source.actions[0].action_id, ())
-    false_branch = DecisionBranch(BoolConstructor(False), fail)
-    true_branch = DecisionBranch(BoolConstructor(True), leaf)
-    complete_with_default = DecisionSwitch(
-        normalized.root,
-        (false_branch, true_branch),
-        fail,
-        (normalized.root.id,),
-    )
-    with pytest.raises(MatchCompileInvariantError, match="complete closed"):
-        compiler_module._default_constraint(complete_with_default, normalized.type_table)
-
-    int_occurrence = replace(normalized.root, type=IntType())
-    malformed_open = DecisionSwitch(
-        int_occurrence,
-        (false_branch,),
-        fail,
-        (int_occurrence.id,),
-    )
-    with pytest.raises(MatchCompileInvariantError, match="non-literal"):
-        compiler_module._default_constraint(malformed_open, normalized.type_table)
-
-    repeated = DecisionSwitch(
-        normalized.root,
-        (DecisionBranch(BoolConstructor(False), fail),),
-        None,
-        (normalized.root.id,),
-    )
-    repeated_outer = DecisionSwitch(
-        normalized.root,
-        (DecisionBranch(BoolConstructor(False), repeated),),
-        None,
-        (normalized.root.id,),
-    )
-    with pytest.raises(MatchCompileInvariantError, match="more than once"):
-        compiler_module._issues(normalized, repeated_outer, normalized.occurrences)
-
-
 def test_validator_rejects_each_malformed_switch_shape_and_cycles() -> None:
     _, _, compiled = _compile("let value = false\ncase value of | false => 0 | true => 1")
     root = cast(DecisionSwitch, compiled.root)
@@ -2457,5 +2350,3 @@ def test_validator_rejects_each_malformed_switch_shape_and_cycles() -> None:
     )
     with pytest.raises(MatchCompileInvariantError, match="cycle"):
         validate_decision_dag(cyclic)
-    with pytest.raises(MatchCompileInvariantError, match="cycle"):
-        compiler_module._first_failure_constraints(cyclic, compiled.normalized.type_table)

@@ -93,6 +93,7 @@ from agm.agl.semantics.types import (
     BoolType,
     BottomType,
     CastKind,
+    CheckedType,
     DecimalType,
     DictType,
     EnumType,
@@ -397,8 +398,6 @@ class TypeDef:
                     decl_id=self.decl_node_id,
                 )
             case "exception":
-                if type_args:
-                    raise ValueError("TypeDef.handle() does not accept type_args for an exception")
                 return ExceptionType(
                     name=self.name,
                     module_id=self.module_id,
@@ -544,7 +543,7 @@ class TypeTable:
     ) -> TypeDef | None:
         """Return the newest registered ``TypeDef`` for a name path, via the name index."""
         decl_id = self._name_index.get((module_id, scope_path, name))
-        return None if decl_id is None else self._defs.get(decl_id)
+        return None if decl_id is None else self._defs[decl_id]
 
     def get_by_id(self, decl_id: DeclId) -> TypeDef | None:
         """Return the registered ``TypeDef`` for *decl_id*, or ``None`` if unregistered.
@@ -741,21 +740,18 @@ class TypeTable:
             if methods
         }
 
-    def _exception_chain(self, decl_id: DeclId, *, caller: str) -> list[tuple[DeclId, TypeDef]]:
-        """Return *decl_id*'s base chain, base first, rejecting a cyclic base link.
+    def _exception_chain(self, decl_id: DeclId) -> list[tuple[DeclId, TypeDef]]:
+        """Return *decl_id*'s base chain, base first.
 
-        Every flattened exception accessor inherits base-first declaration order
-        from this one walk, so ``caller`` only selects the ``KeyError``/
-        ``AssertionError`` label of the accessor that asked.
+        Every flattened exception accessor inherits base-first declaration
+        order from this one walk. The whole-program inhabitation fixpoint
+        rejects a cyclic ``extends`` chain before any exception's fields are
+        ever flattened, so the walk here is unconditionally finite.
         """
         chain: list[tuple[DeclId, TypeDef]] = []
-        visited: set[DeclId] = set()
         current: DeclId | None = decl_id
         while current is not None:
-            if current in visited:
-                raise AssertionError(f"cyclic exception base chain detected at {current!r}")
-            visited.add(current)
-            typedef = self._require_exception_def(current, caller=caller)
+            typedef = self._defs[current]
             chain.append((current, typedef))
             current = typedef.base
         chain.reverse()
@@ -767,11 +763,10 @@ class TypeTable:
         Empty for a hierarchy root and for any non-exception declaration, so a
         caller checking inherited members needs no base-chain walk of its own.
         """
-        typedef = self._defs.get(decl_id)
-        assert typedef is not None, f"no TypeDef registered for identity {decl_id!r}"
+        typedef = self._defs[decl_id]
         if typedef.kind != "exception" or typedef.base is None:
             return ()
-        chain = self._exception_chain(typedef.base, caller="ancestor_defs")
+        chain = self._exception_chain(typedef.base)
         return tuple(base_def for _base_id, base_def in reversed(chain))
 
     def is_exception_ancestor(self, ancestor_id: DeclId, decl_id: DeclId) -> bool:
@@ -854,12 +849,6 @@ class TypeTable:
         substituted mapping object. The memo is bucketed by ``decl_id`` so a single
         identity's invalidation (:meth:`merge_from`) never has to scan entries
         for other identities.
-
-        Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
-        ``decl_id`` — every valid handle is expected to have one.
-        Raises ``AssertionError`` if the registered def's ``kind`` is not
-        ``"record"`` — an internal-invariant violation, since a ``RecordType``
-        handle only ever names a record declaration.
         """
         decl_id = handle.decl_id
         bucket = self._record_fields_cache.get(decl_id)
@@ -867,7 +856,7 @@ class TypeTable:
             cached = bucket.get(handle)
             if cached is not None:
                 return cached
-        typedef = self._require_record_def(handle, caller="record_fields")
+        typedef = self._defs[decl_id]
         subst = dict(zip(typedef.type_params, handle.type_args))
         result: Mapping[str, Type] = {
             fname: substitute(ftype, subst) for fname, ftype in typedef.fields
@@ -882,30 +871,14 @@ class TypeTable:
         by a handle's ``type_args``: every handle for one declaration reads
         the same set straight off its ``TypeDef``, and there is nothing per
         handle to memoize (unlike :meth:`record_fields`).
-
-        Raises the same errors as :meth:`record_fields` for an unregistered
-        or non-record handle.
         """
-        return self._require_record_def(handle, caller="record_mutable_fields").mutable_fields
-
-    def _require_record_def(self, handle: RecordType, *, caller: str) -> TypeDef:
-        typedef = self._defs.get(handle.decl_id)
-        if typedef is None:
-            raise KeyError(f"no TypeDef registered for record {handle!r}")
-        if typedef.kind != "record":
-            raise AssertionError(
-                f"{caller} called for {handle!r}, which is registered as kind "
-                f"{typedef.kind!r}, not 'record'"
-            )
-        return typedef
+        return self._defs[handle.decl_id].mutable_fields
 
     def enum_members(self, handle: EnumType) -> tuple[RecordType, ...]:
         """Return *handle*'s member record types with ``type_args`` substituted in.
 
         Members retain their declaration identities and field ownership. The
-        result is memoized per enum instantiation. Raises ``KeyError`` if no
-        definition is registered, or ``AssertionError`` when the identity is
-        not an enum.
+        result is memoized per enum instantiation.
         """
         decl_id = handle.decl_id
         bucket = self._enum_members_cache.get(decl_id)
@@ -913,14 +886,7 @@ class TypeTable:
             cached = bucket.get(handle)
             if cached is not None:
                 return cached
-        typedef = self._defs.get(decl_id)
-        if typedef is None:
-            raise KeyError(f"no TypeDef registered for enum {handle!r}")
-        if typedef.kind != "enum":
-            raise AssertionError(
-                f"enum_members called for {handle!r}, which is registered as kind "
-                f"{typedef.kind!r}, not 'enum'"
-            )
+        typedef = self._defs[decl_id]
         subst = dict(zip(typedef.type_params, handle.type_args))
         result = tuple(cast(RecordType, substitute(member, subst)) for member in typedef.members)
         self._enum_members_cache.setdefault(decl_id, {})[handle] = result
@@ -1065,9 +1031,7 @@ class TypeTable:
             if len(bindings) != len(typedef.type_params):
                 continue
             args = tuple(bindings[param] for param in typedef.type_params)
-            result = typedef.handle(args)
-            assert isinstance(result, EnumType)
-            owners.append(result)
+            owners.append(cast(EnumType, typedef.handle(args)))
         return tuple(owners)
 
     def record_matches_enum_member(
@@ -1155,13 +1119,6 @@ class TypeTable:
         (the root contributes ``message``), followed by the
         exception's own fields, matching declaration order.
 
-        Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
-        ``decl_id``. Raises ``AssertionError`` if the registered def's
-        ``kind`` is not ``"exception"``, or if the base chain contains a
-        cycle — an internal-invariant violation, since the whole-program
-        inhabitation pre-pass rejects ``extends`` cycles as uninhabitable
-        before this can fire in production; this guard is for internal
-        robustness, not a user diagnostic.
         """
         decl_id = handle.decl_id
         cached = self._exception_fields_cache.get(decl_id)
@@ -1173,7 +1130,7 @@ class TypeTable:
 
     def _flatten_exception_fields(self, decl_id: DeclId) -> Mapping[str, Type]:
         fields: dict[str, Type] = {}
-        for _chain_id, typedef in self._exception_chain(decl_id, caller="exception_fields"):
+        for _chain_id, typedef in self._exception_chain(decl_id):
             fields.update(typedef.fields)
         return fields
 
@@ -1194,9 +1151,6 @@ class TypeTable:
         exception's own), memoized the same way — an exception's OWN fields
         honor their declared ``@arg-*`` attribute exactly like a record's
         fields do; only inheritance is exception-specific.
-
-        Raises ``KeyError``/``AssertionError`` under the same conditions as
-        :meth:`record_fields`/:meth:`exception_fields`.
         """
         if isinstance(handle, ExceptionType):
             decl_id = handle.decl_id
@@ -1206,7 +1160,7 @@ class TypeTable:
             result = self._flatten_exception_field_kinds(decl_id)
             self._exception_field_kinds_cache[decl_id] = result
             return result
-        typedef = self._require_record_def(handle, caller="field_kinds")
+        typedef = self._defs[handle.decl_id]
         return tuple(
             zip((fname for fname, _ftype in typedef.fields), typedef.field_kinds, strict=True)
         )
@@ -1214,7 +1168,7 @@ class TypeTable:
     def _flatten_exception_field_kinds(self, decl_id: DeclId) -> tuple[tuple[str, ParamZone], ...]:
         return tuple(
             (fname, kind)
-            for _chain_id, typedef in self._exception_chain(decl_id, caller="field_kinds")
+            for _chain_id, typedef in self._exception_chain(decl_id)
             for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
         )
 
@@ -1226,19 +1180,16 @@ class TypeTable:
         A field without ``@name``/``@json-name`` is absent from the mapping.
         """
         if isinstance(handle, RecordType):
-            typedef = self._require_record_def(handle, caller="field_external_names")
-            return dict(typedef.field_external_names)
+            return dict(self._defs[handle.decl_id].field_external_names)
         return {
             field_name: external
-            for _chain_id, typedef in self._exception_chain(
-                handle.decl_id, caller="field_external_names"
-            )
+            for _chain_id, typedef in self._exception_chain(handle.decl_id)
             for field_name, external in typedef.field_external_names
         }
 
     def external_name(self, handle: RecordType) -> ExternalName:
         """Return the ``@name``/``@json-name`` spellings of record *handle*'s declaration."""
-        return self._require_record_def(handle, caller="external_name").external_name
+        return self._defs[handle.decl_id].external_name
 
     def declaration_doc(self, handle: RecordType | EnumType) -> str | None:
         """Return a record, member, or enum declaration's recognized ``@doc`` prose."""
@@ -1246,7 +1197,7 @@ class TypeTable:
 
     def field_docs(self, handle: RecordType) -> Mapping[str, str]:
         """Return the ``@doc`` prose of record *handle*'s documented fields."""
-        return dict(self._require_record_def(handle, caller="field_docs").field_docs)
+        return dict(self._defs[handle.decl_id].field_docs)
 
     def json_fields(self, handle: RecordType | ExceptionType) -> tuple[tuple[str, str, Type], ...]:
         """Return every field of *handle* as ``(declared_name, json_name, field_type)``.
@@ -1271,22 +1222,9 @@ class TypeTable:
         """Return the registered ``TypeDef`` for *handle*.
 
         Used to read exception hierarchy metadata (``abstract``, ``base``),
-        which lives here rather than on the ``ExceptionType`` handle. Raises
-        ``KeyError``/``AssertionError`` under the same conditions as
-        :meth:`exception_fields`.
+        which lives here rather than on the ``ExceptionType`` handle.
         """
-        return self._require_exception_def(handle.decl_id, caller="exception_def")
-
-    def _require_exception_def(self, decl_id: DeclId, *, caller: str) -> TypeDef:
-        typedef = self._defs.get(decl_id)
-        if typedef is None:
-            raise KeyError(f"no TypeDef registered for exception identity {decl_id!r}")
-        if typedef.kind != "exception":
-            raise AssertionError(
-                f"{caller} called for identity {decl_id!r}, which is registered as kind "
-                f"{typedef.kind!r}, not 'exception'"
-            )
-        return typedef
+        return self._defs[handle.decl_id]
 
     def entries(self) -> tuple[TypeDef, ...]:
         """Return all registered ``TypeDef``s (used for REPL and program table sharing)."""
@@ -1364,9 +1302,7 @@ class TypeTable:
         if published is not None:
             return published
         standard = self.standard_builtin_declaration("Exception")
-        root = EXCEPTION_BASE if standard is None else standard.handle()
-        assert isinstance(root, ExceptionType)
-        return root
+        return EXCEPTION_BASE if standard is None else cast(ExceptionType, standard.handle())
 
     def option_handle(self, argument: Type, *, standard: bool = False) -> EnumType:
         """Return the ``Option[argument]`` handle this program's ``Option`` names.
@@ -1384,9 +1320,7 @@ class TypeTable:
             if standard
             else self.builtin_declaration("Option")
         ) or OPTION_TYPE_DEF
-        handle = declaration.handle((argument,))
-        assert isinstance(handle, EnumType), "Option's declaration must be an enum"
-        return handle
+        return cast(EnumType, declaration.handle((argument,)))
 
     def standard_builtin_declarations(self) -> Mapping[str, TypeDef]:
         """Return all loaded standard-library source builtin declarations."""
@@ -1519,12 +1453,10 @@ class TypeTable:
         flags = self._declaration_flags(prop)
         if handle.decl_id in flags.flagged:
             return False
-        typedef = self._defs.get(handle.decl_id)
-        if typedef is None:
-            return True
         if isinstance(handle, ExceptionType):
             return True
-        relevant = flags.relevant_params.get(handle.decl_id, frozenset())
+        typedef = self._defs[handle.decl_id]
+        relevant = flags.relevant_params[handle.decl_id]
         if not all(
             structural(arg)
             for pname, arg in zip(typedef.type_params, handle.type_args)
@@ -1533,7 +1465,7 @@ class TypeTable:
             return False
         if not LEAF_POLICIES[prop].text_dict_keys_only:
             return True
-        key_params = flags.key_params.get(handle.decl_id, frozenset())
+        key_params = flags.key_params[handle.decl_id]
         return all(
             dict_key_has_wire_form(arg)
             for pname, arg in zip(typedef.type_params, handle.type_args)
@@ -1583,11 +1515,11 @@ class TypeTable:
                 ref.decl_id
                 for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params)
             ),
-            lambda decl_id: caps.successors.get(decl_id, frozenset()),
+            lambda decl_id: caps.successors[decl_id],
             lambda decl_id: decl_id if decl_id in caps.infinite else None,
             key=self._decl_id_sort_key,
         )
-        return None if result_id is None else self._defs.get(result_id)
+        return None if result_id is None else self._defs[result_id]
 
     def canonical_schema_type(self, t: Type) -> Type:
         """Return *t* with schema-irrelevant nominal type arguments canonicalized.
@@ -1652,39 +1584,24 @@ class TypeTable:
         t: RecordType | EnumType,
         relevant_params: Mapping[DeclId, frozenset[str]],
     ) -> tuple[Type, ...]:
-        typedef = self._defs.get(t.decl_id)
-        if typedef is None:
-            return tuple(self._canonical_schema_type(arg, relevant_params) for arg in t.type_args)
-        relevant = relevant_params.get(t.decl_id, frozenset())
-        result: list[Type] = []
-        for pname, arg in zip(typedef.type_params, t.type_args):
-            if pname in relevant:
-                result.append(self._canonical_schema_type(arg, relevant_params))
-            else:
-                result.append(UnitType())
-        if len(t.type_args) > len(typedef.type_params):
-            result.extend(
-                self._canonical_schema_type(arg, relevant_params)
-                for arg in t.type_args[len(typedef.type_params) :]
-            )
-        return tuple(result)
+        typedef = self._defs[t.decl_id]
+        relevant = relevant_params[t.decl_id]
+        return tuple(
+            self._canonical_schema_type(arg, relevant_params) if pname in relevant else UnitType()
+            for pname, arg in zip(typedef.type_params, t.type_args)
+        )
 
     def schema_relevant_type_args(self, t: RecordType | EnumType) -> tuple[Type, ...]:
         """Return the canonical type arguments that should appear in schema identity labels."""
         caps = self._finite_closure_result()
-        canonical = self._canonical_schema_type(t, caps.relevant_params)
-        if not isinstance(canonical, (RecordType, EnumType)):  # pragma: no cover
-            raise AssertionError(f"canonicalized nominal handle became {canonical!r}")
-        typedef = self._defs.get(t.decl_id)
-        if typedef is None:
-            return canonical.type_args
-        relevant = caps.relevant_params.get(t.decl_id, frozenset())
-        result = [
+        canonical = cast(
+            "RecordType | EnumType", self._canonical_schema_type(t, caps.relevant_params)
+        )
+        typedef = self._defs[t.decl_id]
+        relevant = caps.relevant_params[t.decl_id]
+        return tuple(
             arg for pname, arg in zip(typedef.type_params, canonical.type_args) if pname in relevant
-        ]
-        if len(canonical.type_args) > len(typedef.type_params):
-            result.extend(canonical.type_args[len(typedef.type_params) :])
-        return tuple(result)
+        )
 
     def schema_relevant_nominal_references(
         self, t: Type
@@ -1778,20 +1695,11 @@ class TypeTable:
         from agm.agl.semantics.analyses import nominal_references
 
         def culprit(decl_id: DeclId) -> tuple[TypeDef, str, Type] | None:
-            typedef = self._defs.get(decl_id)
-            if typedef is None:  # pragma: no cover
-                # Unreachable by construction: every identity enqueued was
-                # first confirmed to reach a non-data type, which a dangling
-                # (never-registered) declaration never does. Kept as a
-                # defensive guard, matching the dangling-reference handling in
-                # the fixpoints themselves, in case that ever stops holding.
-                return None
-            direct = self._own_non_data_field(typedef)
-            return None if direct is None else (typedef, *direct)
+            direct = self._own_non_data_field(self._defs[decl_id])
+            return None if direct is None else (self._defs[decl_id], *direct)
 
         def successors(decl_id: DeclId) -> set[DeclId]:
-            typedef = self._defs.get(decl_id)
-            return set() if typedef is None else self._affected_successors(decl_id, typedef)
+            return self._affected_successors(decl_id, self._defs[decl_id])
 
         return bfs_first(
             (ref.decl_id for ref in nominal_references(t) if self.nominal_reaches_non_data(ref)),
@@ -1906,21 +1814,14 @@ def decl_def_sort_key(typedef: TypeDef) -> tuple[tuple[str, ...], tuple[str, ...
 def decl_id_sort_key(
     defs: Mapping[DeclId, TypeDef], decl_id: DeclId
 ) -> tuple[tuple[str, ...], tuple[str, ...], str]:
-    """Deterministic sort key for *decl_id*, resolved to its declaration in *defs*.
+    """Deterministic sort key for registered *decl_id*, resolved to its declaration in *defs*.
 
     Every SCC/BFS traversal that has to order declaration identities sorts by
     declaration name (:func:`decl_def_sort_key`) rather than by identity, so a
     "first"/"culprit" declaration chosen from a fixpoint never depends on
-    declaration numbering. A *decl_id* absent from *defs* (a dangling
-    reference — an internal-invariant violation the fixpoints handle
-    defensively rather than assume away) sorts after every named declaration,
-    using the raw identity only to keep multiple dangling entries mutually
-    ordered.
+    declaration numbering.
     """
-    typedef = defs.get(decl_id)
-    if typedef is None:  # pragma: no cover
-        return ((), (), f"￿<dangling:{decl_id}>")
-    return decl_def_sort_key(typedef)
+    return decl_def_sort_key(defs[decl_id])
 
 
 def qualified_decl_name(typedef: TypeDef) -> str:
@@ -2183,6 +2084,8 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
     declaration-level facts a ``json`` target needs (see
     :func:`is_json_convertible`).
     """
+    # A target is a resolved annotation or ``parse`` argument, never an inference variable.
+    target = cast(CheckedType, target)
     # Bottom is a valid source because a raise expression never reaches the
     # conversion. Other non-data sources and all non-data targets are invalid.
     if isinstance(source, (UnitType, FunctionType)) or isinstance(
@@ -2269,8 +2172,11 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
             return CastKind.FALLIBLE
         return CastKind.STATIC_ERROR
 
-    # All target types are covered above; this is a safety fallback.
-    return CastKind.STATIC_ERROR  # pragma: no cover
+    if isinstance(target, TypeVarType):
+        # A cast target that is still a bare type parameter (e.g. `x as T`
+        # inside a generic function) names no concrete shape to convert into.
+        return CastKind.STATIC_ERROR
+    assert_never(target)  # pragma: no cover
 
 
 def parse_classification(target: Type, table: TypeTable) -> CastKind:

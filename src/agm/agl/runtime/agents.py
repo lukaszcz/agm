@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from agm.agent.transport import AgentCallInfo, stderr_tail
 from agm.agl.ir.builtin_nominals import BuiltinNominals, resolve_standard_member_name
@@ -130,10 +130,7 @@ def agent_value(spec: AgentSpec, nominals: BuiltinNominals) -> RecordValue:
 
 
 def _text_field(value: RecordValue, name: str) -> str:
-    field = value.fields[name]
-    if not isinstance(field, TextValue):
-        raise ValueError(f"Agent field {name!r} must be text")
-    return field.value
+    return cast(TextValue, value.fields[name]).value
 
 
 def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:

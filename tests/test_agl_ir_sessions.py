@@ -6,7 +6,13 @@ from typing import cast
 
 import pytest
 
-from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
+from agm.agl.ir.contracts import (
+    ContractRequest,
+    JsonContractRequest,
+    ScalarDecode,
+    ScalarKind,
+    TextContractRequest,
+)
 from agm.agl.ir.ids import ContractId, Location, SourceId
 from agm.agl.ir.nodes import (
     IrBind,
@@ -46,15 +52,12 @@ _LOC = Location(source_id=_SRC_ID, start_offset=0, end_offset=1, start_line=1, s
 
 
 def _contract() -> ContractRequest:
-    return ContractRequest(
+    return TextContractRequest(
         codec_name="text",
         strict_json=None,
-        json_schema=None,
-        decode=None,
         target_type_label="text",
         structured_exec=False,
         format_instructions="",
-        is_unit=False,
     )
 
 
@@ -215,7 +218,7 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
     assert answer.contract_id in program.contracts
     assert answer.max_attempts == 3
     assert program.contracts == {
-        answer.contract_id: ContractRequest(
+        answer.contract_id: JsonContractRequest(
             codec_name="json",
             strict_json=True,
             json_schema='{"type": "integer"}',

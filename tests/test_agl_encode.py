@@ -7,18 +7,16 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.eval.conversions import run_recipe
 from agm.agl.eval.ir_interpreter import _apply_coercion
 from agm.agl.ir import contracts
 from agm.agl.ir.contracts import (
     ArrayEncode,
-    ConversionRecipe,
-    ConversionStrategy,
     DictEncode,
     EncodeDefinition,
     EncodePlan,
     EnumEncode,
     ExceptionEncode,
+    ExceptionFieldEncode,
     FieldEncode,
     RecordEncode,
     RefEncode,
@@ -28,7 +26,6 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.operations import ToJson
-from agm.agl.ir.program import ValueDescriptors
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.runtime.arguments import decode_param_value
 from agm.agl.runtime.serialize import (
@@ -63,6 +60,7 @@ from agm.agl.semantics.values import (
 from agm.agl.type_schema import (
     _build_template_encode_plan,
     build_encode_plan,
+    build_exception_field_encodes,
     build_param_decoder,
 )
 from tests._agl_helpers import enum_type, next_decl_id, record_type, type_table_for
@@ -71,6 +69,9 @@ from tests.agl.ir_harness import (
     evaluate_ir_with_agents,
     evaluate_ir_with_externs,
 )
+
+#: The exception field-encode table of a program declaring no exceptions.
+_NO_EXCEPTIONS: dict[NominalId, tuple[ExceptionFieldEncode, ...]] = {}
 
 
 def test_contracts_exports_array_encode() -> None:
@@ -121,6 +122,7 @@ def test_encode_plan_preserves_enum_tags_for_member_records() -> None:
         decl_node_id=problem_id,
     )
     table = type_table_for(item_def, choice_def, problem_def)
+    exceptions = {NominalId(problem_id): build_exception_field_encodes(problem, table)}
     item_value = RecordValue(NominalId(item.decl_id), {"value": IntValue(7)})
     choice_value = RecordValue(
         nominal=NominalId(choice_def.members[1].decl_id),
@@ -129,16 +131,16 @@ def test_encode_plan_preserves_enum_tags_for_member_records() -> None:
     problem_value = ExceptionValue(NominalId(problem.decl_id), {"choice": choice_value})
 
     assert value_to_json_obj(choice_value) == {"items": [{"value": 7}]}
-    assert encode_value(build_encode_plan(choice, table), choice_value) == {
+    assert encode_value(build_encode_plan(choice, table), choice_value, _NO_EXCEPTIONS) == {
         "$case": "Many",
         "items": [{"value": 7}],
     }
-    assert encode_value(build_encode_plan(problem, table), problem_value) == {
+    assert encode_value(build_encode_plan(problem, table), problem_value, exceptions) == {
         "choice": {"$case": "Many", "items": [{"value": 7}]}
     }
     # The template builder is what a growing source gets; on a source both
     # builders accept it must agree, exception root and enum slot alike.
-    assert encode_value(_build_template_encode_plan(problem, table), problem_value) == {
+    assert encode_value(_build_template_encode_plan(problem, table), problem_value, exceptions) == {
         "choice": {"$case": "Many", "items": [{"value": 7}]}
     }
 
@@ -146,7 +148,7 @@ def test_encode_plan_preserves_enum_tags_for_member_records() -> None:
 def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
     scalar = EncodePlan(ScalarEncode())
     assert [
-        encode_value(scalar, value)
+        encode_value(scalar, value, _NO_EXCEPTIONS)
         for value in (
             TextValue("text"),
             IntValue(2),
@@ -157,69 +159,24 @@ def test_encode_plan_executes_all_shapes_and_member_identity() -> None:
     ] == ["text", 2, Decimal("2.5"), True, {"raw": None}]
 
     assert encode_value(
-        EncodePlan(ArrayEncode(ScalarEncode())), ArrayValue([IntValue(1), IntValue(2)])
+        EncodePlan(ArrayEncode(ScalarEncode())),
+        ArrayValue([IntValue(1), IntValue(2)]),
+        _NO_EXCEPTIONS,
     ) == [1, 2]
-    assert encode_value(EncodePlan(DictEncode(ScalarEncode())), DictValue({"n": IntValue(3)})) == {
-        "n": 3
-    }
+    assert encode_value(
+        EncodePlan(DictEncode(ScalarEncode())), DictValue({"n": IntValue(3)}), _NO_EXCEPTIONS
+    ) == {"n": 3}
 
     enum = EncodePlan(
         EnumEncode(NominalId(1), (VariantEncode("Member", "Member", NominalId(2), ()),))
     )
-    assert encode_value(enum, RecordValue(nominal=NominalId(2), fields={})) == {"$case": "Member"}
+    assert encode_value(enum, RecordValue(nominal=NominalId(2), fields={}), _NO_EXCEPTIONS) == {
+        "$case": "Member"
+    }
 
 
 def test_to_json_coercion_uses_the_static_scalar_encoder() -> None:
     assert _apply_coercion(IntValue(1), ToJson()) == JsonValue(1)
-    with pytest.raises(AssertionError, match="scalar encode"):
-        _apply_coercion(ArrayValue([]), ToJson())
-
-
-def test_to_json_recipe_requires_the_lowered_encode_plan() -> None:
-    with pytest.raises(AssertionError, match="requires an encode plan"):
-        run_recipe(
-            ConversionRecipe(
-                strategy=ConversionStrategy.TO_JSON,
-                source_label="int",
-                target_label="json",
-            ),
-            IntValue(1),
-            ValueDescriptors(nominals={}, functions={}),
-        )
-
-
-def test_encode_plan_reports_malformed_static_plans() -> None:
-    scalar = ScalarEncode()
-    enum = EnumEncode(NominalId(1), (VariantEncode("A", "A", NominalId(2), ()),))
-    cases = (
-        (scalar, ArrayValue([])),
-        (ArrayEncode(scalar), IntValue(1)),
-        (DictEncode(scalar), IntValue(1)),
-        (RecordEncode(NominalId(1), ()), IntValue(1)),
-        (RecordEncode(NominalId(1), ()), RecordValue(NominalId(2), {})),
-        (ExceptionEncode(NominalId(1), ()), IntValue(1)),
-        (ExceptionEncode(NominalId(1), ()), ExceptionValue(NominalId(2), {})),
-        (enum, RecordValue(nominal=NominalId(1), fields={})),
-        (enum, RecordValue(nominal=NominalId(1), fields={})),
-        (enum, RecordValue(nominal=NominalId(3), fields={})),
-        (enum, IntValue(1)),
-    )
-    for schema, value in cases:
-        with pytest.raises(AssertionError):
-            encode_value(EncodePlan(schema), value)
-
-    for plan in (
-        EncodePlan(RefEncode("missing")),
-        EncodePlan(
-            RefEncode("first"),
-            (
-                EncodeDefinition("first", 0, RefEncode("second")),
-                EncodeDefinition("second", 0, RefEncode("first")),
-            ),
-        ),
-    ):
-        with pytest.raises(AssertionError):
-            encode_value(plan, IntValue(1))
 
 
 def test_encode_plan_binds_definition_parameters_at_each_reference() -> None:
@@ -245,14 +202,13 @@ def test_encode_plan_binds_definition_parameters_at_each_reference() -> None:
         pair, {"first": IntValue(1), "second": ArrayValue([IntValue(2), IntValue(3)])}
     )
 
-    assert encode_value(plan, value) == {"first": 1, "second": [2, 3]}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"first": 1, "second": [2, 3]}
 
 
 def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> None:
     """An argument is rewritten out of the caller's parameter space before it binds."""
     outer = NominalId(1)
     record = NominalId(2)
-    exception = NominalId(3)
     enum = NominalId(4)
     member = NominalId(5)
     # ``Outer`` hands ``Inner`` a composite written in terms of ITS OWN
@@ -266,11 +222,6 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
             RecordEncode(record, (FieldEncode("value", "value", TypeParameterEncode(0)),)),
             RecordValue(record, {"value": IntValue(1)}),
             {"value": 1},
-        ),
-        (
-            ExceptionEncode(exception, (FieldEncode("value", "value", TypeParameterEncode(0)),)),
-            ExceptionValue(exception, {"value": IntValue(2)}),
-            {"value": 2},
         ),
         (
             EnumEncode(
@@ -304,23 +255,9 @@ def test_encode_plan_substitutes_arguments_through_every_composite_shape() -> No
                 ),
             ),
         )
-        assert encode_value(plan, RecordValue(outer, {"held": value})) == {"held": expected}
-
-
-def test_encode_plan_reports_malformed_parameterized_plans() -> None:
-    """An unbound parameter or a mis-applied definition is an internal-invariant violation."""
-    box = EncodeDefinition("Box", 1, ScalarEncode())
-    cases = (
-        # A parameter at the root, where nothing binds it.
-        EncodePlan(TypeParameterEncode(0)),
-        # A reference supplying no argument for the definition's parameter.
-        EncodePlan(RefEncode("Box"), (box,)),
-        # An argument naming a parameter the referring position does not have.
-        EncodePlan(RefEncode("Box", (TypeParameterEncode(0),)), (box,)),
-    )
-    for plan in cases:
-        with pytest.raises(AssertionError):
-            encode_value(plan, IntValue(1))
+        assert encode_value(plan, RecordValue(outer, {"held": value}), _NO_EXCEPTIONS) == {
+            "held": expected
+        }
 
 
 def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None:
@@ -410,7 +347,9 @@ def test_encode_plan_preserves_legacy_json_bytes_for_a_complete_corpus() -> None
 
     for typ, value, legacy_bytes in cases:
         assert (
-            dumps_exact(encode_value(build_encode_plan(typ, table), value), indent=None)
+            dumps_exact(
+                encode_value(build_encode_plan(typ, table), value, _NO_EXCEPTIONS), indent=None
+            )
             == legacy_bytes
         )
 
@@ -438,9 +377,9 @@ def test_encode_bytes_are_preserved_across_agent_request_and_parameter_boundarie
         build_param_decoder(choice, table),
         '{"$case": "One", "value": 2}',
     )
-    assert dumps_exact(encode_value(build_encode_plan(choice, table), decoded), indent=None) == (
-        '{"$case": "One", "value": 2}'
-    )
+    assert dumps_exact(
+        encode_value(build_encode_plan(choice, table), decoded, _NO_EXCEPTIONS), indent=None
+    ) == ('{"$case": "One", "value": 2}')
 
 
 def test_encode_bytes_are_preserved_across_mocked_agent_and_ffi_boundaries(
@@ -572,6 +511,7 @@ def test_encode_plan_distinguishes_record_and_enum_slots_for_a_shared_member() -
                 "by-name": DictValue({"n": IntValue(2)}),
             },
         ),
+        _NO_EXCEPTIONS,
     ) == {
         "plain": {"value": 7},
         "selected": {"$case": "Shared", "value": 7},
@@ -589,6 +529,11 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
     exception.fields["cause"] = exception
     member = RecordValue(NominalId(4), {})
     member.fields["next"] = member
+    exceptions = {
+        NominalId(2): (
+            ExceptionFieldEncode("cause", "cause", EncodePlan(ExceptionEncode(NominalId(2)))),
+        )
+    }
 
     plans = (
         (
@@ -606,21 +551,7 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
             ),
             record,
         ),
-        (
-            EncodePlan(
-                RefEncode("Problem"),
-                (
-                    EncodeDefinition(
-                        "Problem",
-                        0,
-                        ExceptionEncode(
-                            NominalId(2), (FieldEncode("cause", "cause", RefEncode("Problem")),)
-                        ),
-                    ),
-                ),
-            ),
-            exception,
-        ),
+        (EncodePlan(ExceptionEncode(NominalId(2))), exception),
         (
             EncodePlan(
                 RefEncode("Link"),
@@ -648,7 +579,7 @@ def test_encode_plan_detects_record_exception_and_enum_closed_cycles() -> None:
 
     for plan, value in plans:
         with pytest.raises(AglCyclicValue):
-            encode_value(plan, value)
+            encode_value(plan, value, exceptions)
 
 
 def test_encode_plan_allows_a_record_diamond() -> None:
@@ -674,7 +605,10 @@ def test_encode_plan_allows_a_record_diamond() -> None:
         )
     )
 
-    assert encode_value(plan, value) == {"left": {"value": 1}, "right": {"value": 1}}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {
+        "left": {"value": 1},
+        "right": {"value": 1},
+    }
 
 
 def test_template_encode_plan_rejects_unbound_or_unknown_types() -> None:
@@ -707,7 +641,7 @@ def test_template_encode_plan_uses_renamed_field() -> None:
 
     plan = _build_template_encode_plan(box, table)
 
-    assert encode_value(plan, value) == {"payload": 9}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"payload": 9}
 
 
 def test_growing_polymorphic_recursive_json_cast_lowers_and_evaluates() -> None:
@@ -759,7 +693,7 @@ def test_encode_plan_handles_recursive_containers() -> None:
     plan = build_encode_plan(recursive, type_table_for(recursive_def))
 
     assert isinstance(plan.root, RefEncode)
-    assert encode_value(plan, value) == value_to_json_obj(value)
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == value_to_json_obj(value)
 
 
 def test_encode_plan_uses_effective_json_name_diverging_from_value_to_json_obj() -> None:
@@ -778,9 +712,9 @@ def test_encode_plan_uses_effective_json_name_diverging_from_value_to_json_obj()
 
     plan = build_encode_plan(renamed, type_table_for(renamed_def))
 
-    assert encode_value(plan, value) == {"val": 3}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"val": 3}
     assert value_to_json_obj(value) == {"value": 3}
-    assert encode_value(plan, value) != value_to_json_obj(value)
+    assert encode_value(plan, value, _NO_EXCEPTIONS) != value_to_json_obj(value)
 
 
 def test_encode_plan_uses_member_external_name_as_case_tag() -> None:
@@ -805,7 +739,7 @@ def test_encode_plan_uses_member_external_name_as_case_tag() -> None:
 
     plan = build_encode_plan(choice, table)
 
-    assert encode_value(plan, value) == {"$case": "uno"}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"$case": "uno"}
 
 
 def test_encode_plan_json_name_overrides_name_for_field() -> None:
@@ -824,7 +758,7 @@ def test_encode_plan_json_name_overrides_name_for_field() -> None:
 
     plan = build_encode_plan(renamed, type_table_for(renamed_def))
 
-    assert encode_value(plan, value) == {"val": 3}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"val": 3}
 
 
 def test_encode_plan_flattens_renamed_field_from_exception_base_chain() -> None:
@@ -849,10 +783,11 @@ def test_encode_plan_flattens_renamed_field_from_exception_base_chain() -> None:
     )
     table = type_table_for(base_def, derived_def)
     value = ExceptionValue(NominalId(derived_id), {"code": IntValue(4)})
+    exceptions = {NominalId(derived_id): build_exception_field_encodes(derived, table)}
 
     plan = build_encode_plan(derived, table)
 
-    assert encode_value(plan, value) == {"error-code": 4}
+    assert encode_value(plan, value, exceptions) == {"error-code": 4}
 
 
 def test_encode_plan_renames_field_in_generic_record() -> None:
@@ -872,7 +807,7 @@ def test_encode_plan_renames_field_in_generic_record() -> None:
 
     plan = build_encode_plan(box, type_table_for(box_def))
 
-    assert encode_value(plan, value) == {"payload": 9}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"payload": 9}
 
 
 def test_encode_plan_renames_field_in_recursive_hoisted_type() -> None:
@@ -899,7 +834,7 @@ def test_encode_plan_renames_field_in_recursive_hoisted_type() -> None:
     plan = build_encode_plan(recursive, type_table_for(recursive_def))
 
     assert isinstance(plan.root, RefEncode)
-    assert encode_value(plan, value) == {"kids": [{"kids": []}]}
+    assert encode_value(plan, value, _NO_EXCEPTIONS) == {"kids": [{"kids": []}]}
 
 
 def test_encode_definition_keys_match_the_schema_and_decode_defs_keys() -> None:

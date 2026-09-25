@@ -168,20 +168,6 @@ class TestProgramSignatureFuse:
         # name, not position.
         assert diagnostics[0].line == 2
 
-    def test_missing_info_for_a_declared_parameter_is_a_compiler_bug(self) -> None:
-        param, _info = _param_and_info(
-            "name", ParamZone.POSITIONAL_ONLY, TextType(), required=True, line=1
-        )
-        with pytest.raises(AssertionError, match="compiler bug"):
-            ProgramSignature.fuse(params=(param,), infos=(), span=_span(_PROGRAM_LINE))
-
-    def test_extra_info_absent_from_signature_is_a_compiler_bug(self) -> None:
-        _param, info = _param_and_info(
-            "name", ParamZone.POSITIONAL_ONLY, TextType(), required=True, line=1
-        )
-        with pytest.raises(AssertionError, match="compiler bug"):
-            ProgramSignature.fuse(params=(), infos=(info,), span=_span(_PROGRAM_LINE))
-
 
 class TestBindProgramArgumentsSuccess:
     """Successful bindings across zones, sources, and default use."""

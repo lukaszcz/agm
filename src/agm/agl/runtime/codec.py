@@ -18,18 +18,19 @@ import json
 import re
 from collections.abc import Mapping
 from decimal import Decimal
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 import json_repair
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
-    ContractRequest,
     DecodeSchema,
     DictDecode,
     EnumDecode,
+    JsonContractRequest,
     RecordDecode,
     RefDecode,
+    TextContractRequest,
 )
 from agm.agl.runtime.convert import (
     _EMPTY_DEFS,
@@ -411,17 +412,10 @@ def _resolve_ref(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> Deco
     error PATH (not the value graph) — resolving a ref as encountered always
     terminates, so no visited-set is needed here (contrast
     ``ir/validate.py::_check_decode_nominals``, which walks the whole decode
-    plan and does track visited ``defs`` keys). An unknown key (should never
-    happen for a well-formed contract) makes the ref opaque to the caller's
-    ``isinstance`` checks, so navigation fails soft into the generic fallback
-    message rather than raising — these walkers only refine an already-failed
-    validation's message, never gate correctness.
+    plan and does track visited ``defs`` keys).
     """
     while isinstance(decode, RefDecode):
-        resolved = defs.get(decode.key)
-        if resolved is None:
-            return decode
-        decode = resolved
+        decode = defs[decode.key]
     return decode
 
 
@@ -656,26 +650,20 @@ def _validate_and_decode_core(
 
 def _parse_contract_output(
     raw: str,
-    contract: ContractRequest,
+    contract: "TextContractRequest | JsonContractRequest",
     *,
     effective_strict: bool,
 ) -> ParseResult:
     """Parse a raw agent/exec response per a built-in-codec ``ContractRequest``.
 
-    Handles the ``text`` passthrough and the ``json`` parse path, including
-    defensive checks for missing ``json_schema`` and ``decode`` fields.
-    Called by ``IrInterpreter._parse_host_output`` for built-in codecs.
+    Handles the ``text`` passthrough and the ``json`` parse path. Called by
+    ``IrInterpreter._parse_host_output`` for the built-in codecs; a
+    ``JsonContractRequest`` always carries its ``json_schema``/``decode``.
     """
-    if contract.codec_name == "text":
+    if isinstance(contract, TextContractRequest):
         return ParseResult.success(TextValue(raw))
-    # json codec
-    if contract.json_schema is None:
-        return ParseResult.failure("ContractRequest has no json_schema for json codec")
-    schema_raw: object = json.loads(contract.json_schema)
-    if not isinstance(schema_raw, dict):
-        return ParseResult.failure("ContractRequest json_schema is not a JSON object")
-    if contract.decode is None:
-        return ParseResult.failure("ContractRequest has no decode schema for json codec")
+    # The lowerer only ever writes a serialized JSON Schema object here.
+    schema_raw = cast("dict[str, object]", json.loads(contract.json_schema))
     return _parse_json_core(
         raw, schema_raw, contract.decode, dict(contract.defs), strict=effective_strict
     )

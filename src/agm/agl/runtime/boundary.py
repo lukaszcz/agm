@@ -188,7 +188,7 @@ def active_contract_encoder(encoder: "_ContractEncoder") -> ScopedVar["_Contract
 #: its nominal to render it raises ``KeyError`` -- matching
 #: :class:`agm.agl.runtime.ExternRuntimeState`'s own detached fallback, which
 #: is likewise for direct companion use outside evaluation.
-_DETACHED_DESCRIPTORS = ValueDescriptors(nominals={}, functions={})
+_DETACHED_DESCRIPTORS = ValueDescriptors(nominals={}, functions={}, exception_field_encodes={})
 
 #: The descriptor view for the extern call currently running on this thread,
 #: published by :meth:`ExternRegistry.invoke` for the call's extent. A freshly
@@ -768,8 +768,7 @@ class AglDictView(MutableMapping[str, object]):
         if pair is None:
             raise KeyError("popitem(): dict is empty")
         key, value = pair
-        assert isinstance(key, TextValue)
-        return key.value, encode_boundary_value(value, self._descriptors)
+        return cast(TextValue, key).value, encode_boundary_value(value, self._descriptors)
 
     def __contains__(self, key: object) -> bool:
         if not isinstance(key, str):

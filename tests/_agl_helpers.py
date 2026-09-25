@@ -38,6 +38,9 @@ payload without going through source parsing.
 ``derive_schema``/``build_decode_schema`` return one half of
 ``derive_schema_and_decode``, the derivation production runs.
 
+``plan_less_exception_field_encodes`` builds the exception field-encode table a
+hand-built program needs, marking every exception field as having no JSON form.
+
 ``dummy_span`` returns a fixed placeholder ``SourceSpan`` for tests that must
 supply one but don't assert on its content.
 
@@ -60,7 +63,7 @@ from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.ir.builtin_vars import is_engine_builtin_var_key
-from agm.agl.ir.contracts import DecodePlan
+from agm.agl.ir.contracts import DecodePlan, ExceptionFieldEncode
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
 from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
@@ -133,6 +136,17 @@ def derive_schema(typ: Type, type_table: TypeTable) -> dict[str, object]:
 def build_decode_schema(typ: Type, type_table: TypeTable) -> DecodePlan:
     """Return *typ*'s decode plan."""
     return derive_schema_and_decode(typ, type_table)[1]
+
+
+def plan_less_exception_field_encodes(
+    nominals: Mapping[NominalId, NominalDescriptor],
+) -> dict[NominalId, tuple[ExceptionFieldEncode, ...]]:
+    """The field-encode table of ``nominals``' exceptions, every field without a plan."""
+    return {
+        nominal: tuple(ExceptionFieldEncode(name, name, None) for name in descriptor.fields)
+        for nominal, descriptor in nominals.items()
+        if descriptor.kind is NominalKind.EXCEPTION
+    }
 
 
 def dummy_span() -> SourceSpan:

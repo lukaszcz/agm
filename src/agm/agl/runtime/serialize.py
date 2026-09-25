@@ -9,19 +9,26 @@ routed through :class:`float`.  Instead :func:`value_to_json_obj` preserves the
 ``Decimal`` in the JSON-shaped object, and :func:`dumps_exact` emits it as
 unquoted numeric text using the ``Decimal``'s own exact string form.
 
-Two entry points:
+Entry points:
 
 - :func:`value_to_json_obj` — ``Value`` → JSON-shaped object (``dict``/``list``/
   ``str``/``int``/``Decimal``/``bool``/``None``).  ``Decimal`` is preserved.
-- :func:`dumps_exact` — render such an object as JSON text, emitting ``Decimal``
+- :func:`encode_value` — ``Value`` → JSON-shaped object through a lowering-derived
+  :class:`~agm.agl.ir.contracts.EncodePlan` (an ``as json`` cast).
+- :func:`encode_scalar` — one scalar or ``json`` value (an implicit ``json`` coercion).
+- :func:`report_exception_fields` — an uncaught exception's own fields, selected
+  by its runtime nominal like ``encode_value``'s, degrading unconvertible fields
+  to markers for the error report.
+- :func:`dumps_exact` — render a JSON-shaped object as JSON text, emitting ``Decimal``
   as exact unquoted numeric text.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from decimal import Decimal
-from typing import assert_never
+from typing import assert_never, cast
 
 from agm.agl.ir.contracts import (
     ArrayEncode,
@@ -31,6 +38,7 @@ from agm.agl.ir.contracts import (
     EncodeSchema,
     EnumEncode,
     ExceptionEncode,
+    ExceptionFieldEncode,
     FieldEncode,
     RecordEncode,
     RefEncode,
@@ -40,6 +48,7 @@ from agm.agl.ir.contracts import (
     forwarded_encode_key,
     resolve_schema_ref,
 )
+from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.cycles import (
     CYCLIC_VALUE_MARKER,
     AglCyclicValue,
@@ -56,8 +65,8 @@ from agm.agl.semantics.values import (
     ExceptionValue,
     IntValue,
     IrClosureValue,
-    IteratorValue,
     JsonValue,
+    ObservableValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -65,22 +74,26 @@ from agm.agl.semantics.values import (
 )
 from agm.util.decimal import strip_trailing_zeros
 
+#: The closed JSON-shape domain ``dumps_exact``/``_emit`` serialize: every
+#: scalar a JSON document may hold, plus recursively JSON-shaped
+#: ``list``/``dict``.
+type JsonShaped = (
+    None | bool | int | float | Decimal | str | list[JsonShaped] | dict[str, JsonShaped]
+)
+
 
 class AglNonDataValue(Exception):
-    """Sentinel: a value kind with no JSON representation reached the walk.
+    """Sentinel: a value with no JSON representation reached a JSON walk.
 
     Raised by :func:`value_to_json_obj` for ``unit``, ``constructor``,
-    ``function``, and ``iterator`` values — none of these
-    kinds has a JSON-shaped representation. ``kind`` is the user-facing kind
-    name (not the Python class name), used to build the substituted marker
-    text in :func:`degraded_marker`.
+    ``function``, and ``contract`` values, and by
+    :func:`encode_value` for an exception field with no JSON form. ``kind``
+    is the user-facing name of what failed (not a Python class name), used to
+    build the marker text in :func:`degraded_marker`.
 
-    No evaluator path can produce a catchable AgL exception from this
-    sentinel: every reachable conversion to ``json`` is statically gated
-    (``is_json_convertible``, see ``semantics/type_table.py``) to types that
-    have a JSON representation, so a non-data value can only ever reach this
-    walk through a caller that degrades it rather than propagating it — see
-    ``pipeline.py``'s ``exception_value_to_run_error``.
+    A cast reports it as a failed conversion (``eval.ir_interpreter``); only
+    uncaught-error reporting (:func:`report_exception_fields`) degrades it to
+    a marker.
     """
 
     def __init__(self, kind: str) -> None:
@@ -101,15 +114,38 @@ def degraded_marker(exc: "AglCyclicValue | AglNonDataValue") -> str:
     return CYCLIC_VALUE_MARKER
 
 
-def encode_value(plan: EncodePlan, value: Value) -> object:
+def encode_value(
+    plan: EncodePlan,
+    value: Value,
+    exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]]",
+) -> object:
     """Encode *value* through its lowering-derived JSON plan.
 
     Plans select enum ``$case`` tags from the slot type rather than the runtime
     value. A finite source's definitions take no parameters; a growing
     polymorphic-recursive source's definitions are generic templates whose
     parameters each reference binds (see :class:`RefEncode`).
+
+    *exception_field_encodes* is the program-wide, nominal-keyed table of
+    every exception's own field-encode plans (``ExecutableProgram
+    .exception_field_encodes``). An exception reached anywhere in *plan*
+    encodes through this table by its value's own runtime nominal (see
+    :class:`~agm.agl.ir.contracts.ExceptionEncode`).
+
+    Raises :class:`~agm.agl.semantics.cycles.AglCyclicValue` on a cyclic
+    value and :class:`AglNonDataValue` on an exception field with no JSON
+    form (a runtime subtype's field no static cast site examined).
     """
-    return _encode(plan.root, value, {d.key: d for d in plan.definitions}, (), None)
+    return _encode(
+        plan.root, value, {d.key: d for d in plan.definitions}, (), None, exception_field_encodes
+    )
+
+
+def encode_scalar(value: Value) -> object:
+    """Encode one scalar or ``json`` value (a :class:`ScalarEncode` slot)."""
+    if isinstance(value, JsonValue):
+        return value.raw
+    return cast("TextValue | IntValue | DecimalValue | BoolValue", value).value
 
 
 def _encode(
@@ -118,114 +154,172 @@ def _encode(
     definitions: dict[str, EncodeDefinition],
     arguments: tuple[EncodeSchema, ...],
     active: "set[int] | None",
+    exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]]",
 ) -> object:
-    if isinstance(schema, TypeParameterEncode):
-        return _encode(
-            _bound_argument(schema.index, arguments), value, definitions, arguments, active
-        )
-    if isinstance(schema, RefEncode):
-        definition = _resolve_encode_ref(schema.key, definitions)
-        if len(schema.arguments) != definition.parameter_count:
-            raise AssertionError(
-                f"encode plan reference to {schema.key!r} supplies {len(schema.arguments)}"
-                f" arguments for {definition.parameter_count} parameters"
+    match schema:
+        case TypeParameterEncode(index=index):
+            return _encode(
+                _bound_argument(index, arguments),
+                value,
+                definitions,
+                arguments,
+                active,
+                exception_field_encodes,
             )
-        # A reference's arguments are written in the CALLER's parameter space,
-        # so they are substituted before they become the callee's bindings.
-        bound = tuple(_substitute_arguments(argument, arguments) for argument in schema.arguments)
-        return _encode(definition.body, value, definitions, bound, active)
-    if isinstance(schema, ScalarEncode):
-        if isinstance(value, TextValue):
-            return value.value
-        if isinstance(value, IntValue):
-            return value.value
-        if isinstance(value, DecimalValue):
-            return value.value
-        if isinstance(value, BoolValue):
-            return value.value
-        if isinstance(value, JsonValue):
-            return value.raw
-        raise AssertionError(f"scalar encode plan received {type(value).__name__}")
-    if isinstance(schema, ArrayEncode):
-        if not isinstance(value, ArrayValue):
-            raise AssertionError(f"array encode plan received {type(value).__name__}")
-        active = enter_value(id(value), active)
-        try:
-            return [
-                _encode(schema.elem, item, definitions, arguments, active)
-                for item in value.elements
-            ]
-        finally:
-            active.discard(id(value))
-    if isinstance(schema, DictEncode):
-        if not isinstance(value, DictValue):
-            raise AssertionError(f"dict encode plan received {type(value).__name__}")
-        active = enter_value(id(value), active)
-        try:
-            return {
-                key: _encode(schema.value, item, definitions, arguments, active)
-                for key, item in value.text_items()
-            }
-        finally:
-            active.discard(id(value))
-    if isinstance(schema, (RecordEncode, ExceptionEncode)):
-        # Records and exceptions encode identically -- an object keyed by the
-        # plan's declared fields -- so only the value kind the plan demands
-        # differs between them.
-        is_record = isinstance(schema, RecordEncode)
-        expected = RecordValue if is_record else ExceptionValue
-        kind = "record" if is_record else "exception"
-        if not isinstance(value, expected):
-            raise AssertionError(f"{kind} encode plan received {type(value).__name__}")
-        if value.nominal != schema.nominal:
-            raise AssertionError(
-                f"{kind} encode plan received {value.nominal!r}, expected {schema.nominal!r}"
+        case RefEncode(key=key, arguments=ref_args):
+            definition = _resolve_encode_ref(key, definitions)
+            # A reference's arguments are written in the CALLER's parameter
+            # space, so they are substituted before they become the callee's
+            # bindings.
+            bound = tuple(_substitute_arguments(argument, arguments) for argument in ref_args)
+            return _encode(
+                definition.body, value, definitions, bound, active, exception_field_encodes
             )
-        active = enter_value(id(value), active)
-        try:
-            return {
-                fenc.json_name: _encode(
-                    fenc.schema, value.fields[fenc.name], definitions, arguments, active
-                )
-                for fenc in schema.fields
-            }
-        finally:
-            active.discard(id(value))
-    if isinstance(schema, EnumEncode):
-        variant, fields = _variant_for_encode(schema, value)
-        active = enter_value(id(value), active)
-        try:
-            result: dict[str, object] = {"$case": variant.json_name}
-            result.update(
-                {
-                    fenc.json_name: _encode(
-                        fenc.schema, fields[fenc.name], definitions, arguments, active
+        case ScalarEncode():
+            return encode_scalar(value)
+        case ArrayEncode(elem=elem):
+            value = cast(ArrayValue, value)
+            active = enter_value(id(value), active)
+            try:
+                return [
+                    _encode(elem, item, definitions, arguments, active, exception_field_encodes)
+                    for item in value.elements
+                ]
+            finally:
+                active.discard(id(value))
+        case DictEncode(value=value_schema):
+            value = cast(DictValue, value)
+            active = enter_value(id(value), active)
+            try:
+                return {
+                    key: _encode(
+                        value_schema, item, definitions, arguments, active, exception_field_encodes
                     )
-                    for fenc in variant.fields
+                    for key, item in value.text_items()
                 }
+            finally:
+                active.discard(id(value))
+        case RecordEncode(fields=fields):
+            value = cast(RecordValue, value)
+            active = enter_value(id(value), active)
+            try:
+                return {
+                    fenc.json_name: _encode(
+                        fenc.schema,
+                        value.fields[fenc.name],
+                        definitions,
+                        arguments,
+                        active,
+                        exception_field_encodes,
+                    )
+                    for fenc in fields
+                }
+            finally:
+                active.discard(id(value))
+        case ExceptionEncode():
+            value = cast(ExceptionValue, value)
+            active = enter_value(id(value), active)
+            try:
+                return {
+                    field_encode.json_name: _encode_exception_field(
+                        field_encode,
+                        value.fields[field_encode.field_name],
+                        active,
+                        exception_field_encodes,
+                    )
+                    for field_encode in exception_field_encodes[value.nominal]
+                }
+            finally:
+                active.discard(id(value))
+        case EnumEncode():
+            value = cast(RecordValue, value)
+            variant, member_fields = _variant_for_encode(schema, value)
+            active = enter_value(id(value), active)
+            try:
+                result: dict[str, object] = {"$case": variant.json_name}
+                result.update(
+                    {
+                        fenc.json_name: _encode(
+                            fenc.schema,
+                            member_fields[fenc.name],
+                            definitions,
+                            arguments,
+                            active,
+                            exception_field_encodes,
+                        )
+                        for fenc in variant.fields
+                    }
+                )
+                return result
+            finally:
+                active.discard(id(value))
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _encode_exception_field(
+    field_encode: ExceptionFieldEncode,
+    value: Value,
+    active: "set[int] | None",
+    exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]]",
+) -> object:
+    """Encode one exception field through its own self-contained plan.
+
+    The field's plan was compiled independently from its declared type, so it
+    is unrelated to any enclosing plan's ``definitions``/``arguments``. A
+    field with no plan has no JSON form and raises :class:`AglNonDataValue`.
+    """
+    if field_encode.plan is None:
+        raise AglNonDataValue(f"field '{field_encode.field_name}'")
+    return _encode(
+        field_encode.plan.root,
+        value,
+        {d.key: d for d in field_encode.plan.definitions},
+        (),
+        active,
+        exception_field_encodes,
+    )
+
+
+def report_exception_fields(
+    value: ExceptionValue,
+    exception_field_encodes: "Mapping[NominalId, tuple[ExceptionFieldEncode, ...]]",
+) -> dict[str, object]:
+    """Encode an uncaught exception's fields for its error report, by its runtime nominal.
+
+    Reporting-only: this runs while an error is already in flight, so a field
+    that cannot convert degrades to a :func:`degraded_marker` rather than
+    raising. A field with no JSON form is reported through the untyped
+    :func:`value_to_json_obj` walk. Casts go through :func:`encode_value`,
+    which raises instead.
+    """
+    fields: dict[str, object] = {}
+    for field_encode in exception_field_encodes[value.nominal]:
+        field_value = value.fields[field_encode.field_name]
+        try:
+            fields[field_encode.json_name] = (
+                value_to_json_obj(field_value)
+                if field_encode.plan is None
+                else _encode_exception_field(
+                    field_encode, field_value, None, exception_field_encodes
+                )
             )
-            return result
-        finally:
-            active.discard(id(value))
-    raise AssertionError(f"unknown encode schema {schema!r}")  # pragma: no cover
+        except (AglCyclicValue, AglNonDataValue) as field_exc:
+            fields[field_encode.json_name] = degraded_marker(field_exc)
+    return fields
 
 
-def _variant_for_encode(schema: EnumEncode, value: Value) -> tuple[VariantEncode, dict[str, Value]]:
+def _variant_for_encode(
+    schema: EnumEncode, value: RecordValue
+) -> tuple[VariantEncode, dict[str, Value]]:
     """Select the member record carried by an enum-typed static slot."""
-    if not isinstance(value, RecordValue):
-        raise AssertionError(f"enum encode plan received {type(value).__name__}")
-    for variant in schema.variants:
-        if variant.nominal == value.nominal:
-            return variant, value.fields
-    raise AssertionError(f"enum encode plan has no member {value.nominal!r}")
+    variant = next(v for v in schema.variants if v.nominal == value.nominal)
+    return variant, value.fields
 
 
 def _bound_argument(index: int, arguments: tuple[EncodeSchema, ...]) -> EncodeSchema:
     """Read one enclosing definition parameter out of the current bindings."""
-    try:
-        return arguments[index]
-    except IndexError as exc:
-        raise AssertionError(f"encode plan parameter {index} is unbound") from exc
+    return arguments[index]
 
 
 def _substitute_arguments(
@@ -255,8 +349,8 @@ def _substitute_arguments(
             return DictEncode(_substitute_arguments(value_schema, arguments))
         case RecordEncode(nominal=nominal, fields=fields):
             return RecordEncode(nominal, _substitute_fields(fields, arguments))
-        case ExceptionEncode(nominal=nominal, fields=fields):
-            return ExceptionEncode(nominal, _substitute_fields(fields, arguments))
+        case ExceptionEncode():
+            return schema
         case EnumEncode(nominal=nominal, variants=variants):
             return EnumEncode(
                 nominal,
@@ -286,20 +380,16 @@ def _substitute_fields(
 
 def _resolve_encode_ref(key: str, definitions: dict[str, EncodeDefinition]) -> EncodeDefinition:
     """Resolve a plan reference to the definition whose body is not itself a reference."""
-    return resolve_schema_ref(
-        key,
-        definitions,
-        forwarded_encode_key,
-        subject="encode plan",
-    )
+    return resolve_schema_ref(key, definitions, forwarded_encode_key)
 
 
-def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
+def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> JsonShaped:
     """Convert a ``Value`` to a JSON-shaped Python object.
 
-    The result is drawn from the closed JSON-shape domain
-    ``dict | list | str | int | Decimal | bool | None``.  ``DecimalValue`` is
-    preserved as :class:`decimal.Decimal` (never converted to ``float``).
+    The result is drawn from :data:`JsonShaped`.  ``DecimalValue`` is
+    preserved as :class:`decimal.Decimal` (never converted to ``float``); a
+    ``json``-typed value's own raw payload may already carry a ``float``,
+    exactly as ``json.loads`` produced it.
 
     Reference semantics makes cyclic arrays, dicts, and records constructible;
     ``active`` (an active-value-id set, allocated lazily on first use) detects
@@ -307,7 +397,7 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     than recursing forever. Callers pass no *active* argument — it exists
     only to thread the walk's own recursive calls.
 
-    A ``unit``, ``constructor``, ``function``, or ``iterator``
+    A ``unit``, ``constructor``, ``function``, or ``contract``
     value has no JSON representation at all; such a value raises
     :class:`AglNonDataValue` rather than a bare :class:`TypeError`, so a
     caller that can legitimately receive one (e.g. because it carries the
@@ -316,6 +406,7 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     use :func:`encode_value`, which retains source-slot context; this fallback
     serves reporting values that have no associated static slot plan.
     """
+    value = cast(ObservableValue, value)
     if isinstance(value, TextValue):
         return value.value
     if isinstance(value, IntValue):
@@ -325,7 +416,7 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     if isinstance(value, BoolValue):
         return value.value
     if isinstance(value, JsonValue):
-        return value.raw
+        return cast(JsonShaped, value.raw)
     if isinstance(value, ArrayValue):
         active = enter_value(id(value), active)
         try:
@@ -350,45 +441,41 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
         raise AglNonDataValue("constructor")
     if isinstance(value, IrClosureValue):
         raise AglNonDataValue("function")
-    if isinstance(value, IteratorValue):
-        raise AglNonDataValue("iterator")
     if isinstance(value, ContractValue):
         raise AglNonDataValue("contract")
     assert_never(value)  # pragma: no cover
 
 
-def dumps_exact(obj: object, *, indent: int | None = 2) -> str:
+def dumps_exact(obj: JsonShaped, *, indent: int | None = 2) -> str:
     """Serialize a JSON-shaped object to text, emitting decimals exactly.
 
-    Operates over the closed JSON-shape domain produced by
-    :func:`value_to_json_obj` (``dict``/``list``/``str``/``int``/``Decimal``/
-    ``bool``/``None``).  A :class:`decimal.Decimal` is emitted as unquoted
-    numeric text using its exact string form — it is never routed through
-    :class:`float`.
+    Operates over the closed :data:`JsonShaped` domain.  A
+    :class:`decimal.Decimal` is emitted as unquoted numeric text using its
+    exact string form — it is never routed through :class:`float`; a
+    ``float`` itself (never produced by :func:`value_to_json_obj`, but valid
+    for a host-native value crossing the argument-decoding boundary) is
+    delegated to ``json.dumps``.
 
-    A small recursive emitter is used (rather than ``json.dumps``) because the
-    stdlib encoder cannot serialize ``Decimal`` without a binary-float round
-    trip.  ``str``/``bool``/``int``/``None`` leaves are still delegated to
-    ``json.dumps`` so that escaping and formatting match the stdlib exactly.
+    A small recursive emitter is used (rather than ``json.dumps`` throughout)
+    because the stdlib encoder cannot serialize ``Decimal`` without a
+    binary-float round trip.  ``str``/``bool``/``int``/``float``/``None``
+    leaves are still delegated to ``json.dumps`` so that escaping and
+    formatting match the stdlib exactly.
     """
     return _emit(obj, indent=indent, level=0)
 
 
-def _emit(obj: object, *, indent: int | None, level: int) -> str:
+def _emit(obj: JsonShaped, *, indent: int | None, level: int) -> str:
     # ``bool`` must be checked before ``int`` (bool is a subclass of int).
     if isinstance(obj, bool):
         return "true" if obj else "false"
     if isinstance(obj, Decimal):
         return _decimal_text(obj)
-    if isinstance(obj, (str, int)) or obj is None:
+    if isinstance(obj, (str, int, float)) or obj is None:
         return json.dumps(obj, ensure_ascii=False)
     if isinstance(obj, list):
         return _emit_array(obj, indent=indent, level=level)
-    if isinstance(obj, dict):
-        return _emit_dict(obj, indent=indent, level=level)
-    # Defensive: anything outside the closed domain is rendered via json.dumps,
-    # which raises a clear TypeError for genuinely unsupported objects.
-    return json.dumps(obj, ensure_ascii=False)  # pragma: no cover
+    return _emit_dict(obj, indent=indent, level=level)
 
 
 #: Above this many characters, a decimal's exact fixed-point JSON-number text
@@ -419,13 +506,13 @@ def _decimal_text(d: Decimal) -> str:
     if not d.is_finite():
         return format(d, "f")
     _, digits, exponent = d.as_tuple()
-    assert isinstance(exponent, int)  # d is finite here
+    exponent = cast(int, exponent)  # d is finite here
     if len(digits) + abs(exponent) <= _MAX_FIXED_POINT_DIGITS:
         return format(d, "f")
     return str(strip_trailing_zeros(d))
 
 
-def _emit_array(obj: list[object], *, indent: int | None, level: int) -> str:
+def _emit_array(obj: list[JsonShaped], *, indent: int | None, level: int) -> str:
     if not obj:
         return "[]"
     if indent is None:
@@ -437,7 +524,7 @@ def _emit_array(obj: list[object], *, indent: int | None, level: int) -> str:
     return "[\n" + ",\n".join(items) + "\n" + close_pad + "]"
 
 
-def _emit_dict(obj: dict[object, object], *, indent: int | None, level: int) -> str:
+def _emit_dict(obj: dict[str, JsonShaped], *, indent: int | None, level: int) -> str:
     if not obj:
         return "{}"
     keys = [json.dumps(str(k), ensure_ascii=False) for k in obj]

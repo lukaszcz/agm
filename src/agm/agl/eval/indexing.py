@@ -9,9 +9,9 @@ No syntax, scope, or typecheck imports are permitted here.
 
 from __future__ import annotations
 
-from typing import assert_never
+from typing import assert_never, cast
 
-from agm.agl.ir.operations import IndexKind
+from agm.agl.ir.operations import IndexKind, MutableIndexKind
 from agm.agl.semantics.values import ArrayValue, DictValue, IntValue, TextValue, Value
 
 __all__ = [
@@ -52,32 +52,17 @@ def index_get(kind: IndexKind, container: Value, index: Value) -> Value:
     """Get a value from an array, dict, or text container by index."""
     match kind:
         case IndexKind.ARRAY:
-            if not isinstance(container, ArrayValue):
-                raise AssertionError(
-                    f"index_get ARRAY: expected ArrayValue, got {type(container).__name__}"
-                )
-            if not isinstance(index, IntValue):
-                raise AssertionError(
-                    f"index_get ARRAY: expected IntValue index, got {type(index).__name__}"
-                )
+            container = cast(ArrayValue, container)
+            index = cast(IntValue, index)
             normalized = _normalize_index(index.value, len(container.elements), IndexKind.ARRAY)
             return container.elements[normalized]
         case IndexKind.TEXT:
-            if not isinstance(container, TextValue):
-                raise AssertionError(
-                    f"index_get TEXT: expected TextValue, got {type(container).__name__}"
-                )
-            if not isinstance(index, IntValue):
-                raise AssertionError(
-                    f"index_get TEXT: expected IntValue index, got {type(index).__name__}"
-                )
+            container = cast(TextValue, container)
+            index = cast(IntValue, index)
             normalized = _normalize_index(index.value, len(container.value), IndexKind.TEXT)
             return TextValue(container.value[normalized])
         case IndexKind.DICT:
-            if not isinstance(container, DictValue):
-                raise AssertionError(
-                    f"index_get DICT: expected DictValue, got {type(container).__name__}"
-                )
+            container = cast(DictValue, container)
             found = container.lookup(index)
             if found is None:
                 raise AglMissingKey(index)
@@ -86,35 +71,24 @@ def index_get(kind: IndexKind, container: Value, index: Value) -> Value:
             assert_never(unreachable)
 
 
-def index_set(kind: IndexKind, container: Value, index: Value, value: Value) -> None:
+def index_set(kind: MutableIndexKind, container: Value, index: Value, value: Value) -> None:
     """Mutate an array or dict *container* in place, storing *value* at *index*.
 
-    An out-of-range array index raises ``AglIndexOutOfRange``; text is
-    immutable and cannot be assigned through this helper. A dict assignment
-    updates an **existing key only**; a missing key raises
+    An out-of-range array index raises ``AglIndexOutOfRange``. A dict
+    assignment updates an **existing key only**; a missing key raises
     ``AglMissingKey`` rather than inserting it, so this is the single source
     of truth for the missing-key rule (callers must not pre-check via
-    ``index_get``).
+    ``index_get``). Text is immutable and never reaches this helper — its
+    ``kind`` excludes ``IndexKind.TEXT`` at the type level.
     """
     match kind:
         case IndexKind.ARRAY:
-            if not isinstance(container, ArrayValue):
-                raise AssertionError(
-                    f"index_set ARRAY: expected ArrayValue, got {type(container).__name__}"
-                )
-            if not isinstance(index, IntValue):
-                raise AssertionError(
-                    f"index_set ARRAY: expected IntValue index, got {type(index).__name__}"
-                )
+            container = cast(ArrayValue, container)
+            index = cast(IntValue, index)
             normalized = _normalize_index(index.value, len(container.elements), IndexKind.ARRAY)
             container.elements[normalized] = value
-        case IndexKind.TEXT:
-            raise AssertionError("index_set TEXT: text is immutable")
         case IndexKind.DICT:
-            if not isinstance(container, DictValue):
-                raise AssertionError(
-                    f"index_set DICT: expected DictValue, got {type(container).__name__}"
-                )
+            container = cast(DictValue, container)
             if not container.update_existing(index, value):
                 raise AglMissingKey(index)
         case _ as unreachable:  # pragma: no cover

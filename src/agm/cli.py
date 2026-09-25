@@ -186,7 +186,7 @@ def _debug_option() -> bool | None:
         None,
         *option.declarations,
         metavar=option.metavar,
-        help="Keep temporary files and directories after exit.",
+        help="Debug mode.",
     )
 
 

@@ -54,7 +54,7 @@ _HELP_GROUPS: tuple[_HelpGroup, ...] = (
     _HelpGroup("timeout", "Shell-exec/agent idle timeout, or none."),
     _HelpGroup("trace", "Enable or disable trace logging."),
     _HelpGroup("trace_file", "Write the JSONL trace to PATH."),
-    _HelpGroup("debug", "Keep temporary files and directories after exit."),
+    _HelpGroup("debug", "Debug mode."),
 )
 
 

@@ -106,10 +106,12 @@ a direct `agm repl` entry is a static error.
   `.agent-files/`; `--trace-file` writes a JSONL trace to `PATH`; `--no-trace` disables it,
   overriding `[exec] trace = true`.
   These set the initial state; a `std/config::trace := true` write still enables tracing.
-- `--debug` / `--no-debug`: Seed `std/config::debug` (overrides `[exec] debug`; default off).
-  When the run ends with it set, the temporary files and directories `std/fs::temp-file` and
-  `std/fs::temp-dir` created are kept instead of removed. A seeded `debug` also turns trace
-  logging on unless `trace` or `trace-file` is given on the CLI or in configuration.
+- `--debug` / `--no-debug`: Debug mode, seeding `std/config::debug` (overrides `[exec] debug`;
+  default off). Debug mode:
+  - keeps the temporary files and directories created by `std/fs::temp-file` and
+    `std/fs::temp-dir` instead of removing them, when the run ends with `debug` set;
+  - turns trace logging on unless `trace` or `trace-file` is given on the CLI or in
+    configuration.
 
 ### Program arguments
 

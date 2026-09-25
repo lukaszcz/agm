@@ -94,39 +94,6 @@ def _run_program(
     )
 
 
-def test_selected_program_preflight_excludes_unreachable_call_sites(tmp_path: Path) -> None:
-    library_root = tmp_path / "library"
-    library_root.mkdir()
-    (library_root / "a.agl").write_text('program def run() -> unit = ask("selected")\n')
-    (library_root / "b.agl").write_text('def dormant() -> text = exec("unreachable")\n')
-
-    from agm.agl import PipelineDriver
-    from agm.agl.runtime.arguments import ProgramArguments
-
-    prepared = PipelineDriver.prepare_program(
-        "import a\nimport b\nprogram def main() -> unit = ()\n",
-        roots=agl_roots(library_root),
-    )
-    runtime = PipelineDriver(get_sandbox_context=None)
-    discovery = runtime.discover_programs(prepared)
-    assert discovery.compiled is not None, discovery.diagnostics
-    selected = next(
-        program
-        for program in discovery.programs
-        if program.module.path_str() == "a" and program.name == "run"
-    )
-
-    preflight = runtime.preflight_arguments(
-        prepared,
-        selected,
-        ProgramArguments(positional=(), named={}),
-        compiled=discovery.compiled,
-    )
-
-    assert preflight.result.ok, preflight.result.diagnostics
-    assert [site.callee for site in preflight.result.call_sites] == ["ask"]
-
-
 def test_constructor_field_default_omitted_across_module_boundary(tmp_path: Path) -> None:
     # A record's default lives with its declaration; an importing module may
     # omit the defaulted field when constructing it, the same as within the

@@ -38,7 +38,6 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.typecheck.env import (
     AglTypeError,
-    CallSiteRecord,
     CheckedModule,
     ConstructorSignature,
     FunctionSignature,
@@ -60,7 +59,6 @@ __all__ = [
     "ArrayType",
     "BoolType",
     "BottomType",
-    "CallSiteRecord",
     "CheckedModule",
     "CheckedProgram",
     "ConstructorSignature",

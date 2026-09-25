@@ -303,7 +303,7 @@ def test_indirect_extern_default_and_missing_argument_guards(tmp_path: Path) -> 
         IrInterpreter(program(()), extern_registry=registry).run()
 
 
-def test_dry_run_lists_call_site_without_running_the_extern(tmp_path: Path) -> None:
+def test_check_only_never_imports_the_companion(tmp_path: Path) -> None:
     marker = tmp_path / "marker.txt"
     root = tmp_path / "root"
     write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
@@ -323,11 +323,10 @@ def test_dry_run_lists_call_site_without_running_the_extern(tmp_path: Path) -> N
     )
     result = driver.run_prepared(prepared, check_only=True)
     assert result.ok is True
-    assert [cs.callee for cs in result.call_sites] == ["f"]
     assert not marker.exists()
 
 
-def test_dry_run_does_not_import_a_broken_companion(tmp_path: Path) -> None:
+def test_check_only_does_not_import_a_broken_companion(tmp_path: Path) -> None:
     root = tmp_path / "root"
     write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
     write_companion_file(root, "lib/mod", "raise RuntimeError('broken')\n")
@@ -339,7 +338,6 @@ def test_dry_run_does_not_import_a_broken_companion(tmp_path: Path) -> None:
     )
     result = driver.run_prepared(prepared, check_only=True)
     assert result.ok is True
-    assert [cs.callee for cs in result.call_sites] == ["f"]
 
 
 def test_an_attributed_extern_calls_the_companion_it_names(tmp_path: Path) -> None:

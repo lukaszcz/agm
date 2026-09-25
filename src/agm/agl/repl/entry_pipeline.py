@@ -155,14 +155,13 @@ class EntryPipeline:
         host_env: HostEnvironment,
         tab_warnings: list[Diagnostic],
         next_start_id: int,
-        check_only: bool,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> EntryResult:
         """Program pipeline for REPL entries that have imports or cached lib modules.
 
         Builds the module graph from the already-parsed *pipeline_program*, runs
         the full scope/typecheck/match-compilation passes with the session
-        context, then returns a check-only result or lowers and evaluates.
+        context, then lowers and evaluates.
         """
         from agm.agl.diagnostics import AglError
         from agm.agl.modules.errors import (
@@ -237,8 +236,6 @@ class EntryPipeline:
         self._ctx._last_match_compilation = compiled
 
         checked = self._checked_program_from_module(entry_cm)
-        if check_only:
-            return self._ctx._build_check_only_result(orig_program, checked, warnings)
 
         from agm.agl.pipeline import _materialize_program_custom_contract_payloads
 
@@ -378,7 +375,6 @@ class EntryPipeline:
             node_types=entry.node_types,
             contract_specs=entry.contract_specs,
             target_contract_specs=entry.target_contract_specs,
-            call_sites=entry.call_sites,
             warnings=entry.warnings,
             type_env=entry.type_env,
             function_signatures=entry.function_signatures,

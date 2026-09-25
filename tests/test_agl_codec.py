@@ -3868,7 +3868,7 @@ class TestRegisterCodec:
         assert seen_parse_targets[0].name == "Box"
         assert seen_parse_targets[0].type_args == (IntType(),)
 
-    def test_custom_codec_dry_run_reports_materialized_schema(self) -> None:
+    def test_custom_codec_materializes_schema_under_check_only(self) -> None:
         class SchemaTextCodec:
             @property
             def name(self) -> str:
@@ -3901,11 +3901,11 @@ class TestRegisterCodec:
             check_only=True,
         )
 
+        # Host contract materialization (including schema generation) runs
+        # under check_only, so a schema-producing codec must not fail here.
         assert result.ok is True
-        assert len(result.call_sites) == 1
-        assert result.call_sites[0].has_schema is True
 
-    def test_graph_custom_codec_dry_run_reports_materialized_schema(self) -> None:
+    def test_graph_custom_codec_materializes_schema_under_check_only(self) -> None:
         class SchemaTextCodec:
             @property
             def name(self) -> str:
@@ -3939,9 +3939,9 @@ class TestRegisterCodec:
 
         result = rt.run_prepared(prepared, check_only=True)
 
+        # Host contract materialization (including schema generation) runs
+        # under check_only, so a schema-producing codec must not fail here.
         assert result.ok is True
-        assert len(result.call_sites) == 1
-        assert result.call_sites[0].has_schema is True
 
     def test_custom_codec_make_contract_keyword_only_type_table(self) -> None:
         """Custom make_contract hooks may request type_table as a keyword-only arg."""

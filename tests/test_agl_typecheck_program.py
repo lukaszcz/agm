@@ -3976,7 +3976,7 @@ def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
                 for parameter_types in module.argument_bindings.function_param_types.values()
                 for param_type in parameter_types
             ),
-            *(site.target_type for site in module.call_sites),
+            *(spec.target_type for spec in module.contract_specs.values()),
         ]
         assert not any(contains_inference_var(typ) for typ in published_types)
 

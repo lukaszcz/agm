@@ -341,7 +341,6 @@ class RegisteredProgramCommand(TyperCommand):
         from agm.cli_support.run_options import exec_option_conflict
 
         metadata = cast(dict[str, object], ctx.meta)
-        dry_run.set_enabled(False)
         cached_program = cast("ProgramDeclInfo | None", metadata.pop("registered_program", None))
         cached_pipeline = cast(
             "ProgramDiscoveryArtifacts | None", metadata.pop("registered_pipeline_cache", None)

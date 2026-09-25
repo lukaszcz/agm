@@ -581,30 +581,15 @@ class TestNestedGenericTargets:
 
 
 class TestInventory:
-    def test_call_site_record_is_unchanged(self) -> None:
+    def test_type_directed_extern_records_a_target_contract(self) -> None:
         checked = _check(_QUERY + 'let answer: int = query("q")\nanswer')
-        (site,) = checked.call_sites
-        assert (site.callee, site.codec_name, site.target_type) == ("query", "extern", IntType())
+        (spec,) = checked.target_contract_specs[_let_call(checked, "answer")]
+        assert (spec.codec_name, spec.target_type) == ("json", IntType())
         assert checked.contract_specs == {}
 
     def test_ordinary_extern_records_no_target_contract(self) -> None:
         checked = _check("extern def id[T](value: T) -> T\nlet same = id(1)\nsame")
         assert checked.target_contract_specs == {}
-
-    def test_dry_run_inventory_is_unchanged(self, tmp_path: Path) -> None:
-        program = lower_extern_program(
-            _QUERY + 'let answer: int = query("q")\nanswer',
-            "def query(question):\n    return 0\n",
-            tmp_path,
-        )
-        entries = [
-            entry
-            for entry in program.dry_run_inventory
-            if entry.module.is_entry and entry.callee == "query"
-        ]
-        assert [
-            (entry.codec_name, entry.target_type_label, entry.has_schema) for entry in entries
-        ] == [("extern", "int", False)]
 
 
 # ---------------------------------------------------------------------------

@@ -336,25 +336,10 @@ def test_prelude_method_modules_are_inferred_before_consumers() -> None:
     assert selected.checked is not None, selected.diagnostics
 
 
-def test_dry_run_attributes_ambient_method_externs_to_the_calling_module() -> None:
-    """A builtin method backed by an extern is inventoried where the call is written.
-
-    The module declaring the method contributes no call sites of its own,
-    so the inventory describes the program's own source rather than the standard
-    library's internals.
-    """
-    prepared = PipelineDriver.prepare_program("program def main() -> unit = print([1].size())\n")
-    discovery = PipelineDriver(get_sandbox_context=None).discover_programs(prepared)
-
-    assert discovery.compiled is not None, discovery.diagnostics
-    inventory = lower_program(discovery.compiled).dry_run_inventory
-    assert [(entry.module, entry.callee) for entry in inventory] == [(ENTRY_ID, "size")]
-
-
-def test_dry_run_keeps_method_modules_reached_through_source_imports(
+def test_method_modules_reached_through_source_imports_wire_their_externs(
     tmp_path: Path,
 ) -> None:
-    """Source provenance reaches a method module through an intermediary module."""
+    """A method module reached only through an intermediary import still wires."""
     stdlib = tmp_path / "stdlib"
     std = stdlib / MODULE_TREE_DIRNAME
     std.mkdir(parents=True)
@@ -382,7 +367,6 @@ def test_dry_run_keeps_method_modules_reached_through_source_imports(
         prepared, program, ProgramArguments(positional=(), named={}), compiled=discovery.compiled
     )
     assert preflight.result.ok, preflight.result.diagnostics
-    assert [site.callee for site in preflight.result.call_sites] == ["helper"]
 
 
 def test_receiver_methods_are_available_but_owning_module_free_functions_are_not() -> None:

@@ -977,7 +977,7 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
     assert compile_count == 1
 
 
-def test_match_invalid_unreachable_case_fails_single_dry_run() -> None:
+def test_match_invalid_unreachable_case_fails_single_check_only() -> None:
     result = run_inline_command(
         PipelineDriver(get_sandbox_context=None),
         "def dormant(x: bool) -> int =\n  case x of\n    | true => 1\n()",

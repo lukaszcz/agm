@@ -113,7 +113,6 @@ def drive_plain(
     session: ReplSession | None = None,
     echo: bool = True,
     echo_unit: bool = False,
-    check_only: bool = False,
     theme: str = "auto",
     on_setting_save: Callable[[str, "str | bool"], None] | None = None,
 ) -> str:
@@ -130,7 +129,6 @@ def drive_plain(
         repl_session,
         echo=echo,
         echo_unit=echo_unit,
-        check_only=check_only,
         theme=theme,
         on_setting_save=on_setting_save,
         stdin=stdin,
@@ -327,7 +325,7 @@ class TestPlainMultiline:
 
 
 # ---------------------------------------------------------------------------
-# Meta-commands, echo, errors, dry-run
+# Meta-commands, echo, errors
 # ---------------------------------------------------------------------------
 
 
@@ -384,20 +382,6 @@ class TestPlainMetaAndEval:
     def test_echo_unit_off_by_default_suppresses_unit_entries(self) -> None:
         output = drive_plain("()\n")
         assert "()" not in output
-
-
-class TestPlainDryRun:
-    def test_check_only_binding_shows_type_no_value(self) -> None:
-        session = ReplSession()
-        output = drive_plain("let x = 5\n", session=session, check_only=True)
-        assert "x : int" in output
-        assert "= 5" not in output
-        assert session.bindings() == []
-
-    def test_check_only_expression_shows_type(self) -> None:
-        output = drive_plain("1 + 2\n", check_only=True)
-        assert ": int" in output
-        assert "3" not in output
 
 
 # ---------------------------------------------------------------------------

@@ -229,8 +229,12 @@ def test_plain_registered_command_does_not_discover_during_outer_parsing(
 def test_registered_command_passes_dry_run_spelling_to_program(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A ``--dry-run``-looking token is forwarded as an ordinary program argument.
+
+    Registered commands reserve no ``--dry-run`` flag of their own, so this
+    spelling is never intercepted, whether as an option value or a bare token.
+    """
     import agm.commands.exec_program as exec_program
-    from agm.core import dry_run
 
     context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
     index = ActivationIndex(
@@ -238,13 +242,11 @@ def test_registered_command_passes_dry_run_spelling_to_program(
     )
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
-    calls: list[tuple[list[str], bool]] = []
+    calls: list[list[str]] = []
     monkeypatch.setattr(
         exec_program,
         "run_registered",
-        lambda _program, argument_tokens, **_kwargs: calls.append(
-            (argument_tokens, dry_run.enabled())
-        ),
+        lambda _program, argument_tokens, **_kwargs: calls.append(argument_tokens),
     )
 
     value_result = invoke(CliRunner(), ["tools", "lint", "--level=--dry-run"])
@@ -253,37 +255,9 @@ def test_registered_command_passes_dry_run_spelling_to_program(
     assert value_result.exit_code == 0
     assert flag_result.exit_code == 0
     assert calls == [
-        (["--level=--dry-run"], False),
-        (["--level", "strict", "--dry-run"], False),
+        ["--level=--dry-run"],
+        ["--level", "strict", "--dry-run"],
     ]
-
-
-def test_registered_command_clears_stale_dry_run_mode(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    import agm.commands.exec_program as exec_program
-    from agm.core import dry_run
-
-    context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
-    index = ActivationIndex(
-        commands={"tools lint": CommandRegistration("tools", "tools/lint::main")}
-    )
-    monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
-    monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
-    calls: list[tuple[list[str], bool]] = []
-    monkeypatch.setattr(
-        exec_program,
-        "run_registered",
-        lambda _program, argument_tokens, **_kwargs: calls.append(
-            (argument_tokens, dry_run.enabled())
-        ),
-    )
-    dry_run.set_enabled(True)
-
-    result = invoke(CliRunner(), ["tools", "lint", "--dry-run"])
-
-    assert result.exit_code == 0
-    assert calls == [(["--dry-run"], False)]
 
 
 def test_registered_command_preserves_a_host_looking_program_option_value(

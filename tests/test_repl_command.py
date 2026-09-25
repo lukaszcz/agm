@@ -165,7 +165,6 @@ def fake_plain_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object
         *,
         echo: bool = True,
         echo_unit: bool = False,
-        check_only: bool = False,
         theme: str = "auto",
         on_setting_save: object = None,
         stdin: object = None,
@@ -176,7 +175,6 @@ def fake_plain_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object
                 "session": session,
                 "echo": echo,
                 "echo_unit": echo_unit,
-                "check_only": check_only,
                 "theme": theme,
                 "on_setting_save": on_setting_save,
             }
@@ -207,7 +205,6 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
         *,
         echo: bool = True,
         echo_unit: bool = False,
-        check_only: bool = False,
         history_path: Path | None = None,
         theme: str = "auto",
         on_setting_save: object = None,
@@ -219,7 +216,6 @@ def fake_console(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
                 "session": session,
                 "echo": echo,
                 "echo_unit": echo_unit,
-                "check_only": check_only,
                 "history_path": history_path,
                 "theme": theme,
                 "on_setting_save": on_setting_save,
@@ -437,7 +433,6 @@ class TestReplRun:
         call = fake_console[0]
         assert isinstance(call["session"], ReplSession)
         assert call["echo"] is True
-        assert call["check_only"] is False  # not a dry-run by default
         assert call["history_path"] == home / ".agm" / "repl_history"
         assert (home / ".agm").is_dir()
 
@@ -454,7 +449,6 @@ class TestReplRun:
         call = fake_plain_console[0]
         assert isinstance(call["session"], ReplSession)
         assert call["echo"] is True
-        assert call["check_only"] is False  # not a dry-run by default
         assert (home / ".agm").is_dir()
 
     def test_on_setting_save_persists_the_theme_to_config(
@@ -846,7 +840,7 @@ class TestReplRun:
             assert isinstance(trace_file, RecordValue)
             assert trace_file.fields["value"] == TextValue(expected_file)
 
-    def test_shared_dry_run_state_does_not_change_console_mode(
+    def test_shared_dry_run_state_does_not_affect_repl(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
@@ -857,7 +851,7 @@ class TestReplRun:
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
         repl_command.run(_args())
-        assert fake_plain_console[0]["check_only"] is False
+        assert len(fake_plain_console) == 1
 
     def test_quiet_disables_echo(
         self,

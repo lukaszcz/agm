@@ -65,7 +65,11 @@ def test_session_ask_infers_targets_like_agent_ask() -> None:
     text_response = checked.resolved.program.body.items[1]
     assert isinstance(text_response, LetDecl)
     assert checked.node_types[text_response.value.node_id] == TextType()
-    assert [site.target_type.kind for site in checked.call_sites] == ["text", "int", "bool"]
+    assert [spec.target_type.kind for spec in checked.contract_specs.values()] == [
+        "text",
+        "int",
+        "bool",
+    ]
 
 
 def test_unbound_nongeneric_session_method_rejects_type_arguments() -> None:
@@ -121,10 +125,6 @@ def test_session_ask_records_parse_options_and_output_contract_metadata() -> Non
     assert checked.contract_specs[summary.value.node_id].target_type == TextType()
     assert checked.contract_specs[summary.value.node_id].codec_name == "text"
     assert checked.contract_specs[summary.value.node_id].strict_json is None
-    assert [(site.callee, site.codec_name, site.parse_policy) for site in checked.call_sites] == [
-        ("ask", "json", "retry[2]"),
-        ("ask", "text", "abort"),
-    ]
     assert len(checked.warnings) == 1
 
 
@@ -180,8 +180,7 @@ def test_session_dollar_literal_ask_uses_session_ask_typechecking() -> None:
     count = checked.resolved.program.body.items[1]
     assert isinstance(count, LetDecl)
     assert isinstance(count.value, Call)
-    assert checked.call_sites[0].node_id == count.value.node_id
-    assert checked.call_sites[0].target_type.kind == "int"
+    assert checked.contract_specs[count.value.node_id].target_type.kind == "int"
 
 
 def test_agent_builtin_ask_keeps_its_existing_dispatch() -> None:
@@ -189,7 +188,10 @@ def test_agent_builtin_ask_keeps_its_existing_dispatch() -> None:
         'let agent = AgentCommand("worker")\nlet response: text = agent.ask("summarize")\nresponse'
     )
 
-    assert [site.callee for site in checked.call_sites] == ["ask"]
+    response = checked.resolved.program.body.items[1]
+    assert isinstance(response, LetDecl)
+    assert isinstance(response.value, Call)
+    assert checked.contract_specs[response.value.node_id].target_type == TextType()
 
 
 def test_non_session_receivers_do_not_gain_session_methods() -> None:
@@ -208,7 +210,7 @@ def test_nested_session_constructor_and_regular_method_remain_user_defined() -> 
     )
 
     assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == TextType()
-    assert checked.call_sites == ()
+    assert checked.contract_specs == {}
 
 
 def test_redeclared_session_builtin_method_is_not_a_host_method() -> None:

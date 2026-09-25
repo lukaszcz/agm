@@ -15,7 +15,6 @@ from agm.agl.ir.contracts import ContractPayload, ExceptionFieldEncode, ParamDec
 from agm.agl.ir.ids import FunctionId, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
-    DryRunEntry,
     ExecutableModule,
     ExecutableProgram,
     FunctionDescriptor,
@@ -31,7 +30,6 @@ from agm.agl.ir.validate import validate_ir
 from agm.agl.lower import module as module_cache
 from agm.agl.lower.lowerer import (
     _add_builtin_nominals,
-    _contract_has_schema,
     _LinkState,
     _Lowerer,
     builtin_nominals_from_declarations,
@@ -601,29 +599,6 @@ def lower_program(
         if isinstance(item, BuiltinVarDecl)
     )
 
-    payloads = contract_payloads if contract_payloads is not None else {}
-    dry_run_entries: list[DryRunEntry] = []
-    runtime_modules = checked.runtime_modules or frozenset(checked.modules)
-    for module_id, cm in checked.modules.items():
-        if module_id not in runtime_modules:
-            continue
-        for csr in cm.call_sites:
-            dry_run_entries.append(
-                DryRunEntry(
-                    module=module_id,
-                    callee=csr.callee,
-                    codec_name=csr.codec_name,
-                    target_type_label=repr(csr.target_type),
-                    has_schema=_contract_has_schema(
-                        cm.contract_specs.get(csr.node_id),
-                        payloads.get(csr.node_id),
-                    ),
-                    parse_policy=csr.parse_policy,
-                    line=csr.line,
-                    col=csr.col,
-                )
-            )
-    dry_run_inventory = tuple(dry_run_entries)
     exception_field_encodes = _exception_field_encodes(type_table)
     live_functions, live_symbols = _live_functions_and_symbols(link, executable_modules)
     program_symbols = {
@@ -659,7 +634,6 @@ def lower_program(
         param_decoders=param_decoders,
         param_spans=param_spans,
         contracts=dict(link.contracts),
-        dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,
         builtin_var_declarations=builtin_var_declarations,
         exception_field_encodes=exception_field_encodes,

@@ -337,12 +337,12 @@ def test_t9_exec_inside_function() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Golden lowering — IrExec node + dry_run_inventory
+# Golden lowering — IrExec node
 # ---------------------------------------------------------------------------
 
 
 def test_t10_golden_lowering() -> None:
-    """Lowering exec() produces an IrExec node and populates dry_run_inventory."""
+    """Lowering exec() produces an IrExec node."""
     from agm.agl.ir.nodes import IrBind, IrExec, IrSequence
 
     source = 'let result = exec("echo hi")\nresult'
@@ -356,14 +356,6 @@ def test_t10_golden_lowering() -> None:
         and isinstance(let_root_capture(init).value, IrExec)
     ]
     assert len(exec_nodes) == 1, f"Expected 1 IrExec node, found {len(exec_nodes)}"
-
-    # Check dry_run_inventory
-    assert len(executable.dry_run_inventory) >= 1
-    entry = executable.dry_run_inventory[0]
-    assert entry.callee == "exec"
-    assert entry.codec_name == "text"
-    # text codec → no JSON schema
-    assert entry.has_schema is False
 
 
 # ---------------------------------------------------------------------------

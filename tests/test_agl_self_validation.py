@@ -273,7 +273,7 @@ def test_disabled_validation_skips_the_extern_target_leak_check(
     origin_path.with_suffix(".py").write_text("")
     checked = resolve_and_check_inline_entry(source, base_caps(), origin_path=origin_path)
 
-    assert [site.callee for site in checked.call_sites] == ["id"]
+    assert_checked_module_closed(checked)
 
 
 def test_disabled_validation_skips_the_repl_entry_closure_check(

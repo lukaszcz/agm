@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from agm.sandbox.prepare import SandboxContext
 
 __all__ = [
-    "CallSiteInfo",
     "HostEnvironment",
     "ParamBindingInfo",
     "ProgramDeclInfo",
@@ -63,28 +62,6 @@ class HostEnvironment:
     codecs: dict[str, "OutputCodec"]
     extern_registry: "ExternRegistry"
     get_sandbox_context: "Callable[[], SandboxContext] | None" = None
-
-
-@dataclass(frozen=True, slots=True)
-class CallSiteInfo:
-    """Static summary of one agent-call or exec site for check-only inspection.
-
-    ``callee``        Agent or executor name (``"ask"`` or ``"exec"``).
-    ``target_type``   The target type name (e.g. ``"text"``, ``"Review"``).
-    ``codec_name``    Selected codec, or ``"none"`` for a ``unit`` target.
-    ``has_schema``    ``True`` when the contract carries a JSON Schema.
-    ``parse_policy``  ``"abort"`` / ``"retry[N]"`` / ``"default"``.
-    ``line``          1-based source line of the call site.
-    ``col``           1-based source column of the call site.
-    """
-
-    callee: str
-    target_type: str
-    codec_name: str
-    has_schema: bool
-    parse_policy: str
-    line: int
-    col: int
 
 
 @dataclass(frozen=True, slots=True)

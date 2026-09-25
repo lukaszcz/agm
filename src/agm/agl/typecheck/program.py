@@ -222,9 +222,6 @@ class CheckedProgram:
     ``import_sccs``
         Loader-computed reverse-topological import components, retained for
         dependency-ordered lowering after this pass's presentation ordering.
-    ``runtime_modules``
-        Entry-reachable modules through explicit source imports and exports.
-        Loader-injected standard-library edges do not add dry-run call sites.
     """
 
     modules: dict[ModuleId, CheckedModule]
@@ -234,7 +231,6 @@ class CheckedProgram:
     capabilities: HostCapabilities | None = None
     import_sccs: tuple[tuple[ModuleId, ...], ...] = ()
     resource_roots: Mapping[ModuleId, Path | None] = field(default_factory=dict)
-    runtime_modules: frozenset[ModuleId] | None = None
     module_fingerprints: Mapping[ModuleId, bytes] = field(default_factory=dict)
 
 
@@ -262,7 +258,6 @@ def _assert_checked_module_closed(module: CheckedModule) -> None:
         node_types=module.node_types,
         contract_specs=module.contract_specs,
         target_contract_specs=module.target_contract_specs,
-        call_sites=module.call_sites,
         function_signatures=module.function_signatures,
         cast_specs=module.cast_specs,
         argument_bindings=module.argument_bindings,
@@ -1648,7 +1643,6 @@ def check_program(
     presentation_order = tuple(mid for mid in resolved.modules if mid != resolved.entry_id) + (
         resolved.entry_id,
     )
-    runtime_modules = frozenset(resolved.graph.source_reachable_modules(resolved.entry_id))
 
     checked = CheckedProgram(
         modules={mid: checked_modules[mid] for mid in presentation_order},
@@ -1660,7 +1654,6 @@ def check_program(
         capabilities=capabilities,
         import_sccs=resolved.import_sccs,
         resource_roots={mid: resolved.graph.resource_root_for(mid) for mid in presentation_order},
-        runtime_modules=runtime_modules,
         module_fingerprints=module_fingerprints(retainable, capabilities)
         if entry_seed_env is None
         else {},

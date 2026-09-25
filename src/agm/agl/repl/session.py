@@ -331,8 +331,7 @@ class ReplSession:
         self._host_settings_policy = host_settings_policy
         # Trace destination: when set, each evaluated entry opens a fresh
         # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
-        # file.  ``check_only`` entries write nothing (mirroring ``agm exec``).
-        # The COMMAND validates/creates the path up front; the session assumes it
+        # file. The COMMAND validates/creates the path up front; the session assumes it
         # is writable but the no-op store tolerates failure (it disables itself).
         self._trace_path = trace_path
         self._initial_trace_path = trace_path
@@ -696,12 +695,11 @@ class ReplSession:
     # Core evaluation
     # ------------------------------------------------------------------
 
-    def eval_entry(self, text: str, *, check_only: bool = False) -> EntryResult:
+    def eval_entry(self, text: str) -> EntryResult:
         """Parse → resolve → typecheck → matchcompile → lower/eval one entry.
 
         Completed runtime initializers are promoted even when a later initializer
-        fails. ``check_only`` stops after match compilation without lowering,
-        executing, promoting, or advancing the node-id counter.
+        fails.
 
         REPL-only fallback: when the entry fails to evaluate as a program, the
         loop tries to read it as a bare type expression (e.g. ``int``, a declared
@@ -712,7 +710,7 @@ class ReplSession:
         successfully as values are never intercepted, so record constructors and
         bindings keep their normal echo.
         """
-        result = self._eval_entry_pipeline(text, check_only=check_only)
+        result = self._eval_entry_pipeline(text)
         if not result.ok:
             type_result = self._try_type_entry(text)
             if type_result is not None:
@@ -841,12 +839,11 @@ class ReplSession:
             return None
         return checked_program.modules[checked_program.entry_id].type_env
 
-    def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
+    def _eval_entry_pipeline(self, text: str) -> EntryResult:
         """Run the resolve → typecheck → matchcompile → lower/eval entry core.
 
         Completed runtime initializers are promoted even when a later initializer
-        fails. ``check_only`` stops after match compilation without lowering,
-        executing, promoting, or advancing the node-id counter.
+        fails.
         """
         from agm.agl.lexer import spaced_qualifier_collector, tab_warning_collector
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
@@ -878,7 +875,6 @@ class ReplSession:
             host_env=host_env,
             tab_warnings=tab_warnings,
             next_start_id=next_start_id,
-            check_only=check_only,
             spaced_qualifiers=spaced_qualifiers,
         )
 
@@ -1023,32 +1019,6 @@ class ReplSession:
             self._current["strict-json"] = snapshot["strict-json"]
         self._shell_exec_timeout = interp.shell_exec_timeout
         self._builtin_var_values = interp.builtin_vars
-
-    def _build_check_only_result(
-        self,
-        program: "Program",
-        checked: "CheckedModule",
-        warnings: list[Diagnostic],
-    ) -> EntryResult:
-        """Build the EntryResult for a ``check_only`` (type-only) run.
-
-        No value, no evaluation, no promotion, no trace.  The value_type for an
-        expression entry is the checked node type of the expression; for a binding
-        it is the declared binding type.
-        """
-        kind, name = self._classify(program)
-        return EntryResult(
-            kind=kind,
-            name=name,
-            value=None,
-            value_type=self._value_type_of_last(program, checked),
-            diagnostics=[],
-            warnings=warnings,
-            error=None,
-            ok=True,
-            quote_strings=self._quote_strings_for_entry(program),
-            type_table=checked.type_env.type_table,
-        )
 
     def _advance_node_ids(self, next_start_id: int) -> None:
         """Consume node ids for an entry that failed after lowering began."""
@@ -1639,9 +1609,9 @@ class ReplSession:
         """Static type carried by the entry's final value, or ``None``.
 
         A bare expression retains its checked type. A trailing ``let``/``var``
-        reports the declared binding type for the REPL declaration echo, except
-        that an initializer which always exits reports ``bottom``. Shared by the
-        check-only result builder and the success echo so the two agree.
+        reports the declared binding type for the REPL declaration echo. Only
+        called after a completed evaluation, so an always-diverging initializer
+        never reaches this method: it raises before the echo is computed.
         """
         from agm.agl.syntax.nodes import (
             Binder,
@@ -1662,11 +1632,6 @@ class ReplSession:
                 else last.node_id
             )
         if isinstance(last, (LetDecl, VarDecl)):
-            from agm.agl.semantics.types import BottomType
-
-            initializer_type = checked.node_types.get(last.value.node_id)
-            if isinstance(initializer_type, BottomType):
-                return initializer_type
             if last.name == "_":
                 return None
             return checked.type_env.get_binding_type(last.node_id)

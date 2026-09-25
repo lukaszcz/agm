@@ -11,8 +11,8 @@ Covers everything upstream of the boundary walkers (``test_agl_extern_boundary.p
 
 Interpreter dispatch of an extern call is a later stage of this effort, so
 tests below that exercise the full pipeline stop at ``check_only`` (static
-passes, lowering, and dry-run inventory only) rather than evaluating a
-program that calls an extern.
+passes and lowering only) rather than evaluating a program that calls an
+extern.
 """
 
 from __future__ import annotations

@@ -106,7 +106,6 @@ def run_repl_loop(
     writer: Callable[[str], None],
     echo: bool = True,
     echo_unit: bool = False,
-    check_only: bool = False,
     theme: str = "auto",
     on_setting_change: "Callable[[str, str | bool], None] | None" = None,
     highlighted_writer: "Callable[[str, tuple[tuple[int, int], ...]], None] | None" = None,
@@ -127,11 +126,6 @@ def run_repl_loop(
     comment-only entry is a no-op (fresh prompt, no error); any other entry is
     evaluated and its result rendered via
     :func:`agm.agl.repl.render.render_entry_result`.
-
-    When *check_only* is set the REPL is in dry-run mode: each entry is run
-    through the full static pipeline (parse / resolve / typecheck / match
-    compilation) only — no evaluation, no agent/exec calls, and no bindings
-    are persisted — and its inferred type is echoed.
 
     *echo_unit* selects whether a ``unit``-typed expression/binding entry also
     echoes (off by default); ``:set echo-unit on|off`` toggles it live.
@@ -183,9 +177,7 @@ def run_repl_loop(
         if not has_runnable_statements(entry):
             continue
 
-        result = session.eval_entry(entry, check_only=check_only)
-        rendered = render_mod.render_entry_result(
-            result, echo=ctx.echo, echo_unit=ctx.echo_unit, check_only=check_only
-        )
+        result = session.eval_entry(entry)
+        rendered = render_mod.render_entry_result(result, echo=ctx.echo, echo_unit=ctx.echo_unit)
         if rendered is not None:
             writer(rendered)

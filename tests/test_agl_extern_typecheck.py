@@ -1,7 +1,6 @@
-"""Tests for `extern def` typechecking and call-site recording.
+"""Tests for `extern def` typechecking.
 
-Covers everything from a resolved AST to a ``CheckedModule``/``CheckedProgram``
-for `extern def`:
+Covers everything from a resolved AST to a ``CheckedModule`` for `extern def`:
 - signature checking reuses the ordinary/``builtin def`` path (kinds, zones,
   defaults, type params, no body to check).
 - extern-specific header checks: Python-identifier/keyword name rule,
@@ -10,8 +9,6 @@ for `extern def`:
   crossing; Python callables returned toward AgL remain runtime boundary
   errors, while `Agent` enum values cross as ordinary data.
 - calls to externs type exactly like calls to ordinary declared functions.
-- direct extern call sites (own-module and imported) are recorded in
-  ``call_sites`` like ``ask``/``exec`` call sites.
 
 NO contract compilation, lowering, or runtime behavior is exercised here —
 externs are not executable yet.
@@ -28,7 +25,6 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.parser import parse_program
-from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import CastSpec
 from agm.agl.syntax.nodes import Block, FuncDef
@@ -36,19 +32,14 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck import (
     AglTypeError,
     CheckedModule,
-    CheckedProgram,
     FunctionSignature,
     FunctionType,
     IntType,
-    TextType,
-    check_program,
 )
 from agm.agl.typecheck.env import (
-    CallSiteRecord,
     OutputContractSpec,
     PartialCallSpec,
 )
-from tests.agl.ir_harness import make_graph_from_files, write_companion_file
 from tests.agl.module_graph import (
     resolve_and_check_inline_program_ast,
     resolve_inline_entry,
@@ -103,10 +94,9 @@ def check_extern(source: str, capabilities: HostCapabilities | None = None) -> C
     deliberately exercising the scope/typecheck layers' own rule that an
     extern needs a file-backed origin -- independent of whether a companion
     ``.py`` file actually exists on disk, which only the module loader (a
-    separate, already graph-tested concern; see ``check_extern_graph`` below
-    and ``test_agl_extern_syntax.py``) enforces. Building a real loaded graph
-    here would hit that loader check first and mask the one this class means
-    to test.
+    separate, already graph-tested concern; see ``test_agl_extern_syntax.py``)
+    enforces. Building a real loaded graph here would hit that loader check
+    first and mask the one this class means to test.
     """
     return resolve_and_check_inline_program_ast(
         parse_program(source), capabilities or _CAPS, origin_path=_PATH
@@ -118,13 +108,6 @@ def reject_extern(source: str, capabilities: HostCapabilities | None = None) -> 
     with pytest.raises(AglTypeError) as exc_info:
         check_extern(source, capabilities)
     return exc_info.value
-
-
-def check_extern_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
-    """Build and typecheck a multi-module graph; returns the ``CheckedProgram``."""
-    graph = make_graph_from_files(tmp_path, modules)
-    resolved = resolve_program(graph)
-    return check_program(resolved, _CAPS)
 
 
 # ---------------------------------------------------------------------------
@@ -203,12 +186,8 @@ class TestExternCallableSignatures:
     def test_function_typed_return_is_checked_at_the_runtime_boundary(self) -> None:
         check_extern("extern def f(x: int) -> (int) -> int\n0")
 
-    def test_extern_returned_function_keeps_its_call_target(self) -> None:
-        cp = check_extern("extern def choose() -> (int) -> int\nlet maker = choose\nmaker()(1)")
-
-        sites = [site for site in cp.call_sites if site.callee == "choose"]
-        assert len(sites) == 1
-        assert sites[0].target_type == IntType()
+    def test_extern_returned_function_can_be_indirectly_invoked(self) -> None:
+        check_extern("extern def choose() -> (int) -> int\nlet maker = choose\nmaker()(1)")
 
     def test_function_type_nested_in_array_is_accepted(self) -> None:
         check_extern("extern def f(cbs: array[(int) -> int]) -> int\n0")
@@ -356,44 +335,31 @@ def _extern_signature(cp: CheckedModule, name: str) -> FunctionSignature:
 
 
 # ---------------------------------------------------------------------------
-# Call-site recording (dry-run inventory)
+# Extern provenance finalization
 # ---------------------------------------------------------------------------
 
 
-class TestExternCallSiteRecording:
-    def test_single_module_extern_call_recorded(self) -> None:
-        cp = check_extern("extern def f(x: int) -> int\nf(1)")
-        sites = [s for s in cp.call_sites if s.callee == "f"]
-        assert len(sites) == 1
-        assert sites[0].codec_name == "extern"
-        assert sites[0].target_type == IntType()
+class TestExternProvenanceFinalization:
+    def test_type_directed_extern_returned_from_a_function_keeps_its_contract(self) -> None:
+        """A type-directed extern's target contract survives ``return`` through a def.
 
-    def test_multiple_calls_each_recorded(self) -> None:
-        cp = check_extern("extern def f(x: int) -> int\nlet _ = f(1)\nlet _ = f(2)")
-        sites = [s for s in cp.call_sites if s.callee == "f"]
-        assert len(sites) == 2
-
-    def test_generic_direct_calls_publish_independently_concrete_metadata(self) -> None:
+        ``get``'s declared result type instantiates ``query``'s ``T`` at ``int``
+        when it is returned; that provenance is what the finalized target
+        contract reports, even though the annotation lives on ``get``, not on
+        the ``return`` statement itself.
+        """
         cp = check_extern(
-            'extern def id[T](value: T) -> T\nlet number = id(1)\nlet text = id("value")\ntext'
+            "extern def query[T](question: text) -> T\n"
+            "def get() -> (text) -> int\n"
+            "  return query::[int]\n"
+            "let apply = get()\n"
+            'apply("q")'
         )
-        sites = [site for site in cp.call_sites if site.callee == "id"]
-        assert [site.target_type for site in sites] == [IntType(), TextType()]
-        assert cp.argument_bindings.function_param_types[_last_call_node_id(cp, "id")] == (
-            IntType(),
-        )
+        (specs,) = cp.target_contract_specs.values()
+        (spec,) = specs
+        assert (spec.target_type, spec.codec_name) == (IntType(), "json")
 
-    def test_generic_extern_and_builtin_inventory_preserves_source_order(self) -> None:
-        cp = check_extern(
-            _ASK_BUILTIN_SOURCE + "extern def id[T](value: T) -> T\n"
-            "def choose[T](first: T, second: T) -> T = first\n"
-            'let value: int = choose(ask("answer"), id(1))\n'
-            "value"
-        )
-        assert [site.callee for site in cp.call_sites] == ["ask", "id"]
-        assert [site.target_type for site in cp.call_sites] == [IntType(), IntType()]
-
-    def test_failed_region_rolls_back_extern_inventory_before_checker_reuse(self) -> None:
+    def test_failed_region_rolls_back_extern_provenance_before_checker_reuse(self) -> None:
         # Direct resolve_program_ast bypass, not resolve_and_check_entry: see
         # check_extern's docstring -- this builds a _Checker by hand from a
         # virtual origin_path with no real companion file, which is exactly
@@ -434,7 +400,6 @@ class TestExternCallSiteRecording:
         checker._cast_specs[-6] = cast(CastSpec, object())
         checker._extern_expr_targets[-7] = ()
         checker._extern_binding_targets[-8] = ()
-        checker._call_sites.append(cast(CallSiteRecord, object()))
         checker._warnings.append(cast(Diagnostic, object()))
         before = (
             checker._function_call_bindings.copy(),
@@ -445,7 +410,6 @@ class TestExternCallSiteRecording:
             checker._cast_specs.copy(),
             checker._extern_expr_targets.copy(),
             checker._extern_binding_targets.copy(),
-            checker._call_sites.copy(),
             checker._warnings.copy(),
         )
         with pytest.raises(AglTypeError):
@@ -459,16 +423,13 @@ class TestExternCallSiteRecording:
             checker._cast_specs,
             checker._extern_expr_targets,
             checker._extern_binding_targets,
-            checker._call_sites,
             checker._warnings,
         ) == before
-        checker._call_sites.clear()
         checker._warnings.clear()
 
         successful_call = failed_call.args[0]
         assert isinstance(successful_call, Call)
         assert isinstance(checker._check_expr(successful_call, expected=None), FunctionType)
-        assert [site.callee for site in checker._call_sites] == ["id"]
 
     def test_region_finalization_zonks_only_added_extern_provenance(self) -> None:
         from agm.agl.modules.ids import ENTRY_ID
@@ -482,17 +443,16 @@ class TestExternCallSiteRecording:
         checker._extern_binding_targets[11] = (target,)
         checker._return_extern_targets_stack.append([target])
         region = _InferenceRegion(
-            InferenceEngine(),
-            {},
-            {},
-            [],
-            {
+            engine=InferenceEngine(),
+            node_types={},
+            function_call_param_types={},
+            finalization_obligations=[],
+            added_side_table_keys={
                 "extern_expr_targets": {10, 12},
                 "extern_binding_targets": {11, 13},
             },
-            0,
-            0,
-            (0,),
+            warnings_start=0,
+            return_target_lengths=(0,),
         )
 
         checker._finalize_extern_provenance(region)
@@ -517,224 +477,6 @@ class TestExternCallSiteRecording:
                     span=SourceSpan(1, 1, 1, 1, 0, 0),
                 )
             )
-
-    def test_ask_exec_recording_unaffected_by_extern_presence(self) -> None:
-        cp = check_extern(_ASK_BUILTIN_SOURCE + 'extern def f(x: int) -> int\nask("hi")')
-        callees = [s.callee for s in cp.call_sites]
-        assert callees == ["ask"]
-
-    def test_indirect_first_class_call_recorded_at_invocation(self) -> None:
-        source = "extern def f(x: int) -> int\nlet g: (int) -> int = f\ng(1)"
-        cp = check_extern(source)
-        sites = [s for s in cp.call_sites if s.callee == "f"]
-        assert len(sites) == 1
-        assert sites[0].line == 3
-        assert sites[0].target_type == IntType()
-
-    def test_generic_indirect_call_uses_finalized_function_provenance(self) -> None:
-        cp = check_extern("extern def id[T](value: T) -> T\nlet apply: (int) -> int = id\napply(1)")
-        sites = [site for site in cp.call_sites if site.callee == "id"]
-        assert len(sites) == 1
-        assert sites[0].line == 3
-        assert sites[0].target_type == IntType()
-
-    def test_generic_extern_provenance_is_finalized_through_a_returned_function(self) -> None:
-        cp = check_extern(
-            "extern def id[T](value: T) -> T\n"
-            "def get() -> (int) -> int\n"
-            "  return id\n"
-            "let apply = get()\n"
-            "apply(1)"
-        )
-        sites = [site for site in cp.call_sites if site.callee == "id"]
-        assert len(sites) == 1
-        assert sites[0].line == 5
-        assert sites[0].target_type == IntType()
-
-    def test_partial_extern_call_recorded_at_invocation(self) -> None:
-        source = "extern def f(x: int, y: int) -> int\nlet g = f(?, 2)\ng(1)"
-        cp = check_extern(source)
-        sites = [s for s in cp.call_sites if s.callee == "f"]
-        assert len(sites) == 1
-        assert sites[0].line == 3
-        assert sites[0].target_type == IntType()
-
-    def test_generic_partial_call_publishes_concrete_parameter_and_result_metadata(self) -> None:
-        cp = check_extern(
-            "extern def same[T](left: T, right: T) -> T\n"
-            "let apply: (int) -> int = same(?, 1)\n"
-            "apply(2)"
-        )
-        partial_node_id = _last_call_node_id(cp, "same")
-        assert cp.partial_calls[partial_node_id].argument_holes == (0, None)
-        assert cp.argument_bindings.function_param_types[partial_node_id] == (
-            IntType(),
-            IntType(),
-        )
-        sites = [site for site in cp.call_sites if site.callee == "same"]
-        assert len(sites) == 1
-        assert sites[0].line == 3
-        assert sites[0].target_type == IntType()
-
-    def test_partial_extern_function_value_recorded_at_invocation(self) -> None:
-        source = "extern def f(x: int, y: int) -> int\nlet g = f(?, ?)\nlet h = g(?, 2)\nh(1)"
-        cp = check_extern(source)
-        sites = [s for s in cp.call_sites if s.callee == "f"]
-        assert len(sites) == 1
-        assert sites[0].line == 4
-        assert sites[0].target_type == IntType()
-
-    def test_function_valued_if_extern_call_recorded_at_invocation(self) -> None:
-        source = (
-            "extern def inc(x: int) -> int\n"
-            "extern def dec(x: int) -> int\n"
-            "let h: (int) -> int = if true => inc | else => dec\n"
-            "h(1)"
-        )
-        cp = check_extern(source)
-        sites = [s for s in cp.call_sites if s.callee in {"inc", "dec"}]
-        assert {s.callee for s in sites} == {"inc", "dec"}
-        assert {s.line for s in sites} == {4}
-        assert {s.target_type for s in sites} == {IntType()}
-
-    def test_function_valued_if_deduplicates_same_extern_target(self) -> None:
-        source = "extern def f(x: int) -> int\nlet h: (int) -> int = if true => f | else => f\nh(1)"
-        cp = check_extern(source)
-        sites = [s for s in cp.call_sites if s.callee == "f"]
-        assert len(sites) == 1
-        assert sites[0].line == 3
-
-    def test_function_valued_case_extern_call_recorded_at_invocation(self) -> None:
-        source = (
-            "enum Choice\n"
-            "  | Inc\n"
-            "  | Dec\n"
-            "extern def inc(x: int) -> int\n"
-            "extern def dec(x: int) -> int\n"
-            "let c: Choice = Inc\n"
-            "let h: (int) -> int = case c of\n"
-            "  | Inc() => inc\n"
-            "  | Dec() => dec\n"
-            "h(1)"
-        )
-        cp = check_extern(source)
-        sites = [s for s in cp.call_sites if s.callee in {"inc", "dec"}]
-        assert {s.callee for s in sites} == {"inc", "dec"}
-        assert {s.line for s in sites} == {10}
-        assert {s.target_type for s in sites} == {IntType()}
-
-    def test_function_valued_block_extern_call_recorded_at_invocation(self) -> None:
-        source = (
-            "extern def inc(x: int) -> int\n"
-            "def choose() -> (int) -> int\n"
-            "  let ignored = 1\n"
-            "  inc\n"
-            "let h = choose()\n"
-            "h(1)"
-        )
-        cp = check_extern(source)
-        sites = [s for s in cp.call_sites if s.callee == "inc"]
-        assert len(sites) == 1
-        assert sites[0].line == 6
-        assert sites[0].target_type == IntType()
-
-    def test_function_valued_try_extern_call_recorded_at_invocation(self) -> None:
-        source = (
-            "extern def inc(x: int) -> int\n"
-            "extern def dec(x: int) -> int\n"
-            "def choose() -> (int) -> int = try inc catch _ => dec\n"
-            "let h = choose()\n"
-            "h(1)"
-        )
-        cp = check_extern(source)
-        sites = [s for s in cp.call_sites if s.callee in {"inc", "dec"}]
-        assert {s.callee for s in sites} == {"inc", "dec"}
-        assert {s.line for s in sites} == {5}
-        assert {s.target_type for s in sites} == {IntType()}
-
-    def test_function_valued_return_extern_call_recorded_at_invocation(self) -> None:
-        source = (
-            "extern def inc(x: int) -> int\n"
-            "def choose() -> (int) -> int\n"
-            "  return inc\n"
-            "let h = choose()\n"
-            "h(1)"
-        )
-        cp = check_extern(source)
-        sites = [s for s in cp.call_sites if s.callee == "inc"]
-        assert len(sites) == 1
-        assert sites[0].line == 5
-        assert sites[0].target_type == IntType()
-
-    def test_graph_mode_imported_extern_call_recorded(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x\n")
-        checked = check_extern_graph(
-            tmp_path,
-            {
-                "entry": "import lib/mod::*\nlib/mod::f(1)",
-                "lib/mod": "extern def f(x: int) -> int",
-            },
-        )
-        entry_module = checked.modules[checked.entry_id]
-        sites = [s for s in entry_module.call_sites if s.callee == "f"]
-        assert len(sites) == 1
-        assert sites[0].codec_name == "extern"
-        assert sites[0].target_type == IntType()
-
-    def test_graph_mode_generic_extern_call_has_concrete_inventory(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib/mod", "def id(value):\n    return value\n")
-        checked = check_extern_graph(
-            tmp_path,
-            {
-                "entry": "import lib/mod::*\nlib/mod::id(1)",
-                "lib/mod": "extern def id[T](value: T) -> T",
-            },
-        )
-        entry_module = checked.modules[checked.entry_id]
-        sites = [site for site in entry_module.call_sites if site.callee == "id"]
-        assert len(sites) == 1
-        assert sites[0].target_type == IntType()
-
-    def test_graph_mode_same_named_externs_from_different_modules_are_not_collapsed(
-        self, tmp_path: Path
-    ) -> None:
-        write_companion_file(tmp_path / "root", "left", "def f(x):\n    return x\n")
-        write_companion_file(tmp_path / "root", "right", "def f(x):\n    return x\n")
-        checked = check_extern_graph(
-            tmp_path,
-            {
-                "entry": (
-                    "import left as l\n"
-                    "import right as r\n"
-                    "let h: (int) -> int = if true => l::f | else => r::f\n"
-                    "h(1)"
-                ),
-                "left": "extern def f(x: int) -> int",
-                "right": "extern def f(x: int) -> int",
-            },
-        )
-        entry_module = checked.modules[checked.entry_id]
-        sites = [s for s in entry_module.call_sites if s.callee == "f"]
-        assert len(sites) == 2
-        assert {s.line for s in sites} == {4}
-        assert {s.target_type for s in sites} == {IntType()}
-
-    def test_graph_mode_own_module_extern_call_recorded(self, tmp_path: Path) -> None:
-        write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x\n")
-        checked = check_extern_graph(
-            tmp_path,
-            {
-                "entry": "import lib/mod::*\n()",
-                "lib/mod": "extern def f(x: int) -> int\ndef g() -> int = f(1)",
-            },
-        )
-        from agm.agl.modules.ids import ModuleId
-
-        lib_mod_id = next(mid for mid in checked.modules if not mid.is_entry)
-        assert isinstance(lib_mod_id, ModuleId)
-        sites = [s for s in checked.modules[lib_mod_id].call_sites if s.callee == "f"]
-        assert len(sites) == 1
-        assert sites[0].codec_name == "extern"
 
 
 class TestExternDefensiveGuards:

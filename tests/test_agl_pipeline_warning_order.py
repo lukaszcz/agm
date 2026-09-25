@@ -83,12 +83,8 @@ def test_program_discovery_preserves_checker_warning_before_match_failure() -> N
     _assert_warning_then_match_error(result)
 
 
-@pytest.mark.parametrize("check_only", [False, True])
-def test_repl_preserves_checker_warning_before_match_failure(check_only: bool) -> None:
-    result = ReplSession(agent_dispatcher=lambda _request: "").eval_entry(
-        _FAILING_SOURCE,
-        check_only=check_only,
-    )
+def test_repl_preserves_checker_warning_before_match_failure() -> None:
+    result = ReplSession(agent_dispatcher=lambda _request: "").eval_entry(_FAILING_SOURCE)
 
     assert not result.ok
     _assert_warning_then_match_error(result)

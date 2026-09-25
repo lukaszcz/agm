@@ -300,16 +300,6 @@ def _json_payload(schema: dict[str, object], decode_plan: DecodePlan) -> Contrac
     )
 
 
-def _contract_has_schema(
-    spec: OutputContractSpec | None,
-    payload: ContractPayload | None,
-) -> bool:
-    """Return whether a call-site contract carries a materialized schema."""
-    return spec is not None and (
-        spec.codec_name == "json" or (payload is not None and payload.json_schema is not None)
-    )
-
-
 def reserved_fallback_superseded(name: str, type_table: TypeTable) -> bool:
     """Return whether a loaded standard declaration owns the built-in *name*.
 

@@ -4,7 +4,7 @@ Drives ``ReplSession`` directly with source strings and fake agents.  Asserts
 user-visible behaviour: persistence across entries, redefinition/shadowing,
 expression/binding echo data, ``type_of`` purity, partial effects on failure,
 exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
-``dump_source``, surfaced warnings, and ``check_only`` (type-only) runs.
+``dump_source``, and surfaced warnings.
 """
 
 from __future__ import annotations
@@ -30,7 +30,6 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     BoolType,
-    BottomType,
     DecimalType,
     EnumType,
     ExceptionType,
@@ -1864,7 +1863,7 @@ class TestBuiltinIdentityAcrossEntries:
         assert first.ok, first.diagnostics
         assert second.ok, second.diagnostics
 
-        result = s.eval_entry('B::exec("echo hi")', check_only=True)
+        result = s.eval_entry('B::exec("echo hi")')
 
         assert result.ok, result.diagnostics
         assert isinstance(result.value_type, RecordType)
@@ -2381,8 +2380,8 @@ class TestAgentArgumentBuiltinIdentity:
 
     def test_scoped_agent_value_rejected_as_ask_agent_argument(self) -> None:
         """``ask`` shares ``_validate_ask_like_arguments`` with ``ask-request``,
-        so it rejects the same scoped ``Agent`` value the same way; checked
-        only (an actual agent dispatch is out of scope here)."""
+        so it rejects the same scoped ``Agent`` value the same way, before
+        any agent dispatch is attempted."""
         s = open_session()
         declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
         assert declare.ok, declare.diagnostics
@@ -2390,7 +2389,7 @@ class TestAgentArgumentBuiltinIdentity:
         g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
         assert g.ok, g.diagnostics
 
-        result = s.eval_entry('ask("hi", agent = g)', check_only=True)
+        result = s.eval_entry('ask("hi", agent = g)')
         assert not result.ok
         assert any("A::Agent" in d.message for d in result.diagnostics)
 
@@ -2427,7 +2426,7 @@ class TestAgentArgumentBuiltinIdentity:
         not_agent = s.eval_entry("enum NotAgent\n  | X")
         assert not_agent.ok, not_agent.diagnostics
 
-        result = s.eval_entry('ask-request("hi", agent = NotAgent::X)', check_only=True)
+        result = s.eval_entry('ask-request("hi", agent = NotAgent::X)')
         assert not result.ok
         assert any("NotAgent" in d.message for d in result.diagnostics)
 
@@ -2557,7 +2556,7 @@ class TestHostRaisedExceptionContractIdentity:
 
 class TestParsePolicyBuiltinIdentity:
     """``on_parse_error``'s static ``ParsePolicy`` constructor recognition
-    (``BuiltinCallChecker._extract_parse_policy_str`` /
+    (``BuiltinCallChecker._validate_parse_policy_constructor`` /
     ``_accepts_as_parse_policy_constructor``)."""
 
     def test_scoped_parse_policy_constructor_accepted_by_exec(self) -> None:
@@ -2636,8 +2635,7 @@ class TestParsePolicyBuiltinIdentity:
         s = open_session()
         result = s.eval_entry(
             "let Abort = ParsePolicy::Retry(n = 3)\n"
-            'let n: int = exec::[int]("echo 7", on-parse-error = Abort)\nn',
-            check_only=True,
+            'let n: int = exec::[int]("echo 7", on-parse-error = Abort)\nn'
         )
         assert not result.ok
         assert any("on-parse-error" in d.message for d in result.diagnostics)
@@ -2649,8 +2647,7 @@ class TestParsePolicyBuiltinIdentity:
         s = open_session()
         result = s.eval_entry(
             "let Abort = ParsePolicy::Retry(n = 3)\n"
-            'let n: int = exec::[int]("echo 7", on-parse-error = Abort())\nn',
-            check_only=True,
+            'let n: int = exec::[int]("echo 7", on-parse-error = Abort())\nn'
         )
         assert not result.ok
         assert any("on-parse-error" in d.message for d in result.diagnostics)
@@ -2661,8 +2658,7 @@ class TestParsePolicyBuiltinIdentity:
         ``ParsePolicy::Retry`` call spelled the same way."""
         s = open_session()
         result = s.eval_entry(
-            'let Retry = 5\nlet n: int = exec::[int]("echo 7", on-parse-error = Retry(n = 3))\nn',
-            check_only=True,
+            'let Retry = 5\nlet n: int = exec::[int]("echo 7", on-parse-error = Retry(n = 3))\nn'
         )
         assert not result.ok
         assert any("on-parse-error" in d.message for d in result.diagnostics)
@@ -2679,9 +2675,7 @@ class TestParsePolicyBuiltinIdentity:
         not_policy = s.eval_entry("enum NotPolicy\n  | Abort")
         assert not_policy.ok, not_policy.diagnostics
 
-        result = s.eval_entry(
-            'let n: int = exec::[int]("ls", on-parse-error = NotPolicy::Abort())', check_only=True
-        )
+        result = s.eval_entry('let n: int = exec::[int]("ls", on-parse-error = NotPolicy::Abort())')
         assert not result.ok
         assert any("ParsePolicy" in d.message for d in result.diagnostics)
 
@@ -3093,7 +3087,7 @@ enum Agent
         )
         assert not failed.ok
 
-        call = session.eval_entry('exec("echo hi")', check_only=True)
+        call = session.eval_entry('exec("echo hi")')
 
         assert call.ok, call.diagnostics
         assert isinstance(call.value_type, RecordType)
@@ -3416,7 +3410,7 @@ class TestRecursiveTypesAcrossEntries:
         s = open_session()
         assert s.eval_entry("enum Choice\n  | Yes\n  | No").ok
 
-        current = s.eval_entry("[Choice::Yes, Choice::No]", check_only=True)
+        current = s.eval_entry("[Choice::Yes, Choice::No]")
 
         assert not current.ok
         assert any("annotate" in diagnostic.message.lower() for diagnostic in current.diagnostics)
@@ -3424,7 +3418,7 @@ class TestRecursiveTypesAcrossEntries:
         assert s.eval_entry("let yes = Choice::Yes\nlet no = Choice::No").ok
         assert s.eval_entry("enum Choice\n  | Maybe").ok
 
-        mismatch = s.eval_entry("[yes, no]", check_only=True)
+        mismatch = s.eval_entry("[yes, no]")
 
         assert not mismatch.ok
         assert all(
@@ -4671,77 +4665,6 @@ class TestWarnings:
         assert r.ok
         assert any("TAB" in w.message or "tab" in w.message for w in r.warnings)
 
-    def test_match_error_on_check_only_path(self) -> None:
-        s = open_session()
-        s.eval_entry("enum R\n  | Pass\n  | Fail")
-        s.eval_entry("let r: R = Pass")
-        r = s.eval_entry("case r of\n  | Pass() => ()", check_only=True)
-        assert not r.ok
-        assert len(r.diagnostics) == 1
-        assert r.warnings == []
-
-
-# ---------------------------------------------------------------------------
-# check_only
-# ---------------------------------------------------------------------------
-
-
-class TestCheckOnly:
-    def test_check_only_types_expression_without_eval(self) -> None:
-        agent = CountingAgent("nope")
-        s = open_session(agent_dispatcher=agent)
-        r = s.eval_entry('ask """ask"""', check_only=True)
-        assert r.ok
-        assert r.kind == "expression"
-        assert isinstance(r.value_type, TextType)
-        assert r.value is None
-        assert agent.calls == 0
-
-    def test_check_only_does_not_promote(self) -> None:
-        s = open_session()
-        r = s.eval_entry("let x = 1", check_only=True)
-        assert r.ok
-        assert r.kind == "binding"
-        assert r.name == "x"
-        assert isinstance(r.value_type, IntType)
-        assert r.value is None
-        # Not promoted: a later reference fails.
-        assert s.bindings() == []
-        assert not s.eval_entry("x").ok
-
-    def test_check_only_trailing_binder_reports_bottom_initializer(self) -> None:
-        s = open_session()
-        r = s.eval_entry('let x: int = raise Abort(message = "x")', check_only=True)
-
-        assert r.ok
-        assert r.kind == "binding"
-        assert r.name == "x"
-        assert isinstance(r.value_type, BottomType)
-        assert r.value is None
-
-    def test_check_only_does_not_advance_node_ids(self) -> None:
-        s = open_session()
-        s.eval_entry("check_only", check_only=True)  # statement-ish; ignored result
-        # A real binding after a check_only still works.
-        r = s.eval_entry("let a = 1")
-        assert r.ok
-
-    def test_check_only_declaration_kind(self) -> None:
-        s = open_session()
-        r = s.eval_entry("record P\n  x: int", check_only=True)
-        assert r.ok
-        assert r.kind == "declaration"
-        assert r.name == "P"
-        # Not promoted.
-        assert not s.eval_entry("let p = P(x = 1)").ok
-
-    def test_check_only_type_error_still_fails(self) -> None:
-        s = open_session()
-        s.eval_entry('let t = "x"')
-        r = s.eval_entry("t + 1", check_only=True)
-        assert not r.ok
-        assert r.diagnostics
-
 
 # ---------------------------------------------------------------------------
 # Registration / agents listing
@@ -4913,14 +4836,6 @@ class TestTraceLogging:
         run_ids = {rec["run_id"] for rec in records}
         # Per-entry TraceStore → a fresh run_id per entry, all in one file.
         assert len(run_ids) == 2
-
-    def test_check_only_writes_no_trace(self, tmp_path: Path) -> None:
-        trace = tmp_path / "repl.log"
-        s = open_session(agent_dispatcher=CountingAgent("ok"), trace_path=trace)
-        r = s.eval_entry('let g = ask """hi"""', check_only=True)
-        assert r.ok
-        assert r.trace_path is None
-        assert not trace.exists()
 
     def test_cancelled_entry_records_run_end(self, tmp_path: Path) -> None:
         import json
@@ -6474,22 +6389,12 @@ class TestImports:
         assert not r.ok
         assert r.diagnostics
 
-    def test_check_only_graph_mode(self, tmp_path: Path) -> None:
-        # check_only=True in program context returns a check result without evaluating.
-        lib = tmp_path / "mylib.agl"
-        lib.write_text("def add(a: int, b: int) -> int = a + b\n")
-        s = repl_session_with_root(tmp_path)
-        r = s.eval_entry("import mylib::*\nadd(1, 2)", check_only=True)
-        assert r.ok, r.diagnostics
-        # check_only does not promote session state.
-        assert s.bindings() == []
-
-    def test_check_only_graph_mode_rejects_invalid_unreachable_import(self, tmp_path: Path) -> None:
+    def test_graph_mode_rejects_invalid_unreachable_import(self, tmp_path: Path) -> None:
         lib = tmp_path / "invalid.agl"
         lib.write_text("def dormant(x: bool) -> int =\n  case x of\n    | true => 1\n")
         s = repl_session_with_root(tmp_path)
 
-        r = s.eval_entry("import invalid\n()", check_only=True)
+        r = s.eval_entry("import invalid\n()")
 
         assert not r.ok
         assert r.error is None
@@ -7682,16 +7587,16 @@ class TestBareTypeEntry:
         assert r.value is None
         assert render_entry_result(r, echo=True) == "<type:\nrecord A::Box[T]\n  value: T\n>"
 
-    def test_bare_generic_type_entry_in_check_only_mode(self) -> None:
+    def test_bare_generic_type_entry_echoes_definition(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = open_session()
         s.eval_entry("enum Option[T]\n  | none\n  | some(value: T)")
-        r = s.eval_entry("Option", check_only=True)
+        r = s.eval_entry("Option")
         assert r.ok
         assert r.kind == "type"
         assert (
-            render_entry_result(r, echo=True, check_only=True)
+            render_entry_result(r, echo=True)
             == "<type:\nenum Option[T]\n  | none\n  | some(value: T)\n>"
         )
 
@@ -7949,15 +7854,6 @@ class TestBareTypeEntry:
         r = s.eval_entry("int")
         assert r.ok
         assert render_entry_result(r, echo=False) is None
-
-    def test_type_entry_in_check_only_mode(self) -> None:
-        from agm.agl.repl.render import render_entry_result
-
-        s = open_session()
-        r = s.eval_entry("int", check_only=True)
-        assert r.ok
-        assert r.kind == "type"
-        assert render_entry_result(r, echo=True, check_only=True) == "<type: int>"
 
 
 # ---------------------------------------------------------------------------

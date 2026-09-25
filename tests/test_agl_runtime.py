@@ -843,7 +843,7 @@ class TestNoDefaultAgent:
         assert contract.json_schema == {"type": "integer"}
 
 
-class TestDryRunCheckOnly:
+class TestCheckOnly:
     """``check_only=True`` runs the static pipeline but executes nothing."""
 
     def test_check_only_printing_program_produces_no_output(
@@ -871,18 +871,8 @@ class TestDryRunCheckOnly:
         rt = PipelineDriver(agent_dispatcher=agent, get_sandbox_context=None)
         result = run_inline_command(rt, 'let x = ask "hi"\nx', check_only=True)
         assert result.ok is True
-        # The agent must never be invoked during a dry run.
+        # The agent must never be invoked under check_only.
         assert calls == []
-
-    def test_check_only_unit_ask_reports_no_codec(self) -> None:
-        rt = PipelineDriver(agent_dispatcher=lambda request: "ignored", get_sandbox_context=None)
-        result = run_inline_command(rt, 'let result: unit = ask "hi"\nresult', check_only=True)
-        assert result.ok is True
-        assert len(result.call_sites) == 1
-        site = result.call_sites[0]
-        assert site.target_type == "unit"
-        assert site.codec_name == "none"
-        assert site.has_schema is False
 
     def test_check_only_program_argument_validation_still_runs(self) -> None:
         rt = PipelineDriver(get_sandbox_context=None)
@@ -3235,17 +3225,23 @@ class TestRunPreparedProgram:
         assert result.ok is False
         assert "missing/module" in result.diagnostics[0].message
 
-    def test_graph_check_only_returns_call_inventory(self, tmp_path: pathlib.Path) -> None:
-        """check_only=True produces call_sites from the entry module."""
+    def test_graph_check_only_never_invokes_agent(self, tmp_path: pathlib.Path) -> None:
+        """check_only=True accepts an ``ask`` call in the entry module without invoking it."""
+
+        calls: list[object] = []
+
+        def agent(request: object) -> str:
+            calls.append(request)
+            return "should not be called"
 
         roots = agl_roots()
         prepared = prepare_inline_command(
             'let r = ask("hello")\nprint r', entry_path=None, roots=roots
         )
-        rt = PipelineDriver(agent_dispatcher=lambda req: "x", get_sandbox_context=None)
+        rt = PipelineDriver(agent_dispatcher=agent, get_sandbox_context=None)
         result = rt.run_prepared(prepared, check_only=True)
         assert result.ok is True
-        assert len(result.call_sites) >= 1
+        assert calls == []
 
     def test_multimodule_wildcard_import(self, tmp_path: pathlib.Path) -> None:
         """Wildcard import brings multiple modules into scope."""

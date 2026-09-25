@@ -35,9 +35,6 @@ from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.contract import materialize_ir_contracts
 from agm.agl.runtime.types import (
-    CallSiteInfo as CallSiteInfo,
-)
-from agm.agl.runtime.types import (
     HostEnvironment,
     ParamBindingInfo,
     ProgramDeclInfo,
@@ -324,10 +321,6 @@ class RunResult:
         (``A::x``). An explicitly selected synthetic inline ``main`` also
         contributes its direct bindings; an explicit file entry does not.
         Empty for failed runs.
-    ``call_sites``
-        Static call-site inventory populated when ``check_only=True``
-        (internal check-only execution).  One entry per agent-call/exec site in
-        source order.  Empty for ordinary runs.
     ``trace_path``
         Path of the JSONL trace file written during this run, or ``None``
         when tracing was disabled (``--no-trace``) or execution was check-only.
@@ -339,7 +332,6 @@ class RunResult:
     error: RunError | None
     warnings: list[Diagnostic] = field(default_factory=list)
     bindings: dict[str, Value] = field(default_factory=dict)
-    call_sites: tuple[CallSiteInfo, ...] = field(default_factory=tuple)
     trace_path: Path | None = field(default=None)
 
 
@@ -517,9 +509,9 @@ class PipelineDriver:
         """Run a freshly lowered ``executable`` through the shared pipeline tail.
 
         Materializes host codec contracts, honours the ``check_only`` stop
-        (call-site inventory, no execution), then builds and runs the
-        :class:`IrInterpreter`, mapping an uncaught ``AglRaise`` to a failing
-        ``RunResult``. All return paths carry *warnings*.
+        (no execution), then builds and runs the :class:`IrInterpreter`,
+        mapping an uncaught ``AglRaise`` to a failing ``RunResult``. All
+        return paths carry *warnings*.
 
         ``options.arguments`` is ``options.program_symbol``'s own bound
         value-parameter argument list, in declaration order. When the caller
@@ -616,14 +608,12 @@ class PipelineDriver:
         # side effects, no extern companion imports, and no trace is written.
         # ----------------------------------------------------------------
         if check_only:
-            inventory = _build_call_inventory_from_ir(executable.dry_run_inventory)
             return RunResult(
                 ok=True,
                 diagnostics=[],
                 error=None,
                 warnings=list(warnings),
                 bindings={},
-                call_sites=tuple(inventory),
                 trace_path=None,
             )
 
@@ -1547,8 +1537,9 @@ class PipelineDriver:
             # Extern (Python FFI) companions: import and resolve every declared
             # extern up front, gated by capability — fail-fast, before evaluation,
             # and after every static pass (so a static error elsewhere is reported
-            # instead, with no companion import side effect). Dry-run stops before
-            # this host-side import step to preserve its no-side-effects contract.
+            # instead, with no companion import side effect). The check-only stop
+            # happens before this host-side import step to preserve its
+            # no-side-effects contract.
             run_failure = self._wire_externs_or_fail(
                 checked=checked,
                 capabilities=capabilities,
@@ -1633,7 +1624,7 @@ def _select_program_inventory(
     graph: "ModuleGraph",
     module_id: "ModuleId",
 ) -> "ExecutableProgram":
-    """Restrict a selected program to its graph-reachable runtime modules and source inventory.
+    """Restrict a selected program to its runtime-reachable modules and source-reachable params.
 
     ``program_configs`` is left whole: it is already keyed by each program
     def's own linked symbol, so ``_evaluate_program_config`` selects the
@@ -1650,11 +1641,6 @@ def _select_program_inventory(
         modules={
             mid: module for mid, module in executable.modules.items() if mid in runtime_reachable
         },
-        dry_run_inventory=tuple(
-            call_site
-            for call_site in executable.dry_run_inventory
-            if call_site.module in source_reachable
-        ),
         param_bindings={
             key: symbol
             for key, symbol in executable.param_bindings.items()
@@ -2311,22 +2297,3 @@ def exception_value_to_run_error(
     return RunError(
         type_name=nominals[exc.nominal].display_name, fields=fields, line=line, col=col, notes=notes
     )
-
-
-def _build_call_inventory_from_ir(entries: "tuple[object, ...]") -> list[CallSiteInfo]:
-    """Convert lowering-owned check-only metadata to the public runtime shape."""
-    from agm.agl.ir.program import DryRunEntry
-
-    return [
-        CallSiteInfo(
-            callee=entry.callee,
-            target_type=entry.target_type_label,
-            codec_name=entry.codec_name,
-            has_schema=entry.has_schema,
-            parse_policy=entry.parse_policy,
-            line=entry.line,
-            col=entry.col,
-        )
-        for entry in entries
-        if isinstance(entry, DryRunEntry)
-    ]

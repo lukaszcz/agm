@@ -201,7 +201,6 @@ from agm.agl.typecheck.constructors import ConstructorChecker, type_name_not_a_v
 from agm.agl.typecheck.env import (
     AglTypeError,
     ArgumentBindings,
-    CallSiteRecord,
     CheckedModule,
     FunctionSignature,
     OutputContractSpec,
@@ -347,7 +346,7 @@ class _SelectedBuiltinMethod:
 
 @dataclass(frozen=True, slots=True)
 class PendingExternCallObligation:
-    """Syntax-derived extern inventory metadata awaiting region finalization.
+    """Syntax-derived extern call metadata awaiting region finalization.
 
     ``contract_targets`` are the callee's target-parameter instantiations.
     """
@@ -387,7 +386,6 @@ class _InferenceRegion:
     function_call_param_types: dict[int, tuple[Type, ...]]
     finalization_obligations: list[_PendingFinalization]
     added_side_table_keys: dict[str, set[int]] = field(default_factory=dict)
-    call_sites_start: int = 0
     warnings_start: int = 0
     return_target_lengths: tuple[int, ...] = ()
     builtin_defaults: list[tuple[InferenceVarType, Type, SourceSpan, str]] = field(
@@ -889,7 +887,6 @@ class _Checker:
         self._inference_region: _InferenceRegion | None = None
         self._contract_specs: dict[int, OutputContractSpec] = {}
         self._target_contract_specs: dict[int, tuple[OutputContractSpec, ...]] = {}
-        self._call_sites: list[CallSiteRecord] = []
         self._warnings: list[Diagnostic] = []
         # Type variables currently in scope (non-empty inside a generic def body).
         self._current_type_vars: frozenset[str] = frozenset()
@@ -941,7 +938,8 @@ class _Checker:
         self._method_selections: dict[int, MethodDef] = {}
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
-        # value is actually called, dry-run inventory records that call site.
+        # value is actually called, its target contracts are validated the
+        # same way a direct extern call's are.
         self._extern_expr_targets: dict[int, _ExternTargets] = {}
         self._extern_binding_targets: dict[int, _ExternTargets] = {}
         self._builtins = BuiltinCallChecker(self)
@@ -1992,7 +1990,6 @@ class _Checker:
             {},
             [],
             {},
-            len(self._call_sites),
             len(self._warnings),
             tuple(len(targets) for targets in self._return_extern_targets_stack),
         )
@@ -2067,16 +2064,12 @@ class _Checker:
                 # Extern-target result types are already validated for leaked
                 # inference variables by ``_finalize_extern_provenance`` above (via
                 # ``_zonk_extern_targets``), so they are deliberately not re-walked
-                # here — this pass covers only node/param types and call sites.
+                # here — this pass covers only node/param types.
                 if self_validation_enabled():
                     region.engine.assert_no_inference_vars(
                         (
                             *final_node_types.values(),
                             *(t for ts in final_param_types.values() for t in ts),
-                            *(
-                                call_site.target_type
-                                for call_site in self._call_sites[region.call_sites_start :]
-                            ),
                         )
                     )
             else:
@@ -2108,7 +2101,7 @@ class _Checker:
         target_type: Type,
         contract_targets: tuple[Type, ...] = (),
     ) -> None:
-        """Queue typed extern inventory metadata in source registration order."""
+        """Queue one extern call's target-contract metadata in source registration order."""
         assert self._inference_region is not None
         self._inference_region.finalization_obligations.append(
             PendingExternCallObligation(
@@ -2907,7 +2900,6 @@ class _Checker:
         ):
             for node_id in region.added_side_table_keys.get(table_name, set()):
                 table.pop(node_id, None)
-        del self._call_sites[region.call_sites_start :]
         del self._warnings[region.warnings_start :]
         for targets, start in zip(
             self._return_extern_targets_stack, region.return_target_lengths, strict=True
@@ -3012,10 +3004,6 @@ class _Checker:
     def _append_warning(self, warning: Diagnostic) -> None:
         """Append a warning produced while finalizing the active region."""
         self._warnings.append(warning)
-
-    def _append_call_site(self, call_site: CallSiteRecord) -> None:
-        """Append a call site produced while finalizing the active region."""
-        self._call_sites.append(call_site)
 
     def _record_method_selection(self, node_id: int, method: MethodDef) -> None:
         """Publish the checker-selected method for one dot access."""
@@ -3444,22 +3432,11 @@ class _Checker:
             )
 
     def _finalize_extern_call_obligation(self, obligation: PendingExternCallObligation) -> None:
-        """Publish one concrete extern inventory record and its target contracts at region close."""
+        """Validate one concrete extern call's target contracts at region close."""
         self._finalize_target_contracts(
             obligation.node_id, obligation.callee, obligation.contract_targets, obligation.span
         )
         self._reject_unresolved_extern_types((obligation.target_type,), obligation.span)
-        self._append_call_site(
-            CallSiteRecord(
-                node_id=obligation.node_id,
-                callee=obligation.callee,
-                target_type=obligation.target_type,
-                codec_name="extern",
-                parse_policy="default",
-                line=obligation.span.start_line,
-                col=obligation.span.start_col,
-            )
-        )
 
     def _zonk_extern_targets(
         self, targets: _ExternTargets, engine: InferenceEngine
@@ -6775,7 +6752,6 @@ class _Checker:
             node_types=self._node_types,
             contract_specs=self._contract_specs,
             target_contract_specs=self._target_contract_specs,
-            call_sites=tuple(self._call_sites),
             warnings=tuple(self._warnings),
             type_env=self._env,
             function_signatures=self._env.all_function_signatures(),

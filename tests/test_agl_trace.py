@@ -923,21 +923,21 @@ class TestExecNoLog:
 
 
 # ---------------------------------------------------------------------------
-# 8. Dry-run must NOT write a trace
+# 8. check_only must NOT write a trace
 # ---------------------------------------------------------------------------
 
 
-class TestDryRunNoTrace:
-    def test_dry_run_does_not_write_trace(self, tmp_path: Path) -> None:
+class TestCheckOnlyNoTrace:
+    def test_check_only_does_not_write_trace(self, tmp_path: Path) -> None:
         """check_only=True must produce no trace output."""
         trace_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, "let x = 1\nx", trace_file=trace_path, check_only=True)
         assert result.ok
-        # No trace file created for dry-run.
+        # No trace file created under check_only.
         assert not trace_path.exists()
 
-    def test_dry_run_trace_path_is_none(self, tmp_path: Path) -> None:
+    def test_check_only_trace_path_is_none(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver(get_sandbox_context=None)
         result = _run_inline(rt, "let x = 1\nx", trace_file=trace_path, check_only=True)

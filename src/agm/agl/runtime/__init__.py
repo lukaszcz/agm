@@ -2,7 +2,6 @@
 
 Public API
 ----------
-- :class:`CallSiteInfo` — static summary of one agent-call/exec site.
 - :class:`AgentRequest` — request object passed to host agent callables.
 - :class:`AgentResponse` — response from a host agent callable.
 - :class:`OutputCodec` — protocol for output codecs.
@@ -20,13 +19,11 @@ from agm.agl.runtime.codec import JsonCodec, OutputCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.runtime.types import CallSiteInfo
 
 __all__ = [
     "AgentFn",
     "AgentRequest",
     "AgentResponse",
-    "CallSiteInfo",
     "JsonCodec",
     "OutputCodec",
     "OutputContract",

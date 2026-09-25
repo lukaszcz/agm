@@ -488,11 +488,3 @@ A run ends in one of three ways:
    holding a value with a reference cycle ([Types](types.md#cycles)), or a
    value of a kind with no JSON representation, is reported as a placeholder
    marker, so reporting a failure never fails.
-
-## Static call inventory
-
-Because contracts are materialized before execution, a host can present a
-complete static inventory of a program's agent-call and `exec` sites — for
-each: callee, target type, codec, schema presence, parse policy, and source
-location — without running anything. This supports dry-run inspection of a
-workflow's external interactions.

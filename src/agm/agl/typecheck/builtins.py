@@ -53,7 +53,6 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.arguments import bind_call_args
 from agm.agl.typecheck.env import (
     AglTypeError,
-    CallSiteRecord,
     OutputContractSpec,
     ParamSpec,
     TypeEnvironment,
@@ -92,7 +91,6 @@ class PendingBuiltinObligation:
     kind: BuiltinObligationKind
     format_name: str | None
     strict_json: bool | None
-    parse_policy: str
     # (name, span) of every parse-shaping named arg present, in canonical order.
     # Retained so region-close diagnostics point at the offending argument rather
     # than the whole call span.
@@ -138,8 +136,6 @@ class BuiltinCheckCtx(Protocol):
     def _record_contract_spec(self, node_id: int, spec: OutputContractSpec) -> None: ...
 
     def _record_explicit_builtin_target(self, node_id: int, target_type: Type) -> None: ...
-
-    def _append_call_site(self, call_site: CallSiteRecord) -> None: ...
 
     def _append_warning(self, warning: Diagnostic) -> None: ...
 
@@ -292,7 +288,6 @@ class BuiltinCallChecker:
                     ),
                     format_name=None,
                     strict_json=None,
-                    parse_policy="default",
                     parse_option_spans=(),
                 )
             )
@@ -309,7 +304,6 @@ class BuiltinCallChecker:
                     kind=BuiltinObligationKind.EXEC,
                     format_name=None,
                     strict_json=None,
-                    parse_policy="default",
                     parse_option_spans=(),
                 )
             )
@@ -755,7 +749,7 @@ class BuiltinCallChecker:
             receiver_type=receiver_type,
             agent_request_type=agent_request_type,
         )
-        format_name, strict_json, parse_policy = self._parse_options(named)
+        format_name, strict_json = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
                 node_id=node.node_id,
@@ -765,7 +759,6 @@ class BuiltinCallChecker:
                 kind=kind,
                 format_name=format_name,
                 strict_json=strict_json,
-                parse_policy=parse_policy,
                 parse_option_spans=self._collect_parse_option_spans(named),
             )
         )
@@ -869,13 +862,8 @@ class BuiltinCallChecker:
                     "are ignored and have no output contract.",
                     span=offending_span,
                 )
-            codec_name = "none"
-            parse_policy = "default"
-        else:
-            spec = self._record_parsed_contract(obligation, use="an agent output type")
-            codec_name = spec.codec_name
-            parse_policy = obligation.parse_policy
-        self._append_call_site(obligation, codec_name, parse_policy)
+            return
+        self._record_parsed_contract(obligation, use="an agent output type")
 
     def _warn_noop_parse_error_on_text(self, obligation: PendingBuiltinObligation) -> None:
         """Warn when ``on-parse-error`` is set on a text target, where it can never fire."""
@@ -892,22 +880,6 @@ class BuiltinCallChecker:
                 end_line=obligation.span.end_line,
                 end_column=obligation.span.end_col,
                 severity="warning",
-            )
-        )
-
-    def _append_call_site(
-        self, obligation: PendingBuiltinObligation, codec_name: str, parse_policy: str
-    ) -> None:
-        assert not contains_inference_var(obligation.target_type)
-        self._ctx._append_call_site(
-            CallSiteRecord(
-                node_id=obligation.node_id,
-                callee=obligation.kind.value,
-                target_type=obligation.target_type,
-                codec_name=codec_name,
-                parse_policy=parse_policy,
-                line=obligation.span.start_line,
-                col=obligation.span.start_col,
             )
         )
 
@@ -938,7 +910,7 @@ class BuiltinCallChecker:
         cmd_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable_from(cmd_type, TextType(), node.args[0].span, node.args[0])
         self._check_exec_spawn_options(named)
-        format_name, strict_json, parse_policy = self._parse_options(named)
+        format_name, strict_json = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
                 node_id=node.node_id,
@@ -948,7 +920,6 @@ class BuiltinCallChecker:
                 kind=BuiltinObligationKind.EXEC,
                 format_name=format_name,
                 strict_json=strict_json,
-                parse_policy=parse_policy,
                 parse_option_spans=self._collect_parse_option_spans(named),
             )
         )
@@ -1195,7 +1166,7 @@ class BuiltinCallChecker:
 
     # --- shared parse-option handling (ask / exec) ---
 
-    def _parse_options(self, named: dict[str, NamedArg]) -> tuple[str | None, bool | None, str]:
+    def _parse_options(self, named: dict[str, NamedArg]) -> tuple[str | None, bool | None]:
         """Validate static option syntax without selecting a target-dependent codec."""
         format_name: str | None = None
         if "format" in named:
@@ -1213,11 +1184,10 @@ class BuiltinCallChecker:
                     "'strict-json' must be a static bool literal.", span=strict_na.span
                 )
             strict_json = strict_na.value.value
-        parse_policy = "default"
         if "on-parse-error" in named:
             parse_na = named["on-parse-error"]
-            parse_policy = self._extract_parse_policy_str(parse_na.value, parse_na.span)
-        return format_name, strict_json, parse_policy
+            self._validate_parse_policy_constructor(parse_na.value, parse_na.span)
+        return format_name, strict_json
 
     @staticmethod
     def _collect_parse_option_spans(
@@ -1278,8 +1248,7 @@ class BuiltinCallChecker:
             # recognized at its own path rather than the root canonical one.
             is_structured = target_type == self.contract_type("ExecResult")
             if not is_structured:
-                spec = self._record_parsed_contract(obligation, use="an exec output type")
-                self._append_call_site(obligation, spec.codec_name, obligation.parse_policy)
+                self._record_parsed_contract(obligation, use="an exec output type")
                 return
             # ``exec`` will mint an ``ExecResult`` record directly: apply the
             # same host-coherence check as ``ask``/``ask-request`` (currently
@@ -1297,12 +1266,11 @@ class BuiltinCallChecker:
             spec = OutputContractSpec(target_type, "text", None, structured_exec=True)
 
         self._ctx._record_contract_spec(obligation.node_id, spec)
-        self._append_call_site(obligation, spec.codec_name, "default")
 
     # --- on_parse_error policy extraction ---
 
-    def _extract_parse_policy_str(self, arg: Expr, span: SourceSpan) -> str:
-        """Extract a static ``ParsePolicy`` constructor as an inventory string.
+    def _validate_parse_policy_constructor(self, arg: Expr, span: SourceSpan) -> None:
+        """Validate that *arg* is a static ``ParsePolicy`` constructor.
 
         *arg* must actually RESOLVE (through the same constructor-identity
         mechanism ordinary expression-checking uses,
@@ -1323,14 +1291,15 @@ class BuiltinCallChecker:
                     "(Abort or Retry(n: <int>)).",
                     span=span,
                 )
-            return self._extract_parse_policy_variant(callee.name, arg.named_args, span)
+            self._validate_parse_policy_variant(callee.name, arg.named_args, span)
+            return
         # Bare VarRef: ``Abort`` or ``ParsePolicy::Abort`` (no parens) is also accepted.
         if (
             isinstance(arg, VarRef)
             and arg.name == "Abort"
             and self._accepts_as_parse_policy_constructor(arg)
         ):
-            return "abort"
+            return
         raise AglTypeError(
             "'on-parse-error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
             span=span,
@@ -1377,10 +1346,10 @@ class BuiltinCallChecker:
         ctor_ref = self._ctx._constructor_ref_for(ref.node_id)
         return ctor_ref is not None and ctor_ref.matches(parse_policy_type, ref.name)
 
-    def _extract_parse_policy_variant(
+    def _validate_parse_policy_variant(
         self, name: str, named_args: tuple[NamedArg, ...], span: SourceSpan
-    ) -> str:
-        """Extract Abort or Retry variant from ParsePolicy call."""
+    ) -> None:
+        """Validate the Abort or Retry variant of a ``ParsePolicy`` call."""
         if name == "Abort":
             if named_args:
                 raise AglTypeError(
@@ -1388,7 +1357,7 @@ class BuiltinCallChecker:
                     "(Abort or Retry(n: <int>)).",
                     span=span,
                 )
-            return "abort"
+            return
         if name == "Retry":
             n_arg = next((a for a in named_args if a.name == "n"), None)
             if n_arg is None or not isinstance(n_arg.value, IntLit):
@@ -1397,7 +1366,7 @@ class BuiltinCallChecker:
                     "(Abort or Retry(n: <int>)).",
                     span=span,
                 )
-            return f"retry[{n_arg.value.value}]"
+            return
         raise AglTypeError(
             "'on-parse-error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
             span=span,

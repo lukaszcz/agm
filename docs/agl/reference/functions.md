@@ -202,9 +202,10 @@ For `def`/`extern def`/`builtin def`/lambda, the **default zone is standard**: a
 parameter list with no zone attribute has all parameters in the standard zone
 (positional or named). A method receiver `self` is the exception: it is always
 positional-only. A `program def`'s parameter list defaults to the **named-only**
-zone instead: a plain `name: text` parameter is addressed only by `--name`
-([Host environment](host-environment.md#program-arguments)); an `@arg-pos`
-parameter opens a positional slot.
+AgL zone instead. Its CLI projects an unzoned required parameter to a
+positional-only slot and a defaulted parameter to `--name`
+([Host environment](host-environment.md#program-arguments)). Explicit zone
+attributes govern both AgL calls and CLI slots.
 
 <!-- agl-check: fragment -->
 ```agl

@@ -109,10 +109,10 @@ a direct `agm repl` entry is a static error.
 ### Program arguments
 
 The selected `program def`'s value parameters project onto the CLI through AgL's
-positional/standard/named-only zones. A parameter list without zone attributes is entirely
-named-only, so `x: T` becomes `--x`; an `@arg-pos` parameter fills an `ARG` slot in declaration
-order and is never addressable by name; an `@arg-std` parameter accepts a positional token or
-`--x`.
+positional/standard/named-only zones. Without zone attributes, a required `x: T` fills a
+positional CLI slot and a defaulted `x: T = VALUE` becomes `--x`. An `@arg-pos` parameter is
+never addressable by name; `@arg-std` accepts a positional token or `--x`, and `@arg-named`
+requires `--x`. AgL calls retain their declared parameter zones.
 
 A name-addressable parameter's type selects its flag form; every value-taking flag also accepts
 `--x=VALUE`:
@@ -139,9 +139,10 @@ value syntax of the declared type (`'{"$case": "Some", "value": "hi"}'` or `'Som
 
 An omitted argument resolves as `CLI > @opt-env variable > qualified program table (see
 [Configuration](#configuration)) > signature default > required error`; errors are reported
-before any agent runs. A positional-only parameter has no name to key a config table by, so it
-skips that step. A config key cannot spell `None` for `Option[T]` or `Optional[T]`: a present
-key normally supplies `Some`, and an absent one falls through to the declared default. For
+as CLI usage before any agent runs. An explicit `@arg-pos` parameter skips the config table;
+an unzoned required parameter retains its config key. A config key cannot spell `None` for
+`Option[T]` or `Optional[T]`: a present key normally supplies `Some`, and an absent one falls
+through to the declared default. For
 `Optional[T]`, the exact string `"default"` supplies `Default`; pass `--no-x` for `None`.
 
 Also reported before any agent runs: a parameter supplied twice (two flags, or positional plus

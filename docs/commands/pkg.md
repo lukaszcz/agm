@@ -166,7 +166,8 @@ rev = "devel review"
 
 `agm devel`, `agm devel --help`, and `agm help devel` show the group's guidance and a generated
 subcommand listing. Leaf commands generate usage and option help from their program signatures and
-closure module parameters, so authored help is optional.
+closure module parameters, so authored help is optional. Invalid or missing program arguments show
+that command's usage.
 
 A program may register its own command instead, via
 [`@command`](../agl/reference/attributes.md#command) on the `program def`

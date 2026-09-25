@@ -67,9 +67,9 @@ def test_complete_registered_commands_reads_active_index(
         "var level: Level = Info\n"
         "\n"
         "program def main(\n"
-        '  @opt-name("program-level") mode: Level,\n'
-        '  @opt-name("optional-level") maybe: Option[Level],\n'
-        '  @opt-name("default-level") fallback: Optional[Level]\n'
+        '  @arg-named @opt-name("program-level") mode: Level,\n'
+        '  @arg-named @opt-name("optional-level") maybe: Option[Level],\n'
+        '  @arg-named @opt-name("default-level") fallback: Optional[Level]\n'
         ") -> unit = ()\n",
         encoding="utf-8",
     )
@@ -325,7 +325,7 @@ def test_installed_exec_reference_offers_program_value_argument_completion(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     module.write_text(
-        "program def main(region: text, verbose: bool = false) -> unit = print region\n",
+        "program def main(@arg-named region: text, verbose: bool = false) -> unit = print region\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -368,8 +368,8 @@ def test_installed_exec_reference_uses_its_selected_program_for_completion(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     module.write_text(
-        "program def first(level: text) -> unit = ()\n"
-        "program def second(region: text) -> unit = ()\n",
+        "program def first(@arg-named level: text) -> unit = ()\n"
+        "program def second(@arg-named region: text) -> unit = ()\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -480,7 +480,7 @@ def test_registered_command_param_completion_offers_program_value_argument_flags
     (package_root / MODULE_TREE_DIRNAME).mkdir()
     (package_root / MODULE_TREE_DIRNAME / "lint.agl").write_text(
         "@param let module-verbose: bool = false\n"
-        "program def main(tag: text, verbose: bool = false) -> unit = ()\n",
+        "program def main(@arg-named tag: text, verbose: bool = false) -> unit = ()\n",
         encoding="utf-8",
     )
     (package_root / "package.toml").write_text(
@@ -1958,8 +1958,8 @@ class TestExecCommandShellComplete:
         sc = ZshComplete(self._get_cli(), {}, "agm", "_AGM_COMPLETE")
         return [c.value for c in sc.get_completions(args, incomplete)]
 
-    def test_file_program_value_arguments_offer_their_flags(self, tmp_path: Path) -> None:
-        """``agm exec FILE --<TAB>`` also offers the program's own value-parameter flags."""
+    def test_file_program_omits_implicit_positional_flag(self, tmp_path: Path) -> None:
+        """``agm exec FILE --<TAB>`` offers flags only for named CLI parameters."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             "program def main(name: text, verbose: bool = false) -> unit = print name\n"
@@ -1967,14 +1967,15 @@ class TestExecCommandShellComplete:
 
         result = self._complete(["exec", str(agl_file)], "--")
 
-        assert "--name" in result
+        assert "--name" not in result
         assert "--verbose" in result
         assert "--no-verbose" in result
 
     def test_command_flag_source_offers_program_value_argument_flags(self) -> None:
         """``agm exec -c 'program def ...' --<TAB>`` discovers value-argument flags too."""
         result = self._complete(
-            ["exec", "-c", "program def main(count: int) -> unit = print count"], "--"
+            ["exec", "-c", "program def main(@arg-named count: int) -> unit = print count"],
+            "--",
         )
         assert "--count" in result
 
@@ -2031,7 +2032,7 @@ class TestProgramArgumentCompletionItems:
 
     def test_text_and_bool_value_parameters_offer_their_flags(self) -> None:
         values = self._values(
-            "program def main(name: text, verbose: bool = false) -> unit = print name\n",
+            "program def main(@arg-named name: text, verbose: bool = false) -> unit = print name\n",
             None,
             "--",
         )
@@ -2042,7 +2043,9 @@ class TestProgramArgumentCompletionItems:
 
     def test_incomplete_prefix_filters_results(self) -> None:
         values = self._values(
-            "program def main(apple: text, banana: text) -> unit = ()\n", None, "--a"
+            "program def main(@arg-named apple: text, @arg-named banana: text) -> unit = ()\n",
+            None,
+            "--a",
         )
 
         assert values == ["--apple"]
@@ -2057,7 +2060,8 @@ class TestProgramArgumentCompletionItems:
 
     def test_requested_name_selects_among_several_programs(self) -> None:
         values = self._values(
-            "program def one(alpha: text) -> unit = ()\nprogram def two(beta: text) -> unit = ()\n",
+            "program def one(@arg-named alpha: text) -> unit = ()\n"
+            "program def two(@arg-named beta: text) -> unit = ()\n",
             "two",
             "--",
         )
@@ -2090,7 +2094,9 @@ class TestProgramArgumentCompletionItems:
         assert "-s" not in values
 
     def test_reservation_collision_degrades_to_empty(self) -> None:
-        assert self._values("program def main(help: text) -> unit = ()\n", None, "--") == []
+        assert (
+            self._values("program def main(@arg-named help: text) -> unit = ()\n", None, "--") == []
+        )
 
 
 class TestExecCommandShellCompleteEdgeCases:
@@ -2119,7 +2125,7 @@ class TestExecCommandShellCompleteEdgeCases:
         from typer._click.shell_completion import _resolve_context
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("program def main(msg: text) -> unit = ()\n")
+        agl_file.write_text("program def main(@arg-named msg: text) -> unit = ()\n")
 
         cli = self._get_cli()
         exec_cmd = self._get_exec_cmd()
@@ -2136,7 +2142,7 @@ class TestExecCommandShellCompleteEdgeCases:
         from typer._click.shell_completion import _resolve_context
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("program def main(msg: text) -> unit = ()\n")
+        agl_file.write_text("program def main(@arg-named msg: text) -> unit = ()\n")
         cli = self._get_cli()
         ctx = _resolve_context(cli, {}, "agm", ["exec", str(agl_file)])
         ctx.params["module_paths"] = module_paths

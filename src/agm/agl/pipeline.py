@@ -144,6 +144,9 @@ class ArgumentPreflight:
         The bound, decoded arguments, ready for ``run_prepared``'s own
         ``arguments`` — one entry per declared parameter, in declaration
         order — or ``()`` when the static pipeline or binding failed.
+    ``argument_diagnostics``
+        Program argument failures, separate from static and module parameter
+        diagnostics so CLI hosts can present them as usage errors.
     ``param_seeds``
         The decoded module-parameter values, ready for ``run_prepared``.
         Already folds in any ``@config`` entry targeting a ``@param``
@@ -163,6 +166,7 @@ class ArgumentPreflight:
     result: "RunResult"
     executable: "ExecutableProgram | None"
     arguments: "tuple[Value | UseDefault, ...]" = ()
+    argument_diagnostics: "tuple[Diagnostic, ...]" = ()
     param_seeds: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
     program_config: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
 
@@ -1369,6 +1373,7 @@ class PipelineDriver:
                     warnings=result.warnings,
                 ),
                 executable=executable,
+                argument_diagnostics=argument_diagnostics,
             )
         return ArgumentPreflight(
             result=result,

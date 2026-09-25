@@ -25,7 +25,7 @@ def _point_program(tmp_path: Path) -> Path:
         "  y: int\n\n"
         "program def main(\n"
         '  @opt-env("POINT")\n'
-        "  point: Point,\n"
+        "  @arg-named point: Point,\n"
         "  tag: Option[Point] = Option::None,\n"
         "  meta: json = {},\n"
         ") -> unit =\n"

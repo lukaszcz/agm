@@ -259,7 +259,8 @@ custom command.
 A file workflow declares one or more `program def` entries: `agm exec` invokes the sole one after
 initialization, or selects one of several with `-p`/`--program PATH` (for example,
 `review::main`). An entry's own value parameters project onto `agm exec`'s CLI as positional
-arguments and `--name` options (a `program def`'s parameters are named-only by default). A static
+arguments and `--name` options (required parameters are positional by default; defaulted
+parameters use options). A static
 `@param let` or `@param var` in its import closure is a module parameter, configurable through
 the same host channels. Inline `-c` source is wrapped in a synthetic entry when needed. Programs
 can span multiple `.agl` files via

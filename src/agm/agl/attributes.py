@@ -247,14 +247,16 @@ _RESERVED_JSON_NAME = "$case"
 class ProgramOptionSpec:
     """How one host-facing parameter presents itself to a host.
 
-    ``name`` is the external spelling every host surface uses for the
-    parameter — its flag, the derived negative, the config key, completion —
-    and defaults to the declared name. ``short`` is a one-letter alternative
-    spelling, ``env`` an environment variable read when no value is supplied,
+    ``name`` is the external spelling used for a flag (when present), its
+    config key, and completion; it defaults to the declared name. ``short``
+    is a one-letter alternative spelling, ``env`` an environment variable
+    read when no value is supplied,
     ``metavar`` the placeholder standing for the value in usage text,
     ``hidden`` whether the parameter's own name entry is kept out of help and
-    completion, and ``doc`` its help prose. Every field but ``name`` is absent
-    unless an attribute supplies it.
+    completion, and ``doc`` its help prose. Presentation fields are absent
+    unless an attribute supplies them. ``cli_positional`` marks an unzoned,
+    required program parameter, whose CLI default is positional-only even
+    though its AgL call zone remains named-only.
     """
 
     name: str
@@ -263,6 +265,7 @@ class ProgramOptionSpec:
     metavar: str | None = None
     hidden: bool = False
     doc: str | None = None
+    cli_positional: bool = False
 
 
 @dataclass(frozen=True, slots=True)

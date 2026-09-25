@@ -594,6 +594,11 @@ def run(
             param_values=param_tiers.upper,
             param_values_lower=param_tiers.lower,
         )
+        if argument_preflight.argument_diagnostics:
+            raise RegisteredProgramUsageError(
+                "; ".join(diag.message for diag in argument_preflight.argument_diagnostics),
+                selected_program,
+            )
         if not argument_preflight.result.ok:
             for diag in argument_preflight.result.diagnostics:
                 print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)

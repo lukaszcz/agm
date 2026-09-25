@@ -440,7 +440,7 @@ class TestExecArgsParsing:
     ) -> None:
         """A selected program, not the outer command, owns an option's value token."""
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+        write_file_program(agl_file, "program def main(@arg-named msg: text) -> unit = ()\n")
 
         result = invoke(runner, ["exec", "--no-stdlib", str(agl_file), "--msg", "--no-stdlib"])
 
@@ -457,7 +457,7 @@ class TestExecArgsParsing:
         from agm.agl.typecheck.program import CheckedProgram
 
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+        write_file_program(agl_file, "program def main(@arg-named msg: text) -> unit = ()\n")
         real_typecheck = pipeline._run_typecheck_program
         typechecks = 0
 
@@ -488,7 +488,7 @@ class TestExecArgsParsing:
         value: str,
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+        write_file_program(agl_file, "program def main(@arg-named msg: text) -> unit = ()\n")
 
         result = invoke(runner, ["exec", str(agl_file), "--msg", value])
 
@@ -526,7 +526,7 @@ class TestExecArgsParsing:
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
         agl_file = tmp_path / "test.agl"
-        write_file_program(agl_file, "program def main(msg: text) -> unit = ()\n")
+        write_file_program(agl_file, "program def main(@arg-named msg: text) -> unit = ()\n")
 
         result = invoke(runner, ["exec", str(agl_file), "--msg", "--", "--no-stdlib"])
 
@@ -700,7 +700,7 @@ class TestExecCommandArgParsing:
         result = invoke(runner, ["exec", "--help", str(agl_file)])
 
         assert result.exit_code == 0
-        assert "--msg" in result.output
+        assert "<msg>" in result.output
         assert recorded_runs == []
 
     def test_exec_bare_short_help_flag_prints_help(
@@ -720,7 +720,7 @@ class TestExecCommandArgParsing:
         result = invoke(runner, ["exec", str(agl_file), "-h"])
 
         assert result.exit_code == 0
-        assert "--msg" in result.output
+        assert "<msg>" in result.output
         assert recorded_runs == []
 
     def test_exec_short_help_flag_consumed_as_an_argument_value_is_not_help(
@@ -817,7 +817,8 @@ class TestExecCommandInline:
 
     def test_inline_code_with_program_arguments(self, capsys: pytest.CaptureFixture[str]) -> None:
         args = self._command_args(
-            "program def main(msg: text) -> unit = print msg", argument_tokens=["--msg", "hi"]
+            "program def main(@arg-named msg: text) -> unit = print msg",
+            argument_tokens=["--msg", "hi"],
         )
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == "hi\n"
@@ -1023,7 +1024,7 @@ class TestExecDynamicHelp:
 
         assert print_exec_help(tokens=["--help"], file="tools/main::second", code=None)
 
-        assert "--region" in capsys.readouterr().out
+        assert "<region>" in capsys.readouterr().out
 
 
 class TestExecCommandBehavior:
@@ -1690,7 +1691,7 @@ class TestExecCommandExitCodes:
         write_file_program(
             agl_file,
             'import std/config\nlet worker = AgentCommand("worker")\n'
-            "program def main(value: int) -> unit =\n"
+            "program def main(@arg-named value: int) -> unit =\n"
             "  std/config::trace := false\n"
             "  print value\n",
         )
@@ -2144,7 +2145,8 @@ class TestJsonProgramArgumentsCLI:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "record Point\n  x: int\n  y: int\nprogram def main(pt: Point) -> unit = print pt.x\n",
+            "record Point\n  x: int\n  y: int\n"
+            "program def main(@arg-named pt: Point) -> unit = print pt.x\n",
         )
 
         assert (
@@ -2160,7 +2162,9 @@ class TestJsonProgramArgumentsCLI:
     ) -> None:
         """A decimal-typed argument provided as a JSON string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(price: decimal) -> unit = print price\n")
+        write_file_program(
+            agl_file, "program def main(@arg-named price: decimal) -> unit = print price\n"
+        )
 
         assert (
             exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--price", "1.5"]))
@@ -2173,7 +2177,9 @@ class TestJsonProgramArgumentsCLI:
     ) -> None:
         """An array-typed argument provided as a JSON array string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(tags: array[text]) -> unit = print tags\n")
+        write_file_program(
+            agl_file, "program def main(@arg-named tags: array[text]) -> unit = print tags\n"
+        )
 
         assert (
             exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=['--tags=["a", "b"]']))
@@ -2187,7 +2193,8 @@ class TestJsonProgramArgumentsCLI:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "record Point\n  x: int\n  y: int\nprogram def main(pt: Point) -> unit = print pt.x\n",
+            "record Point\n  x: int\n  y: int\n"
+            "program def main(@arg-named pt: Point) -> unit = print pt.x\n",
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -3291,9 +3298,8 @@ class TestEntryModuleConfig:
 class TestProgramValueArguments:
     """CLI/config binding for a selected program's own value parameters.
 
-    A ``program def``'s value parameters default to the named-only zone, so
-    a plain ``name: text`` parameter is addressed only by ``--name``; an
-    explicit ``@arg-pos`` attribute opens a positional slot.
+    A required unzoned ``program def`` parameter is positional-only on the CLI.
+    An explicit ``@arg-named`` attribute exposes a required ``--name`` flag.
     """
 
     def test_positional_and_named_option_arguments(
@@ -3388,7 +3394,7 @@ class TestProgramValueArguments:
         agl_file = tmp_path / "prog.agl"
         write_file_program(
             agl_file,
-            "program def main(worker: Agent) -> unit = print worker\n",
+            "program def main(@arg-named worker: Agent) -> unit = print worker\n",
         )
 
         assert (
@@ -3444,9 +3450,7 @@ class TestProgramValueArguments:
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
         agl_file = tmp_path / "prog.agl"
-        write_file_program(
-            agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
-        )
+        write_file_program(agl_file, "program def main(tag: text) -> unit = print tag\n")
 
         assert exec_command.run(_exec_args_no_trace(agl_file)) is None
         assert capsys.readouterr().out == "configured\n"
@@ -3579,7 +3583,9 @@ class TestProgramValueArguments:
         ``--agent`` to the program.
         """
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(agent: text) -> unit = print agent\n")
+        write_file_program(
+            agl_file, "program def main(@arg-named agent: text) -> unit = print agent\n"
+        )
 
         result = invoke(CliRunner(), ["exec", "--no-trace", str(agl_file), "--agent", "codex"])
 
@@ -3605,7 +3611,9 @@ class TestProgramValueArguments:
     ) -> None:
         """A flag naming no declared program argument surfaces the program's own usage error."""
         agl_file = tmp_path / "prog.agl"
-        write_file_program(agl_file, "program def main(name: text) -> unit = print name\n")
+        write_file_program(
+            agl_file, "program def main(@arg-named name: text) -> unit = print name\n"
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(
@@ -4351,7 +4359,8 @@ class TestExecFileSelectorTokens:
         a runnable program."""
         write_file_program(tmp_path / "inp.agl", 'program def main() -> unit = print "other"\n')
         write_file_program(
-            tmp_path / "--weird.agl", "program def main(input: text) -> unit = print input\n"
+            tmp_path / "--weird.agl",
+            "program def main(@arg-named input: text) -> unit = print input\n",
         )
         monkeypatch.chdir(tmp_path)
 

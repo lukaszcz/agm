@@ -478,13 +478,22 @@ class _Recognizer:
             highest = zone
             self.param_zones[entry.node_id] = zone
             if target is AttributeTarget.PROGRAM_PARAMETER:
-                self._program_option(entry, recognized, zone)
+                self._program_option(
+                    entry,
+                    recognized,
+                    zone,
+                    cli_positional=(
+                        declared is None and owner_zone is None and entry.default is None
+                    ),
+                )
 
     # ------------------------------------------------------------------
     # Fact builder: program option presentation
     # ------------------------------------------------------------------
 
-    def _program_option(self, entry: Param, recognized: _Recognized, zone: ParamZone) -> None:
+    def _program_option(
+        self, entry: Param, recognized: _Recognized, zone: ParamZone, *, cli_positional: bool
+    ) -> None:
         """Record how one ``program def`` parameter presents itself to a host.
 
         Every program parameter gets an entry: without any ``@opt-*``
@@ -504,7 +513,9 @@ class _Recognizer:
                         f"{entry.name!r}, which a host addresses by position and never by name.",
                         span=attribute.span,
                     )
-        self.program_options[entry.node_id] = _option_spec(entry.name, recognized)
+        self.program_options[entry.node_id] = _option_spec(
+            entry.name, recognized, cli_positional=cli_positional
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +570,9 @@ def _validate_attribute_prefix(
     return _Recognized(nodes=nodes, texts=texts)
 
 
-def _option_spec(name: str, recognized: _Recognized) -> ProgramOptionSpec:
+def _option_spec(
+    name: str, recognized: _Recognized, *, cli_positional: bool = False
+) -> ProgramOptionSpec:
     """Build one host-facing parameter's presentation spec."""
     external = recognized.text_of(OPTION_NAME_ATTRIBUTE)
     return ProgramOptionSpec(
@@ -569,6 +582,7 @@ def _option_spec(name: str, recognized: _Recognized) -> ProgramOptionSpec:
         metavar=recognized.text_of(OPTION_METAVAR_ATTRIBUTE),
         hidden=OPTION_HIDDEN_ATTRIBUTE in recognized.nodes,
         doc=recognized.text_of(DOC_ATTRIBUTE),
+        cli_positional=cli_positional,
     )
 
 

@@ -8082,14 +8082,15 @@ class TestPackageInstall:
             "import std/config\n"
             'let noun = "subject"\n'
             '@doc("Publish a %{noun}")\n'
-            "program def main(subject: text) -> unit =\n"
+            "program def main(@arg-named subject: text) -> unit =\n"
             "  print subject\n"
             "  print std/config::strict-json\n"
             '  let _ = exec("true")\n',
             encoding="utf-8",
         )
         (package / "src" / "inspect.agl").write_text(
-            "program def main(subject: text) -> unit = print subject\n", encoding="utf-8"
+            "program def main(@arg-named subject: text) -> unit = print subject\n",
+            encoding="utf-8",
         )
         home.mkdir()
         (home / "config.toml").write_text(
@@ -9692,7 +9693,7 @@ class TestExecCommand:
         work.mkdir()
         program = work / "greet.agl"
         program.write_text(
-            'program def main(name: text) -> unit =\n  print "hi "\n  print name\n',
+            'program def main(@arg-named name: text) -> unit =\n  print "hi "\n  print name\n',
             encoding="utf-8",
         )
 
@@ -9902,7 +9903,7 @@ class TestExecCommand:
             "enum Fix\n"
             "  | Complete(output: text)\n"
             "\n"
-            "program def main(task: text) -> unit =\n"
+            "program def main(@arg-named task: text) -> unit =\n"
             '  let impl = AgentCommand("impl-runner \\%{SESSION_ID}")\n'
             '  let reviewer = AgentCommand("review-runner \\%{SESSION_ID}")\n'
             "  var artifact: text = impl.ask(\n"

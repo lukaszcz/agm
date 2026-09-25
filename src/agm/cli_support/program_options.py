@@ -1173,6 +1173,7 @@ class _ProgramClickCommand(click.Command):
         params: list[click.Parameter],
         description: str | None,
         usage_slots: tuple[str, ...],
+        positional_help: tuple[tuple[str, str], ...] = (),
         parameter_sections: tuple[tuple[str, tuple[click.Parameter, ...]], ...] = (),
         module_help_sections: tuple[
             tuple[str, tuple[tuple["ParamSurfaceEntry", ProjectedOption], ...]], ...
@@ -1191,6 +1192,7 @@ class _ProgramClickCommand(click.Command):
             context_settings=settings,
         )
         self.usage_slots = usage_slots
+        self.positional_help = positional_help
         self.parameter_sections = parameter_sections
         self.module_help_sections = module_help_sections
         self.ambiguous_options = {} if ambiguous_options is None else ambiguous_options
@@ -1286,6 +1288,9 @@ class _ProgramClickCommand(click.Command):
         ]
         with formatter.section("Options"):
             formatter.write_dl(own_options)
+        if self.positional_help:
+            with formatter.section("Arguments"):
+                formatter.write_dl(list(self.positional_help))
         for title, entries in self.module_help_sections:
             records = [
                 _module_help_record(entry, projected)
@@ -1309,6 +1314,7 @@ def _build_click_command(
     params: Sequence[click.Parameter],
     description: str | None,
     usage_slots: tuple[str, ...],
+    positional_help: tuple[tuple[str, str], ...] = (),
     extra_options: Sequence[click.Parameter] = (),
     parameter_sections: tuple[tuple[str, tuple[click.Parameter, ...]], ...] = (),
     module_help_sections: tuple[
@@ -1331,6 +1337,7 @@ def _build_click_command(
         params=[*params, *extra_options, _help_option()],
         description=description,
         usage_slots=usage_slots,
+        positional_help=positional_help,
         parameter_sections=parameter_sections,
         module_help_sections=module_help_sections,
         ambiguous_options=ambiguous_options,
@@ -1363,12 +1370,12 @@ def _usage_slots(positional: "tuple[ProgramParamInfo, ...]") -> tuple[str, ...]:
 class ProgramCommand:
     """One program's whole CLI surface: a ``click.Command`` and what it stands for.
 
-    ``command`` parses tokens; ``positional`` lists positional-capable
-    parameters (``POSITIONAL_ONLY``, ``STANDARD``) in declaration order; and
-    ``options`` pairs every name-addressable parameter (``STANDARD``,
-    ``NAMED_ONLY``) with its projected CLI option, in the same order the
-    command's own options were built from. A ``STANDARD`` parameter appears
-    in both, since it accepts either a positional token or ``--name``.
+    ``command`` parses tokens; ``positional`` lists CLI positional-capable
+    parameters in declaration order; and
+    ``options`` pairs every AgL name-addressable parameter (``STANDARD``,
+    ``NAMED_ONLY``) with its projected value form. An unzoned required
+    parameter also appears in ``positional``; its Click option exists only
+    for an environment fallback, when declared.
 
     ``options`` also carries the external↔declared correspondence: each entry
     holds the parameter's declared name and the external name its flags were
@@ -1393,12 +1400,9 @@ class ProgramCommand:
         Click owns the token conventions: short options and their bundles,
         attached and ``--x=V`` values, the ``--`` end-of-options marker, and
         an option's value being whatever token follows it. Every non-option
-        token lands in the catch-all positional slot unconditionally — the
-        shared zone binder (``runtime.arguments.bind_program_arguments``)
-        pairs positional values with parameters left to right and diagnoses
-        an excess positional argument itself, with a message that depends on
-        whether the program declares any named-only parameters, so capping
-        here would pre-empt that one diagnosis.
+        token lands in the catch-all positional slot unconditionally. An
+        implicit positional CLI value is mapped to its AgL named parameter;
+        the shared zone binder diagnoses any excess positional arguments.
 
         A parameter whose value came from neither a token nor its
         ``@opt-env`` variable is left out of the result entirely, so a host
@@ -1425,8 +1429,8 @@ class ProgramCommand:
         except click.UsageError as exc:
             raise ValueError(exc.format_message()) from exc
         values = cast(dict[str, object], ctx.params)
-        positional = cast(tuple[str, ...], values[_POSITIONAL_DEST])
-        positional_names = self.positionally_filled_names(len(positional))
+        cli_positional = cast(tuple[str, ...], values[_POSITIONAL_DEST])
+        positional_names = self.positionally_filled_names(len(cli_positional))
 
         named: dict[str, object] = {}
         for index, (param, projected) in enumerate(self.options):
@@ -1447,6 +1451,12 @@ class ProgramCommand:
             )
             if value is not _NOT_SUPPLIED:
                 named[param.name] = value
+        positional: list[str] = []
+        for index, value in enumerate(cli_positional):
+            if index < len(self.positional) and self.positional[index].cli.cli_positional:
+                named[self.positional[index].name] = value
+            else:
+                positional.append(value)
         module_params: dict[StaticBindingKey, object] = {}
         for offset, (entry, projected) in enumerate(self.module_options, start=len(self.options)):
             # Every module spelling is resolved ahead of the parse, so a
@@ -1466,7 +1476,8 @@ class ProgramCommand:
             if value is not _NOT_SUPPLIED:
                 module_params[entry.param.key] = value
         return ParsedTail(
-            arguments=ProgramArguments(positional=positional, named=named), params=module_params
+            arguments=ProgramArguments(positional=tuple(positional), named=named),
+            params=module_params,
         )
 
     def value_token_indexes(
@@ -1530,6 +1541,8 @@ class ProgramCommand:
         long_options: dict[str, bool] = {}
         short_options: dict[str, bool] = {}
         for param, projected in self.options:
+            if param.cli.cli_positional:
+                continue
             long_options[projected.flag] = projected.takes_value
             if projected.negative_flag is not None:
                 long_options[projected.negative_flag] = False
@@ -1610,6 +1623,7 @@ class ProgramCommand:
             params=self.params,
             description=self.command.help if description is None else description,
             usage_slots=self.command.usage_slots,
+            positional_help=self.command.positional_help,
             extra_options=extra_options,
             parameter_sections=self.command.parameter_sections,
             module_help_sections=self.command.module_help_sections,
@@ -1629,7 +1643,7 @@ class ProgramCommand:
         """
         spellings: list[str] = []
         for param, projected in self.options:
-            if param.cli.hidden:
+            if param.cli.hidden or param.cli.cli_positional:
                 continue
             spellings.extend(param_spellings(param, projected))
         for entry, _projected in self.module_options:
@@ -1641,13 +1655,12 @@ class ProgramCommand:
     def positionally_filled_names(self, count: int) -> frozenset[str]:
         """Return the declared names *count* positional tokens fill.
 
-        The shared binder (``runtime.arguments.bind_program_arguments``) pairs
-        positional values with positional-capable parameters left to right,
-        without skipping, so the first *count* of them are the ones a token
-        supplied. Held here so every surface deciding whether a positional
+        The CLI pairs positional values with its slots left to right, so the
+        first *count* of them are the ones a token supplied. Held here so
+        every surface deciding whether a positional
         token outranks a lower-precedence layer — an ``@opt-env`` fallback in
         :meth:`parse`, a configured value in ``commands.exec_program`` — reads
-        the binder's pairing rule from one place.
+        the CLI pairing rule from one place.
         """
         return frozenset(param.name for param in self.positional[:count])
 
@@ -1735,7 +1748,7 @@ def build_program_command(
     parameter's own spelling — so one parameter's ``--no-<name>`` negation
     can never silently steal a different parameter literally named
     ``no-<name>``, and two parameters can never claim the same short.
-    Positional-only parameters never enter the flag namespace and so are
+    Positional-only CLI parameters never enter the flag namespace and so are
     never checked. Returns a :class:`ReservedFlagError` or
     :class:`DuplicateOptionFlagError` for the caller to render on the first
     collision found, in declaration order.
@@ -1745,13 +1758,16 @@ def build_program_command(
     help a reader of this program sees.
     """
     signature = program.parameters
-    positional = tuple(p for p in signature if p.kind in _POSITIONAL_ZONES)
+    positional = tuple(p for p in signature if p.kind in _POSITIONAL_ZONES or p.cli.cli_positional)
     options = tuple(
         (p, project_option(p.cli.name, p.type))
         for p in signature
         if p.kind in _NAME_ADDRESSABLE_ZONES
     )
-    collision = _check_reservation(options, reserved_flags)
+    collision = _check_reservation(
+        tuple((param, projected) for param, projected in options if not param.cli.cli_positional),
+        reserved_flags,
+    )
     if collision is not None:
         return collision
     from agm.cli_support.param_surface import build_param_surface
@@ -1764,7 +1780,19 @@ def build_program_command(
     )
     click_params: list[click.Parameter] = [_positional_argument()]
     for index, (param, projected) in enumerate(options):
-        click_params.extend(_click_params(index, param, projected))
+        if param.cli.cli_positional:
+            if param.cli.env is not None:
+                click_params.append(
+                    _positive_option(
+                        index,
+                        param,
+                        projected,
+                        (f"--_program-env-{index}",),
+                        environment_only=True,
+                    )
+                )
+        else:
+            click_params.extend(_click_params(index, param, projected))
     sections: dict[str, list[click.Parameter]] = {}
     help_sections: dict[str, list[tuple[ParamSurfaceEntry, ProjectedOption]]] = {}
     for offset, (entry, projected) in enumerate(module_options, start=len(options)):
@@ -1780,6 +1808,11 @@ def build_program_command(
         params=click_params,
         description=program.doc,
         usage_slots=_usage_slots(positional),
+        positional_help=tuple(
+            (param.cli.metavar or param.cli.name, param.cli.doc)
+            for param in positional
+            if param.cli.doc is not None
+        ),
         parameter_sections=tuple(
             (section, tuple(section_params)) for section, section_params in sections.items()
         ),

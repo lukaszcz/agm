@@ -110,7 +110,7 @@ def _signature_long_claims(program: ProgramDeclInfo) -> _Claims:
 def _signature_option_claims(program: ProgramDeclInfo) -> _Claims:
     claims: dict[str, list[_Claimant]] = {}
     for parameter in program.parameters:
-        if parameter.kind is ParamZone.POSITIONAL_ONLY:
+        if parameter.kind is ParamZone.POSITIONAL_ONLY or parameter.cli.cli_positional:
             continue
         projected = project_option(parameter.cli.name, parameter.type)
         for flag in param_spellings(parameter, projected):

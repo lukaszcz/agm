@@ -78,10 +78,12 @@ other positive values become `Some`. A parameter given a
 one-letter spelling by `@opt-short` also accepts `-n value` and `-nvalue`, and
 groups with other one-letter flags — `-abc` — where only the last letter of a
 group may take a value. A `program def`'s
-parameter list defaults to the **named-only** zone, so a plain `name: text`
-parameter is addressed only by `--name`; an `@arg-pos` parameter opens a
-positional slot. A bare `--` ends option parsing, so a later
-`--`-prefixed token is collected positionally instead of being read as a flag.
+parameter list defaults to the **named-only** AgL zone. On the CLI, an unzoned
+required parameter such as `name: text` is positional-only; an unzoned defaulted
+parameter such as `name: text = "value"` remains named-only. An explicit
+`@arg-pos`, `@arg-std`, or `@arg-named` sets both the AgL and CLI zones.
+A bare `--` ends option parsing, so a later `--`-prefixed token is collected
+positionally instead of being read as a flag.
 Supplying the same parameter twice (by any combination of position and name)
 is a usage error, as is a flag naming no declared parameter.
 
@@ -94,13 +96,12 @@ entry call, as described above. Each parameter's effective value resolves as:
 CLI token (--name / positional)  >  @opt-env variable  >  qualified config table  >  declared default
 ```
 
-A **positional-only** parameter has no `--flag`, so a config-table entry
-naming it can never reach the argument binder — it falls back to its declared
-default and is reported with a distinct positional-only warning, not the
-generic "not a declared program argument" one. A required parameter (no
-default) for which no external value is provided is a **host invocation
-error** — reported like a static failure, not catchable in-language, before
-any statement executes.
+An explicitly **positional-only** parameter has no qualified config key; a
+config-table entry naming it is ignored with a positional-only warning. An
+unzoned required parameter retains its qualified config key even though its
+CLI slot is positional-only. A required parameter (no default) for which no
+external value is provided is a **host invocation error** — shown as CLI
+usage, not catchable in-language, before any statement executes.
 
 `text` parameters take their external value verbatim. A parameter of any
 other type reads its external text as one **strict JSON value or AgL value

@@ -4,8 +4,9 @@
 parameter belongs to. It is the same fact from the source text down to the
 CLI: scope resolves it from the ``@arg-*`` attributes an entry or its
 declaration carries and publishes it on the resolved program, shared argument
-binding enforces it for calls and patterns, and the host projects a
-``program def``'s parameters onto CLI arguments through it.
+binding enforces it for calls and patterns, and the host projects explicit
+zones onto CLI arguments through it. Unzoned required program parameters
+receive a positional CLI projection while retaining their AgL zone.
 
 It lives in its own dependency-free top-level leaf, alongside ``modules.ids``
 and below ``attributes``, so both ends of that span can name it: ``scope``

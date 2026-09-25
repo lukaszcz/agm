@@ -69,8 +69,8 @@ class ProgramParamInfo:
     """Static summary of one ``program def`` value parameter, as the host sees it.
 
     ``name``         — the declared parameter name.
-    ``kind``         — the parameter's zone (positional-only, standard,
-                        named-only), governing how a host projects it.
+    ``kind``         — the parameter's AgL zone (positional-only, standard,
+                        named-only); ``cli`` may override its CLI projection.
     ``type``         — the parameter's checked type.
     ``has_default``  — ``True`` when the parameter has a default expression.
     ``span``         — the parameter's declaration span, the anchor for a

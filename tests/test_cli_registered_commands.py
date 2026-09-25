@@ -270,7 +270,7 @@ def test_registered_command_preserves_a_host_looking_program_option_value(
     write_installed_package(
         home,
         "tools",
-        source="program def main(message: text) -> unit = ()\n",
+        source="program def main(@arg-named message: text) -> unit = ()\n",
         commands={"tools lint": "tools/lint::main"},
         module_path="lint",
     )
@@ -455,7 +455,7 @@ def test_ambiguous_registered_value_reuses_static_pipeline_artifacts(
     write_installed_package(
         home,
         "tools",
-        source="program def main(message: text) -> unit = ()\n",
+        source="program def main(@arg-named message: text) -> unit = ()\n",
         commands={"tools run": "tools/main::main"},
     )
     monkeypatch.setenv("HOME", str(home))
@@ -497,7 +497,7 @@ def test_registered_value_named_like_short_help_reuses_static_pipeline_artifacts
     write_installed_package(
         home,
         "tools",
-        source="program def main(tag: text) -> unit = print tag\n",
+        source="program def main(@arg-named tag: text) -> unit = print tag\n",
         commands={"tools run": "tools/main::main"},
     )
     monkeypatch.setenv("HOME", str(home))
@@ -545,7 +545,11 @@ def test_registered_command_help_does_not_dispatch_program(
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
     (program,) = discover_program_declarations_from_source(
-        "program def main(level: text, verbose: bool, message: text) -> unit = ()"
+        "program def main(\n"
+        "  @arg-named level: text,\n"
+        "  @arg-named verbose: bool,\n"
+        "  @arg-named message: text\n"
+        ") -> unit = ()"
     )
     monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
     calls: list[object] = []
@@ -587,7 +591,7 @@ def test_registered_command_help_recognizes_program_value_argument_flags(
     monkeypatch.setattr(dispatch, "current_config_context", lambda: context)
     monkeypatch.setattr(dispatch, "load_command_index", lambda **_: index)
     (program,) = discover_program_declarations_from_source(
-        "program def main(tag: text) -> unit = print tag"
+        "program def main(@arg-named tag: text) -> unit = print tag"
     )
     monkeypatch.setattr(exec_program, "registered_program_declaration", lambda *_a, **_k: program)
     calls: list[object] = []
@@ -635,7 +639,7 @@ def test_registered_command_help_degrades_when_program_discovery_fails() -> None
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
-        "program def main(level: text) -> unit = ()"
+        "program def main(@arg-named level: text) -> unit = ()"
     )
 
     text = registered_help(
@@ -653,7 +657,7 @@ def test_registered_command_help_omits_program_arguments_on_a_reservation_collis
     from agm.cli_support.program_discovery import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
-        "program def main(help: text) -> unit = print help"
+        "program def main(@arg-named help: text) -> unit = print help"
     )
 
     text = registered_help(
@@ -975,7 +979,7 @@ def test_registered_help_reuses_discovery_for_a_host_shaped_program_value(
     write_installed_package(
         home,
         "tools",
-        source="program def main(tag: text) -> unit = ()\n",
+        source="program def main(@arg-named tag: text) -> unit = ()\n",
         commands={"tools run": "tools/main::main"},
     )
     monkeypatch.setenv("HOME", str(home))
@@ -1260,7 +1264,7 @@ def test_exec_runs_an_installed_reference(monkeypatch: pytest.MonkeyPatch, tmp_p
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     module.write_text(
-        "program def main(level: text) -> unit = print level\n",
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -1287,7 +1291,7 @@ def test_installed_package_dispatches_its_own_source_declared_command(
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
         '@command("tools review")\n'
         '@doc("Review changes")\n'
-        "program def main(level: text) -> unit = print level\n",
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
     home = tmp_path / "home"
@@ -1313,7 +1317,7 @@ def test_editable_package_dispatches_its_own_source_declared_command(
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
         '@command("tools review")\n'
         '@doc("Review changes")\n'
-        "program def main(level: text) -> unit = print level\n",
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
     home = tmp_path / "home"
@@ -1339,7 +1343,8 @@ def test_editing_an_editable_packages_source_command_path_takes_effect_without_r
     )
     module = source / MODULE_TREE_DIRNAME / "review.agl"
     module.write_text(
-        '@command("tools review")\nprogram def main(level: text) -> unit = print level\n',
+        '@command("tools review")\n'
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
     home = tmp_path / "home"
@@ -1351,7 +1356,8 @@ def test_editing_an_editable_packages_source_command_path_takes_effect_without_r
     assert before.exit_code == 0
 
     module.write_text(
-        '@command("tools inspect")\nprogram def main(level: text) -> unit = print level\n',
+        '@command("tools inspect")\n'
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
 
@@ -1374,7 +1380,7 @@ def test_a_non_editable_install_does_not_pick_up_a_source_edit_made_after_instal
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
-        "program def main(level: text) -> unit = print level\n", encoding="utf-8"
+        "program def main(@arg-named level: text) -> unit = print level\n", encoding="utf-8"
     )
     home = tmp_path / "home"
 
@@ -1382,7 +1388,8 @@ def test_a_non_editable_install_does_not_pick_up_a_source_edit_made_after_instal
     monkeypatch.setenv("HOME", str(home))
 
     (source / MODULE_TREE_DIRNAME / "review.agl").write_text(
-        '@command("tools review")\nprogram def main(level: text) -> unit = print level\n',
+        '@command("tools review")\n'
+        "program def main(@arg-named level: text) -> unit = print level\n",
         encoding="utf-8",
     )
 
@@ -1545,7 +1552,7 @@ def test_exec_help_for_an_installed_reference_includes_program_arguments(
         '[package]\nname = "tools"\nversion = "1.0.0"\n', encoding="utf-8"
     )
     module.write_text(
-        "program def main(level: text) -> unit = ()\n",
+        "program def main(@arg-named level: text) -> unit = ()\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -1597,7 +1604,7 @@ def test_program_argument_parse_failure_raises_a_typed_usage_error(tmp_path: Pat
     from agm.commands.exec_program import RegisteredProgramUsageError
 
     source = tmp_path / "main.agl"
-    source.write_text("program def main(level: text) -> unit = ()\n", encoding="utf-8")
+    source.write_text("program def main(@arg-named level: text) -> unit = ()\n", encoding="utf-8")
 
     with pytest.raises(RegisteredProgramUsageError) as exc_info:
         exec_program.run(
@@ -1634,7 +1641,7 @@ def test_registered_command_argument_error_renders_shared_usage_help(
         encoding="utf-8",
     )
     module.write_text(
-        "@param let verbose: bool = false\nprogram def main(level: text) -> unit = ()\n",
+        "@param let verbose: bool = false\nprogram def main(@arg-named level: text) -> unit = ()\n",
         encoding="utf-8",
     )
     write_record(package_root)
@@ -2002,7 +2009,7 @@ def test_registered_declaration_ignores_a_program_owned_by_another_package(tmp_p
     from agm.commands.exec_program import registered_program_declaration
 
     write_installed_package(
-        tmp_path, "tools", source="program def main(level: text) -> unit = ()\n"
+        tmp_path, "tools", source="program def main(@arg-named level: text) -> unit = ()\n"
     )
     context = ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path)
 
@@ -2070,7 +2077,10 @@ def test_registered_program_declaration_finds_its_own_value_parameters(tmp_path:
     write_installed_package(
         tmp_path,
         "tools",
-        source=("program def other() -> unit = ()\nprogram def main(level: text) -> unit = ()\n"),
+        source=(
+            "program def other() -> unit = ()\n"
+            "program def main(@arg-named level: text) -> unit = ()\n"
+        ),
     )
     context = ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path)
 
@@ -2100,7 +2110,8 @@ def test_registered_program_declaration_prefers_the_entry_module_over_an_import(
     )
     helper.write_text("program def main(other: int) -> unit = ()\n", encoding="utf-8")
     entry.write_text(
-        "import tools/helper\nprogram def main(level: text) -> unit = ()\n", encoding="utf-8"
+        "import tools/helper\nprogram def main(@arg-named level: text) -> unit = ()\n",
+        encoding="utf-8",
     )
     write_record(package_root)
     write_activation_index(

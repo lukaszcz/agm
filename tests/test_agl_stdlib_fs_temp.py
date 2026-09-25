@@ -11,7 +11,6 @@ import pytest
 from agm.agl import PipelineDriver
 from agm.agl.pipeline import RunResult
 from agm.agl.semantics.values import BoolValue, Value
-from agm.core import dry_run
 from tests._agl_helpers import agl_roots
 
 
@@ -156,32 +155,6 @@ program def main() -> unit =
     )
     assert removed.ok
     assert len(_entries(os_temp)) == 1
-
-
-def test_temp_creation_is_suppressed_and_logged_in_dry_run(
-    os_temp: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    dry_run.set_enabled(True)
-
-    result = _run(
-        """import std/fs
-import std/path
-program def main() -> unit =
-  let file = fs::temp-file(suffix = ".md")
-  let dir = fs::temp-dir()
-  print(file != dir)
-  print(path::dirname(file) == fs::os-temp-dir())
-""",
-        os_temp.parent / "main.agl",
-    )
-
-    assert result.ok
-    assert _entries(os_temp) == []
-    lines = capsys.readouterr().out.splitlines()
-    assert lines[0].startswith("dry-run: agm make-temp-file ")
-    assert lines[0].endswith(".md")
-    assert lines[1].startswith("dry-run: agm make-temp-dir ")
-    assert lines[2:4] == ["true", "true"]
 
 
 @pytest.mark.parametrize(

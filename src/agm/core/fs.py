@@ -1,11 +1,10 @@
-"""Filesystem helpers that respect dry-run mode."""
+"""Filesystem helpers; those used by ``--dry-run`` commands respect dry-run mode."""
 
 from __future__ import annotations
 
 import os
 import shutil
 import sys
-import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 from stat import S_IMODE
@@ -149,38 +148,6 @@ def mkdir(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
     path.mkdir(parents=parents, exist_ok=exist_ok)
 
 
-def make_temp_file(*, prefix: str, suffix: str = "") -> Path:
-    """Create a new empty owner-only file in the OS temporary directory and return its path.
-
-    Under dry-run nothing is created; the returned path is an unused name there.
-    """
-
-    if dry_run.enabled():
-        path = _unused_temp_path(prefix, suffix)
-        dry_run.print_operation("make-temp-file", display_path(path))
-        return path
-    handle, name = tempfile.mkstemp(prefix=prefix, suffix=suffix)
-    os.close(handle)
-    return Path(name)
-
-
-def make_temp_dir(*, prefix: str) -> Path:
-    """Create a new owner-only directory in the OS temporary directory and return its path.
-
-    Under dry-run nothing is created; the returned path is an unused name there.
-    """
-
-    if dry_run.enabled():
-        path = _unused_temp_path(prefix, "")
-        dry_run.print_operation("make-temp-dir", display_path(path))
-        return path
-    return Path(tempfile.mkdtemp(prefix=prefix))
-
-
-def _unused_temp_path(prefix: str, suffix: str) -> Path:
-    return Path(tempfile.gettempdir()) / f"{prefix}{uuid4().hex}{suffix}"
-
-
 def write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Write text unless dry-run is enabled."""
 
@@ -252,11 +219,8 @@ def append_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
 
 
 def copy_file(source: Path, destination: Path) -> None:
-    """Copy one file unless dry-run is enabled."""
+    """Copy one file with its metadata."""
 
-    if dry_run.enabled():
-        dry_run.print_operation("copy-file", f"{display_path(source)} {display_path(destination)}")
-        return
     shutil.copy2(source, destination)
 
 
@@ -280,11 +244,8 @@ def backup_file(path: Path) -> None:
 
 
 def move(source: Path, destination: Path) -> None:
-    """Move a file or directory unless dry-run is enabled."""
+    """Move a file or directory."""
 
-    if dry_run.enabled():
-        dry_run.print_operation("move", f"{display_path(source)} {display_path(destination)}")
-        return
     shutil.move(source, destination)
 
 

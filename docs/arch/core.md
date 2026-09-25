@@ -24,7 +24,7 @@ Package companions run in AGM's own interpreter, so one module classifies PEP 50
 
 ## Dry Run and Cleanup
 
-Commands that support `--dry-run` set an invocation mode consulted by the process and filesystem primitives, so planned operations share one implementation. The cleanup helper releases resources without masking an exception already in flight; the AgL interpreter and the `exec`/`repl` hosts use it when closing agent sessions.
+Commands that support `--dry-run` set an invocation mode consulted by the process and filesystem primitives, so planned operations share one implementation. Only project-management commands support it: AgL hosts (`exec`, `repl`, `check`, registered commands) never enable it, so AgL code and stdlib companions have no dry-run behavior. The cleanup helper releases resources without masking an exception already in flight; the AgL interpreter and the `exec`/`repl` hosts use it when closing agent sessions.
 
 ## Generic Utilities
 

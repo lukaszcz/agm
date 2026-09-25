@@ -16,7 +16,6 @@ from agm.agl.pipeline import _wire_extern_registry
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.scope.program import resolve_program
 from agm.agl.typecheck.program import check_program
-from agm.core import dry_run
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
 from tests._agl_helpers import agl_roots
@@ -311,39 +310,6 @@ program def main() -> unit =
 
     assert result.ok
     assert capsys.readouterr().out == "contents\ncontents\nfalse\n"
-
-
-def test_fs_writes_are_suppressed_and_logged_in_dry_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    dry_run.set_enabled(True)
-
-    result = _run_file(
-        """import std/fs
-program def main() -> unit =
-  fs::write("created.txt", "first")
-  fs::append("created.txt", " second")
-  fs::mkdir("created")
-  fs::copy("missing.txt", "copied.txt")
-  fs::move("missing.txt", "moved.txt")
-  fs::remove("missing.txt")
-""",
-        tmp_path / "main.agl",
-        roots=agl_roots(),
-    )
-
-    assert result.ok
-    assert not (tmp_path / "created.txt").exists()
-    assert not (tmp_path / "created").exists()
-    assert capsys.readouterr().out == (
-        "dry-run: agm write-file created.txt\n"
-        "dry-run: agm append-file created.txt\n"
-        "dry-run: agm mkdir created\n"
-        "dry-run: agm copy-file missing.txt copied.txt\n"
-        "dry-run: agm move missing.txt moved.txt\n"
-        "dry-run: agm unlink missing.txt\n"
-    )
 
 
 def test_fs_externs_honor_the_existing_extern_capability_gate() -> None:

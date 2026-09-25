@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import glob as glob_module
+import os
 import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -202,16 +203,20 @@ def _session_temp_path(operation: str, create: Callable[[], Path]) -> str:
     return str(created)
 
 
+def _make_temp_file(suffix: str) -> Path:
+    handle, name = tempfile.mkstemp(prefix=_TEMP_PREFIX, suffix=suffix)
+    os.close(handle)
+    return Path(name)
+
+
 def temp_file(suffix: str = "") -> str:
     """Create a new empty temporary file named with *suffix*; removed at session end."""
-    return _session_temp_path(
-        "temp-file", lambda: fs.make_temp_file(prefix=_TEMP_PREFIX, suffix=suffix)
-    )
+    return _session_temp_path("temp-file", lambda: _make_temp_file(suffix))
 
 
 def temp_dir() -> str:
     """Create a new temporary directory; removed with its contents at session end."""
-    return _session_temp_path("temp-dir", lambda: fs.make_temp_dir(prefix=_TEMP_PREFIX))
+    return _session_temp_path("temp-dir", lambda: Path(tempfile.mkdtemp(prefix=_TEMP_PREFIX)))
 
 
 __all__ = [

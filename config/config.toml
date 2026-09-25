@@ -26,7 +26,7 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # timeout = "30m"               # initial shell-exec and agent idle timeout
 # trace = false                 # trace logging; off by default — set true to enable
 # trace-file = "trace.jsonl"    # explicit trace path (omit for auto timestamped path)
-# debug = false                 # keep std/fs temporary files and directories after exit
+# debug = false                 # keep std/fs temp paths after exit; trace unless trace is set
 #
 
 # [repl] — AgL REPL settings (agm repl).

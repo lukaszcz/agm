@@ -404,7 +404,8 @@ surrogate code point is a host invocation error.
 ### Positional effect
 
 The host applies each effective initial setting before execution. Thus a declared `trace` or `trace-file` default configures the trace service when
-no CLI/config seed is supplied. Every setting takes effect
+no CLI/config seed is supplied. A `debug` seed of `true` also seeds `trace` as `true` when
+no CLI/config seed sets `trace` or `trace-file`. Every setting takes effect
 **positionally** thereafter: a write to `std/config::X` governs the statements
 that follow it, in program order, and does not affect statements before it. A
 completed write remains effective if a later expression fails. Writing `trace`

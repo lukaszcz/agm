@@ -234,14 +234,16 @@ class EngineSeedTiers:
         (``lower``/*middle*/``upper``, ``cli`` excluded): when it names
         ``trace`` or ``trace-file`` at all, ``trace`` is true iff its ``trace``
         is true or its ``trace-file`` resolves to a real path (``Some``) — each
-        key independently carrying whichever tier won that merge. Left
+        key independently carrying whichever tier won that merge. Otherwise an
+        effective ``debug`` (CLI, else config) turns ``trace`` on. Left
         unconfigured everywhere, ``trace`` stays absent (``None``).
         """
+        from agm.agl.semantics.values import BoolValue
+
+        debug = self.cli.get("debug", config_result.get("debug"))
         if self.cli_trace is not None:
             raw, origin = self.cli_trace
         elif "trace" in config_result or "trace-file" in config_result:
-            from agm.agl.semantics.values import BoolValue
-
             trace_value = config_result.get("trace")
             is_trace_true = isinstance(trace_value, BoolValue) and trace_value.value
             # The config layer follows the declared register relation a
@@ -250,6 +252,8 @@ class EngineSeedTiers:
                 "trace-file", self._trace_file_text(config_result) is not None
             )
             origin = "trace/trace-file configuration"
+        elif isinstance(debug, BoolValue) and debug.value:
+            raw, origin = True, "debug"
         else:
             return None
 

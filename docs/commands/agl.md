@@ -102,12 +102,14 @@ a direct `agm repl` entry is a static error.
   timeouts, seeding `std/config::timeout` with `Some(DURATION)`, or remove configured ones,
   seeding `None`.
 - `--trace` / `--trace-file PATH` / `--no-trace` (mutually exclusive): Trace logging, **off by
-  default**. `--trace` writes to an auto-timestamped path under `.agent-files/`; `--trace-file`
-  writes a JSONL trace to `PATH`; `--no-trace` disables it, overriding `[exec] trace = true`.
+  default** (on under `debug`). `--trace` writes to an auto-timestamped path under
+  `.agent-files/`; `--trace-file` writes a JSONL trace to `PATH`; `--no-trace` disables it,
+  overriding `[exec] trace = true`.
   These set the initial state; a `std/config::trace := true` write still enables tracing.
 - `--debug` / `--no-debug`: Seed `std/config::debug` (overrides `[exec] debug`; default off).
   When the run ends with it set, the temporary files and directories `std/fs::temp-file` and
-  `std/fs::temp-dir` created are kept instead of removed.
+  `std/fs::temp-dir` created are kept instead of removed. A seeded `debug` also turns trace
+  logging on unless `trace` or `trace-file` is given on the CLI or in configuration.
 
 ### Program arguments
 
@@ -321,7 +323,7 @@ strict-json = false         # lenient JSON recovery is the default
 timeout = "30m"             # initial shell-exec and agent idle timeout
 trace = false               # trace logging off by default; set true to enable
 # trace-file = "trace.jsonl"  # explicit trace path (omit for auto timestamped path)
-debug = false               # keep std/fs temporary paths after exit
+debug = false               # keep std/fs temporary paths after exit; trace unless configured
 
 ```
 

@@ -121,6 +121,10 @@ def test_each_engine_key_seed_has_the_same_cli_config_presence_matrix(
     # A supplied trace-file also implies the readable ``trace`` setting.
     if key == "trace-file" and (cli_given or config_given):
         expected_keys.add("trace")
+    # A winning true ``debug`` (the config value here; the CLI value is false)
+    # turns the readable ``trace`` setting on.
+    if key == "debug" and config_given and not cli_given:
+        expected_keys.add("trace")
     assert actual_keys == expected_keys
 
 

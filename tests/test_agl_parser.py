@@ -130,7 +130,7 @@ from agm.agl.syntax.types import (
 )
 from agm.agl.syntax.visitor import walk
 from agm.core.process import CapturedOutput, ProcessCaptureResult
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -5319,7 +5319,7 @@ class TestVerbatimTextLiteral:
         from agm.agl import PipelineDriver
 
         with patch("agm.core.process.run_capture_result", return_value=completed):
-            result = run_inline_command(PipelineDriver(get_sandbox_context=None), "exec $ true")
+            result = run_inline_code(PipelineDriver(get_sandbox_context=None), "exec $ true")
 
         assert result.ok
 

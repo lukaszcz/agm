@@ -144,7 +144,7 @@ class TestEntrySourceId:
         root.mkdir()
         graph = load_graph(_MINIMAL, entry_path=None, roots=_roots(root))
         entry = graph.modules[ENTRY_ID]
-        assert entry.source.label == "<command>"
+        assert entry.source.label == "<code>"
 
     def test_file_entry_source_label_is_path(self, tmp_path: Path) -> None:
         entry_file = tmp_path / "prog.agl"

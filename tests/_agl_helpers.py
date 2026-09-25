@@ -43,7 +43,7 @@ supply one but don't assert on its content.
 
 ``program_config_engine_seeds`` partitions a preflighted entry's evaluated
 ``@config`` into its engine-setting seeds, mirroring the production split
-``agm.commands.exec_program`` makes; ``run_inline_command`` uses it so an
+``agm.commands.exec_program`` makes; ``run_inline_code`` uses it so an
 inline scenario's ``@config`` engine settings reach the interpreter the same
 way the real host applies them.
 
@@ -256,7 +256,7 @@ def write_file_program(path: Path, source: str, **kwargs: str) -> None:
     path.write_text(file_program(source), **kwargs)
 
 
-def prepare_inline_command(
+def prepare_inline_code(
     source: str,
     *,
     entry_path: Path | None = None,
@@ -268,7 +268,7 @@ def prepare_inline_command(
     ``entry_path`` is ``None`` for real inline sources; the corpus passes a path
     for programs whose builtins need a file-backed anchor (``resource``).
     """
-    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path, inline_command=True)
+    parsed = PipelineDriver.parse_entry(source, entry_path=entry_path, inline_code=True)
     return PipelineDriver.prepare_parsed_entry(
         parsed,
         roots=roots,
@@ -303,7 +303,7 @@ def program_config_engine_seeds(
     }
 
 
-def run_inline_command(
+def run_inline_code(
     runtime: PipelineDriver,
     source: str,
     *,
@@ -318,7 +318,7 @@ def run_inline_command(
     value arguments or its scenario module parameters, and otherwise through
     plain default-program selection.
     """
-    prepared = prepare_inline_command(
+    prepared = prepare_inline_code(
         source,
         entry_path=entry_path,
         roots=roots,
@@ -842,7 +842,7 @@ def run_program(
     failure). Shared by the engine-setting test suites (``default-agent``,
     ``default-sandbox``, the generic restamp tests).
     """
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         source,
         roots=agl_roots(),

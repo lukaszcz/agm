@@ -71,7 +71,7 @@ a direct `agm repl` entry is a static error.
 
 ### Options
 
-- `-c SOURCE`, `--command SOURCE`: AgL program source text, instead of `FILE`.
+- `-c SOURCE`, `--code SOURCE`: AgL program source text, instead of `FILE`.
 - `-p PATH`, `--program PATH`: Select a `program def` by declaration path (`main`,
   `review::main`). With a `PACKAGE/MODULE::PROGRAM` reference, replaces its program path and
   keeps its module.
@@ -157,7 +157,7 @@ A projected flag that collides with a reserved flag has no static check, only a 
 program for execution fails, while `--help` and shell completion silently fall back to
 `agm exec`'s own help and no completions. `agm exec` reserves:
 
-- its own options: `--help`/`-h`, `--program`/`-p`, `--command`/`-c`, `--module-path`/`-I`,
+- its own options: `--help`/`-h`, `--program`/`-p`, `--code`/`-c`, `--module-path`/`-I`,
   `--max-call-depth`, `--no-stdlib`;
 - every engine-setting flag in both polarities: `--default-agent`, `--default-sandbox`,
   `--strict-json`/`--no-strict-json`, `--timeout`/`--no-timeout`,
@@ -188,7 +188,7 @@ is a usage error (exit 1) when the program's own parser exists to reject `--nope
 Inline `-c` source without a `program def` gets a parameterless synthetic `main`, so it accepts
 no `ARG`/`--NAME` tokens; declare a `program def` to add parameters. Even then it takes no
 positionals: a bare token after `-c SOURCE` is the mutually exclusive `FILE` selector
-(`agm exec -c '…' hello` fails with `error: argument FILE not allowed with -c/--command`),
+(`agm exec -c '…' hello` fails with `error: argument FILE not allowed with -c/--code`),
 although `-c … --help` shows a positional usage slot for positional-capable parameters. Named options work, so give inline
 programs only standard or named-only parameters.
 

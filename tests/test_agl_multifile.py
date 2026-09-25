@@ -20,7 +20,7 @@ import pytest
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.types import RecordType
-from tests._agl_helpers import agl_roots, prepare_inline_command, run_inline_command
+from tests._agl_helpers import agl_roots, prepare_inline_code, run_inline_code
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 
 MULTI_FILE_DIR = Path(__file__).parent / "agl" / "multi_file"
@@ -55,7 +55,7 @@ def _run_program(
     prepared = (
         PipelineDriver.prepare_program(entry_source, entry_path=entry_path, roots=roots)
         if entry_path is not None
-        else prepare_inline_command(entry_source, roots=roots)
+        else prepare_inline_code(entry_source, roots=roots)
     )
     if agents:
         from agm.agent.spec import AgentCommand
@@ -69,7 +69,7 @@ def _run_program(
     else:
         rt = _make_runtime(default_agent=default_agent)
     if entry_path is None:
-        return run_inline_command(rt, entry_source, roots=roots, param_values=param_values)
+        return run_inline_code(rt, entry_source, roots=roots, param_values=param_values)
     discovery = rt.discover_programs(prepared)
     entry_program = next(program for program in discovery.programs if program.module.is_entry)
     if not entry_program.parameters:

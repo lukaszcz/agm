@@ -666,13 +666,13 @@ def _exec_selection_inputs(ctx: click.Context) -> tuple[ExecProgramDiscovery, Ex
     from agm.cli_support.program_options import split_exec_tail
 
     params = cast(dict[str, object], ctx.params)
-    raw_command = params.get("command")
+    raw_code = params.get("code")
     raw_program = params.get("program")
     # One discovery for this completion: the FILE derivation below may
     # probe several candidate tokens with it, and the selection it settles
     # on is then read back without a second static pipeline pass.
     discovery = ExecProgramDiscovery(
-        command=raw_command if isinstance(raw_command, str) else None,
+        code=raw_code if isinstance(raw_code, str) else None,
         requested_program=raw_program if isinstance(raw_program, str) else None,
         module_paths=_string_list(params.get("module_paths")),
         no_stdlib=bool(params.get("no_stdlib")),
@@ -683,7 +683,7 @@ def _exec_selection_inputs(ctx: click.Context) -> tuple[ExecProgramDiscovery, Ex
     tail = split_exec_tail(
         _string_list(params.get("tail")),
         program_command_for_file=(
-            None if isinstance(raw_command, str) else discovery.command_for_file
+            None if isinstance(raw_code, str) else discovery.command_for_file
         ),
     )
     return discovery, tail
@@ -711,9 +711,7 @@ def complete_exec_tail(ctx: click.Context, args: list[str], incomplete: str) -> 
     """Complete ``agm exec``'s tail: the FILE, then the selected program's positional slots."""
     del args
     tail, program_command = _exec_program_command(ctx)
-    if tail.file is None and not isinstance(
-        cast(dict[str, object], ctx.params).get("command"), str
-    ):
+    if tail.file is None and not isinstance(cast(dict[str, object], ctx.params).get("code"), str):
         return complete_agl_file(ctx, [], incomplete)
     if program_command is None:
         return []
@@ -739,7 +737,7 @@ class ExecCommand(TyperCommand):
 
     When the incomplete token starts with ``--``, the standard completion (built-in
     exec options) is extended with ``--<param>`` / ``--no-<param>`` items discovered
-    from the FILE or ``-c``/``--command`` source already parsed into ``ctx.params``.
+    from the FILE or ``-c``/``--code`` source already parsed into ``ctx.params``.
     Its completion-only parameters complete the selected program's option values
     (see :func:`program_value_completion_options`).
     Degrades to base completion on any error (unreadable file, parse failure, etc.).
@@ -783,10 +781,10 @@ class ExecCommand(TyperCommand):
             retain_end_of_options(preview_args, host_options),
         )
         preview_params = cast(dict[str, object], preview_ctx.params)
-        raw_command = preview_params.get("command")
+        raw_code = preview_params.get("code")
         raw_program = preview_params.get("program")
         discovery = ExecProgramDiscovery(
-            command=raw_command if isinstance(raw_command, str) else None,
+            code=raw_code if isinstance(raw_code, str) else None,
             requested_program=raw_program if isinstance(raw_program, str) else None,
             module_paths=_string_list(preview_params.get("module_paths")),
             no_stdlib=bool(preview_params.get("no_stdlib")),
@@ -794,7 +792,7 @@ class ExecCommand(TyperCommand):
         selected = split_exec_tail(
             _string_list(preview_params.get("tail")),
             program_command_for_file=(
-                None if isinstance(raw_command, str) else discovery.command_for_file
+                None if isinstance(raw_code, str) else discovery.command_for_file
             ),
         )
         program_command = (

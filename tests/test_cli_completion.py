@@ -393,7 +393,7 @@ def test_completion_treats_an_unreadable_colon_named_file_as_a_file_not_a_refere
     try:
         from agm.cli_support.exec_target import is_installed_reference
 
-        assert is_installed_reference(str(unreadable), command=None) is False
+        assert is_installed_reference(str(unreadable), code=None) is False
 
         from agm.cli import app
 

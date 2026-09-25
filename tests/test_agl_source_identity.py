@@ -202,10 +202,10 @@ class TestParseWithSource:
         assert prog.span.source.label == "<repl>"
 
     def test_source_command_label(self) -> None:
-        """<command> label used for exec -c is propagated correctly."""
-        sid = SourceId(label="<command>")
+        """<code> label used for exec -c is propagated correctly."""
+        sid = SourceId(label="<code>")
         prog = parse_program("1 + 2", source=sid)
-        assert prog.span.source.label == "<command>"
+        assert prog.span.source.label == "<code>"
 
 
 # ---------------------------------------------------------------------------

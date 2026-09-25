@@ -1018,7 +1018,7 @@ def _exec_print_help(
     *,
     tokens: "Sequence[str]",
     file: str | None,
-    command: str | None,
+    code: str | None,
     program: str | None = None,
 ) -> bool:
     """Print the help *tokens* request, if they request any; report whether they did.
@@ -1043,7 +1043,7 @@ def _exec_print_help(
 
     if not contains_help_flag(tokens):
         return False
-    if file is None and command is None:
+    if file is None and code is None:
         print_help_for_command_path(["exec"])
         return True
     selection = discovery.selection(file)
@@ -1078,10 +1078,10 @@ def exec_cmd(
         metavar="FILE",
         autocompletion=completion.complete_exec_tail,
     ),
-    command: str | None = typer.Option(
+    code: str | None = typer.Option(
         None,
         "-c",
-        "--command",
+        "--code",
         metavar="SOURCE",
         help="AgL program source.",
     ),
@@ -1122,7 +1122,7 @@ def exec_cmd(
         cached_discovery
         if isinstance(cached_discovery, ExecProgramDiscovery)
         else ExecProgramDiscovery(
-            command=command,
+            code=code,
             requested_program=program,
             module_paths=module_paths,
             no_stdlib=no_stdlib,
@@ -1130,7 +1130,7 @@ def exec_cmd(
     )
     selected = split_exec_tail(
         tail or (),
-        program_command_for_file=None if command is not None else discovery.command_for_file,
+        program_command_for_file=None if code is not None else discovery.command_for_file,
     )
     file = selected.file
     argument_tokens = list(selected.tokens)
@@ -1138,17 +1138,17 @@ def exec_cmd(
         discovery,
         tokens=argument_tokens,
         file=file,
-        command=command,
+        code=code,
         program=program,
     ):
         raise SystemExit(0)
-    if command is not None and file is not None:
-        exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--command")
-    if command is None and file is None:
-        exit_with_usage_error(["exec"], "error: one of the arguments FILE -c/--command is required")
+    if code is not None and file is not None:
+        exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--code")
+    if code is None and file is None:
+        exit_with_usage_error(["exec"], "error: one of the arguments FILE -c/--code is required")
     exec_args = ExecArgs(
         file=file,
-        command=command,
+        code=code,
         program=program,
         argument_tokens=argument_tokens,
         strict_json=strict_json,

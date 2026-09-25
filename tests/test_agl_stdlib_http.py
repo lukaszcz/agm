@@ -17,7 +17,7 @@ from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.pipeline import RunResult
 from agm.agl.scope.symbols import AglScopeError
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 from tests._http_helpers import FakeHttp, fake_session, install
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
@@ -102,7 +102,7 @@ def _run(
     **kwargs: object,
 ) -> tuple[RunResult, FakeHttp]:
     adapter = install(monkeypatch, outcomes)
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         source,
         entry_path=tmp_path / "entry.agl",
@@ -661,7 +661,7 @@ program def main() -> unit =
   let _ = http::get("https://x/b")
   ()
 """
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None), source, entry_path=tmp_path / "entry.agl"
     )
     assert result.ok, result.error

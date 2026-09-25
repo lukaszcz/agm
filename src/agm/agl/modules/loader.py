@@ -1204,7 +1204,7 @@ def _load_into_graph(
 def entry_source_id(
     entry_path: Path | None,
     *,
-    default_label: str = "<command>",
+    default_label: str = "<code>",
 ) -> tuple[Path | None, SourceId]:
     """Return an entry's canonical path and the source id its label implies.
 
@@ -1220,11 +1220,11 @@ def parse_entry_module(
     entry_source: str,
     *,
     entry_path: Path | None,
-    inline_command: bool = False,
+    inline_code: bool = False,
 ) -> ParsedEntryModule:
     """Parse an entry source and collect its lexical advisories.
 
-    *inline_command* applies the ``agm exec -c`` synthetic-entry wrap. Syntax
+    *inline_code* applies the ``agm exec -c`` synthetic-entry wrap. Syntax
     failures intentionally propagate to let callers choose their own raising or
     diagnostic-capturing policy.
     """
@@ -1236,7 +1236,7 @@ def parse_entry_module(
             )
         except AglSyntaxError as error:
             raise EntryParseSyntaxError(error, tuple(spaced_sink)) from error
-    if inline_command:
+    if inline_code:
         program, next_id = wrap_inline_program(program, next_node_id=next_id)
     return ParsedEntryModule(
         program=program,

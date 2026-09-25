@@ -4,7 +4,7 @@ installed ``PACKAGE/MODULE::PROGRAM`` reference.
 Execution (``commands/exec.py`` and ``exec_program.run_registered``) and the
 advisory ``--help``/shell-completion surfaces (``cli.py``, ``completion.py``)
 must classify a bare ``agm exec`` positional argument identically: it names an
-installed reference when no inline ``-c/--command`` source was given, the
+installed reference when no inline ``-c/--code`` source was given, the
 argument contains ``::``, and no on-disk file exists at that path. This module
 supplies that one classification rule (:func:`is_installed_reference`) plus
 the installed-reference resolution (module path -> active package -> entry
@@ -21,20 +21,20 @@ from agm.packages.activation import select_active_packages
 from agm.packages.model import PackageInfo
 
 
-def is_installed_reference(file: str | None, *, command: str | None) -> bool:
+def is_installed_reference(file: str | None, *, code: str | None) -> bool:
     """Return whether *file* names an installed package program reference.
 
-    True exactly when no inline ``-c/--command`` source was given, *file* is
+    True exactly when no inline ``-c/--code`` source was given, *file* is
     present, contains ``::``, and no on-disk file exists at that path. This is
     the single classification rule shared by execution, ``--help``, and shell
     completion.
     """
-    return command is None and file is not None and "::" in file and not Path(file).is_file()
+    return code is None and file is not None and "::" in file and not Path(file).is_file()
 
 
 @dataclass(frozen=True, slots=True)
 class InlineSource:
-    """The exec argument is inline ``-c/--command`` source."""
+    """The exec argument is inline ``-c/--code`` source."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,16 +122,16 @@ def resolve_installed_reference(
 def resolve_exec_target(
     *,
     file: str | None,
-    command: str | None,
+    code: str | None,
     home: Path,
     proj_dir: Path | None,
     cwd: Path,
 ) -> ExecTarget | ExecTargetError:
     """Classify an ``agm exec`` argument and resolve it if it names an installed reference."""
-    if command is not None:
+    if code is not None:
         return InlineSource()
     if file is None:
-        return ExecTargetError("exec requires either a FILE or -c/--command")
-    if not is_installed_reference(file, command=command):
+        return ExecTargetError("exec requires either a FILE or -c/--code")
+    if not is_installed_reference(file, code=code):
         return FileEntry(Path(file))
     return resolve_installed_reference(file, home=home, proj_dir=proj_dir, cwd=cwd)

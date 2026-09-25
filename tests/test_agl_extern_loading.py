@@ -43,7 +43,7 @@ from agm.agl.runtime.externs import (
 from agm.agl.scope.program import resolve_program
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core import fs
-from tests._agl_helpers import file_program, prepare_inline_command
+from tests._agl_helpers import file_program, prepare_inline_code
 from tests.agl.ir_harness import age_file, write_companion_file, write_module_file
 from tests.agl.module_graph import load_graph
 
@@ -189,7 +189,7 @@ class TestCompanionPathDerivation:
     def test_missing_companion_becomes_prepared_program_diagnostic(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
-        prepared = prepare_inline_command(
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(root),
             default_stdlib=False,
@@ -986,7 +986,7 @@ class TestFailFastDiagnostics:
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def wrong_name(x):\n    return x\n")
         driver = PipelineDriver(get_sandbox_context=None)
-        prepared = prepare_inline_command(
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
@@ -1008,7 +1008,7 @@ class TestOrdering:
             f"open({str(marker)!r}, 'w').write('imported')\ndef wrong_name(x):\n    return x\n",
         )
         driver = PipelineDriver(get_sandbox_context=None)
-        prepared = prepare_inline_command(
+        prepared = prepare_inline_code(
             'import lib/mod::*\n1 + "a"',
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
@@ -1039,7 +1039,7 @@ class TestOrdering:
             ),
         )
         driver = PipelineDriver(get_sandbox_context=None)
-        prepared = prepare_inline_command(
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
@@ -1057,7 +1057,7 @@ class TestRegistryPopulatedViaPipeline:
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver(get_sandbox_context=None)
-        prepared = prepare_inline_command(
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
@@ -1081,7 +1081,7 @@ class TestRegistryPopulatedViaPipeline:
         write_module_file(tmp_path / "root", "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver(get_sandbox_context=None)
-        prepared = prepare_inline_command(
+        prepared = prepare_inline_code(
             "import lib/mod::*\nlib/mod::f(1)",
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,

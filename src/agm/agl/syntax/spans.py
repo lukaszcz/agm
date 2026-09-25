@@ -17,7 +17,7 @@ class SourceId:
 
     ``label`` is the display string used in diagnostics:
     - canonical file path for file-based modules (``"/path/to/foo.agl"``)
-    - ``"<command>"`` for ``exec -c`` inline source
+    - ``"<code>"`` for ``exec -c`` inline source
     - ``"<repl>"`` for REPL entries
     - ``"<agl>"`` (the default / unknown source)
     """

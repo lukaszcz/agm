@@ -59,9 +59,9 @@ from tests._agl_helpers import (
     REPO_STDLIB_ROOT,
     agl_roots,
     module_param_values,
-    prepare_inline_command,
+    prepare_inline_code,
     program_config_engine_seeds,
-    run_inline_command,
+    run_inline_code,
     session_sandbox_context,
     write_sandbox_home,
     write_transparent_sandbox_shims,
@@ -988,7 +988,7 @@ def test_module_param_paths_must_exist_in_selected_program_closure() -> None:
 def test_inline_entry_module_params_seed_root_binding(capsys: pytest.CaptureFixture[str]) -> None:
     from agm.agl import PipelineDriver
 
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         "@param var value: int = 1\nvalue := value + 1\nprint value\n",
         module_params={"<entry>::value": 4},
@@ -1005,7 +1005,7 @@ def test_inline_entry_with_its_own_program_def_follows_relaxed_binding_order(
     like a file program: a def declared above a root var it reads still works."""
     from agm.agl import PipelineDriver
 
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         "def read-counter() -> int = counter\n\nvar counter = 41\n\n"
         "program def main() -> unit =\n  counter := counter + 1\n  print read-counter()\n",
@@ -1118,7 +1118,7 @@ def _run_program(
     # `inline_entry` sources carry no `program def`: they run through the same
     # synthetic-entry transform as `agm exec -c`.
     prepare = (
-        prepare_inline_command if scenario.get("inline_entry") else PipelineDriver.prepare_program
+        prepare_inline_code if scenario.get("inline_entry") else PipelineDriver.prepare_program
     )
     with (
         unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell),

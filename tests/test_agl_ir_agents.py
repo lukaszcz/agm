@@ -21,7 +21,7 @@ from agm.agl.semantics.values import (
     TextValue,
 )
 from agm.agl.zones import ParamZone
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 from tests.agl.ir_harness import (
     agent_caps,
     evaluate_ir,
@@ -476,7 +476,7 @@ def test_unit_typed_ask() -> None:
         return "acknowledged"
 
     runtime = PipelineDriver(agent_dispatcher=notify, get_sandbox_context=None)
-    result = run_inline_command(runtime, 'ask("Notify!")\n()')
+    result = run_inline_code(runtime, 'ask("Notify!")\n()')
     assert result.ok
     assert len(calls) == 1
 

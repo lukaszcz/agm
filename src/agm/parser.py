@@ -408,7 +408,7 @@ _EXECUTION_HELP_TEXTS: dict[ExecutionSurface, tuple[str, str]] = {
             inline SOURCE.
 
             Options:
-              -c, --command SOURCE   AgL source; wrapped in `program def main`
+              -c, --code SOURCE      AgL source; wrapped in `program def main`
                                      unless it declares a program.
               -p, --program PATH     Select a `program def` by declaration path.
             """)

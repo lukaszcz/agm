@@ -9,7 +9,7 @@ import pytest
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError
 from agm.agl.pipeline import ParsedEntry, PipelineDriver
-from tests._agl_helpers import agl_roots, prepare_inline_command
+from tests._agl_helpers import agl_roots, prepare_inline_code
 from tests.agl.module_graph import load_graph
 
 
@@ -49,7 +49,7 @@ class TestParseEntry:
         source = "import std/config::*\nprogram def main() -> unit = ()"
         parsed = PipelineDriver.parse_entry(source, entry_path=None)
         via_split = PipelineDriver.prepare_parsed_entry(parsed, roots=_roots(), default_stdlib=True)
-        via_wrapper = prepare_inline_command(source, entry_path=None, roots=_roots())
+        via_wrapper = prepare_inline_code(source, entry_path=None, roots=_roots())
 
         assert via_split.diagnostics == via_wrapper.diagnostics == ()
         assert via_split.resolved is not None

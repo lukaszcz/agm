@@ -28,7 +28,7 @@ from agm.agl.syntax import (
     UseDecl,
     VarDecl,
 )
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 from tests.agl.ir_harness import write_module_file
 from tests.agl.module_graph import resolve_entry, resolve_inline_entry
 
@@ -118,7 +118,7 @@ def test_a_region_body_may_mix_indented_and_flat_nesting() -> None:
 def test_an_indented_region_body_runs(capsys: pytest.CaptureFixture[str]) -> None:
     source = "scope A\n  def value() -> int = 7\nend A\n\nprint(A::value())"
 
-    assert run_inline_command(PipelineDriver(get_sandbox_context=None), source).ok is True
+    assert run_inline_code(PipelineDriver(get_sandbox_context=None), source).ok is True
     assert capsys.readouterr().out == "7\n"
 
 
@@ -559,7 +559,7 @@ def test_ast_walk_visits_a_scoped_funcs_scope_path_segments() -> None:
 
 
 def test_scoped_declarations_do_not_generate_runtime_initializers() -> None:
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None), "def A::f() -> int = 0\n()", default_stdlib=False
     )
 
@@ -571,7 +571,7 @@ def test_library_scope_regions_apply_entry_only_declaration_restrictions(tmp_pat
     root.mkdir()
     write_module_file(root, "library", "scope A\n  agent bot\nend A")
 
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         "import library\n()",
         roots=RootSet(roots=frozenset({root})),
@@ -598,7 +598,7 @@ def test_production_pipeline_validates_path_atoms_against_public_content(
     if "dependency" in library:
         write_module_file(root, "dependency", "record Point")
 
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         entry,
         roots=RootSet(roots=frozenset({root})),

@@ -1,6 +1,6 @@
 """Implementation of the ``agm exec FILE`` command.
 
-Behaviour: read the ``.agl`` source — either from the inline ``-c/--command``
+Behaviour: read the ``.agl`` source — either from the inline ``-c/--code``
 argument or from the source file (exit 1 if unreadable), load the
 ``[exec]`` configuration, construct a ``PipelineDriver`` with the resolved
 settings and call ``runtime.run``. Print diagnostics to stderr, invoke a
@@ -12,7 +12,7 @@ are two separate channels: warnings are printed to stderr like errors but never
 affect the exit code; only error-severity diagnostics yield exit 1.  The
 diagnostic severity is included in compiler-style output, e.g.
 ``path.agl:1:5: warning: message`` or ``1:5: error: message`` for inline
-``-c/--command`` source.
+``-c/--code`` source.
 
 Exit-code contract:
     0  success
@@ -345,7 +345,7 @@ def registered_program_declaration(
             return None
         artifacts = discover_program_artifacts_for_target(
             file=program,
-            command=None,
+            code=None,
             module_paths=None,
             no_stdlib=False,
             context=context,
@@ -373,11 +373,11 @@ def run(
     *reserved_flags* is the invoking surface's flag inventory, which the
     selected program's parameters may not claim.
     """
-    # The program source comes either from an inline ``-c/--command`` argument
+    # The program source comes either from an inline ``-c/--code`` argument
     # or from a file.  The CLI layer guarantees exactly one is provided; the
     # defensive ``else`` keeps ``run`` safe when called directly.
-    if args.command is not None:
-        source = args.command
+    if args.code is not None:
+        source = args.code
         entry_path: Path | None = None
         diagnostic_source_name: str | None = None
     elif args.file is not None:
@@ -385,7 +385,7 @@ def run(
         entry_path = Path(args.file)
         diagnostic_source_name = args.file
     else:
-        print("Error: exec requires either a FILE or -c/--command", file=sys.stderr)
+        print("Error: exec requires either a FILE or -c/--code", file=sys.stderr)
         raise SystemExit(1)
 
     ctx = current_config_context()
@@ -430,7 +430,7 @@ def run(
         cached_pipeline.parsed
         if cached_pipeline is not None
         else PipelineDriver.parse_entry(
-            source, entry_path=entry_path, inline_command=args.command is not None
+            source, entry_path=entry_path, inline_code=args.code is not None
         )
     )
 

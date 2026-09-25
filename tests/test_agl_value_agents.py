@@ -27,7 +27,7 @@ from agm.config.context import ConfigContext
 from tests._agl_helpers import (
     agent_value,
     hermetic_get_sandbox_context,
-    run_inline_command,
+    run_inline_code,
     session_sandbox_context,
     write_sandbox_home,
 )
@@ -120,7 +120,7 @@ def test_ask_dispatches_each_agent_value_under_disabled_sandbox(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         f'let answer: text = ask("hello", agent = {source}, sandbox = AgentSandbox::Disabled)\n'
         "answer",
@@ -184,7 +184,7 @@ def test_ask_dispatches_each_agent_value_selects_each_spec_permission_flag(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         f'let answer: text = ask("hello", agent = {source})\nanswer',
     )
@@ -248,7 +248,7 @@ def test_disabled_and_native_sandbox_modes_never_wrap_the_argv(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"), '
         f"sandbox = {sandbox_operand})\nanswer",
@@ -307,7 +307,7 @@ def test_ask_dispatches_claude_and_codex_under_native_sandbox_mode(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         f'let answer: text = ask("hello", agent = {source}, sandbox = AgentSandbox::Native)\n'
         "answer",
@@ -337,7 +337,7 @@ def test_agent_transport_failures_become_typed_errors(
         get_sandbox_context=None,
     )
 
-    run = run_inline_command(
+    run = run_inline_code(
         runtime,
         'let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer',
     )
@@ -375,7 +375,7 @@ def test_undecodable_agent_stdout_becomes_a_protocol_failure(
     # Disabled: this test drives the real ``prepare_rendered_prompt_run`` seam
     # (only ``run_capture_result`` is mocked), so a real sandbox mode would try
     # to resolve ``srt`` on PATH -- irrelevant to the protocol-failure assertion.
-    run = run_inline_command(
+    run = run_inline_code(
         runtime,
         "let answer: text = "
         'ask("hello", agent = AgentCommand("runner"), sandbox = AgentSandbox::Disabled)\n'
@@ -404,7 +404,7 @@ def test_caught_agent_call_error_keeps_static_agent_encoding_when_raised_later(
         get_sandbox_context=None,
     )
 
-    run = run_inline_command(
+    run = run_inline_code(
         runtime,
         "let saved = try\n"
         '  let _ = ask("hello", agent = AgentCommand("runner"))\n'
@@ -430,7 +430,7 @@ def test_user_exception_enum_field_keeps_slot_encoding_after_storage_and_reraise
         get_sandbox_context=None,
     )
 
-    run = run_inline_command(
+    run = run_inline_code(
         runtime,
         "enum Status | Open | Closed\n"
         "exception Problem extends Exception\n"
@@ -461,7 +461,7 @@ def test_nonzero_exit_message_includes_the_exit_code(
         get_sandbox_context=None,
     )
 
-    run = run_inline_command(
+    run = run_inline_code(
         runtime,
         'let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer',
     )
@@ -688,7 +688,7 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
 
     monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
 
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(
             agent_dispatcher=value_driven_agent_factory(
                 idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
@@ -732,7 +732,7 @@ def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
         get_sandbox_context=None,
     )
 
-    run = run_inline_command(
+    run = run_inline_code(
         runtime,
         'let answer: text = ask("hello", '
         'agent = AgentCommand("runner --flag=\\%{AGM_NO_SUCH_VARIABLE}"))\nanswer',
@@ -752,7 +752,7 @@ def test_invalid_agent_value_becomes_typed_error() -> None:
         get_sandbox_context=None,
     )
 
-    run = run_inline_command(
+    run = run_inline_code(
         runtime,
         'let answer: text = ask("hello", agent = AgentCommand(""))\nanswer',
     )
@@ -774,7 +774,7 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
         return "not an integer"
 
     runtime = PipelineDriver(agent_dispatcher=agent, get_sandbox_context=None)
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         "import std/config\n"
         'std/config::default-agent := AgentCommand("first")\n'
@@ -864,7 +864,7 @@ def test_default_sandbox_mode_wraps_the_argv_and_honours_run_config_memory(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         f'let answer: text = ask("hello", agent = {source})\nanswer',
     )
@@ -907,7 +907,7 @@ def test_interpolated_agent_command_sandboxes_under_the_real_executable(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         'let answer: text = ask("hello", agent = AgentCommand("\\%{TOOL}/bin/agent"))\nanswer',
     )
@@ -999,7 +999,7 @@ def test_sandbox_context_is_built_at_most_once_per_get_sandbox_context(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         'let a: text = ask("one", agent = AgentClaude("sonnet", "medium"))\n'
         'let b: text = ask("two", agent = AgentClaude("sonnet", "medium"))\n'
@@ -1031,7 +1031,7 @@ def test_explicit_settings_file_selects_that_file_over_the_profile_candidate(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"), '
         f'sandbox = Sandbox(settings = Some("{explicit_settings.as_posix()}")))\nanswer',
@@ -1067,7 +1067,7 @@ def test_missing_srt_becomes_an_agent_call_error_carrying_the_library_message(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"))\nanswer',
     )
@@ -1111,7 +1111,7 @@ def test_temp_settings_cleanup_runs_after_success_and_failure(
         ),
         get_sandbox_context=None,
     )
-    result = run_inline_command(
+    result = run_inline_code(
         runtime,
         'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"))\nanswer',
     )

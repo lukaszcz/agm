@@ -262,7 +262,7 @@ class ExecArgs:
     trace_file: str | None
     argument_tokens: list[str] = field(default_factory=list)
     trace: bool = False
-    command: str | None = None
+    code: str | None = None
     program: str | None = None
     module_paths: list[str] = field(default_factory=list)
     no_stdlib: bool = False

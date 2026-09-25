@@ -28,7 +28,7 @@ from agm.agl.runtime.externs import ExternRegistry
 from agm.cli_support.args import ExecArgs
 from agm.packages.manifest import PackageManifest
 from agm.packages.model import PackageInfo
-from tests._agl_helpers import REPO_STDLIB_ROOT, agl_roots, run_inline_command, write_file_program
+from tests._agl_helpers import REPO_STDLIB_ROOT, agl_roots, run_inline_code, write_file_program
 from tests._http_helpers import install as install_fake_http
 from tests._process_helpers import FakeShell
 from tests.agl.ir_harness import write_companion_file, write_module_file
@@ -86,7 +86,7 @@ def _exec_args(
 
 def _run_inline(runtime: PipelineDriver, source: str, **kwargs: object) -> RunResult:
     """Run this module's command-style source through the inline entry transform."""
-    return run_inline_command(runtime, source, **kwargs)
+    return run_inline_code(runtime, source, **kwargs)
 
 
 class TestTraceFileCreated:
@@ -305,7 +305,7 @@ class TestAgentCallRecord:
 
     def test_agent_request_preserves_agent_variant_payload(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        run_inline_command(
+        run_inline_code(
             _agent_runtime(_agent_returning("ok")),
             'let a = AgentClaude("sonnet", "high")\nlet x: text = a.ask("review")\nx',
             trace_file=trace_path,
@@ -334,7 +334,7 @@ class TestAgentCallRecord:
 
     def test_unit_ask_logs_a_request_and_response(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        result = run_inline_command(
+        result = run_inline_code(
             _agent_runtime(_agent_returning("ignored")),
             'let a = AgentCommand("a")\nlet value: unit = ask "do it"\nvalue',
             trace_file=trace_path,
@@ -353,7 +353,7 @@ class TestAgentCallRecord:
             received.append(request.prompt)
             return AgentResponse(content="42")
 
-        result = run_inline_command(
+        result = run_inline_code(
             _agent_runtime(agent, strict_json=True),
             'let a = AgentCommand("a")\nlet value: int = a.ask("number")\nvalue',
             trace_file=trace_path,
@@ -468,7 +468,7 @@ class TestRetryRecords:
                 cause="timeout", exit_code=9, stderr_tail="too slow", elapsed=1.5
             )
 
-        result = run_inline_command(
+        result = run_inline_code(
             _agent_runtime(agent),
             'let a = AgentCommand("a")\nlet value: text = a.ask("work")\nvalue',
             trace_file=trace_path,
@@ -503,7 +503,7 @@ class TestRetryRecords:
                 ),
             )
 
-        result = run_inline_command(
+        result = run_inline_code(
             _agent_runtime(agent),
             'let a = AgentCommand("a")\nlet value: text = a.ask("work")\nvalue',
             trace_file=trace_path,
@@ -537,7 +537,7 @@ class TestRetryRecords:
                 ),
             )
 
-        result = run_inline_command(
+        result = run_inline_code(
             _agent_runtime(agent),
             'let a = AgentCommand("a")\nlet value: text = a.ask("work")\nvalue',
             trace_file=trace_path,
@@ -585,7 +585,7 @@ class TestRetryRecords:
             ),
             get_sandbox_context=None,
         )
-        result = run_inline_command(
+        result = run_inline_code(
             runtime,
             'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"))\nanswer',
             trace_file=trace_path,
@@ -628,7 +628,7 @@ class TestRetryRecords:
             ),
             get_sandbox_context=None,
         )
-        result = run_inline_command(
+        result = run_inline_code(
             runtime,
             'let answer: text = ask("hello", agent = AgentClaude("sonnet", "medium"), '
             "sandbox = AgentSandbox::Native)\nanswer",
@@ -689,7 +689,7 @@ class TestExceptionRecord:
 
     def test_exception_record_and_value_have_no_trace_id(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
-        result = run_inline_command(
+        result = run_inline_code(
             _agent_runtime(_agent_returning("not json"), strict_json=True),
             'let impl = AgentCommand("impl")\nlet x: int = impl.ask("get int")\nx',
             trace_file=trace_path,
@@ -838,7 +838,7 @@ class TestRunBoundaryRecords:
         from datetime import datetime
 
         trace_path = tmp_path / "trace.jsonl"
-        run_inline_command(
+        run_inline_code(
             _agent_runtime(_agent_returning("agent output")),
             'let a = AgentCommand("a")\n'
             'let x: text = a.ask("prompt")\n'
@@ -1416,7 +1416,7 @@ class TestCompanionTraceHook:
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'value': 42})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1444,7 +1444,7 @@ class TestCompanionTraceHook:
             "lib/logger",
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'value': 1})\n",
         )
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             "import lib/logger\nlib/logger::emit()",
             roots=agl_roots(root),
@@ -1467,7 +1467,7 @@ class TestCompanionTraceHook:
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'value': 1})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None), source, entry_path=entry_path, trace_file=None
         )
         assert result.ok
@@ -1486,7 +1486,7 @@ class TestCompanionTraceHook:
             "    runtime.trace('probe', payload)\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1512,7 +1512,7 @@ class TestCompanionTraceHook:
             "    runtime.trace('probe', {'items': items})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1536,7 +1536,7 @@ class TestCompanionTraceHook:
             "    runtime.trace('probe', {'bad': object()})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1561,7 +1561,7 @@ class TestCompanionTraceHook:
             "    runtime.trace('probe', {'text': chr(0xD800), 'number': math.nan})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1599,7 +1599,7 @@ class TestCompanionTraceHook:
             f"    Path({str(flag_path)!r}).write_text(str(runtime.tracing()))\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1633,7 +1633,7 @@ class TestCompanionTraceHook:
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {'kind': 'x'})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1654,7 +1654,7 @@ class TestCompanionTraceHook:
             "    runtime.trace('probe', {'amount': Decimal('1.50')})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1677,7 +1677,7 @@ class TestCompanionTraceHook:
             "    runtime.trace('probe', {'payload': json({'nested': [1, 2]})})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1696,7 +1696,7 @@ class TestCompanionTraceHook:
         source = "extern def emit() -> unit\nlet f = emit\nf()\n()\n"
         companion = "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n"
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1734,7 +1734,7 @@ class TestCompanionTraceHook:
             "    runtime.trace('b_probe', {})\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=entry_path,
@@ -1776,7 +1776,7 @@ class TestCompanionTraceHook:
             "def emit():\n    runtime.trace('probe', {})\n    return 0\n",
         )
         source = "import lib/logger\nlet _ = lib/logger::wrap()\n()\n"
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             roots=agl_roots(root),
@@ -1812,7 +1812,7 @@ class TestCompanionTraceHook:
             "lib/logger",
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n",
         )
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             "import lib/logger\nlib/logger::wrap()",
             roots=agl_roots(root),
@@ -1851,7 +1851,7 @@ class TestCompanionTraceHook:
             "lib/logger",
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n",
         )
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             "import lib/logger\nlib/logger::outer()",
             roots=agl_roots(root),
@@ -1891,7 +1891,7 @@ class TestCompanionTraceHook:
         roots = RootSet(
             roots=frozenset(), packages=(package,), stdlib_roots=frozenset({REPO_STDLIB_ROOT})
         )
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             main_path.read_text(),
             roots=roots,
@@ -1930,7 +1930,7 @@ class TestCompanionTraceHook:
             "from agl import runtime\n\ndef emit():\n    runtime.trace('probe', {})\n",
         )
         source = "import lib/logger\nlib/logger::apply(fn(z: int) => lib/logger::emit())\n"
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             roots=agl_roots(root),
@@ -1972,7 +1972,7 @@ class TestCompanionTraceHook:
         entry_path.with_suffix(".py").write_text(
             "from agl import runtime\n\ndef probe(z):\n    runtime.trace('probe', {'z': z})\n"
         )
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             roots=agl_roots(root),
@@ -2021,7 +2021,7 @@ program def main() -> unit =
   let _ = api.get("https://x/y")
   ()
 """
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=tmp_path / "entry.agl",
@@ -2059,7 +2059,7 @@ program def main() -> unit =
   let _ = http::get("https://x/y")
   ()
 """
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             entry_path=tmp_path / "entry.agl",

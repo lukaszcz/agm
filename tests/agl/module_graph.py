@@ -197,7 +197,7 @@ def load_graph(
         roots=roots,
         default_stdlib=default_stdlib,
         spaced_qualifiers=parsed.spaced_qualifiers,
-        default_label="<command>",
+        default_label="<code>",
         source_text=normalize_newlines(entry_source),
     )
     return graph
@@ -308,7 +308,7 @@ def resolve_inline_entry(
     admit executable root statements, while static-root tests must retain the
     file source unchanged.
     """
-    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_code=True)
     graph, import_node_id = build_module_graph_from_program(
         parsed.program,
         next_node_id=parsed.next_id,
@@ -391,7 +391,7 @@ def resolve_and_check_inline_entry(
     default_stdlib: bool = True,
 ) -> CheckedModule:
     """Type-check test-only inline source with the ``agm exec -c`` transform."""
-    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_code=True)
     graph, import_node_id = build_module_graph_from_program(
         parsed.program,
         next_node_id=parsed.next_id,

@@ -490,10 +490,10 @@ def test_exec_with_an_extended_environment_reaches_the_process_boundary() -> Non
     from unittest.mock import patch
 
     from agm.agl import PipelineDriver
-    from tests._agl_helpers import run_inline_command
+    from tests._agl_helpers import run_inline_code
 
     with patch("agm.core.process.run_capture_result", side_effect=fake_shell):
-        result = run_inline_command(
+        result = run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             roots=agl_roots(),

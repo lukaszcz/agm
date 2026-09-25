@@ -414,7 +414,7 @@ class TestReplLogFlagParsing:
 
 
 def _exec_args(
-    command: str,
+    code: str,
     *,
     trace: bool = False,
     no_trace: bool = False,
@@ -422,7 +422,7 @@ def _exec_args(
 ) -> ExecArgs:
     return ExecArgs(
         file=None,
-        command=command,
+        code=code,
         argument_tokens=[],
         strict_json=None,
         trace=trace,

@@ -27,7 +27,7 @@ from agm.agl.semantics.values import (
     IntValue,
     TextValue,
 )
-from tests._agl_helpers import agl_roots, file_program, prepare_inline_command
+from tests._agl_helpers import agl_roots, file_program, prepare_inline_code
 from tests.agl.ir_harness import (
     evaluate_ir_raises_with_externs,
     evaluate_ir_with_externs,
@@ -316,7 +316,7 @@ def test_check_only_never_imports_the_companion(tmp_path: Path) -> None:
         "    return x + 1\n",
     )
     driver = PipelineDriver(get_sandbox_context=None)
-    prepared = prepare_inline_command(
+    prepared = prepare_inline_code(
         "import lib/mod\nlib/mod::f(1)",
         roots=_roots(root),
         default_stdlib=False,
@@ -331,7 +331,7 @@ def test_check_only_does_not_import_a_broken_companion(tmp_path: Path) -> None:
     write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
     write_companion_file(root, "lib/mod", "raise RuntimeError('broken')\n")
     driver = PipelineDriver(get_sandbox_context=None)
-    prepared = prepare_inline_command(
+    prepared = prepare_inline_code(
         "import lib/mod\nlib/mod::f(1)",
         roots=_roots(root),
         default_stdlib=False,

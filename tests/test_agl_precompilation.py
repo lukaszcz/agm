@@ -20,7 +20,7 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.parsed_module_cache import clear_parsed_module_cache
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 
 
 def _run(root: Path, source: str) -> subprocess.CompletedProcess[str]:
@@ -142,7 +142,7 @@ def compile_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[
     def run(source: str) -> RunResult:
         clear_parsed_module_cache()
         clear_retained_artifacts()
-        return run_inline_command(
+        return run_inline_code(
             PipelineDriver(get_sandbox_context=None),
             source,
             roots=RootSet(roots=frozenset({tmp_path})),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.semantics.values import BoolValue, IntValue, TextValue
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 from tests.agl.ir_harness import evaluate_ir, lower_inline_ir
 
 
@@ -150,7 +150,7 @@ let r = case x of
   | 1 => "second"
   | _ => "other"
 r"""
-    result = run_inline_command(PipelineDriver(get_sandbox_context=None), src)
+    result = run_inline_code(PipelineDriver(get_sandbox_context=None), src)
     assert not result.ok
     # Anchored at the redundant arm itself, not at the case head.
     assert [(d.line, d.column) for d in result.diagnostics] == [(4, 5)]
@@ -397,7 +397,7 @@ let r = case x of
   | 1 => "one"
   | 2 => "two"
 r"""
-    result = run_inline_command(PipelineDriver(get_sandbox_context=None), src)
+    result = run_inline_code(PipelineDriver(get_sandbox_context=None), src)
     assert not result.ok
     # Anchored at the case head, where the missing arms belong.
     assert [(d.line, d.column) for d in result.diagnostics] == [(2, 9)]

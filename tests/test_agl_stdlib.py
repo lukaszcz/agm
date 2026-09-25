@@ -39,7 +39,7 @@ from agm.agl.typecheck.checker import (
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
 from agm.agl.zones import ParamZone
-from tests._agl_helpers import agl_roots, run_inline_command
+from tests._agl_helpers import agl_roots, run_inline_code
 from tests.agl.module_graph import load_graph, resolve_and_check_inline_entry, resolve_inline_entry
 
 _ROOTS = agl_roots()
@@ -524,7 +524,7 @@ def test_builtin_exception_own_fields_are_standard_zone(
 ) -> None:
     """A builtin exception's own fields follow the standard zone, so they
     accept positional arguments in a constructor call."""
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None), 'print(IndexError(1, 2, message = "m").index)\n'
     )
 

@@ -48,11 +48,11 @@ def invoke(runner: CliRunner, argv: list[str]) -> Result:
     return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
 
 
-def inline_args(command: str, *, argument_tokens: list[str] | None = None) -> ExecArgs:
+def inline_args(code: str, *, argument_tokens: list[str] | None = None) -> ExecArgs:
     """Build the ``ExecArgs`` an ``agm exec -c SOURCE`` invocation produces."""
     return ExecArgs(
         file=None,
-        command=command,
+        code=code,
         argument_tokens=argument_tokens or [],
         strict_json=None,
         no_trace=True,
@@ -64,7 +64,7 @@ def print_exec_help(
     *,
     tokens: list[str],
     file: str | None,
-    command: str | None,
+    code: str | None,
     program: str | None = None,
     module_paths: list[str] | None = None,
     no_stdlib: bool = False,
@@ -73,21 +73,19 @@ def print_exec_help(
     from agm.cli_support.program_discovery import ExecProgramDiscovery
 
     discovery = ExecProgramDiscovery(
-        command=command,
+        code=code,
         requested_program=program,
         module_paths=module_paths,
         no_stdlib=no_stdlib,
     )
-    return cli._exec_print_help(
-        discovery, tokens=tokens, file=file, command=command, program=program
-    )
+    return cli._exec_print_help(discovery, tokens=tokens, file=file, code=code, program=program)
 
 
 def file_args(path: Path) -> ExecArgs:
     """Build the ``ExecArgs`` an ``agm exec FILE`` invocation produces."""
     return ExecArgs(
         file=str(path),
-        command=None,
+        code=None,
         argument_tokens=[],
         strict_json=None,
         no_trace=True,
@@ -270,7 +268,7 @@ class TestModuleParameterHostInputs:
         self._context(tmp_path, monkeypatch)
 
         assert print_exec_help(
-            tokens=["--help"], file=str(source), command=None, module_paths=[str(modules)]
+            tokens=["--help"], file=str(source), code=None, module_paths=[str(modules)]
         )
 
         output = capsys.readouterr().out
@@ -647,7 +645,7 @@ class TestExecArgsParsing:
 
 
 class TestExecCommandArgParsing:
-    """Parser-contract tests for the -c/--command option."""
+    """Parser-contract tests for the -c/--code option."""
 
     def test_exec_command_flag_maps_to_command(
         self, runner: CliRunner, recorded_runs: list[object]
@@ -656,17 +654,17 @@ class TestExecCommandArgParsing:
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        assert getattr(args, "command") == 'print "hi"'
+        assert getattr(args, "code") == 'print "hi"'
         assert getattr(args, "file") is None
 
     def test_exec_command_long_flag_maps_to_command(
         self, runner: CliRunner, recorded_runs: list[object]
     ) -> None:
-        result = invoke(runner, ["exec", "--command", "let x = 1"])
+        result = invoke(runner, ["exec", "--code", "let x = 1"])
         assert result.exit_code == 0
 
         args = recorded_runs[0]
-        assert getattr(args, "command") == "let x = 1"
+        assert getattr(args, "code") == "let x = 1"
 
     def test_exec_file_and_command_are_mutually_exclusive(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
@@ -808,25 +806,23 @@ class TestExecCommandArgParsing:
 
 
 class TestExecCommandInline:
-    """Behavior tests for executing an inline -c/--command program."""
+    """Behavior tests for executing an inline -c/--code program."""
 
     def _command_args(self, command: str, *, argument_tokens: list[str] | None = None) -> ExecArgs:
         return inline_args(command, argument_tokens=argument_tokens)
 
-    def test_inline_command_runs_and_prints(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_inline_code_runs_and_prints(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert exec_command.run(self._command_args('print "hello"')) is None
         assert capsys.readouterr().out == "hello\n"
 
-    def test_inline_command_with_program_arguments(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_inline_code_with_program_arguments(self, capsys: pytest.CaptureFixture[str]) -> None:
         args = self._command_args(
             "program def main(msg: text) -> unit = print msg", argument_tokens=["--msg", "hi"]
         )
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == "hi\n"
 
-    def test_inline_command_static_error_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_inline_code_static_error_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(self._command_args("let x = undefined-name"))
         assert exc_info.value.code == 1
@@ -836,7 +832,7 @@ class TestExecCommandInline:
         """Calling run() with neither source set fails cleanly (defensive guard)."""
         args = ExecArgs(
             file=None,
-            command=None,
+            code=None,
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -940,13 +936,13 @@ class TestExecDynamicHelp:
     degradation) instead.
     """
 
-    def test_exec_help_for_inline_command_includes_discovered_arguments(
+    def test_exec_help_for_inline_code_includes_discovered_arguments(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         assert print_exec_help(
             tokens=["--help"],
             file=None,
-            command="program def main(count: int = 1) -> unit = print(count + 1)",
+            code="program def main(count: int = 1) -> unit = print(count + 1)",
         )
 
         assert "--count" in capsys.readouterr().out
@@ -980,7 +976,7 @@ class TestExecDynamicHelp:
         )
 
         assert print_exec_help(
-            tokens=["--help"], file=str(entry), command=None, module_paths=[str(module_root)]
+            tokens=["--help"], file=str(entry), code=None, module_paths=[str(module_root)]
         )
 
         assert "--region" in capsys.readouterr().out
@@ -995,14 +991,14 @@ class TestExecDynamicHelp:
             lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable roots")),
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         assert "--msg" not in capsys.readouterr().out
 
     def test_exec_help_for_unreadable_file_degrades(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        assert print_exec_help(tokens=["--help"], file=str(tmp_path / "missing.agl"), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(tmp_path / "missing.agl"), code=None)
 
         assert "agm exec" in capsys.readouterr().out
 
@@ -1025,7 +1021,7 @@ class TestExecDynamicHelp:
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
 
-        assert print_exec_help(tokens=["--help"], file="tools/main::second", command=None)
+        assert print_exec_help(tokens=["--help"], file="tools/main::second", code=None)
 
         assert "--region" in capsys.readouterr().out
 
@@ -1443,13 +1439,13 @@ class TestExecCommandWarnings:
         assert "undefined-name" in captured.err
         assert captured.err.startswith("test.agl:2:11-24: error:")
 
-    def test_inline_error_diagnostic_has_command_label(
+    def test_inline_error_diagnostic_has_code_label(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Inline -c errors carry the ``<command>:`` source label (from SourceId)."""
+        """Inline -c errors carry the ``<code>:`` source label (from SourceId)."""
         args = ExecArgs(
             file=None,
-            command="let x = undefined-name\n",
+            code="let x = undefined-name\n",
             argument_tokens=[],
             strict_json=None,
             no_trace=False,
@@ -1462,9 +1458,9 @@ class TestExecCommandWarnings:
         captured = capsys.readouterr()
         assert "undefined-name" in captured.err
         assert "1:9-22: error:" in captured.err
-        # The graph loader stamps inline source with SourceId(label="<command>"),
-        # so <command>: appears as the source label in the diagnostic output.
-        assert "<command>:1:9-22: error:" in captured.err
+        # The graph loader stamps inline source with SourceId(label="<code>"),
+        # so <code>: appears as the source label in the diagnostic output.
+        assert "<code>:1:9-22: error:" in captured.err
 
     def test_warning_and_error_together_exits_1_and_prints_both(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -2746,14 +2742,14 @@ class TestExecSourceConfigPrecedence:
 
 
 def _exec_args_inline_no_trace(
-    command: str,
+    code: str,
     *,
     strict_json: bool | None = None,
 ) -> ExecArgs:
     """Build a minimal ExecArgs for -c inline exec tests."""
     return ExecArgs(
         file=None,
-        command=command,
+        code=code,
         argument_tokens=[],
         strict_json=strict_json,
         no_trace=True,
@@ -3044,7 +3040,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=str(entry),
-            command=None,
+            code=None,
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -3078,7 +3074,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=str(entry),
-            command=None,
+            code=None,
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -3105,7 +3101,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=str(entry),
-            command=None,
+            code=None,
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -3144,7 +3140,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=None,
-            command="import util::*\nlet r = greet()\nprint r\n",
+            code="import util::*\nlet r = greet()\nprint r\n",
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -3952,7 +3948,7 @@ class TestProgramArgumentsDynamicHelp:
             agl_file, 'program def main(tag: text = "default") -> unit = print tag\n'
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert f"agm exec {agl_file}" in out
@@ -3968,7 +3964,7 @@ class TestProgramArgumentsDynamicHelp:
             'program def main(@doc("Who to greet.") name: text = "you") -> unit = print name\n',
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "Greet a person." in out
@@ -3986,7 +3982,7 @@ class TestProgramArgumentsDynamicHelp:
             ") -> unit = print tag\n",
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "--tag" in out
@@ -4003,7 +3999,7 @@ class TestProgramArgumentsDynamicHelp:
             " print tag\n",
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "-t" in out
@@ -4023,7 +4019,7 @@ class TestProgramArgumentsDynamicHelp:
             "end review\n",
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "first" in out
@@ -4046,7 +4042,7 @@ class TestProgramArgumentsDynamicHelp:
         )
 
         assert print_exec_help(
-            tokens=["--help"], file=str(agl_file), command=None, program="review::main"
+            tokens=["--help"], file=str(agl_file), code=None, program="review::main"
         )
 
         out = capsys.readouterr().out
@@ -4059,7 +4055,7 @@ class TestProgramArgumentsDynamicHelp:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'program def main() -> unit = print "hi"\n')
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert f"agm exec {agl_file}" in out
@@ -4075,7 +4071,7 @@ class TestProgramArgumentsDynamicHelp:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, "program def main(dry-run: bool = false) -> unit = ()\n")
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert str(agl_file) in out
@@ -4098,7 +4094,7 @@ class TestProgramArgumentsDynamicHelp:
             'import helper\nprogram def main(tag: text = "default") -> unit = print tag\n',
         )
 
-        assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)
+        assert print_exec_help(tokens=["--help"], file=str(agl_file), code=None)
 
         out = capsys.readouterr().out
         assert "--tag" in out
@@ -4114,7 +4110,7 @@ class TestProgramArgumentsDynamicHelp:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            print_exec_help(tokens=["--help"], file=str(agl_file), command=None, program="wrong")
+            print_exec_help(tokens=["--help"], file=str(agl_file), code=None, program="wrong")
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -4129,7 +4125,7 @@ class TestProgramArgumentsDynamicHelp:
         agl_file = tmp_path / "prog.agl"
         write_file_program(agl_file, 'program def main(tag: text = "a") -> unit = print tag\n')
 
-        assert not print_exec_help(tokens=["--tag", "-h"], file=str(agl_file), command=None)
+        assert not print_exec_help(tokens=["--tag", "-h"], file=str(agl_file), code=None)
 
         assert (
             exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["--tag", "-h"])) is None
@@ -4149,7 +4145,7 @@ class TestProgramArgumentsDynamicHelp:
             ") -> unit = print alias\n",
         )
 
-        assert not print_exec_help(tokens=["-va", "-h"], file=str(agl_file), command=None)
+        assert not print_exec_help(tokens=["-va", "-h"], file=str(agl_file), code=None)
 
         assert (
             exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["-va", "-h"])) is None
@@ -4170,7 +4166,7 @@ class TestProgramArgumentsDynamicHelp:
             'program def main(@opt-short("v") verbose: bool = false) -> unit = print verbose\n',
         )
 
-        assert not print_exec_help(tokens=["-vh"], file=str(agl_file), command=None)
+        assert not print_exec_help(tokens=["-vh"], file=str(agl_file), code=None)
         assert exec_command.run(_exec_args_no_trace(agl_file, argument_tokens=["-vh"])) is None
 
         assert "--verbose" in capsys.readouterr().out
@@ -4723,7 +4719,7 @@ class TestExecProgramSelection:
     ) -> None:
         args = ExecArgs(
             file=None,
-            command='let value = "inline"\nprint value\n',
+            code='let value = "inline"\nprint value\n',
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -4747,7 +4743,7 @@ class TestExecProgramSelection:
         monkeypatch.setattr(exec_engine, "PipelineDriver", NoProgramDiscoveryRuntime)
         args = ExecArgs(
             file=None,
-            command='print "only selected mains run"',
+            code='print "only selected mains run"',
             argument_tokens=[],
             strict_json=None,
             no_trace=True,
@@ -4775,7 +4771,7 @@ class TestExecProgramSelection:
         monkeypatch.setattr(exec_engine, "PipelineDriver", NoProgramDiscoveryRuntime)
         args = ExecArgs(
             file=None,
-            command='print "only selected mains run"',
+            code='print "only selected mains run"',
             argument_tokens=["stray"],
             strict_json=None,
             no_trace=True,

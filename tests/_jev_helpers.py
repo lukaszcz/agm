@@ -47,7 +47,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.runtime.externs import ExternRegistry
-from tests._agl_helpers import package_roots, run_inline_command
+from tests._agl_helpers import package_roots, run_inline_code
 from tests._package_helpers import package_info
 
 SYSONE_ROOT = Path(__file__).resolve().parents[1] / "packages" / "sysone"
@@ -126,7 +126,7 @@ def jev_roots() -> RootSet:
 
 def load_jev_companion(driver: PipelineDriver, registry: ExternRegistry) -> ModuleType:
     """Load the ``sysone/jev`` companion into *registry* through *driver*."""
-    result = run_inline_command(driver, "import sysone/jev", roots=jev_roots())
+    result = run_inline_code(driver, "import sysone/jev", roots=jev_roots())
     assert result.ok, result.diagnostics
     companion = registry.loaded_companion(JEV_MODULE)
     assert companion is not None

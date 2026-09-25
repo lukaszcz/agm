@@ -19,7 +19,7 @@ from agm.config.context import ConfigContext
 from tests._agl_helpers import (
     agent_value,
     agl_roots,
-    prepare_inline_command,
+    prepare_inline_code,
     write_file_program,
 )
 from tests._agl_helpers import (
@@ -574,7 +574,7 @@ class TestMalformedAgentCommandAtConstruction:
 
     def test_seeded_malformed_command_text_is_a_pre_execution_diagnostic(self) -> None:
         driver = PipelineDriver(get_sandbox_context=None)
-        prepared = prepare_inline_command("()", entry_path=None, roots=agl_roots())
+        prepared = prepare_inline_code("()", entry_path=None, roots=agl_roots())
         result = driver.run_prepared(
             prepared,
             builtin_host_settings={

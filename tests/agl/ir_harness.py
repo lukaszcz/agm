@@ -33,7 +33,7 @@ from agm.agl.semantics.values import Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
-from tests._agl_helpers import agl_roots, run_inline_command
+from tests._agl_helpers import agl_roots, run_inline_code
 from tests._process_helpers import shell_command_from_argv
 from tests.agl.module_graph import build_module_graph, build_module_graph_from_program, load_graph
 
@@ -78,7 +78,7 @@ def _checked_inline_program(
     Raw lowering helpers intentionally do not call this: shape tests must
     supply static-root source explicitly.
     """
-    parsed = parse_entry_module(source, entry_path=origin_path, inline_command=True)
+    parsed = parse_entry_module(source, entry_path=origin_path, inline_code=True)
     graph, _import_node_id = build_module_graph_from_program(
         parsed.program,
         next_node_id=parsed.next_id,
@@ -288,7 +288,7 @@ def run_inline_ir(
     )
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        result = run_inline_command(
+        result = run_inline_code(
             runtime,
             source,
             roots=_roots() if roots is None else roots,
@@ -445,7 +445,7 @@ def make_inline_graph_from_files(
     """
     root = _write_module_root(tmp_path, modules)
     entry_source = modules.get("entry", "()")
-    parsed = parse_entry_module(entry_source, entry_path=None, inline_command=True)
+    parsed = parse_entry_module(entry_source, entry_path=None, inline_code=True)
     graph, _next_id, _new_modules = build_repl_graph(
         parsed.program,
         parsed.next_id,

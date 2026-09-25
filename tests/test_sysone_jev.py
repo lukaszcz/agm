@@ -22,7 +22,7 @@ from agm.cli_support.program_options import (
     build_program_command,
 )
 from agm.core.parse import parse_timeout
-from tests._agl_helpers import prepare_inline_command, run_inline_command
+from tests._agl_helpers import prepare_inline_code, run_inline_code
 from tests._jev_helpers import (
     JEV_MODULE,
     SYSONE_ROOT,
@@ -117,7 +117,7 @@ def probe(state: json) -> unit =
   ()
 """
     result = PipelineDriver(get_sandbox_context=None).check_prepared(
-        prepare_inline_command(source, roots=jev_roots())
+        prepare_inline_code(source, roots=jev_roots())
     )
 
     assert result.ok, result.diagnostics
@@ -330,7 +330,7 @@ def _run_jev(
     """Run *body* as ``main``'s body after *declarations* against scripted *outcomes*,
     retries off by default."""
     mount = mount_jev(monkeypatch, outcomes)
-    result = run_inline_command(
+    result = run_inline_code(
         mount.driver,
         _program(body, declarations),
         roots=jev_roots(),
@@ -628,7 +628,7 @@ def test_none_settings_leave_the_sdk_environment_defaults(monkeypatch: pytest.Mo
         _BILLING_CALL + 'let _ = jev::system-one("I was charged twice." as json, billing)\n'
     )
 
-    result = run_inline_command(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
+    result = run_inline_code(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
 
     assert result.ok, result.error
     mount.transport.assert_complete()
@@ -636,7 +636,7 @@ def test_none_settings_leave_the_sdk_environment_defaults(monkeypatch: pytest.Mo
 
 def _cli_module_params(driver: PipelineDriver, source: str, tokens: list[str]) -> dict[str, object]:
     """Module parameter values ``agm exec`` would parse from *tokens* for *source*'s program."""
-    discovery = driver.discover_programs(prepare_inline_command(source, roots=jev_roots()))
+    discovery = driver.discover_programs(prepare_inline_code(source, roots=jev_roots()))
     (program,) = [program for program in discovery.programs if program.module.is_entry]
     params = tuple(discovery.params_for(program))
     command = build_program_command(program, EXEC_RESERVED_FLAGS, params)
@@ -664,7 +664,7 @@ def test_the_api_key_option_falls_back_to_its_environment_variable(
     # Only the parsed setting may carry the key now, not the SDK's own lookup.
     monkeypatch.delenv("TYPESAFE_API_KEY")
 
-    result = run_inline_command(
+    result = run_inline_code(
         mount.driver, source, roots=jev_roots(), module_params={**_NO_RETRIES, **module_params}
     )
 
@@ -776,7 +776,7 @@ let _ = jev::system-one(state, billing, base-url = Some("https://api.typesafe.ai
     log = _log_clients(monkeypatch, mount.companion)
     settings = mount.companion.Settings
 
-    result = run_inline_command(
+    result = run_inline_code(
         mount.driver, _program(body), roots=jev_roots(), module_params=_NO_RETRIES
     )
 
@@ -800,8 +800,8 @@ def test_pooled_clients_close_when_the_run_fails_and_each_run_opens_its_own(
         _BILLING_CALL + 'let _ = jev::system-one("I was charged twice." as json, billing)\n'
     )
 
-    first = run_inline_command(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
-    second = run_inline_command(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
+    first = run_inline_code(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
+    second = run_inline_code(mount.driver, source, roots=jev_roots(), module_params=_NO_RETRIES)
 
     assert first.ok, first.error
     assert second.error is not None
@@ -939,7 +939,7 @@ def test_an_sdk_error_of_no_specific_class_raises_plain_jev_error(
     if api_key_env is None:
         monkeypatch.delenv("TYPESAFE_API_KEY")
 
-    result = run_inline_command(
+    result = run_inline_code(
         mount.driver, _program(body), roots=jev_roots(), module_params=_NO_RETRIES
     )
 

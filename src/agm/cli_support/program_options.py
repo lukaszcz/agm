@@ -387,7 +387,7 @@ def engine_key_flags() -> frozenset[str]:
 # there and forgotten here fails.
 _BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
     {
-        "--command",
+        "--code",
         "-c",
         "--program",
         "-p",
@@ -427,7 +427,7 @@ class ExecTail:
     """``agm exec``'s source selector and the tokens the program itself reads.
 
     ``file`` is the FILE argument — a path or an installed reference — or
-    ``None`` when the invocation names none (``-c/--command``, or nothing at
+    ``None`` when the invocation names none (``-c/--code``, or nothing at
     all). ``tokens`` is every remaining tail token in written order, for the
     selected program's own command to read.
     """

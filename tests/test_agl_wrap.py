@@ -28,7 +28,7 @@ from agm.agl.syntax import (
     UseDecl,
     VarDecl,
 )
-from tests._agl_helpers import run_inline_command
+from tests._agl_helpers import run_inline_code
 
 
 def test_wrap_inline_program_partitions_root_items_and_preserves_statement_order() -> None:
@@ -387,7 +387,7 @@ def test_wrapped_computed_binding_is_readable_from_a_root_declaration(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A retained binding an inline declaration reads may be computed."""
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         'let a = 2\nlet b = a + 1\ndef show() -> unit = print("%{b}")\nshow()',
     )
@@ -400,7 +400,7 @@ def test_wrapped_computed_binding_chain_initializes_in_source_order(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Retained computed bindings run in source order before the entry body."""
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         'let base = 2\nlet doubled = base * 2\nlet label = "v%{doubled}"\n'
         "var total = doubled\n"
@@ -417,7 +417,7 @@ def test_wrapped_entry_var_is_assignable_from_a_closure(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A lambda in the synthetic entry may assign the entry's own ``var``."""
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         "var count = 0\nlet bump = fn() -> unit => do count := count + 1 until true\n"
         'bump()\nbump()\nprint("%{count}")',
@@ -431,7 +431,7 @@ def test_wrapped_entry_closure_sees_later_writes_to_a_captured_var(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The capture shares the entry's cell rather than snapshotting its value."""
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         "var factor = 2\nlet scale = fn(n: int) -> int => n * factor\n"
         "print(scale(3))\nfactor := 10\nprint(scale(3))",
@@ -443,7 +443,7 @@ def test_wrapped_entry_closure_sees_later_writes_to_a_captured_var(
 
 def test_late_import_in_inline_source_reports_the_header_rule() -> None:
     """An import after an executable item names the ordering rule it broke."""
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None), 'print("a")\nimport std/text\nprint("b")'
     )
 
@@ -455,7 +455,7 @@ def test_late_import_in_inline_source_reports_the_header_rule() -> None:
 
 def test_import_inside_an_inline_nested_block_still_names_the_block() -> None:
     """A block the source itself wrote keeps the placement diagnostic."""
-    result = run_inline_command(
+    result = run_inline_code(
         PipelineDriver(get_sandbox_context=None),
         'print("a")\nfor i in 1 to 2 do\n  import std/text\n  print(i)\ndone',
     )

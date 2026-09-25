@@ -32,6 +32,7 @@ from agm.cli_support.args import ExecArgs
 from agm.commands import exec_program as exec_engine
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import write_file_program
+from tests._help_helpers import assert_lists_execution_options, execution_options_is_last
 
 
 class RecordedArgs(Protocol):
@@ -4063,16 +4064,10 @@ class TestProgramArgumentsDynamicHelp:
         out = capsys.readouterr().out
         assert f"agm exec {agl_file}" in out
         assert "--help" in out
-        options, _, execution_options = out.partition("Execution options:\n")
+        options, _, _ = out.partition("Execution options:\n")
         assert "--strict-json" not in options
-        assert execution_options.endswith(
-            "  --strict-json / --no-strict-json\n"
-            "  --max-call-depth N\n"
-            "  --default-agent AGENT\n"
-            "  --default-sandbox SANDBOX\n"
-            "  --timeout DURATION / --no-timeout\n"
-            "  --trace, --no-trace, --trace-file PATH, --no-trace-file\n"
-        )
+        assert_lists_execution_options(out, "exec")
+        assert execution_options_is_last(out)
 
     def test_help_for_a_program_can_show_a_dry_run_parameter(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

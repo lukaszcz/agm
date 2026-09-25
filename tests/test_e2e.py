@@ -45,6 +45,7 @@ from tests._agl_helpers import (
 from tests._command_coverage import record_invocation
 from tests._external_agent_clis import EXTERNAL_AGENT_CLIS
 from tests._git_helpers import clone_with_fork_remote
+from tests._help_helpers import assert_lists_execution_options, execution_options_is_last
 from tests._package_helpers import write_installed_package, write_python_package
 from tests._proc_helpers import wait_for_path
 
@@ -8225,15 +8226,8 @@ class TestPackageInstall:
         assert "<name>" in command_help.stdout
         assert "--tag" in command_help.stdout
         assert "Greet someone" in command_help.stdout
-        assert command_help.stdout.endswith(
-            "Execution options:\n"
-            "  --strict-json / --no-strict-json\n"
-            "  --max-call-depth N\n"
-            "  --default-agent AGENT\n"
-            "  --default-sandbox SANDBOX\n"
-            "  --timeout DURATION / --no-timeout\n"
-            "  --trace, --no-trace, --trace-file PATH, --no-trace-file\n"
-        )
+        assert_lists_execution_options(command_help.stdout, "registered")
+        assert execution_options_is_last(command_help.stdout)
         assert short_help.returncode == 0
         assert "--tag" in short_help.stdout
         assert configured.stdout == "alice:configured\n"
@@ -8559,10 +8553,10 @@ class TestHelp:
         assert result.returncode == 0, f"help {cmd} failed"
         assert f"agm {cmd}" in result.stdout, f"help {cmd} missing header"
 
-    def test_help_help_mentions_completion_options(
+    def test_help_overview_mentions_completion_options(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        result = run_agm(["help", "help"], env=env, cwd=str(tmp_path))
+        result = run_agm(["help"], env=env, cwd=str(tmp_path))
         assert result.returncode == 0
         assert "--install-completion" in result.stdout
         assert "--show-completion" in result.stdout
@@ -8594,9 +8588,10 @@ class TestHelp:
         assert "--embedded" in result.stdout
         assert "--split" in result.stdout
         assert "PROJECT_NAME" in result.stdout
-        # The non-URL form (PROJECT_NAME without REPO_URL) must not show --branch.
-        # Partition at the standalone PROJECT_NAME usage line to check only the non-URL forms.
-        assert "--branch" not in result.stdout.partition("PROJECT_NAME\n")[0]
+        # The non-URL usage form (before the REPO_URL forms) must not show -b/--branch.
+        non_url_form = result.stdout.partition("REPO_URL")[0].rpartition("\nagm init")[0]
+        assert "[PROJECT_NAME]" in non_url_form
+        assert "-b" not in non_url_form
 
     def test_help_aliases_resolve(self, tmp_path: Path, env: dict[str, str]) -> None:
         """Aliases show help for the canonical command."""
@@ -8612,7 +8607,7 @@ class TestHelp:
             (["help", "wt", "new"], ["wt", "new", "-h"], "agm wt new"),
             (["help", "worktree", "remove"], ["worktree", "remove", "-h"], "agm worktree remove"),
             (["help", "workspace", "setup"], ["workspace", "setup", "-h"], "agm workspace setup"),
-            (["help", "wsp", "list"], ["wsp", "list", "-h"], "agm workspace list"),
+            (["help", "wsp", "list"], ["wsp", "list", "-h"], "agm wsp list"),
             (
                 ["help", "workspace", "shell-regen"],
                 ["workspace", "shell-regen", "-h"],
@@ -8728,7 +8723,7 @@ class TestHelp:
             (["tmux", "open", "-n", "abc"], ["tmux", "open", "-h"], "pane count"),
         ],
     )
-    def test_incorrect_usage_includes_full_help(
+    def test_incorrect_usage_shows_the_usage(
         self,
         argv: list[str],
         help_argv: list[str],
@@ -8741,7 +8736,7 @@ class TestHelp:
 
         assert result.returncode != 0
         assert error_text in result.stderr.lower()
-        assert expected.stdout in result.stderr
+        assert expected.stdout.partition("\n\n")[0] in result.stderr
 
 
 # ── edge cases ─────────────────────────────────────────────────────────────

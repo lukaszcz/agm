@@ -166,7 +166,7 @@ def _dry_run_option() -> bool:
         callback=set_dry_run,
         expose_value=False,
         is_eager=True,
-        help="Print commands and AGM operations without executing them.",
+        help="Print planned actions instead of performing them.",
     )
 
 
@@ -176,7 +176,7 @@ def _strict_json_option() -> bool | None:
         None,
         *option.declarations,
         metavar=option.metavar,
-        help="Require agents to return exactly one bare JSON value; default is lenient recovery.",
+        help="Strict or lenient agent JSON parsing.",
     )
 
 
@@ -186,7 +186,7 @@ def _max_call_depth_option() -> int | None:
         None,
         *option.declarations,
         metavar=option.metavar,
-        help="Override the maximum recursion call depth (CLI > config).",
+        help="Maximum call depth.",
     )
 
 
@@ -196,7 +196,7 @@ def _default_agent_option() -> str | None:
         None,
         *option.declarations,
         metavar=option.metavar,
-        help="Seed the free-ask default session from an Agent value or command.",
+        help="Default agent (Agent value or command).",
     )
 
 
@@ -206,7 +206,7 @@ def _default_sandbox_option() -> str | None:
         None,
         *option.declarations,
         metavar=option.metavar,
-        help="Seed std/config::default-sandbox from an AgentSandbox value.",
+        help="Default agent sandbox (AgentSandbox).",
     )
 
 
@@ -216,19 +216,26 @@ def _trace_file_option() -> str | None:
         None,
         *option.declarations,
         metavar=option.metavar,
-        help="Write a structured JSONL trace log to PATH. Trace logging is off by default.",
+        help="Write the JSONL trace to PATH.",
         autocompletion=completion.complete_path_argument,
     )
 
 
-def _no_trace_option(help_text: str) -> bool:
+def _no_trace_option() -> bool:
     option = execution_option_spec("no_trace")
-    return typer.Option(False, *option.declarations, metavar=option.metavar, help=help_text)
+    return typer.Option(
+        False, *option.declarations, metavar=option.metavar, help="Disable trace logging."
+    )
 
 
-def _trace_option(help_text: str) -> bool:
+def _trace_option() -> bool:
     option = execution_option_spec("trace")
-    return typer.Option(False, *option.declarations, metavar=option.metavar, help=help_text)
+    return typer.Option(
+        False,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Enable trace logging to an auto-named file.",
+    )
 
 
 def _timeout_option() -> str | None:
@@ -237,11 +244,7 @@ def _timeout_option() -> str | None:
         None,
         *option.declarations,
         metavar=option.metavar,
-        help=(
-            "Override initial shell-exec and agent idle timeouts (e.g. '30s', '5m', '120').  "
-            "Seeds the in-program 'std/config::timeout' setting to Some(VALUE).  "
-            "Mutually exclusive with --no-timeout."
-        ),
+        help="Shell-exec and agent idle timeout.",
     )
 
 
@@ -251,11 +254,7 @@ def _no_timeout_option() -> bool:
         False,
         *option.declarations,
         metavar=option.metavar,
-        help=(
-            "Remove any configured initial shell-exec and agent timeout.  "
-            "Seeds the in-program 'std/config::timeout' setting to None.  "
-            "Mutually exclusive with --timeout."
-        ),
+        help="No shell-exec or agent idle timeout.",
     )
 
 
@@ -265,11 +264,7 @@ def _no_trace_file_option() -> bool:
         False,
         *option.declarations,
         metavar=option.metavar,
-        help=(
-            "Clears only the in-program trace-file binding; a trace-file path set in "
-            "config or auto-assigned by --trace still applies.  Use --no-trace to disable "
-            "tracing entirely.  Mutually exclusive with --trace-file."
-        ),
+        help="Clear only std/config::trace-file.",
     )
 
 
@@ -279,17 +274,13 @@ def _module_path_option() -> list[str]:
         "-I",
         "--module-path",
         metavar="DIR",
-        help=(
-            "Add DIR as an additional module search root (repeatable). "
-            "Resolved relative to the invocation working directory. "
-            "Joins the unordered root set; a module id found in two roots is an ambiguity error."
-        ),
+        help="Add a module search root (repeatable).",
         autocompletion=completion.complete_dir_argument,
     )
 
 
-def _no_stdlib_option(help_text: str) -> bool:
-    return typer.Option(False, "--no-stdlib", help=help_text)
+def _no_stdlib_option() -> bool:
+    return typer.Option(False, "--no-stdlib", help="Disable the automatic import std/prelude::*.")
 
 
 def _missing_arguments(command_path: Sequence[str], names: Sequence[str]) -> NoReturn:
@@ -1091,33 +1082,24 @@ def exec_cmd(
         None,
         "-c",
         "--command",
-        help="Execute the AgL program given as COMMAND instead of reading from FILE.",
+        help="Program source.",
     ),
     program: str | None = typer.Option(
         None,
         "-p",
         "--program",
         metavar="PATH",
-        help="Select a program def by its declaration path.",
+        help="Select a program def by declaration path.",
     ),
     strict_json: bool | None = _strict_json_option(),
     max_call_depth: int | None = _max_call_depth_option(),
     default_agent: str | None = _default_agent_option(),
     default_sandbox: str | None = _default_sandbox_option(),
     trace_file: str | None = _trace_file_option(),
-    no_trace: bool = _no_trace_option(
-        "Disable trace logging (overrides [exec] trace = true in config.toml)."
-    ),
-    trace: bool = _trace_option(
-        "Enable trace logging to an auto-named timestamped file under .agent-files/. "
-        "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
-        "config.toml opt in."
-    ),
+    no_trace: bool = _no_trace_option(),
+    trace: bool = _trace_option(),
     module_paths: list[str] = _module_path_option(),
-    no_stdlib: bool = _no_stdlib_option(
-        "Disable the automatic import std/prelude::* prelude throughout the loaded program "
-        "(entry and library modules)."
-    ),
+    no_stdlib: bool = _no_stdlib_option(),
     timeout: str | None = _timeout_option(),
     no_timeout: bool = _no_timeout_option(),
     no_trace_file: bool = _no_trace_file_option(),
@@ -1133,7 +1115,6 @@ def exec_cmd(
     # One discovery for the whole invocation: the tail split probes candidate
     # FILE tokens with it, and the help surface below then asks about the
     # token it settled on, without paying for a second static pipeline pass.
-    set_dry_run(ctx, None, False)
     metadata = cast(_ContextWithMetadata, ctx).meta
     cached_discovery = metadata.pop("exec_program_discovery", None)
     discovery = (
@@ -1193,7 +1174,6 @@ def exec_cmd(
 
 @app.command(name="repl")
 def repl_cmd(
-    ctx: typer.Context,
     strict_json: bool | None = _strict_json_option(),
     max_call_depth: int | None = _max_call_depth_option(),
     default_agent: str | None = _default_agent_option(),
@@ -1201,31 +1181,20 @@ def repl_cmd(
     quiet: bool = typer.Option(
         False,
         "--quiet",
-        help="Suppress automatic echoing of entry results.",
+        help="Do not echo entry results.",
     ),
     trace_file: str | None = _trace_file_option(),
-    no_trace: bool = _no_trace_option("Disable trace logging."),
-    trace: bool = _trace_option(
-        "Enable trace logging to an auto-named timestamped file under .agent-files/. "
-        "Trace logging is off by default; --trace, --trace-file, or [exec] trace = true in "
-        "config.toml opt in. A std/config::trace write takes effect in the REPL too."
-    ),
-    no_stdlib: bool = _no_stdlib_option(
-        "Disable the automatic import std/prelude::* prelude for each loaded REPL program "
-        "(entries and library modules)."
-    ),
+    no_trace: bool = _no_trace_option(),
+    trace: bool = _trace_option(),
+    no_stdlib: bool = _no_stdlib_option(),
     plain: bool = typer.Option(
         False,
         "--plain",
-        help=(
-            "Force the plain, non-interactive line front end. Auto-detected "
-            "otherwise: engaged when stdin/stdout is not a terminal or TERM=dumb."
-        ),
+        help="Use the plain line front end even on a terminal.",
     ),
     _help: bool = _help_option(),
 ) -> None:
     del _help
-    set_dry_run(ctx, None, False)
     _reject_run_option_conflict(
         "repl", trace_option_conflict(no_trace=no_trace, trace=trace, trace_file=trace_file)
     )
@@ -1257,10 +1226,7 @@ def check_cmd(
         autocompletion=completion.complete_agl_file,
     ),
     module_paths: list[str] = _module_path_option(),
-    no_stdlib: bool = _no_stdlib_option(
-        "Disable automatic std/prelude opening throughout each checked file "
-        "(entry and library modules)."
-    ),
+    no_stdlib: bool = _no_stdlib_option(),
     _help: bool = _help_option(),
 ) -> None:
     del _help

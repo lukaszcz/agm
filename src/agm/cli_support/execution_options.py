@@ -6,7 +6,12 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Literal
 
+import click
+
 ExecutionSurface = Literal["exec", "repl", "registered"]
+
+#: Widest option label kept on its description's line, at most half the help width.
+_LABEL_COLUMN_MAX = 34
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +23,14 @@ class ExecutionOptionSpec:
     metavar: str | None
     group: str
     surfaces: frozenset[ExecutionSurface]
+
+
+@dataclass(frozen=True, slots=True)
+class _HelpGroup:
+    """One help row: the grouped options' labels, joined by `` / ``, and their help."""
+
+    key: str
+    description: str
 
 
 _EXEC_AND_REGISTERED: frozenset[ExecutionSurface] = frozenset({"exec", "registered"})
@@ -38,18 +51,22 @@ EXECUTION_OPTION_SPECS: tuple[ExecutionOptionSpec, ...] = (
     ExecutionOptionSpec("no_timeout", ("--no-timeout",), None, "timeout", _EXEC_AND_REGISTERED),
     ExecutionOptionSpec("trace", ("--trace",), None, "trace", _ALL_SURFACES),
     ExecutionOptionSpec("no_trace", ("--no-trace",), None, "trace", _ALL_SURFACES),
-    ExecutionOptionSpec("trace_file", ("--trace-file",), "PATH", "trace", _ALL_SURFACES),
-    ExecutionOptionSpec("no_trace_file", ("--no-trace-file",), None, "trace", _EXEC_AND_REGISTERED),
+    ExecutionOptionSpec("trace_file", ("--trace-file",), "PATH", "trace_file", _ALL_SURFACES),
+    ExecutionOptionSpec(
+        "no_trace_file", ("--no-trace-file",), None, "no_trace_file", _EXEC_AND_REGISTERED
+    ),
 )
 
 _SPEC_BY_NAME = {spec.name: spec for spec in EXECUTION_OPTION_SPECS}
-_HELP_GROUPS: tuple[tuple[str, str], ...] = (
-    ("strict_json", " "),
-    ("call_depth", " "),
-    ("default_agent", " "),
-    ("default_sandbox", " "),
-    ("timeout", " / "),
-    ("trace", ", "),
+_HELP_GROUPS: tuple[_HelpGroup, ...] = (
+    _HelpGroup("strict_json", "Strict or lenient agent JSON parsing."),
+    _HelpGroup("call_depth", "Maximum call depth."),
+    _HelpGroup("default_agent", "Default agent (Agent value or command)."),
+    _HelpGroup("default_sandbox", "Default agent sandbox (AgentSandbox)."),
+    _HelpGroup("timeout", "Shell-exec/agent idle timeout, or none."),
+    _HelpGroup("trace", "Enable or disable trace logging."),
+    _HelpGroup("trace_file", "Write the JSONL trace to PATH."),
+    _HelpGroup("no_trace_file", "Clear only std/config::trace-file."),
 )
 
 
@@ -58,29 +75,24 @@ def execution_option_spec(name: str) -> ExecutionOptionSpec:
     return _SPEC_BY_NAME[name]
 
 
-def execution_option_lines(parameter_names: Collection[str]) -> tuple[str, ...]:
-    """Format supported execution options as concise, grouped help rows."""
+def execution_option_rows(parameter_names: Collection[str]) -> tuple[tuple[str, str], ...]:
+    """Return ``(options, help)`` rows for the given supported execution options."""
     names = frozenset(parameter_names)
-    rows: list[str] = []
-    for group, separator in _HELP_GROUPS:
+    rows: list[tuple[str, str]] = []
+    for group in _HELP_GROUPS:
         specs = [
-            spec for spec in EXECUTION_OPTION_SPECS if spec.group == group and spec.name in names
+            spec
+            for spec in EXECUTION_OPTION_SPECS
+            if spec.group == group.key and spec.name in names
         ]
         if not specs:
             continue
         labels = [
-            f"{spec.declarations[0].replace('/', ' / ')} {spec.metavar}"
-            if spec.metavar is not None
-            else spec.declarations[0].replace("/", " / ")
+            " ".join(filter(None, (spec.declarations[0].replace("/", " / "), spec.metavar)))
             for spec in specs
         ]
-        rows.append(separator.join(labels))
+        rows.append((" / ".join(labels), group.description))
     return tuple(rows)
-
-
-def execution_options_section(surface: ExecutionSurface) -> str:
-    """Render the final help section for a built-in execution surface."""
-    return format_execution_options_section(execution_option_names_for_surface(surface))
 
 
 def execution_option_names_for_surface(surface: ExecutionSurface) -> frozenset[str]:
@@ -88,12 +100,18 @@ def execution_option_names_for_surface(surface: ExecutionSurface) -> frozenset[s
     return frozenset(spec.name for spec in EXECUTION_OPTION_SPECS if surface in spec.surfaces)
 
 
-def format_execution_options_section(parameter_names: Collection[str]) -> str:
-    """Render the final help section for the given execution-option parameters."""
-    return _format_execution_options_section(execution_option_lines(parameter_names))
+def write_execution_options(
+    formatter: click.HelpFormatter, parameter_names: Collection[str]
+) -> None:
+    """Write the ``Execution options`` section for *parameter_names*, if any, to *formatter*."""
+    rows = execution_option_rows(parameter_names)
+    if rows:
+        with formatter.section("Execution options"):
+            formatter.write_dl(rows, col_max=min(_LABEL_COLUMN_MAX, formatter.width // 2))
 
 
-def _format_execution_options_section(rows: tuple[str, ...]) -> str:
-    if not rows:
-        return ""
-    return "Execution options:\n" + "".join(f"  {row}\n" for row in rows)
+def execution_options_section(surface: ExecutionSurface, *, width: int) -> str:
+    """Render *surface*'s ``Execution options`` section, wrapped to *width*."""
+    formatter = click.HelpFormatter(width=width)
+    write_execution_options(formatter, execution_option_names_for_surface(surface))
+    return formatter.getvalue()

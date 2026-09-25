@@ -52,6 +52,7 @@ from agm.cli_support.program_options import (
     split_exec_tail,
 )
 from tests._agl_helpers import next_decl_id
+from tests._help_helpers import assert_lists_execution_options, execution_options_is_last
 
 _SPAN = SourceSpan(1, 1, 1, 2, 0, 1)
 _TABLE = create_seeded_type_table()
@@ -1159,16 +1160,8 @@ class TestRenderHelp:
         text = _command(_param("tag", TextType())).render_help(
             "agm publish", extra_options=run_options
         )
-        section = text.rpartition("Execution options:\n")[2]
-
-        assert section == (
-            "  --strict-json / --no-strict-json\n"
-            "  --max-call-depth N\n"
-            "  --default-agent AGENT\n"
-            "  --default-sandbox SANDBOX\n"
-            "  --timeout DURATION / --no-timeout\n"
-            "  --trace, --no-trace, --trace-file PATH, --no-trace-file\n"
-        )
+        assert_lists_execution_options(text, "registered")
+        assert execution_options_is_last(text)
         assert text.index("Execution options:") > text.index("--tag")
         assert "--help" in text.partition("Execution options:")[0]
 

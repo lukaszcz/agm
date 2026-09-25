@@ -112,7 +112,7 @@ from agm.cli_support.execution_options import (
     EXECUTION_OPTION_SPECS,
     ExecutionSurface,
     execution_option_names_for_surface,
-    format_execution_options_section,
+    write_execution_options,
 )
 
 _EXECUTION_OPTION_NAMES = frozenset(spec.name for spec in EXECUTION_OPTION_SPECS)
@@ -1294,12 +1294,7 @@ class _ProgramClickCommand(click.Command):
         }
         if self.execution_surface is not None:
             execution_names.update(execution_option_names_for_surface(self.execution_surface))
-        section = format_execution_options_section(execution_names)
-        if section:
-            title, _, body = section.partition("\n")
-            with formatter.section(title.removesuffix(":")):
-                for row in body.splitlines():
-                    formatter.write_text(row.strip())
+        write_execution_options(formatter, execution_names)
 
 
 def _build_click_command(

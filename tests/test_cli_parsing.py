@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 import click
 import pytest
@@ -43,6 +43,7 @@ import agm.commands.worktree.remove as worktree_remove_command
 import agm.parser as parser_helpers
 from agm.core import dry_run as dry_run_state
 from agm.packages.layout import MODULE_TREE_DIRNAME
+from tests._help_helpers import assert_lists_execution_options
 
 
 class RecordedArgs(Protocol):
@@ -1930,13 +1931,30 @@ class TestEveryCommandHasHelpText:
             assert cmd in _HELP_TEXTS, f"missing help text for '{cmd}'"
 
     def test_every_overview_command_has_help_text(self) -> None:
-        from agm.cli import _COMMAND_OVERVIEW, _HELP_TEXTS
+        from agm.cli import _COMMAND_OVERVIEW
 
         for name, _ in _COMMAND_OVERVIEW:
-            canonical = name.split(" (")[0]
-            assert canonical in _HELP_TEXTS, (
-                f"overview lists '{canonical}' but _HELP_TEXTS has no entry"
-            )
+            text = parser_helpers.help_text_for(name)
+            assert text is not None, f"overview lists '{name}' without help text"
+            assert text.startswith(f"agm {name}")
+
+    def test_every_command_path_has_help_listing_dry_run_exactly_when_accepted(self) -> None:
+        def walk(command: click.Command, path: tuple[str, ...]) -> None:
+            text = parser_helpers._help_text_for_path(path)
+            accepts = any("--dry-run" in param.opts for param in command.params)
+            assert ("--dry-run" in text) == accepts, " ".join(path)
+            if isinstance(command, click.Group):
+                for name in command.list_commands(click.Context(command)):
+                    subcommand = command.get_command(click.Context(command), name)
+                    assert subcommand is not None
+                    walk(subcommand, (*path, name))
+
+        root = get_command(cli.app)
+        assert isinstance(root, click.Group)
+        for name in root.list_commands(click.Context(root)):
+            command = root.get_command(click.Context(root), name)
+            assert command is not None
+            walk(command, (name,))
 
     def test_aliases_point_to_valid_commands(self) -> None:
         from agm.cli import _HELP_ALIASES, _HELP_TEXTS
@@ -2249,21 +2267,17 @@ class TestParserHelpers:
             assert option in result
         assert "--runner" not in result
 
-    def test_exec_help_ends_with_the_shared_execution_options_section(self) -> None:
+    @pytest.mark.parametrize("surface", ["exec", "repl"])
+    def test_execution_options_follow_the_command_options(
+        self, surface: Literal["exec", "repl"]
+    ) -> None:
         output = io.StringIO()
-        parser_helpers.print_help_for_command_path(["exec"], file=output)
+        parser_helpers.print_help_for_command_path([surface], file=output)
         result = output.getvalue()
 
-        assert result.endswith(
-            "Execution options:\n"
-            "  --strict-json / --no-strict-json\n"
-            "  --max-call-depth N\n"
-            "  --default-agent AGENT\n"
-            "  --default-sandbox SANDBOX\n"
-            "  --timeout DURATION / --no-timeout\n"
-            "  --trace, --no-trace, --trace-file PATH, --no-trace-file\n"
-        )
-        assert "--help" not in result.rpartition("Execution options:")[2]
+        assert_lists_execution_options(result, surface)
+        assert result.index("Options:") < result.index("Execution options:")
+        assert result.index("Execution options:") < result.index("Exit codes:")
 
     def test_exec_help_lists_installed_program_reference(self) -> None:
         output = io.StringIO()
@@ -2278,21 +2292,6 @@ class TestParserHelpers:
         assert "--strict-json" in result
         assert "--default-agent" in result
         assert "--runner" not in result
-
-    def test_repl_help_ends_with_its_supported_execution_options(self) -> None:
-        output = io.StringIO()
-        parser_helpers.print_help_for_command_path(["repl"], file=output)
-        result = output.getvalue()
-
-        assert result.endswith(
-            "Execution options:\n"
-            "  --strict-json / --no-strict-json\n"
-            "  --max-call-depth N\n"
-            "  --default-agent AGENT\n"
-            "  --default-sandbox SANDBOX\n"
-            "  --trace, --no-trace, --trace-file PATH\n"
-        )
-        assert "--help" not in result.rpartition("Execution options:")[2]
 
     def test_print_command_help_with_file_param(self) -> None:
         output = io.StringIO()

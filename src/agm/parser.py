@@ -401,14 +401,14 @@ _HELP_TEXTS: dict[str, str] = {
 _EXECUTION_HELP_TEXTS: dict[ExecutionSurface, tuple[str, str]] = {
     "exec": (
         textwrap.dedent("""\
-            agm exec [OPTIONS] (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND)
+            agm exec [OPTIONS] (FILE | PACKAGE/MODULE::PROGRAM | -c SOURCE)
                      [ARG]... [--NAME VALUE]...
 
             Run an AgL program from FILE, an installed PACKAGE/MODULE::PROGRAM, or
-            inline COMMAND.
+            inline SOURCE.
 
             Options:
-              -c, --command COMMAND  Program source; wrapped in `program def main`
+              -c, --command SOURCE   AgL source; wrapped in `program def main`
                                      unless it declares a program.
               -p, --program PATH     Select a `program def` by declaration path.
             """)

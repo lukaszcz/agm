@@ -13,7 +13,7 @@ agm exec [--strict-json|--no-strict-json]
          [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
          [--no-stdlib]
          [-I DIR]... [-p PATH]
-         (FILE | PACKAGE/MODULE::PROGRAM | -c COMMAND) [ARG]... [--NAME VALUE]...
+         (FILE | PACKAGE/MODULE::PROGRAM | -c SOURCE) [ARG]... [--NAME VALUE]...
 ```
 
 Run an AgL program from exactly one source: a `FILE`, an installed `PACKAGE/MODULE::PROGRAM`
@@ -71,7 +71,7 @@ a direct `agm repl` entry is a static error.
 
 ### Options
 
-- `-c COMMAND`, `--command COMMAND`: Program source text, instead of `FILE`.
+- `-c SOURCE`, `--command SOURCE`: AgL program source text, instead of `FILE`.
 - `-p PATH`, `--program PATH`: Select a `program def` by declaration path (`main`,
   `review::main`). With a `PACKAGE/MODULE::PROGRAM` reference, replaces its program path and
   keeps its module.
@@ -187,7 +187,7 @@ is a usage error (exit 1) when the program's own parser exists to reject `--nope
 
 Inline `-c` source without a `program def` gets a parameterless synthetic `main`, so it accepts
 no `ARG`/`--NAME` tokens; declare a `program def` to add parameters. Even then it takes no
-positionals: a bare token after `-c COMMAND` is the mutually exclusive `FILE` selector
+positionals: a bare token after `-c SOURCE` is the mutually exclusive `FILE` selector
 (`agm exec -c '…' hello` fails with `error: argument FILE not allowed with -c/--command`),
 although `-c … --help` shows a positional usage slot for positional-capable parameters. Named options work, so give inline
 programs only standard or named-only parameters.

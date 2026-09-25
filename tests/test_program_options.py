@@ -1975,7 +1975,7 @@ class TestExecProgramName:
         )
 
     def test_an_inline_source_is_named_by_its_option(self) -> None:
-        assert exec_program_name(file=None, program=None) == "agm exec -c COMMAND"
+        assert exec_program_name(file=None, program=None) == "agm exec -c SOURCE"
 
 
 # ---------------------------------------------------------------------------

@@ -1082,7 +1082,8 @@ def exec_cmd(
         None,
         "-c",
         "--command",
-        help="Program source.",
+        metavar="SOURCE",
+        help="AgL program source.",
     ),
     program: str | None = typer.Option(
         None,

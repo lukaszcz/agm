@@ -1918,7 +1918,7 @@ def exec_program_name(*, file: str | None, program: str | None) -> str:
     usage line — and the ``-p`` selection when one was made, so the usage
     line stands for the command that was actually run.
     """
-    parts = ["agm", "exec", "-c COMMAND" if file is None else file]
+    parts = ["agm", "exec", "-c SOURCE" if file is None else file]
     if program is not None:
         parts.extend(("-p", program))
     return " ".join(parts)

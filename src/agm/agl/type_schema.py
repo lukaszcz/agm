@@ -33,13 +33,15 @@ Derivation rules:
 - ``dict[text, V]`` → ``{"type": "object", "additionalProperties": <schema for V>}``
 - ``record``  → object schema with ``additionalProperties: false``, ``required``,
                 and per-field ``properties``, keyed by each field's effective
-                JSON name (``@json-name`` ?? ``@name`` ?? declared). A field
-                whose declaration carries a constant default is dropped from
-                ``required``.
+                JSON name (``@json-name`` ?? ``@name`` ?? declared), with each
+                field's ``@doc`` as its property's ``description`` when present.
+                A field whose declaration carries a constant default is dropped
+                from ``required``.
 - ``enum``    → ``{"oneOf": [...]}`` — one variant schema per variant, each an
                 object with the member's ``@doc`` as ``description`` when
                 present, a ``"$case"`` const property (the member's effective
-                JSON tag), and any payload fields, JSON-keyed the same way.
+                JSON tag), and any payload fields, JSON-keyed the same way and
+                carrying their own ``@doc`` as ``description`` when present.
 
 Recursive types: both derivations expand the
 concrete *instantiation graph* reachable from *typ* (nodes are concrete
@@ -339,10 +341,15 @@ def _record_properties(
     respective object's own envelope (``$case`` for an enum variant).
     """
     defaults = dict(type_table.field_has_default(handle))
+    docs = type_table.field_docs(handle)
     required: list[str] = []
     properties: dict[str, object] = {}
     for name, json_name, field_type in type_table.json_fields(handle):
-        properties[json_name] = _emit(field_type, type_table, plan)
+        field_schema = _emit(field_type, type_table, plan)
+        doc = docs.get(name)
+        if doc is not None:
+            field_schema = {**field_schema, "description": doc}
+        properties[json_name] = field_schema
         if not defaults[name]:
             required.append(json_name)
     return required, properties

@@ -988,6 +988,15 @@ class TestContractTypeTree:
         schema = _schema(root)
         assert isinstance(schema, dict)
         assert list(schema["properties"]) == ["urgent", "owner", "notes"]
+        properties = schema["properties"]
+        assert isinstance(properties, dict)
+        assert properties["urgent"] == {
+            "type": "boolean",
+            "description": "Is it urgent?",
+        }
+        owner_schema = properties["owner"]
+        assert isinstance(owner_schema, dict)
+        assert owner_schema["description"] == "Who handles it?"
 
     def test_generic_record_of_enum(self, tmp_path: Path) -> None:
         program = _lower(
@@ -1076,6 +1085,12 @@ class TestContractTypeTree:
             ("radius", "The radius."),
             ("label", None),
         ]
+        circle_schema = _schema(circle)
+        assert isinstance(circle_schema, dict)
+        assert circle_schema["properties"]["radius"] == {
+            "type": "number",
+            "description": "The radius.",
+        }
         assert dot.fields == ()
 
     def test_generic_record_field_docs_survive_substitution(self, tmp_path: Path) -> None:

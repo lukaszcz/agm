@@ -111,9 +111,8 @@ class TraceStore:
     def _emit(self, kind: str, extra: dict[str, object]) -> None:
         """Append a record, disabling this best-effort service on I/O failure.
 
-        The envelope (``ts``/``run_id``/``kind``) is laid over *extra* last,
-        not merged into a dict *extra* could contribute to, so it always wins
-        by construction — never merely by *extra* happening not to collide.
+        The envelope is emitted first in ``kind``/``ts``/``run_id`` order;
+        collisions from *extra* are omitted so its values always win.
         """
         timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
         # Wall clocks may move backwards; preserve trace-file ordering as an
@@ -121,10 +120,8 @@ class TraceStore:
         if timestamp < self._last_timestamp:
             timestamp = self._last_timestamp
         self._last_timestamp = timestamp
-        record: dict[str, object] = dict(extra)
-        record["ts"] = timestamp
-        record["run_id"] = self._run_id
-        record["kind"] = kind
+        record: dict[str, object] = {"kind": kind, "ts": timestamp, "run_id": self._run_id}
+        record.update({key: value for key, value in extra.items() if key not in record})
         try:
             append_jsonl(self._path, record)
         except OSError as exc:

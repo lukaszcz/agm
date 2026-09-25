@@ -1047,6 +1047,16 @@ class TestAppendJsonl:
 
 
 class TestTraceStoreProperties:
+    def test_trace_jsonl_orders_envelope_before_payload(self, tmp_path: Path) -> None:
+        from agm.agl.runtime.trace import TraceStore
+
+        path = tmp_path / "trace.jsonl"
+        trace = TraceStore(path)
+        trace.print_stmt(rendered="hello", span=None)
+
+        line = path.read_text(encoding="utf-8").strip()
+        assert list(json.loads(line)) == ["kind", "ts", "run_id", "rendered"]
+
     def test_activate_repoints_and_stops_writes(self, tmp_path: Path) -> None:
         """``activate`` routes later events to the new path; ``None`` stops writes."""
         from agm.agl.runtime.trace import TraceStore

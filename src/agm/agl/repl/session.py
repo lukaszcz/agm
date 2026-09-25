@@ -22,7 +22,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     from agm.agl.scope.program import ResolvedModule
     from agm.agl.scope.symbols import BindingRef, ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import Frame, RecordValue, Value
+    from agm.agl.semantics.values import BoolValue, Frame, RecordValue, Value
     from agm.agl.syntax.nodes import (
         ExportDecl,
         ImportDecl,
@@ -147,20 +147,19 @@ def has_runnable_statements(text: str) -> bool:
     the real AgL lexer and looks for any non-trivial token — the lexer skips
     whitespace and comments entirely and emits no tokens for blank/comment-only
     input, while synthetic layout tokens (``_NEWLINE`` / ``_INDENT`` /
-    ``_DEDENT``) carry no statement, so they are ignored.  Any lexer error (a
-    half-typed entry never reaches here, but be defensive) is treated as
-    *runnable* so the entry flows on to ``eval_entry`` and surfaces a real
-    diagnostic rather than being silently dropped.
+    ``_DEDENT``) carry no statement, so they are ignored.  A lexically invalid
+    entry is treated as *runnable* so the entry flows on to ``eval_entry`` and
+    surfaces a real diagnostic rather than being silently dropped.
 
     Shared by the interactive console (blank-line handling) and ``load_file``
     (an empty / comment-only file loads as a benign no-op).  Such source parses
     to an empty module, so this only spares the caller a pointless pipeline run.
     """
-    from agm.agl.lexer import tokenize
+    from agm.agl.lexer import LexError, tokenize
 
     try:
         return any(token.type not in _TRIVIAL_TOKENS for token in tokenize(text))
-    except Exception:  # defensive: lexer errors are treated as runnable
+    except LexError:
         return True
 
 
@@ -265,6 +264,7 @@ class ReplSession:
         )
         self._builtin_var_seed: dict[BuiltinVarKey, Value] = {}
         self._builtin_var_values: dict[BuiltinVarKey, Value] = {}
+        # The host reports a configuration failure from it as an ``AglError``.
         self._param_seed_resolver = param_seed_resolver
         # Decoded parameter values survive in the session alongside host-backed
         # builtin values. They are passed to each fresh interpreter, which only
@@ -448,9 +448,9 @@ class ReplSession:
         same way here as everywhere else. A stdlib version mismatch therefore
         surfaces from inside the caller's own try/except
         (:meth:`open`, :meth:`eval_entry`) instead of from
-        construction. The resolved path is cached back onto ``_stdlib_root``
-        once found, so a later :reset -- which only clears ``_roots`` -- reuses
-        it rather than re-resolving.
+        construction; it is raised as an ``AglError``. The resolved path is
+        cached back onto ``_stdlib_root`` once found, so a later :reset --
+        which only clears ``_roots`` -- reuses it rather than re-resolving.
         """
         if self._roots is not None:
             return self._roots
@@ -458,13 +458,16 @@ class ReplSession:
 
         from agm.agl.modules.roots import assemble_roots
         from agm.config.context import current_config_context
-        from agm.config.module_roots import resolve_stdlib_root
+        from agm.config.module_roots import StdlibResolutionError, resolve_stdlib_root
 
         cwd = self._cwd if self._cwd is not None else Path.cwd()
         if self._stdlib_root is None:
-            self._stdlib_root = resolve_stdlib_root(
-                home=current_config_context(cwd=cwd).home, anchor=cwd
-            )
+            try:
+                self._stdlib_root = resolve_stdlib_root(
+                    home=current_config_context(cwd=cwd).home, anchor=cwd
+                )
+            except StdlibResolutionError as exc:
+                raise AglError(str(exc)) from exc
         self._roots = assemble_roots(
             invocation_root=cwd,
             stdlib_root=self._stdlib_root,
@@ -495,26 +498,20 @@ class ReplSession:
         the standard-library companion, if any, imported) only once an entry
         actually executes, exactly as today.
 
-        Returns the rejection diagnostics, or an empty tuple on success.
-        Never raises: a host calls this once, right after constructing the
-        session and before it accepts any entry or prints a banner. Every
-        checked frontend failure ``load_and_check_program`` can raise -- a
-        syntax, module-loading, scope, or type error -- is a subclass of
-        ``AglError``; a bare ``except Exception`` beneath it also adapts an
-        unchecked failure reading a module file (a permission error, invalid
-        UTF-8) or resolving the default stdlib root, raised lazily by
-        :meth:`_ensure_roots` the first time it runs -- exactly as
-        :meth:`EntryPipeline.eval_entry` adapts the same raises for an
-        ordinary entry.
+        Returns the rejection diagnostics, or an empty tuple on success. A
+        host calls this once, right after constructing the session and before
+        it accepts any entry or prints a banner. Every source, module-loading,
+        stdlib-root, or configuration failure is an ``AglError`` and becomes a
+        diagnostic, exactly as :meth:`EntryPipeline.eval_entry` reports it for
+        an ordinary entry.
         """
-        from agm.agl.diagnostics import AglError
         from agm.agl.parser import parse_program_seeded
 
         host_env = self._runtime.host_environment()
         try:
             roots = self._ensure_roots()
-        except Exception as exc:
-            return (Diagnostic(message=str(exc), line=1),)
+        except AglError as exc:
+            return (exc.to_diagnostic(),)
         cache_key = self._bootstrap_cache_key(roots, host_env.capabilities)
         with _bootstrap_cache_lock:
             if cache_key is not None:
@@ -544,8 +541,6 @@ class ReplSession:
                 )
             except AglError as exc:
                 return (exc.to_diagnostic(),)
-            except Exception as exc:
-                return (Diagnostic(message=str(exc), line=1),)
 
             self._loaded_lib_modules.update(loaded.new_modules)
             self._pending_param_raw_values.update(loaded.raw_param_values)
@@ -906,10 +901,7 @@ class ReplSession:
         seed = self._current.get("strict-json")
         if seed is None:
             return self._strict_json_floor
-        from agm.agl.semantics.values import BoolValue
-
-        assert isinstance(seed, BoolValue)
-        return seed.value
+        return cast("BoolValue", seed).value
 
     @staticmethod
     def _resolve_timeout_seconds(seed: "RecordValue | None") -> float | None:
@@ -938,11 +930,9 @@ class ReplSession:
         the field with the interpreter's own already-parsed value
         (:meth:`_update_engine_settings`).
         """
-        from agm.agl.semantics.values import RecordValue
-
-        seed = self._engine_seed.get("timeout")
-        assert seed is None or isinstance(seed, RecordValue)
-        return self._resolve_timeout_seconds(seed)
+        return self._resolve_timeout_seconds(
+            cast("RecordValue | None", self._engine_seed.get("timeout"))
+        )
 
     @staticmethod
     def _engine_snapshot(interp: "IrInterpreter") -> "dict[str, Value]":
@@ -1038,7 +1028,7 @@ class ReplSession:
             kind=kind,
             name=name,
             value=None,
-            value_type=self._value_type_of_last(program, checked),
+            value_type=self._value_type_of_last(checked),
             diagnostics=[],
             warnings=warnings,
             error=None,
@@ -1548,7 +1538,7 @@ class ReplSession:
         )
 
         last = program.body.items[-1]
-        value_type = self._value_type_of_last(program, checked)
+        value_type = self._value_type_of_last(checked)
         if not isinstance(last, (Binder, Declaration)):
             return captured, value_type
         if isinstance(last, LetDecl):
@@ -1632,7 +1622,7 @@ class ReplSession:
             return last.callee.name != "ask"
         return True
 
-    def _value_type_of_last(self, program: "Program", checked: "CheckedModule") -> "Type | None":
+    def _value_type_of_last(self, checked: "CheckedModule") -> "Type | None":
         """Static type carried by the entry's final value, or ``None``.
 
         A bare expression retains its checked type. A trailing ``let``/``var``
@@ -1649,19 +1639,15 @@ class ReplSession:
 
         # An entry echoed here always has at least one item: blank and
         # comment-only entries are filtered by ``has_runnable_statements``.
-        last = program.body.items[-1]
-        # Bare expression → node type from checked side table. Infix chains are
-        # resolved after graph assembly, so use their rewritten entry item.
+        # The resolved program holds the entry with its infix chains resolved.
+        last = checked.resolved.program.body.items[-1]
+        # A statement item (a scope region, an import, ...) has no type.
         if not isinstance(last, (Binder, Declaration)):
-            return checked.node_types.get(
-                checked.resolved.program.body.items[-1].node_id
-                if checked.node_types.get(last.node_id) is None
-                else last.node_id
-            )
+            return checked.node_types.get(last.node_id)
         if isinstance(last, (LetDecl, VarDecl)):
             from agm.agl.semantics.types import BottomType
 
-            initializer_type = checked.node_types.get(last.value.node_id)
+            initializer_type = checked.node_types[last.value.node_id]
             if isinstance(initializer_type, BottomType):
                 return initializer_type
             if last.name == "_":
@@ -1699,7 +1685,6 @@ class ReplSession:
             raise AglError(
                 "':type' expects a single expression, not a binding, declaration, or statement."
             )
-        expr_item = items[0]
         checked_program = self._entry_pipeline.resolve_and_check_program(
             program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
         )
@@ -1716,11 +1701,8 @@ class ReplSession:
         if match_result.compiled is None:
             diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
             raise AglError(diagnostic.message, span=match_result.issues[0].span)
-        typ = checked.node_types.get(expr_item.node_id)
-        if typ is None:
-            resolved_expr = checked.resolved.program.body.items[-1]
-            typ = checked.node_types.get(resolved_expr.node_id)
-        assert typ is not None
+        # The resolved program holds the expression with its infix chains resolved.
+        typ = checked.node_types[checked.resolved.program.body.items[-1].node_id]
         from agm.agl.repl.type_display import format_type_for_repl
 
         return format_type_for_repl(typ, checked.type_env.type_table)
@@ -1748,12 +1730,10 @@ class ReplSession:
 
         result: list[tuple[str, Type, Value]] = []
         for name, ref in self._session_scope.bindings.items():
-            typ = self._type_env.get_binding_type(ref.decl_node_id)
-            # Every promoted let/var binding has a recorded type.
-            assert typ is not None
-            symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
-            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
-            assert slot is not None
+            # Every promoted let/var binding has a recorded type, symbol, and slot.
+            typ = self._type_env.binding_type_of(ref.decl_node_id)
+            symbol = self._link_image.symbol_of(ref.decl_node_id)
+            slot = self._ir_base_frame[symbol]
             value = slot.value if isinstance(slot, Cell) else slot
             result.append((name, typ, value))
         return result
@@ -1798,12 +1778,11 @@ class ReplSession:
                         ),
                     )
                 )
-            typ = type_env.get_binding_type(ref.decl_node_id)
-            assert typ is not None
+            binding_type = type_env.binding_type_of(ref.decl_node_id)
             symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
             slot = self._ir_base_frame.get(symbol) if symbol is not None else None
             if slot is None:
-                return f"{name} is a value.\n{_format_info_section('Type', repr(typ))}"
+                return f"{name} is a value.\n{_format_info_section('Type', repr(binding_type))}"
             value = slot.value if isinstance(slot, Cell) else slot
             rendered = _render_value_or_cyclic_message(
                 value, self.descriptors(), pretty=True, quote_strings=True
@@ -1813,7 +1792,7 @@ class ReplSession:
                 (
                     f"{name} is a {'mutable ' if ref.mutable else ''}binding.",
                     _format_info_section("Binding", f"{keyword} {name}"),
-                    _format_info_section("Type", repr(typ)),
+                    _format_info_section("Type", repr(binding_type)),
                     _format_info_section("Value", rendered, location),
                 )
             )
@@ -1933,8 +1912,8 @@ class ReplSession:
         )
         if signature is not None:
             return signature
-        typedef = type_env.type_table.get_by_id(constructor.owner_decl_node_id)
-        assert typedef is not None and typedef.kind == "record"
+        # Only a record constructor lacks a recorded constructor signature.
+        typedef = type_env.type_table.typedef_of(constructor.owner_decl_node_id)
         type_args = tuple(TypeVarType(name) for name in constructor.type_params)
         return ConstructorSignature(
             owner_name=constructor.owner_name,

@@ -30,6 +30,7 @@ from agm.agl.syntax.nodes import (
     UnaryNot,
     UnitLit,
     VarRef,
+    is_complete_call,
 )
 
 __all__ = ["is_constant_expression"]
@@ -48,6 +49,7 @@ def is_constant_expression(
     number reads as the literal it looks like. A template is constant when
     every hole is — an environment hole is an ordinary call, so it is not —
     and a reference is constant when it names a constant of its own module.
+    A partial application is never constant.
 
     ``is_constructor``, ``is_constant_builtin`` and ``is_module_constant`` are
     supplied by the checked frontend artifact, keeping this syntax-level
@@ -84,9 +86,12 @@ def is_constant_expression(
         # Builtin provenance is attached to calls speculatively for member
         # selection, so only a VarRef-rooted call can prove constancy here.
         is_root_builtin = isinstance(expr.callee, VarRef) and is_constant_builtin(expr.node_id)
-        return is_root_builtin or (
-            recur(expr.callee)
-            and all(recur(argument) for argument in expr.args)
-            and all(recur(argument.value) for argument in expr.named_args)
+        return is_complete_call(expr) and (
+            is_root_builtin
+            or (
+                recur(expr.callee)
+                and all(recur(argument) for argument in expr.args)
+                and all(recur(argument.value) for argument in expr.named_args)
+            )
         )
     return False

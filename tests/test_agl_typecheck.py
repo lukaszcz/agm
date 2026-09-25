@@ -5133,10 +5133,8 @@ class TestPartialDeclaredCalls:
         checked, call = self._checked_call_value(
             'def f(x: int, y: text, z: bool) -> unit = ()\nlet g = f(?2, "ok", z = ?1)\ng'
         )
-        assert checked.partial_calls[call.node_id] == PartialCallSpec(
-            argument_holes=(1, None, 0),
-        )
-        assert checked.argument_bindings.function_calls[call.node_id][1] is not None
+        assert _partial_slots(checked.partial_calls[call.node_id]) == (1, "arg", 0)
+        assert call.node_id not in checked.argument_bindings.function_calls
 
     def test_placeholder_on_non_declared_synthetic_call_falls_through(self) -> None:
         sp = mk_span()
@@ -5162,19 +5160,13 @@ class TestPartialDeclaredCalls:
         err = reject_type("let x = 1\nx(?)")
         assert "callee" in str(err)
 
-    def test_placeholder_outside_partial_call_is_guarded(self) -> None:
-        sp = mk_span()
-        placeholder = Placeholder(index=None, span=sp, node_id=_mk_node_id())
-        block = Block(items=(placeholder,), span=sp, node_id=_mk_node_id())
-        program = Program(body=block, span=sp, node_id=_mk_node_id())
-        resolved = _ModuleResolution(
-            program=program,
-            resolution={},
-            builtin_calls={},
-            root_scope=ScopeNode(node_id=program.node_id),
-        )
-        with pytest.raises(AssertionError, match="placeholder"):
-            check_resolved(resolved)
+
+def _partial_slots(spec: PartialCallSpec) -> tuple[int | str | None, ...]:
+    """A partial call's slots: a hole's parameter index, ``"arg"`` for a supplied
+    argument, ``None`` for a defaulted parameter."""
+    return tuple(
+        slot if slot is None or isinstance(slot, int) else "arg" for slot in spec.arguments
+    )
 
 
 class TestPartialConstructorAndValueCalls:
@@ -5200,7 +5192,7 @@ class TestPartialConstructorAndValueCalls:
             result=checked.type_env.get_type("Point"),
         )
         assert checked.partial_calls[call.node_id] == PartialCallSpec(
-            argument_holes=(1, 2, 0),
+            arguments=(1, 2, 0),
             callee_kind="constructor",
         )
 
@@ -5226,7 +5218,7 @@ class TestPartialConstructorAndValueCalls:
             params=(TextType(),), result=checked.type_env.get_type("Boom")
         )
         assert checked.partial_calls[status_call.node_id].callee_kind == "constructor"
-        assert checked.partial_calls[boom_call.node_id].argument_holes == (0, None)
+        assert _partial_slots(checked.partial_calls[boom_call.node_id]) == (0, "arg")
 
     def test_generic_member_constructor_uses_a_matching_expected_enum_result(self) -> None:
         checked = accept_type(
@@ -5434,9 +5426,8 @@ class TestPartialConstructorAndValueCalls:
         assert checked.node_types[finish_digits.node_id] == FunctionType(
             params=(IntType(),), result=IntType()
         )
-        assert checked.partial_calls[from_value.node_id] == PartialCallSpec(
-            argument_holes=(0, None), callee_kind="value"
-        )
+        assert checked.partial_calls[from_value.node_id].callee_kind == "value"
+        assert _partial_slots(checked.partial_calls[from_value.node_id]) == (0, "arg")
         assert checked.partial_calls[finish_digits.node_id].callee_kind == "value"
 
     def test_value_call_arity_and_named_arg_rejections_with_holes(self) -> None:
@@ -5480,9 +5471,8 @@ class TestProvisionalFunctionValuesAndPartials:
         assert checked.node_types[fill.value.node_id] == FunctionType(
             params=(IntType(), IntType()), result=IntType()
         )
-        assert checked.partial_calls[fill.value.node_id] == PartialCallSpec(
-            argument_holes=(0, None, None, 1)
-        )
+        assert checked.partial_calls[fill.value.node_id].callee_kind == "declared"
+        assert _partial_slots(checked.partial_calls[fill.value.node_id]) == (0, "arg", None, 1)
         assert all(
             not contains_inference_var(param_type)
             for param_types in checked.argument_bindings.function_param_types.values()
@@ -5507,9 +5497,8 @@ class TestProvisionalFunctionValuesAndPartials:
         assert checked.node_types[keep.value.node_id] == FunctionType(
             params=(IntType(),), result=IntType()
         )
-        assert checked.partial_calls[keep.value.node_id] == PartialCallSpec(
-            argument_holes=(0, None), callee_kind="value"
-        )
+        assert checked.partial_calls[keep.value.node_id].callee_kind == "value"
+        assert _partial_slots(checked.partial_calls[keep.value.node_id]) == (0, "arg")
 
     def test_partial_function_value_context_completes_provisional_result(self) -> None:
         checked = accept_type(
@@ -7185,9 +7174,8 @@ class TestFieldAccess:
         fill_decl = checked.resolved.program.body.items[-2]
         assert isinstance(fill_decl, LetDecl)
         assert isinstance(fill_decl.value, Call)
-        assert checked.partial_calls[fill_decl.value.node_id] == PartialCallSpec(
-            argument_holes=(0, None), callee_kind="value"
-        )
+        assert checked.partial_calls[fill_decl.value.node_id].callee_kind == "value"
+        assert _partial_slots(checked.partial_calls[fill_decl.value.node_id]) == (0, "arg")
         # Placeholders still take the value-call path: the callee keeps its
         # method selection (used by lowering to build the bound closure), but
         # the call itself is never routed through the declared-name path.
@@ -11619,20 +11607,6 @@ class TestResolveTypeExprTypeVars:
                 ),
             )
         assert exc_info.value.span == arg_sp
-
-
-# ---------------------------------------------------------------------------
-# TypeVarType: derive_schema raises TypeError (coverage for schema.py)
-# ---------------------------------------------------------------------------
-
-
-class TestTypeVarTypeSchema:
-    def test_typevar_type_not_wire_serialisable(self) -> None:
-        from agm.agl.semantics.type_table import create_seeded_type_table
-        from tests._agl_helpers import derive_schema
-
-        with pytest.raises(TypeError, match="TypeVarType"):
-            derive_schema(TypeVarType("T"), create_seeded_type_table())
 
 
 # ---------------------------------------------------------------------------

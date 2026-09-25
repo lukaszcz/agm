@@ -66,6 +66,13 @@ def builtin_method_receiver_for(
     if isinstance(receiver, AppliedT):
         raise AglTypeError("Unknown builtin method receiver.", span=receiver.span)
     if receiver is None and len(owner_path) == 1 and owner_path[0] in BUILTIN_METHOD_RECEIVER_NAMES:
+        if owner_path[0] in ("array", "dict"):
+            # A generic receiver binds its type parameters only in applied form.
+            raise AglTypeError(
+                "Builtin method receivers must use their bare generic form "
+                "(array[T] or dict[K, V]).",
+                span=function.span,
+            )
         return BuiltinMethodReceiver(owner_path[0])
     return None
 

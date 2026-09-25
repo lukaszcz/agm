@@ -545,6 +545,14 @@ class TypeTable:
         decl_id = self._name_index.get((module_id, scope_path, name))
         return None if decl_id is None else self._defs[decl_id]
 
+    def named(self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()) -> TypeDef:
+        """Return the newest ``TypeDef`` registered for a name path a checked program declares."""
+        return self._defs[self._name_index[(module_id, scope_path, name)]]
+
+    def typedef_of(self, decl_id: DeclId) -> TypeDef:
+        """Return the ``TypeDef`` registered for a declaration a checked program declares."""
+        return self._defs[decl_id]
+
     def get_by_id(self, decl_id: DeclId) -> TypeDef | None:
         """Return the registered ``TypeDef`` for *decl_id*, or ``None`` if unregistered.
 

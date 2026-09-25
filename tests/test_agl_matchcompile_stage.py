@@ -19,7 +19,6 @@ from agm.agl.matchcompile import (
     CaseSite,
     CompiledMatchSite,
     MatchCompilationResult,
-    MatchCompiledModule,
     MatchCompiledProgram,
     NonExhaustiveIssue,
     RedundantArmIssue,
@@ -45,7 +44,6 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import (
     PipelineDriver,
     PreparedProgram,
-    _run_matchcompile_program,
 )
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import Case
@@ -54,7 +52,12 @@ from agm.agl.typecheck import EnumOwnerForm
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from tests._agl_helpers import prepare_inline_command, run_inline_command
-from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.ir_harness import (
+    MatchCompiledModule,
+    base_caps,
+    make_graph_from_files,
+    single_module_program,
+)
 from tests.agl.match_reference import case_sites
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
@@ -79,9 +82,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "LiteralKind",
         "LiteralWitness",
         "MatchCompilationResult",
-        "MatchCompiledArtifact",
         "MatchCompiledProgram",
-        "MatchCompiledModule",
         "MatchIssue",
         "MatchSiteSource",
         "MatchWitness",
@@ -101,7 +102,6 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "diagnostics_from_match_issues",
         "render_witness",
         "validate_match_compiled_program",
-        "validate_match_compiled_module",
     }
     assert not hasattr(matchcompile, "EnumOwnerForm")
     assert not hasattr(matchcompile, "EnumOwnerFormKind")
@@ -114,29 +114,15 @@ def _checked(source: str) -> CheckedModule:
 
 
 def _compile_module_matches(checked: CheckedModule) -> MatchCompilationResult:
-    """Reimplements the deleted ``compile_module_matches`` for this file's tests.
-
-    This file drives match compilation at per-module granularity to test the
-    stage module's own artifact/diagnostic contracts (validation, corruption
-    rejection) directly — production only ever compiles a whole program
-    (:func:`~agm.agl.matchcompile.compile_program_matches`), so there is no
-    surviving public per-module entry point. Reuses the same
-    ``_compile_owner_sites``/``_rejected`` building blocks
-    ``compile_program_matches`` itself calls once per module.
-    """
-    sites, issues = stage_module._compile_owner_sites(checked)
-    sorted_issues = tuple(sorted(issues, key=issue_sort_key))
-    if sorted_issues:
-        return stage_module._rejected((sites,), sorted_issues)
-    return MatchCompilationResult(
-        compiled=MatchCompiledModule(checked=checked, sites=sites), issues=()
-    )
+    """Match-compile one checked module as a single-module program."""
+    return compile_program_matches(single_module_program(checked))
 
 
 def _compiled(source: str) -> MatchCompiledModule:
-    result = _compile_module_matches(_checked(source))
-    assert isinstance(result.compiled, MatchCompiledModule)
-    return result.compiled
+    checked = _checked(source)
+    result = _compile_module_matches(checked)
+    assert result.compiled is not None
+    return MatchCompiledModule(checked, result.compiled.sites_by_module[ENTRY_ID])
 
 
 def _prepared_program(source: str, *, roots: frozenset[Path] = frozenset()) -> PreparedProgram:
@@ -309,16 +295,16 @@ def test_compiles_nested_cases_as_sealed_source_payloads() -> None:
         "  | false => 3\n"
     )
     result = _compile_module_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledModule)
-    compiled = result.compiled
+    assert result.compiled is not None
+    sites = result.compiled.sites_by_module[ENTRY_ID]
 
-    assert len(compiled.sites) == 2
-    assert {type(site.source) for site in compiled.sites.values()} == {CaseSite}
-    assert len(case_sites(compiled.sites)) == 2
+    assert len(sites) == 2
+    assert {type(site.source) for site in sites.values()} == {CaseSite}
+    assert len(case_sites(sites)) == 2
 
-    mutable_sites = cast(MutableMapping[int, CompiledMatchSite], compiled.sites)
+    mutable_sites = cast(MutableMapping[int, CompiledMatchSite], sites)
     with pytest.raises(TypeError):
-        mutable_sites[999] = next(iter(compiled.sites.values()))
+        mutable_sites[999] = next(iter(sites.values()))
 
 
 def test_artifact_validation_skips_lets_but_requires_cases() -> None:
@@ -816,22 +802,6 @@ def test_graph_reports_error_from_unexecuted_imported_module(tmp_path: Path) -> 
     result = compile_program_matches(checked)
     assert result.compiled is None
     assert len(result.issues) == 1
-
-
-def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    single = _compiled("let x = 1\nx")
-    graph = make_graph_from_files(tmp_path, {"entry": "()"})
-    checked = check_program(resolve_program(graph), base_caps())
-    single_result = MatchCompilationResult(compiled=single, issues=())
-    monkeypatch.setattr(
-        "agm.agl.matchcompile.compile_program_matches",
-        lambda _checked, _cached=None: single_result,
-    )
-    compiled, diagnostics = _run_matchcompile_program(checked, graph, base_caps())
-    assert compiled is None
-    assert "module artifact" in diagnostics[0].message
 
 
 def test_single_and_program_discovery_surface_match_errors() -> None:

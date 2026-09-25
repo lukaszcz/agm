@@ -40,7 +40,7 @@ An enum-backed engine setting (kind `AGENT` or `OPTION_TEXT` in `config/engine_k
 
 ## Diagnostics and Recursion
 
-All passes report through `agl/diagnostics.py`; scope and typecheck diagnostics carry a phase tag. `agl/recursion.py` is the boundary that turns stack exhaustion on over-deep source into an ordinary pre-execution diagnostic; the pipeline and the REPL apply it around every pass they drive.
+All passes report through `agl/diagnostics.py`; scope and typecheck diagnostics carry a phase tag. Only `AglError`s become diagnostics: module-file reads (`modules/parsed_module_cache.py`), REPL stdlib-root resolution, and host parameter-config lookups raise them where they fail; an internal compiler failure propagates. `agl/recursion.py` is the boundary that turns stack exhaustion on over-deep source into an ordinary pre-execution diagnostic; the pipeline and the REPL apply it around every pass they drive.
 
 ## Self-Validation
 

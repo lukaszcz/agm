@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import pytest
@@ -1949,22 +1950,7 @@ class TestEngineSettingDefaults:
 
 
 class TestRuntimeErrorPaths:
-    """An unexpected failure in any pipeline stage is reported as a diagnostic."""
-
-    def test_unexpected_parse_failure_is_a_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An unexpected failure while parsing is reported instead of crashing."""
-        import agm.agl.modules.loader as parser_mod
-
-        def bad_parse(*args: object, **kwargs: object) -> object:
-            raise RuntimeError("unexpected parse error")
-
-        monkeypatch.setattr(parser_mod, "parse_program_seeded", bad_parse)
-        rt = PipelineDriver()
-        result = run_inline_command(rt, "let x = 1")
-        assert result.ok is False
-        assert any("unexpected parse error" in d.message for d in result.diagnostics)
+    """Language failures surface as diagnostics or run errors; internal failures propagate."""
 
     def test_tab_warning_included_even_on_parse_failure(self) -> None:
         """Tab advisories come from the lexer's single scan, so they survive a
@@ -1977,36 +1963,6 @@ class TestRuntimeErrorPaths:
         tab_warns = [w for w in result.warnings if w.severity == "warning"]
         assert len(tab_warns) == 1
         assert tab_warns[0].line == 1
-
-    def test_unexpected_scope_failure_is_a_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An unexpected failure while resolving scopes is reported instead of crashing."""
-        import agm.agl.scope.program as scope_mod
-
-        def bad_resolve(program: object, **_: object) -> object:
-            raise RuntimeError("unexpected scope error")
-
-        monkeypatch.setattr(scope_mod, "resolve_program", bad_resolve)
-        rt = PipelineDriver()
-        result = run_inline_command(rt, "let x = 1")
-        assert result.ok is False
-        assert any("unexpected scope error" in d.message for d in result.diagnostics)
-
-    def test_unexpected_typecheck_failure_is_a_diagnostic(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An unexpected failure while typechecking is reported instead of crashing."""
-        import agm.agl.typecheck.program as tc_mod
-
-        def bad_check(resolved: object, caps: object, **_: object) -> object:
-            raise RuntimeError("unexpected type error")
-
-        monkeypatch.setattr(tc_mod, "check_program", bad_check)
-        rt = PipelineDriver()
-        result = run_inline_command(rt, "let x = 1")
-        assert result.ok is False
-        assert any("unexpected type error" in d.message for d in result.diagnostics)
 
     def test_contract_error_returns_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Contract materialization error → ok=False with contract error diagnostic."""
@@ -2739,34 +2695,6 @@ class TestDeriveSchema:
         assert "oneOf" in result
         assert len(result["oneOf"]) == 2
 
-    def test_exception_type_raises(self) -> None:
-        from agm.agl.semantics.types import ExceptionType
-        from tests._agl_helpers import derive_schema
-
-        with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(ExceptionType(name="MyErr"), type_table_for())
-
-    def test_unit_type_raises(self) -> None:
-        from agm.agl.semantics.types import UnitType
-        from tests._agl_helpers import derive_schema
-
-        with pytest.raises(TypeError, match="UnitType"):
-            derive_schema(UnitType(), type_table_for())
-
-    def test_function_type_raises(self) -> None:
-        from agm.agl.semantics.types import FunctionType, TextType
-        from tests._agl_helpers import derive_schema
-
-        with pytest.raises(TypeError, match="FunctionType"):
-            derive_schema(FunctionType(params=(TextType(),), result=TextType()), type_table_for())
-
-    def test_bottom_type_raises(self) -> None:
-        from agm.agl.semantics.types import BottomType
-        from tests._agl_helpers import derive_schema
-
-        with pytest.raises(TypeError, match="BottomType"):
-            derive_schema(BottomType(), type_table_for())
-
 
 # ---------------------------------------------------------------------------
 # Param decoding and agent-facing format instructions
@@ -2845,21 +2773,6 @@ class TestBuildParamDecoder:
         typ = IntType()
         decoder = build_param_decoder(typ, type_table_for())
         assert decoder.target_type_label == repr(typ)
-
-    def test_undecodable_type_raises_type_error(self) -> None:
-        """Unit/agent/exception types raise TypeError (via derive_schema)."""
-        from agm.agl.semantics.types import UnitType
-        from agm.agl.type_schema import build_param_decoder
-
-        with pytest.raises(TypeError):
-            build_param_decoder(UnitType(), type_table_for())
-
-    def test_exception_type_raises_type_error(self) -> None:
-        from agm.agl.semantics.types import ExceptionType
-        from agm.agl.type_schema import build_param_decoder
-
-        with pytest.raises(TypeError):
-            build_param_decoder(ExceptionType(name="MyErr"), type_table_for())
 
 
 class TestBuildFormatInstructions:
@@ -3516,28 +3429,53 @@ class TestPrepareProgramFailures:
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
-    def test_prepare_program_generic_exception_during_load(self, tmp_path: pathlib.Path) -> None:
-        """A non-AglError exception during graph loading is captured as a diagnostic."""
+    @pytest.mark.parametrize(
+        "make_unreadable",
+        (
+            lambda path: path.write_bytes(b"\xff\xfe not utf-8 \x80"),
+            lambda path: path.mkdir(),
+        ),
+        ids=("undecodable", "directory"),
+    )
+    def test_prepare_program_reports_an_unreadable_module_file(
+        self, tmp_path: pathlib.Path, make_unreadable: Callable[[pathlib.Path], object]
+    ) -> None:
+        """A module file that cannot be read as text is a load diagnostic."""
+        make_unreadable(tmp_path / "broken.agl")
+        roots = agl_roots(tmp_path.resolve())
+
+        prepared = prepare_inline_command("import broken\n()", entry_path=None, roots=roots)
+
+        assert prepared.resolved is None
+        assert prepared.diagnostics
+
+    @pytest.mark.parametrize(
+        "stage",
+        ("agm.agl.modules.loader.build_repl_graph", "agm.agl.scope.program.resolve_program"),
+    )
+    def test_prepare_program_propagates_an_internal_failure(
+        self, tmp_path: pathlib.Path, stage: str
+    ) -> None:
+        """An internal frontend failure is a crash, never a program diagnostic."""
         from unittest.mock import patch
 
         roots = agl_roots(tmp_path.resolve())
-        with patch("agm.agl.modules.loader.build_repl_graph", side_effect=RuntimeError("boom")):
-            prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
-        assert len(prepared.diagnostics) >= 1
-        assert "boom" in prepared.diagnostics[0].message
-
-    def test_prepare_program_generic_exception_during_resolve(self, tmp_path: pathlib.Path) -> None:
-        """A non-AglScopeError exception during resolve_program is captured."""
-        from unittest.mock import patch
-
-        roots = agl_roots(tmp_path.resolve())
-        with patch(
-            "agm.agl.scope.program.resolve_program",
-            side_effect=RuntimeError("resolve fail"),
+        with (
+            patch(stage, side_effect=RuntimeError("internal")),
+            pytest.raises(RuntimeError),
         ):
-            prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
-        assert len(prepared.diagnostics) >= 1
-        assert "resolve fail" in prepared.diagnostics[0].message
+            prepare_inline_command("let x = 1\nx", entry_path=None, roots=roots)
+
+    def test_typecheck_propagates_an_internal_failure(self) -> None:
+        """An internal type-checker failure escapes the file pipeline."""
+        from unittest.mock import patch
+
+        prepared = prepare_inline_command("let x = 1\nx", entry_path=None, roots=agl_roots())
+        with (
+            patch("agm.agl.typecheck.program.check_program", side_effect=RuntimeError("internal")),
+            pytest.raises(RuntimeError),
+        ):
+            PipelineDriver().discover_programs(prepared)
 
 
 class TestDiscoverProgramsFailures:
@@ -3609,36 +3547,6 @@ class TestDiscoverProgramsFailures:
             discovery = PipelineDriver().discover_programs(prepared)
 
         assert discovery.diagnostics[0].related[0].message == "constraint"
-
-    def test_run_typecheck_program_generic_exception_captured(self, tmp_path: pathlib.Path) -> None:
-        """_run_typecheck_program captures generic exceptions as diagnostics."""
-        from unittest.mock import MagicMock, patch
-
-        from agm.agl.pipeline import PreparedProgram
-
-        roots = agl_roots()
-        # Build a PreparedProgram with a fake resolved so we reach check_program.
-        fake_rg = MagicMock()
-        fake_rg.warnings = ()
-        fake_rg.modules = {}
-
-        pg = PreparedProgram(
-            source="let x = 1",
-            entry_path=None,
-            roots=roots,
-            resolved=fake_rg,
-            diagnostics=(),
-            warnings=(),
-        )
-        rt = PipelineDriver()
-        with patch(
-            "agm.agl.typecheck.program.check_program",
-            side_effect=RuntimeError("graph type crash"),
-        ):
-            # discover_programs will call _run_typecheck_program internally.
-            discovery = rt.discover_programs(pg)
-        assert len(discovery.diagnostics) >= 1
-        assert "graph type crash" in discovery.diagnostics[0].message
 
 
 class TestRunPreparedEdgeCases:

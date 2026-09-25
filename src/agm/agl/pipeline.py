@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from agm.agl.artifact_cache import (
     retain_match_sites,
@@ -93,8 +93,7 @@ class ArtifactProvenanceError(Exception):
     The artifact seam is internal — a caller passes back an artifact this
     pipeline produced for a specific prepared source — so a mismatch is a
     host-wiring bug with no user-facing remedy, not a diagnostic about the
-    program. Frontend artifacts are re-verified by optional self-validation;
-    lowered executables are validated by the pipeline that issued them.
+    program. Only optional self-validation re-verifies artifact provenance.
     """
 
 
@@ -504,20 +503,21 @@ class PipelineDriver:
         )
         return self._host_env_cache
 
-    def _validate_cached_executable(
+    def _reuse_cached_executable(
         self,
         executable: "ExecutableProgram",
         resolved: "ResolvedProgram",
         capabilities: "HostCapabilities",
     ) -> "tuple[ExecutableProgram | None, ModuleId]":
-        """Validate a preflight executable and retain its selected module."""
-        provenance = self._executable_provenance.get(id(executable))
-        if provenance is None:
-            raise ArtifactProvenanceError("Cached executable was not produced by this pipeline.")
-        if provenance.prepared.resolved is not resolved:
+        """Return a preflight executable (``None`` once capabilities change) and its module."""
+        if self_validation_enabled() and (
+            id(executable) not in self._executable_provenance
+            or self._executable_provenance[id(executable)].prepared.resolved is not resolved
+        ):
             raise ArtifactProvenanceError(
-                "Cached executable does not belong to the prepared source."
+                "Cached executable was not issued by this pipeline for the prepared source."
             )
+        provenance = self._executable_provenance[id(executable)]
         if provenance.capabilities != capabilities:
             return None, provenance.selected_module
         return executable, provenance.selected_module
@@ -806,16 +806,6 @@ class PipelineDriver:
                     diagnostics=(exc.to_diagnostic(),),
                     warnings=tuple(tab_sink),
                 )
-            except Exception as exc:
-                return ParsedEntry(
-                    source=entry_source,
-                    entry_path=entry_path,
-                    program=None,
-                    next_id=0,
-                    spaced_qualifiers=(),
-                    diagnostics=(Diagnostic(message=str(exc), line=1),),
-                    warnings=tuple(tab_sink),
-                )
         program = parsed_module.program
         next_id = parsed_module.next_id
 
@@ -848,16 +838,7 @@ class PipelineDriver:
         rather than raised, with ``resolved`` left ``None``.
         """
         from agm.agl.lexer import tab_warning_collector
-        from agm.agl.modules.errors import (
-            AmbiguousModule,
-            ImportEntryError,
-            MissingExternCompanion,
-            ModuleNotFound,
-            ModulePrefixNotFound,
-        )
         from agm.agl.modules.loader import build_repl_graph
-        from agm.agl.parser import AglSyntaxError
-        from agm.agl.scope import AglScopeError
         from agm.agl.scope.program import resolve_program
         from agm.util.text import normalize_newlines
 
@@ -919,30 +900,7 @@ class PipelineDriver:
                         default_label="<command>",
                         source_text=normalize_newlines(entry_source),
                     )
-            except AglSyntaxError as exc:
-                return PreparedProgram(
-                    entry_source,
-                    entry_path,
-                    roots,
-                    None,
-                    (exc.to_diagnostic(),),
-                    (*parsed.warnings, *tab_sink),
-                )
-            except (
-                ModuleNotFound,
-                AmbiguousModule,
-                ModulePrefixNotFound,
-                ImportEntryError,
-                MissingExternCompanion,
-            ) as exc:
-                return PreparedProgram(
-                    entry_source,
-                    entry_path,
-                    roots,
-                    None,
-                    (exc.to_diagnostic(),),
-                    (*parsed.warnings, *tab_sink),
-                )
+                    resolved = resolve_program(graph)
             except AglError as exc:
                 return PreparedProgram(
                     entry_source,
@@ -952,37 +910,7 @@ class PipelineDriver:
                     (exc.to_diagnostic(),),
                     (*parsed.warnings, *tab_sink),
                 )
-            except Exception as exc:
-                return PreparedProgram(
-                    entry_source,
-                    entry_path,
-                    roots,
-                    None,
-                    (Diagnostic(message=str(exc), line=1),),
-                    (*parsed.warnings, *tab_sink),
-                )
         warnings: tuple[Diagnostic, ...] = (*parsed.warnings, *tab_sink)
-
-        try:
-            with frontend_recursion_boundary():
-                resolved = resolve_program(graph)
-        except AglScopeError as exc:
-            return PreparedProgram(
-                entry_source, entry_path, roots, None, (exc.to_diagnostic(),), warnings
-            )
-        except AglError as exc:
-            return PreparedProgram(
-                entry_source, entry_path, roots, None, (exc.to_diagnostic(),), warnings
-            )
-        except Exception as exc:
-            return PreparedProgram(
-                entry_source,
-                entry_path,
-                roots,
-                None,
-                (Diagnostic(message=f"Scope error: {exc}", line=1),),
-                warnings,
-            )
 
         companion_paths = {mid: lm.companion_path for mid, lm in graph.modules.items()}
         return PreparedProgram(
@@ -1163,11 +1091,12 @@ class PipelineDriver:
         checked = static.checked
         if static.compiled is None or checked is None:
             return static
-        assert prepared.resolved is not None
+        # A checked program implies a resolved one.
+        resolved = cast("ResolvedProgram", prepared.resolved)
         aliases = _TypeAliasIndex(checked)
         return replace(
             static,
-            programs=_program_decl_infos(checked, prepared.resolved.graph, aliases),
+            programs=_program_decl_infos(checked, resolved.graph, aliases),
             module_params=_module_param_infos(checked, aliases),
         )
 
@@ -1447,7 +1376,7 @@ class PipelineDriver:
         capabilities = host_env.capabilities
         selected_module = None if selected_program is None else selected_program.module
         if executable is not None:
-            executable, selected_module = self._validate_cached_executable(
+            executable, selected_module = self._reuse_cached_executable(
                 executable, resolved, capabilities
             )
         if compiled is not None:
@@ -1742,8 +1671,7 @@ def _module_param_infos(
             if cli is None:
                 continue
             name = static_binding_name(item)
-            binding_type = checked_module.type_env.get_binding_type(binding_node_id)
-            assert binding_type is not None
+            binding_type = checked_module.type_env.binding_type_of(binding_node_id)
             params.append(
                 ParamBindingInfo(
                     module=module_id,
@@ -1783,10 +1711,7 @@ def _program_param_infos(
     describe the same parameter list, in the same declaration order.
     """
     checked_module = checked.modules[module_id]
-    signature = checked_module.type_env.get_function_signature_by_node_id(funcdef.node_id)
-    assert signature is not None, (
-        f"compiler bug: program {funcdef.name!r} has no recorded function signature"
-    )
+    signature = checked_module.type_env.function_signature_of(funcdef.node_id)
     scope_path = tuple(segment.name for segment in funcdef.scope_path)
     return tuple(
         ProgramParamInfo(
@@ -1928,9 +1853,6 @@ def _run_typecheck_program(
             checked = check_program(resolved, capabilities)
     except AglError as exc:
         return None, (exc.to_diagnostic(),)
-    except Exception as exc:
-        diagnostic = Diagnostic(message=f"Type error: {exc}", line=1)
-        return None, (diagnostic,)
     return checked, ()
 
 
@@ -1946,21 +1868,15 @@ def _run_matchcompile_program(
     module this program carries.
     """
     from agm.agl.matchcompile import (
-        MatchCompiledProgram,
         cached_module_sites,
         compile_program_matches,
         diagnostics_from_match_issues,
     )
 
     retainable = retained_module_sources(graph)
-    try:
-        result = compile_program_matches(checked, retained_match_sites(retainable, capabilities))
-        if result.compiled is None:
-            return None, diagnostics_from_match_issues(result.issues)
-        if not isinstance(result.compiled, MatchCompiledProgram):
-            raise TypeError("program match compilation returned a module artifact")
-    except Exception as exc:
-        return None, (Diagnostic(message=f"Match compilation error: {exc}", line=1),)
+    result = compile_program_matches(checked, retained_match_sites(retainable, capabilities))
+    if result.compiled is None:
+        return None, diagnostics_from_match_issues(result.issues)
     retain_match_sites(retainable, capabilities, cached_module_sites(result.compiled))
     return result.compiled, ()
 
@@ -2118,11 +2034,8 @@ def _wire_extern_registry(
             # it declares was already reported by that one diagnostic.
             continue
         if mid not in loaded_modules:
-            companion_path = companion_paths.get(mid)
-            assert companion_path is not None, (
-                f"module {mid.display()!r} declares extern {name!r} but has no "
-                "companion path recorded by the loader"
-            )
+            # The loader records a companion path for every extern-declaring module.
+            companion_path = cast("Path", companion_paths[mid])
             if (
                 check_requirements
                 and not registry.holds_current(companion_path)

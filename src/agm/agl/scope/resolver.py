@@ -241,6 +241,11 @@ def _route_root(source: ScopePath, relative: ScopePath) -> ScopePath:
     return source[: len(source) - len(relative)] if relative else source
 
 
+def _ref_qname(ref: BindingRef) -> QName:
+    """Return the declaring module and atom that *ref* names."""
+    return ref.module_id, _bare_atom((*ref.scope_path, ref.name))
+
+
 def _bare_route_sort_key(route: BareRoute) -> tuple[str, ScopePath]:
     return route[0].path_str(), route[1]
 
@@ -3335,7 +3340,6 @@ class _Resolver:
                     NullLit,
                     StringLit,
                     UnitLit,
-                    Placeholder,
                     OperatorRef,
                 ),
             ), f"unhandled expr node: {type(expr)}"  # pragma: no cover
@@ -4078,7 +4082,7 @@ class _Resolver:
         owner_ref: BindingRef | None = None
         if len(chain.segments) == 1 and not chain.anchored:
             owner_ref = self._lookup_import_env_unqualified(chain.segments[0].name, chain.span)
-            if owner_ref is not None and owner_ref.kind is not BinderKind.constructor_binding:
+            if owner_ref is not None and not self._is_constructible_type_ref(_ref_qname(owner_ref)):
                 return None
         elif len(chain.segments) > 1:
             route = QualifierChain(
@@ -4097,7 +4101,7 @@ class _Resolver:
                 # rather than a separately selected type owner. Let the normal
                 # module-path resolver consume the complete atom.
                 return None
-            if owner_ref.kind is not BinderKind.constructor_binding:
+            if not self._is_constructible_type_ref(_ref_qname(owner_ref)):
                 rendered = chain.render()
                 raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
         if owner_ref is None:
@@ -4463,15 +4467,8 @@ class _Resolver:
         )
         if not isinstance(result, QualResolutionFound):
             return None
-        if advisory.type_qualified:
-            info = self._decl_info.get(
-                result.qname,
-                DeclInfo(
-                    decl_node_id=-1, decl_span=advisory.dcolon_span, kind=BinderKind.let_binding
-                ),
-            )
-            if info.kind is not BinderKind.constructor_binding:
-                return None
+        if advisory.type_qualified and not self._is_constructible_type_ref(result.qname):
+            return None
         rendered = render_qualifier(advisory.segments, anchored=advisory.anchored)
         return AglScopeError(
             f"Whitespace before '::{advisory.member_text}' makes this a call with a "
@@ -4480,6 +4477,19 @@ class _Resolver:
             # The lexer knows the offsets but not which module it scanned; the
             # failing reference supplies the source identity.
             span=replace(advisory.dcolon_span, source=failure_span.source),
+        )
+
+    def _is_constructible_type_ref(self, qname: QName) -> bool:
+        """Whether *qname* declares a type with constructors: not an alias of a structural type."""
+        info = self._decl_info.get(qname)
+        declaration = self._all_public_types.get(qname)
+        return (
+            info is not None
+            and info.kind is BinderKind.constructor_binding
+            and not (
+                isinstance(declaration, TypeAlias)
+                and not isinstance(declaration.type_expr, (NameT, AppliedT))
+            )
         )
 
     def _spaced_qualifier_at(self, span: SourceSpan) -> SpacedQualifier | None:
@@ -4549,12 +4559,10 @@ class _Resolver:
                 self._builtin_calls[node.node_id] = kind
         else:
             self._resolve_expr(callee)
-        # Resolve positional args.
-        for arg in node.args:
-            self._resolve_expr(arg)
-        # Resolve named-arg values.
-        for named in node.named_args:
-            self._resolve_expr(named.value)
+        # Resolve argument expressions; a placeholder refers to nothing.
+        for arg in (*node.args, *(named.value for named in node.named_args)):
+            if not isinstance(arg, Placeholder):
+                self._resolve_expr(arg)
 
     def _resolve_field_access(self, expr: FieldAccess) -> None:
         """Resolve a field-access expression by resolving its object as a value."""
@@ -4797,9 +4805,9 @@ class _Resolver:
         # A root record, exception, or alias constructor is reached as an
         # ordinary imported member; its declaration kind is what makes it a
         # constructor spelling.
-        info = self._decl_info.get(qname)
-        if info is None or info.kind is not BinderKind.constructor_binding:
+        if not self._is_constructible_type_ref(qname):
             return None
+        info = self._decl_info[qname]
         atom_path = _bare_path(qname[1])
         return ConstructorRef(
             owner_name=atom_path[-1],

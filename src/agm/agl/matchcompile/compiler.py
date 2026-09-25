@@ -755,8 +755,7 @@ def _validate_occurrence_ledger(
 
     complete_groups: dict[tuple[OccurrenceId, Constructor], tuple[Occurrence, ...]] = {}
     for key, indexed_children in groups.items():
-        constructor = key[1]
-        assert isinstance(constructor, NominalConstructor)
+        constructor = cast(NominalConstructor, key[1])
         expected_indices = set(range(constructor.arity))
         if set(indexed_children) != expected_indices:
             raise MatchCompileInvariantError(
@@ -777,7 +776,6 @@ def _canonical_switch_constructor(
         )
     signature = signature_for_type(occurrence.type, type_table)
     if isinstance(signature, OpenSignature):
-        assert isinstance(constructor, LiteralConstructor)
         return constructor
     canonical = next(
         (candidate for candidate in signature.constructors if candidate == constructor),
@@ -1168,10 +1166,9 @@ def _validate_semantic_replay(compiled: CompiledMatchSite) -> None:
                 specialized.allocator,
             )
         if needs_default:
-            assert decision.default is not None
             current_allocator = replay(
                 default_matrix(matrix, selection.index),
-                decision.default,
+                cast(Decision, decision.default),
                 current_allocator,
             )
         return current_allocator

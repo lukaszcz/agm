@@ -299,11 +299,15 @@ class Template:
 
 
 @dataclass(frozen=True, slots=True)
-class NamedArg:
-    """A named argument in a constructor or call expression: ``name = value``."""
+class NamedArg[V: CallArg]:
+    """A named ``name = value`` pair: a call argument or a record-update field.
+
+    ``V`` is :data:`CallArg` for a call argument, which may be a placeholder,
+    and :data:`Expr` for a record-update field, which may not.
+    """
 
     name: str
-    value: Expr
+    value: V
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -317,7 +321,7 @@ class RecordUpdate:
     """
 
     target: Expr
-    updates: tuple[NamedArg, ...]
+    updates: tuple[NamedArg[Expr], ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -410,7 +414,23 @@ class TypeApply:
 
 
 @dataclass(frozen=True, slots=True)
-class Call:
+class CallFields[A: CallArg]:
+    """The fields of a call whose arguments have type ``A``.
+
+    :class:`Call` is the call node; :data:`CompleteCall` types a call none of
+    whose arguments is a placeholder.
+    """
+
+    callee: Expr
+    args: tuple[A, ...]
+    named_args: tuple[NamedArg[A], ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+    type_args: tuple[TypeExpr, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Call(CallFields["CallArg"]):
     """A uniform function/built-in call: ``callee(args, name: v)``.
 
     Also produced by the single-arg juxtaposition sugar ``f x``
@@ -421,13 +441,6 @@ class Call:
     The type arguments are static ``TypeExpr`` values resolved by the type checker —
     they are never evaluated at runtime.
     """
-
-    callee: Expr
-    args: tuple[Expr, ...]
-    named_args: tuple[NamedArg, ...]
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-    type_args: tuple[TypeExpr, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -917,7 +930,6 @@ Expr = (
     | FieldAccess
     | IndexAccess
     | Template
-    | Placeholder
     | BinaryOp
     | OperatorRef
     | UnaryNot
@@ -946,6 +958,20 @@ Expr = (
     | ArrayLit
     | DictLit
 )
+
+# A call argument: an expression or, only there, a partial-application placeholder.
+CallArg = Expr | Placeholder
+
+# A call none of whose arguments is a placeholder: a complete, not a partial, call.
+type CompleteCall = CallFields[Expr]
+
+
+def is_complete_call(call: Call) -> TypeGuard[CompleteCall]:
+    """Whether no argument of *call* is a placeholder."""
+    return not any(
+        isinstance(argument, Placeholder)
+        for argument in (*call.args, *(named.value for named in call.named_args))
+    )
 
 
 # ---------------------------------------------------------------------------

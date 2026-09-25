@@ -141,15 +141,9 @@ def require_reserved_nominal_id(name: str) -> int:
     For the host's own built-in constants and canonical shapes, whose names
     are in :data:`RESERVED_NOMINAL_NAMES` by construction.
     """
-    reserved_id = RESERVED_NOMINAL_IDS.get(name)
-    assert reserved_id is not None, f"compiler bug: {name!r} is not a reserved nominal name"
-    return reserved_id
+    return RESERVED_NOMINAL_IDS[name]
 
 
 def require_reserved_enum_member_id(enum_name: str, member_name: str) -> int:
     """Return the stable fallback identity for a host-known enum member."""
-    member_id = RESERVED_ENUM_MEMBER_IDS.get((enum_name, member_name))
-    assert member_id is not None, (
-        f"compiler bug: {enum_name!r}::{member_name!r} is not a reserved enum member"
-    )
-    return member_id
+    return RESERVED_ENUM_MEMBER_IDS[(enum_name, member_name)]

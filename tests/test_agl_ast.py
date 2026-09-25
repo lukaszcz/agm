@@ -48,6 +48,7 @@ from agm.agl.syntax import (
     Break,
     BuiltinVarDecl,
     Call,
+    CallArg,
     Case,
     CaseBranch,
     Cast,
@@ -2357,11 +2358,11 @@ class TestUnionAliases:
         args = typing.get_args(Expr)
         assert Call in args
 
-    def test_placeholder_is_expr(self) -> None:
+    def test_placeholder_is_a_call_argument_not_an_expr(self) -> None:
         import typing
 
-        args = typing.get_args(Expr)
-        assert Placeholder in args
+        assert Placeholder not in typing.get_args(Expr)
+        assert Placeholder in typing.get_args(CallArg)
 
     def test_index_access_is_expr(self) -> None:
         import typing

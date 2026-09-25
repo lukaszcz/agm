@@ -965,13 +965,11 @@ def resolve_program(
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 key = (mid, _item_atom(item))
                 all_public_types[key] = item
-                kind = (
-                    BinderKind.constructor_binding
-                    if not isinstance(item, TypeAlias)
-                    or isinstance(item.type_expr, (NameT, AppliedT))
-                    else BinderKind.let_binding
+                decl_info[key] = DeclInfo(
+                    decl_node_id=item.node_id,
+                    decl_span=item.span,
+                    kind=BinderKind.constructor_binding,
                 )
-                decl_info[key] = DeclInfo(decl_node_id=item.node_id, decl_span=item.span, kind=kind)
             elif isinstance(item, BuiltinVarDecl):
                 key = (mid, _item_atom(item))
                 decl_info[key] = DeclInfo(

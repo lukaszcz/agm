@@ -21,6 +21,7 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     contains_inference_var,
 )
+from agm.agl.semantics.values import IntValue, TextValue
 from agm.agl.typecheck import (
     AglTypeError,
     ArrayType,
@@ -47,6 +48,7 @@ from tests._agl_helpers import (
     checked_module_items,
     strip_decl_ids,
 )
+from tests.agl.ir_harness import evaluate_ir_graph
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_and_check_repl_entry
 
@@ -1431,6 +1433,34 @@ def test_open_imported_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) 
                 "pal": "enum Color\n  | Red\n  | Blue\n\ntype Palette = Color",
             },
         )
+
+
+@pytest.mark.parametrize(
+    "entry",
+    ("import names::*\nlet x: text = Name", "import names\nlet x: text = names::Name"),
+)
+def test_imported_structural_alias_is_a_type_name_not_a_value(tmp_path: Path, entry: str) -> None:
+    """An imported alias of a structural type names no value, bare or qualified."""
+    with pytest.raises(AglTypeError):
+        check_agl_program(tmp_path, {"entry": entry, "names": "type Name = text"})
+
+
+@pytest.mark.parametrize(
+    ("value_decl", "value_use"),
+    (("let Name: int = 7", "Name"), ("def Name() -> int = 7", "Name()")),
+)
+def test_imported_alias_and_imported_value_share_a_name(
+    tmp_path: Path, value_decl: str, value_use: str
+) -> None:
+    """A value position names the imported value; a type position the imported alias."""
+    result = evaluate_ir_graph(
+        f'import a::*\nimport b::*\nlet v: int = {value_use}\nlet w: Name = "t"',
+        {"a": "type Name = text", "b": value_decl},
+        tmp_path,
+    )
+
+    assert result["v"] == IntValue(7)
+    assert result["w"] == TextValue("t")
 
 
 def test_module_qualified_alias_of_imported_enum_is_a_type_name_not_a_value(

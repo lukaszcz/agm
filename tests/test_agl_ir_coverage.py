@@ -105,8 +105,6 @@ def test_param_conversion_direct_success_edges() -> None:
     assert convert_host_value("decimal", decimal.Decimal("1.5"), DecimalType(), table) == (
         DecimalValue(decimal.Decimal("1.5"))
     )
-    with pytest.raises(ValueError, match="unsupported type"):
-        convert_host_value("unit", None, UnitType(), table)
 
 
 def test_deeply_nested_singleton_decompositions_execute() -> None:

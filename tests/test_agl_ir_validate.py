@@ -424,7 +424,7 @@ def test_case_without_default_requires_default_for_open_literal_domain() -> None
                 subject=IrConstInt(location=LOC, value=1),
                 arms=(
                     IrCaseArm(
-                        key=IrLiteralCaseKey(IrLiteralKind.NUMERIC, 1),
+                        key=IrLiteralCaseKey(IrLiteralKind.NUMERIC, decimal.Decimal(1)),
                         field_bindings=(),
                         body=IrConstUnit(location=LOC),
                     ),

@@ -192,9 +192,12 @@ class _RawNamedArg:
 
 
 _RawPosArg: TypeAlias = syntax.Expr | _RawPlaceholder | _RawInfixChain
-_RawNamed: TypeAlias = syntax.NamedArg | _RawNamedArg
+_RawNamed: TypeAlias = syntax.NamedArg[syntax.Expr] | _RawNamedArg
 _RawArgLists: TypeAlias = tuple[list[_RawPosArg], list[_RawNamed]]
-_ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
+_CallArgs: TypeAlias = tuple[
+    tuple[syntax.CallArg, ...], tuple[syntax.NamedArg[syntax.CallArg], ...]
+]
+_ArgLists: TypeAlias = tuple[list[syntax.CallArg], list[syntax.NamedArg[syntax.CallArg]]]
 _JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
 _RawAttrPosArg: TypeAlias = syntax.Expr | _RawInfixChain
 _RawAttrArgLists: TypeAlias = tuple[list[_RawAttrPosArg], list[syntax.AttributeKeyedArg]]
@@ -1524,9 +1527,7 @@ class AstBuilder(Transformer):
     # Postfix: call / field_access / index_access
     # ------------------------------------------------------------------
 
-    def _call_args_from_children(
-        self, args: _Args, span: SourceSpan
-    ) -> tuple[tuple[syntax.Expr, ...], tuple[syntax.NamedArg, ...]]:
+    def _call_args_from_children(self, args: _Args, span: SourceSpan) -> _CallArgs:
         """Finalize the optional argument list among one call-like rule's children."""
         for arg in args:
             if isinstance(arg, tuple) and len(arg) == 2 and isinstance(arg[0], list):
@@ -1749,7 +1750,7 @@ class AstBuilder(Transformer):
         named_args: list[_RawNamed],
         *,
         call_span: SourceSpan,
-    ) -> tuple[tuple[syntax.Expr, ...], tuple[syntax.NamedArg, ...]]:
+    ) -> _CallArgs:
         placeholders: list[_RawPlaceholder] = []
         for arg in pos_args:
             if isinstance(arg, _RawPlaceholder):
@@ -1760,14 +1761,14 @@ class AstBuilder(Transformer):
 
         self._validate_placeholders(placeholders, call_span=call_span)
 
-        final_pos: list[syntax.Expr] = []
+        final_pos: list[syntax.CallArg] = []
         for arg in pos_args:
             if isinstance(arg, _RawPlaceholder):
                 final_pos.append(self._build_placeholder(arg))
             else:
                 final_pos.append(cast(syntax.Expr, arg))
 
-        final_named: list[syntax.NamedArg] = []
+        final_named: list[syntax.NamedArg[syntax.CallArg]] = []
         for named_arg in named_args:
             if isinstance(named_arg, syntax.NamedArg):
                 final_named.append(named_arg)
@@ -1880,7 +1881,7 @@ class AstBuilder(Transformer):
         raw_digits = text[1:] if tok.type == "PLACEHOLDER_NUM" else None
         return _RawPlaceholder(raw_digits=raw_digits, span=self._span_from_meta(meta))
 
-    def named_arg(self, meta: Meta, args: _Args) -> syntax.NamedArg | _RawNamedArg:
+    def named_arg(self, meta: Meta, args: _Args) -> syntax.NamedArg[syntax.Expr] | _RawNamedArg:
         """named_arg: field_name EQ named_arg_value"""
         name_tok = _find_name_token(args)
         value = cast(
@@ -1962,7 +1963,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def with_update(self, meta: Meta, args: _Args) -> syntax.NamedArg:
+    def with_update(self, meta: Meta, args: _Args) -> syntax.NamedArg[syntax.Expr]:
         """with_update: field_name EQ or_expr"""
         name_tok = _find_name_token(args)
         value = _find_expr(args[1:])
@@ -3756,16 +3757,29 @@ def _rewrite_item(
 
 
 def _rewrite_arguments(
-    args: tuple[syntax.Expr, ...],
-    named_args: tuple[syntax.NamedArg, ...],
+    args: tuple[syntax.CallArg, ...],
+    named_args: tuple[syntax.NamedArg[syntax.CallArg], ...],
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
     builder: AstBuilder,
-) -> tuple[tuple[syntax.Expr, ...], tuple[syntax.NamedArg, ...]]:
+) -> _CallArgs:
     """Group the raw infix chains inside a call's argument list."""
     return (
-        tuple(_rewrite_expr(arg, table, builder) for arg in args),
-        tuple(_rewrite_named_arg(arg, table, builder) for arg in named_args),
+        tuple(_rewrite_call_arg(arg, table, builder) for arg in args),
+        tuple(
+            replace(arg, value=_rewrite_call_arg(arg.value, table, builder)) for arg in named_args
+        ),
     )
+
+
+def _rewrite_call_arg(
+    arg: syntax.CallArg,
+    table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
+    builder: AstBuilder,
+) -> syntax.CallArg:
+    """Group the raw infix chains inside one call argument; a placeholder has none."""
+    if isinstance(arg, syntax.Placeholder):
+        return arg
+    return _rewrite_expr(arg, table, builder)
 
 
 def _rewrite_attribute_keyed_arg(
@@ -3954,10 +3968,10 @@ def _rewrite_template_segment(
 
 
 def _rewrite_named_arg(
-    arg: syntax.NamedArg,
+    arg: syntax.NamedArg[syntax.Expr],
     table: dict[str, tuple[int, syntax.InfixAssoc, syntax.BinOp | None]],
     builder: AstBuilder,
-) -> syntax.NamedArg:
+) -> syntax.NamedArg[syntax.Expr]:
     return replace(arg, value=_rewrite_expr(arg.value, table, builder))
 
 

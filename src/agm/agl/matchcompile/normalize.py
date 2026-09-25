@@ -224,7 +224,7 @@ def _nominal_signature(nominal_type: EnumType | RecordType, table: TypeTable) ->
             return _build_enum_signature(nominal_type, table)
         return _build_record_signature(nominal_type, table)
 
-    typedef = cast(TypeDef, table.get_by_id(nominal_type.decl_id))
+    typedef = table.typedef_of(nominal_type.decl_id)
     cache = _NOMINAL_SIGNATURES.get(table)
     if cache is None:
         cache = {}
@@ -405,7 +405,6 @@ def normalize_case(
         SourceAction(
             action_id=branch.node_id,
             source_index=index,
-            body_node_id=branch.body.node_id,
             pattern_span=branch.pattern.span,
         )
         for index, branch in enumerate(case.branches)

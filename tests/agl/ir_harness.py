@@ -7,7 +7,8 @@ import io
 import os
 import time
 import unittest.mock
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
@@ -16,8 +17,12 @@ from agm.agl.ir.nodes import IrBlock, IrConstUnit, IrExpr
 from agm.agl.ir.program import ExecutableProgram, IrFunctionBody
 from agm.agl.lexer import spaced_qualifier_collector
 from agm.agl.lower.program import lower_program
-from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram, compile_program_matches
-from agm.agl.matchcompile.stage import _compile_owner_sites
+from agm.agl.matchcompile import (
+    CompiledMatchSite,
+    MatchCompiledProgram,
+    compile_program_matches,
+)
+from agm.agl.matchcompile.stage import _compile_owner_sites, _validate_sites
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph, build_repl_graph, parse_entry_module
 from agm.agl.modules.roots import RootSet
@@ -27,6 +32,7 @@ from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ScopeNode
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.values import Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
@@ -121,19 +127,45 @@ def _compiled_checked(checked: CheckedProgram) -> MatchCompiledProgram:
     return result.compiled
 
 
-def compile_checked_module(checked: CheckedModule) -> MatchCompiledModule:
-    """Reimplement the deleted ``compile_module_matches`` for tests that need a
-    per-module compiled artifact from a hand-resolved or virtual-path
-    ``CheckedModule`` with no real module graph behind it (see
-    :func:`~tests.agl.module_graph.resolve_and_check_program_ast`).
+@dataclass(frozen=True, slots=True)
+class MatchCompiledModule:
+    """A checked module plus its compiled match sites, for per-module tests.
 
-    Production only ever compiles a whole program
-    (:func:`~agm.agl.matchcompile.compile_program_matches`), so there is no
-    surviving public per-module entry point; this reuses the same
-    ``_compile_owner_sites`` building block that function calls once per
-    module. Callers that need a rejected (non-exhaustive/refutable) result
-    should call :func:`~agm.agl.matchcompile.stage._compile_owner_sites`
-    themselves instead -- this helper asserts every site compiled cleanly.
+    Production compiles only whole programs; this wraps one module's sites and
+    runs the stage's own site validation when self-validation is enabled.
+    """
+
+    checked: CheckedModule
+    sites: Mapping[int, CompiledMatchSite]
+
+    def __post_init__(self) -> None:
+        if self_validation_enabled():
+            _validate_sites(owner=self.checked, module_id=self.checked.module_id, sites=self.sites)
+
+
+def single_module_program(checked: CheckedModule) -> CheckedProgram:
+    """Wrap one checked module in the smallest whole-program artifact."""
+    return CheckedProgram(
+        modules={ENTRY_ID: checked},
+        entry_id=ENTRY_ID,
+        program_type_table={},
+        warnings=(),
+        import_sccs=((ENTRY_ID,),),
+        resource_roots={ENTRY_ID: None},
+        runtime_modules=frozenset({ENTRY_ID}),
+    )
+
+
+def compile_checked_module(checked: CheckedModule) -> MatchCompiledModule:
+    """Match-compile one ``CheckedModule`` that has no real module graph behind it.
+
+    For a hand-resolved or virtual-path module (see
+    :func:`~tests.agl.module_graph.resolve_and_check_program_ast`). Production
+    compiles a whole program
+    (:func:`~agm.agl.matchcompile.compile_program_matches`); this runs the same
+    per-module ``_compile_owner_sites`` step and asserts every site compiled
+    cleanly. Callers that need a rejected (non-exhaustive/refutable) result
+    call :func:`~agm.agl.matchcompile.stage._compile_owner_sites` directly.
     """
     sites, issues = _compile_owner_sites(checked)
     assert not issues
@@ -148,15 +180,8 @@ def lower_compiled_module(compiled: MatchCompiledModule, *, source_text: str) ->
     the module in the smallest whole-program artifact rather than retaining a
     second lowering entry point.
     """
-    checked = compiled.checked
-    checked_program = CheckedProgram(
-        modules={ENTRY_ID: checked},
-        entry_id=ENTRY_ID,
-        program_type_table={},
-        warnings=(),
-    )
     program = MatchCompiledProgram(
-        checked=checked_program,
+        checked=single_module_program(compiled.checked),
         sites_by_module={ENTRY_ID: compiled.sites},
     )
     return lower_program(program, _entry_source_text=source_text)

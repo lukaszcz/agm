@@ -44,7 +44,6 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     TypeVarType,
-    UnitType,
 )
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -611,18 +610,6 @@ def test_encode_plan_allows_a_record_diamond() -> None:
     }
 
 
-def test_template_encode_plan_rejects_unbound_or_unknown_types() -> None:
-    from agm.agl.semantics.types import TypeVarType
-
-    table = type_table_for()
-    with pytest.raises(AssertionError):
-        _build_template_encode_plan(TypeVarType("T"), table)
-    with pytest.raises(AssertionError):
-        _build_template_encode_plan(RecordType("Ghost", decl_id=999), table)
-    with pytest.raises(AssertionError):
-        _build_template_encode_plan(UnitType(), table)
-
-
 def test_template_encode_plan_uses_renamed_field() -> None:
     """The declaration-template plan for a growing source also JSON-keys by rename."""
     decl_id = next_decl_id()
@@ -664,11 +651,6 @@ def test_growing_polymorphic_recursive_json_cast_lowers_and_evaluates() -> None:
         '{"$case": "Succ", "next": {"$case": "Single", "value": '
         '{"first": [1], "second": {"x": 2}}}}'
     )
-
-
-def test_encode_plan_rejects_a_non_json_type() -> None:
-    with pytest.raises(AssertionError, match="unencodable"):
-        build_encode_plan(UnitType(), type_table_for())
 
 
 def test_encode_plan_handles_recursive_containers() -> None:

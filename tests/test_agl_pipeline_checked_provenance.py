@@ -1,9 +1,9 @@
 """Cached pipeline artifacts retain prepared-source and host capability provenance.
 
-Frontend source provenance is an internal invariant, re-verified only under
-AgL's self-validation (enabled suite-wide). Lowered executable provenance is
-owned by the issuing pipeline. Capability changes invalidate either cache on
-the production path and rerun the affected passes.
+Source provenance of frontend artifacts and of lowered executables is an
+internal invariant, re-verified only under AgL's self-validation (enabled
+suite-wide). Capability changes invalidate either cache on the production path
+and rerun the affected passes.
 """
 
 from __future__ import annotations

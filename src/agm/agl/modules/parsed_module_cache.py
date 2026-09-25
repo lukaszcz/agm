@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agm.agl.modules import disk_cache
+from agm.agl.modules.errors import ModuleReadError
 from agm.core import fs
 from agm.util.text import normalize_newlines
 
@@ -97,6 +98,16 @@ class _DerivedEntry[V]:
 
     source: LoadedModule
     value: V
+
+
+def _read_module_source(module_id: ModuleId, path: Path) -> str:
+    """Read *path*'s text, reporting an unreadable file as a module-load error."""
+    try:
+        return fs.read_text(path)
+    except UnicodeDecodeError as exc:
+        raise ModuleReadError(module_id, path, "file is not valid UTF-8 text") from exc
+    except OSError as exc:
+        raise ModuleReadError(module_id, path, exc.strerror or str(exc)) from exc
 
 
 def _companion_intact(module: LoadedModule) -> bool:
@@ -158,7 +169,7 @@ class ParsedModuleCache:
         node-id counter is neither read nor advanced.
         """
         key = (str(path), module_id, default_stdlib)
-        source_text = normalize_newlines(fs.read_text(path))
+        source_text = normalize_newlines(_read_module_source(module_id, path))
         with self._lock:
             entry = self._entries.get(key)
             if entry is not None and entry.source_text == source_text and _companion_intact(entry):

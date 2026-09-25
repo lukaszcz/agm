@@ -394,14 +394,16 @@ class ArgumentBindings(_Record):
     binder.
 
     ``function_calls``
-        Direct user-function ``Call.node_id`` → declaration-order argument tuple
-        (one entry per parameter; ``None`` means "use the parameter's default").
+        Complete direct user-function ``Call.node_id`` → declaration-order
+        argument tuple (one entry per parameter; ``None`` means "use the
+        parameter's default"). A partial call's binding is its
+        :class:`PartialCallSpec`.
     ``function_param_types``
         Direct user-function ``Call.node_id`` → concrete declaration-order parameter
         types after generic type-argument substitution.  The lowerer uses these
         types to insert call-site coercions without re-inferring generic arguments.
     ``constructor_calls``
-        Record/enum/exception constructor ``Call.node_id`` → ordered
+        Complete record/enum/exception constructor ``Call.node_id`` → ordered
         ``{field_name: expr}`` mapping (every field bound; constructors have no
         defaults).
     ``constructor_patterns``
@@ -418,15 +420,16 @@ class ArgumentBindings(_Record):
 @_pickles_by_name
 @dataclass(frozen=True, slots=True)
 class PartialCallSpec(_Record):
-    """Checker-computed routing metadata for a call that produces a function.
+    """Checker-computed binding of a partial call, which produces a function.
 
     ``callee_kind`` identifies which lowering path the underlying call uses.
-    ``argument_holes`` is ordered like the checked call binding for that callee;
-    each item is the produced-function parameter index for a placeholder slot,
-    or ``None`` for a supplied non-placeholder argument or a defaulted slot.
+    ``arguments`` is ordered like the checked call binding for that callee
+    (declaration order; field order for a constructor): each slot is the
+    supplied argument expression, the produced-function parameter index a
+    placeholder fills, or ``None`` for a defaulted parameter.
     """
 
-    argument_holes: tuple[int | None, ...]
+    arguments: tuple[Expr | int | None, ...]
     callee_kind: Literal["declared", "constructor", "value"] = "declared"
 
 
@@ -611,10 +614,6 @@ class CheckedModule(_Record):
     def method_selection_for(self, node_id: int) -> MethodDef | None:
         """Return the method selected for one member-access node, if any."""
         return self.method_selections.get(node_id)
-
-    def pattern_binding_for(self, node_id: int) -> BindingRef | None:
-        """Return the immutable binding selected for one pattern occurrence."""
-        return self.pattern_binding_refs.get(node_id)
 
     @property
     def interface(self) -> ModuleTypeInterface:
@@ -1906,6 +1905,10 @@ class TypeEnvironment:
         """
         return self._function_signatures_by_node_id.get(node_id)
 
+    def function_signature_of(self, node_id: int) -> FunctionSignature:
+        """Return the signature of a function declaration a checked program resolved to."""
+        return self._function_signatures_by_node_id[node_id]
+
     def register_extern_node_id(self, node_id: int) -> None:
         """Mark a function declaration ``node_id`` as an ``extern def``.
 
@@ -1939,6 +1942,10 @@ class TypeEnvironment:
 
     def get_binding_type(self, node_id: int) -> Type | None:
         return self._binding_types.get(node_id)
+
+    def binding_type_of(self, node_id: int) -> Type:
+        """Return the type of a binding declaration a checked program resolved to."""
+        return self._binding_types[node_id]
 
     def remove_binding_types(self, node_ids: Iterable[int]) -> None:
         """Forget binding-type metadata for the given declaration node ids."""

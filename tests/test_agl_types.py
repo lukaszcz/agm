@@ -923,16 +923,6 @@ class TestInferenceVarType:
         )
         assert compute_finite_closure(finite_table).infinite == frozenset()
 
-    def test_schema_walkers_reject_flexible_variables(self) -> None:
-        from agm.agl.semantics.type_table import create_seeded_type_table
-        from tests._agl_helpers import derive_schema
-
-        variable = InferenceVarType("T")
-        table = create_seeded_type_table()
-
-        with pytest.raises(TypeError):
-            derive_schema(variable, table)
-
 
 # ---------------------------------------------------------------------------
 # Generic nominal identity (fields/variants excluded from equality)

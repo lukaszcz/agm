@@ -25,7 +25,7 @@ table for a recursive target type) from one shared recursion plan.
 from __future__ import annotations
 
 import json
-from typing import assert_never
+from typing import Literal, TypeAlias, assert_never
 
 from agm.agl.ir.contracts import (
     ConversionRecipe,
@@ -42,7 +42,6 @@ from agm.agl.semantics.types import (
     CastKind,
     DecimalType,
     IntType,
-    JsonType,
     TextType,
     Type,
 )
@@ -51,11 +50,21 @@ from agm.agl.type_schema import (
     derive_schema_and_decode,
 )
 
-__all__ = ["compile_recipe"]
+__all__ = ["RecipeCastKind", "compile_recipe"]
+
+#: The cast kinds a recipe implements: a nominal downcast lowers to its own
+#: IR node, and the checker rejects a static-error cast.
+RecipeCastKind: TypeAlias = Literal[
+    CastKind.TOTAL_NOOP,
+    CastKind.TOTAL_RENDER,
+    CastKind.TOTAL_JSON,
+    CastKind.IDENTITY_UPCAST,
+    CastKind.FALLIBLE,
+]
 
 
 def compile_recipe(
-    source: Type, target: Type, kind: CastKind, type_table: TypeTable
+    source: Type, target: Type, kind: RecipeCastKind, type_table: TypeTable
 ) -> ConversionRecipe:
     """Compile a cast ``(source, target, kind)`` into a ``ConversionRecipe``.
 
@@ -113,7 +122,6 @@ def compile_recipe(
             else:
                 # cast_classification only yields FALLIBLE for decimal→int or a
                 # text/json source; the remaining case is a json source.
-                assert isinstance(source, JsonType), f"unexpected fallible cast source {source!r}"
                 decode_strategy = ConversionStrategy.DECODE_JSON
             schema, decode_plan = derive_schema_and_decode(target, type_table)
             return DecodeConversionRecipe(
@@ -132,12 +140,5 @@ def compile_recipe(
                 source_label=source_label,
                 target_label=target_label,
             )
-        case CastKind.NOMINAL_DOWNCAST:  # pragma: no cover
-            raise AssertionError(
-                f"nominal downcast reached recipe compilation: {source!r} as {target!r}"
-            )
-        case CastKind.STATIC_ERROR:  # pragma: no cover
-            # The checker rejects statically-impossible casts before lowering.
-            raise AssertionError(f"STATIC_ERROR cast reached lowering: {source!r} as {target!r}")
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

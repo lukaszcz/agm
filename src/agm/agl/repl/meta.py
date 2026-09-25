@@ -346,31 +346,13 @@ _COMMANDS: list[MetaCommand] = [
 ]
 
 
-# Module-level caches for the command index and name tuple.  Both are rebuilt
-# once at import time (when ``_COMMANDS`` is fully populated).
-_command_index_cache: dict[str, MetaCommand] | None = None
-_command_names_cache: tuple[str, ...] | None = None
-
-
-def _rebuild_caches() -> None:
-    """Rebuild both module-level caches from the current ``_COMMANDS`` list."""
-    global _command_index_cache, _command_names_cache
-    index: dict[str, MetaCommand] = {}
-    names: list[str] = []
-    for command in _COMMANDS:
-        for name in command.names:
-            index[name] = command
-            names.append(f":{name}")
-    _command_index_cache = index
-    _command_names_cache = tuple(names)
-
-
-def _command_index() -> dict[str, MetaCommand]:
-    """Return the cached name → command lookup, building it on first call."""
-    if _command_index_cache is None:
-        _rebuild_caches()
-    assert _command_index_cache is not None
-    return _command_index_cache
+# Name → command lookup and ``:``-prefixed names, derived once from ``_COMMANDS``.
+_COMMAND_INDEX: dict[str, MetaCommand] = {
+    name: command for command in _COMMANDS for name in command.names
+}
+_COMMAND_NAMES: tuple[str, ...] = tuple(
+    f":{name}" for command in _COMMANDS for name in command.names
+)
 
 
 def meta_command_names() -> tuple[str, ...]:
@@ -379,10 +361,7 @@ def meta_command_names() -> tuple[str, ...]:
     This is the single source of truth shared with the console completer so
     tab-completion always matches the live registry.
     """
-    if _command_names_cache is None:
-        _rebuild_caches()
-    assert _command_names_cache is not None
-    return _command_names_cache
+    return _COMMAND_NAMES
 
 
 def dispatch_meta(line: str, ctx: MetaContext) -> MetaOutcome:
@@ -394,13 +373,12 @@ def dispatch_meta(line: str, ctx: MetaContext) -> MetaOutcome:
     clean error outcome rather than raising.
     """
     body = line.strip()
-    assert body.startswith(":")  # the loop only calls us for ``:`` lines
     without_colon = body[1:]
     parts = without_colon.split(None, 1)
     name = parts[0] if parts else ""
     arg = parts[1].strip() if len(parts) > 1 else ""
 
-    command = _command_index().get(name)
+    command = _COMMAND_INDEX.get(name)
     if command is None:
         return MetaOutcome(text=f"Unknown command ':{name}'. Type :help for the command list.")
     return command.handler(arg, ctx)

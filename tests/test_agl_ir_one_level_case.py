@@ -15,7 +15,6 @@ from agm.agl.ir import (
     IrCase,
     IrCaseArm,
     IrConstBool,
-    IrConstDecimal,
     IrConstInt,
     IrConstText,
     IrLiteralCaseKey,
@@ -118,9 +117,8 @@ def test_validation_requires_enum_member_record() -> None:
 
 
 def test_numeric_keys_are_runtime_canonical_and_duplicate_semantics_are_rejected() -> None:
-    integer = IrLiteralCaseKey(IrLiteralKind.NUMERIC, 1)
+    integer = IrLiteralCaseKey(IrLiteralKind.NUMERIC, decimal.Decimal(1))
     widened = IrLiteralCaseKey(IrLiteralKind.NUMERIC, decimal.Decimal("1.0"))
-    assert integer.scalar_value == decimal.Decimal(1)
     assert integer == widened
     case = _literal_case(
         IrCaseArm(integer, (), IrConstInt(_LOC, 1)),
@@ -374,16 +372,3 @@ def test_enum_dispatch_defaults_for_an_unmatched_member_record() -> None:
     )
 
     assert IrInterpreter(_program(malformed, nominals=_color_nominals())).run() == {}
-
-
-def test_direct_literal_key_rejects_invalid_scalar_kind_pair() -> None:
-    with pytest.raises(ValueError):
-        IrLiteralCaseKey(IrLiteralKind.BOOL, 1)
-    with pytest.raises(ValueError):
-        IrLiteralCaseKey(IrLiteralKind.NUMERIC, True)
-    with pytest.raises(ValueError):
-        IrLiteralCaseKey(IrLiteralKind.NULL, "null")
-    assert IrLiteralCaseKey(IrLiteralKind.TEXT, "x").scalar_value == "x"
-    assert IrLiteralCaseKey(IrLiteralKind.NULL, None).scalar_value is None
-    assert IrLiteralCaseKey(IrLiteralKind.BOOL, False).scalar_value is False
-    assert IrConstDecimal(_LOC, decimal.Decimal(1)).value == decimal.Decimal(1)

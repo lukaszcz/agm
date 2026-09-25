@@ -10,6 +10,7 @@ exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
 from __future__ import annotations
 
 import dataclasses
+import importlib
 from collections.abc import Mapping
 from pathlib import Path
 from shutil import copyfile, copytree
@@ -6780,29 +6781,61 @@ class TestImports:
         assert s.eval_entry("arithmetic::add()").ok
         assert s.eval_entry("mul()").ok
 
-    def test_generic_graph_load_error_surfaces_as_diagnostic(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize("unreadable", ("undecodable", "directory"))
+    def test_unreadable_module_file_surfaces_as_diagnostic(
+        self, tmp_path: Path, unreadable: str
     ) -> None:
-        # Covers the last-resort ``except Exception`` fallback in
-        # ``_eval_entry``: a generic error from the graph loader
-        # (not an AglSyntaxError or module error) must still surface as a
-        # failed entry with a diagnostic rather than an uncaught exception.
-        import agm.agl.modules.loader as loader_mod
-
-        original_build = loader_mod.build_repl_graph
-
-        def bad_build(*args: object, **kwargs: object) -> object:
-            raise RuntimeError("unexpected loader failure")
-
-        lib = tmp_path / "mylib.agl"
-        lib.write_text("def noop(n: int) -> int = n\n")
+        """A module file that cannot be read as text fails the entry, not the session."""
+        broken = tmp_path / "mylib.agl"
+        if unreadable == "undecodable":
+            broken.write_bytes(b"\xff\xfe not utf-8 \x80")
+        else:
+            broken.mkdir()
         s = repl_session_with_root(tmp_path)
-        monkeypatch.setattr(loader_mod, "build_repl_graph", bad_build)
-        r = s.eval_entry("import mylib\nnoop(1)")
+
+        r = s.eval_entry("import mylib\n()")
+
         assert not r.ok
-        assert len(r.diagnostics) >= 1
-        assert "unexpected loader failure" in r.diagnostics[0].message
-        monkeypatch.setattr(loader_mod, "build_repl_graph", original_build)
+        assert r.diagnostics
+        assert s.eval_entry("1 + 1").ok
+
+    @pytest.mark.parametrize(
+        "stage",
+        (
+            "agm.agl.modules.loader.build_repl_graph",
+            "agm.agl.scope.program.resolve_program",
+            "agm.agl.typecheck.program.check_program",
+        ),
+    )
+    def test_internal_frontend_failure_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+    ) -> None:
+        """An internal frontend failure is a crash, never an entry diagnostic."""
+        (tmp_path / "mylib.agl").write_text("def noop(n: int) -> int = n\n")
+        s = repl_session_with_root(tmp_path)
+        module_name, attribute = stage.rsplit(".", 1)
+
+        def fail(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("internal")
+
+        monkeypatch.setattr(importlib.import_module(module_name), attribute, fail)
+        with pytest.raises(RuntimeError):
+            s.eval_entry("import mylib\nmylib::noop(1)")
+
+    def test_internal_failure_while_opening_propagates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``open`` reports source failures only; an internal failure escapes it."""
+        import agm.agl.typecheck.program as program_mod
+
+        def fail(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("internal")
+
+        # No standard library: the bootstrap image cache never serves this open.
+        s = ReplSession(default_stdlib=False)
+        monkeypatch.setattr(program_mod, "check_program", fail)
+        with pytest.raises(RuntimeError):
+            s.open()
 
     def test_region_scoped_import_retains_its_qualifier_route_across_entries(
         self, tmp_path: Path
@@ -8494,16 +8527,7 @@ class TestSessionOpen:
     def test_open_reports_an_unreadable_stdlib_module_instead_of_raising(
         self, tmp_path: Path
     ) -> None:
-        """A module under the stdlib root that fails to read is a diagnostic, not a crash.
-
-        ``open`` documents "Never raises": every failure
-        ``load_and_check_program`` can produce must come back as a diagnostic
-        tuple, the same as it already does for a syntax/scope/type error. A
-        module file's own I/O failure -- invalid UTF-8 here, the same class of
-        failure a permission-denied file would raise via
-        ``agm.core.fs.read_text`` -- must not surface as an unhandled
-        ``UnicodeDecodeError``, which would break the "Never raises" contract.
-        """
+        """A module under the stdlib root that fails to read is a diagnostic, not a crash."""
         std_dir = tmp_path / MODULE_TREE_DIRNAME
         std_dir.mkdir()
         (std_dir / "prelude.agl").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
@@ -8533,7 +8557,7 @@ class TestDeferredStdlibResolution:
         # Must not raise: resolution has not happened yet.
         s = ReplSession()
 
-        # The lazy failure is caught by ``open``'s own "Never raises" contract.
+        # The lazy failure is reported by ``open`` as a diagnostic.
         diagnostics = s.open()
         assert diagnostics
         assert "0.0.1" in diagnostics[0].message

@@ -123,7 +123,6 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     Lambda,
     LetDecl,
-    Placeholder,
     VarRef,
 )
 from agm.agl.typecheck.env import CheckedModule
@@ -237,8 +236,10 @@ def test_repl_promotion_requires_imported_runtime_modules_to_be_available() -> N
     plan = ReplPromotionPlan(
         source_declaration_ids=(frozenset({10}),),
         initializers=(InitializerOrigin(source_index=0, is_function=True),),
-        declaration_dependencies={},
+        declaration_dependencies={10: frozenset()},
         imported_module_dependencies={10: frozenset({library_id})},
+        scope_region_source_indices={},
+        use_declaration_source_indices={},
     )
 
     assert plan.completed_declaration_ids({0}, set()) == frozenset()
@@ -416,13 +417,6 @@ def _make_lowerer(checked: CheckedModule, source: str) -> "_Lowerer":
     link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=normalized)
     compiled = compile_checked_module(checked)
     return _Lowerer(compiled.checked, link, ENTRY_ID, source_id, source, compiled.sites)
-
-
-def test_direct_lowerer_helper_requires_successful_match_compilation() -> None:
-    source = "case true of | true => 1"
-
-    with pytest.raises(AssertionError):
-        _make_lowerer(_check(source), source)
 
 
 def test_private_lowerer_requires_complete_match_site_mapping_argument() -> None:
@@ -1710,19 +1704,6 @@ result
         assert projections
         assert all(field.nominal == NominalId(exception_decl_id) for field in projections)
 
-    def test_kind_for_non_container_raises_assertion(self) -> None:
-        """_kind_for_container raises AssertionError for a non-container type.
-
-        Defensive guard: can only be triggered by a compiler bug (well-typed IR
-        never passes a non-container type here).
-        """
-        import pytest
-
-        checked = _check("()")
-        lowerer = _make_lowerer(checked, "()")
-        with pytest.raises(AssertionError, match="compiler bug"):
-            lowerer._kind_for_container(IntType())
-
 
 # ---------------------------------------------------------------------------
 # Function-related lowering coverage
@@ -2341,24 +2322,6 @@ class TestPartialCallLowering:
         assert isinstance(captured_arg.operation, IntToDecimal)
         assert isinstance(captured_arg.value, IrLoad)
         assert captured_arg.value.symbol == captured_bind.symbol
-
-    def test_lower_expr_placeholder_guard(self) -> None:
-        import pytest
-
-        from agm.agl.syntax.spans import SourceSpan
-
-        checked = _check("()")
-        lowerer = _make_lowerer(checked, "()")
-        span = SourceSpan(
-            start_line=1,
-            start_col=0,
-            end_line=1,
-            end_col=1,
-            start_offset=0,
-            end_offset=1,
-        )
-        with pytest.raises(AssertionError, match="placeholder"):
-            lowerer.lower_expr(Placeholder(index=None, span=span, node_id=999_001))
 
 
 # ---------------------------------------------------------------------------

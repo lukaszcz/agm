@@ -440,30 +440,6 @@ class TestDispatchMeta:
         assert outcome.text is not None
         assert ":quit" in outcome.text
 
-    def test_command_index_cold_cache(self) -> None:
-        # _command_index() must rebuild if its cache is None (cold-start path).
-        original = meta_mod._command_index_cache
-        meta_mod._command_index_cache = None
-        try:
-            idx = meta_mod._command_index()
-            assert ":help" in idx or "help" in idx
-        finally:
-            meta_mod._command_index_cache = original
-
-    def test_command_index_lazy_build_on_cold_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Verify the lazy-build branch of _command_index() is reachable: when both
-        # caches are forced to None the functions rebuild them on the next call.
-        monkeypatch.setattr(meta_mod, "_command_index_cache", None)
-        monkeypatch.setattr(meta_mod, "_command_names_cache", None)
-        # dispatch_meta → _command_index() triggers the lazy build of the index.
-        outcome = meta_mod.dispatch_meta(":help", _ctx())
-        assert outcome.text is not None
-        assert ":quit" in outcome.text
-        # meta_command_names() rebuilds the names cache when it is cold.
-        monkeypatch.setattr(meta_mod, "_command_names_cache", None)
-        names = meta_mod.meta_command_names()
-        assert ":help" in names
-
 
 # ---------------------------------------------------------------------------
 # :set only controls REPL options

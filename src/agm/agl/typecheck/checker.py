@@ -130,10 +130,12 @@ from agm.agl.syntax.nodes import (
     Break,
     BuiltinVarDecl,
     Call,
+    CallArg,
     Case,
     CaseBranch,
     Cast,
     CatchClause,
+    CompleteCall,
     ConstructorPattern,
     Continue,
     DecimalLit,
@@ -187,6 +189,7 @@ from agm.agl.syntax.nodes import (
     VarRef,
     WildcardPattern,
     declares_source_entry,
+    is_complete_call,
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -252,7 +255,9 @@ _SESSION_PRELUDE_TYPE = cast(RecordType, BUILTIN_PRELUDE_TYPES["Session"])
 class _BuiltinMethodChecker(Protocol):
     """Shared call shape for a receiver-directed built-in method checker."""
 
-    def __call__(self, node: Call, *, expected: Type | None, receiver_type: Type) -> Type: ...
+    def __call__(
+        self, node: CompleteCall, *, expected: Type | None, receiver_type: Type
+    ) -> Type: ...
 
 
 def _builtin_method_receiver_key(receiver_type: RecordType | EnumType) -> _BuiltinMethodReceiver:
@@ -1423,8 +1428,7 @@ class _Checker:
         # program context an imported declaration may use the same spelling as this
         # local unannotated definition; only this declaration's node id can
         # determine whether its signature was pre-registered.
-        sig = self._env.get_function_signature_by_node_id(node.node_id)
-        assert sig is not None, f"No candidate signature for '{node.name}'"
+        sig = self._env.function_signature_of(node.node_id)
         if node.is_builtin:
             return
         assert node.is_extern or node.body is not None, f"FuncDef '{node.name}' has no body"
@@ -1743,8 +1747,7 @@ class _Checker:
         """Require a static host parameter to have a closed, decodable type."""
         if stmt.node_id not in self._resolved.attributes.params:
             return
-        binding_type = self._env.get_binding_type(stmt.node_id)
-        assert binding_type is not None, "checked parameter binding has no recorded type"
+        binding_type = self._env.binding_type_of(stmt.node_id)
         variables = free_type_vars(binding_type)
         if variables:
             names = ", ".join(sorted(variables))
@@ -2173,7 +2176,7 @@ class _Checker:
 
     def _register_extern_call_obligation(
         self,
-        node: Call,
+        node: Call | CompleteCall,
         callee: str,
         target_type: Type,
         contract_targets: tuple[Type, ...] = (),
@@ -2248,8 +2251,6 @@ class _Checker:
             return self._check_type_apply(expr, expected=expected)
         if isinstance(expr, Call):
             return self._check_call(expr, expected=expected)
-        if isinstance(expr, Placeholder):
-            raise AssertionError("compiler bug: placeholder reached expression type checking")
         if isinstance(expr, Lambda):
             return self._check_lambda(expr, expected=expected)
         if isinstance(expr, Block):
@@ -2392,8 +2393,7 @@ class _Checker:
     ) -> FunctionType:
         """Specialize a runtime builtin reference as its defaulted eta closure."""
         kind = BUILTIN_CALL_NAMES.get(ref.name)
-        signature = self._env.get_function_signature_by_node_id(ref.decl_node_id)
-        assert signature is not None
+        signature = self._env.function_signature_of(ref.decl_node_id)
         template = self._builtin_value_template(signature)
         engine = self._active_inference_engine()
 
@@ -2760,8 +2760,7 @@ class _Checker:
                 span=node.span,
             )
 
-        sig = self._env.get_function_signature_by_node_id(ref.decl_node_id)
-        assert sig is not None, f"No candidate signature for '{ref.name}'"
+        sig = self._env.function_signature_of(ref.decl_node_id)
         builtin_kind = (
             BUILTIN_CALL_NAMES.get(ref.name)
             if ref.is_builtin and ref.kind is BinderKind.function_binding
@@ -2931,7 +2930,7 @@ class _Checker:
     def _call_result_type(
         params: tuple[ParamSpec, ...],
         result: Type,
-        binding: tuple[Expr | None, ...],
+        binding: tuple[CallArg | None, ...],
         hole_indices: Mapping[int, int],
     ) -> Type:
         if not hole_indices:
@@ -3097,17 +3096,17 @@ class _Checker:
 
     def _record_partial_call(
         self,
-        node: Call,
-        binding: tuple[Expr | None, ...],
+        node: Call | CompleteCall,
+        binding: Sequence[CallArg | None],
         hole_indices: Mapping[int, int],
         *,
         callee_kind: Literal["declared", "constructor", "value"] = "declared",
     ) -> None:
         self._record_side_table_addition("partial_calls", self._partial_calls, node.node_id)
         self._partial_calls[node.node_id] = PartialCallSpec(
-            argument_holes=tuple(
-                hole_indices[expr.node_id] if isinstance(expr, Placeholder) else None
-                for expr in binding
+            arguments=tuple(
+                hole_indices[arg.node_id] if isinstance(arg, Placeholder) else arg
+                for arg in binding
             ),
             callee_kind=callee_kind,
         )
@@ -3241,7 +3240,7 @@ class _Checker:
         node_id: int,
         result_template: Type,
         field_templates: Mapping[str, Type],
-        bound_exprs: Mapping[str, Expr],
+        bound_exprs: Mapping[str, CallArg],
     ) -> None:
         """Propagate field evidence only through generic result type parameters."""
         result_vars = free_type_vars(result_template)
@@ -3298,7 +3297,7 @@ class _Checker:
         )
 
     def _generic_result_provenance(
-        self, signature: FunctionSignature, binding: tuple[Expr | None, ...]
+        self, signature: FunctionSignature, binding: tuple[CallArg | None, ...]
     ) -> set[int]:
         """Carry evidence only from arguments that select the generic result type."""
         return self._result_dependent_provenance(
@@ -3306,7 +3305,7 @@ class _Checker:
         )
 
     def _result_dependent_provenance(
-        self, dependencies: Sequence[bool], binding: Sequence[Expr | None]
+        self, dependencies: Sequence[bool], binding: Sequence[CallArg | None]
     ) -> set[int]:
         """Return marked evidence from arguments whose types select the result."""
         return self._inferred_return_provenance_for_exprs(
@@ -3474,8 +3473,7 @@ class _Checker:
         assert isinstance(typ, FunctionType), (
             f"extern binding {ref.name!r} has non-function type {typ!r}"
         )
-        signature = self._env.get_function_signature_by_node_id(ref.decl_node_id)
-        assert signature is not None
+        signature = self._env.function_signature_of(ref.decl_node_id)
         return (
             _ExternTarget(
                 name=ref.name,
@@ -3595,7 +3593,7 @@ class _Checker:
         builtin_kind = self._resolved.builtin_calls.get(node.node_id)
         static_kind = self._resolved.builtin_static_calls.get(node.node_id)
         if isinstance(node.callee, VarRef) and (kind := builtin_kind or static_kind) is not None:
-            if hole_indices:
+            if not is_complete_call(node):
                 builtin_name = BUILTIN_CALL_DISPLAY_NAMES[kind]
                 raise AglTypeError(
                     f"Cannot use placeholder arguments with special builtin '{builtin_name}'; "
@@ -3653,11 +3651,10 @@ class _Checker:
 
         # Qualified agent and Session method calls retain their declared named
         # and optional arguments. The receiver is their first positional operand.
-        if isinstance(node.callee, VarRef) and not hole_indices:
+        if is_complete_call(node) and isinstance(node.callee, VarRef):
             callee_ref = self._binding_for(node.callee.node_id)
             if callee_ref.is_builtin and callee_ref.is_method:
-                signature = self._env.get_function_signature_by_node_id(callee_ref.decl_node_id)
-                assert signature is not None
+                signature = self._env.function_signature_of(callee_ref.decl_node_id)
                 declared_receiver = signature.params[0].type
                 checker: _BuiltinMethodChecker | None = None
                 if isinstance(declared_receiver, (RecordType, EnumType)):
@@ -3685,8 +3682,7 @@ class _Checker:
         if isinstance(node.callee, VarRef):
             callee_ref = self._binding_for(node.callee.node_id)
             if callee_ref.is_builtin and callee_ref.is_method:
-                signature = self._env.get_function_signature_by_node_id(callee_ref.decl_node_id)
-                assert signature is not None
+                signature = self._env.function_signature_of(callee_ref.decl_node_id)
                 explicit_target: Type | None = None
                 if node.type_args:
                     if len(signature.type_params) != 1 or len(node.type_args) != 1:
@@ -3756,7 +3752,7 @@ class _Checker:
         # allocates a bound-method closure value, and ``_partial_declared_body``
         # in the lowerer requires a ``VarRef`` callee for the declared-partial
         # shape, so a partial member call cannot take this path.
-        if isinstance(node.callee, FieldAccess) and not hole_indices:
+        if is_complete_call(node) and isinstance(node.callee, FieldAccess):
             return self._check_member_call(node, node.callee, expected=expected)
 
         # Value call (lambda or higher-order, or a partial member call). A
@@ -3770,9 +3766,9 @@ class _Checker:
     @staticmethod
     def _bind_call_args(
         params: tuple[ParamSpec, ...],
-        node: Call,
+        node: Call | CompleteCall,
         func_name: str,
-    ) -> tuple[Expr | None, ...]:
+    ) -> tuple[CallArg | None, ...]:
         """Bind a call's positional/named args against *params* (declaration order).
 
         Shared by concrete checking and generic inference, so a bare-name shorthand
@@ -3788,7 +3784,7 @@ class _Checker:
         )
 
     @staticmethod
-    def _argument_check_order(binding: Sequence[Expr | None]) -> tuple[int, ...]:
+    def _argument_check_order(binding: Sequence[CallArg | None]) -> tuple[int, ...]:
         """Check context-dependent lambdas after sibling argument evidence."""
         ordinary: list[int] = []
         contextual: list[int] = []
@@ -3805,7 +3801,7 @@ class _Checker:
     def _constrain_bound_arguments(
         self,
         param_types: Sequence[Type],
-        binding: Sequence[Expr | None],
+        binding: Sequence[CallArg | None],
         *,
         subject: str,
         error_subject: str,
@@ -3832,7 +3828,7 @@ class _Checker:
     def _check_bound_call_args(
         self,
         params: tuple[ParamSpec, ...],
-        binding: tuple[Expr | None, ...],
+        binding: tuple[CallArg | None, ...],
     ) -> None:
         for spec, bound_expr in zip(params, binding, strict=True):
             if bound_expr is None or isinstance(bound_expr, Placeholder):
@@ -3842,19 +3838,21 @@ class _Checker:
 
     def _finish_declared_call(
         self,
-        node: Call,
+        node: Call | CompleteCall,
         params: tuple[ParamSpec, ...],
         result: Type,
-        binding: tuple[Expr | None, ...],
+        binding: tuple[CallArg | None, ...],
         hole_indices: Mapping[int, int],
         *,
         check_args: bool = True,
     ) -> Type:
         """Record direct-call side tables and build the result type."""
-        self._record_function_call_binding(node.node_id, binding)
-        self._record_function_call_param_types(node.node_id, tuple(p.type for p in params))
-        if hole_indices:
+        supplied = tuple(arg for arg in binding if not isinstance(arg, Placeholder))
+        if len(supplied) == len(binding):
+            self._record_function_call_binding(node.node_id, supplied)
+        else:
             self._record_partial_call(node, binding, hole_indices)
+        self._record_function_call_param_types(node.node_id, tuple(p.type for p in params))
         if check_args:
             self._check_bound_call_args(params, binding)
         return self._call_result_type(params, result, binding, hole_indices)
@@ -3866,7 +3864,7 @@ class _Checker:
         node: Call,
         func_name: str,
         sig: FunctionSignature,
-        binding: tuple[Expr | None, ...],
+        binding: tuple[CallArg | None, ...],
         hole_indices: Mapping[int, int],
         *,
         callee_declaration_id: int,
@@ -4079,7 +4077,7 @@ class _Checker:
     # --- member call (``p.f(...)``) ---
 
     def _check_member_call(
-        self, node: Call, field_access: FieldAccess, *, expected: Type | None
+        self, node: CompleteCall, field_access: FieldAccess, *, expected: Type | None
     ) -> Type:
         """Check a non-partial member call, preferring the declared-name path.
 
@@ -4124,15 +4122,9 @@ class _Checker:
             return self._check_value_call(
                 node, expected=expected, hole_indices={}, callee_type=callee_type
             )
-        sig = self._env.get_function_signature_by_node_id(method.decl_node_id)
-        assert sig is not None, (
-            f"compiler bug: no registered signature for selected method {method.name!r}"
-        )
+        sig = self._env.function_signature_of(method.decl_node_id)
 
         assert isinstance(callee_type, FunctionType)
-        assert len(sig.params) == len(callee_type.params) + 1, (
-            f"compiler bug: method {method.name!r} signature arity does not match its bound type"
-        )
         params = tuple(
             ParamSpec(
                 name=sig.params[i + 1].name,
@@ -4177,7 +4169,7 @@ class _Checker:
 
     def _check_value_call_head(
         self,
-        node: Call,
+        node: Call | CompleteCall,
         *,
         expected: Type | None,
         callee_type: Type | None = None,
@@ -4240,14 +4232,14 @@ class _Checker:
 
     def _check_value_call(
         self,
-        node: Call,
+        node: Call | CompleteCall,
         *,
         expected: Type | None,
         hole_indices: Mapping[int, int],
         callee_type: Type | None = None,
     ) -> Type:
         callee_type = self._check_value_call_head(node, expected=expected, callee_type=callee_type)
-        binding: tuple[Expr | None, ...] = node.args
+        binding: tuple[CallArg | None, ...] = node.args
         if hole_indices:
             self._record_partial_call(node, binding, hole_indices, callee_kind="value")
         self._constrain_bound_arguments(
@@ -5551,8 +5543,7 @@ class _Checker:
             name: engine.fresh(name) for name in own_type_params
         }
         combined: dict[str, Type] = {**substitutions, **own_fresh}
-        declared_signature = self._env.get_function_signature_by_node_id(method.decl_node_id)
-        assert declared_signature is not None
+        declared_signature = self._env.function_signature_of(method.decl_node_id)
         self._register_bound_obligation(
             declared_signature.bounds, combined, span=span, subject=method.name
         )
@@ -5855,8 +5846,7 @@ class _Checker:
             )
             if self._env.is_extern_node_id(method.decl_node_id):
                 # ``MethodDef`` omits target parameters; read them off the signature.
-                signature = self._env.get_function_signature_by_node_id(method.decl_node_id)
-                assert signature is not None
+                signature = self._env.function_signature_of(method.decl_node_id)
                 self._set_extern_expr_targets(
                     node.node_id,
                     (
@@ -6137,7 +6127,9 @@ class _Checker:
         target, _annotation = resolved
         return self._resolve_constructor_alias(target) if isinstance(target, VarRef) else None
 
-    def _call_binding_for_key(self, call: Call) -> tuple[Hashable, Mapping[str, Expr]] | None:
+    def _call_binding_for_key(
+        self, call: CompleteCall
+    ) -> tuple[Hashable, Mapping[str, Expr]] | None:
         """Identity and field bindings for a constant call, for ``constant_key``.
 
         A constructor call — direct or through a chain of constant aliases —

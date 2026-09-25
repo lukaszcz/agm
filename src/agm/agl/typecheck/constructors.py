@@ -8,7 +8,7 @@ and delegates the constructor dispatch branches in ``_check_varref``,
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Literal, Protocol
 
@@ -23,7 +23,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     substitute,
 )
-from agm.agl.syntax.nodes import Call, Expr, NamedArg, Placeholder, VarRef
+from agm.agl.syntax.nodes import Call, CallArg, Expr, NamedArg, Placeholder, VarRef
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
 from agm.agl.typecheck.arguments import bind_constructor_args
@@ -69,7 +69,7 @@ class ConstructorCheckCtx(Protocol):
     def _record_partial_call(
         self,
         node: Call,
-        binding: tuple[Expr | None, ...],
+        binding: Sequence[CallArg | None],
         hole_indices: Mapping[int, int],
         *,
         callee_kind: Literal["declared", "constructor", "value"] = "declared",
@@ -113,7 +113,7 @@ class ConstructorCheckCtx(Protocol):
         node_id: int,
         result_template: Type,
         field_templates: Mapping[str, Type],
-        bound_exprs: Mapping[str, Expr],
+        bound_exprs: Mapping[str, CallArg],
     ) -> None: ...
 
     def _frame_generic_constraint_error(
@@ -453,8 +453,8 @@ class ConstructorChecker:
         *,
         node_type_args: tuple[TypeExpr, ...],
         ctor_ref: ConstructorRef,
-        positional: tuple[Expr, ...],
-        named: tuple[NamedArg, ...],
+        positional: tuple[CallArg, ...],
+        named: tuple[NamedArg[CallArg], ...],
         span: SourceSpan,
         node: Call,
         expected: Type | None,
@@ -539,14 +539,7 @@ class ConstructorChecker:
                     expected,
                     engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name),
                 )
-        self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
-        if hole_indices:
-            self._ctx._record_partial_call(
-                node,
-                tuple(bound_exprs[name] for name, _kind in field_kinds),
-                hole_indices,
-                callee_kind="constructor",
-            )
+        self._record_call_binding(node, bound_exprs, hole_indices)
         if not node_type_args:
             self._ctx._set_generic_constructor_result_provenance(
                 node.node_id,
@@ -561,6 +554,20 @@ class ConstructorChecker:
         return self._ctx._active_inference_engine()
 
     # --- Constructor call helpers ---
+
+    def _record_call_binding(
+        self, node: Call, bound_exprs: Mapping[str, CallArg], hole_indices: Mapping[int, int]
+    ) -> None:
+        """Record a complete call's field binding, or a partial call's."""
+        supplied = {
+            name: arg for name, arg in bound_exprs.items() if not isinstance(arg, Placeholder)
+        }
+        if len(supplied) == len(bound_exprs):
+            self._ctx._record_constructor_call_binding(node.node_id, supplied)
+        else:
+            self._ctx._record_partial_call(
+                node, tuple(bound_exprs.values()), hole_indices, callee_kind="constructor"
+            )
 
     def _constructor_fields_and_context(
         self, owner: RecordType | ExceptionType
@@ -577,7 +584,7 @@ class ConstructorChecker:
         field_kinds: tuple[tuple[str, ParamZone], ...],
         field_types: Mapping[str, Type],
         result: RecordType | EnumType | ExceptionType,
-        bound_exprs: Mapping[str, Expr],
+        bound_exprs: Mapping[str, CallArg],
         hole_indices: Mapping[int, int],
     ) -> Type:
         if not hole_indices:
@@ -600,7 +607,7 @@ class ConstructorChecker:
         *,
         owner: RecordType | ExceptionType,
         field_kinds: tuple[tuple[str, ParamZone], ...],
-        bound_exprs: Mapping[str, Expr],
+        bound_exprs: Mapping[str, CallArg],
         node: Call | None,
         hole_indices: Mapping[int, int],
     ) -> Type:
@@ -610,17 +617,7 @@ class ConstructorChecker:
         fields, _context_desc = self._constructor_fields_and_context(owner)
 
         if node is not None:
-            self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
-            if hole_indices:
-                binding: tuple[Expr | None, ...] = tuple(
-                    bound_exprs[fname] for fname, _fkind in field_kinds
-                )
-                self._ctx._record_partial_call(
-                    node,
-                    binding,
-                    hole_indices,
-                    callee_kind="constructor",
-                )
+            self._record_call_binding(node, bound_exprs, hole_indices)
 
         # Type-check each supplied field. Placeholder fields are checked when
         # the produced function is invoked.
@@ -945,8 +942,8 @@ class ConstructorChecker:
         self,
         *,
         owner: RecordType | ExceptionType,
-        positional: tuple[Expr, ...],
-        named: tuple[NamedArg, ...],
+        positional: tuple[CallArg, ...],
+        named: tuple[NamedArg[CallArg], ...],
         span: SourceSpan,
         node: Call | None = None,
         hole_indices: Mapping[int, int] | None = None,

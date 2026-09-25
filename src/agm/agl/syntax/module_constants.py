@@ -63,6 +63,7 @@ from agm.agl.syntax.nodes import (
     BoolLit,
     BuiltinVarDecl,
     Call,
+    CompleteCall,
     DecimalLit,
     DictLit,
     EnumDef,
@@ -84,6 +85,7 @@ from agm.agl.syntax.nodes import (
     UnitLit,
     VarDecl,
     VarRef,
+    is_complete_call,
     static_items,
 )
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
@@ -224,7 +226,7 @@ def constant_key(
     *,
     initializer_for: Callable[[int], tuple[Expr, TypeExpr | None] | None],
     constructor_ref_for: Callable[[VarRef], Hashable | None],
-    call_binding: Callable[[Call], tuple[Hashable, Mapping[str, Expr]] | None],
+    call_binding: Callable[[CompleteCall], tuple[Hashable, Mapping[str, Expr]] | None],
 ) -> Hashable | None:
     """Canonical comparison key for a constant dict-literal key expression.
 
@@ -290,7 +292,7 @@ def constant_key(
             return _CallKey(ctor_id, ())
         resolved = initializer_for(expr.node_id)
         return None if resolved is None else recur(resolved[0])
-    if isinstance(expr, Call) and isinstance(expr.callee, VarRef):
+    if isinstance(expr, Call) and isinstance(expr.callee, VarRef) and is_complete_call(expr):
         binding = call_binding(expr)
         if binding is None:
             return None

@@ -27,10 +27,6 @@ class OccurrenceId:
 
     value: int
 
-    def __post_init__(self) -> None:
-        if self.value < 0:
-            raise ValueError("occurrence ids must be non-negative")
-
 
 @dataclass(frozen=True, slots=True)
 class ConstructorField:
@@ -103,18 +99,6 @@ class LiteralConstructor:
 
     kind: LiteralKind
     value: LiteralValue
-
-    def __post_init__(self) -> None:
-        valid = (
-            self.kind is LiteralKind.NUMERIC
-            and isinstance(self.value, decimal.Decimal)
-            or self.kind is LiteralKind.TEXT
-            and isinstance(self.value, str)
-            or self.kind is LiteralKind.NULL
-            and self.value is None
-        )
-        if not valid:
-            raise ValueError(f"invalid value {self.value!r} for literal kind {self.kind.value}")
 
     @property
     def arity(self) -> int:
@@ -210,10 +194,6 @@ class Occurrence:
     type: Type
     provenance: OccurrenceProvenance
 
-    def __post_init__(self) -> None:
-        if self.creation_order < 0:
-            raise ValueError("occurrence creation order must be non-negative")
-
 
 @dataclass(frozen=True, slots=True)
 class PathDecomposition:
@@ -272,7 +252,6 @@ class SourceAction:
 
     action_id: int
     source_index: int
-    body_node_id: int
     pattern_span: SourceSpan
 
 

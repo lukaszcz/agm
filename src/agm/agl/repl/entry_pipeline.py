@@ -86,11 +86,12 @@ class EntryPipeline:
         retained import/use preamble and cached library modules before
         resolving and type-checking the result.
 
-        Raises the underlying ``AglSyntaxError``/module-loading
-        error/``AglScopeError``/``AglTypeError`` on failure — callers adapt
-        these to their own failure-reporting shape.
+        Raises an ``AglError`` on any source, module-loading, root, or
+        configuration failure — callers adapt it to their own failure-reporting
+        shape.
         """
         from agm.agl.modules.loader import build_repl_graph
+        from agm.agl.recursion import frontend_recursion_boundary
         from agm.agl.typecheck.program import check_program
 
         roots = self._ctx._ensure_roots()
@@ -98,24 +99,24 @@ class EntryPipeline:
         entry_program, next_start_id, entry_imports, entry_uses = self._prepare_entry_program(
             pipeline_program, next_start_id, roots
         )
-        graph, new_next_id, new_modules = build_repl_graph(
-            entry_program,
-            next_start_id,
-            path=None,
-            cached=self._ctx._loaded_lib_modules,
-            roots=roots,
-            default_stdlib=self._ctx._default_stdlib,
-            spaced_qualifiers=spaced_qualifiers,
-            session_infix=self._ctx._accumulated_infix,
-        )
-
-        resolved_program = self._resolve_program(graph)
-        checked_program = check_program(
-            resolved_program,
-            host_env.capabilities,
-            entry_seed_env=self._ctx._type_env,
-            cached_checked_modules=self._ctx._retained_checked_modules,
-        )
+        with frontend_recursion_boundary():
+            graph, new_next_id, new_modules = build_repl_graph(
+                entry_program,
+                next_start_id,
+                path=None,
+                cached=self._ctx._loaded_lib_modules,
+                roots=roots,
+                default_stdlib=self._ctx._default_stdlib,
+                spaced_qualifiers=spaced_qualifiers,
+                session_infix=self._ctx._accumulated_infix,
+            )
+            resolved_program = self._resolve_program(graph)
+            checked_program = check_program(
+                resolved_program,
+                host_env.capabilities,
+                entry_seed_env=self._ctx._type_env,
+                cached_checked_modules=self._ctx._retained_checked_modules,
+            )
         self._retain_module_artifacts(resolved_program, checked_program)
         raw_param_values = self._resolve_new_module_params(checked_program, new_modules)
         return LoadedCheckedProgram(
@@ -165,16 +166,6 @@ class EntryPipeline:
         context, then returns a check-only result or lowers and evaluates.
         """
         from agm.agl.diagnostics import AglError
-        from agm.agl.modules.errors import (
-            AmbiguousModule,
-            ImportEntryError,
-            MissingExternCompanion,
-            ModuleNotFound,
-            ModulePrefixNotFound,
-        )
-        from agm.agl.parser import AglSyntaxError
-        from agm.agl.scope import AglScopeError
-        from agm.agl.typecheck import AglTypeError
 
         try:
             loaded = self.load_and_check_program(
@@ -183,24 +174,8 @@ class EntryPipeline:
                 next_start_id=next_start_id,
                 spaced_qualifiers=spaced_qualifiers,
             )
-        except AglSyntaxError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-        except (
-            ModuleNotFound,
-            AmbiguousModule,
-            ModulePrefixNotFound,
-            ImportEntryError,
-            MissingExternCompanion,
-        ) as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-        except AglScopeError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-        except AglTypeError as exc:
-            return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
         except AglError as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
-        except Exception as exc:
-            return self._ctx._fail([Diagnostic(message=str(exc), line=1)], tab_warnings)
 
         checked_program = loaded.checked_program
         new_modules = loaded.new_modules
@@ -229,9 +204,6 @@ class EntryPipeline:
                 list(diagnostics_from_match_issues(match_result.issues)), warnings
             )
         compiled = match_result.compiled
-        from agm.agl.matchcompile import MatchCompiledProgram
-
-        assert isinstance(compiled, MatchCompiledProgram)
         # Retained for the next entry: its library modules are the same checked
         # objects, so their compiled sites carry over on identity alone.
         self._ctx._last_match_compilation = compiled

@@ -360,10 +360,7 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
         case.branches[1].node_id,
     ]
     assert isinstance(normalized.source, CaseSite)
-    assert [action.body_node_id for action in normalized.source.actions] == [
-        case.branches[0].body.node_id,
-        case.branches[1].body.node_id,
-    ]
+    assert [action.source_index for action in normalized.source.actions] == [0, 1]
     assert isinstance(normalized.rows[0].cells[0], ConstructorCell)
     binder_cell = normalized.rows[1].cells[0]
     assert isinstance(binder_cell, WildcardCell)
@@ -591,31 +588,12 @@ def test_text_and_null_literals_retain_distinct_typed_canonical_keys() -> None:
     assert null_cell.constructor == LiteralConstructor(LiteralKind.NULL, None)
 
 
-@pytest.mark.parametrize(
-    ("kind", "value"),
-    [
-        (LiteralKind.NUMERIC, "1"),
-        (LiteralKind.TEXT, None),
-        (LiteralKind.NULL, "null"),
-    ],
-)
-def test_literal_constructor_rejects_noncanonical_payloads(
-    kind: LiteralKind, value: object
-) -> None:
-    with pytest.raises(ValueError, match="invalid value"):
-        LiteralConstructor(kind, cast("decimal.Decimal | str | None", value))
-
-
 def test_model_rejects_invalid_occurrences_cells_and_normalized_matrices() -> None:
     checked = _check("let value = 1\ncase value of | 1 => 1 | _ => 0")
     normalized = normalize_case(_only_case(checked.resolved.program), checked)
     source_cell = normalized.rows[0].cells[0]
     assert isinstance(source_cell, ConstructorCell)
 
-    with pytest.raises(ValueError, match="occurrence ids"):
-        OccurrenceId(-1)
-    with pytest.raises(ValueError, match="creation order"):
-        replace(normalized.root, creation_order=-1)
     with pytest.raises(ValueError, match="argument count"):
         replace(source_cell, arguments=(source_cell,))
     with pytest.raises(ValueError, match="only its root"):

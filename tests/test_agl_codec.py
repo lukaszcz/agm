@@ -65,7 +65,6 @@ from agm.agl.semantics.types import (
     DecimalType,
     DictType,
     EnumType,
-    ExceptionType,
     IntType,
     JsonType,
     RecordType,
@@ -879,43 +878,6 @@ class TestRecursiveSchemaDerivation:
             },
         }
 
-    def test_raises_for_infinite_closure_root(self) -> None:
-        pair_id = next_decl_id()
-        perfect_id = next_decl_id()
-        pair_def = TypeDef(
-            kind="record",
-            name="Pair",
-            module_id=ENTRY_ID,
-            type_params=("A", "B"),
-            fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
-            decl_node_id=pair_id,
-        )
-        perfect_def = enum_typedef(
-            "Perfect",
-            {
-                "Single": {"value": TypeVarType("T")},
-                "Succ": {
-                    "next": EnumType(
-                        name="Perfect",
-                        type_args=(
-                            RecordType(
-                                name="Pair",
-                                type_args=(TypeVarType("T"), TypeVarType("T")),
-                                decl_id=pair_id,
-                            ),
-                        ),
-                        decl_id=perfect_id,
-                    )
-                },
-            },
-            type_params=("T",),
-            decl_id=perfect_id,
-        )
-        table = type_table_for(pair_def, perfect_def)
-        perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
-        with pytest.raises(TypeError, match="finite schema"):
-            derive_schema(perfect_int, table)
-
     def test_assign_defs_keys_breaks_residual_collision_with_numeric_suffix(self) -> None:
         # Three handles whose bare display forms all sanitize to the
         # identical string despite being genuinely distinct instantiations
@@ -1267,43 +1229,6 @@ class TestRecursiveDecodeDerivation:
             ),
             defs=(),
         )
-
-    def test_raises_for_infinite_closure_root(self) -> None:
-        pair_id = next_decl_id()
-        perfect_id = next_decl_id()
-        pair_def = TypeDef(
-            kind="record",
-            name="Pair",
-            module_id=ENTRY_ID,
-            type_params=("A", "B"),
-            fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
-            decl_node_id=pair_id,
-        )
-        perfect_def = enum_typedef(
-            "Perfect",
-            {
-                "Single": {"value": TypeVarType("T")},
-                "Succ": {
-                    "next": EnumType(
-                        name="Perfect",
-                        type_args=(
-                            RecordType(
-                                name="Pair",
-                                type_args=(TypeVarType("T"), TypeVarType("T")),
-                                decl_id=pair_id,
-                            ),
-                        ),
-                        decl_id=perfect_id,
-                    )
-                },
-            },
-            type_params=("T",),
-            decl_id=perfect_id,
-        )
-        table = type_table_for(pair_def, perfect_def)
-        perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
-        with pytest.raises(TypeError, match="finite schema"):
-            build_decode_schema(perfect_int, table)
 
     def test_derive_schema_and_decode_shares_one_plan_and_matches_separate_calls(self) -> None:
         """derive_schema_and_decode matches (derive_schema(...), build_decode_schema(...))."""
@@ -2799,13 +2724,6 @@ program def main(issue: Issue) -> unit =
                 type_table_for(issue_def),
             )
 
-    def test_unsupported_type_in_convert_host_value_raises(self) -> None:
-        """ExceptionType is not a supported param type."""
-        from agm.agl.runtime.engine_config import convert_host_value
-
-        with pytest.raises(ValueError, match="unsupported type"):
-            convert_host_value("e", "val", ExceptionType(name="Boom"), type_table_for())
-
     def test_structured_param_is_strict_no_repair(self) -> None:
         """host --param values read strict JSON or AgL value syntax, no repair.
 
@@ -2985,34 +2903,6 @@ class TestDecodeValueRejectsMismatchedPayloads:
         assert isinstance(result.value, DecimalValue)
         assert result.value.value == Decimal("1.0")
         assert str(result.value.value) == "1.0"
-
-
-# ---------------------------------------------------------------------------
-# Exception types have no JSON Schema
-# ---------------------------------------------------------------------------
-
-
-class TestSchemaExceptionType:
-    def test_exception_type_raises_type_error(self) -> None:
-
-        with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(ExceptionType(name="Boom"), type_table_for())
-
-    def test_record_containing_exception_type_raises_type_error(self) -> None:
-        from agm.agl.semantics.types import EXCEPTION_BASE
-
-        boom_id = next_decl_id()
-        boom = ExceptionType(name="Boom", decl_id=boom_id)
-        boom_def = TypeDef(
-            kind="exception",
-            name="Boom",
-            module_id=ENTRY_ID,
-            base=EXCEPTION_BASE.decl_id,
-            decl_node_id=boom_id,
-        )
-        box, box_def = record_type("Box", {"boom": boom})
-        with pytest.raises(TypeError, match="ExceptionType"):
-            derive_schema(box, type_table_for(boom_def, box_def))
 
 
 # ---------------------------------------------------------------------------

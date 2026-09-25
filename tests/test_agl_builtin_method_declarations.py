@@ -45,9 +45,10 @@ def test_invalid_builtin_method_receivers_are_rejected(source: str) -> None:
     assert discovery.diagnostics
 
 
-def test_bare_array_scope_is_not_a_builtin_receiver_head() -> None:
+@pytest.mark.parametrize("receiver", ("array", "dict"))
+def test_bare_generic_scope_is_not_a_builtin_receiver_head(receiver: str) -> None:
     prepared = PipelineDriver.prepare_program(
-        "def array::copy(self) -> int = 0\nprogram def main() -> unit = ()\n",
+        f"def {receiver}::copy(self) -> int = 0\nprogram def main() -> unit = ()\n",
         default_stdlib=False,
     )
 

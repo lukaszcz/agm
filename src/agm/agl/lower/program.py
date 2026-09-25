@@ -108,13 +108,13 @@ def _descriptor_for_skipped_identity(
     from the main declaration pass, but still needed for IR identity and
     validation, so it is added here with ``bears_name_path=False``.
     """
-    typedef = type_table.get_by_id(nominal.value)
-    assert typedef is not None
+    typedef = type_table.typedef_of(nominal.value)
     handle = typedef.handle()
     if isinstance(handle, RecordType):
         return _record_descriptor(typedef, handle, type_table, bears_name_path=False)
-    assert isinstance(handle, ExceptionType)
-    return exception_descriptor(typedef, handle, type_table, bears_name_path=False)
+    return exception_descriptor(
+        typedef, cast(ExceptionType, handle), type_table, bears_name_path=False
+    )
 
 
 def _add_missing_enum_member_descriptors(
@@ -174,7 +174,7 @@ def _add_exception_field_encodes(
     for nominal, descriptor in nominals.items():
         if descriptor.kind is not NominalKind.EXCEPTION or nominal in encodes:
             continue
-        typedef = cast(TypeDef, type_table.get_by_id(nominal.value))
+        typedef = type_table.typedef_of(nominal.value)
         encodes[nominal] = build_exception_field_encodes(
             cast(ExceptionType, typedef.handle()), type_table
         )
@@ -201,8 +201,7 @@ def _program_signatures(
     """Build every linked ``program def``'s host-facing parameter signature."""
     result: dict[SymbolId, tuple[IrProgramParam, ...]] = {}
     for _mid, cm, item in program_funcdefs(modules):
-        sig = cm.type_env.get_function_signature_by_node_id(item.node_id)
-        assert sig is not None, f"compiler bug: no function signature for program {item.name!r}"
+        sig = cm.type_env.function_signature_of(item.node_id)
         result[fn_node_to_sym[item.node_id]] = _program_signature(sig, type_table)
     return result
 
@@ -231,10 +230,7 @@ def _param_tables(
                 continue
             key = static_binding_key(module_id, (segment.name for segment in item.scope_path), name)
             bindings[key] = decl_to_sym[binding_node_id]
-            binding_type = checked_module.type_env.get_binding_type(binding_node_id)
-            assert binding_type is not None, (
-                f"compiler bug: parameter binding {name!r} has no checked type"
-            )
+            binding_type = checked_module.type_env.binding_type_of(binding_node_id)
             decoders[key] = build_param_decoder(binding_type, type_table)
             spans[key] = item.span
     return bindings, decoders, spans
@@ -389,7 +385,6 @@ def lower_program(
                     bears_name_path=bears_name_path,
                 )
             case _:
-                assert isinstance(handle, ExceptionType)
                 link.nominals[nominal] = exception_descriptor(
                     typedef, handle, type_table, bears_name_path=bears_name_path
                 )
@@ -406,13 +401,10 @@ def lower_program(
     # declaration above. Inline members remain excluded just as they are in
     # that pass, because a generic member also appears in this template loop.
     for cm in checked.modules.values():
-        for name, generic in cm.type_env.all_generic_types().items():
+        for generic in cm.type_env.all_generic_types().values():
             typ = generic.template
             nominal = NominalId(typ.decl_id)
-            generic_typedef = type_table.get(typ.module_id, typ.name, typ.scope_path)
-            assert generic_typedef is not None, (
-                f"compiler bug: generic type {name!r} has no TypeDef registered"
-            )
+            generic_typedef = type_table.named(typ.module_id, typ.name, typ.scope_path)
             bears_name_path = (
                 generic_typedef.decl_node_id == typ.decl_id and typ.decl_id not in inline_member_ids
             )
@@ -459,7 +451,7 @@ def lower_program(
             if mid == checked.entry_id and _entry_source_text is not None
             else cm.source_text,
             compiled.sites_by_module[mid],
-            checked.resource_roots.get(mid),
+            checked.resource_roots[mid],
             has_std_env=STD_ENV_ID in checked.modules,
             stable_ids=_link is None,
             contract_payloads=contract_payloads,
@@ -472,10 +464,9 @@ def lower_program(
     # retains the loader's reverse-topological components separately for this
     # execution-sensitive pass. Within an import cycle, the loader's stable
     # member ordering is the only valid tie-break; the entry remains last.
-    import_sccs = checked.import_sccs or (tuple(checked.modules),)
     ordered_mids = [
         mid
-        for component in import_sccs
+        for component in checked.import_sccs
         for mid in component
         if mid != checked.entry_id and mid not in _already_linked
     ]
@@ -494,7 +485,7 @@ def lower_program(
         key = None
         if fingerprint is not None:
             context = (
-                checked.resource_roots.get(mid),
+                checked.resource_roots[mid],
                 STD_ENV_ID in checked.modules,
                 sorted(link.builtin_nominals.declared.items()),
                 sorted(link.builtin_nominals.members.items()),
@@ -561,9 +552,8 @@ def lower_program(
 
     payloads = contract_payloads if contract_payloads is not None else {}
     dry_run_entries: list[DryRunEntry] = []
-    runtime_modules = checked.runtime_modules or frozenset(checked.modules)
     for module_id, cm in checked.modules.items():
-        if module_id not in runtime_modules:
+        if module_id not in checked.runtime_modules:
             continue
         for csr in cm.call_sites:
             dry_run_entries.append(

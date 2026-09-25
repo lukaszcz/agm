@@ -40,14 +40,11 @@ from .model import (
 from .stage import (
     CachedModuleSites,
     MatchCompilationResult,
-    MatchCompiledArtifact,
-    MatchCompiledModule,
     MatchCompiledProgram,
     cached_module_sites,
     compile_program_matches,
     diagnostic_from_match_issue,
     diagnostics_from_match_issues,
-    validate_match_compiled_module,
     validate_match_compiled_program,
 )
 
@@ -68,9 +65,7 @@ __all__ = [
     "LiteralKind",
     "LiteralWitness",
     "MatchCompilationResult",
-    "MatchCompiledArtifact",
     "MatchCompiledProgram",
-    "MatchCompiledModule",
     "MatchIssue",
     "MatchSiteSource",
     "MatchWitness",
@@ -90,5 +85,4 @@ __all__ = [
     "diagnostics_from_match_issues",
     "render_witness",
     "validate_match_compiled_program",
-    "validate_match_compiled_module",
 ]

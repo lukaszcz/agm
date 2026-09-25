@@ -84,6 +84,19 @@ class ModulePrefixNotFound(AglError):
         self.prefix = prefix
 
 
+class ModuleReadError(AglError):
+    """A module file could not be read as UTF-8 text.
+
+    ``module_id`` is the module whose file failed to read and ``path`` the
+    file.
+    """
+
+    def __init__(self, module_id: ModuleId, path: Path, reason: str) -> None:
+        super().__init__(f"cannot read module '{module_id.display()}' at '{path}': {reason}")
+        self.module_id = module_id
+        self.path = path
+
+
 class MissingExternCompanion(AglError):
     """A module declaring at least one ``extern def`` has no companion ``.py`` file.
 

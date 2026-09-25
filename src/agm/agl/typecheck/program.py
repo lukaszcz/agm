@@ -231,10 +231,10 @@ class CheckedProgram:
     entry_id: ModuleId
     program_type_table: dict[DeclKey, Type]
     warnings: tuple[Diagnostic, ...]
+    import_sccs: tuple[tuple[ModuleId, ...], ...]
+    resource_roots: Mapping[ModuleId, Path | None]
+    runtime_modules: frozenset[ModuleId]
     capabilities: HostCapabilities | None = None
-    import_sccs: tuple[tuple[ModuleId, ...], ...] = ()
-    resource_roots: Mapping[ModuleId, Path | None] = field(default_factory=dict)
-    runtime_modules: frozenset[ModuleId] | None = None
     module_fingerprints: Mapping[ModuleId, bytes] = field(default_factory=dict)
 
 
@@ -1067,9 +1067,7 @@ def _module_function_signatures(
     for item in program.body.items:
         if not isinstance(item, FuncDef) or item.scope_path or item.is_synthetic:
             continue
-        signature = env.get_function_signature_by_node_id(item.node_id)
-        assert signature is not None, f"No checked signature for '{item.name}'"
-        signatures[item.name] = signature
+        signatures[item.name] = env.function_signature_of(item.node_id)
     return signatures
 
 
@@ -1086,9 +1084,7 @@ def _module_static_binding_types(program: Program, env: TypeEnvironment) -> dict
         if not isinstance(item, (LetDecl, VarDecl)) or exported_binding_name(item) is None:
             continue
         node_id = static_binding_node_id(item)
-        binding_type = env.get_binding_type(node_id)
-        assert binding_type is not None, f"No checked type for binding node {node_id}"
-        result[node_id] = binding_type
+        result[node_id] = env.binding_type_of(node_id)
     return result
 
 

@@ -46,19 +46,6 @@ def _immutable_module_sites(
 
 
 @dataclass(frozen=True, slots=True)
-class MatchCompiledModule:
-    """A checked module plus one compiled decision DAG per source match site."""
-
-    checked: CheckedModule
-    sites: Mapping[int, CompiledMatchSite]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "sites", _immutable_sites(self.sites))
-        if self_validation_enabled():
-            validate_match_compiled_module(self)
-
-
-@dataclass(frozen=True, slots=True)
 class MatchCompiledProgram:
     """A checked program plus total per-module compiled match-site mappings.
 
@@ -95,14 +82,11 @@ class CachedModuleSites:
     sites: Mapping[int, CompiledMatchSite]
 
 
-MatchCompiledArtifact: TypeAlias = MatchCompiledModule | MatchCompiledProgram
-
-
 @dataclass(frozen=True, slots=True)
 class MatchCompilationResult:
     """Non-raising stage result with exactly one artifact or source issue tuple."""
 
-    compiled: MatchCompiledArtifact | None
+    compiled: MatchCompiledProgram | None
     issues: tuple[MatchIssue, ...]
 
 
@@ -160,7 +144,6 @@ def cached_module_sites(
     return {
         module_id: CachedModuleSites(previous.checked.modules[module_id], sites)
         for module_id, sites in previous.sites_by_module.items()
-        if module_id in previous.checked.modules
     }
 
 
@@ -272,13 +255,6 @@ def _validate_sites(
         )
 
 
-def validate_match_compiled_module(compiled: MatchCompiledModule) -> None:
-    """Validate totality, ownership, provenance, and replay for a module artifact."""
-    _validate_sites(
-        owner=compiled.checked, module_id=compiled.checked.module_id, sites=compiled.sites
-    )
-
-
 def validate_match_compiled_program(compiled: MatchCompiledProgram) -> None:
     """Validate totality, ownership, provenance, and replay for a program artifact."""
     expected_modules = set(compiled.checked.modules)
@@ -301,14 +277,11 @@ def validate_match_compiled_program(compiled: MatchCompiledProgram) -> None:
 
 __all__ = [
     "MatchCompilationResult",
-    "MatchCompiledArtifact",
     "MatchCompiledProgram",
-    "MatchCompiledModule",
     "CachedModuleSites",
     "cached_module_sites",
     "compile_program_matches",
     "diagnostic_from_match_issue",
     "diagnostics_from_match_issues",
     "validate_match_compiled_program",
-    "validate_match_compiled_module",
 ]

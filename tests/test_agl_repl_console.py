@@ -508,13 +508,6 @@ class TestLexer:
         fragments = AglPromptLexer().lex_document(Document(line))(0)
         assert "".join(text for _style, text in fragments) == line
 
-    def test_out_of_range_line_does_not_crash(self) -> None:
-        lexer = AglPromptLexer()
-        getter = lexer.lex_document(Document("let x = 1"))
-        # Asking for a line beyond the document yields an empty line, not a crash.
-        assert getter(0)  # in range
-        assert getter(5) == []
-
     def test_positionless_synthetic_token_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A lexer token without source offsets leaves the typed line intact."""
         monkeypatch.setattr(

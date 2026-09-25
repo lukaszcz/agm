@@ -31,7 +31,7 @@ from agm.agl.parser import parse_program
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import CastSpec
-from agm.agl.syntax.nodes import Block, FuncDef
+from agm.agl.syntax.nodes import Block, FuncDef, IntLit
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck import (
     AglTypeError,
@@ -611,7 +611,9 @@ class TestExternCallSiteRecording:
             "apply(2)"
         )
         partial_node_id = _last_call_node_id(cp, "same")
-        assert cp.partial_calls[partial_node_id].argument_holes == (0, None)
+        hole, supplied = cp.partial_calls[partial_node_id].arguments
+        assert hole == 0
+        assert isinstance(supplied, IntLit)
         assert cp.argument_bindings.function_param_types[partial_node_id] == (
             IntType(),
             IntType(),

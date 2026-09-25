@@ -179,20 +179,16 @@ def convert_host_value(
     :class:`~agm.agl.runtime.arguments.OptionSome` box, for an ``Option[T]``
     *type_obj*: the boxed payload decodes against ``T``'s own field schema and
     is wrapped into the enum's ``Some`` shape, exactly as a program's own
-    ``Option[T]`` parameter decodes. Types with no wire schema
-    (unit/function/exception/…) are rejected up front; the builtin ``Agent``
-    enum has an ordinary wire schema, dispatched through its own shorthand
-    and constructor-call reading. *type_table* resolves record/enum
-    field/variant shapes for *type_obj*.
+    ``Option[T]`` parameter decodes. *type_obj* is a checked engine-setting
+    type with a wire schema; the builtin ``Agent`` enum's schema is dispatched
+    through its own shorthand and constructor-call reading. *type_table*
+    resolves record/enum field/variant shapes for *type_obj*.
     """
     from agm.agl.runtime.arguments import decode_param_value
     from agm.agl.runtime.convert import StrictJsonParseError
     from agm.agl.type_schema import build_param_decoder
 
-    try:
-        decoder = build_param_decoder(type_obj, type_table)
-    except TypeError as exc:
-        raise ValueError(f"Setting {name!r} has unsupported type {type_obj!r}.") from exc
+    decoder = build_param_decoder(type_obj, type_table)
     try:
         return decode_param_value(decoder, raw)
     except (StrictJsonParseError, ValueError) as exc:

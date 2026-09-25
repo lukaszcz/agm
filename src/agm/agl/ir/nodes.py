@@ -756,15 +756,14 @@ class IrLiteralKind(enum.Enum):
     NULL = "null"
 
 
-IrLiteralScalar: TypeAlias = int | decimal.Decimal | bool | str | None
+IrLiteralScalar: TypeAlias = decimal.Decimal | bool | str | None
 
 
 def is_canonical_literal_scalar(kind: IrLiteralKind, value: IrLiteralScalar) -> bool:
     """Report whether *value* is the canonical stored scalar for *kind*.
 
-    Canonical means post-normalization: a ``NUMERIC`` key stores a finite
-    :class:`decimal.Decimal` (never an ``int`` or a ``bool``), so this is the
-    single source of truth for the shape an :class:`IrLiteralCaseKey` holds.
+    A ``NUMERIC`` key stores a finite :class:`decimal.Decimal` (never a
+    ``bool``); this is the shape an :class:`IrLiteralCaseKey` holds.
     """
     return (
         kind is IrLiteralKind.NUMERIC
@@ -790,25 +789,12 @@ class IrNominalCaseKey:
 class IrLiteralCaseKey:
     """One canonical scalar discriminant using runtime equality semantics.
 
-    Numeric keys accept an integer or decimal input but store a
-    :class:`decimal.Decimal`, so equal integer/decimal spellings are identical
-    keys before validation or evaluation.
+    Numeric keys store a :class:`decimal.Decimal`, so equal integer/decimal
+    spellings are identical keys.
     """
 
     kind: IrLiteralKind
     scalar_value: IrLiteralScalar
-
-    def __post_init__(self) -> None:
-        value = self.scalar_value
-        if (
-            self.kind is IrLiteralKind.NUMERIC
-            and not isinstance(value, bool)
-            and isinstance(value, int)
-        ):
-            value = decimal.Decimal(value)
-            object.__setattr__(self, "scalar_value", value)
-        if not is_canonical_literal_scalar(self.kind, value):
-            raise ValueError(f"invalid scalar {value!r} for literal case kind {self.kind.name!r}")
 
 
 IrCaseKey: TypeAlias = IrNominalCaseKey | IrLiteralCaseKey

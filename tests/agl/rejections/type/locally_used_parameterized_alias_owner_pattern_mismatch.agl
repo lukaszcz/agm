@@ -1,0 +1,15 @@
+use R::*
+
+enum Slot[T] | Empty | Filled(value: T)
+
+scope R
+  type Rows[A] = Slot[array[A]]
+end R
+
+def h(s: Slot[int]) -> int =
+  case s of
+    | Rows::Filled(value) => 1
+    | _ => 0
+
+program def main() -> unit =
+  print(h(Slot::Empty))

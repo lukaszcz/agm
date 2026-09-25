@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_score_selects_the_payload_members",
+      "params": {
+        "score": 3
+      },
+      "expect": {
+        "stdout": "pass: score 3\ncount 3, filled true\n6 held\nwidth 2, wrapped true, row 3\napplied 4\n"
+      }
+    },
+    {
+      "name": "zero_score_selects_the_nullary_members",
+      "params": {
+        "score": 0
+      },
+      "expect": {
+        "stdout": "fail\ncount 0, filled false\n0 held\nwidth 0, wrapped true, row 3\napplied 4\n"
+      }
+    }
+  ]
+}

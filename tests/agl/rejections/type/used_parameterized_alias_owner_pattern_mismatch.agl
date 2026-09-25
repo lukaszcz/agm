@@ -1,0 +1,7 @@
+import shapes
+use shapes::{Rows}
+
+program def main(slot: shapes::Slot[int]) -> unit =
+  case slot of
+    | Rows::Filled(value) => print(value)
+    | _ => print("none")

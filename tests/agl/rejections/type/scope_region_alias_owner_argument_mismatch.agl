@@ -1,0 +1,11 @@
+record Point
+  x: int
+
+scope s
+  record Point
+    y: int
+  type Q = Point
+end s
+
+program def main() -> unit =
+  print(s::Q::Q(x = 1))

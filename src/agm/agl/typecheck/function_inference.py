@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 from agm.agl.constraints import ConstraintBounds, close_constraints
 from agm.agl.modules.ids import ModuleId
@@ -26,7 +26,6 @@ from agm.agl.semantics.types import (
     BoolType,
     DecimalType,
     DictType,
-    EnumType,
     ExceptionType,
     FunctionType,
     InferenceVarType,
@@ -41,11 +40,11 @@ from agm.agl.semantics.types import (
     substitute,
 )
 from agm.agl.syntax.nodes import (
+    Expr,
     FieldAccess,
     FuncDef,
     LetDecl,
     Param,
-    Program,
     VarDecl,
     VarRef,
     static_items,
@@ -107,20 +106,18 @@ class CandidateSession:
     slot_constructor_ref_snapshots: dict[ModuleId, dict[int, "ConstructorRef"]] = field(
         default_factory=dict
     )
-    current_declaration_id: int | None = None
     generic_edges: list[GenericCandidateEdge] = field(default_factory=list)
 
     def record_generic_edge(
         self,
         *,
+        caller_declaration_id: int,
         callee_declaration_id: int,
         type_args: tuple[Type, ...],
         result: Type,
         span: SourceSpan,
     ) -> None:
         """Retain a generic occurrence for component-wide uniformity validation."""
-        caller_declaration_id = self.current_declaration_id
-        assert caller_declaration_id is not None
         self.generic_edges.append(
             GenericCandidateEdge(
                 caller_declaration_id,
@@ -130,6 +127,14 @@ class CandidateSession:
                 span,
             )
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateBody:
+    """One provisional function body checked within a candidate session."""
+
+    session: CandidateSession
+    declaration_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,7 +255,12 @@ def _declaration_key(node: FuncDef) -> tuple[int, int]:
     return (node.span.start_offset, node.node_id)
 
 
-_CandidateFunction = tuple[CandidateModule, FuncDef]
+class _CandidateFunction(NamedTuple):
+    """One unannotated ordinary function participating in candidate inference."""
+
+    module: CandidateModule
+    node: FuncDef
+    body: Expr
 
 
 def _candidate_functions(component: ModuleCandidateComponent) -> dict[int, _CandidateFunction]:
@@ -258,16 +268,15 @@ def _candidate_functions(component: ModuleCandidateComponent) -> dict[int, _Cand
     functions: dict[int, _CandidateFunction] = {}
     for module in component.modules:
         program = module.resolved.program
-        assert isinstance(program, Program)
         for item in static_items(program.body.items):
+            # Only ``builtin def`` and ``extern def`` declarations are body-less.
             if (
                 isinstance(item, FuncDef)
                 and item.return_type is None
-                and not item.is_builtin
-                and not item.is_extern
+                and item.body is not None
                 and not item.is_synthetic
             ):
-                functions[item.node_id] = (module, item)
+                functions[item.node_id] = _CandidateFunction(module, item, item.body)
     return functions
 
 
@@ -275,7 +284,7 @@ def _function_key(
     functions: dict[int, _CandidateFunction], declaration_id: int
 ) -> tuple[tuple[str, ...], int, int]:
     """Return global deterministic source order for a declaration id."""
-    module, node = functions[declaration_id]
+    module, node, _body = functions[declaration_id]
     return (module.module_id.segments, *_declaration_key(node))
 
 
@@ -287,7 +296,7 @@ def _candidate_methods_by_name(functions: dict[int, _CandidateFunction]) -> dict
     method, never by re-deriving that from a ``self`` parameter.
     """
     by_name: dict[str, list[int]] = {}
-    for declaration_id, (module, node) in functions.items():
+    for declaration_id, (module, node, _body) in functions.items():
         if module.resolved.receiver_owner_for(module.module_id, node) is not None:
             by_name.setdefault(node.name, []).append(declaration_id)
     return by_name
@@ -299,10 +308,9 @@ def _function_dependencies(
     """Collect candidate references from bodies and their top-level bindings."""
     methods_by_name = _candidate_methods_by_name(functions)
     binding_values: dict[int, tuple[CandidateModule, object]] = {}
-    modules = {module.module_id: module for module, _ in functions.values()}
+    modules = {function.module.module_id: function.module for function in functions.values()}
     for module in modules.values():
         program = module.resolved.program
-        assert isinstance(program, Program)
         for item in static_items(program.body.items):
             if isinstance(item, LetDecl):
                 binding_values[item.node_id] = (module, item.value)
@@ -310,8 +318,7 @@ def _function_dependencies(
                 binding_values[item.node_id] = (module, item.value)
 
     dependencies: dict[int, tuple[int, ...]] = {}
-    for declaration_id, (module, node) in functions.items():
-        assert node.body is not None
+    for declaration_id, (module, _node, body) in functions.items():
         referenced: set[int] = set()
         visited_bindings: set[int] = set()
 
@@ -341,7 +348,7 @@ def _function_dependencies(
         # values, partial applications, type applications, member calls, and
         # transitively referenced top-level binding initializers. Defaults are
         # checked only by authoritative validation.
-        visit_from(module, node.body)
+        visit_from(module, body)
 
         def dependency_key(node_id: int) -> tuple[tuple[str, ...], int, int]:
             return _function_key(functions, node_id)
@@ -480,7 +487,6 @@ def _seed_candidate_visible_bindings(
 
     for module in component.modules:
         program = module.resolved.program
-        assert isinstance(program, Program)
         checker = _Checker(
             env=module.env,
             resolved=module.resolved,
@@ -516,6 +522,7 @@ class _ProvisionalHeader(NamedTuple):
 
     module: CandidateModule
     node: FuncDef
+    body: Expr
     result: InferenceVarType
     signature: FunctionSignature
     receiver: ResolvedReceiver | None
@@ -528,15 +535,15 @@ def _infer_function_component(
     """Infer one cross-module function component and publish concrete schemes."""
     from agm.agl.typecheck.checker import _Checker
 
-    engine = InferenceEngine(functions[0][0].env.type_table)
-    session = CandidateSession(engine, frozenset(node.node_id for _, node in functions))
+    engine = InferenceEngine(functions[0].module.env.type_table)
+    session = CandidateSession(engine, frozenset(function.node.node_id for function in functions))
     provisional: list[_ProvisionalHeader] = []
     discovery_envs = component.discovery_targets()
     publication_envs = component.publication_targets()
 
     # Make each member visible throughout its import SCC before traversing a
     # body. Node-id keys retain declaration identity despite matching names.
-    for module, node in functions:
+    for module, node, body in functions:
         checker = _Checker(
             env=module.env,
             resolved=module.resolved,
@@ -558,18 +565,18 @@ def _infer_function_component(
         register_method_header(module.env, node, signature, receiver, module.module_id)
         for env in discovery_envs:
             _register_signature(env, module, node, signature, function_type)
-        provisional.append(_ProvisionalHeader(module, node, result, signature, receiver))
+        provisional.append(_ProvisionalHeader(module, node, body, result, signature, receiver))
 
     session.binding_snapshots = {
         module.module_id: module.env.snapshot_binding_types() for module in component.modules
     }
     candidate_methods: dict[str, list[int]] = {}
-    for module, node in functions:
+    for module, node, _body in functions:
         if module.resolved.receiver_owner_for(module.module_id, node) is not None:
             candidate_methods.setdefault(node.name, []).append(node.node_id)
     try:
         _seed_candidate_visible_bindings(component, session, candidate_methods)
-        for module, node, result, signature, _receiver in provisional:
+        for module, node, body, result, signature, _receiver in provisional:
             module.env.restore_binding_types(
                 session.visible_binding_snapshots[(module.module_id, node.node_id)]
             )
@@ -585,7 +592,9 @@ def _infer_function_component(
                 session.slot_constructor_ref_snapshots[module.module_id]
             )
             with module.env.type_scope(tuple(segment.name for segment in node.scope_path)):
-                candidate_type = checker.check_candidate_funcdef_body(node, signature, session)
+                candidate_type = checker.check_candidate_funcdef_body(
+                    node, body, signature, session
+                )
             try:
                 engine.unify(
                     result,
@@ -611,7 +620,7 @@ def _infer_function_component(
 
     unresolved = [
         (module, node)
-        for module, node, result, _signature, _receiver in provisional
+        for module, node, _body, result, _signature, _receiver in provisional
         if not engine.is_solved(result) or contains_inference_var(engine.zonk(result))
     ]
     if len(unresolved) == 1:
@@ -634,7 +643,7 @@ def _infer_function_component(
         )
 
     records: list[FunctionSignatureRecord] = []
-    for module, node, result, signature, receiver in provisional:
+    for module, node, body, result, signature, receiver in provisional:
         concrete_result = engine.zonk(result)
         concrete_signature = FunctionSignature(
             params=signature.params,
@@ -642,9 +651,7 @@ def _infer_function_component(
             type_params=signature.type_params,
             bounds=signature.bounds,
         )
-        function_type = FunctionType(
-            params=tuple(param.type for param in signature.params), result=concrete_result
-        )
+        function_type = concrete_signature.value_type
         for env in publication_envs:
             _register_signature(env, module, node, concrete_signature, function_type)
         register_method_header(module.env, node, concrete_signature, receiver, module.module_id)
@@ -660,7 +667,7 @@ def _infer_function_component(
                 module_id=module.module_id,
                 declaration_span=node.span,
                 scope_path=tuple(segment.name for segment in node.scope_path),
-                candidate_evidence=(node.body.span,) if node.body is not None else (),
+                candidate_evidence=(body.span,),
             )
         )
     return tuple(records)
@@ -673,7 +680,7 @@ def _close_generic_candidate_edges(
     """Validate uniform generic recursion and connect its delayed result evidence."""
     functions = {
         node.node_id: (node, result, signature)
-        for _, node, result, signature, _receiver in provisional
+        for _, node, _body, result, signature, _receiver in provisional
     }
     engine = session.engine
     for edge in session.generic_edges:
@@ -753,26 +760,31 @@ def _method_owner(
     """
     generic = env.get_generic_type_by_declaration(owner.module_id, owner.scope_path)
     if generic is not None:
-        assert isinstance(generic.template, (RecordType, EnumType))
         return generic.template, len(generic.type_params), generic
-    nominal = env.get_type_by_declaration(owner.module_id, owner.scope_path)
-    assert isinstance(nominal, (RecordType, EnumType, ExceptionType))
-    return nominal, 0, None
+    return env.nominal_by_declaration(owner.module_id, owner.scope_path), 0, None
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedReceiver:
-    """A classified method's receiver resolved once for header registration.
+class NominalResolvedReceiver:
+    """A classified method's nominal receiver, keyed by its declaration owner."""
 
-    Nominal receivers retain their declaration owner for the nominal method
-    table. Builtin receivers carry their structural or scalar type and the
-    constructor key that publishes their methods for member selection.
-    """
+    scope_path: tuple[str, ...]
+    owner: NominalOwner
+    type_param_arity: int
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltinResolvedReceiver:
+    """A classified method's builtin receiver: its structural or scalar type and
+    the type ``constructor`` that publishes its methods for member selection."""
 
     scope_path: tuple[str, ...]
     owner: Type
     type_param_arity: int
-    builtin_constructor: str | None = None
+    constructor: str
+
+
+ResolvedReceiver = NominalResolvedReceiver | BuiltinResolvedReceiver
 
 
 def _method_type_parameter_name(node: FuncDef, index: int) -> str:
@@ -828,14 +840,14 @@ def _receiver_type(
     declaration_scope_path = tuple(segment.name for segment in node.scope_path)
     if builtin is not None:
         receiver, arity, constructor = builtin
-        return receiver, ResolvedReceiver(
+        return receiver, BuiltinResolvedReceiver(
             scope_path=declaration_scope_path,
             owner=receiver,
             type_param_arity=arity,
-            builtin_constructor=constructor,
+            constructor=constructor,
         )
     nominal_owner, arity, generic = _method_owner(env, owner)
-    resolved = ResolvedReceiver(
+    resolved = NominalResolvedReceiver(
         scope_path=declaration_scope_path, owner=nominal_owner, type_param_arity=arity
     )
     if len(node.type_param_slots) < arity:
@@ -878,18 +890,15 @@ def register_method_header(
         scope_path=receiver.scope_path,
         name=node.name,
         decl_node_id=node.node_id,
-        signature=FunctionType(
-            params=tuple(param.type for param in signature.params), result=signature.result
-        ),
+        signature=signature.value_type,
         receiver_type_param_arity=receiver.type_param_arity,
         type_params=signature.type_params,
         is_builtin=node.is_builtin,
     )
-    if receiver.builtin_constructor is not None:
-        env.register_method_def(receiver.builtin_constructor, method)
-    else:
-        assert isinstance(receiver.owner, (RecordType, EnumType, ExceptionType))
-        env.register_method_def(receiver.owner, method)
+    env.register_method_def(
+        receiver.constructor if isinstance(receiver, BuiltinResolvedReceiver) else receiver.owner,
+        method,
+    )
 
 
 def _target_params(type_params: tuple[str, ...], params: Sequence[ParamSpec]) -> tuple[str, ...]:
@@ -960,13 +969,12 @@ def resolve_function_header(
                 )
             )
             continue
-        # Only a receiver may omit its annotation, and that param took the
-        # branch above.
-        assert param.type_expr is not None
+        # The parser lets only a method's receiver omit its annotation.
+        annotation = cast(TypeExpr, param.type_expr)
         params.append(
             ParamSpec(
                 name=param.name,
-                type=env.resolve_type_expr(param.type_expr, span=param.span, type_vars=type_vars),
+                type=env.resolve_type_expr(annotation, span=param.span, type_vars=type_vars),
                 kind=param_zones[param.node_id],
                 has_default=param.default is not None,
             )
@@ -983,8 +991,4 @@ def resolve_function_header(
         target_params=_target_params(signature_type_params, params) if node.is_extern else (),
         bounds=_declaration_bounds(node),
     )
-    return (
-        signature,
-        FunctionType(params=tuple(param.type for param in params), result=resolved_result),
-        resolved_receiver,
-    )
+    return signature, signature.value_type, resolved_receiver

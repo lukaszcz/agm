@@ -25,6 +25,7 @@ from agm.agl.repl.session import ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.types import IntType, TextType, Type
 from agm.agl.semantics.values import IntValue, TextValue, Value
+from tests._agl_helpers import repl_session_with_root
 
 # A descriptor view with no nominal/function entries: enough for every test
 # value here, none of which is a record/enum/exception or closure.
@@ -694,6 +695,154 @@ class TestInfo:
             "Nothing is a constructor.\nSignature:\n  Nothing() -> std/option::Option::None"
         )
 
+    @pytest.mark.parametrize("name", ("Ready", "Go"))
+    def test_info_reports_the_redeclared_constructor_it_resolves(self, name: str) -> None:
+        """A redeclared member's signature comes from the declaration the name now selects."""
+        redeclaration = "enum State\n  | Ready(y: text)"
+        redeclared = _open_session()
+        assert redeclared.eval_entry("enum State[T]\n  | Ready(x: T)").ok
+        assert redeclared.eval_entry("use State::{Ready as Go}").ok
+        assert redeclared.eval_entry(redeclaration).ok
+        fresh = _open_session()
+        assert fresh.eval_entry(redeclaration).ok
+        assert fresh.eval_entry("use State::{Ready as Go}").ok
+
+        outcome = meta_mod.dispatch_meta(f":info {name}", _session_ctx(redeclared))
+
+        assert outcome.text is not None
+        assert outcome.text == meta_mod.dispatch_meta(f":info {name}", _session_ctx(fresh)).text
+
+    _ALIAS_DECLARATIONS = (
+        "record Point\n  x: int\n\ntype AliasP = Point\n\n"
+        "record Box[T]\n  v: T\n\ntype AliasB[T] = Box[T]\n\n"
+        "exception Oops\n  code: int\n\ntype AliasE = Oops\n\n"
+        "enum Slot[T]\n  | Filled(value: T)\n  | Empty\n\n"
+        "type AliasO = Slot[int]\n\ntype AliasG[T] = Slot[T]\n"
+    )
+
+    @pytest.mark.parametrize("alias", ("AliasP", "AliasB", "AliasE", "AliasO", "AliasG"))
+    @pytest.mark.parametrize(
+        ("use", "spelling"),
+        (
+            ("use lib::{%s}", "%s"),
+            ("use lib::{%s as Renamed}", "Renamed"),
+            ("()", "lib::%s"),
+        ),
+    )
+    def test_info_describes_an_imported_alias_as_its_declaration(
+        self, tmp_path: Path, alias: str, use: str, spelling: str
+    ) -> None:
+        """Imported, qualified, and renamed aliases read like the same local declaration."""
+        (tmp_path / "lib.agl").write_text(self._ALIAS_DECLARATIONS)
+        imported = repl_session_with_root(tmp_path)
+        imported.open()
+        assert imported.eval_entry("import lib").ok
+        assert imported.eval_entry(use.replace("%s", alias)).ok
+        local = _open_session()
+        assert local.eval_entry(self._ALIAS_DECLARATIONS).ok
+        spelled = spelling.replace("%s", alias)
+
+        described = imported.info_of(spelled)
+        declared = local.info_of(alias)
+
+        assert described is not None
+        assert declared is not None
+        assert described.replace(spelled, "N") == declared.replace(alias, "N")
+
+    @pytest.mark.parametrize("spelling", ("s::D", "DD"))
+    def test_info_describes_a_scoped_alias_as_its_declaration(self, spelling: str) -> None:
+        """A scoped alias, qualified or renamed by ``use``, reads like a root declaration."""
+        scoped = _open_session()
+        assert scoped.eval_entry("scope s\n  record P\n    x: int\n\n  type D = P\nend s").ok
+        assert scoped.eval_entry("use s::{D as DD}").ok
+        root = _open_session()
+        assert root.eval_entry("record P\n  x: int\n\ntype D = P").ok
+
+        described = scoped.info_of(spelling)
+        declared = root.info_of("D")
+
+        assert described is not None
+        assert declared is not None
+        assert described.replace(spelling, "N") == declared.replace("D", "N")
+
+    def test_info_of_a_type_name_several_imports_contribute_describes_its_value(
+        self, tmp_path: Path
+    ) -> None:
+        """A bare name two imports contribute as types reads as the one value it names."""
+        (tmp_path / "a.agl").write_text("record T\n  x: int\n")
+        (tmp_path / "b.agl").write_text("type T = int\n")
+        both = repl_session_with_root(tmp_path)
+        both.open()
+        assert both.eval_entry("import a::{T}").ok
+        assert both.eval_entry("import b::{T}").ok
+        one = repl_session_with_root(tmp_path)
+        one.open()
+        assert one.eval_entry("import a::{T}").ok
+
+        described = both.info_of("T")
+
+        assert described is not None
+        assert described == one.info_of("T")
+
+    def test_info_describes_a_generic_alias_with_its_parameters(self) -> None:
+        """A generic alias reads as its declaration, parameters included."""
+        declaration = "type Rows[A] = array[A]"
+        session = _open_session()
+        assert session.eval_entry(declaration).ok
+
+        described = session.info_of("Rows")
+
+        assert described is not None
+        assert declaration in described
+
+    @pytest.mark.parametrize(
+        ("spelling", "owner"),
+        (
+            ("C::Mem", "Src[int]::Mem"),
+            ("Rows[text]::Mem", "Src[array[text]]::Mem"),
+            ("O::Filled", "lib::Slot[int]::Filled"),
+            ("lib::O::Filled", "lib::Slot[int]::Filled"),
+        ),
+    )
+    def test_info_of_an_alias_member_matches_its_applied_owner(
+        self, tmp_path: Path, spelling: str, owner: str
+    ) -> None:
+        """A member selected through an alias has the signature of its applied owner's member."""
+        (tmp_path / "lib.agl").write_text(
+            "enum Slot[T]\n  | Filled(value: T)\n  | Empty\n\ntype O = Slot[int]\n"
+        )
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        for entry in (
+            "import lib",
+            "use lib::{O}",
+            "enum Src[T]\n  | Mem(v: T)\n  | Nil",
+            "type C = Src[int]",
+            "type Rows[A] = Src[array[A]]",
+        ):
+            assert session.eval_entry(entry).ok
+
+        selected = session.info_of(spelling)
+        applied = session.info_of(owner)
+
+        assert selected is not None
+        assert applied is not None
+        assert selected.replace(spelling, "N") == applied.replace(owner, "N")
+
+    @pytest.mark.parametrize("name", ("lib::P", "lib::Point"))
+    def test_info_reports_a_qualified_imported_record_or_alias(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        """A module-qualified name resolves exactly as its unqualified use does."""
+        (tmp_path / "lib.agl").write_text("record Point\n  x: int\n\ntype P = Point\n")
+        session = repl_session_with_root(tmp_path)
+        session.open()
+        assert session.eval_entry("import lib").ok
+        assert session.eval_entry("use lib::{P, Point}").ok
+
+        assert session.info_of(name.removeprefix("lib::")) is not None
+        assert session.info_of(name) is not None
+
     def test_info_reports_a_constructor_declared_in_the_repl(self) -> None:
         session = _open_session()
         assert session.eval_entry("enum State = | Ready").ok
@@ -735,6 +884,7 @@ class TestInfo:
         session = _open_session()
 
         assert session.info_of("()") is None
+        assert session.info_of("(") is None
         assert session.info_of("std/not-loaded::missing") is None
 
     def test_info_reports_the_static_type_of_an_imported_value(self) -> None:

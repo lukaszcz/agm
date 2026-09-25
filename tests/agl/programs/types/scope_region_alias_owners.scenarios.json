@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "each_owner_reaches_the_region_declaration",
+      "params": {
+        "start": 1
+      },
+      "expect": {
+        "stdout": "[1, 2, 3]\n5 4 0 true\n1 1\n"
+      }
+    },
+    {
+      "name": "negative_start_keeps_the_order",
+      "params": {
+        "start": -3
+      },
+      "expect": {
+        "stdout": "[-3, -2, -1]\n1 0 0 true\n-3 -3\n"
+      }
+    }
+  ]
+}

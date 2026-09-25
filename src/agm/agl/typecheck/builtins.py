@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, cast
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.constraints import ConstraintBounds
@@ -20,7 +20,7 @@ from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import STD_ENV_ID, spell_declaration
 from agm.agl.scope.symbols import BindingRef, BuiltinKind, ConstructorRef
 from agm.agl.semantics.analyses import nominal_references
-from agm.agl.semantics.type_table import DeclId, parse_classification
+from agm.agl.semantics.type_table import DeclId, TypeDef, parse_classification
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     BoolType,
@@ -395,7 +395,6 @@ class BuiltinCallChecker:
         declaration the same way a method call resolves the receiver's: by
         ``node.callee``'s binding, never a copy of the declared signature.
         """
-        assert isinstance(node.callee, VarRef)
         ref = self._ctx._binding_for(node.callee.node_id)
         sig = self._ctx._env.function_signature_of(ref.decl_node_id)
         self._ctx._register_bound_obligation(
@@ -406,8 +405,7 @@ class BuiltinCallChecker:
 
     def check_session_open(self, node: CompleteCall) -> Type:
         """Type-check ``Session::open(agent, transport?, name?)``."""
-        session_transport = self.contract_type("SessionTransport")
-        assert isinstance(session_transport, EnumType)
+        session_transport = self.contract_enum("SessionTransport")
         transport = self._ctx._env.type_table.option_handle(session_transport)
         return self._check_static_call(
             node,
@@ -593,7 +591,6 @@ class BuiltinCallChecker:
         ``Result[T, ValueParseError]`` shape to substitute ``T`` into, so this
         never hand-constructs the ``Result`` type.
         """
-        assert isinstance(node.callee, VarRef)  # only VarRef callees reach a builtin kind
         ref = self._ctx._binding_for(node.callee.node_id)
         signature = self._ctx._env.function_signature_of(ref.decl_node_id)
         type_param = signature.type_params[0]
@@ -893,7 +890,6 @@ class BuiltinCallChecker:
     def _append_call_site(
         self, obligation: PendingBuiltinObligation, codec_name: str, parse_policy: str
     ) -> None:
-        assert not contains_inference_var(obligation.target_type)
         self._ctx._append_call_site(
             CallSiteRecord(
                 node_id=obligation.node_id,
@@ -998,11 +994,15 @@ class BuiltinCallChecker:
         declared = self._ctx._env.type_table.builtin_declaration(name)
         if declared is not None:
             return declared.handle()
-        canonical = BUILTIN_PRELUDE_TYPES.get(name)
-        assert isinstance(canonical, (RecordType, EnumType, ExceptionType)), (
-            f"{name!r} has no canonical builtin prelude type"
-        )
-        return canonical
+        return BUILTIN_PRELUDE_TYPES[name]
+
+    def contract_record(self, name: str) -> RecordType:
+        """:meth:`contract_type` for a ``builtin record`` contract *name*."""
+        return cast(RecordType, self.contract_type(name))
+
+    def contract_enum(self, name: str) -> EnumType:
+        """:meth:`contract_type` for a ``builtin enum`` contract *name*."""
+        return cast(EnumType, self.contract_type(name))
 
     def _resolve_host_record_contract(self, name: str, *, span: SourceSpan) -> RecordType:
         """Resolve *name*'s host record contract, rejecting it if incoherent.
@@ -1014,8 +1014,7 @@ class BuiltinCallChecker:
         ``builtin record`` in the canonical prelude, so the resolved handle is
         always a ``RecordType``.
         """
-        contract_type = self.contract_type(name)
-        assert isinstance(contract_type, RecordType), f"{name!r} is not a builtin record contract"
+        contract_type = self.contract_record(name)
         self._check_host_contract_coherent(contract_type, span=span)
         return contract_type
 
@@ -1050,18 +1049,11 @@ class BuiltinCallChecker:
         returns ``None`` and this is skipped.
         """
         table = self._ctx._env.type_table
-        typedef = table.get_by_id(exc_type.decl_id)
-        assert typedef is not None, "compiler bug: caught exception is not registered"
-        if not typedef.is_builtin:
+        if not table.typedef_of(exc_type.decl_id).is_builtin:
             return
         self._check_host_contract_coherent(exc_type, span=span)
-        live_declaration = table.builtin_declaration(exc_type.name)
-        assert live_declaration is not None, "compiler bug: builtin exception is not live"
-        live_handle = live_declaration.handle()
-        assert isinstance(live_handle, ExceptionType), (
-            f"{exc_type.name!r} is registered as a builtin exception name but its live "
-            "declaration is not an exception"
-        )
+        # The caught declaration is itself a live ``builtin exception`` of this name.
+        live_handle = cast(TypeDef, table.builtin_declaration(exc_type.name)).exception_handle()
         if live_handle == exc_type:
             return
         caught_spelling = spell_declaration(
@@ -1244,7 +1236,6 @@ class BuiltinCallChecker:
             self._ctx, obligation.target_type, codec_name, obligation.span, use=use
         )
         spec = OutputContractSpec(obligation.target_type, codec_name, effective_strict)
-        assert not contains_inference_var(spec.target_type)
         self._ctx._record_contract_spec(obligation.node_id, spec)
         self._warn_noop_parse_error_on_text(obligation)
         return spec
@@ -1265,8 +1256,8 @@ class BuiltinCallChecker:
             # `builtin record ExecResult` declaration names (see
             # `contract_type`), so a scoped declaration is
             # recognized at its own path rather than the root canonical one.
-            is_structured = target_type == self.contract_type("ExecResult")
-            if not is_structured:
+            exec_result = self.contract_record("ExecResult")
+            if target_type != exec_result:
                 spec = self._record_parsed_contract(obligation, use="an exec output type")
                 self._append_call_site(obligation, spec.codec_name, obligation.parse_policy)
                 return
@@ -1274,8 +1265,7 @@ class BuiltinCallChecker:
             # same host-coherence check as ``ask``/``ask-request`` (currently
             # vacuous, since none of ``ExecResult``'s own fields are nominal,
             # but applied uniformly so a future field cannot regress silently).
-            assert isinstance(target_type, RecordType)
-            self._check_host_contract_coherent(target_type, span=obligation.span)
+            self._check_host_contract_coherent(exec_result, span=obligation.span)
             if obligation.has_parse_shaping_option:
                 option_name, offending_span = obligation.first_parse_option()
                 raise AglTypeError(
@@ -1361,8 +1351,7 @@ class BuiltinCallChecker:
             return self._ctx._constructor_ref_for(ref.node_id) is not None
         if any(segment.type_args is not None for segment in chain.segments):
             return False
-        parse_policy_type = self.contract_type("ParsePolicy")
-        assert isinstance(parse_policy_type, EnumType), "ParsePolicy is always an enum contract"
+        parse_policy_type = self.contract_enum("ParsePolicy")
         ctor_ref = self._ctx._constructor_ref_for(ref.node_id)
         return ctor_ref is not None and ctor_ref.matches(parse_policy_type, ref.name)
 

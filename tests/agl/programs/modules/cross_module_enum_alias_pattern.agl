@@ -1,8 +1,7 @@
 # A pattern qualified through a cross-module type alias whose target is an
-# enum (`lib/aliasmod::Local` aliases `pal/colors::Palette`). An alias of an
-# enum publishes no constructor of its own, so the pattern resolves through
-# the enum owner the alias names and must still select the variant actually
-# written (`Red`/`Green`).
+# enum (`lib/aliasmod::Local` aliases `pal/colors::Palette`). The alias
+# selects members of the enum its own module resolves it to, and the pattern
+# must still select the variant actually written (`Red`/`Green`).
 import pal/colors
 import lib/aliasmod
 

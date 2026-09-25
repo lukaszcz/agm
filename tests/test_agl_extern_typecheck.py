@@ -19,7 +19,6 @@ externs are not executable yet.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -782,28 +781,3 @@ class TestExternCallSiteRecording:
         sites = [s for s in checked.modules[lib_mod_id].call_sites if s.callee == "f"]
         assert len(sites) == 1
         assert sites[0].codec_name == "extern"
-
-
-class TestExternDefensiveGuards:
-    """Cover the extern return-type guard the grammar makes unreachable.
-
-    ``extern_func_def`` always requires a return type, so an ``extern def``
-    without one is a syntax error long before the checker sees it. The guard
-    still stands because ``check_program`` accepts a caller-supplied AST, and
-    this is the only way to hand it one. It mirrors
-    ``TestDefensiveGuards.test_builtin_funcdef_without_return_type_rejected_defensively``
-    in ``test_agl_typecheck.py``, which covers the ``builtin def`` half of the
-    same rule.
-    """
-
-    def test_extern_funcdef_without_return_type_rejected_defensively(self) -> None:
-        program = parse_program("extern def f() -> int\nf()")
-        declaration = program.body.items[0]
-        assert isinstance(declaration, FuncDef)
-        stripped = replace(declaration, return_type=None)
-        body = replace(program.body, items=(stripped, *program.body.items[1:]))
-
-        with pytest.raises(AglTypeError, match="return type"):
-            resolve_and_check_inline_program_ast(
-                replace(program, body=body), _CAPS, origin_path=_PATH
-            )

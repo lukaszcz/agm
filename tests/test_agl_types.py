@@ -609,14 +609,6 @@ class TestTypeEnvironmentPrelude:
         assert isinstance(t, EnumType)
         assert t.name == "ParsePolicy"
 
-    def test_source_type_match_requires_graph_context(self) -> None:
-        env = TypeEnvironment()
-
-        assert (
-            env.match_source_type_qname(ModuleId.from_path("library/remote"), "Remote", IntType())
-            is None
-        )
-
 
 # ---------------------------------------------------------------------------
 # seed_from — does not duplicate or clobber prelude types

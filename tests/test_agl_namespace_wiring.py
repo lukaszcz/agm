@@ -11,7 +11,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.semantics.types import EnumOwnerFormKind, RecordType
+from agm.agl.semantics.types import RecordType
 from agm.agl.syntax import QualifierAnchor, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.typecheck import AglTypeError
@@ -1543,11 +1543,7 @@ def test_anchored_enum_owner_form_preserves_its_route(tmp_path: Path) -> None:
         node_id=0,
     )
 
-    form = env.resolve_enum_owner_form(
-        kind=EnumOwnerFormKind.QUALIFIED_IMPORT,
-        owner_name="Flag",
-        module_qualifier=qualifier,
-    )
+    form = env.resolve_imported_enum_owner_form(qualifier, "Flag", span=span)
 
     assert form is not None
     assert form.qualifier_anchored is True
@@ -1574,10 +1570,8 @@ def test_qualified_enum_owner_form_rejects_a_non_type_member(tmp_path: Path) -> 
     )
 
     assert (
-        checked.modules[graph.entry_id].type_env.resolve_enum_owner_form(
-            EnumOwnerFormKind.QUALIFIED_IMPORT,
-            "Flag",
-            qualifier,
+        checked.modules[graph.entry_id].type_env.resolve_imported_enum_owner_form(
+            qualifier, "Flag", span=span
         )
         is None
     )

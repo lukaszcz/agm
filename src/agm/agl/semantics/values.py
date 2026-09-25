@@ -653,6 +653,10 @@ class IrClosureValue:
         return id(self)
 
 
+# A first-class function value: a closure or a constructor.
+FunctionValue: TypeAlias = IrClosureValue | ConstructorValue
+
+
 @dataclass(slots=True, eq=False)
 class IteratorValue:
     """Internal loop iterator cursor.
@@ -764,6 +768,7 @@ __all__ = [
     "DictValue",
     "ExceptionValue",
     "Frame",
+    "FunctionValue",
     "IntValue",
     "IrClosureValue",
     "IteratorValue",

@@ -68,6 +68,16 @@ An inline enum member may also be selected from an applied enum owner:
 `Member`. That selection is already concrete, so it cannot take another type
 application; use `Source::Member[T]` when applying the member directly.
 
+An alias of an enum is a transparent owner. With `type Texts = Source[text]`,
+`Texts::Member` is `Source[text]::Member` in types, constructors, patterns,
+and `is` tests. A parameterized alias names a member type only once applied,
+as in `Rows[text]::Member` for `type Rows[A] = Source[array[A]]`. In a
+constructor, pattern, or `is` test, an unapplied `Rows::Member` is
+`Rows[A]::Member` for an inferred `A`: `Rows::Member(value = ["a"])`
+constructs a `Source[array[text]]::Member`, while `Rows::Member(value = 1)`
+and a `Rows::Member(…)` pattern or `is` test on a `Source[int]` value are
+static errors.
+
 `dict[K, T]` admits any key type `K` structurally. A *hashing operation* on
 a concrete key — a non-empty dict literal `{k: v, …}`, indexing (`d[k]`),
 indexed assignment (`d[k] := v`), and `k in d` — requires `K` to be
@@ -808,17 +818,16 @@ the following breaks the chain:
   type — the empty array or dict is always a value, regardless of `T`, as
   with `Category.subcategories` above.
 
-A record or exception whose every required field, or an enum whose every
-member, needs another value of the same or a mutually recursive declaration
-with no such escape has no finite value and is rejected:
+A record or exception with a required field that needs another value of the
+same or a mutually recursive declaration with no such escape, or an enum each
+of whose members does, has no finite value and is rejected. One such field is
+enough:
 
 <!-- agl-check: error -->
 ```agl
 record Node
   next: Node
-# Record type 'Node' is uninhabitable: every value of 'Node' would be
-# infinite. Recursion must be guarded by an enum base-case member or an
-# `array`/`dict` field.
+# Rejected: every value of 'Node' would be infinite.
 ```
 
 The same rule rejects an enum whose only member carries itself, an exception
@@ -830,10 +839,26 @@ constructible descendants, not by their own fields alone. The error is
 reported at the declaration and names its kind (`Record type`/`Enum type`/
 `Exception type`).
 
+An inline enum member is a record in its own right, so the rule applies to
+each member separately: a base-case sibling makes the enum inhabited, but not
+a member with a required field that needs another value of that member:
+
+<!-- agl-check: error -->
+```agl
+enum Chain
+  | Link(next: Chain::Link)
+  | End
+# Rejected: every value of 'Chain::Link' would be infinite, although 'Chain'
+# itself has the base case 'End'.
+```
+
 Generic recursive types — a declaration referencing itself at a different
 type argument, such as `Expr[T]` referencing `Expr[array[T]]` in its own body —
 are constructible under the same rule; see [Generics](generics.md) for the
-generics-specific recursion rules.
+generics-specific recursion rules. A generic declaration applied to an
+instance of itself, such as `Box[Box[int]]`, is not recursion: a generic
+reference is inhabited according to which of its arguments are, here
+`Box[int]`.
 
 ### Recursive aliases are not allowed
 
@@ -943,6 +968,31 @@ type Metadata = dict[text, json]
 Aliases never create a new nominal type: a value of type `Status` *is* a
 value of type `Review`. Aliases are transparent everywhere, including
 qualified member access. Alias chains resolve transitively.
+
+An alias denotes the target its name resolves to where the alias is
+declared — exactly as the same type in an annotation there, through that
+scope region's and module's imports and `use` declarations — wherever the
+alias is used. It qualifies exactly the members its target does.
+An alias of a record or exception is also that type's constructor, and the
+owner-qualified form `Point::Point(…)` accepts, in either position, the
+type's own name or the name of any alias on the chain leading to it. With
+`record Point`, `type P = Point`, and `type Q = P`, each of `Q::Q(…)`,
+`Q::P(…)`, `Q::Point(…)`, `P::P(…)`, and `P(…)` constructs a `Point`, in
+expressions and patterns alike, whether `Point` is declared locally or
+imported; `P::Other(…)` is a static error. A `use` rename names the type as
+well: after `use lib::{Point as R}`, `R::R(…)` is `lib::Point::Point(…)`.
+
+An alias of an applied generic fixes its type arguments: with
+`type B = Box[int]`, both `B(value = "s")` and a `B::B(…)` pattern on a
+`Box[text]` value are static errors. A parameterized alias constructor infers
+only the parameters its target mentions; an explicit type application still
+supplies every declared parameter, so with `type Tagged[X] = Point`,
+`Tagged(x = 1)` and `Tagged::[int](x = 1)` both construct a `Point`.
+
+An `is` test through an alias tests the declaration the alias denotes: with
+`type W = Plain::Wait`, `value is W` is `value is Plain::Wait`, and with
+`type F = Oops` for an exception `Oops`, `error is F` holds for an `Oops` or
+any of its descendants.
 
 `builtin type` declares a host-recognized alias. The one such alias is `path`,
 the `text` alias naming a filesystem location; its declaration must read

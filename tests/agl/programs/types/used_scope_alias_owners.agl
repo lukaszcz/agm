@@ -1,0 +1,41 @@
+# An alias a `use` brings into scope qualifies constructors in value
+# position exactly as it does in patterns and `is` tests: plain, renamed,
+# from a nested scope, and generic with its argument inferred.
+
+enum Held[T]
+  | Filled(value: T)
+  | Empty
+
+scope R
+  type Ints = Held[int]
+  type Rows[A] = Held[array[A]]
+
+  scope N
+    type Nested = Held[int]
+  end N
+end R
+
+scope M
+  use R::*
+  use R::{Ints as I}
+  use R::N::*
+
+  def pick(start: int) -> Ints =
+    if start > 0 => Ints::Filled(value = start) else => Ints::Empty
+
+  def count(rows: Held[array[int]]) -> int =
+    case rows of
+      | Rows::Filled(value) => value.size()
+      | Rows::Empty => 0
+
+  def run(start: int) -> unit =
+    let slot = pick(start)
+    let renamed: I = if start > 1 => I::Filled(value = start) else => I::Empty
+    let nested: Nested = if start > 2 => Nested::Filled(value = start) else => Nested::Empty
+    let rows: Rows[int] = if start > 0 => Rows::Filled(value = [start]) else => Rows::Empty
+    print("%{slot is Ints::Filled} %{renamed is I::Filled} %{nested is Nested::Filled}")
+    print("%{count(rows)} %{rows is Rows::Filled}")
+end M
+
+program def main(start: int) -> unit =
+  M::run(start)

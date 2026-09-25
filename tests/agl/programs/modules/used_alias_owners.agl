@@ -1,0 +1,51 @@
+# An alias target resolves where the alias is declared, `use` contributions
+# included: a used, renamed, region-used or hiding-narrowed type qualifies
+# constructors, patterns and `is` tests through an alias of it, in this
+# module and in the module that imports the alias.
+import shapes
+import others::{Plain}
+import used
+use shapes::{Slot, Rows}
+use shapes::{Slot as S}
+
+type X = Slot[int]
+
+type Y = S[text]
+
+scope R
+  use shapes::{Plain}
+
+  type RP = Plain
+end R
+
+scope H
+  use shapes::* hiding Plain
+
+  type HP = Plain
+end H
+
+def describe(slot: X) -> text =
+  case slot of
+    | X::Filled(value) => "filled %{value}"
+    | X::Empty => "empty"
+
+def wait-of(plain: R::RP) -> int =
+  case plain of
+    | R::RP::Wait(n) => n
+    | R::RP::Ready => 0
+
+def size-of(rows: Slot[array[int]]) -> int =
+  case rows of
+    | Rows::Filled(value) => value.size()
+    | Rows::Empty => 0
+
+program def main(start: int) -> unit =
+  let slot: X = if start > 0 => X::Filled(value = start) else => X::Empty
+  print("%{describe(slot)} %{slot is X::Filled} %{slot is X::Empty}")
+  print(Y::Filled(value = "y%{start}").value)
+  let plain: R::RP = if start > 0 => R::RP::Wait(n = start) else => R::RP::Ready
+  print("%{wait-of(plain)} %{plain is R::RP::Wait}")
+  print(H::HP::Busy(n = start + 1).n)
+  let imported: shapes::Slot[int] = used::UX::Filled(value = start + 2)
+  print(imported is used::UX::Filled)
+  print(size-of(Rows::Filled(value = [start, start])))

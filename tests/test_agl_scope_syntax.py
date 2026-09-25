@@ -11,8 +11,10 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.scope import AglScopeError
-from agm.agl.scope.imports import SingleTarget, build_import_env
+from agm.agl.scope.imports import ImportEnv, SingleTarget, build_import_env
 from agm.agl.scope.resolver import _Resolver
+from agm.agl.scope.symbols import ModuleResolution
+from agm.agl.scope.type_owners import TypeOwnerIndex
 from agm.agl.syntax import (
     BuiltinVarDecl,
     EnumDef,
@@ -22,6 +24,7 @@ from agm.agl.syntax import (
     ImportDecl,
     Item,
     LetDecl,
+    Program,
     RecordDef,
     ScopeRegion,
     ScopeSegment,
@@ -31,6 +34,26 @@ from agm.agl.syntax import (
 from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import write_module_file
 from tests.agl.module_graph import resolve_entry, resolve_inline_entry
+
+
+def _resolve_alone(
+    program: Program, import_env: ImportEnv, *, allow_root_statements: bool = False
+) -> ModuleResolution:
+    """Resolve *program* as the entry of a program with no declared types."""
+    resolver = _Resolver(
+        module_id=ENTRY_ID,
+        import_env=import_env,
+        all_public_types={},
+        type_owners=TypeOwnerIndex(
+            all_public_types={},
+            constructor_refs={},
+            import_envs={ENTRY_ID: import_env},
+            contributions=lambda *_: None,
+        ),
+        allow_root_statements=allow_root_statements,
+    )
+    resolver.prepare(program)
+    return resolver.resolve()
 
 
 def _declaration(source: str) -> Item:
@@ -474,12 +497,7 @@ def test_use_reaches_a_scope_made_nameable_by_an_import_tail() -> None:
         {library: {scope_member: (library, scope_member)}},
     )
 
-    resolved = _Resolver(
-        module_id=ENTRY_ID,
-        import_env=import_env,
-        all_public_types={},
-        allow_root_statements=True,
-    ).run(program)
+    resolved = _resolve_alone(program, import_env, allow_root_statements=True)
 
     assert any(ref.name == "visible" for ref in resolved.resolution.values())
 
@@ -505,7 +523,7 @@ def test_use_keeps_equally_nameable_bare_scope_targets_ambiguous() -> None:
     )
 
     with pytest.raises(AglScopeError, match="ambiguous"):
-        _Resolver(module_id=ENTRY_ID, import_env=import_env, all_public_types={}).run(program)
+        _resolve_alone(program, import_env)
 
 
 @pytest.mark.parametrize(

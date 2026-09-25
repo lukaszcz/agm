@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "large_start_fills_every_owner",
+      "params": {
+        "start": 3
+      },
+      "expect": {
+        "stdout": "true true true\n1 true\n"
+      }
+    },
+    {
+      "name": "middle_start_fills_the_renamed_owner_only_beyond_nested",
+      "params": {
+        "start": 2
+      },
+      "expect": {
+        "stdout": "true true false\n1 true\n"
+      }
+    },
+    {
+      "name": "non_positive_start_empties_every_owner",
+      "params": {
+        "start": 0
+      },
+      "expect": {
+        "stdout": "false false false\n0 false\n"
+      }
+    }
+  ]
+}

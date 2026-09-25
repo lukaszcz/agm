@@ -1,0 +1,13 @@
+enum Held[T]
+  | Filled(value: T)
+  | Empty
+
+scope R
+  type Rows[A] = Held[array[A]]
+end R
+
+scope M
+  use R::*
+
+  let made = Rows::Filled(value = 1)
+end M

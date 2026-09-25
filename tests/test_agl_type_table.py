@@ -171,7 +171,7 @@ def test_enum_owners_for_referenced_member_require_its_full_type_template() -> N
     )
     assert table.enum_owners_for_member(RecordType("Box", (TextType(),), decl_id=10)) == ()
     assert not table.record_matches_enum_member(
-        enum.handle(), "Missing", RecordType("Box", (IntType(),), decl_id=10)
+        enum.handle(), (), "Missing", RecordType("Box", (IntType(),), decl_id=10)
     )
 
 
@@ -2487,7 +2487,7 @@ class TestEnvTypeHasMatchingTableDefGraphMode:
         }
         cg = _check_program(tmp_path, modules)
         mylib_id = ModuleId.from_path("mylib")
-        point = cg.program_type_table[(mylib_id, "Point")]
+        point = cg.program_type_table[(mylib_id, (), "Point")]
         assert isinstance(point, RecordType)
 
         mylib_table = cg.modules[mylib_id].type_env.type_table
@@ -4179,6 +4179,146 @@ class TestInhabitationAnalysis:
     def test_referenced_uninhabitable_member_is_rejected_by_program_checking(self) -> None:
         with pytest.raises(AglTypeError):
             _check("record Bad\n  next: Bad\nenum E = ::Bad | Good\n()")
+
+    def test_inline_member_requiring_itself_is_rejected_beside_an_inhabited_member(
+        self,
+    ) -> None:
+        # E is inhabited through B, but A's field needs another A: the member
+        # is a record with no finite value, so it is rejected at its own span.
+        with pytest.raises(AglTypeError) as info:
+            _check("enum E\n  | A(x: E::A)\n  | B\n()")
+        span = info.value.span
+        assert span is not None
+        assert span.start_line == 2
+
+    @pytest.mark.parametrize(
+        ("source", "line"),
+        [
+            ("enum E[T]\n  | A(x: E::A[T])\n  | B(y: T)\n()", 2),
+            ("enum E\n  | A(x: F::C)\n  | B\nenum F\n  | C(y: E::A)\n  | D\n()", 2),
+            ("scope S\n  enum E\n    | A(x: S::E::A)\n    | B\nend S\n\n()", 3),
+        ],
+        ids=["generic-member", "cross-enum-member-cycle", "scoped-member"],
+    )
+    def test_member_requiring_itself_is_rejected_at_its_own_span(
+        self, source: str, line: int
+    ) -> None:
+        with pytest.raises(AglTypeError) as info:
+            _check(source)
+        span = info.value.span
+        assert span is not None
+        assert span.start_line == line
+
+    @staticmethod
+    def _many_parameter_enum(argument: str, arity: int) -> str:
+        """Return an enum whose member ``Ki`` refers back to it with *argument* at position i."""
+        params = [f"A{i}" for i in range(arity)]
+        members = "".join(
+            f"  | K{i}(x: D[{', '.join([*params[:i], argument, *params[i + 1 :]])}])\n"
+            for i in range(arity)
+        )
+        return f"enum D[{', '.join(params)}]\n{members}  | Base(v: A0)\n"
+
+    def test_many_parameter_enum_with_an_uninhabited_argument_is_solved(self) -> None:
+        # Every member passes the uninhabited record on at another position,
+        # so the answer depends on which of 2^16 argument patterns are inhabited.
+        source = "record Bad\n  b: Bad\n" + self._many_parameter_enum("Bad", 16) + "()"
+        with pytest.raises(AglTypeError) as info:
+            _check(source)
+        span = info.value.span
+        assert span is not None
+        assert span.start_line == 1
+
+    def test_many_parameter_enum_with_a_long_inhabited_chain_argument_is_accepted(self) -> None:
+        # The argument is inhabited only at the end of a declaration chain.
+        chain = "".join(f"record L{i}\n  x: L{i + 1}\n" for i in range(12))
+        _check(self._many_parameter_enum("L0", 16) + chain + "record L12\n()")
+
+    def test_mutually_recursive_sum_guarded_by_arrays_is_accepted(self) -> None:
+        # Both members settle only through the enum they are members of.
+        _check("enum A = ::B | ::C\nrecord B\n  x: array[A]\nrecord C\n  y: array[A]\n()")
+
+    @staticmethod
+    def _user_of_boxed_option_table() -> tuple[TypeTable, RecordType, TypeDef]:
+        """Return ``Bad``/``Opt[T]``/``Box[T]`` and ``User`` holding ``Box[Opt[Bad]]``."""
+        table = TypeTable()
+        bad = RecordType("Bad", module_id=ENTRY_ID, decl_id=700041)
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Bad",
+                module_id=ENTRY_ID,
+                fields=(("next", bad),),
+                decl_node_id=bad.decl_id,
+            ),
+        )
+        opt = register_typedef(
+            table,
+            enum_typedef(
+                "Opt",
+                {"Some": {"v": TypeVarType("T")}, "Nothing": {}},
+                type_params=("T",),
+                decl_id=700042,
+            ),
+        )
+        box = register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("x", TypeVarType("T")),),
+                decl_node_id=700043,
+            ),
+        )
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="User",
+                module_id=ENTRY_ID,
+                fields=(("u", box.handle((opt.handle((bad,)),))),),
+                decl_node_id=700044,
+            ),
+        )
+        return table, bad, box
+
+    def test_generic_argument_settled_by_a_lower_declaration_is_awaited(self) -> None:
+        # User needs Box[Opt[Bad]]: Opt with an uninhabited argument is first
+        # demanded while User is evaluated, and settles as inhabited (through
+        # Nothing) only afterwards.
+        table, bad, _box = self._user_of_boxed_option_table()
+
+        assert compute_uninhabited(table) == frozenset({bad.decl_id})
+
+    def test_unsettled_argument_nested_in_a_member_field_is_awaited(self) -> None:
+        # A generic argument still unknown while a lower declaration settles
+        # suspends its reader; it must not be read as uninhabited, which would
+        # wrongly strike User or AY.
+        table, bad, box = self._user_of_boxed_option_table()
+        opt2 = register_typedef(
+            table,
+            enum_typedef(
+                "Opt2",
+                {"S2": {"v": box.handle((TypeVarType("T"),))}, "N2": {}},
+                type_params=("T",),
+                decl_id=700045,
+            ),
+        )
+        register_typedef(
+            table,
+            TypeDef(
+                kind="record",
+                name="AY",
+                module_id=ENTRY_ID,
+                fields=(("y", opt2.handle((bad,))),),
+                decl_node_id=700046,
+            ),
+        )
+
+        assert compute_uninhabited(table) == frozenset({bad.decl_id})
 
     def test_referenced_enum_member_still_requires_its_own_finite_value(self) -> None:
         table = TypeTable()

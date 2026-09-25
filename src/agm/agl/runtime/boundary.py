@@ -24,13 +24,16 @@ from agm.agl.semantics.values import (
     UNIT_VALUE,
     ArrayValue,
     BoolValue,
+    ConstructorValue,
     ContractValue,
     DecimalValue,
     DictValue,
     ExceptionValue,
+    FunctionValue,
     IntValue,
     IrClosureValue,
     JsonValue,
+    ObservableValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -142,16 +145,17 @@ def raise_arithmetic_error(
     ) from exc
 
 
-_FunctionEncoder = Callable[[IrClosureValue], object] | None
+_FunctionEncoder = Callable[[FunctionValue], object] | None
 
 _IMMUTABLE_MESSAGE = "AgL nominal values are immutable"
 
-# The closure encoder for the extent of one companion call. Encoding a closure
-# needs an interpreter, which this evaluator-independent module never holds, so
-# the extern-call chokepoint publishes one here rather than every crossing
-# value carrying a copy: whatever a companion reaches -- an argument, a view it
-# built itself, a closure nested in an array or dict -- encodes through the
-# call it is running inside. Scoped to that call rather than captured, so
+# The function encoder for the extent of one companion call. Encoding a
+# closure or constructor value needs an interpreter, which this
+# evaluator-independent module never holds, so the extern-call chokepoint
+# publishes one here rather than every crossing value carrying a copy:
+# whatever a companion reaches -- an argument, a view it built itself, a
+# function nested in an array or dict -- encodes through the call it is
+# running inside. Scoped to that call rather than captured, so
 # nothing here outlives the interpreter that published it.
 _ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextvars.ContextVar(
     "agl_active_function_encoder", default=None
@@ -159,7 +163,7 @@ _ACTIVE_FUNCTION_ENCODER: contextvars.ContextVar["_FunctionEncoder"] = contextva
 
 
 def active_function_encoder(encoder: "_FunctionEncoder") -> ScopedVar["_FunctionEncoder | None"]:
-    """Publish *encoder* as the ambient closure encoder for a call's extent."""
+    """Publish *encoder* as the ambient function encoder for a call's extent."""
     return ScopedVar(_ACTIVE_FUNCTION_ENCODER, encoder)
 
 
@@ -801,13 +805,14 @@ def encode_boundary_value(value: Value, descriptors: ValueDescriptors) -> object
     is stored on any array/dict/mutable-record view this mints, so the view
     keeps rendering correctly after the call that built it returns. An
     ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
-    value). A closure needs an interpreter to become a callable proxy, which
-    the active extern call supplies through :func:`active_function_encoder`;
-    the runtime boundary itself remains evaluator-independent. A closure
-    therefore crosses only inside a call, matching the window a proxy may be
-    invoked in: reading one through a view that outlived its call -- or from
-    a thread that did not inherit the call's context -- reports rather than
-    minting a proxy nothing could invoke. A ``json`` payload crosses uncopied
+    value). A function value -- a closure or a constructor -- needs an
+    interpreter to become a callable proxy, which the active extern call
+    supplies through :func:`active_function_encoder`; the runtime boundary
+    itself remains evaluator-independent. A function therefore crosses only
+    inside a call, matching the window a proxy may be invoked in: reading one
+    through a view that outlived its call -- or from a thread that did not
+    inherit the call's context -- reports rather than minting a proxy nothing
+    could invoke. A ``json`` payload crosses uncopied
     and unchecked: the companion is trusted to treat what it receives as
     read-only.
     """
@@ -818,6 +823,8 @@ def _encode_boundary_value(
     value: Value, descriptors: ValueDescriptors, memo: dict[int, object]
 ) -> object:
     """Encode *value*, retaining shared nominal nodes within one crossing."""
+    # An iterator is internal to loop lowering and never crosses.
+    value = cast(ObservableValue, value)
     if isinstance(value, UnitValue):
         return None
     if isinstance(value, BoolValue):
@@ -834,7 +841,7 @@ def _encode_boundary_value(
         return AglArrayView(value, descriptors)
     if isinstance(value, DictValue):
         return AglDictView(value, descriptors)
-    if isinstance(value, IrClosureValue):
+    if isinstance(value, (IrClosureValue, ConstructorValue)):
         encoder = _ACTIVE_FUNCTION_ENCODER.get()
         if encoder is None:
             raise BoundaryViolation(
@@ -847,18 +854,16 @@ def _encode_boundary_value(
         if contract_encoder is None:
             raise BoundaryViolation("a target contract crosses only into its extern call")
         return contract_encoder(value)
-    if isinstance(value, (RecordValue, ExceptionValue)):
-        encoded = memo.get(id(value))
-        if encoded is not None:
-            return encoded
-        try:
-            cls = _NOMINAL_CLASSES[value.nominal]
-        except KeyError as exc:
-            raise BoundaryViolation(_unknown_nominal_message(value.nominal, descriptors)) from exc
-        encoded = cast("type[_AglNominalShape]", cls)._agl_encode(value, descriptors, memo)
-        memo[id(value)] = encoded
+    encoded = memo.get(id(value))
+    if encoded is not None:
         return encoded
-    raise BoundaryViolation(f"cannot encode {type(value).__name__}")
+    try:
+        cls = _NOMINAL_CLASSES[value.nominal]
+    except KeyError as exc:
+        raise BoundaryViolation(_unknown_nominal_message(value.nominal, descriptors)) from exc
+    encoded = cast("type[_AglNominalShape]", cls)._agl_encode(value, descriptors, memo)
+    memo[id(value)] = encoded
+    return encoded
 
 
 def decode_boundary_value(obj: object) -> Value:
@@ -898,11 +903,11 @@ def _decode_boundary_value(obj: object, memo: dict[int, Value]) -> Value:
         return obj._value
     # Imported lazily because externs depends on this module for normal
     # boundary conversion. Only proxies minted by the evaluator carry an AgL
-    # closure; arbitrary Python callables remain unsupported.
+    # function value; arbitrary Python callables remain unsupported.
     from agm.agl.runtime.externs import AglCallableProxy
 
     if isinstance(obj, AglCallableProxy):
-        return obj._closure
+        return obj._function
     descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
     if isinstance(descriptor, NominalDescriptor):
         decoded = memo.get(id(obj))

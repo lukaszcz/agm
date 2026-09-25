@@ -1,0 +1,5 @@
+import shapes
+
+program def main() -> unit =
+  case shapes::Slot::Filled(value = "three") of
+    | shapes::Slot[int]::Filled(value) => print value

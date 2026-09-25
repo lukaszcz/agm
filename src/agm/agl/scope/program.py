@@ -26,7 +26,7 @@ Design
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -41,7 +41,6 @@ from agm.agl.modules.ids import ModuleId, expand_module_wildcard
 if TYPE_CHECKING:
     from agm.agl.modules.loader import LoadedModule, ModuleGraph
 from agm.agl.scope.imports import (
-    EMPTY_IMPORT_ENV,
     ImportEnv,
     ImportTarget,
     NameAtom,
@@ -53,8 +52,6 @@ from agm.agl.scope.imports import (
     build_import_env,
     declares_bare_constructor,
     matching_atoms,
-    resolve_alias_target,
-    try_resolve_qualified_member,
 )
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
@@ -66,13 +63,17 @@ from agm.agl.scope.symbols import (
     ReceiverOwner,
     ScopeNode,
     ScopePath,
-    alias_denotes_constructible_type,
+    TypeOwner,
+    binding_qname,
     builtin_type_static_kind,
+    contributed_declarations,
     dedupe_constructor_candidates,
+    resolve_bare_contribution_layer,
 )
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
+from agm.agl.scope.type_owners import TypeOwnerIndex
 from agm.agl.semantics.type_table import source_enum_member_decl_id, source_nominal_decl_id
 from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
@@ -84,8 +85,6 @@ from agm.agl.syntax.nodes import (
     ImportDecl,
     LetDecl,
     Program,
-    QualifierAnchor,
-    QualifierChain,
     RecordDef,
     ScopeRegion,
     TypeAlias,
@@ -96,7 +95,7 @@ from agm.agl.syntax.nodes import (
     static_binding_node_id,
     static_items,
 )
-from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, member_type_params
+from agm.agl.syntax.types import TypeExpr, member_type_params
 
 
 def _mid_sort_key(m: ModuleId) -> tuple[str, ...]:
@@ -187,142 +186,27 @@ class ResolvedProgram:
 # ---------------------------------------------------------------------------
 
 
-def _referenced_member_constructor_refs(
-    member: VariantRef,
-    module_id: ModuleId,
-    import_env: ImportEnv,
-    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
-    cross_module_constructor_refs: Mapping[QName, ConstructorRef],
-    import_envs: Mapping[ModuleId, ImportEnv],
-) -> tuple[ConstructorRef, ...]:
-    """Resolve a member reference to every record constructor it transparently denotes."""
-    chain = member.chain
-    local_atom = _atom((*chain.route_segments, chain.member))
-    qnames: tuple[QName, ...] = ()
-    if (module_id, local_atom) in all_public_types or (
-        module_id,
-        local_atom,
-    ) in cross_module_constructor_refs:
-        qnames = ((module_id, local_atom),)
-    elif chain.segments and chain.anchor is not QualifierAnchor.CURRENT_MODULE:
-        route = tuple(part for part in chain.segments[0].name.split("/"))
-        atom = _atom((*tuple(segment.name for segment in chain.segments[1:]), chain.member))
-        qname = try_resolve_qualified_member(import_env, route, atom, anchored=chain.anchored)
-        if qname is not None:
-            qnames = (qname,)
-    return dedupe_constructor_candidates(
-        cref
-        for qname in qnames
-        for cref in _constructor_refs_through_aliases(
-            qname, all_public_types, cross_module_constructor_refs, import_envs
-        )
-    )
-
-
-def _constructor_refs_through_aliases(
-    qname: QName,
-    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
-    cross_module_constructor_refs: Mapping[QName, ConstructorRef],
-    import_envs: Mapping[ModuleId, ImportEnv],
-) -> tuple[ConstructorRef, ...]:
-    """Follow aliases from *qname* while retaining every reachable record identity."""
-    pending = [qname]
-    seen: set[QName] = set()
-    result: list[ConstructorRef] = []
-    while pending:
-        current = pending.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        constructor = cross_module_constructor_refs.get(current)
-        if constructor is not None:
-            result.append(constructor)
-            continue
-        declaration = all_public_types.get(current)
-        if not isinstance(declaration, TypeAlias) or not isinstance(
-            declaration.type_expr, (NameT, AppliedT)
-        ):
-            continue
-        current_module, atom = current
-        path = (atom,) if isinstance(atom, str) else atom
-        pending.extend(
-            _alias_target_qnames(
-                declaration.type_expr,
-                current_module,
-                path[:-1],
-                all_public_types,
-                cross_module_constructor_refs,
-                import_envs,
-            )
-        )
-    return dedupe_constructor_candidates(result)
-
-
-def _alias_target_qnames(
-    type_expr: NameT | AppliedT,
-    module_id: ModuleId,
-    scope_path: PathAtom,
-    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
-    cross_module_constructor_refs: Mapping[QName, ConstructorRef],
-    import_envs: Mapping[ModuleId, ImportEnv],
-) -> tuple[QName, ...]:
-    """Return the declaration identities a named alias target can denote."""
-    qualifier = type_expr.qualifier
-    if qualifier is None or not qualifier.segments:
-        local_paths = (
-            ((),)
-            if qualifier is not None and qualifier.anchor is QualifierAnchor.CURRENT_MODULE
-            else (scope_path, ())
-            if scope_path
-            else ((),)
-        )
-        for path in local_paths:
-            qname = (module_id, _atom((*path, type_expr.name)))
-            if qname in all_public_types or qname in cross_module_constructor_refs:
-                return (qname,)
-        return tuple(import_envs[module_id].unqualified.get(type_expr.name, ()))
-    local_qname = (module_id, _atom((*qualifier.route_segments, type_expr.name)))
-    if local_qname in all_public_types or local_qname in cross_module_constructor_refs:
-        return (local_qname,)
-    if qualifier.anchor is QualifierAnchor.CURRENT_MODULE:
-        return ()
-    route_qname = try_resolve_qualified_member(
-        import_envs[module_id],
-        tuple(part for part in qualifier.segments[0].name.split("/")),
-        _atom((*tuple(segment.name for segment in qualifier.segments[1:]), type_expr.name)),
-        anchored=qualifier.anchored,
-    )
-    return () if route_qname is None else (route_qname,)
-
-
 def _build_cross_module_constructor_candidates(
     import_env: ImportEnv,
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
     cross_module_constructor_refs: Mapping[QName, ConstructorRef],
-    import_envs: Mapping[ModuleId, ImportEnv],
-    referenced_member_constructor_refs: Mapping[tuple[ModuleId, int], tuple[ConstructorRef, ...]],
-) -> tuple[dict[str, tuple[ConstructorRef, ...]], frozenset[str]]:
+    type_owners: TypeOwnerIndex,
+) -> dict[str, tuple[ConstructorRef, ...]]:
     """Build constructor candidates from types exposed by import tails for a module.
 
     For each type exposed unqualified by an import tail:
     - RecordDef: add the record name as a candidate (e.g. ``Foo(x:1)``).
     - EnumDef: add each variant name as a candidate (e.g. ``Red``).
-    - TypeAlias: add the alias name only when its chain provably ends at a
-      constructible type, judged from its DECLARING module's environment —
-      an alias can reach its target through that module's own import, not the
-      consumer's — which is why *import_envs* is the whole program's table.
+    - TypeAlias: add the alias name unless *type_owners* resolves it to an
+      enum, following each alias of the chain where it is declared.
 
     A selected QName may also name an enum variant directly (e.g. an
     individually imported/renamed variant); such names are absent from
     ``all_public_types`` (which is keyed by owning-type QName), so they are
     resolved through ``cross_module_constructor_refs`` instead, which already
     carries a per-variant :class:`ConstructorRef`.
-
-    Returns ``(candidates, type_names)`` where ``type_names`` is the set of
-    import-tail-exposed type names (for qualified constructor access like ``Color::Red``).
     """
     candidates: dict[str, list[ConstructorRef]] = {}
-    type_names: set[str] = set()
     exposed_qnames = frozenset(
         qname for qnames in import_env.unqualified.values() for qname in qnames
     )
@@ -345,50 +229,20 @@ def _build_cross_module_constructor_candidates(
                 if variant_ref is not None:
                     add_candidate(exposed_name, variant_ref)
                 continue
-            type_names.add(exposed_name)
             src_path = (src_name,) if isinstance(src_name, str) else src_name
             owner_path = src_path[:-1]
-
-            def declaring_module_lookup(
-                target: str,
-                qualifier: QualifierChain | None,
-                *,
-                declaring_module: ModuleId = mid,
-                declaring_path: PathAtom = owner_path,
-            ) -> RecordDef | EnumDef | ExceptionDef | TypeAlias | None:
-                return resolve_alias_target(
-                    target,
-                    qualifier,
-                    self_module_id=declaring_module,
-                    import_env=import_envs.get(declaring_module, EMPTY_IMPORT_ENV),
-                    all_public_types=all_public_types,
-                    scope_path=declaring_path,
-                )
-
             if isinstance(decl, (RecordDef, ExceptionDef)):
                 cref = cross_module_constructor_refs[key]
                 add_candidate(exposed_name, cref)
             elif (
                 isinstance(decl, TypeAlias)
-                and isinstance(decl.type_expr, (NameT, AppliedT))
-                and alias_denotes_constructible_type(decl, declaring_module_lookup)
+                and (alias_ref := type_owners.alias_constructor(decl, key)) is not None
             ):
-                add_candidate(
-                    exposed_name,
-                    ConstructorRef(
-                        owner_name=decl.name,
-                        owner_decl_node_id=decl.node_id,
-                        type_params=decl.type_params,
-                        owner_module_id=mid,
-                        owner_path=owner_path,
-                    ),
-                )
+                add_candidate(exposed_name, alias_ref)
             elif isinstance(decl, EnumDef):
                 for member in decl.members:
                     if isinstance(member, VariantRef):
-                        for referenced_cref in referenced_member_constructor_refs.get(
-                            (mid, member.node_id), ()
-                        ):
+                        for referenced_cref in type_owners.referenced_member_refs(mid, member):
                             add_candidate(referenced_cref.owner_name, referenced_cref)
                         continue
                     if declares_bare_constructor(
@@ -399,9 +253,18 @@ def _build_cross_module_constructor_candidates(
                     member_qname = (mid, member_atom)
                     if member_qname in exposed_qnames:
                         add_candidate(member.name, cross_module_constructor_refs[member_qname])
-    return (
-        {name: dedupe_constructor_candidates(refs) for name, refs in candidates.items()},
-        frozenset(type_names),
+    return {name: dedupe_constructor_candidates(refs) for name, refs in candidates.items()}
+
+
+def _import_tail_type_names(
+    import_env: ImportEnv,
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+) -> frozenset[str]:
+    """Return the type names import tails expose unqualified, for ``Owner::member`` access."""
+    return frozenset(
+        name
+        for name, qnames in import_env.unqualified.items()
+        if isinstance(name, str) and any(qname in all_public_types for qname in qnames)
     )
 
 
@@ -829,7 +692,7 @@ def resolve_program(
     entry_parent_scope: ScopeNode | None = None,
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
-    entry_repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
+    entry_repl_session_type_paths: Mapping[ScopePath, TypeOwner] | None = None,
     cached_modules: Mapping[ModuleId, ResolvedModule] | None = None,
 ) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
@@ -859,9 +722,9 @@ def resolve_program(
         Named scope layers promoted by prior REPL entries. They are copied into
         the entry's resolver so qualified members remain available.
     entry_repl_session_type_paths:
-        Type-owned scope paths among the retained layers, each mapped to its
-        rendered alias target or to None for a nominal type. Scope needs the
-        distinction to reject a method receiver in an alias scope.
+        Type-owned scope paths among the retained layers, each mapped to the
+        :class:`~agm.agl.scope.symbols.TypeOwner` resolved when it was declared,
+        so an alias keeps the target it resolved to then.
     cached_modules:
         Resolutions from an earlier compilation of the same modules -- a REPL
         session's own image. A cached entry is reused only while it holds the
@@ -995,33 +858,34 @@ def resolve_program(
     prelude_static_decl_node_ids = _builtin_static_decl_node_ids(all_public_funcs, all_public_types)
     cross_module_type_owners = _public_type_owners(all_public_types)
     cross_module_constructor_refs = _member_record_constructor_refs(all_public_types)
-    referenced_member_constructor_refs: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
-    for mid, loaded in graph.modules.items():
-        for item in static_items(loaded.program.body.items):
-            if not isinstance(item, EnumDef):
-                continue
-            for member in item.members:
-                if not isinstance(member, VariantRef):
-                    continue
-                crefs = _referenced_member_constructor_refs(
-                    member,
-                    mid,
-                    import_envs[mid],
-                    all_public_types,
-                    cross_module_constructor_refs,
-                    import_envs,
-                )
-                if crefs:
-                    referenced_member_constructor_refs[mid, member.node_id] = crefs
-    cross_module_constructible_types = frozenset(
-        qname
-        for qname, declaration in all_public_types.items()
-        if isinstance(declaration, (RecordDef, EnumDef, ExceptionDef))
-    )
     # ------------------------------------------------------------------
-    # Step 6: Resolve each module's bodies.
+    # Step 6: Prepare each module's headers, then resolve its bodies against
+    # the type owners the prepared headers make selectable.
     # ------------------------------------------------------------------
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
+    resolvers: dict[ModuleId, _Resolver] = {}
+
+    def type_contributions(
+        module_id: ModuleId, scope_path: ScopePath, name: NameAtom, is_type: Callable[[QName], bool]
+    ) -> tuple[ScopePath, frozenset[QName]] | None:
+        resolver = resolvers.get(module_id)
+        if resolver is not None:
+            return resolver.type_contributions(scope_path, name, is_type)
+        nearest = resolve_bare_contribution_layer(
+            resolved_modules[module_id].resolved.scope_nodes[scope_path],
+            name,
+            predicate=lambda ref: is_type(binding_qname(ref)),
+        )
+        return None if nearest is None else contributed_declarations(*nearest)
+
+    # The index answers from prepared headers, so it is only asked once every
+    # module below is prepared.
+    type_owners = TypeOwnerIndex(
+        all_public_types=all_public_types,
+        constructor_refs=cross_module_constructor_refs,
+        import_envs=import_envs,
+        contributions=type_contributions,
+    )
 
     for mid, loaded in graph.modules.items():
         cached = _reusable(cached_modules, mid, loaded)
@@ -1029,36 +893,19 @@ def resolve_program(
             resolved_modules[mid] = cached
             continue
         is_entry = mid == graph.entry_id
-        # Build cross-module constructor candidates from unqualified import tails.
-        cross_module_candidates, cross_module_type_names = (
-            _build_cross_module_constructor_candidates(
-                import_envs[mid],
-                all_public_types,
-                cross_module_constructor_refs,
-                import_envs,
-                referenced_member_constructor_refs,
-            )
-        )
-        constructor_candidates = cross_module_candidates
-        type_names = cross_module_type_names
-        if is_entry:
-            constructor_candidates = dict(entry_ambient_constructor_candidates or {})
-            for name, refs in cross_module_candidates.items():
-                constructor_candidates[name] = dedupe_constructor_candidates(
-                    (*constructor_candidates.get(name, ()), *refs)
-                )
-            type_names = entry_ambient_type_names | cross_module_type_names
         resolver = _Resolver(
             module_id=mid,
             import_env=import_envs[mid],
             decl_info=decl_info,
             cross_module_constructor_refs=cross_module_constructor_refs,
             builtin_static_decl_node_ids=prelude_static_decl_node_ids,
-            referenced_member_constructor_refs=referenced_member_constructor_refs,
-            cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_owners=cross_module_type_owners,
-            program_import_envs=import_envs,
             all_public_types=all_public_types,
+            type_owners=(
+                type_owners.with_retained(mid, entry_repl_session_type_paths)
+                if is_entry and entry_repl_session_type_paths is not None
+                else type_owners
+            ),
             allow_root_statements=is_entry and entry_parent_scope is not None,
             is_standard_library_module=mid.is_standard_library,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
@@ -1067,11 +914,29 @@ def resolve_program(
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
         )
-        resolved = resolver.run(
+        type_names = _import_tail_type_names(import_envs[mid], all_public_types)
+        resolver.prepare(
             loaded.program,
             parent_scope=entry_parent_scope if is_entry else None,
+            ambient_type_names=entry_ambient_type_names | type_names if is_entry else type_names,
+        )
+        resolvers[mid] = resolver
+
+    for mid, resolver in resolvers.items():
+        is_entry = mid == graph.entry_id
+        # Build cross-module constructor candidates from unqualified import tails.
+        cross_module_candidates = _build_cross_module_constructor_candidates(
+            import_envs[mid], all_public_types, cross_module_constructor_refs, type_owners
+        )
+        constructor_candidates = cross_module_candidates
+        if is_entry:
+            constructor_candidates = dict(entry_ambient_constructor_candidates or {})
+            for name, refs in cross_module_candidates.items():
+                constructor_candidates[name] = dedupe_constructor_candidates(
+                    (*constructor_candidates.get(name, ()), *refs)
+                )
+        resolved = resolver.resolve(
             ambient_constructor_candidates=constructor_candidates or None,
-            ambient_type_names=type_names,
             ambient_bare_constructor_keys=(
                 entry_ambient_bare_constructor_keys if is_entry else frozenset()
             ),
@@ -1085,6 +950,7 @@ def resolve_program(
             source_text=graph.modules[mid].source_text,
         )
 
+    resolved_modules = {mid: resolved_modules[mid] for mid in graph.modules}
     retain_resolved_modules(retainable, resolved_modules)
     return ResolvedProgram(
         modules=resolved_modules,

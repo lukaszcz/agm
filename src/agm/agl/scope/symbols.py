@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeAlias as TypingTypeAlias
 
@@ -30,22 +30,17 @@ from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.diagnostics import AglError, dollar_spacing_hint
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.external_names import ExternalName
-from agm.agl.semantics.types import EnumType, RecordType, TypeVarType
+from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, TypeVarType
 from agm.agl.syntax.nodes import (
     AttributeKeyedArg,
-    EnumDef,
-    ExceptionDef,
     ExportItem,
     FuncDef,
     ImportItem,
     Program,
-    QualifierChain,
-    RecordDef,
     TypeAlias,
     UseDecl,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT
 from agm.agl.zones import ParamZone
 
 ScopePath = tuple[str, ...]
@@ -370,6 +365,11 @@ class ConstructorRef:
     the canonical identity of a seeded builtin member.
     ``inline_enum_owner_decl_node_id`` identifies the enum that synthetically
     declared this record; standalone and referenced records leave it unset.
+
+    A type alias's constructor names the alias itself: ``owner_decl_node_id``
+    is the alias declaration, and typecheck follows its checked template.
+    ``member`` is set on an alias of an enum and names the member that
+    ``Alias::Member`` selects from that template.
     """
 
     owner_name: str
@@ -380,16 +380,32 @@ class ConstructorRef:
     owner_path: ScopePath = ()
     is_builtin: bool = False
     inline_enum_owner_decl_node_id: int | None = None
+    member: str | None = None
 
     @classmethod
-    def for_member(cls, member: RecordType) -> "ConstructorRef":
-        """Build the reference denoting *member*'s own record declaration."""
+    def for_nominal(cls, nominal: RecordType | ExceptionType) -> "ConstructorRef":
+        """Build the reference denoting *nominal*'s own declaration."""
         return cls(
-            owner_name=member.name,
-            owner_decl_node_id=member.decl_id,
-            type_params=tuple(arg.name for arg in member.type_args if isinstance(arg, TypeVarType)),
-            owner_module_id=member.module_id,
-            owner_path=member.scope_path,
+            owner_name=nominal.name,
+            owner_decl_node_id=nominal.decl_id,
+            type_params=()
+            if isinstance(nominal, ExceptionType)
+            else tuple(arg.name for arg in nominal.type_args if isinstance(arg, TypeVarType)),
+            owner_module_id=nominal.module_id,
+            owner_path=nominal.scope_path,
+        )
+
+    @classmethod
+    def for_alias(
+        cls, alias: TypeAlias, module_id: ModuleId, owner_path: ScopePath
+    ) -> "ConstructorRef":
+        """Build the constructor reference of *alias*, declared at *owner_path*."""
+        return cls(
+            owner_name=alias.name,
+            owner_decl_node_id=alias.node_id,
+            type_params=alias.type_params,
+            owner_module_id=module_id,
+            owner_path=owner_path,
         )
 
     def matches(self, enum_type: EnumType, member_name: str) -> bool:
@@ -399,6 +415,47 @@ class ConstructorRef:
             and self.owner_path == (*enum_type.scope_path, enum_type.name)
             and self.owner_name == member_name
         )
+
+
+@dataclass(frozen=True, slots=True)
+class TypeOwner:
+    """What a type path selects when it qualifies a constructor, by declaration identity.
+
+    ``constructor`` is the constructor the owner's bare spelling names -- a
+    record's or exception's own, or an alias's -- and ``None`` for an enum or
+    a structural alias. ``names`` holds, for a record or exception target, the
+    target's own name and every alias name on the chain leading to it, and for
+    an alias presumed constructible its own name; it is empty for an enum or
+    structural target, whose owner constructs nothing itself. ``members`` maps
+    an enum target's member names to their own constructors. ``alias`` is an
+    alias path's declaration.
+    """
+
+    constructor: ConstructorRef | None
+    names: frozenset[str] = frozenset()
+    members: Mapping[str, ConstructorRef] = field(default_factory=dict)
+    alias: TypeAlias | None = None
+
+    @property
+    def constructs(self) -> bool:
+        """Whether the owner qualifies any constructor."""
+        return bool(self.names or self.members)
+
+    def select(self, name: str, written: str) -> ConstructorRef | None:
+        """Return the constructor ``Owner::name`` selects, with the owner spelled *written*.
+
+        A record or exception is also qualified by the owner's written
+        spelling, which covers a ``use`` rename. An alias of an enum keeps its
+        own constructor and records the selected member's record name.
+        """
+        member = self.members.get(name)
+        if member is not None:
+            if self.constructor is None:
+                return member
+            return replace(self.constructor, member=member.owner_name)
+        if self.names and (name in self.names or name == written):
+            return self.constructor
+        return None
 
 
 def dedupe_constructor_candidates(
@@ -419,53 +476,6 @@ def dedupe_constructor_candidates(
             seen.add(candidate)
             unique.append(candidate)
     return tuple(unique)
-
-
-def alias_denotes_constructible_type(
-    alias: TypeAlias,
-    lookup: Callable[
-        [str, QualifierChain | None], RecordDef | EnumDef | ExceptionDef | TypeAlias | None
-    ],
-) -> bool:
-    """Whether *alias* denotes a constructible (non-enum) type.
-
-    A record, exception, or an alias chain that bottoms out at one of those
-    has a variant-less constructor; an enum does not (its variants are the
-    constructors, not the enum type itself). This follows the alias chain
-    (``type B = A`` where ``type A = Color``) through *lookup*, which resolves
-    one referenced type name — together with its ``qualifier`` chain, when
-    the reference is module-qualified or reaches its target through an import
-    — to its declaration, and returns ``False`` only when the chain provably
-    ends at an ``EnumDef``.
-
-    *lookup* is scoped to whatever declarations the caller can see (a
-    module's own root declarations and import environment, or a whole
-    program's public types); a link the callback cannot resolve — no import
-    environment available, a container/primitive alias, or an unresolvable
-    name — makes the alias presumed constructible, preserving
-    today's permissive default. The walk guards against a cyclic chain by
-    tracking the ``node_id`` of every declaration visited, not the bare name
-    spelling, since a qualified chain can revisit the same name in a
-    different module.
-    """
-    seen = {alias.node_id}
-    current = alias
-    while True:
-        type_expr = current.type_expr
-        if not isinstance(type_expr, (NameT, AppliedT)):
-            return True
-        target = lookup(type_expr.name, type_expr.qualifier)
-        if target is None:
-            return True
-        if target.node_id in seen:
-            return True
-        seen.add(target.node_id)
-        if isinstance(target, EnumDef):
-            return False
-        if isinstance(target, TypeAlias):
-            current = target
-            continue
-        return True
 
 
 # ---------------------------------------------------------------------------
@@ -615,9 +625,11 @@ class ImportedUseContribution:
 
     ``hidden_prefixes`` records the declaration's ``hiding`` clause as
     selection prefixes (see :func:`import_item_path`), so a wildcard-facade
-    refresh (:meth:`_Resolver._nearest_bare_contribution_layer`) can skip
-    re-adding a name the ``use`` hid instead of reinstating it from the
-    import environment.
+    refresh (:meth:`_Resolver._facade_refresh`) can skip re-adding a name the
+    ``use`` hid instead of reinstating it from the import environment.
+    ``constructors`` snapshots the constructor candidates it exposed; it
+    starts empty, since headers are read before type owners are known, and is
+    filled in once they are.
     """
 
     declaration: UseDecl
@@ -626,8 +638,8 @@ class ImportedUseContribution:
     members: Mapping[BareAtom, QName]
     scope_routes: Mapping[BareAtom, frozenset[BareRoute]]
     bindings: Mapping[BareAtom, frozenset[BindingRef]]
-    constructors: Mapping[BareAtom, frozenset[ConstructorRef]]
     hidden_prefixes: frozenset[ScopePath]
+    constructors: Mapping[BareAtom, frozenset[ConstructorRef]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -722,6 +734,18 @@ def resolve_bare_contribution_layer(
             return layer, selected
         layer = layer.parent
     return None
+
+
+def binding_qname(ref: BindingRef) -> QName:
+    """Return the declaring module and atom that *ref* names."""
+    return ref.module_id, to_bare_atom((*ref.scope_path, ref.name))
+
+
+def contributed_declarations(
+    layer: ScopeNode, refs: Iterable[BindingRef]
+) -> tuple[ScopePath, frozenset[QName]]:
+    """Return a contributing layer's path and the declarations its *refs* name."""
+    return layer.scope_path, frozenset(binding_qname(ref) for ref in refs)
 
 
 # ---------------------------------------------------------------------------
@@ -879,6 +903,9 @@ class ModuleResolution:
         presentation, and documentation text. See
         :class:`~agm.agl.scope.attributes.AttributeFacts`, which describes each
         table; typecheck, lowering, and the host read them from there.
+    ``type_owners``
+        For a REPL entry, the :class:`TypeOwner` each type it declares resolved
+        to, keyed by type path; the session retains them for later entries.
     """
 
     program: Program
@@ -908,6 +935,7 @@ class ModuleResolution:
     method_declarations: dict[DeclarationKey, ReceiverOwner] = field(default_factory=dict)
     reachable_declarations: frozenset[DeclarationKey] = frozenset()
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
+    type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

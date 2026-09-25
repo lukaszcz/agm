@@ -1,0 +1,8 @@
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+type Rows[A] = Slot[array[A]]
+
+program def main() -> unit =
+  print(Rows::Filled(value = 1))

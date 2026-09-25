@@ -35,6 +35,7 @@ from agm.agl.semantics.types import (
     DecimalType,
     EnumType,
     ExceptionType,
+    FunctionType,
     IntType,
     JsonType,
     RecordType,
@@ -51,6 +52,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
+from agm.agl.typecheck import AglTypeError
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, repl_session_with_root
 from tests._process_helpers import FakeShell
@@ -1234,9 +1236,8 @@ class TestCrossEntryScopeCollision:
         result = s.eval_entry("A::B::x")
 
         assert not result.ok
-        assert any(
-            "A::B" in d.message and "member" in d.message.lower() for d in result.diagnostics
-        )
+        assert result.error is None
+        assert result.diagnostics
 
 
 class TestBareConstructorVisibilityAcrossEntries:
@@ -2911,12 +2912,322 @@ enum Agent
         assert result.value.fields == {"x": IntValue(1)}
         assert not cross.ok
 
+    @pytest.mark.parametrize(
+        "redeclaration",
+        ["record Box[T]\n  w: T\n  z: int", "record Box\n  q: int"],
+        ids=["generic", "non-generic"],
+    )
+    def test_generic_alias_constructs_the_record_it_named_after_a_redeclaration(
+        self, redeclaration: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("record Box[T]\n  v: T").ok
+        old = s.eval_entry("Box(v = 0)")
+        assert s.eval_entry("type B[T] = Box[T]").ok
+        assert s.eval_entry(redeclaration).ok
+
+        built = s.eval_entry("B(v = 1)")
+
+        assert built.ok, built.diagnostics
+        assert isinstance(old.value, RecordValue)
+        assert isinstance(built.value, RecordValue)
+        assert built.value.nominal == old.value.nominal
+        assert built.value.fields == {"v": IntValue(1)}
+
+    def test_applied_generic_alias_constructor_keeps_the_record_it_named(self) -> None:
+        s = open_session()
+        assert s.eval_entry("record Box[T]\n  v: T").ok
+        old = s.eval_entry("Box(v = 0)")
+        assert s.eval_entry("type B[T] = Box[T]").ok
+        assert s.eval_entry("record Box[T]\n  w: text").ok
+
+        constructor = s.eval_entry("let f = B::[int]")
+        built = s.eval_entry("f(1)")
+
+        assert constructor.ok, constructor.diagnostics
+        assert constructor.value_type == FunctionType(params=(IntType(),), result=old.value_type)
+        assert built.ok, built.diagnostics
+        assert isinstance(old.value, RecordValue)
+        assert isinstance(built.value, RecordValue)
+        assert built.value.nominal == old.value.nominal
+        assert built.value.fields == {"v": IntValue(1)}
+
+    @pytest.mark.parametrize(
+        "use",
+        [
+            "let kept: Alias[int]::Member = old",
+            "record Holder\n  member: Alias[int]::Member\nHolder(member = old)",
+        ],
+        ids=["annotation", "field"],
+    )
+    def test_owner_applied_alias_member_keeps_the_enum_it_named(self, use: str) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Source[T]\n  | Member(value: T)").ok
+        assert s.eval_entry("type Alias[T] = Source[T]").ok
+        assert s.eval_entry("let old = Source::Member(value = 1)").ok
+        assert s.eval_entry("enum Source[T]\n  | Member(flag: bool)").ok
+
+        result = s.eval_entry(use)
+
+        assert result.ok, result.diagnostics
+
+    @staticmethod
+    def _session_with_retained_enum_aliases() -> ReplSession:
+        s = open_session()
+        assert s.eval_entry("enum Slot[T]\n  | Filled(value: T)\n  | Empty").ok
+        assert s.eval_entry("type Count = Slot[int]").ok
+        assert s.eval_entry("type Holder[T] = Slot[T]").ok
+        assert s.eval_entry("type Rows[A] = Slot[array[A]]").ok
+        return s
+
+    @pytest.mark.parametrize(
+        ("entry", "expected"),
+        [
+            ("Count::Filled(value = 1).value", IntValue(1)),
+            ("let kept: Count::Filled = Slot::Filled(value = 2)\nkept.value", IntValue(2)),
+            ("Holder::Filled(value = 3).value", IntValue(3)),
+            ("Holder[int]::Filled(value = 4).value", IntValue(4)),
+            (
+                "let slot: Count = Count::Empty\n"
+                "case slot of | Count::Filled(value) => value | Count::Empty => 5",
+                IntValue(5),
+            ),
+            ("let slot: Count = Count::Filled(value = 6)\nslot is Count::Filled", BoolValue(True)),
+            ("Rows::Filled(value = [7]).value.size()", IntValue(1)),
+            (
+                "let slot: Slot[array[int]] = Slot::Filled(value = [8, 9])\n"
+                "case slot of | Rows::Filled(value) => value.size() | Rows::Empty => 0",
+                IntValue(2),
+            ),
+        ],
+    )
+    def test_retained_enum_alias_selects_its_members(self, entry: str, expected: object) -> None:
+        s = self._session_with_retained_enum_aliases()
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == expected
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            'Count::Filled(value = "x")',
+            "let held: Holder::Filled = Slot::Filled(value = 1)",
+            'let slot: Slot[text] = Slot::Filled(value = "t")\nslot is Count::Filled',
+            "Rows::Filled(value = 1)",
+            "let slot: Slot[int] = Slot::Filled(value = 1)\n"
+            "case slot of | Rows::Filled(value) => 1 | _ => 0",
+            "let wrap: (int) -> Slot[int] = Rows::Filled",
+        ],
+        ids=[
+            "argument",
+            "unapplied-generic-alias",
+            "is-test",
+            "parameterized-alias-argument",
+            "parameterized-alias-pattern",
+            "parameterized-alias-value",
+        ],
+    )
+    def test_retained_enum_alias_member_keeps_the_alias_type_arguments(self, entry: str) -> None:
+        s = self._session_with_retained_enum_aliases()
+
+        assert not s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize("name", ["Col", "C", "I"])
+    def test_retained_type_name_is_not_a_value_in_a_later_entry(self, name: str) -> None:
+        """A type an earlier entry declared names no value, as in a program file."""
+        s = open_session()
+        assert s.eval_entry("enum Col\n  | Red\n  | Paint(n: int)").ok
+        assert s.eval_entry("type C = Col\ntype I = int").ok
+
+        with pytest.raises(AglTypeError):
+            s.type_of(f"print({name})")
+        assert not s.eval_entry(f"print({name})").ok
+
+    @pytest.mark.parametrize(
+        "entries",
+        [
+            (
+                "enum A::Slot[T]\n  | Filled(value: T)\n  | Empty",
+                "use A::*",
+                "type X = Slot[int]",
+            ),
+            ("use A::*\nenum A::Slot[T]\n  | Filled(value: T)\n  | Empty\ntype X = Slot[int]",),
+        ],
+        ids=["across-entries", "one-entry"],
+    )
+    def test_alias_of_a_used_enum_selects_its_members(self, entries: tuple[str, ...]) -> None:
+        s = open_session()
+        for entry in entries:
+            assert s.eval_entry(entry).ok
+
+        result = s.eval_entry(
+            "let slot: X = X::Filled(value = 2)\n"
+            "let filled = slot is X::Filled\n"
+            "case slot of | X::Filled(value) => value + (if filled => 1 else => 0) | X::Empty => 0"
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(3)
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("Ints::Filled(value = 2)", "2"),
+            ("I::Filled(value = 2)", "2"),
+            ("Nested::Filled(value = 2)", "2"),
+            ("Rows::Filled(value = [2])", "[2]"),
+        ],
+        ids=["used", "renamed", "nested-scope", "generic"],
+    )
+    def test_used_scope_alias_qualifies_a_constructor_value(
+        self, value: str, expected: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Held[T]\n  | Filled(value: T)\n  | Empty").ok
+        assert s.eval_entry(
+            "scope R\n"
+            "  type Ints = Held[int]\n"
+            "  type Rows[A] = Held[array[A]]\n"
+            "\n"
+            "  scope N\n"
+            "    type Nested = Held[int]\n"
+            "  end N\n"
+            "end R"
+        ).ok
+
+        result = s.eval_entry(
+            "scope M\n"
+            "  use R::*\n"
+            "  use R::{Ints as I}\n"
+            "  use R::N::*\n"
+            f'  let made = "%{{({value}).value}}"\n'
+            "end M\n"
+            "M::made"
+        )
+
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue(expected)
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "Point::Point(x = 1).x",
+            "P::P(x = 1).x",
+            "P::Point(x = 1).x",
+            "case Point(x = 1) of | Point::Point(x) => x",
+            "case Point(x = 1) of | P::P(x) => x",
+        ],
+    )
+    def test_retained_record_qualifies_its_own_constructor(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Point\n  x: int").ok
+        assert s.eval_entry("type P = Point").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["Point::Foo(x = 1)", "P::Foo(x = 1)", "case Point(x = 1) of | P::Foo(x) => x"],
+    )
+    def test_retained_record_rejects_a_foreign_member_name(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Point\n  x: int").ok
+        assert s.eval_entry("type P = Point").ok
+
+        assert not s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "P::P(x = 1)",
+            "P::Point(x = 1)",
+            "let make = P::P\nmake(1)",
+            "case P(x = 1) of | P::P(x) => P(x = x)",
+        ],
+    )
+    def test_record_alias_owner_keeps_its_target_after_a_redeclaration(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Point\n  x: int").ok
+        old = s.eval_entry("Point(x = 1)")
+        assert s.eval_entry("type P = Point").ok
+        assert s.eval_entry("record Point\n  y: int").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert isinstance(old.value, RecordValue)
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal == old.value.nominal
+        assert not s.eval_entry("P::P(y = 1)").ok
+        assert not s.eval_entry("P::Point(y = 1)").ok
+
+    @pytest.mark.parametrize(
+        ("entry", "expected"),
+        [
+            ("C::Mem(v = 1).v", IntValue(1)),
+            (
+                "let kept: C = C::Mem(v = 2)\ncase kept of | C::Mem(v) => v | C::Nil => 0",
+                IntValue(2),
+            ),
+            ("let make = C::Mem\nmake(3).v", IntValue(3)),
+            ("let kept: C = C::Mem(v = 4)\nkept is C::Mem", BoolValue(True)),
+            ("let kept: C = C::Nil\nkept is C::Mem", BoolValue(False)),
+        ],
+    )
+    def test_enum_alias_owner_keeps_its_target_after_a_redeclaration(
+        self, entry: str, expected: object
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Src[T]\n  | Mem(v: T)\n  | Nil").ok
+        assert s.eval_entry("type C = Src[int]").ok
+        assert s.eval_entry("enum Src[T]\n  | Other(w: T)").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == expected
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "C::Other(w = 1)",
+            'C::Mem(v = "s")',
+            "let other: Src[int] = Src::Other(w = 1)\nother is C::Mem",
+        ],
+    )
+    def test_enum_alias_owner_rejects_the_redeclared_target_members(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Src[T]\n  | Mem(v: T)\n  | Nil").ok
+        assert s.eval_entry("type C = Src[int]").ok
+        assert s.eval_entry("enum Src[T]\n  | Other(w: T)").ok
+
+        assert not s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["s::A::A(z = 1).z", "s::A::Q(z = 1).z", "case s::Q(z = 1) of | s::A::A(z) => z"],
+    )
+    def test_retained_scope_region_alias_qualifies_its_target(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Q\n  x: int").ok
+        assert s.eval_entry("scope s\n  record Q\n    z: int\n  type A = Q\nend s").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
     def test_redeclaring_a_record_as_an_enum_reports_a_diagnostic_not_a_crash(self) -> None:
         """A record's construction spelling does not outlive its declaration.
 
         Once the name belongs to an enum, the record form it used to accept
-        is reported as a diagnostic rather than routed into the enum's
-        variant-constructor path, which has no variant to build.
+        is reported as a diagnostic, exactly as for an enum declared in the
+        same program, rather than building the superseded record.
         """
         s = open_session()
         assert s.eval_entry("record R\n  a: int").ok
@@ -2930,7 +3241,6 @@ enum Agent
         # fails, but with an empty message that says nothing about why.
         [stale_diagnostic] = stale.diagnostics
         assert "R" in stale_diagnostic.message
-        assert "constructor" in stale_diagnostic.message
         assert fresh.ok, fresh.diagnostics
 
     def test_redeclaring_an_enum_as_a_record_drops_stale_variants(self) -> None:
@@ -6111,6 +6421,34 @@ class TestImports:
         assert s.eval_entry("new()").value == IntValue(2)
         assert not s.eval_entry("old()").ok
 
+    @pytest.mark.parametrize(
+        ("original", "use", "construct"),
+        (
+            ("record NS::R\n  x: int", "use NS::{R as Q}", "Q(y = 7).y"),
+            ("record NS::R\n  x: int", "use NS::{R}", "R(y = 7).y"),
+            ("record R0\n  x: int\n\ntype NS::R = R0", "use NS::{R as Q}", "Q(y = 7).y"),
+            (
+                "record NS::R\n  x: int",
+                "scope Outer\n  use NS::{R as Q}\nend Outer",
+                "scope Outer\n  def make() -> int = Q(y = 7).y\nend Outer\n\nOuter::make()",
+            ),
+        ),
+    )
+    def test_retained_use_selects_the_redeclared_constructor(
+        self, original: str, use: str, construct: str
+    ) -> None:
+        """A redeclared use source supersedes: the retained use names only the newest one."""
+        s = open_session()
+        assert s.eval_entry(original).ok
+        assert s.eval_entry(use).ok
+        assert s.eval_entry("record NS::R\n  y: int").ok
+
+        result = s.eval_entry(construct)
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(7)
+        assert not s.eval_entry(construct.replace("y = 7", "x = 7")).ok
+
     def test_distinct_use_targets_with_clashing_bare_names_remain_ambiguous(self) -> None:
         s = open_session()
         assert s.eval_entry("def First::value() -> int = 1").ok
@@ -7766,7 +8104,7 @@ class TestBareTypeEntry:
             template=RecordType(name="Box", module_id=right),
         )
         env = TypeEnvironment(
-            program_generic_table={(left, "Box"): left_def, (right, "Box"): right_def},
+            program_generic_table={(left, (), "Box"): left_def, (right, (), "Box"): right_def},
             import_env=ImportEnv(
                 contributions={},
                 unqualified={"Box": frozenset({(left, "Box"), (right, "Box")})},
@@ -7808,7 +8146,7 @@ class TestBareTypeEntry:
             is None
         )
 
-        graph_env = TypeEnvironment(program_generic_table={(ENTRY_ID, "Box"): local_def})
+        graph_env = TypeEnvironment(program_generic_table={(ENTRY_ID, (), "Box"): local_def})
         assert graph_env.resolve_qualified_unapplied_generic_type(
             local_expr.qualifier,
             "Box",

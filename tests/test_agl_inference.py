@@ -284,13 +284,6 @@ class TestUnification:
         with pytest.raises(InferenceError, match="infinite"):
             engine.unify(variable, wrap(variable), _origin(engine, 1))
 
-    def test_solver_rejects_flexible_variables_owned_by_another_engine(self) -> None:
-        owner = InferenceEngine()
-        foreign = owner.fresh("T")
-
-        with pytest.raises(AssertionError, match="owned"):
-            InferenceEngine().zonk(foreign)
-
     def test_occurs_check_never_expands_nominal_definitions(self) -> None:
         engine = InferenceEngine()
         variable = engine.fresh("T")
@@ -734,3 +727,17 @@ class TestFinalizationAndProvenance:
 
         assert (first.sequence, second.sequence) == (0, 1)
         assert first.role is ConstraintRole.LITERAL_ELEMENT
+
+
+def test_conflicting_constructor_fields_cite_the_fields_they_constrain() -> None:
+    """A generic constructor's conflicting field arguments are attributed to their fields."""
+    with pytest.raises(AglTypeError) as raised:
+        resolve_and_check_inline_entry(
+            'record Dup[T]\n  a: T\n  b: T\n\nlet d = Dup(a = 1, b = "s")', HostCapabilities()
+        )
+
+    cause = raised.value.__cause__
+    assert isinstance(cause, InferenceError)
+    origins = cause.origins
+    assert [origin.subject for origin in origins] == ["a", "b"]
+    assert {origin.role for origin in origins} == {ConstraintRole.CONSTRUCTOR_FIELD}

@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.sessions import SessionHost
     from agm.agl.runtime.types import ParamBindingInfo
     from agm.agl.scope.program import ResolvedModule
-    from agm.agl.scope.symbols import BindingRef, ConstructorRef, ScopeNode
+    from agm.agl.scope.symbols import BindingRef, ConstructorRef, ScopeNode, TypeOwner
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import BoolValue, Frame, RecordValue, Value
     from agm.agl.syntax.nodes import (
@@ -58,6 +58,7 @@ if TYPE_CHECKING:
         ImportDecl,
         InfixAssoc,
         Program,
+        QualifierChain,
         ScopeRegion,
         TypeAlias,
         VarRef,
@@ -119,10 +120,13 @@ class _BootstrapSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class _InfoReference:
-    """Binding and constructor identities selected for one ``:info`` name."""
+    """Binding, constructor, and alias declaration one ``:info`` name selects, and its spelling."""
 
     binding: "BindingRef | None"
     constructor: "ConstructorRef | None"
+    alias: "TypeAlias | None"
+    qualifier: "QualifierChain | None"
+    span: "SourceSpan"
 
 
 # Bootstrap images retain complete frontend graphs, so keep only a small working
@@ -358,9 +362,9 @@ class ReplSession:
         # Persistent session environment.
         self._session_scope: ScopeNode = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes: dict[tuple[str, ...], ScopeNode] = {(): self._session_scope}
-        # Each retained type-owned path maps to its rendered alias target, or
-        # None for a nominal type.
-        self._session_type_paths: dict[tuple[str, ...], str | None] = {}
+        # Each retained type-owned path maps to the owner it resolved to when
+        # declared, so a retained alias keeps its target across entries.
+        self._session_type_paths: dict[tuple[str, ...], TypeOwner] = {}
         self._type_env: TypeEnvironment = TypeEnvironment()
         self._type_env.seal()
         self._link_image = LinkImage()
@@ -378,7 +382,7 @@ class ReplSession:
         # Replayed verbatim in a later entry so a same-module candidate whose
         # owner path is a retained named scope keeps whichever visibility it
         # actually had, instead of that being re-derived from the owner
-        # path's shape (see ``_Resolver.run``'s ``ambient_bare_constructor_keys``).
+        # path's shape (see ``_Resolver.resolve``'s ``ambient_bare_constructor_keys``).
         self._ambient_bare_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
         # Type names declared in prior promoted entries, for qualified constructor
         # access (``Owner::variant``) across REPL entries.
@@ -1071,7 +1075,6 @@ class ReplSession:
             VariantDef,
             static_items,
         )
-        from agm.agl.syntax.types import render_type_expr
         from agm.agl.typecheck.env import TypeEnvironment
 
         entry_declarations = tuple(static_items(program.body.items))
@@ -1398,14 +1401,9 @@ class ReplSession:
                     session_node.bare_constructor_contributions.setdefault(atom, set()).update(
                         constructor_refs
                     )
-        alias_targets = {
-            type_name_path(item): render_type_expr(item.type_expr)
-            for item in entry_type_items
-            if isinstance(item, TypeAlias) and item.node_id in promoted_declaration_ids
-        }
         self._session_type_paths.update(
-            ((*path, name), alias_targets.get((path, name)))
-            for path, name in promoted_type_name_paths
+            (type_path, checked.resolved.type_owners[type_path])
+            for type_path in promoted_type_paths
         )
 
         if not partial:
@@ -1434,11 +1432,18 @@ class ReplSession:
             new_type_env.seal()
             self._type_env = new_type_env
 
+        entry_type_decl_ids = frozenset(item.node_id for item in entry_type_items)
+
         def _select_promoted(crefs: tuple[ConstructorRef, ...]) -> tuple[ConstructorRef, ...]:
+            # A replaced path's constructor is this entry's own declaration,
+            # never the superseded one the entry still saw as ambient.
             return tuple(
                 ref
                 for ref in crefs
-                if (ref.owner_path, ref.owner_name) in replaced_type_name_paths
+                if (
+                    (ref.owner_path, ref.owner_name) in replaced_type_name_paths
+                    and ref.owner_decl_node_id in entry_type_decl_ids
+                )
                 or ref.owner_path in declared_enum_type_scopes
             )
 
@@ -1454,7 +1459,7 @@ class ReplSession:
             # The bare table is keyed by name alone -- it already carries only
             # the candidates that were bare-visible when this entry resolved,
             # so promotion just replays that same visibility for later entries
-            # (see ``ambient_bare_constructor_keys`` in ``_Resolver.run``).
+            # (see ``ambient_bare_constructor_keys`` in ``_Resolver.resolve``).
             for cname, crefs in checked.resolved.constructor_candidates.items():
                 if selected := _select_promoted(crefs):
                     self._ambient_bare_constructor_candidates[cname] = (
@@ -1752,6 +1757,7 @@ class ReplSession:
             format_type_for_repl,
         )
         from agm.agl.semantics.values import Cell
+        from agm.agl.syntax.types import render_type_expr
 
         parts = tuple(name.split("::"))
         if not name or any(not part for part in parts):
@@ -1760,7 +1766,6 @@ class ReplSession:
         scope_path, local_name = parts[:-1], parts[-1]
         resolved_reference = self._resolve_info_reference(name)
         ref = None if resolved_reference is None else resolved_reference.binding
-        constructor = None if resolved_reference is None else resolved_reference.constructor
         location = (
             _format_repl_location(ref.decl_span)
             if ref is not None and ref.module_id.is_entry
@@ -1797,11 +1802,12 @@ class ReplSession:
                 )
             )
 
-        type_path = (*scope_path, local_name)
-        alias_target = self._session_type_paths.get(type_path)
-        if type_path in self._session_type_paths and alias_target is not None:
-            definition = f"type {name} = {alias_target}"
+        alias = None if resolved_reference is None else resolved_reference.alias
+        if alias is not None:
+            params = f"[{', '.join(alias.type_params)}]" if alias.type_params else ""
+            definition = f"type {name}{params} = {render_type_expr(alias.type_expr)}"
             return f"{name} is a type alias.\n{_format_info_section('Type', definition)}"
+        type_path = (*scope_path, local_name)
         type_name = "::".join(type_path)
         typ = self._type_env.get_type(type_name)
         if typ is not None:
@@ -1824,9 +1830,11 @@ class ReplSession:
             )
             display = _format_info_section("Type", definition)
             return f"{name} is a generic {library_generic.kind} type.\n{display}"
-        if constructor is None:
+        if resolved_reference is None or resolved_reference.constructor is None:
             return None
-        constructor_signature = self._constructor_signature(constructor)
+        constructor_signature = self._constructor_signature(
+            resolved_reference, resolved_reference.constructor
+        )
         return "\n".join(
             (
                 f"{name} is a constructor.",
@@ -1837,54 +1845,95 @@ class ReplSession:
         )
 
     def _resolve_info_reference(self, name: str) -> _InfoReference | None:
-        """Resolve NAME with the REPL entry resolver, without type-checking it."""
+        """Resolve NAME with the REPL entry resolver, without type-checking it.
+
+        ``None`` when NAME is not a name reference.
+        """
         from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.parser import parse_program_seeded
         from agm.agl.syntax.nodes import VarRef
 
-        reference: VarRef | None = None
         try:
             with spaced_qualifier_collector() as spaced_sink:
                 program, next_node_id = parse_program_seeded(
                     name, start_id=self._next_node_id, resolve_infix=False
                 )
-            if len(program.body.items) != 1 or not isinstance(program.body.items[0], VarRef):
-                return None
-            reference = program.body.items[0]
+        except AglError:
+            return None
+        if len(program.body.items) != 1 or not isinstance(program.body.items[0], VarRef):
+            return None
+        reference = program.body.items[0]
+        try:
             resolved = self._entry_pipeline.resolve_program(
                 program, next_node_id, spaced_qualifiers=tuple(spaced_sink)
             )
         except AglError:
-            return None if reference is None else self._canonical_library_reference(reference)
-        entry = resolved.modules[resolved.entry_id].resolved
-        binding = entry.resolution.get(reference.node_id)
-        constructor = entry.constructor_refs.get(reference.node_id)
-        return (
-            _InfoReference(binding=binding, constructor=constructor)
-            if binding is not None or constructor is not None
-            else self._canonical_library_reference(reference)
+            binding, constructor = self._canonical_library_identities(reference)
+        else:
+            entry = resolved.modules[resolved.entry_id].resolved
+            binding = entry.resolution.get(reference.node_id)
+            constructor = entry.constructor_refs.get(reference.node_id)
+        return _InfoReference(
+            binding=binding,
+            constructor=constructor,
+            alias=self._alias_declaration(reference),
+            qualifier=reference.qualifier,
+            span=reference.span,
         )
 
-    def _canonical_library_reference(self, reference: "VarRef") -> _InfoReference | None:
+    def _canonical_library_identities(
+        self, reference: "VarRef"
+    ) -> tuple["BindingRef | None", "ConstructorRef | None"]:
         """Return retained identities named by REFERENCE's canonical module path."""
         from agm.agl.modules.ids import ModuleId
 
         qualifier = reference.qualifier
         if qualifier is None or not qualifier.segments or "/" not in qualifier.segments[0].name:
-            return None
+            return None, None
         module_id = ModuleId.from_path(qualifier.segments[0].name)
         module = self._retained_resolved_modules.get(module_id)
         if module is None:
-            return None
+            return None, None
         scope_path = tuple(segment.name for segment in qualifier.segments[1:])
         binding = module.resolved.declarations.get((module_id, scope_path, reference.name))
         candidates = module.resolved.constructor_candidates_by_path.get(
             (scope_path, reference.name), ()
         )
-        constructor = candidates[0] if len(candidates) == 1 else None
-        if binding is None and constructor is None:
+        return binding, candidates[0] if len(candidates) == 1 else None
+
+    def _alias_declaration(self, reference: "VarRef") -> "TypeAlias | None":
+        """Return the alias declaration REFERENCE names as a type, by identity.
+
+        ``None`` when it names no alias, or several declarations at once.
+        """
+        from agm.agl.syntax.nodes import TypeAlias, static_type_items
+        from agm.agl.syntax.types import NameT
+        from agm.agl.typecheck import AglTypeError
+
+        type_name = NameT(
+            reference.name, reference.span, reference.node_id, qualifier=reference.qualifier
+        )
+        try:
+            key = self._type_env.type_name_declaration(type_name, span=reference.span)
+        except AglTypeError:
             return None
-        return _InfoReference(binding=binding, constructor=constructor)
+        if key is None:
+            return None
+        module_id, scope_path, name = key
+        if module_id.is_entry:
+            owner = self._session_type_paths.get((*scope_path, name))
+            return None if owner is None else owner.alias
+        items = self._retained_resolved_modules[module_id].resolved.program.body.items
+        return next(
+            (
+                item
+                for item in static_type_items(items)
+                if isinstance(item, TypeAlias)
+                and item.name == name
+                and tuple(segment.name for segment in item.scope_path) == scope_path
+            ),
+            None,
+        )
 
     def _info_type_env(self, ref: "BindingRef") -> "TypeEnvironment":
         """Return the retained type environment that owns REF."""
@@ -1900,28 +1949,15 @@ class ReplSession:
         ]
         return matches[0] if len(matches) == 1 else None
 
-    def _constructor_signature(self, constructor: "ConstructorRef") -> "ConstructorSignature":
-        """Return the signature for the constructor identity selected by scope."""
-        from agm.agl.semantics.types import TypeVarType
-        from agm.agl.typecheck.env import ConstructorSignature
+    def _constructor_signature(
+        self, reference: _InfoReference, constructor: "ConstructorRef"
+    ) -> "ConstructorSignature":
+        """Return the signature *constructor* spelled as *reference* has, as the checker selects."""
+        from agm.agl.typecheck.constructors import selected_constructor_signature
 
-        checked = self._retained_checked_modules.get(constructor.owner_module_id)
-        type_env = self._type_env if checked is None else checked.type_env
-        signature = type_env.get_constructor_signature(
-            constructor.owner_name, scope_path=constructor.owner_path
-        )
-        if signature is not None:
-            return signature
-        # Only a record constructor lacks a recorded constructor signature.
-        typedef = type_env.type_table.typedef_of(constructor.owner_decl_node_id)
-        type_args = tuple(TypeVarType(name) for name in constructor.type_params)
-        return ConstructorSignature(
-            owner_name=constructor.owner_name,
-            field_names=tuple(name for name, _typ in typedef.fields),
-            field_templates=tuple(typ for _name, typ in typedef.fields),
-            result_template=typedef.handle(type_args),
-            type_params=constructor.type_params,
-        )
+        return selected_constructor_signature(
+            self._type_env, reference.qualifier, constructor, reference.span, type_vars=frozenset()
+        )[1]
 
     def type_names(self) -> frozenset[str]:
         """Return the names of types declared in prior promoted entries.

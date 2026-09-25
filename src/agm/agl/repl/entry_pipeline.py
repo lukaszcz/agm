@@ -360,7 +360,7 @@ class EntryPipeline:
             partial_calls=entry.partial_calls,
             slot_resolution=entry.slot_resolution,
             slot_constructor_refs=entry.slot_constructor_refs,
-            is_test_constructor_refs=entry.is_test_constructor_refs,
+            selected_constructor_refs=entry.selected_constructor_refs,
             pattern_binding_refs=entry.pattern_binding_refs,
             pattern_constructor_refs=entry.pattern_constructor_refs,
             pattern_constructor_owners=entry.pattern_constructor_owners,

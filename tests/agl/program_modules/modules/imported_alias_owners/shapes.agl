@@ -1,0 +1,19 @@
+record Point
+  x: int
+
+type P = Point
+
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+enum Plain
+  | Ready
+  | Wait(n: int)
+
+exception Oops extends Exception
+  code: int
+
+type F = Oops
+
+type Rows[A] = Slot[array[A]]

@@ -332,7 +332,6 @@ def _add_builtin_nominals(
             continue
         if isinstance(typ, ExceptionType):
             continue
-        enum_type = cast(EnumType, typ)
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
             module_id=RESERVED_ID,
@@ -344,7 +343,7 @@ def _add_builtin_nominals(
                 VariantDescriptor(
                     vname, tuple(type_table.record_fields(member)), NominalId(member.decl_id)
                 )
-                for vname, member in type_table.enum_member_names(enum_type).items()
+                for vname, member in type_table.enum_member_names(typ).items()
             ),
         )
 
@@ -1427,12 +1426,6 @@ class _Lowerer:
                     return IrBuiltinLoad(
                         location=self._loc(span),
                         key=builtin_var_key(ref.module_id, ref.scope_path, ref.name),
-                    )
-                if ref.kind is BinderKind.constructor_binding:
-                    constructor_type = cast(FunctionType, self._node_type(nid))
-                    return IrMakeConstructor(
-                        location=self._loc(span),
-                        nominal=NominalId(cast(RecordType, constructor_type.result).decl_id),
                     )
                 if ref.kind is BinderKind.function_binding and ref.is_builtin:
                     return self._lower_builtin_value(ref, nid, span)

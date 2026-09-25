@@ -175,9 +175,7 @@ def _add_exception_field_encodes(
         if descriptor.kind is not NominalKind.EXCEPTION or nominal in encodes:
             continue
         typedef = type_table.typedef_of(nominal.value)
-        encodes[nominal] = build_exception_field_encodes(
-            cast(ExceptionType, typedef.handle()), type_table
-        )
+        encodes[nominal] = build_exception_field_encodes(typedef.exception_handle(), type_table)
 
 
 def _program_signature(sig: FunctionSignature, type_table: TypeTable) -> tuple[IrProgramParam, ...]:

@@ -126,8 +126,7 @@ def _index_registered_owner(index: _MemberIndex, type_table: TypeTable, owner_id
     """Index an owner outside this compile unit from its registered declaration."""
     if owner_id in index.members:
         return
-    typedef = type_table.get_by_id(owner_id)
-    assert typedef is not None, "compiler bug: related owner is not registered"
+    typedef = type_table.typedef_of(owner_id)
     members = index.members.setdefault(owner_id, {})
     for field_name, _field_type in typedef.fields:
         members.setdefault(field_name, []).append(
@@ -151,9 +150,7 @@ def _member_declarations(
             if isinstance(item, TypeAlias):
                 continue
             declared_path = tuple(segment.name for segment in item.scope_path)
-            typedef = type_table.get(module_id, item.name, declared_path)
-            assert typedef is not None, "compiler bug: declared type is not registered"
-            decl_owner_id = typedef.decl_node_id
+            decl_owner_id = type_table.named(module_id, item.name, declared_path).decl_node_id
             owner_ids[module_id, (*declared_path, item.name)] = decl_owner_id
             index.declared.add(decl_owner_id)
             members = index.members.setdefault(decl_owner_id, {})
@@ -179,11 +176,9 @@ def _member_declarations(
             if method_owner_id is None:
                 # A method on an owner retained from an earlier REPL entry or
                 # another module: its members come from the shared type table.
-                typedef = type_table.get(
+                method_owner_id = type_table.named(
                     owner_path.module_id, owner_path.scope_path[-1], owner_path.scope_path[:-1]
-                )
-                assert typedef is not None, "compiler bug: method owner is not registered"
-                method_owner_id = typedef.decl_node_id
+                ).decl_node_id
                 owner_ids[owner_path.module_id, owner_path.scope_path] = method_owner_id
                 _index_registered_owner(index, type_table, method_owner_id)
             index.declared.add(method_owner_id)
@@ -219,8 +214,7 @@ def _level_mates(type_table: TypeTable, owner_id: DeclId) -> tuple[DeclId, ...]:
     counted owning enums; an enum's are the member records it counts for
     (:meth:`TypeTable.owning_enum_defs_for_selection`, read in reverse).
     """
-    typedef = type_table.get_by_id(owner_id)
-    assert typedef is not None, "compiler bug: level-mate query for unregistered declaration"
+    typedef = type_table.typedef_of(owner_id)
     match typedef.kind:
         case "exception":
             ancestors = tuple(base.decl_node_id for base in type_table.ancestor_defs(owner_id))
@@ -289,11 +283,8 @@ def _raise_collision(
         owner_id, conflicting_id = conflicting_id, owner_id
         declared, conflicting = conflicting, declared
 
-    owner_typedef = type_table.get_by_id(owner_id)
-    conflicting_typedef = type_table.get_by_id(conflicting_id)
-    assert owner_typedef is not None and conflicting_typedef is not None, (
-        "compiler bug: collision owner is not registered"
-    )
+    owner_typedef = type_table.typedef_of(owner_id)
+    conflicting_typedef = type_table.typedef_of(conflicting_id)
     related = (
         ()
         if conflicting.span is None

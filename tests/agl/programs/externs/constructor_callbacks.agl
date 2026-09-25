@@ -1,0 +1,35 @@
+# Constructor values cross into extern companions as Python callables, just
+# like closures: record, enum member, generic member, and alias constructors.
+
+extern def apply_each[A, B](f: (A) -> B, values: array[A]) -> array[B]
+
+record Point
+  x: int
+
+enum Plain
+  | Ready
+  | Wait(n: int)
+
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+type Count = Slot[int]
+
+type W = Plain::Wait
+
+type Box = Point
+
+program def main(n: int) -> unit =
+  let values = [n, n + 1]
+  print(values.map(Point))
+  print(values.map(Plain::Wait))
+  print(["a%{n}", "b"].map(Slot::Filled))
+  print(values.map(Count::Filled))
+  print(values.map(W))
+  print(values.map(Box))
+  let points = apply_each(Box, values)
+  let waits = apply_each(W, values)
+  print(apply_each(Slot::Filled, ["c%{n}"]))
+  print(apply_each(Count::Filled, values))
+  print("%{points[0].x + points[1].x} %{waits[1].n} %{points[0] == Point(n)}")

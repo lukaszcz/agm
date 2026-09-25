@@ -3532,34 +3532,6 @@ class TestConstructorBindings:
         case = resolved.program.body.items[-1]
         assert case.branches[0].pattern.node_id in resolved.pattern_constructor_candidates
 
-    # --- Enum name is NOT a value (only variants are) ---
-
-    def test_enum_name_used_as_value_is_undefined(self) -> None:
-        """The enum name itself is NOT a value binding — only its variants are.
-
-        default_stdlib=False: this program declares its own ``Option``, which
-        collides with the default prelude's ``std/option::Option[T]``.
-        The point of this test is purely local ("does a bare reference to a
-        locally-declared enum's own name resolve as a value"), independent of
-        any module graph, so nothing else needs to be in scope.
-        """
-        err = reject_scope(
-            "enum Option\n  | none\n  | some\nlet x = Option\nx\n", default_stdlib=False
-        )
-        msg = err.to_diagnostic().message
-        assert "Option" in msg
-        assert "not defined" in msg.lower()
-
-    def test_uppercase_enum_name_not_value(self) -> None:
-        """Enum name 'Option' (uppercase) is still not a value binding.
-
-        default_stdlib=False for the same reason as
-        test_enum_name_used_as_value_is_undefined above.
-        """
-        err = reject_scope("enum Option\n  | None\n  | Some\nOption\n", default_stdlib=False)
-        msg = err.to_diagnostic().message
-        assert "Option" in msg
-
     # --- Case-neutral: lowercase and uppercase behave identically ---
 
     def test_lowercase_constructor_resolves_same_as_uppercase(self) -> None:

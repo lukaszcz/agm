@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import decimal
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, ContextManager, Protocol, TypeVar, assert_never, cast
 
 from agm.agl.eval.arith import (
@@ -174,6 +174,7 @@ from agm.agl.semantics.values import (
     DictValue,
     ExceptionValue,
     Frame,
+    FunctionValue,
     IntValue,
     IrClosureValue,
     IteratorValue,
@@ -937,31 +938,45 @@ class IrInterpreter:
         """Open this interpreter's callback window for one extern invocation."""
         return self._extern_call_window_guard.active()
 
-    def _make_extern_callable_proxy(self, closure: IrClosureValue) -> AglCallableProxy:
-        """Wrap one AgL closure for a companion's synchronous callback."""
+    def _make_extern_callable_proxy(self, function: FunctionValue) -> AglCallableProxy:
+        """Wrap one AgL function value for a companion's synchronous callback."""
 
         def invoke(args: tuple[Value, ...]) -> Value:
-            return self._invoke_crossed_closure(closure, args)
+            return self._invoke_crossed_function(function, args)
 
         return AglCallableProxy(
-            arity=len(self._program.functions[closure.function_id].params),
-            closure=closure,
+            arity=len(
+                self._program.nominals[function.nominal].fields
+                if isinstance(function, ConstructorValue)
+                else self._program.functions[function.function_id].params
+            ),
+            function=function,
             require_active_window=self._extern_call_window_guard.require_active,
             invoke=invoke,
         )
 
-    def _invoke_crossed_closure(self, closure: IrClosureValue, args: tuple[Value, ...]) -> Value:
+    def _construct(self, constructor: ConstructorValue, values: Sequence[Value]) -> RecordValue:
+        """Build *constructor*'s record from its field values, in declaration order."""
+        fields = self._program.nominals[constructor.nominal].fields
+        return RecordValue(
+            nominal=constructor.nominal, fields=dict(zip(fields, values, strict=True))
+        )
+
+    def _invoke_crossed_function(self, function: FunctionValue, args: tuple[Value, ...]) -> Value:
         """Re-enter this interpreter to execute an AgL callback from an extern.
 
-        A callback has no AgL call site of its own -- it is invoked directly
-        by the companion holding it, not through an ``IrCall`` node -- so it
-        is attributed to the enclosing active call's own span (the outer call
-        that handed the companion this closure in the first place, ``None``
-        outside any active call). An extern callback resolves that further
-        through :meth:`_extern_trace_span`, exactly like an ordinary extern
-        call, in case the outer span still lies inside its own package.
+        A constructor builds its record. A closure's callback has no AgL call
+        site of its own -- it is invoked directly by the companion holding it,
+        not through an ``IrCall`` node -- so it is attributed to the enclosing
+        active call's own span (the outer call that handed the companion this
+        closure in the first place, ``None`` outside any active call). An
+        extern callback resolves that further through
+        :meth:`_extern_trace_span`, exactly like an ordinary extern call, in
+        case the outer span still lies inside its own package.
         """
-        desc = self._program.functions[closure.function_id]
+        if isinstance(function, ConstructorValue):
+            return self._construct(function, args)
+        desc = self._program.functions[function.function_id]
         match desc.impl:
             case ExternFunctionBody() as extern:
                 return self._effects.eval_extern_call(
@@ -971,7 +986,7 @@ class IrInterpreter:
                 self._check_call_depth()
                 previous_module = self._enter_call(desc.module_id, active_call_span())
                 try:
-                    return self._bind_and_invoke(desc, body, closure, list(args))
+                    return self._bind_and_invoke(desc, body, function, list(args))
                 finally:
                     self._exit_call(previous_module)
             case other:  # pragma: no cover
@@ -1123,12 +1138,7 @@ class IrInterpreter:
         """
         callee_val = self._eval(callee_expr)
         if isinstance(callee_val, ConstructorValue):
-            constructor_desc = self._program.nominals[callee_val.nominal]
-            fields = {
-                name: self._eval(argument)
-                for name, argument in zip(constructor_desc.fields, arguments, strict=True)
-            }
-            return RecordValue(nominal=callee_val.nominal, fields=fields)
+            return self._construct(callee_val, [self._eval(argument) for argument in arguments])
         callee_val = cast(IrClosureValue, callee_val)
 
         desc = self._program.functions[callee_val.function_id]

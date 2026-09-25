@@ -1,0 +1,32 @@
+# An alias parameter its target never mentions constrains nothing, so the
+# alias constructs, is used as a value, and raises without an explicit type
+# argument; one supplied explicitly is accepted and has no effect.
+
+record Point
+  x: int
+
+type PhP[X] = Point
+
+exception Failed extends Exception
+  code: int
+
+type PhE[X] = Failed
+
+enum Src[T]
+  | Mem(v: T)
+  | Nil
+
+type PhS[X] = Src[int]
+
+def check(code: int) -> int =
+  try
+    if code > 0 => raise PhE(message = "failed", code = code) else => code
+  catch Failed as e =>
+    e.code * 10
+
+program def main(start: int) -> unit =
+  let make = PhP
+  let points = [PhP(x = start), make(start + 1), PhP::PhP(x = start + 2), PhP::[text](x = start + 3)]
+  let slot: Src[int] = PhS::Mem(v = start)
+  print(points.map(fn p => p.x))
+  print("%{check(start)} %{slot is PhS::Mem}")

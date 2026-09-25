@@ -1,0 +1,12 @@
+enum Tree
+  | Leaf
+  | Node(n: int)
+
+scope s
+  exception Bad
+    code: int
+end s
+
+program def main() -> unit =
+  let t: Tree = Tree::Leaf
+  print(t is s::Bad)

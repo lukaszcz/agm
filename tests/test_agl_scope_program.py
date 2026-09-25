@@ -31,6 +31,7 @@ from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_progr
 from agm.agl.scope.symbols import AglScopeError, BinderKind, ReceiverOwner
 from agm.agl.semantics.values import IntValue
 from agm.agl.syntax.nodes import AssignStmt, Case, ConstructorPattern, FuncDef, VarPattern, VarRef
+from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests._timeouts import fail_if_slow
 from tests.agl.ir_harness import (
@@ -2090,11 +2091,10 @@ class TestTypeDeclarationsInModules:
             resolve_program(graph)
 
     def test_nonconstructible_alias_yields_to_repl_session_binding(self, tmp_path: Path) -> None:
-        """A prior REPL session binding shadows a same-named nonconstructible alias.
+        """A prior REPL session binding keeps its value beside a same-named nonconstructible alias.
 
-        Mirrors ``_define_constructor_bindings``'s own parent-shadow rule: an
-        ordinary session binding keeps its expression-position meaning rather
-        than being silently replaced by the new entry's alias.
+        The alias lives only in the type namespace, so the session binding
+        keeps its expression-position meaning.
         """
         prior_resolved = resolve_repl_entry("let Palette = 42\nPalette")
         session_scope = prior_resolved.root_scope
@@ -2611,7 +2611,8 @@ class TestQualifiedConstructorReferences:
 
         assert resolve_program(graph).entry_id == ENTRY_ID
 
-    def test_non_constructible_qualified_type_errors(self, tmp_path: Path) -> None:
+    def test_non_constructible_qualified_type_is_a_type_name(self, tmp_path: Path) -> None:
+        """A structural alias qualifying a constructor is a type name, as a local one is."""
         graph = _make_graph_from_files(
             tmp_path,
             {
@@ -2619,7 +2620,19 @@ class TestQualifiedConstructorReferences:
                 "entry": "import mylib::*\nlet x = mylib::Alias::Ctor\nx",
             },
         )
-        with pytest.raises(AglScopeError, match="constructible"):
+        with pytest.raises(AglTypeError):
+            resolve_program(graph)
+
+    def test_qualified_non_type_owns_no_constructor(self, tmp_path: Path) -> None:
+        """A route member that is not a type cannot qualify a constructor."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "mylib": "def compute() -> int = 1",
+                "entry": "import mylib::*\nlet x = mylib::compute::Ctor\nx",
+            },
+        )
+        with pytest.raises(AglScopeError):
             resolve_program(graph)
 
     def test_non_type_exported_name_in_field_access_falls_through(self, tmp_path: Path) -> None:

@@ -1,0 +1,7 @@
+record Box[T]
+  value: T
+
+type B = Box[int]
+
+program def main() -> unit =
+  print(B::B(value = "s"))

@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "each_spelling_builds_the_aliased_box",
+      "params": {
+        "start": 1
+      },
+      "expect": {
+        "stdout": "[1, 2, 3]\nt1 1\n"
+      }
+    },
+    {
+      "name": "negative_start_keeps_the_order",
+      "params": {
+        "start": -5
+      },
+      "expect": {
+        "stdout": "[-5, -4, -3]\nt-5 -5\n"
+      }
+    }
+  ]
+}

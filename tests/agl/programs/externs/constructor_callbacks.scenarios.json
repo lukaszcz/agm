@@ -1,0 +1,31 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_values_cross_as_callables",
+      "params": {
+        "n": 1
+      },
+      "expect": {
+        "stdout": "[Point(x = 1), Point(x = 2)]\n[Plain::Wait(n = 1), Plain::Wait(n = 2)]\n[Slot::Filled(value = \"a1\"), Slot::Filled(value = \"b\")]\n[Slot::Filled(value = 1), Slot::Filled(value = 2)]\n[Plain::Wait(n = 1), Plain::Wait(n = 2)]\n[Point(x = 1), Point(x = 2)]\n[Slot::Filled(value = \"c1\")]\n[Slot::Filled(value = 1), Slot::Filled(value = 2)]\n3 2 true\n"
+      }
+    },
+    {
+      "name": "negative_values_cross_as_callables",
+      "params": {
+        "n": -3
+      },
+      "expect": {
+        "stdout": "[Point(x = -3), Point(x = -2)]\n[Plain::Wait(n = -3), Plain::Wait(n = -2)]\n[Slot::Filled(value = \"a-3\"), Slot::Filled(value = \"b\")]\n[Slot::Filled(value = -3), Slot::Filled(value = -2)]\n[Plain::Wait(n = -3), Plain::Wait(n = -2)]\n[Point(x = -3), Point(x = -2)]\n[Slot::Filled(value = \"c-3\")]\n[Slot::Filled(value = -3), Slot::Filled(value = -2)]\n-5 -2 true\n"
+      }
+    },
+    {
+      "name": "zero_crosses_as_callables",
+      "params": {
+        "n": 0
+      },
+      "expect": {
+        "stdout": "[Point(x = 0), Point(x = 1)]\n[Plain::Wait(n = 0), Plain::Wait(n = 1)]\n[Slot::Filled(value = \"a0\"), Slot::Filled(value = \"b\")]\n[Slot::Filled(value = 0), Slot::Filled(value = 1)]\n[Plain::Wait(n = 0), Plain::Wait(n = 1)]\n[Point(x = 0), Point(x = 1)]\n[Slot::Filled(value = \"c0\")]\n[Slot::Filled(value = 0), Slot::Filled(value = 1)]\n1 1 true\n"
+      }
+    }
+  ]
+}

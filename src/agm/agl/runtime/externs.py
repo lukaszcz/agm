@@ -56,7 +56,7 @@ from agm.agl.semantics.values import (
     ArrayValue,
     ContractValue,
     DictValue,
-    IrClosureValue,
+    FunctionValue,
     TextValue,
     Value,
 )
@@ -211,7 +211,7 @@ class _CompanionRuntime:
     def active_span(self) -> "Location | None":
         """The span of the extern call active in this context, if any.
 
-        Read by ``IrInterpreter._invoke_crossed_closure`` for a companion
+        Read by ``IrInterpreter._invoke_crossed_function`` for a companion
         callback that is itself an extern: it has no AgL call site of its
         own, so it inherits the outer call's span instead.
         """
@@ -383,31 +383,31 @@ class ExternCallWindow:
         )
 
 
-class _ClosureInvoker(Protocol):
-    """The evaluator-owned execution hook for one crossed AgL closure."""
+class _FunctionInvoker(Protocol):
+    """The evaluator-owned execution hook for one crossed AgL function value."""
 
     def __call__(self, args: tuple[Value, ...]) -> Value: ...
 
 
 class AglCallableProxy:
-    """A Python callable backed by an AgL closure during an extern call.
+    """A Python callable backed by an AgL function value during an extern call.
 
     The evaluator supplies execution while this runtime-side adapter owns
     Python argument/result conversion and the invocation-window guard.
     """
 
-    __slots__ = ("_arity", "_closure", "_require_active_window", "_invoke")
+    __slots__ = ("_arity", "_function", "_require_active_window", "_invoke")
 
     def __init__(
         self,
         *,
         arity: int,
-        closure: IrClosureValue,
+        function: FunctionValue,
         require_active_window: Callable[[], None],
-        invoke: _ClosureInvoker,
+        invoke: _FunctionInvoker,
     ) -> None:
         self._arity = arity
-        self._closure = closure
+        self._function = function
         self._require_active_window = require_active_window
         self._invoke = invoke
 
@@ -715,7 +715,7 @@ class ExternRegistry:
         *,
         nominals: BuiltinNominals,
         descriptors: ValueDescriptors,
-        function_encoder: Callable[[IrClosureValue], object] | None = None,
+        function_encoder: Callable[[FunctionValue], object] | None = None,
         active_call: ActiveCall | None = None,
         contracts: Mapping[ContractId, TargetContractRequest] | None = None,
     ) -> Value:
@@ -749,8 +749,9 @@ class ExternRegistry:
         call so ``runtime.state``/``runtime.trace`` inside *fn* reach them;
         absent direct callers use detached host state and a no-op trace
         instead.
-        *function_encoder* turns an AgL closure into a callable proxy and is
-        published for the call's extent, so every closure a companion reaches
+        *function_encoder* turns an AgL function value (a closure or a
+        constructor) into a callable proxy and is published for the call's
+        extent, so every function value a companion reaches
         -- through an argument, a retained view, or a nested container --
         encodes through the interpreter it is running under. Like
         *active_call*, it is scoped to this call's context: a thread the

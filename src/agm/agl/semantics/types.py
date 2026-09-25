@@ -51,7 +51,7 @@ import enum as _enum
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from itertools import count
-from typing import TypeGuard, assert_never
+from typing import TypeGuard, assert_never, overload
 
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
 from agm.agl.ir.reserved_nominals import require_reserved_nominal_id as _reserved_id
@@ -450,10 +450,6 @@ class TypeTemplate:
 
     template: Type
     type_params: tuple[str, ...] = ()
-
-    def match(self, concrete: Type) -> TypeTemplateMatch | None:
-        """Match this template exactly against one concrete semantic type."""
-        return match_type_template(self.template, concrete, self.type_params)
 
 
 @dataclass(frozen=True, slots=True)
@@ -920,8 +916,24 @@ def free_type_vars(t: Type) -> frozenset[str]:
     return frozenset(node.name for node in iter_type(t) if isinstance(node, TypeVarType))
 
 
+@overload
+def substitute(t: FunctionType, subst: Mapping[str, Type]) -> FunctionType: ...
+
+
+@overload
+def substitute(t: RecordType, subst: Mapping[str, Type]) -> RecordType: ...
+
+
+@overload
+def substitute(t: Type, subst: Mapping[str, Type]) -> Type: ...
+
+
 def substitute(t: Type, subst: Mapping[str, Type]) -> Type:
-    """Capture-free substitution of rigid ``TypeVarType`` names only."""
+    """Capture-free substitution of rigid ``TypeVarType`` names only.
+
+    Only a type variable is replaced wholesale, so a function stays a function
+    and a record stays a record.
+    """
 
     def replace_rigid(node: Type) -> Type:
         if isinstance(node, TypeVarType):
@@ -1135,7 +1147,7 @@ HOST_MINTED_PRELUDE_TYPE_IDS: frozenset[int] = frozenset(
     _reserved_id(name) for name in HOST_MINTED_PRELUDE_TYPE_NAMES
 )
 
-BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
+BUILTIN_PRELUDE_TYPES: dict[str, RecordType | EnumType | ExceptionType] = {
     "ExecResult": _EXEC_RESULT_TYPE,
     "ParsePolicy": _PARSE_POLICY_TYPE,
     "Agent": _AGENT_TYPE,

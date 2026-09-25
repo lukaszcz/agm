@@ -20,7 +20,7 @@ from collections.abc import Callable
 import pytest
 
 from agm.agl import artifact_serialization
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.type_table import MethodDef
 from agm.agl.semantics.types import (
     EnumType,
@@ -35,7 +35,6 @@ from agm.agl.typecheck import env as env_module
 from agm.agl.typecheck.env import (
     AliasFact,
     BindingTypeFact,
-    ConstructorSignature,
     EnvironmentFact,
     EnvironmentFacts,
     FunctionSignature,
@@ -43,7 +42,6 @@ from agm.agl.typecheck.env import (
     TypeEnvironment,
     TypeFact,
 )
-from agm.agl.zones import ParamZone
 from tests._agl_helpers import dummy_span
 from tests.agl.module_graph import check_resolved, resolve_inline_entry
 
@@ -57,15 +55,6 @@ _WIDGET_GENERIC_DEF = GenericTypeDef(
     kind="record", type_params=("T",), template=RecordType(name="Widget")
 )
 _ALIAS_TARGET = IntT(span=dummy_span(), node_id=1)
-_BOX2_RECORD_TYPE = RecordType(name="Box2")
-_BOX2_CTOR_SIG = ConstructorSignature(
-    owner_name="Box2",
-    field_names=("value",),
-    field_templates=(IntType(),),
-    result_template=_BOX2_RECORD_TYPE,
-    type_params=(),
-)
-_FIELD_KINDS = (("value", ParamZone.STANDARD),)
 _METHOD_OWNER = RecordType(name="Box3", decl_id=909)
 _OWNED_METHOD = MethodDef(
     module_id=ENTRY_ID,
@@ -150,27 +139,6 @@ def _query_register_alias(env: TypeEnvironment) -> object:
     )
 
 
-def _record_register_constructor_signature(env: TypeEnvironment) -> None:
-    env.register_constructor_signature(_BOX2_CTOR_SIG)
-
-
-def _query_register_constructor_signature(env: TypeEnvironment) -> object:
-    return env.get_constructor_signature("Box2")
-
-
-def _record_register_constructor_field_kinds(env: TypeEnvironment) -> None:
-    env.register_constructor_field_kinds(
-        "Widget", _FIELD_KINDS, scope_path=("Scoped",), module_id=ENTRY_ID, decl_id=707
-    )
-
-
-def _query_register_constructor_field_kinds(env: TypeEnvironment) -> object:
-    return (
-        env.get_constructor_field_kinds("Widget", scope_path=("Scoped",)),
-        env.get_constructor_field_kinds_for_type(RecordType(name="Widget", decl_id=707), "Widget"),
-    )
-
-
 def _setup_unregister_name(env: TypeEnvironment) -> None:
     env.register_generic_type("Retired", _WIDGET_GENERIC_DEF)
 
@@ -248,16 +216,6 @@ _SCENARIOS: tuple[_Scenario, ...] = (
     _Scenario("register_type", _record_register_type, _query_register_type),
     _Scenario("register_generic_type", _record_register_generic_type, _query_register_generic_type),
     _Scenario("register_alias", _record_register_alias, _query_register_alias),
-    _Scenario(
-        "register_constructor_signature",
-        _record_register_constructor_signature,
-        _query_register_constructor_signature,
-    ),
-    _Scenario(
-        "register_constructor_field_kinds",
-        _record_register_constructor_field_kinds,
-        _query_register_constructor_field_kinds,
-    ),
     _Scenario(
         "unregister_name",
         _record_unregister_name,
@@ -372,29 +330,6 @@ class TestFactForwarding:
 
 
 # ---------------------------------------------------------------------------
-# Constructor field kinds: module-id keying
-# ---------------------------------------------------------------------------
-
-
-class TestConstructorFieldKindsModuleId:
-    def test_replay_records_the_resolved_module_id_for_cross_module_lookup(self) -> None:
-        lib_id = ModuleId(("lib",))
-        source = TypeEnvironment(module_id=lib_id)
-        source.begin_facts()
-        source.register_constructor_field_kinds("Widget", _FIELD_KINDS, scope_path=("Scoped",))
-        facts = source.own_facts()
-
-        target = TypeEnvironment()
-        target.replay(facts)
-
-        assert (
-            target.get_constructor_field_kinds("Widget", scope_path=("Scoped",), module_id=lib_id)
-            == _FIELD_KINDS
-        )
-        assert target.get_constructor_field_kinds("Widget", scope_path=("Scoped",)) is None
-
-
-# ---------------------------------------------------------------------------
 # Journal lifecycle
 # ---------------------------------------------------------------------------
 
@@ -429,28 +364,6 @@ class TestJournalLifecycle:
         assert header_facts.entries == (TypeFact(name="Header", typ=RecordType(name="Header")),)
         assert env.own_facts().entries == (BindingTypeFact(node_id=804, typ=IntType()),)
 
-    def test_end_facts_before_begin_facts_raises(self) -> None:
-        env = TypeEnvironment()
-        with pytest.raises(AssertionError):
-            env.end_facts()
-
-    def test_own_facts_before_begin_facts_raises(self) -> None:
-        env = TypeEnvironment()
-        with pytest.raises(AssertionError):
-            env.own_facts()
-
-    def test_begin_facts_twice_raises(self) -> None:
-        env = TypeEnvironment()
-        env.begin_facts()
-        with pytest.raises(AssertionError):
-            env.begin_facts()
-
-    def test_begin_facts_on_a_sealed_environment_raises(self) -> None:
-        env = TypeEnvironment()
-        env.seal()
-        with pytest.raises(AssertionError):
-            env.begin_facts()
-
     def test_own_facts_is_stable_after_seal(self) -> None:
         env = TypeEnvironment()
         env.begin_facts()
@@ -476,12 +389,6 @@ class TestJournalLifecycle:
         env.seal()
 
         assert env.own_facts() == facts
-
-    def test_replay_of_empty_facts_onto_a_sealed_environment_raises(self) -> None:
-        target = TypeEnvironment()
-        target.seal()
-        with pytest.raises(AssertionError):
-            target.replay(EnvironmentFacts())
 
 
 # ---------------------------------------------------------------------------
@@ -573,5 +480,4 @@ class TestModulePathNeverJournals:
     def test_module_path_checking_never_starts_a_journal(self) -> None:
         """A real single-module check never opens the journal window."""
         checked = check_resolved(resolve_inline_entry("def value() -> int = 1"))
-        with pytest.raises(AssertionError):
-            checked.type_env.own_facts()
+        assert checked.type_env.own_facts() == EnvironmentFacts()

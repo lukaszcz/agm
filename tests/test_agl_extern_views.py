@@ -182,7 +182,7 @@ def test_companion_constructed_view_encodes_any_closure_through_the_active_encod
     def encode(closure: IrClosureValue) -> object:
         return AglCallableProxy(
             arity=1,
-            closure=closure,
+            function=closure,
             require_active_window=window.require_active,
             invoke=lambda _args: results[closure.function_id],
         )
@@ -291,7 +291,7 @@ def test_view_retained_past_a_call_reads_plain_fields_but_not_a_function_field()
     def encode(closure: IrClosureValue) -> object:
         return AglCallableProxy(
             arity=0,
-            closure=closure,
+            function=closure,
             require_active_window=window.require_active,
             invoke=lambda _args: IntValue(7),
         )

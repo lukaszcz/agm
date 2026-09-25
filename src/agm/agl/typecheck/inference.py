@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import overload
 
 from agm.agl.diagnostics import AglError
 from agm.agl.semantics.type_table import TypeTable
@@ -20,6 +21,7 @@ from agm.agl.semantics.types import (
     BottomType,
     DictType,
     EnumType,
+    ExceptionType,
     FunctionType,
     InferenceVarType,
     RecordType,
@@ -179,8 +181,21 @@ class InferenceEngine:
         """
         self._complete(inferred, context, origin)
 
+    @overload
+    def zonk(self, typ: FunctionType) -> FunctionType: ...
+
+    @overload
+    def zonk[N: RecordType | EnumType | ExceptionType](self, typ: N) -> N: ...
+
+    @overload
+    def zonk(self, typ: Type) -> Type: ...
+
     def zonk(self, typ: Type) -> Type:
-        """Recursively replace flexible links with their final known solutions."""
+        """Recursively replace flexible links with their final known solutions.
+
+        Only a flexible variable is replaced wholesale, so a function or nominal
+        keeps its kind.
+        """
         if isinstance(typ, InferenceVarType):
             root = self._find(typ)
             solution = self._solution.get(root)
@@ -432,8 +447,6 @@ class InferenceEngine:
         self._next_variable += 1
 
     def _find(self, variable: InferenceVarType) -> InferenceVarType:
-        if variable not in self._parent:
-            raise AssertionError("inference variable is not owned by this engine")
         parent = self._parent[variable]
         if parent != variable:
             parent = self._find(parent)
@@ -529,9 +542,11 @@ class InferenceEngine:
         if earlier:
             bindings = [origin_ for origin_ in earlier if evidence[origin_]]
             first = bindings[0] if bindings else earlier[0]
-            label = first.type_param or first.subject
+            cause = f"constrained by {first.role.value} '{first.subject}'"
             related_message = (
-                f"{label} was first constrained by {first.role.value} '{first.subject}'."
+                f"First {cause}."
+                if first.type_param is None
+                else f"{first.type_param} was first {cause}."
             )
             related = ((related_message, first.span),)
         raise InferenceError(

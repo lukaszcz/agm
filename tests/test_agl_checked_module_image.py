@@ -314,20 +314,27 @@ class TestRehydrationParity:
             )
             assert rehydrated_module.type_env.all_generic_types() == cm.type_env.all_generic_types()
 
-    def test_rehydration_reseals_a_complete_image(
+    def test_rehydrated_module_memoises_its_namespace_queries(
+        self, rehydrated: dict[ModuleId, CheckedModule]
+    ) -> None:
+        """A rehydrated environment is frozen, so whole-namespace queries are computed once."""
+        for module in rehydrated.values():
+            env = module.type_env
+            assert env.enum_owner_forms() is env.enum_owner_forms()
+            assert env.blocked_enum_variants() is env.blocked_enum_variants()
+
+    def test_rehydrated_module_reproduces_its_image(
         self, compiled: _Compiled, rehydrated: dict[ModuleId, CheckedModule]
     ) -> None:
-        """A rehydrated module is sealed and its own image equals the original.
+        """A rehydrated module's own image equals the original.
 
-        ``rehydrate`` ends with ``seal()``: the environment is frozen, and a
-        further ``image()`` call on the rehydrated module -- covering every
+        A further ``image()`` call on the rehydrated module -- covering every
         field, including ``interface`` -- reproduces the image it was built
         from.
         """
         for mid in _non_entry_module_ids(compiled):
             rehydrated_module = rehydrated[mid]
             cm = compiled.checked.modules[mid]
-            assert rehydrated_module.type_env.is_sealed
             assert rehydrated_module.image() == cm.image()
 
 
@@ -390,14 +397,7 @@ def _is_vacuous(value: object) -> bool:
             or value.constructor_patterns
         )
     if isinstance(value, ModuleTypeInterface):
-        return not (
-            value.types
-            or value.generics
-            or value.aliases
-            or value.constructors
-            or value.field_kinds
-            or value.definitions
-        )
+        return not (value.types or value.generics or value.aliases or value.definitions)
     if isinstance(value, EnvironmentFacts):
         return len(value.entries) == 0
     return False
@@ -498,17 +498,10 @@ class TestPublishedModuleSurface:
 
 class TestJournalNeverStartsOutsideProgramChecking:
     def test_repl_seed_environment_is_never_journaled(self) -> None:
-        """A REPL session's seed env is only ever copied from, never mutated.
-
-        ``seed_from`` requires a sealed source; a real session env is sealed
-        by the ``check_program`` run that produced it. Sealing it directly
-        here (skipping ``begin_facts``) is the minimal environment that
-        satisfies that precondition without itself having journaled.
-        """
+        """A REPL session's seed env is only ever copied from, never journaled into."""
         seed_env = TypeEnvironment()
         seed_env.seal()
         resolve_and_check_repl_entry(
             "def value() -> int = 1", base_caps(), seed_env=seed_env, default_stdlib=False
         )
-        with pytest.raises(AssertionError):
-            seed_env.own_facts()
+        assert seed_env.own_facts() == EnvironmentFacts()

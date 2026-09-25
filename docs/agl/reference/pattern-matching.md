@@ -134,9 +134,12 @@ members only. A bare name for a member that has fields is a static error:
 write `Fail()` to ignore its fields or destructure them. Empty parentheses
 ignore every field, including named-only fields. The call and qualified forms
 apply to every member record and to standalone records; the bare form is a
-convenience for the common fieldless case. A local record constructor such as
+convenience for the common fieldless case. A record constructor such as
 `Record(…)` is an unqualified call form; its owner-qualified form repeats the
-record name: `Record::Record(…)`.
+record name, `Record::Record(…)`, and either position may instead name an
+alias leading to the record. A pattern spelled through an alias matches the
+declaration the alias denotes, at the alias's type arguments (see
+[Type aliases](types.md#type-aliases)).
 
 Constructor ownership in patterns is directed by the scrutinee's static
 nominal type. When two enums contribute the same unqualified member spelling,

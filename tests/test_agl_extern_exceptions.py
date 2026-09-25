@@ -37,7 +37,7 @@ def _raising_proxy(window: ExternCallWindow, problem: ExceptionValue) -> AglCall
 
     return AglCallableProxy(
         arity=0,
-        closure=IrClosureValue(FunctionId(1), ()),
+        function=IrClosureValue(FunctionId(1), ()),
         require_active_window=window.require_active,
         invoke=invoke,
     )

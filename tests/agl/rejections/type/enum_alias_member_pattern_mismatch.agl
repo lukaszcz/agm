@@ -1,0 +1,11 @@
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+type Count = Slot[int]
+
+program def main() -> unit =
+  let slot: Slot[text] = Slot::Filled(value = "three")
+  case slot of
+    | Count::Filled(value) => print value
+    | _ => print "none"

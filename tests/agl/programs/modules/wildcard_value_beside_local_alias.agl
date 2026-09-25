@@ -1,0 +1,11 @@
+# A local alias shares its spelling with a function a wildcard import brings
+# in: the alias names the type, the imported function the value.
+import lib::*
+
+type paint = int
+
+def twice(n: paint) -> paint = n * 2
+
+program def main(start: int) -> unit =
+  let base: paint = twice(start)
+  print(paint(base))

@@ -715,7 +715,7 @@ def test_a_corrupted_binding_replay_fails_a_rehydrated_module_via_env_assert_clo
     """``TypeEnvironment.assert_closed()`` catches a broken-journal binding leak.
 
     A rehydrated module is never added to ``check_program``'s
-    ``reused_modules``, so ``assert_checked_module_closed`` validates it like a
+    ``reused_modules``, so ``assert_checked_module_output_closed`` validates it like a
     freshly checked one -- specifically, the ``module.type_env.assert_closed()``
     half of that check, since ``set_binding_type`` mutates the type
     environment, not any of the ``CheckedModule`` fields
@@ -768,7 +768,7 @@ def test_a_corrupted_node_types_entry_fails_a_rehydrated_module_via_output_close
     the sibling test above corrupts a binding instead, which that other check
     alone catches. Wrapping ``retained_checked_modules`` to inject a stray
     inference variable into a served image's ``node_types`` proves the two
-    checks ``_assert_checked_module_closed`` runs cover disjoint data: this
+    checks ``assert_checked_module_output_closed`` runs cover disjoint data: this
     corruption is invisible to ``env.assert_closed()`` and is caught only by
     ``assert_checked_output_closed``.
     """
@@ -822,19 +822,19 @@ def test_an_in_memory_reused_module_skips_closure_validation(
     It is the very object an earlier ``check_program`` call already sealed and
     validated; re-walking it on every subsequent compilation that imports it
     would be pure waste. Only a rehydrated or freshly checked module reaches
-    ``_assert_checked_module_closed``.
+    ``assert_checked_module_output_closed``.
     """
     calls: list[ModuleId] = []
     from agm.agl.typecheck import program as program_module
 
-    original = program_module._assert_checked_module_closed
+    original = program_module.assert_checked_module_output_closed
 
     def spied_assert_checked_module_closed(module: CheckedModule) -> None:
         calls.append(module.module_id)
         original(module)
 
     monkeypatch.setattr(
-        program_module, "_assert_checked_module_closed", spied_assert_checked_module_closed
+        program_module, "assert_checked_module_output_closed", spied_assert_checked_module_closed
     )
 
     graph = make_inline_graph_from_files(

@@ -368,7 +368,7 @@ determines whether it denotes a type, a value, or a constructor
 how it is declared and the position it appears in.
 
 AgL keeps **two namespaces**: a *type* namespace and a *value* namespace. A
-name may exist in both at once without collision. A `record` or `enum`
+name may exist in both at once without collision. A `record` or `exception`
 declaration introduces a type name *and* a same-spelled value binding for its
 constructor:
 
@@ -379,6 +379,26 @@ record Box[T]
 # 'Box' the constructor lives in the value namespace.
 let b: Box[int] = Box(value = 1)
 ```
+
+An enum, an alias of an enum, and an alias of a structural type have no
+constructor of their own (an enum's members are its constructors); neither
+does an alias whose target is one of its own type parameters, since a type
+parameter shadows any type of the same name (in `type G[Col] = Col`, `Col`
+is the parameter). Such a name lives only in the type namespace, so a value
+of the same spelling — a builtin, an imported function — stays visible
+beside it:
+
+```agl
+enum render
+  | Plain
+  | Fancy
+def show(style: render) -> text =
+  render(1)   # the builtin 'render'
+```
+
+Where no value of that spelling is visible, using the name as a value,
+qualifying a constructor with it, or calling it is a static type error,
+whether the name is declared locally or imported.
 
 ### Constructors in the value namespace
 

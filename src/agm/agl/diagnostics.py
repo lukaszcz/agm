@@ -243,3 +243,26 @@ class AglError(Exception):
             return Diagnostic(message=str(self), line=1, related=related)
         primary = diagnostic_from_span(str(self), self.span)
         return replace(primary, related=related)
+
+
+class AglTypeError(AglError):
+    """A fatal static type error.
+
+    Raised by the type checker on the first type violation.  Carries an
+    optional ``SourceSpan`` for source location.
+    """
+
+
+def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
+    """Return the diagnostic for a type name that denotes no constructor value.
+
+    Raised wherever a type name is found in a value position -- by scope when
+    no value of that name is visible, by typecheck when a constructor
+    position names a type without one -- so the reader is told the same
+    thing wherever the name was written and whatever declared it.
+    """
+    return AglTypeError(
+        f"'{name}' is a type name, not a value; "
+        "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
+        span=span,
+    )

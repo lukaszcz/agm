@@ -1,0 +1,12 @@
+enum Slot[T]
+  | Filled(value: T)
+  | Empty
+
+scope R
+  type Rows[A] = Slot[array[A]]
+end R
+
+program def main(slot: Slot[int]) -> unit =
+  case slot of
+    | R::Rows::Filled(value) => print(value)
+    | _ => print("none")

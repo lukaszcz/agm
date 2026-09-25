@@ -17,7 +17,6 @@ from agm.agl.syntax.nodes import (
     ExceptionDef,
     ImportDecl,
     ImportItem,
-    QualifierChain,
     RecordDef,
 )
 from agm.agl.syntax.nodes import TypeAlias as TypeAliasDecl
@@ -50,7 +49,6 @@ __all__ = [
     "qualifier_members",
     "qualifier_scope_paths",
     "render_qualifier",
-    "resolve_alias_target",
     "resolve_qualified",
     "resolve_qualified_member",
     "declares_bare_constructor",
@@ -685,55 +683,6 @@ def try_resolve_qualified_member(
     """Resolve ``qualifier::member``, returning ``None`` for any non-unique verdict."""
     result = resolve_qualified(env, qualifier, member, anchored=anchored)
     return result.qname if isinstance(result, QualResolutionFound) else None
-
-
-def resolve_alias_target(
-    name: str,
-    qualifier: QualifierChain | None,
-    *,
-    self_module_id: ModuleId | None,
-    import_env: ImportEnv,
-    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAliasDecl],
-    scope_path: PathAtom = (),
-) -> RecordDef | EnumDef | ExceptionDef | TypeAliasDecl | None:
-    """Resolve one type-alias target reference through a module's import environment.
-
-    Shared by the scope resolver and the program-level cross-module constructor
-    pre-pass so both judge a type alias's constructibility (see
-    :func:`~agm.agl.scope.symbols.alias_denotes_constructible_type`) the same
-    way for a target reached through an import rather than a same-module
-    declaration.
-
-    For an unqualified *name*, tries *self_module_id*'s own declaration under
-    *scope_path* first (when *self_module_id* is given — a caller that
-    already checked richer local state passes ``self_module_id=None`` to skip
-    this step), then the unqualified name exposed by *import_env*'s import
-    tails. For a qualified *name*, resolves through the ordinary
-    qualified-member route.
-
-    Returns ``None`` for anything it cannot resolve — an ambiguous
-    unqualified name or an unknown route — which the caller treats as
-    "presumed constructible".
-    """
-    if qualifier is None or not qualifier.segments:
-        if self_module_id is not None:
-            local = all_public_types.get((self_module_id, _atom((*scope_path, name))))
-            if local is not None:
-                return local
-        qnames = import_env.unqualified.get(name)
-        if qnames is None or len(qnames) != 1:
-            return None
-        (qname,) = qnames
-        return all_public_types.get(qname)
-    qualified = try_resolve_qualified_member(
-        import_env,
-        qualifier.route_segments,
-        name,
-        anchored=qualifier.anchored,
-    )
-    if qualified is None:
-        return None
-    return all_public_types.get(qualified)
 
 
 def resolve_qualified_member(

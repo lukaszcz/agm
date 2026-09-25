@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from typing import cast
 
 from agm.agl.ir.reserved_nominals import reserved_nominal_id
 from agm.agl.modules.ids import RESERVED_ID
@@ -122,8 +123,7 @@ def contract_for_typedef(
         )
         for member in typedef.members
     )
-    normalized_base = None if base_type is None else normalize(base_type)
-    assert normalized_base is None or isinstance(normalized_base, ExceptionType)
+    normalized_base = None if base_type is None else cast(ExceptionType, normalize(base_type))
     return BuiltinTypeContract(
         kind=typedef.kind,
         name=typedef.name,
@@ -143,13 +143,9 @@ def _canonical_contracts(
     """Project seeded definitions once; their nominal paths remain runtime-only."""
     contracts: dict[str, BuiltinTypeContract] = {}
     for name, typedef in definitions.items():
-        base_type: ExceptionType | None = None
-        if typedef.base is not None:
-            base_def = table.get_by_id(typedef.base)
-            assert base_def is not None
-            base_handle = base_def.handle()
-            assert isinstance(base_handle, ExceptionType)
-            base_type = base_handle
+        base_type = (
+            None if typedef.base is None else table.typedef_of(typedef.base).exception_handle()
+        )
         contracts[name] = contract_for_typedef(typedef, table, base_type=base_type)
     return contracts
 

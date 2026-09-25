@@ -23,7 +23,6 @@ _TABLE_CLASSES = frozenset(
         ("agm.agl.semantics.type_table", "TypeTable"),
         ("agm.agl.semantics.persistent", "PersistentDict"),
         ("agm.agl.typecheck.env", "TypeEnvironment"),
-        ("agm.agl.typecheck.program", "_DeclKeyDict"),
     }
 )
 _DATA_MODULES = (

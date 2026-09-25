@@ -226,18 +226,15 @@ def test_lowering_validates_ir_when_enabled() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_disabled_validation_still_seals_the_checked_type_env(
+def test_disabled_validation_still_memoises_checked_namespace_queries(
     self_validation_disabled: None,
 ) -> None:
-    """Sealing is functional state, not a self-check, so it survives being disabled.
+    """A checked environment is frozen whether or not it also re-verifies itself."""
+    env = resolve_and_check_inline_entry(_MATCH_SOURCE, base_caps()).type_env
 
-    ``TypeEnvironment.seal`` freezes the environment (gating further mutation and
-    enabling memoization/seeding) independently of whether it also re-verifies
-    itself; a checked module's ``type_env`` must come out sealed either way.
-    """
-    checked = resolve_and_check_inline_entry(_SOURCE, base_caps())
-
-    assert checked.type_env.is_sealed is True
+    assert env.enum_owner_forms()
+    assert env.enum_owner_forms() is env.enum_owner_forms()
+    assert env.blocked_enum_variants() is env.blocked_enum_variants()
 
 
 def test_disabled_validation_skips_the_inference_region_leak_check(

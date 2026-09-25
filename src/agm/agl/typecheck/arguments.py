@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Generic, TypeVar, assert_never
+from typing import Generic, TypeVar, assert_never, cast
 
 from agm.agl.semantics import arguments as pure
 from agm.agl.syntax.nodes import (
@@ -229,8 +229,8 @@ def bind_constructor_args[A: CallArg](
     Parameters
     ----------
     field_kinds:
-        Ordered ``(field_name, ParamZone)`` pairs from the constructor's
-        field-kinds registry — produced by ``get_constructor_field_kinds``.
+        Ordered ``(field_name, ParamZone)`` pairs of the constructor's fields
+        (``TypeTable.field_kinds``).
     positional:
         Positional argument expressions in source order.
     named:
@@ -267,13 +267,9 @@ def bind_constructor_args[A: CallArg](
         call_span=call_span,
         context_desc=context_desc,
     )
-    # Every field has has_default=False, so bind_arguments either fills every
-    # entry or raises MISSING_REQUIRED — the None branch is unreachable here.
-    return {
-        fname: bound_expr
-        for (fname, _fkind), bound_expr in zip(field_kinds, binding)
-        if bound_expr is not None
-    }
+    # No field has a default, so bind_arguments binds every one or raises MISSING_REQUIRED.
+    bound = cast(tuple[A, ...], binding)
+    return {fname: bound_expr for (fname, _fkind), bound_expr in zip(field_kinds, bound)}
 
 
 # ---------------------------------------------------------------------------

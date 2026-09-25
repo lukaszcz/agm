@@ -300,10 +300,12 @@ companion may write any supported boundary value. An unsupported write raises
 
 ## Callbacks
 
-An AgL function passed to an extern is a Python callable. Its Python arguments
-are decoded as ordinary extern return values, and its result is encoded as an
-ordinary extern argument. The companion calls it positionally; its AgL arity
-applies, and Python keyword arguments are not accepted.
+An AgL function passed to an extern is a Python callable. Every function value
+crosses alike, whether a declared function, a lambda, a partial application, or
+a constructor (`Point`, `Slot::Filled`, or one spelled through an alias). Its
+Python arguments are decoded as ordinary extern return values, and its result
+is encoded as an ordinary extern argument. The companion calls it positionally;
+its AgL arity applies, and Python keyword arguments are not accepted.
 
 <!-- agl-check: fragment -->
 ```agl

@@ -1,0 +1,5 @@
+import shapes
+use shapes::{Rows}
+
+program def main(slot: shapes::Slot[int]) -> unit =
+  print(slot is Rows::Filled)

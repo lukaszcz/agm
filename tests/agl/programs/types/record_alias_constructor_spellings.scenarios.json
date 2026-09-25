@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "each_spelling_builds_the_record",
+      "params": {
+        "start": 1
+      },
+      "expect": {
+        "stdout": "[1, 2, 3]\n4 true\n"
+      }
+    },
+    {
+      "name": "negative_start_keeps_the_order",
+      "params": {
+        "start": -2
+      },
+      "expect": {
+        "stdout": "[-2, -1, 0]\n1 true\n"
+      }
+    }
+  ]
+}

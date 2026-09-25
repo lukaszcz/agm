@@ -312,9 +312,7 @@ class TypeDef:
     ``field_kinds`` — each field's own ``ParamZone``, in ``fields`` order;
                    for an exception, its OWN kinds only (see
                    :meth:`TypeTable.field_kinds` for the flattened base
-                   chain). Mirrors the ``TypeEnvironment`` constructor-kind
-                   registry, computed once at the same declaration site and
-                   fed to both.
+                   chain).
     ``is_builtin`` — ``True`` when this entry came from a source ``builtin``
                    declaration, at whatever path it was written. It is
                    metadata about the declaration, not part of its shape, so
@@ -333,8 +331,8 @@ class TypeDef:
                    against a seeded canonical literal must not fail merely
                    because the two carry different declaration identities.
     ``is_inline_enum_member`` — ``True`` for a synthetic record declaration
-                   created by an inline enum member. Its inhabitation is
-                   determined by its enclosing enum rather than independently.
+                   created by an inline enum member, as opposed to a
+                   separately declared record an enum references.
     ``external_name`` — a record's own ``@name``/``@json-name`` spellings
                    (its value-syntax name and its ``$case`` tag as an enum
                    member); unused for enums and exceptions.
@@ -375,37 +373,48 @@ class TypeDef:
         corresponding handle (e.g. to register a value, or to pass to
         :meth:`TypeTable.record_fields`/:meth:`TypeTable.enum_members`/
         :meth:`TypeTable.exception_fields`). *type_args* defaults to ``()``
-        for non-generic defs and must be empty for an exception (exceptions
-        are never generic) — passing a non-empty tuple for one raises
-        ``ValueError``. The returned handle's ``decl_id`` is stamped from
+        for non-generic defs and is empty for an exception (exceptions are
+        never generic). The returned handle's ``decl_id`` is stamped from
         ``self.decl_node_id``.
         """
         match self.kind:
             case "record":
-                return RecordType(
-                    name=self.name,
-                    type_args=type_args,
-                    module_id=self.module_id,
-                    scope_path=self.scope_path,
-                    decl_id=self.decl_node_id,
-                )
+                return self.record_handle(type_args)
             case "enum":
-                return EnumType(
-                    name=self.name,
-                    type_args=type_args,
-                    module_id=self.module_id,
-                    scope_path=self.scope_path,
-                    decl_id=self.decl_node_id,
-                )
+                return self.enum_handle(type_args)
             case "exception":
-                return ExceptionType(
-                    name=self.name,
-                    module_id=self.module_id,
-                    scope_path=self.scope_path,
-                    decl_id=self.decl_node_id,
-                )
+                return self.exception_handle()
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
+
+    def record_handle(self, type_args: tuple[Type, ...] = ()) -> RecordType:
+        """Return the ``RecordType`` handle naming this record ``TypeDef``."""
+        return RecordType(
+            name=self.name,
+            type_args=type_args,
+            module_id=self.module_id,
+            scope_path=self.scope_path,
+            decl_id=self.decl_node_id,
+        )
+
+    def enum_handle(self, type_args: tuple[Type, ...] = ()) -> EnumType:
+        """Return the ``EnumType`` handle naming this enum ``TypeDef``."""
+        return EnumType(
+            name=self.name,
+            type_args=type_args,
+            module_id=self.module_id,
+            scope_path=self.scope_path,
+            decl_id=self.decl_node_id,
+        )
+
+    def exception_handle(self) -> ExceptionType:
+        """Return the ``ExceptionType`` handle naming this exception ``TypeDef``."""
+        return ExceptionType(
+            name=self.name,
+            module_id=self.module_id,
+            scope_path=self.scope_path,
+            decl_id=self.decl_node_id,
+        )
 
 
 class TypeTable:
@@ -484,6 +493,12 @@ class TypeTable:
         # pass over ``_defs``. Whole-table, rebuilt on any registration
         # change; feeds :meth:`exception_descendants`.
         self._exception_children: dict[DeclId, tuple[DeclId, ...]] | None = None
+        # Enum identity -> its inline members by terminal name, each as the
+        # enum's type parameters and the member's handle template over
+        # them. Declaration shells declare
+        # them a phase before the enum's body registers (see
+        # :meth:`declare_inline_member`); a superseded enum keeps its own.
+        self._inline_members: dict[DeclId, dict[str, tuple[tuple[str, ...], RecordType]]] = {}
 
     def register(self, typedef: TypeDef) -> None:
         """Register *typedef* under its own declaration identity.
@@ -525,6 +540,11 @@ class TypeTable:
         self._name_index[(typedef.module_id, typedef.scope_path, typedef.name)] = decl_id
         if existing is None:
             self._defs[decl_id] = typedef
+            if typedef.kind == "enum":
+                member_path = (*typedef.scope_path, typedef.name)
+                for member in typedef.members:
+                    if member.module_id == typedef.module_id and member.scope_path == member_path:
+                        self.declare_inline_member(decl_id, typedef.type_params, member)
             self._standard_builtins = None
             self._host_minted_ids = None
             self._declaration_flags_cache = {}
@@ -537,6 +557,25 @@ class TypeTable:
                 f"conflicting TypeDef registration for identity {decl_id!r}: "
                 f"{existing!r} is already registered, got {typedef!r}"
             )
+
+    def declare_inline_member(
+        self, enum_id: DeclId, type_params: tuple[str, ...], member: RecordType
+    ) -> None:
+        """Record *member*'s handle template as an inline member of enum *enum_id*.
+
+        *member*'s type arguments range over the enum's *type_params*. The
+        builder declares each member from its shell, before the enum's body
+        registers, so :meth:`inline_member` answers while bodies are resolved.
+        """
+        self._inline_members.setdefault(enum_id, {})[member.name] = (type_params, member)
+
+    def inline_member(self, owner: EnumType, name: str) -> RecordType | None:
+        """Return *owner*'s inline member *name* at *owner*'s type arguments, if declared."""
+        declared = self._inline_members.get(owner.decl_id, {}).get(name)
+        if declared is None:
+            return None
+        type_params, member = declared
+        return substitute(member, dict(zip(type_params, owner.type_args, strict=True)))
 
     def get(
         self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
@@ -800,6 +839,10 @@ class TypeTable:
             self._exception_children = index
         return index
 
+    def exception_children(self, decl_id: DeclId) -> tuple[DeclId, ...]:
+        """Return the ids of the exceptions directly extending *decl_id*."""
+        return self._exception_children_index().get(decl_id, ())
+
     def exception_descendants(self, decl_id: DeclId) -> tuple[TypeDef, ...]:
         """Return every exception descending from *decl_id*, breadth-first.
 
@@ -896,7 +939,7 @@ class TypeTable:
                 return cached
         typedef = self._defs[decl_id]
         subst = dict(zip(typedef.type_params, handle.type_args))
-        result = tuple(cast(RecordType, substitute(member, subst)) for member in typedef.members)
+        result = tuple(substitute(member, subst) for member in typedef.members)
         self._enum_members_cache.setdefault(decl_id, {})[handle] = result
         return result
 
@@ -1039,23 +1082,21 @@ class TypeTable:
             if len(bindings) != len(typedef.type_params):
                 continue
             args = tuple(bindings[param] for param in typedef.type_params)
-            owners.append(cast(EnumType, typedef.handle(args)))
+            owners.append(typedef.enum_handle(args))
         return tuple(owners)
 
     def record_matches_enum_member(
-        self, enum: EnumType, member_name: str, record: RecordType
+        self, enum: EnumType, type_params: tuple[str, ...], member_name: str, record: RecordType
     ) -> bool:
-        """Return whether *record* matches the named member of *enum* exactly.
+        """Return whether *record* is the named member of *enum* over *type_params*.
 
-        A generic enum's bare template may qualify any of its instantiations,
-        so free variables still present in its member template are inferred
-        while concrete owner arguments must match exactly.
+        The owner's own *type_params* are inferred; every other owner argument
+        must match exactly.
         """
         member = self.enum_member_names(enum).get(member_name)
         if member is None or member.decl_id != record.decl_id:
             return False
-        parameters = tuple(sorted(free_type_vars(member)))
-        return match_nominal_owner_template(TypeTemplate(member, parameters), record) is not None
+        return match_nominal_owner_template(TypeTemplate(member, type_params), record) is not None
 
     def is_enum_member(self, handle: RecordType) -> bool:
         """Return whether *handle* names a declaration registered as an enum member.
@@ -1310,7 +1351,7 @@ class TypeTable:
         if published is not None:
             return published
         standard = self.standard_builtin_declaration("Exception")
-        return EXCEPTION_BASE if standard is None else cast(ExceptionType, standard.handle())
+        return EXCEPTION_BASE if standard is None else standard.exception_handle()
 
     def option_handle(self, argument: Type, *, standard: bool = False) -> EnumType:
         """Return the ``Option[argument]`` handle this program's ``Option`` names.
@@ -1328,7 +1369,7 @@ class TypeTable:
             if standard
             else self.builtin_declaration("Option")
         ) or OPTION_TYPE_DEF
-        return cast(EnumType, declaration.handle((argument,)))
+        return declaration.enum_handle((argument,))
 
     def standard_builtin_declarations(self) -> Mapping[str, TypeDef]:
         """Return all loaded standard-library source builtin declarations."""
@@ -1795,6 +1836,8 @@ class TypeTable:
             self._invalidate_cache_for(decl_id)
         for name_key, decl_id in other._name_index.items():
             self._name_index[name_key] = decl_id
+        for enum_id, members in other._inline_members.items():
+            self._inline_members.setdefault(enum_id, {}).update(members)
         # Orphan status travels with the declaration: a session seeds a fresh
         # table from its accumulated one on every entry, so a declaration
         # orphaned once must stay orphaned for the rest of the session.

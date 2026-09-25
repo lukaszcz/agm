@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_start_selects_filled_members",
+      "module_roots": [
+        "program_modules/modules/imported_alias_owners"
+      ],
+      "params": {
+        "start": 1
+      },
+      "expect": {
+        "stdout": "filled 1 true false\ny1\n1 true\n2\ntrue\n2\n"
+      }
+    },
+    {
+      "name": "non_positive_start_selects_empty_members",
+      "module_roots": [
+        "program_modules/modules/imported_alias_owners"
+      ],
+      "params": {
+        "start": 0
+      },
+      "expect": {
+        "stdout": "empty false true\ny0\n0 false\n1\ntrue\n2\n"
+      }
+    }
+  ]
+}

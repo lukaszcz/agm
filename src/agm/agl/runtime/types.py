@@ -82,6 +82,8 @@ class ProgramParamInfo:
                         alias (directly, through non-generic aliases, or as
                         ``Option[path]``), which its checked ``text`` type
                         no longer shows.
+    ``enum_values``  — the preferred value-syntax spelling of each enum member,
+                        using ``@name`` when present.
     """
 
     name: str
@@ -91,6 +93,7 @@ class ProgramParamInfo:
     span: "SourceSpan"
     cli: "ProgramOptionSpec"
     is_path: bool = False
+    enum_values: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +102,8 @@ class ParamBindingInfo:
 
     ``is_path`` retains whether its annotation spells the builtin ``path``
     alias, including ``Option[path]``, for host filesystem completion.
+    ``enum_values`` retains the preferred value-syntax spelling of each enum
+    member, using ``@name`` when present.
     """
 
     module: "ModuleId"
@@ -111,6 +116,7 @@ class ParamBindingInfo:
     cli: "ProgramOptionSpec"
     doc: str | None
     is_path: bool = False
+    enum_values: tuple[str, ...] = ()
 
     @property
     def key(self) -> "StaticBindingKey":

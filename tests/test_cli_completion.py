@@ -55,7 +55,23 @@ def test_complete_registered_commands_reads_active_index(
     package_root.mkdir(parents=True)
     (package_root / MODULE_TREE_DIRNAME).mkdir()
     (package_root / MODULE_TREE_DIRNAME / "lint.agl").write_text(
-        "program def main(level: text) -> unit = ()\n", encoding="utf-8"
+        "enum Level\n"
+        '  | @name("silent") Silent\n'
+        '  | @name("error") Error\n'
+        '  | @name("warn") Warn\n'
+        '  | @name("info") Info\n'
+        '  | @name("debug") Debug\n'
+        "\n"
+        "@param\n"
+        '@opt-name("log-level")\n'
+        "var level: Level = Info\n"
+        "\n"
+        "program def main(\n"
+        '  @opt-name("program-level") mode: Level,\n'
+        '  @opt-name("optional-level") maybe: Option[Level],\n'
+        '  @opt-name("default-level") fallback: Optional[Level]\n'
+        ") -> unit = ()\n",
+        encoding="utf-8",
     )
     (package_root / "package.toml").write_text(
         """[package]
@@ -99,9 +115,15 @@ review-tools = { program = "tools/review::main" }
     registered_options = [
         item.value for item in shell_complete.get_completions(["tools", "lint"], "--")
     ]
-    assert "--level" in registered_options
+    assert "--log-level" in registered_options
+    assert "--program-level" in registered_options
+    assert "--optional-level" in registered_options
+    assert "--default-level" in registered_options
     assert "--dry-run" not in registered_options
-    assert shell_complete.get_completions(["tools", "lint", "--level"], "") == []
+    for flag in ("--log-level", "--program-level", "--optional-level", "--default-level"):
+        assert [
+            item.value for item in shell_complete.get_completions(["tools", "lint", flag], "")
+        ] == ["silent", "error", "warn", "info", "debug"]
     assert completion.complete_help_path(_make_ctx(help_command=[]), "to") == ["tools"]
     assert completion.complete_help_path(_make_ctx(help_command=["tools"]), "li") == ["lint"]
 

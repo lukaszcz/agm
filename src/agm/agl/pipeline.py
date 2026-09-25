@@ -1716,6 +1716,7 @@ def _module_param_infos(
     module_params: dict[ModuleId, tuple[ParamBindingInfo, ...]] = {}
     for module_id, checked_module in checked.modules.items():
         attributes = checked_module.resolved.attributes
+        type_table = checked_module.type_env.type_table
         params: list[ParamBindingInfo] = []
         for item in static_items(checked_module.resolved.program.body.items):
             if not isinstance(item, (LetDecl, VarDecl)):
@@ -1746,6 +1747,7 @@ def _module_param_infos(
                         binding_type,
                         alias_index,
                     ),
+                    enum_values=_enum_completion_values(binding_type, type_table),
                 )
             )
         module_params[module_id] = tuple(params)
@@ -1766,6 +1768,7 @@ def _program_param_infos(
     describe the same parameter list, in the same declaration order.
     """
     checked_module = checked.modules[module_id]
+    type_table = checked_module.type_env.type_table
     signature = checked_module.type_env.get_function_signature_by_node_id(funcdef.node_id)
     assert signature is not None, (
         f"compiler bug: program {funcdef.name!r} has no recorded function signature"
@@ -1782,8 +1785,29 @@ def _program_param_infos(
             is_path=_annotates_path(
                 checked, module_id, scope_path, ast_param.type_expr, param_spec.type, aliases
             ),
+            enum_values=_enum_completion_values(param_spec.type, type_table),
         )
         for ast_param, param_spec in zip(funcdef.params, signature.params, strict=True)
+    )
+
+
+def _enum_completion_values(type_: "Type", type_table: "TypeTable") -> tuple[str, ...]:
+    """Return the value-syntax names for a parameter's enum, if it has one."""
+    from agm.agl.semantics.types import (
+        EnumType,
+        is_standard_option_enum,
+        is_standard_optional_enum,
+    )
+
+    if isinstance(type_, EnumType) and (
+        is_standard_option_enum(type_) or is_standard_optional_enum(type_)
+    ):
+        type_ = type_.type_args[0]
+    if not isinstance(type_, EnumType):
+        return ()
+    return tuple(
+        type_table.external_name(member).name or member.name
+        for member in type_table.enum_members(type_)
     )
 
 

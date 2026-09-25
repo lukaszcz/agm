@@ -614,9 +614,11 @@ def _program_value_completer(
         ctx: click.Context, option: click.Parameter, incomplete: str
     ) -> list[CompletionItem]:
         del ctx, option
-        if not param.is_path:
-            return []
-        return [CompletionItem(candidate) for candidate in _path_candidates(incomplete)]
+        if param.is_path:
+            return [CompletionItem(candidate) for candidate in _path_candidates(incomplete)]
+        return [
+            CompletionItem(value) for value in param.enum_values if value.startswith(incomplete)
+        ]
 
     return complete
 
@@ -627,8 +629,8 @@ def program_value_completion_options(program_command: ProgramCommand | None) -> 
     Click decides which parameter an incomplete value belongs to — after
     ``--flag``, ``-x``, or as ``--flag=`` — from the completing command's own
     parameters, so each program flag that takes a value is mirrored by one. A
-    ``path`` parameter's value completes filesystem paths; any other value
-    completes nothing rather than being read as a positional slot.
+    ``path`` parameter completes filesystem paths; an enum parameter completes
+    its value-syntax spellings; other values complete nothing.
     """
     if program_command is None:
         return []

@@ -1160,7 +1160,7 @@ class TestRenderHelp:
         text = _command(_param("tag", TextType())).render_help(
             "agm publish", extra_options=run_options
         )
-        assert_lists_execution_options(text, "registered")
+        assert_lists_execution_options(text)
         assert execution_options_is_last(text)
         assert text.index("Execution options:") > text.index("--tag")
         assert "--help" in text.partition("Execution options:")[0]

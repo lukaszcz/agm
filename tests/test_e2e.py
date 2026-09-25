@@ -8226,7 +8226,7 @@ class TestPackageInstall:
         assert "<name>" in command_help.stdout
         assert "--tag" in command_help.stdout
         assert "Greet someone" in command_help.stdout
-        assert_lists_execution_options(command_help.stdout, "registered")
+        assert_lists_execution_options(command_help.stdout)
         assert execution_options_is_last(command_help.stdout)
         assert short_help.returncode == 0
         assert "--tag" in short_help.stdout

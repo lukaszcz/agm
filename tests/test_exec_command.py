@@ -4062,7 +4062,7 @@ class TestProgramArgumentsDynamicHelp:
         assert "--help" in out
         options, _, _ = out.partition("Execution options:\n")
         assert "--strict-json" not in options
-        assert_lists_execution_options(out, "exec")
+        assert_lists_execution_options(out)
         assert execution_options_is_last(out)
 
     def test_help_for_a_program_can_show_a_dry_run_parameter(

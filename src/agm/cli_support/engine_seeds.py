@@ -17,7 +17,10 @@ import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
 from agm.agl.runtime.engine_config import convert_config_value, raw_option_str
+from agm.agl.runtime.option import option_text
+from agm.agl.semantics.values import RecordValue
 from agm.config.engine_keys import (
     ENGINE_KEYS,
     EngineKeyKind,
@@ -31,9 +34,66 @@ if TYPE_CHECKING:
 
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.values import Value
+    from agm.cli_support.args import ExecutionOptionValues
     from agm.config.general import ExecConfig
 
-__all__ = ["EngineSeedTiers", "build_host_engine_seeds"]
+__all__ = [
+    "EngineSeedTiers",
+    "build_host_engine_seeds",
+    "execution_cli_values",
+    "resolve_timeout",
+]
+
+
+def execution_cli_values(args: "ExecutionOptionValues") -> dict[str, object | None]:
+    """Return the engine settings *args*' execution flags explicitly set.
+
+    A present ``None`` is an explicit empty ``Option`` (``--no-timeout``,
+    ``--no-trace-file``).
+    """
+    values: dict[str, object | None] = {}
+    if args.strict_json is not None:
+        values["strict-json"] = args.strict_json
+    if args.timeout is not None:
+        values["timeout"] = args.timeout
+    elif args.no_timeout:
+        values["timeout"] = None
+    if args.no_trace:
+        values["trace"] = False
+    elif args.trace:
+        values["trace"] = True
+    if args.trace_file is not None:
+        values["trace-file"] = args.trace_file
+    elif args.no_trace_file:
+        values["trace-file"] = None
+    if args.default_agent is not None:
+        values["default-agent"] = args.default_agent
+    if args.default_sandbox is not None:
+        values["default-sandbox"] = args.default_sandbox
+    return values
+
+
+def resolve_timeout(
+    engine_seeds: "Mapping[str, Value]", cli_values: "Mapping[str, object | None]"
+) -> float | None:
+    """Parse the merged ``timeout`` seed into seconds; ``None`` when unset or cleared.
+
+    Exits 1 naming the value's origin when it is not a duration.
+    """
+    from agm.core.parse import parse_timeout
+
+    seed = engine_seeds.get("timeout")
+    if not isinstance(seed, RecordValue):
+        return None
+    text = option_text(seed, nominals=NO_BUILTIN_DECLARATIONS)
+    if text is None:
+        return None
+    try:
+        return parse_timeout(text)
+    except ValueError as exc:
+        origin = "--timeout" if cli_values.get("timeout") is not None else "@config timeout"
+        print(f"Error: invalid {origin} value: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def _configured_value(

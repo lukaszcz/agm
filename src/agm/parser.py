@@ -7,7 +7,7 @@ import textwrap
 from collections.abc import Sequence
 from typing import NoReturn, Protocol
 
-from agm.cli_support.execution_options import ExecutionSurface, execution_options_section
+from agm.cli_support.execution_options import execution_options_section
 from agm.command_catalog import COMMAND_OVERVIEW
 from agm.core.env import help_width
 from agm.util.text import first_paragraph, format_description_column
@@ -398,7 +398,7 @@ _HELP_TEXTS: dict[str, str] = {
 
 # Help for commands that take the shared execution options: the text before and after
 # their ``Execution options`` section.
-_EXECUTION_HELP_TEXTS: dict[ExecutionSurface, tuple[str, str]] = {
+_EXECUTION_HELP_TEXTS: dict[str, tuple[str, str]] = {
     "exec": (
         textwrap.dedent("""\
             agm exec [OPTIONS] (FILE | PACKAGE/MODULE::PROGRAM | -c SOURCE)
@@ -454,8 +454,8 @@ _EXECUTION_HELP_TEXTS: dict[ExecutionSurface, tuple[str, str]] = {
                            :reset.
             """),
         textwrap.dedent("""\
-            Execution options override [exec] config, whose timeout also applies.
-            A `std/config::KEY := VALUE` entry holds for the session until :reset.
+            Execution options override [exec] config; a `std/config::KEY := VALUE`
+            entry holds for the session until :reset.
 
             The interactive console needs a terminal on stdin and stdout and TERM
             other than dumb; otherwise the plain front end runs, without styling.
@@ -465,8 +465,8 @@ _EXECUTION_HELP_TEXTS: dict[ExecutionSurface, tuple[str, str]] = {
 
             Exit codes:
               0  Normal exit.
-              1  Setup failure before the prompt: invalid [exec] config or an
-                 unwritable --trace-file.
+              1  Setup failure before the prompt: invalid [exec] config or
+                 execution option, or an unwritable --trace-file.
         """),
     ),
 }
@@ -762,11 +762,9 @@ def _overview_text() -> str:
 
 def help_text_for(command: str) -> str | None:
     canonical = _HELP_ALIASES.get(command, command)
-    match canonical:
-        case "exec" | "repl":
-            before, after = _EXECUTION_HELP_TEXTS[canonical]
-            section = execution_options_section(canonical, width=help_width())
-            return f"{before}\n{section}\n{after}"
+    if canonical in _EXECUTION_HELP_TEXTS:
+        before, after = _EXECUTION_HELP_TEXTS[canonical]
+        return f"{before}\n{execution_options_section(width=help_width())}\n{after}"
     return _HELP_TEXTS.get(canonical)
 
 

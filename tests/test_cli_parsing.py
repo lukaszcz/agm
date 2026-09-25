@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 import click
 import pytest
@@ -2267,15 +2267,13 @@ class TestParserHelpers:
             assert option in result
         assert "--runner" not in result
 
-    @pytest.mark.parametrize("surface", ["exec", "repl"])
-    def test_execution_options_follow_the_command_options(
-        self, surface: Literal["exec", "repl"]
-    ) -> None:
+    @pytest.mark.parametrize("command", ["exec", "repl"])
+    def test_execution_options_follow_the_command_options(self, command: str) -> None:
         output = io.StringIO()
-        parser_helpers.print_help_for_command_path([surface], file=output)
+        parser_helpers.print_help_for_command_path([command], file=output)
         result = output.getvalue()
 
-        assert_lists_execution_options(result, surface)
+        assert_lists_execution_options(result)
         assert result.index("Options:") < result.index("Execution options:")
         assert result.index("Execution options:") < result.index("Exit codes:")
 

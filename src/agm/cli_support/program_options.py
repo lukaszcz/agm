@@ -109,13 +109,9 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.zones import ParamZone
 from agm.cli_support.execution_options import (
-    EXECUTION_OPTION_SPECS,
-    ExecutionSurface,
-    execution_option_names_for_surface,
+    EXECUTION_OPTION_NAMES,
     write_execution_options,
 )
-
-_EXECUTION_OPTION_NAMES = frozenset(spec.name for spec in EXECUTION_OPTION_SPECS)
 
 if TYPE_CHECKING:
     from agm.agl.ir.static_keys import StaticBindingKey
@@ -1173,7 +1169,7 @@ class _ProgramClickCommand(click.Command):
         ] = (),
         ambiguous_options: Mapping[str, tuple["ParamBindingInfo", ...]] | None = None,
         surface_entries: Mapping["ParamBindingInfo", "ParamSurfaceEntry"] | None = None,
-        execution_surface: ExecutionSurface | None = None,
+        list_execution_options: bool = False,
         context_settings: dict[str, bool] | None = None,
     ) -> None:
         settings: dict[str, bool] = {} if context_settings is None else dict(context_settings)
@@ -1189,9 +1185,9 @@ class _ProgramClickCommand(click.Command):
         self.module_help_sections = module_help_sections
         self.ambiguous_options = {} if ambiguous_options is None else ambiguous_options
         self.surface_entries = {} if surface_entries is None else surface_entries
-        self.execution_surface = execution_surface
+        self.list_execution_options = list_execution_options
         self.execution_option_params = tuple(
-            param for param in params if param.name in _EXECUTION_OPTION_NAMES
+            param for param in params if param.name in EXECUTION_OPTION_NAMES
         )
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
@@ -1289,12 +1285,12 @@ class _ProgramClickCommand(click.Command):
             if records:
                 with formatter.section(f"Parameters of {title}"):
                     formatter.write_dl(records)
-        execution_names = {
-            param.name for param in self.execution_option_params if param.name is not None
-        }
-        if self.execution_surface is not None:
-            execution_names.update(execution_option_names_for_surface(self.execution_surface))
-        write_execution_options(formatter, execution_names)
+        write_execution_options(
+            formatter,
+            EXECUTION_OPTION_NAMES
+            if self.list_execution_options
+            else {param.name for param in self.execution_option_params if param.name is not None},
+        )
 
 
 def _build_click_command(
@@ -1310,7 +1306,7 @@ def _build_click_command(
     ] = (),
     ambiguous_options: Mapping[str, tuple["ParamBindingInfo", ...]] | None = None,
     surface_entries: Mapping["ParamBindingInfo", "ParamSurfaceEntry"] | None = None,
-    execution_surface: ExecutionSurface | None = None,
+    list_execution_options: bool = False,
     context_settings: dict[str, bool] | None = None,
 ) -> _ProgramClickCommand:
     """Assemble one program command: its own parameters, then *extra_options*, then help.
@@ -1329,7 +1325,7 @@ def _build_click_command(
         module_help_sections=module_help_sections,
         ambiguous_options=ambiguous_options,
         surface_entries=surface_entries,
-        execution_surface=execution_surface,
+        list_execution_options=list_execution_options,
         context_settings=context_settings,
     )
 
@@ -1587,7 +1583,7 @@ class ProgramCommand:
         *,
         description: str | None = None,
         extra_options: Sequence[click.Parameter] = (),
-        execution_surface: ExecutionSurface | None = None,
+        list_execution_options: bool = False,
     ) -> str:
         """Render this command's help as the invocation *program_name* spells it.
 
@@ -1609,7 +1605,7 @@ class ProgramCommand:
             module_help_sections=self.command.module_help_sections,
             ambiguous_options=self.command.ambiguous_options,
             surface_entries=self.command.surface_entries,
-            execution_surface=execution_surface,
+            list_execution_options=list_execution_options,
         )
         return _format_help(command, program_name)
 
@@ -1861,7 +1857,7 @@ def render_program_help(
     program_name: str,
     description: str | None = None,
     extra_options: "Sequence[click.Parameter]" = (),
-    execution_surface: ExecutionSurface | None = None,
+    list_execution_options: bool = False,
 ) -> str:
     """Render the help of the command *program_name* invokes.
 
@@ -1875,7 +1871,7 @@ def render_program_help(
             program_name,
             description=description,
             extra_options=extra_options,
-            execution_surface=execution_surface,
+            list_execution_options=list_execution_options,
         )
     command = _build_click_command(
         program_name,
@@ -1883,7 +1879,7 @@ def render_program_help(
         description=description,
         usage_slots=(),
         extra_options=extra_options,
-        execution_surface=execution_surface,
+        list_execution_options=list_execution_options,
     )
     return _format_help(command, program_name)
 
@@ -1906,7 +1902,7 @@ def exec_program_help(
         program_command,
         program_name=exec_program_name(file=file, program=program),
         extra_options=extra_options,
-        execution_surface="exec",
+        list_execution_options=True,
     )
 
 

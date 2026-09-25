@@ -70,13 +70,16 @@ from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.runtime.engine_config import restamp_engine_setting
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.option import option_text
 from agm.agl.runtime.types import ProgramDeclInfo
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES
-from agm.agl.semantics.values import BoolValue, RecordValue
+from agm.agl.semantics.values import BoolValue
 from agm.agl.syntax.nodes import FuncDef, static_items
 from agm.cli_support.args import ExecArgs
-from agm.cli_support.engine_seeds import build_host_engine_seeds
+from agm.cli_support.engine_seeds import (
+    build_host_engine_seeds,
+    execution_cli_values,
+    resolve_timeout,
+)
 from agm.cli_support.exec_roots import effective_exec_roots_or_none
 from agm.cli_support.exec_target import (
     ExecTargetError,
@@ -113,7 +116,6 @@ from agm.config.qualified_keys import (
 from agm.core.cleanup import preserve_primary_error
 from agm.core.fs import read_text_arg
 from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
-from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
 from agm.packages.activation import load_activation_index
 from agm.packages.manifest import command_paths_for_program
@@ -272,13 +274,6 @@ def _registered_command_paths(
         return ()
     reference = "::".join(("/".join(module_segments), *program_path))
     return command_paths_for_program(package.manifest, reference)
-
-
-def _option_text(value: "Value | None") -> str | None:
-    """Read a standard-identity ``Option[text]`` engine value's payload, if present."""
-    if not isinstance(value, RecordValue):
-        return None
-    return option_text(value, nominals=NO_BUILTIN_DECLARATIONS)
 
 
 def _registered_command_mismatch(command_path: str) -> NoReturn:
@@ -493,25 +488,7 @@ def run(
     # value (``--default-agent``/``[exec] default-agent``) decodes through
     # the same shared path as every other key; a bad value exits 1 here,
     # before the module graph is loaded.
-    cli_values: dict[str, object | None] = {}
-    if args.strict_json is not None:
-        cli_values["strict-json"] = args.strict_json
-    if args.timeout is not None:
-        cli_values["timeout"] = args.timeout
-    elif args.no_timeout:
-        cli_values["timeout"] = None
-    if args.no_trace:
-        cli_values["trace"] = False
-    elif args.trace:
-        cli_values["trace"] = True
-    if args.trace_file is not None:
-        cli_values["trace-file"] = args.trace_file
-    elif args.no_trace_file:
-        cli_values["trace-file"] = None
-    if args.default_agent is not None:
-        cli_values["default-agent"] = args.default_agent
-    if args.default_sandbox is not None:
-        cli_values["default-sandbox"] = args.default_sandbox
+    cli_values = execution_cli_values(args)
 
     # strict-json/timeout/trace are resolved only after preflight, below, once a
     # selected program's own ``@config`` entries (ranked between the config
@@ -658,16 +635,7 @@ def run(
     strict_seed = engine_seeds.get("strict-json")
     resolved_strict_json = isinstance(strict_seed, BoolValue) and strict_seed.value
 
-    timeout_text = _option_text(engine_seeds.get("timeout"))
-    if timeout_text is not None:
-        try:
-            resolved_timeout: float | None = parse_timeout(timeout_text)
-        except ValueError as exc:
-            origin = "--timeout" if cli_values.get("timeout") is not None else "@config timeout"
-            print(f"Error: invalid {origin} value: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
-    else:
-        resolved_timeout = None
+    resolved_timeout = resolve_timeout(engine_seeds, cli_values)
 
     # One resolution for both the readable ``trace`` seed above and the trace
     # file opened below.

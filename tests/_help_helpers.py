@@ -2,23 +2,15 @@
 
 from __future__ import annotations
 
-from agm.cli_support.execution_options import (
-    EXECUTION_OPTION_SPECS,
-    ExecutionSurface,
-    execution_option_names_for_surface,
+from agm.cli_support.execution_options import EXECUTION_OPTION_SPECS
+
+#: Every flag spelling of the shared execution options.
+EXECUTION_OPTION_FLAGS = frozenset(
+    flag
+    for spec in EXECUTION_OPTION_SPECS
+    for declaration in spec.declarations
+    for flag in declaration.split("/")
 )
-
-
-def execution_option_flags(surface: ExecutionSurface) -> set[str]:
-    """Return every flag spelling of *surface*'s execution options."""
-    names = execution_option_names_for_surface(surface)
-    return {
-        flag
-        for spec in EXECUTION_OPTION_SPECS
-        if spec.name in names
-        for declaration in spec.declarations
-        for flag in declaration.split("/")
-    }
 
 
 def execution_options_section(text: str) -> str:
@@ -34,9 +26,9 @@ def execution_options_is_last(text: str) -> bool:
     return "\n\n" not in text.partition("Execution options:\n")[2].rstrip("\n")
 
 
-def assert_lists_execution_options(text: str, surface: ExecutionSurface) -> None:
-    """Assert *text*'s ``Execution options`` section lists exactly *surface*'s flags."""
+def assert_lists_execution_options(text: str) -> None:
+    """Assert *text*'s ``Execution options`` section lists exactly the shared flags."""
     section = execution_options_section(text)
     listed = {token for token in section.split() if token.startswith("--")}
-    assert listed == execution_option_flags(surface)
+    assert listed == EXECUTION_OPTION_FLAGS
     assert "--help" not in section

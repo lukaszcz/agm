@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 
 @dataclass(slots=True)
@@ -254,6 +255,20 @@ class CheckArgs:
     no_stdlib: bool = False
 
 
+class ExecutionOptionValues(Protocol):
+    """The engine-setting execution options every AgL-running command carries."""
+
+    strict_json: bool | None
+    default_agent: str | None
+    default_sandbox: str | None
+    timeout: str | None
+    no_timeout: bool
+    trace: bool
+    no_trace: bool
+    trace_file: str | None
+    no_trace_file: bool
+
+
 @dataclass(slots=True)
 class ExecArgs:
     file: str | None
@@ -288,6 +303,9 @@ class ReplArgs:
     trace: bool = False
     # Optional recursion call-depth override (None = no override).
     max_call_depth: int | None = None
+    timeout: str | None = None
+    no_timeout: bool = False
+    no_trace_file: bool = False
     no_stdlib: bool = False
     # An AgL ``Agent`` literal used to seed std/config::default-agent.
     default_agent: str | None = None

@@ -48,7 +48,7 @@ from agm.cli_support.args import (
     WorktreeRemoveArgs,
 )
 from agm.cli_support.execution_options import execution_option_spec
-from agm.cli_support.run_options import exec_option_conflict, trace_option_conflict
+from agm.cli_support.run_options import execution_option_conflict
 from agm.command_catalog import COMMAND_OVERVIEW
 from agm.config.general import parse_timeout
 from agm.parser import (
@@ -1165,7 +1165,7 @@ def exec_cmd(
         no_trace_file=no_trace_file,
         pipeline_cache=discovery.cached_artifacts(file),
     )
-    _reject_run_option_conflict("exec", exec_option_conflict(exec_args))
+    _reject_run_option_conflict("exec", execution_option_conflict(exec_args))
     # Imported lazily: pulls in the AgL DSL (runtime, codec, jsonschema), which
     # would otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.exec as exec_command
@@ -1188,6 +1188,9 @@ def repl_cmd(
     no_trace: bool = _no_trace_option(),
     trace: bool = _trace_option(),
     no_stdlib: bool = _no_stdlib_option(),
+    timeout: str | None = _timeout_option(),
+    no_timeout: bool = _no_timeout_option(),
+    no_trace_file: bool = _no_trace_file_option(),
     plain: bool = typer.Option(
         False,
         "--plain",
@@ -1196,27 +1199,27 @@ def repl_cmd(
     _help: bool = _help_option(),
 ) -> None:
     del _help
-    _reject_run_option_conflict(
-        "repl", trace_option_conflict(no_trace=no_trace, trace=trace, trace_file=trace_file)
+    repl_args = ReplArgs(
+        strict_json=strict_json,
+        max_call_depth=max_call_depth,
+        default_agent=default_agent,
+        default_sandbox=default_sandbox,
+        quiet=quiet,
+        no_trace=no_trace,
+        trace_file=trace_file,
+        trace=trace,
+        timeout=timeout,
+        no_timeout=no_timeout,
+        no_trace_file=no_trace_file,
+        no_stdlib=no_stdlib,
+        plain=plain,
     )
+    _reject_run_option_conflict("repl", execution_option_conflict(repl_args))
     # Imported lazily: pulls in the AgL DSL (runtime, repl console), which would
     # otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.repl as repl_command
 
-    repl_command.run(
-        ReplArgs(
-            strict_json=strict_json,
-            max_call_depth=max_call_depth,
-            default_agent=default_agent,
-            default_sandbox=default_sandbox,
-            quiet=quiet,
-            no_trace=no_trace,
-            trace_file=trace_file,
-            trace=trace,
-            no_stdlib=no_stdlib,
-            plain=plain,
-        )
-    )
+    repl_command.run(repl_args)
 
 
 @app.command(name="check")

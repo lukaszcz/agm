@@ -36,7 +36,11 @@ from agm.agl.repl.plain_console import plain_mode_engaged
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.cli_support.args import ReplArgs
-from agm.cli_support.engine_seeds import build_host_engine_seeds
+from agm.cli_support.engine_seeds import (
+    build_host_engine_seeds,
+    execution_cli_values,
+    resolve_timeout,
+)
 from agm.cli_support.param_config import resolve_module_param_values
 from agm.config.context import current_config_context
 from agm.config.general import (
@@ -82,26 +86,14 @@ def run(args: ReplArgs) -> None:
     # Seed only explicit CLI/config controls.  Trace-service fallbacks remain
     # absent so a ``builtin var`` initializer can provide the setting default.
     # The raw timeout preserves its configured spelling.
-    cli_values: dict[str, object | None] = {}
-    if args.strict_json is not None:
-        cli_values["strict-json"] = args.strict_json
-    if args.no_trace:
-        cli_values["trace"] = False
-    elif args.trace:
-        cli_values["trace"] = True
-    if args.trace_file is not None:
-        cli_values["trace-file"] = args.trace_file
-    if args.default_agent is not None:
-        cli_values["default-agent"] = args.default_agent
-    if args.default_sandbox is not None:
-        cli_values["default-sandbox"] = args.default_sandbox
-
+    cli_values = execution_cli_values(args)
     engine_tiers = build_host_engine_seeds(
         config=config,
         primary_table=toml_dict(merged_config.get("exec")),
         cli_values=cli_values,
     )
     engine_seeds = engine_tiers.merged()
+    timeout = resolve_timeout(engine_seeds, cli_values)
 
     # One resolution for both the readable ``trace`` seed and the trace file
     # prepared below, exactly as ``agm exec`` does.
@@ -117,10 +109,10 @@ def run(args: ReplArgs) -> None:
     # same `SandboxContext` and the `[run.*]` config loads at most once.
     get_sandbox_context = lazy_sandbox_context(ctx)
     runner_agent = value_driven_agent_factory(
-        idle_timeout=config.timeout, get_sandbox_context=get_sandbox_context
+        idle_timeout=timeout, get_sandbox_context=get_sandbox_context
     )
     session_host = create_agl_session_host(
-        idle_timeout=config.timeout, get_sandbox_context=get_sandbox_context
+        idle_timeout=timeout, get_sandbox_context=get_sandbox_context
     )
 
     host_settings_policy = HostSettingsPolicy(
@@ -153,7 +145,7 @@ def run(args: ReplArgs) -> None:
             agent_dispatcher=runner_agent,
             session_host=session_host,
             get_sandbox_context=get_sandbox_context,
-            shell_exec_timeout=config.timeout,
+            shell_exec_timeout=timeout,
             trace_path=trace_path,
             engine_base=engine_seeds,
             process_environment=process_environment,

@@ -507,7 +507,9 @@ $ echo $?
 ```text
 agm repl [--strict-json|--no-strict-json]
          [--max-call-depth N] [--default-agent AGENT] [--default-sandbox SANDBOX]
-         [--quiet] [--no-stdlib] [--trace|--trace-file PATH|--no-trace] [--plain]
+         [--timeout DURATION|--no-timeout]
+         [--trace|--trace-file PATH|--no-trace] [--no-trace-file]
+         [--quiet] [--no-stdlib] [--plain]
 ```
 
 Interactive AgL. Unlike `agm exec`, which runs a whole program in a fresh environment, the REPL
@@ -611,8 +613,9 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 
 ### Options
 
-- `--strict-json` / `--no-strict-json`, `--max-call-depth N`,
-  `--default-agent AGENT`, `--default-sandbox SANDBOX`: As for `agm exec`.
+- `--strict-json` / `--no-strict-json`, `--max-call-depth N`, `--default-agent AGENT`,
+  `--default-sandbox SANDBOX`, `--timeout DURATION` / `--no-timeout`, `--no-trace-file`: As for
+  `agm exec`.
 - `--quiet`: Do not echo entry results, for this session only (does not persist and overrides a
   saved `echo = true`).
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library
@@ -638,8 +641,8 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 - **Engine settings**: import `std/config` and write a qualified target
   (`std/config::strict-json := true`). The write takes effect positionally, so subsequent entries see
   it even if a later expression in the same entry fails; `trace`/`trace-file` writes reconfigure the
-  trace destination. The initial `[exec] timeout` is also the idle timeout for CLI and Pi RPC
-  agent sessions; a source `timeout` write changes only shell `exec`. `:reset` restores the
+  trace destination. The initial timeout (`--timeout` or `[exec] timeout`) is also the idle
+  timeout for CLI and Pi RPC agent sessions; a source `timeout` write changes only shell `exec`. `:reset` restores the
   pre-loop CLI/`[exec]` defaults.
 
 ### Exit codes

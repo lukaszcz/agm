@@ -153,7 +153,7 @@ def registered_command_help(
         program_name=f"agm {path_name}",
         description=description or "Run the registered AgL program.",
         extra_options=run_options,
-        execution_surface="registered",
+        list_execution_options=True,
     )
 
 
@@ -338,7 +338,7 @@ class RegisteredProgramCommand(TyperCommand):
             contains_help_flag,
             program_help_requested,
         )
-        from agm.cli_support.run_options import exec_option_conflict
+        from agm.cli_support.run_options import execution_option_conflict
 
         metadata = cast(dict[str, object], ctx.meta)
         cached_program = cast("ProgramDeclInfo | None", metadata.pop("registered_program", None))
@@ -370,7 +370,7 @@ class RegisteredProgramCommand(TyperCommand):
             argument_tokens=list(ctx.args),
             **cast(_RunOptionValues, ctx.params),
         )
-        conflict = exec_option_conflict(exec_args)
+        conflict = execution_option_conflict(exec_args)
         if conflict is not None:
             declaration, command = program_command()
             self._usage_error(conflict, declaration, command)

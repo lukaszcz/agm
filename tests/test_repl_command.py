@@ -130,6 +130,25 @@ class TestReplArgsParsing:
         assert invoke(runner, ["repl", "--plain"]).exit_code == 0
         assert getattr(recorded_runs[0], "plain") is True
 
+    @pytest.mark.parametrize(
+        ("argv", "field", "expected"),
+        [
+            (["--timeout", "5s"], "timeout", "5s"),
+            (["--no-timeout"], "no_timeout", True),
+            (["--no-trace-file"], "no_trace_file", True),
+        ],
+    )
+    def test_accepts_every_exec_execution_option(
+        self,
+        runner: CliRunner,
+        recorded_runs: list[object],
+        argv: list[str],
+        field: str,
+        expected: object,
+    ) -> None:
+        assert invoke(runner, ["repl", *argv]).exit_code == 0
+        assert getattr(recorded_runs[0], field) == expected
+
 
 class TestReplMutualExclusion:
     def test_no_trace_and_trace_file_conflict(
@@ -138,6 +157,19 @@ class TestReplMutualExclusion:
         result = invoke(runner, ["repl", "--no-trace", "--trace-file", "/tmp/x.log"])
         assert result.exit_code == 1
         assert recorded_runs == []  # never dispatched
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["--timeout", "5s", "--no-timeout"],
+            ["--trace-file", "x.jsonl", "--no-trace-file"],
+        ],
+    )
+    def test_exclusive_execution_options_conflict(
+        self, runner: CliRunner, recorded_runs: list[object], argv: list[str]
+    ) -> None:
+        assert invoke(runner, ["repl", *argv]).exit_code == 1
+        assert recorded_runs == []
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +276,9 @@ def _args(
     no_trace: bool = False,
     trace: bool = False,
     trace_file: str | None = None,
+    no_trace_file: bool = False,
+    timeout: str | None = None,
+    no_timeout: bool = False,
     default_agent: str | None = None,
     default_sandbox: str | None = None,
     no_stdlib: bool = False,
@@ -262,6 +297,9 @@ def _args(
         no_trace=no_trace,
         trace=trace,
         trace_file=trace_file,
+        no_trace_file=no_trace_file,
+        timeout=timeout,
+        no_timeout=no_timeout,
         default_agent=default_agent,
         default_sandbox=default_sandbox,
         no_stdlib=no_stdlib,
@@ -737,6 +775,75 @@ class TestReplRun:
         assert result.ok
         assert isinstance(result.value, RecordValue)
         assert result.value.fields["value"] == TextValue("30s")
+
+    @pytest.mark.parametrize(
+        ("args", "expected_seed", "expected_seconds"),
+        [
+            (_args(), "30s", 30.0),
+            (_args(timeout="5s"), "5s", 5.0),
+            (_args(no_timeout=True), None, None),
+        ],
+    )
+    def test_cli_timeout_flags_override_the_configured_timeout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+        args: ReplArgs,
+        expected_seed: str | None,
+        expected_seconds: float | None,
+    ) -> None:
+        """``--timeout``/``--no-timeout`` set the readable setting and every consumer's timeout."""
+        from agm.agl.semantics.values import RecordValue, TextValue
+
+        home = _isolated_home(monkeypatch, tmp_path)
+        (home / ".agm").mkdir()
+        (home / ".agm" / "config.toml").write_text('[exec]\ntimeout = "30s"\n')
+        idle_timeouts: list[float | None] = []
+        real_factory = repl_command.value_driven_agent_factory
+
+        def recording_factory(*, idle_timeout: float | None, **kwargs: object) -> object:
+            idle_timeouts.append(idle_timeout)
+            return real_factory(idle_timeout=idle_timeout, **kwargs)
+
+        monkeypatch.setattr(repl_command, "value_driven_agent_factory", recording_factory)
+
+        repl_command.run(args)
+        session: ReplSession = fake_plain_console[0]["session"]
+
+        result = session.eval_entry("import std/config\nstd/config::timeout")
+        assert result.ok
+        assert isinstance(result.value, RecordValue)
+        if expected_seed is None:
+            assert result.value.fields == {}
+        else:
+            assert result.value.fields["value"] == TextValue(expected_seed)
+        assert idle_timeouts == [expected_seconds]
+        assert session._shell_exec_timeout == expected_seconds
+
+    def test_cli_no_trace_file_clears_visible_seed_not_configured_trace(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_plain_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.semantics.values import RecordValue
+
+        home = _isolated_home(monkeypatch, tmp_path)
+        trace_path = tmp_path / "configured.jsonl"
+        (home / ".agm").mkdir()
+        (home / ".agm" / "config.toml").write_text(
+            f'[exec]\ntrace = true\ntrace-file = "{trace_path}"\n'
+        )
+
+        repl_command.run(_args(no_trace_file=True))
+        session: ReplSession = fake_plain_console[0]["session"]
+
+        result = session.eval_entry("import std/config\nstd/config::trace-file")
+        assert result.ok
+        assert isinstance(result.value, RecordValue)
+        assert result.value.fields == {}
+        assert session._trace_path == trace_path
 
     def test_exec_config_seeds_each_configured_engine_setting(
         self,

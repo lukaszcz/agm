@@ -10,7 +10,7 @@ from typing import Any, cast
 import click
 import pytest
 import typer
-from click.shell_completion import ShellComplete
+from typer._completion_classes import ZshComplete
 
 import agm.completion as completion
 import agm.vcs.git as git_helpers
@@ -102,7 +102,7 @@ review-tools = { program = "tools/review::main" }
     from agm.cli import app
 
     cli_command = typer.main.get_command(app)
-    shell_complete = ShellComplete(cli_command, {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(cli_command, {}, "agm", "_AGM_COMPLETE")
 
     first_segments = [item.value for item in shell_complete.get_completions([], "to")]
     assert "tools" in first_segments
@@ -153,7 +153,7 @@ def test_one_completion_loads_the_command_index_once(
 
     from agm.cli import app
 
-    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
     shell_complete.get_completions(["tools", "lint"], "--")
 
     assert loads == 1
@@ -173,7 +173,7 @@ _PATH_PROGRAM = (
 def _completion_values(args: list[str], incomplete: str) -> list[str]:
     from agm.cli import app
 
-    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
     return [cast(str, item.value) for item in shell_complete.get_completions(args, incomplete)]
 
 
@@ -342,7 +342,7 @@ def test_installed_exec_reference_offers_program_value_argument_completion(
 
     from agm.cli import app
 
-    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
     values = [
         item.value for item in shell_complete.get_completions(["exec", "tools/review::main"], "--")
     ]
@@ -386,7 +386,7 @@ def test_installed_exec_reference_uses_its_selected_program_for_completion(
 
     from agm.cli import app
 
-    shell_complete = ShellComplete(typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
     values = [
         item.value
         for item in shell_complete.get_completions(["exec", "tools/review::second"], "--")
@@ -419,9 +419,7 @@ def test_completion_treats_an_unreadable_colon_named_file_as_a_file_not_a_refere
 
         from agm.cli import app
 
-        shell_complete = ShellComplete(
-            typer.main.get_command(app), {}, "agm", "_TYPER_COMPLETE_ARGS"
-        )
+        shell_complete = ZshComplete(typer.main.get_command(app), {}, "agm", "_AGM_COMPLETE")
         values = [
             item.value for item in shell_complete.get_completions(["exec", str(unreadable)], "--")
         ]
@@ -1957,7 +1955,7 @@ class TestExecCommandShellComplete:
         return typer.main.get_command(app)
 
     def _complete(self, args: list[str], incomplete: str) -> list[str]:
-        sc = ShellComplete(self._get_cli(), {}, "agm", "_TYPER_COMPLETE_ARGS")
+        sc = ZshComplete(self._get_cli(), {}, "agm", "_AGM_COMPLETE")
         return [c.value for c in sc.get_completions(args, incomplete)]
 
     def test_file_program_value_arguments_offer_their_flags(self, tmp_path: Path) -> None:
@@ -2113,12 +2111,12 @@ class TestExecCommandShellCompleteEdgeCases:
         return cmd
 
     def _complete(self, args: list[str], incomplete: str) -> list[str]:
-        sc = ShellComplete(self._get_cli(), {}, "agm", "_TYPER_COMPLETE_ARGS")
+        sc = ZshComplete(self._get_cli(), {}, "agm", "_AGM_COMPLETE")
         return [c.value for c in sc.get_completions(args, incomplete)]
 
     def test_non_option_incomplete_returns_base_only(self, tmp_path: Path) -> None:
         """When incomplete does not start with '-', shell_complete returns base result only."""
-        from click.shell_completion import _resolve_context
+        from typer._click.shell_completion import _resolve_context
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("program def main(msg: text) -> unit = ()\n")
@@ -2135,7 +2133,7 @@ class TestExecCommandShellCompleteEdgeCases:
     def test_non_string_module_paths_are_ignored(
         self, tmp_path: Path, module_paths: object
     ) -> None:
-        from click.shell_completion import _resolve_context
+        from typer._click.shell_completion import _resolve_context
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("program def main(msg: text) -> unit = ()\n")
@@ -2221,7 +2219,7 @@ def test_pkg_install_completion_includes_directories_and_archives(
     from agm.cli import app
 
     cli = typer.main.get_command(app)
-    shell_complete = ShellComplete(cli, {}, "agm", "_TYPER_COMPLETE_ARGS")
+    shell_complete = ZshComplete(cli, {}, "agm", "_AGM_COMPLETE")
     candidates = [
         item.value for item in shell_complete.get_completions(["pkg", "install"], "package")
     ]

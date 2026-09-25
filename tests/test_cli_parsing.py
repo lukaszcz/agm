@@ -10,6 +10,9 @@ from typing import Protocol
 import click
 import pytest
 from click.testing import CliRunner, Result
+from typer import Exit as TyperExit
+from typer._click import Context as TyperContext
+from typer.core import TyperCommand, TyperGroup
 from typer.main import get_command
 
 import agm.cli as cli
@@ -1939,20 +1942,20 @@ class TestEveryCommandHasHelpText:
             assert text.startswith(f"agm {name}")
 
     def test_every_command_path_has_help_listing_dry_run_exactly_when_accepted(self) -> None:
-        def walk(command: click.Command, path: tuple[str, ...]) -> None:
+        def walk(command: TyperCommand | TyperGroup, path: tuple[str, ...]) -> None:
             text = parser_helpers._help_text_for_path(path)
             accepts = any("--dry-run" in param.opts for param in command.params)
             assert ("--dry-run" in text) == accepts, " ".join(path)
-            if isinstance(command, click.Group):
-                for name in command.list_commands(click.Context(command)):
-                    subcommand = command.get_command(click.Context(command), name)
+            if isinstance(command, TyperGroup):
+                for name in command.list_commands(TyperContext(command)):
+                    subcommand = command.get_command(TyperContext(command), name)
                     assert subcommand is not None
                     walk(subcommand, (*path, name))
 
         root = get_command(cli.app)
-        assert isinstance(root, click.Group)
-        for name in root.list_commands(click.Context(root)):
-            command = root.get_command(click.Context(root), name)
+        assert isinstance(root, TyperGroup)
+        for name in root.list_commands(TyperContext(root)):
+            command = root.get_command(TyperContext(root), name)
             assert command is not None
             walk(command, (name,))
 
@@ -2032,7 +2035,7 @@ class TestPrintContextHelp:
     def test_prints_overview_for_root_command(self, capsys: pytest.CaptureFixture[str]) -> None:
         root = click.Context(click.Command("agm"))
         root.parent = None
-        with pytest.raises((SystemExit, click.exceptions.Exit)):
+        with pytest.raises((SystemExit, click.exceptions.Exit, TyperExit)):
             cli._print_context_help(root, None, True)
         captured = capsys.readouterr()
         assert "agm - Agent Management Framework" in captured.out
@@ -2041,7 +2044,7 @@ class TestPrintContextHelp:
         root = click.Context(click.Command("agm"))
         root.parent = None
         sub = click.Context(click.Command("open"), parent=root, info_name="open")
-        with pytest.raises((SystemExit, click.exceptions.Exit)):
+        with pytest.raises((SystemExit, click.exceptions.Exit, TyperExit)):
             cli._print_context_help(sub, None, True)
         captured = capsys.readouterr()
         assert "agm open" in captured.out
@@ -2125,7 +2128,7 @@ class TestParseLoopArgs:
         assert args.command_name is None
 
     def test_empty_args_with_command_optional_false_exits(self) -> None:
-        with pytest.raises((SystemExit, click.exceptions.Exit)):
+        with pytest.raises((SystemExit, click.exceptions.Exit, TyperExit)):
             cli._parse_loop_args([], command_path=["loop"], command_optional=False)
 
     def test_no_log_and_log_file_mutually_exclusive_with_command(self) -> None:

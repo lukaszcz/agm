@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import click
 import pytest
+from typer.core import TyperGroup, TyperOption
 
 from agm.agl.attributes import ProgramOptionSpec
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
@@ -137,7 +138,7 @@ def _registered_command_flags() -> set[str]:
     return {
         flag
         for param in command.params
-        if isinstance(param, click.Option)
+        if isinstance(param, TyperOption)
         for flag in (*param.opts, *param.secondary_opts)
     }
 
@@ -332,12 +333,12 @@ class TestEngineKeyFlags:
         from agm import cli
 
         group = typer.main.get_command(cli.app)
-        assert isinstance(group, click.Group)
+        assert isinstance(group, TyperGroup)
         exec_command = group.commands["exec"]
         declared = {
             flag
             for param in exec_command.params
-            if isinstance(param, click.Option)
+            if isinstance(param, TyperOption)
             for flag in (*param.opts, *param.secondary_opts)
         }
 

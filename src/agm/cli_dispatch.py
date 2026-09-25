@@ -456,7 +456,7 @@ class RegisteredCommandGroup(TyperGroup):
 
         return [*params, *registered_command_value_options(command_path, ctx)]
 
-    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem]:
+    def shell_complete(self, ctx: click.Context, incomplete: str) -> list[CompletionItem[str]]:
         """Extend root completion with the next registered-command path segment.
 
         Past a registered program's path, a non-option token completes that
@@ -479,8 +479,8 @@ class RegisteredCommandGroup(TyperGroup):
                 *(CompletionItem(segment) for segment in registered_segments),
                 *registered_command_positional_completion(command_path, incomplete, ctx),
             ]
-        items_by_value: dict[str, CompletionItem] = {
-            cast(str, item.value): item for item in super().shell_complete(ctx, incomplete)
+        items_by_value: dict[str, CompletionItem[str]] = {
+            item.value: item for item in super().shell_complete(ctx, incomplete)
         }
         for segment in registered_segments:
             items_by_value[segment] = CompletionItem(segment)

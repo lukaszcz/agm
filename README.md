@@ -24,7 +24,8 @@ Set up the development environment:
 just setup
 ```
 
-Install the CLI into an isolated `uv tool` environment and copy AGM config files,
+Install the CLI with the runtime versions from `uv.lock` into an isolated `uv tool`
+environment and copy AGM config files,
 prompts, and sandbox templates into the selected AGM home (`$AGM_HOME`, or
 `$HOME/.agm/` by default). It also installs and activates the lockstep immutable
 `std` package at `<AGM-home>/packages/std/<version>/` and installs the AgL editor

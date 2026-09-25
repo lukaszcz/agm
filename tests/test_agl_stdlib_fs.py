@@ -175,7 +175,7 @@ program def main() -> unit =
     assert result.error.fields["operation"] == "glob"
 
 
-def test_fs_temp_dir_raises_fs_error_when_tmpdir_is_not_valid_unicode(
+def test_fs_os_temp_dir_raises_fs_error_when_tmpdir_is_not_valid_unicode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # ``tempfile.gettempdir`` caches its first result process-wide, so ``TMPDIR``
@@ -185,7 +185,7 @@ def test_fs_temp_dir_raises_fs_error_when_tmpdir_is_not_valid_unicode(
     result = _run_file(
         """import std/fs
 program def main() -> unit =
-  let _ = fs::temp-dir()
+  let _ = fs::os-temp-dir()
 """,
         tmp_path / "main.agl",
         roots=agl_roots(),
@@ -194,7 +194,7 @@ program def main() -> unit =
     assert not result.ok
     assert result.error is not None
     assert result.error.type_name == "FsError"
-    assert result.error.fields["operation"] == "temp-dir"
+    assert result.error.fields["operation"] == "os-temp-dir"
 
 
 def test_fs_try_read_of_an_invalid_path_returns_an_error(
@@ -288,6 +288,29 @@ program def main() -> unit =
     assert (tmp_path / "created" / "by" / "append" / "deep" / "file.txt").is_file()
     assert (tmp_path / "created" / "by" / "mkdir" / "deep").is_dir()
     assert capsys.readouterr().out == "contents\nappended\ntrue\n"
+
+
+def test_fs_copy_and_move_create_missing_destination_parent_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = _run_file(
+        """import std/fs
+program def main() -> unit =
+  fs::write("source.txt", "contents")
+  fs::copy("source.txt", "created/by/copy/file.txt")
+  fs::move("source.txt", "created/by/move/file.txt")
+  print(fs::read("created/by/copy/file.txt"))
+  print(fs::read("created/by/move/file.txt"))
+  print(fs::exists("source.txt"))
+""",
+        tmp_path / "main.agl",
+        roots=agl_roots(),
+    )
+
+    assert result.ok
+    assert capsys.readouterr().out == "contents\ncontents\nfalse\n"
 
 
 def test_fs_writes_are_suppressed_and_logged_in_dry_run(

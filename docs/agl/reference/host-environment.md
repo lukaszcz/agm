@@ -322,6 +322,7 @@ key:
 | `default-sandbox` | `AgentSandbox` | `Sandbox` (every field defaulted) |
 | `trace-file` | `Option[path]` | `None` |
 | `timeout` | `Option[text]` | `None` |
+| `debug` | `bool` | `false` |
 
 Import `std/config` and read or write a setting through a qualified target
 (`std/config::strict-json`).
@@ -411,7 +412,9 @@ or `trace-file` updates the trace destination used by subsequent calls.
 Assigning `Some(path)` to `trace-file`
 enables tracing; a later `trace := false` disables it while retaining the path.
 Writing `strict-json` or `timeout` changes subsequent agent-output parsing or
-`exec` calls, respectively. A write the engine cannot accept — a `timeout`
+`exec` calls, respectively. `debug` is read once, when the host session ends
+(the run, or the REPL session): if it is `true` then, the temporary files and
+directories `std/fs` created are kept rather than removed. A write the engine cannot accept — a `timeout`
 whose text is not a duration — raises the catchable `TypeError`
 ([Exceptions](exceptions.md#typeerror)) and leaves the setting unchanged.
 Trace output is best-effort: a filesystem failure disables tracing for the rest

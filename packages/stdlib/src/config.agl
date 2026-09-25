@@ -9,3 +9,5 @@ builtin var strict-json: bool = false
 builtin var timeout: Option[text] = None
 builtin var trace: bool = false
 builtin var trace-file: Option[path] = None
+# Keeps `std/fs` temporary paths when the host session ends.
+builtin var debug: bool = false

@@ -452,6 +452,21 @@ def test_runtime_state_without_close_behaves_exactly_as_before(tmp_path: Path) -
     assert bindings["a"] == bindings["b"]
 
 
+@pytest.mark.parametrize(("debug", "expected"), ((False, ["plain", "kept"]), (True, ["plain"])))
+def test_runtime_state_keeps_debug_retained_values_open_in_debug_mode(
+    debug: bool, expected: list[str]
+) -> None:
+    state = ExternRuntimeState()
+    closed: list[str] = []
+    state.get_or_create("kept", lambda: "kept", closed.append, keep_in_debug=True)
+    state.get_or_create("plain", lambda: "plain", closed.append)
+
+    state.close_all(debug=debug)
+    state.close_all(debug=debug)
+
+    assert closed == expected
+
+
 def test_runtime_state_closer_runs_once_when_an_uncaught_exception_escapes(
     tmp_path: Path,
 ) -> None:

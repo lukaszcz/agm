@@ -20,8 +20,17 @@ program def main(root: path, scenario: text) -> unit =
     print(fs::glob(path::join([root, "nested", "**"])).size())
     fs::remove(at(root, "nested"))
     print(fs::exists(at(root, "nested")))
-    print(fs::is-dir(fs::temp-dir()))
-    print(path::is-absolute(fs::temp-dir()))
+    print(fs::is-dir(fs::os-temp-dir()))
+    print(path::is-absolute(fs::os-temp-dir()))
+  if scenario == "temp_paths" =>
+    let file = fs::temp-file(suffix = ".txt")
+    let dir = fs::temp-dir()
+    fs::write(file, "scratch")
+    fs::copy(file, path::join([dir, "a/b/copy.txt"]))
+    print(fs::read(path::join([dir, "a/b/copy.txt"])))
+    print(path::dirname(file) == fs::os-temp-dir())
+    print(path::extension(file))
+    print(fs::list(dir).size())
   if scenario == "missing_file" =>
     let _ = fs::read(at(root, "missing.txt"))
   if scenario == "missing_directory" =>

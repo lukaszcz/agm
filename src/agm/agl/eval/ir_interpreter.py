@@ -488,6 +488,7 @@ class IrInterpreter:
         builtin_host_settings: Mapping[str | BuiltinVarKey, Value] | None = None,
         param_seeds: Mapping[StaticBindingKey, Value] | None = None,
         process_environment: Mapping[str, str] | None = None,
+        extern_runtime_state: ExternRuntimeState | None = None,
     ) -> None:
         self._program = program
         self._descriptors = ValueDescriptors.from_program(program)
@@ -645,7 +646,11 @@ class IrInterpreter:
             extern_registry if extern_registry is not None else ExternRegistry()
         )
         self._extern_call_window_guard = ExternCallWindow()
-        self._extern_runtime_state = ExternRuntimeState()
+        # A host-supplied state bag outlives this interpreter; its host closes it.
+        self._owns_extern_runtime_state = extern_runtime_state is None
+        self._extern_runtime_state = (
+            extern_runtime_state if extern_runtime_state is not None else ExternRuntimeState()
+        )
         self._effects = EffectHandlers(self)
 
     def _parse_host_output(
@@ -704,6 +709,11 @@ class IrInterpreter:
     def shell_exec_timeout(self) -> float | None:
         """Current shell-exec timeout (may have been updated by a ``builtin var`` write)."""
         return self._shell_exec_timeout
+
+    @property
+    def debug(self) -> bool:
+        """Current ``debug`` setting (may have been updated by a ``builtin var`` write)."""
+        return cast(BoolValue, self._builtin_host_settings["debug"]).value
 
     @property
     def builtin_vars(self) -> dict[BuiltinVarKey, Value]:
@@ -1390,18 +1400,20 @@ class IrInterpreter:
         ``RecursionError`` that still escapes (its limit is capped) is converted
         to a catchable AgL ``RecursionError`` rather than crashing the host.
 
-        Companion state is closed on every exit; session cleanup stays gated by
+        Companion state this interpreter owns is closed on every exit, honoring
+        the final ``debug`` setting; session cleanup stays gated by
         ``close_sessions``.
         """
         needed = _BASE_RECURSION_HEADROOM + self._max_call_depth * _PYTHON_FRAMES_PER_AGL_CALL
         target = min(needed, _MAX_PYTHON_RECURSION_LIMIT)
         session_cleanup = self._session_host.close_all if self._close_sessions else _noop
+        state_cleanup = (
+            self._close_extern_runtime_state if self._owns_extern_runtime_state else _noop
+        )
 
         with raised_recursion_limit(target):
             try:
-                with preserve_primary_error(
-                    self._extern_runtime_state.close_all, label="companion state cleanup"
-                ):
+                with preserve_primary_error(state_cleanup, label="companion state cleanup"):
                     with preserve_primary_error(session_cleanup, label="agent session cleanup"):
                         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
                             self._install_function_closures()
@@ -1427,6 +1439,9 @@ class IrInterpreter:
                 return self._collect_results()
             except RecursionError:
                 raise self._recursion_error() from None
+
+    def _close_extern_runtime_state(self) -> None:
+        self._extern_runtime_state.close_all(debug=self.debug)
 
     def _eval_and_record_initializer(self, module_id: ModuleId, node: IrExpr) -> None:
         """Evaluate one initializer, retaining its result for result collection."""

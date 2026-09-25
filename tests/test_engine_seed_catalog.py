@@ -35,6 +35,7 @@ _CONFIG_RAW_VALUES: dict[str, object] = {
     "default-sandbox": "Native",
     "trace-file": "configured.jsonl",
     "timeout": "12s",
+    "debug": True,
 }
 
 _CLI_VALUES: dict[str, object] = {
@@ -44,6 +45,7 @@ _CLI_VALUES: dict[str, object] = {
     "default-sandbox": "Disabled",
     "trace-file": "cli.jsonl",
     "timeout": "3s",
+    "debug": False,
 }
 
 
@@ -57,6 +59,7 @@ def _config_for(key: str, configured: bool) -> ExecConfig:
         if configured and key == "default-agent"
         else None,
         default_sandbox="Native" if configured and key == "default-sandbox" else None,
+        debug=configured if key == "debug" else False,
     )
 
 
@@ -72,6 +75,7 @@ _RAW_AND_EXPECTED_BY_KEY: dict[str, tuple[object, object]] = {
     "default-sandbox": ("Native", "Native"),
     "trace-file": ("raw.jsonl", "raw.jsonl"),
     "timeout": ("5s", 5.0),
+    "debug": (True, True),
 }
 
 

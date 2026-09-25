@@ -16,11 +16,21 @@ extern def list(path: path) -> array[path]
 # Creates *path* and any missing parent directories.
 extern def mkdir(path: path) -> unit
 extern def remove(path: path) -> unit
+# Creates any missing parent directories of *destination*.
 extern def copy(source: path, destination: path) -> unit
+# Creates any missing parent directories of *destination*.
 extern def move(source: path, destination: path) -> unit
 # Raises `FsError` if any match's name is not valid Unicode.
 extern def glob(pattern: text) -> array[path]
-# Raises `FsError` if the host's temporary-directory path is not valid Unicode.
+# The host's temporary directory. Raises `FsError` if its path is not valid Unicode.
+@extern-name("os_temp_dir")
+extern def os-temp-dir() -> path
+# Creates a new empty file named with *suffix* in `os-temp-dir()`. It is removed when the
+# host session ends (the run, or the REPL session) unless `std/config::debug` is then set.
+@extern-name("temp_file")
+extern def temp-file(suffix: text = "") -> path
+# Creates a new directory in `os-temp-dir()`. It is removed with its contents when the
+# host session ends unless `std/config::debug` is then set.
 @extern-name("temp_dir")
 extern def temp-dir() -> path
 

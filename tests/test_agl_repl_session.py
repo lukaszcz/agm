@@ -8524,3 +8524,51 @@ class TestExceptionRootAcrossEntries:
         assert plain is not None
         assert plain.base == root.decl_node_id
         assert plain.base != EXCEPTION_BASE.decl_id
+
+
+class TestTempPathsAcrossEntries:
+    """``std/fs`` temporary paths live for the whole REPL session."""
+
+    @pytest.fixture
+    def os_temp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        import tempfile
+
+        directory = tmp_path / "os-temp"
+        directory.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(directory))
+        return directory
+
+    def _session_with_temp_file(self) -> ReplSession:
+        session = open_session()
+        assert session.eval_entry("import std/fs").ok
+        assert session.eval_entry("let t = fs::temp-file()").ok
+        assert session.eval_entry('fs::append(t, "x")').ok
+        assert session.eval_entry("fs::read(t)").ok
+        return session
+
+    def test_a_temp_path_survives_later_entries_and_is_removed_on_close(
+        self, os_temp: Path
+    ) -> None:
+        session = self._session_with_temp_file()
+        assert len(list(os_temp.iterdir())) == 1
+
+        session.close()
+
+        assert list(os_temp.iterdir()) == []
+
+    def test_reset_removes_temp_paths(self, os_temp: Path) -> None:
+        session = self._session_with_temp_file()
+
+        session.reset()
+
+        assert list(os_temp.iterdir()) == []
+        session.close()
+
+    def test_debug_keeps_temp_paths_on_close(self, os_temp: Path) -> None:
+        session = self._session_with_temp_file()
+        assert session.eval_entry("import std/config").ok
+        assert session.eval_entry("std/config::debug := true").ok
+
+        session.close()
+
+        assert len(list(os_temp.iterdir())) == 1

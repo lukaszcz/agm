@@ -7,6 +7,12 @@
       "expect": {"stdout": "first second\ntrue\ntrue\n2\n1\n0\n2\n4\nfalse\ntrue\ntrue\n"}
     },
     {
+      "name": "creates_session_temp_paths_in_the_os_temp_dir",
+      "params": {"root": "$TEMP_ROOT", "scenario": "temp_paths"},
+      "filesystem": {},
+      "expect": {"stdout": "scratch\ntrue\nOption::Some(value = \".txt\")\n1\n"}
+    },
+    {
       "name": "reports_a_missing_file_as_fs_error",
       "params": {"root": "$TEMP_ROOT", "scenario": "missing_file"},
       "filesystem": {},

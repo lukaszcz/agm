@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 from stat import S_IMODE
@@ -146,6 +147,38 @@ def mkdir(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
         dry_run.print_operation("mkdir", display_path(path))
         return
     path.mkdir(parents=parents, exist_ok=exist_ok)
+
+
+def make_temp_file(*, prefix: str, suffix: str = "") -> Path:
+    """Create a new empty owner-only file in the OS temporary directory and return its path.
+
+    Under dry-run nothing is created; the returned path is an unused name there.
+    """
+
+    if dry_run.enabled():
+        path = _unused_temp_path(prefix, suffix)
+        dry_run.print_operation("make-temp-file", display_path(path))
+        return path
+    handle, name = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    os.close(handle)
+    return Path(name)
+
+
+def make_temp_dir(*, prefix: str) -> Path:
+    """Create a new owner-only directory in the OS temporary directory and return its path.
+
+    Under dry-run nothing is created; the returned path is an unused name there.
+    """
+
+    if dry_run.enabled():
+        path = _unused_temp_path(prefix, "")
+        dry_run.print_operation("make-temp-dir", display_path(path))
+        return path
+    return Path(tempfile.mkdtemp(prefix=prefix))
+
+
+def _unused_temp_path(prefix: str, suffix: str) -> Path:
+    return Path(tempfile.gettempdir()) / f"{prefix}{uuid4().hex}{suffix}"
 
 
 def write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:

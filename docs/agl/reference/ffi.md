@@ -92,22 +92,22 @@ def rng() -> random.Random:
     return runtime.state("mylib/rng", random.Random)
 ```
 
-`runtime.state(key, factory)` calls `factory` once for each interpreter state
+`runtime.state(key, factory)` calls `factory` once for each host-session state
 bag and returns that value on later calls. It must be called during an extern
 invocation; direct host calls outside evaluation use a separate detached
 state, which is not closed automatically.
 
 This is distinct from ordinary Python module globals. A cached companion's
 globals are shared by every interpreter using that registry and last until its
-companion is re-imported. `runtime.state` instead uses the interpreter active
-for the current extern call: its bag lasts for that interpreter's run, not for
-the Python module. Thus a batch run gets a fresh bag, and every REPL entry gets
-a fresh bag even though its session keeps the companion module cached until
-`:reset`.
+companion is re-imported. `runtime.state` instead uses the host session active
+for the current extern call: its bag lasts for that session, not for the Python
+module. Thus each batch run gets a fresh bag, while a REPL session keeps one bag
+across its entries until `:reset` or exit.
 
 A value that owns a resource passes a `close` callable receiving that value,
-run once when the owning interpreter's run ends — on a clean return as well as
-an escaping exception. `close` is recorded only on the creating call:
+run once when the host session ends — on a clean return, an escaping exception,
+`std/process::exit`, an interrupt, or a SIGTERM/SIGHUP alike. `close` is
+recorded only on the creating call:
 
 ```python
 import requests
@@ -118,6 +118,10 @@ from agl import runtime
 def session() -> requests.Session:
     return runtime.state("mylib/session", requests.Session, close=requests.Session.close)
 ```
+
+A value created with `keep_in_debug=True` is instead left unclosed when the
+session ends with `std/config::debug` set, so a debugging artifact (`std/fs`
+temporary paths) survives for inspection.
 
 A `close` that raises never replaces a run already failing: it is attached as
 a note on that in-flight error, while on an otherwise clean exit it is itself

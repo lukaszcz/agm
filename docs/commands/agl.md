@@ -105,6 +105,9 @@ a direct `agm repl` entry is a static error.
   default**. `--trace` writes to an auto-timestamped path under `.agent-files/`; `--trace-file`
   writes a JSONL trace to `PATH`; `--no-trace` disables it, overriding `[exec] trace = true`.
   These set the initial state; a `std/config::trace := true` write still enables tracing.
+- `--debug` / `--no-debug`: Seed `std/config::debug` (overrides `[exec] debug`; default off).
+  When the run ends with it set, the temporary files and directories `std/fs::temp-file` and
+  `std/fs::temp-dir` created are kept instead of removed.
 
 ### Program arguments
 
@@ -318,6 +321,7 @@ strict-json = false         # lenient JSON recovery is the default
 timeout = "30m"             # initial shell-exec and agent idle timeout
 trace = false               # trace logging off by default; set true to enable
 # trace-file = "trace.jsonl"  # explicit trace path (omit for auto timestamped path)
+debug = false               # keep std/fs temporary paths after exit
 
 ```
 
@@ -368,6 +372,7 @@ program def main(spec: text) -> unit =
   std/config::default-agent := AgentClaude("sonnet", "medium")
   std/config::default-sandbox := AgentSandbox::Native
   std/config::timeout := Some("30s")  # shell-exec idle timeout
+  std/config::debug := true           # keep std/fs temporary paths after the run
 
   let result = ask "Process %{spec}"
   print result
@@ -377,8 +382,8 @@ A qualified target (`std/config::KEY := …`) always works; after `import std/co
 bare `KEY := …`. `timeout` (`Option[text]`) and `trace-file` (`Option[path]`) take `Some("…")`
 or `None`.
 
-Precedence for `default-agent`, `default-sandbox`, `strict-json`, `timeout`, `trace`, and
-`trace-file` is
+Precedence for `default-agent`, `default-sandbox`, `strict-json`, `timeout`, `trace`,
+`trace-file`, and `debug` is
 `source write > CLI > qualified program table > @config > [exec].X > engine default`, where
 `@config` is the selected program's own [`@config`](../agl/reference/attributes.md#config)
 entries. CLI, config, and `@config` supply the **initial** value; a source write overrides it
@@ -388,7 +393,8 @@ there, and `std/config::strict-json := true` overrides `[exec] strict-json = fal
 Writes take effect **positionally**, like `var` mutation. `trace`/`trace-file` writes reconfigure
 the trace destination for subsequent calls; `trace-file := Some(path)` enables tracing, and a
 later `trace := false` disables it without clearing the path. `strict-json` and `timeout`
-writes affect subsequent agent-output parsing and `exec` calls.
+writes affect subsequent agent-output parsing and `exec` calls. `debug` matters only when the
+run ends: its final value decides whether `std/fs` temporary paths are kept.
 
 A CLI, program-table, or `[exec]` timeout seeds both the shell-exec and agent idle timeouts; a
 source `timeout` write changes only the **shell-exec** timeout; agent idle timeout cannot change
@@ -405,6 +411,7 @@ drives shell execution.
 | `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error, or program-argument validation failure; it can also be requested with `std/process::exit(1)` |
 | `2` | The workflow executed but ended with an uncaught AgL exception; it can also be requested with `std/process::exit(2)` |
 | `3`–`255` | Requested by `std/process::exit(code)` |
+| `128+N` | Terminated by signal `N` (SIGTERM → `143`, SIGHUP → `129`), after the run's cleanup |
 
 `std/process::exit` accepts only the portable range `0..255`, so every supported host preserves
 the status; an out-of-range value is a runtime error, not a termination.
@@ -554,8 +561,8 @@ the module is loaded again.
 An imported module's `extern def` companion ([Python FFI](../agl/reference/ffi.md)) is imported
 once per session, so its module globals last for the session; `:reset` discards the cached
 companion and a later import creates new globals. A value from `runtime.state(...)` instead
-belongs to the interpreter evaluating one entry and ends with that entry, even while the
-companion stays cached. A direct entry has no backing file, so it cannot declare `extern def` or
+belongs to the session: it survives across entries and is closed at `:reset` or exit, so
+`std/fs` temporary paths stay usable until then (or are kept, with `std/config::debug` set). A direct entry has no backing file, so it cannot declare `extern def` or
 call `resource`/`resource-dir`; imported file-backed modules use them normally.
 
 ### Entry editing
@@ -613,7 +620,8 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 ### Options
 
 - `--strict-json` / `--no-strict-json`, `--max-call-depth N`, `--default-agent AGENT`,
-  `--default-sandbox SANDBOX`, `--timeout DURATION` / `--no-timeout`: As for `agm exec`.
+  `--default-sandbox SANDBOX`, `--timeout DURATION` / `--no-timeout`, `--debug` / `--no-debug`:
+  As for `agm exec`; `debug` is read when the session ends.
 - `--quiet`: Do not echo entry results, for this session only (does not persist and overrides a
   saved `echo = true`).
 - `--no-stdlib`: Disable the automatic prelude for every loaded program (entries and library
@@ -647,7 +655,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 
 Per-entry errors are reported inline and never exit; the REPL fails only before the loop starts.
 The exception is `std/process::exit(code)`, which ends the REPL with its `0..255` status after
-finalizing the entry's trace.
+finalizing the entry's trace. SIGTERM and SIGHUP end it with `128+N` after the session's cleanup.
 
 `--default-agent`/`[exec] default-agent` and `--default-sandbox`/`[exec] default-sandbox` are
 decoded before the loop, before the session is even built: a blank value, or text that fails to

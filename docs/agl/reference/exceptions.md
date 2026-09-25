@@ -316,8 +316,8 @@ called on `Err`. It carries only the inherited `message` field.
 `message`, it carries `path: text` and `operation: text`.
 
 `fs::list` and `fs::glob` also raise it when a directory entry or match is not
-valid Unicode, and `fs::temp-dir` when the host's temporary directory is;
-`path` is then the directory or pattern that was asked for, and the message
+valid Unicode, and `fs::os-temp-dir`, `fs::temp-file`, and `fs::temp-dir` when
+the host's temporary directory is; `path` is then the directory or pattern that was asked for, and the message
 names the offending entry with its undecodable bytes escaped. The whole call
 fails rather than the entry being skipped.
 

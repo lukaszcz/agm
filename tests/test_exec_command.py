@@ -5007,3 +5007,47 @@ class TestExecStandardLibraryEntries:
             exec_command.run(_exec_args_no_trace(entry, no_stdlib=True, module_paths=[str(loose)]))
             is None
         )
+
+
+class TestExecDebugKeepsTempPaths:
+    """``--debug`` / ``[exec] debug`` keep ``std/fs`` temp paths past the run."""
+
+    _PROGRAM = "import std/fs\nprogram def main() -> unit =\n  let _ = fs::temp-file()\n"
+
+    @pytest.fixture
+    def os_temp(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        import tempfile
+
+        directory = tmp_path / "os-temp"
+        directory.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(directory))
+        return directory
+
+    @pytest.mark.parametrize(("flags", "kept"), (([], 0), (["--debug"], 1), (["--no-debug"], 0)))
+    def test_debug_flag(
+        self, runner: CliRunner, tmp_path: Path, os_temp: Path, flags: list[str], kept: int
+    ) -> None:
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(self._PROGRAM)
+
+        result = invoke(runner, ["exec", "--no-trace", *flags, str(agl_file)])
+
+        assert result.exit_code == 0
+        assert len(list(os_temp.iterdir())) == kept
+
+    @pytest.mark.parametrize(("debug", "kept"), ((None, 1), (False, 0)))
+    def test_debug_config_and_cli_override(
+        self,
+        tmp_path: Path,
+        os_temp: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        debug: bool | None,
+        kept: int,
+    ) -> None:
+        _config_home(tmp_path, monkeypatch, "[exec]\ndebug = true\n")
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text(self._PROGRAM)
+
+        exec_command.run(_exec_args_no_trace(agl_file, debug=debug))
+
+        assert len(list(os_temp.iterdir())) == kept

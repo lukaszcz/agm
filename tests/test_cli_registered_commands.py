@@ -362,9 +362,10 @@ def test_registered_command_forwards_exec_run_time_options(
             "30s",
             "--trace-file",
             "trace.jsonl",
+            "--debug",
         ],
     )
-    negated = invoke(CliRunner(), ["tools", "lint", "--trace", "--no-timeout"])
+    negated = invoke(CliRunner(), ["tools", "lint", "--trace", "--no-timeout", "--no-debug"])
     plain = invoke(CliRunner(), ["tools", "lint", "--no-trace", "--level=--timeout"])
 
     assert [result.exit_code for result in (full, negated, plain)] == [0, 0, 0]
@@ -379,6 +380,7 @@ def test_registered_command_forwards_exec_run_time_options(
             timeout="30s",
             trace_file="trace.jsonl",
             no_trace=False,
+            debug=True,
         ),
         ExecArgs(
             file="tools/lint::main",
@@ -387,6 +389,7 @@ def test_registered_command_forwards_exec_run_time_options(
             trace_file=None,
             trace=True,
             no_timeout=True,
+            debug=False,
         ),
         ExecArgs(
             file="tools/lint::main",

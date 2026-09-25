@@ -22,11 +22,12 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
+from agm.agl.runtime.externs import ExternRuntimeState
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.scope.symbols import dedupe_constructor_candidates
 from agm.agl.self_validation import self_validation_enabled
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
     from agm.agl.scope.program import ResolvedModule
     from agm.agl.scope.symbols import BindingRef, ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import Frame, RecordValue, Value
+    from agm.agl.semantics.values import BoolValue, Frame, RecordValue, Value
     from agm.agl.syntax.nodes import (
         ExportDecl,
         ImportDecl,
@@ -347,6 +348,9 @@ class ReplSession:
             else AgentDispatcherSessionHost(agent_dispatcher)
         )
         self._session_host = effective_session_host
+        # Companion state (``std/fs`` temporary paths, ...) lives for the whole
+        # session: every entry's interpreter shares this bag; :meth:`close` ends it.
+        self._extern_runtime_state = ExternRuntimeState()
         self._runtime = PipelineDriver(
             default_call_depth_limit=default_call_depth_limit,
             agent_dispatcher=agent_dispatcher,
@@ -1929,13 +1933,22 @@ class ReplSession:
         """
         return frozenset(self._ambient_constructor_candidates)
 
+    def close(self) -> None:
+        """Close the session's companion state, honoring the current ``debug`` setting."""
+        debug = self._current.get("debug")
+        self._extern_runtime_state.close_all(
+            debug=debug is not None and cast("BoolValue", debug).value
+        )
+
     def reset(self) -> None:
         """Clear ALL session state (symbols, types, values, source, ids).
 
+        Closes the session's companion state first (see :meth:`close`).
         Restores the live engine settings (strict-json/timeout)
         to their values at session construction, undoing any effect-at-binding
         from ``std/config`` writes entered during the session.
         """
+        self.close()
         from agm.agl.lower import LinkImage
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.typecheck.env import TypeEnvironment

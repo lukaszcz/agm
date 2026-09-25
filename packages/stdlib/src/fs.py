@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
+import functools
 import glob as glob_module
 import tempfile
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import NoReturn, TypeVar
 
-from agl import AglException, array, nominals
+from agl import AglException, array, nominals, runtime
 
 from agm.core import fs
+from agm.core.cleanup import run_cleanup_steps
 from agm.util.unicode import LoneSurrogateError, require_scalar_text, visible_text
 
 FsError = nominals.std.fs.FsError
 
 T = TypeVar("T")
+
+# Name prefix of every temporary path this module creates.
+_TEMP_PREFIX = "agm-"
+# The ``runtime.state`` key of the host session's temporary paths, removed when it ends.
+_TEMP_PATHS_KEY = "std/fs/temp-paths"
 
 
 def _raise_fs_error(path: str, operation: str, *, message: str | None = None) -> NoReturn:
@@ -119,27 +126,39 @@ def mkdir(path: str) -> None:
     _run(path, "mkdir", lambda: fs.mkdir(Path(path), parents=True, exist_ok=True))
 
 
+def _remove_entry(target: Path, *, missing_ok: bool = False) -> None:
+    """Remove the file, symbolic link, or directory tree at *target*."""
+    if target.is_symlink() or not target.is_dir():
+        fs.unlink(target, missing_ok=missing_ok)
+    else:
+        fs.rmtree(target)
+
+
 def remove(path: str) -> None:
     """Remove a file, symbolic link, or directory tree at *path*."""
-    target = Path(path)
-
-    def drop() -> None:
-        if target.is_symlink() or not target.is_dir():
-            fs.unlink(target)
-        else:
-            fs.rmtree(target)
-
-    _run(path, "remove", drop)
+    _run(path, "remove", lambda: _remove_entry(Path(path)))
 
 
 def copy(source: str, destination: str) -> None:
-    """Copy a file from *source* to *destination*."""
-    _run(source, "copy", lambda: fs.copy_file(Path(source), Path(destination)))
+    """Copy a file from *source* to *destination*, creating its missing parent directories."""
+
+    def do() -> None:
+        target = Path(destination)
+        _ensure_parent_directory(target)
+        fs.copy_file(Path(source), target)
+
+    _run(source, "copy", do)
 
 
 def move(source: str, destination: str) -> None:
-    """Move a file or directory from *source* to *destination*."""
-    _run(source, "move", lambda: fs.move(Path(source), Path(destination)))
+    """Move a file or directory to *destination*, creating its missing parent directories."""
+
+    def do() -> None:
+        target = Path(destination)
+        _ensure_parent_directory(target)
+        fs.move(Path(source), target)
+
+    _run(source, "move", do)
 
 
 def glob(pattern: str) -> object:
@@ -151,10 +170,48 @@ def glob(pattern: str) -> object:
     )
 
 
-def temp_dir() -> str:
-    """Return the host's temporary-file directory."""
+def _checked_os_temp_dir(operation: str) -> str:
+    """Return the host's temporary directory, raising ``FsError`` if it is not valid Unicode."""
     directory = tempfile.gettempdir()
-    return _run(visible_text(directory), "temp-dir", lambda: require_scalar_text(directory))
+    return _run(visible_text(directory), operation, lambda: require_scalar_text(directory))
+
+
+def os_temp_dir() -> str:
+    """Return the host's temporary-file directory."""
+    return _checked_os_temp_dir("os-temp-dir")
+
+
+def _remove_temp_paths(paths: list[Path]) -> None:
+    """Remove every temporary path, newest first; one the program already removed is skipped."""
+    run_cleanup_steps(
+        [functools.partial(_remove_entry, path, missing_ok=True) for path in reversed(paths)]
+    )
+
+
+def _no_temp_paths() -> list[Path]:
+    return []
+
+
+def _session_temp_path(operation: str, create: Callable[[], Path]) -> str:
+    """Create a temporary path with *create* and register it for removal at session end."""
+    directory = _checked_os_temp_dir(operation)
+    created = _run(directory, operation, create)
+    runtime.state(
+        _TEMP_PATHS_KEY, _no_temp_paths, close=_remove_temp_paths, keep_in_debug=True
+    ).append(created)
+    return str(created)
+
+
+def temp_file(suffix: str = "") -> str:
+    """Create a new empty temporary file named with *suffix*; removed at session end."""
+    return _session_temp_path(
+        "temp-file", lambda: fs.make_temp_file(prefix=_TEMP_PREFIX, suffix=suffix)
+    )
+
+
+def temp_dir() -> str:
+    """Create a new temporary directory; removed with its contents at session end."""
+    return _session_temp_path("temp-dir", lambda: fs.make_temp_dir(prefix=_TEMP_PREFIX))
 
 
 __all__ = [
@@ -167,8 +224,10 @@ __all__ = [
     "list",
     "mkdir",
     "move",
+    "os_temp_dir",
     "read",
     "remove",
     "temp_dir",
+    "temp_file",
     "write",
 ]

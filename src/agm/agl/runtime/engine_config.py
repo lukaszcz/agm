@@ -186,7 +186,7 @@ def engine_default_settings() -> "dict[str, Value]":
     """Build the typed engine-default value for every scalar/``Option[text]`` engine key.
 
     Derives the raw values from the shared engine-key catalog, then decodes
-    them via :func:`convert_config_value` (``false``/``false``/``none``/``none``),
+    them via :func:`convert_config_value` (``false`` or ``None``),
     building its own fresh seeded ``TypeTable`` rather than requiring one from
     the caller.
 

@@ -123,6 +123,13 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
         config_attr="timeout",
         default=None,
     ),
+    EngineKeySpec(
+        "debug",
+        EngineKeyKind.BOOL,
+        EngineKeyConsumer.HOST_CONSUMED,
+        config_attr="debug",
+        default=False,
+    ),
 )
 
 # Ordered projection for consumers that only need name -> value kind.

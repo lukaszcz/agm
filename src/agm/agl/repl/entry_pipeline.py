@@ -688,6 +688,7 @@ class EntryPipeline:
                 builtin_host_settings=self._builtin_host_settings(),
                 param_seeds={**self._ctx._param_seed_values, **decoded_param_seeds},
                 process_environment=self._ctx._process_environment,
+                extern_runtime_state=self._ctx._extern_runtime_state,
             )
         except AglRaise as exc:
             error = exception_value_to_run_error(

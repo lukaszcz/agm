@@ -58,6 +58,7 @@ from agm.config.module_roots import (
 )
 from agm.core.cleanup import preserve_primary_error
 from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
+from agm.core.process import terminating_signals_exit
 from agm.core.toml import toml_dict
 from agm.packages.activation import select_package_roots
 from agm.packages.development import discover_development_packages
@@ -138,7 +139,10 @@ def run(args: ReplArgs) -> None:
         raise SystemExit(1) from exc
 
     process_environment = dict(os.environ)
-    with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
+    with (
+        terminating_signals_exit(),
+        preserve_primary_error(session_host.close_all, label="agent session cleanup"),
+    ):
         session = ReplSession(
             default_strict_json=strict_json,
             default_call_depth_limit=call_depth_limit,
@@ -161,57 +165,58 @@ def run(args: ReplArgs) -> None:
             ),
         )
 
-        # Load and check the session's initial library image now, so any
-        # startup failure loading the standard library exits before the
-        # console opens and prints its banner, rather than surfacing only
-        # once the first entry runs.
-        open_diagnostics = session.open()
-        if open_diagnostics:
-            for diagnostic in open_diagnostics:
-                print(f"Error: {format_diagnostic(diagnostic)}", file=sys.stderr)
-            raise SystemExit(1)
+        with preserve_primary_error(session.close, label="companion state cleanup"):
+            # Load and check the session's initial library image now, so any
+            # startup failure loading the standard library exits before the
+            # console opens and prints its banner, rather than surfacing only
+            # once the first entry runs.
+            open_diagnostics = session.open()
+            if open_diagnostics:
+                for diagnostic in open_diagnostics:
+                    print(f"Error: {format_diagnostic(diagnostic)}", file=sys.stderr)
+                raise SystemExit(1)
 
-        history_path = agm_home_dir(home=ctx.home) / "repl_history"
-        history_path.parent.mkdir(parents=True, exist_ok=True)
+            history_path = agm_home_dir(home=ctx.home) / "repl_history"
+            history_path.parent.mkdir(parents=True, exist_ok=True)
 
-        def on_setting_save(key: str, value: str | bool) -> None:
-            save_repl_setting(key, value, home=ctx.home)
+            def on_setting_save(key: str, value: str | bool) -> None:
+                save_repl_setting(key, value, home=ctx.home)
 
-        # ``--quiet`` disables echo for this session only and never persists,
-        # overriding a saved ``[repl] echo = true``; absent ``--quiet`` the
-        # persisted (or default) ``[repl] echo`` applies.
-        echo = repl_config.echo and not args.quiet
+            # ``--quiet`` disables echo for this session only and never persists,
+            # overriding a saved ``[repl] echo = true``; absent ``--quiet`` the
+            # persisted (or default) ``[repl] echo`` applies.
+            echo = repl_config.echo and not args.quiet
 
-        # The front end is chosen once, here: ``--plain`` forces the plain line
-        # front end; otherwise ``plain_mode_engaged`` auto-detects it from
-        # stdin/stdout (a pipe, redirected file, or a dumb terminal). There is no
-        # flag to force prompt_toolkit onto a non-terminal. The ``console`` import
-        # stays local so a plain session never pulls in prompt_toolkit; the
-        # ``plain_console`` import is local too for symmetry and late binding —
-        # ``plain_mode_engaged`` is already imported from it at module top, so
-        # this local import defers nothing on the plain branch, but the late
-        # binding is what test fixtures rely on when they monkeypatch it.
-        if args.plain or plain_mode_engaged(stdin=sys.stdin, stdout=sys.stdout, env=os.environ):
-            from agm.agl.repl.plain_console import run_plain_console
+            # The front end is chosen once, here: ``--plain`` forces the plain line
+            # front end; otherwise ``plain_mode_engaged`` auto-detects it from
+            # stdin/stdout (a pipe, redirected file, or a dumb terminal). There is no
+            # flag to force prompt_toolkit onto a non-terminal. The ``console`` import
+            # stays local so a plain session never pulls in prompt_toolkit; the
+            # ``plain_console`` import is local too for symmetry and late binding —
+            # ``plain_mode_engaged`` is already imported from it at module top, so
+            # this local import defers nothing on the plain branch, but the late
+            # binding is what test fixtures rely on when they monkeypatch it.
+            if args.plain or plain_mode_engaged(stdin=sys.stdin, stdout=sys.stdout, env=os.environ):
+                from agm.agl.repl.plain_console import run_plain_console
 
-            run_plain_console(
+                run_plain_console(
+                    session,
+                    echo=echo,
+                    echo_unit=repl_config.echo_unit,
+                    theme=repl_config.theme,
+                    on_setting_save=on_setting_save,
+                    stdin=sys.stdin,
+                    stdout=sys.stdout,
+                )
+                return
+
+            from agm.agl.repl.console import run_console
+
+            run_console(
                 session,
                 echo=echo,
                 echo_unit=repl_config.echo_unit,
+                history_path=history_path,
                 theme=repl_config.theme,
                 on_setting_save=on_setting_save,
-                stdin=sys.stdin,
-                stdout=sys.stdout,
             )
-            return
-
-        from agm.agl.repl.console import run_console
-
-        run_console(
-            session,
-            echo=echo,
-            echo_unit=repl_config.echo_unit,
-            history_path=history_path,
-            theme=repl_config.theme,
-            on_setting_save=on_setting_save,
-        )

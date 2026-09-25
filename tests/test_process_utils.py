@@ -10,6 +10,8 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,6 +33,7 @@ from agm.core.process import (
     run_foreground,
     run_subprocess,
     terminate_process,
+    terminating_signals_exit,
     terminating_signals_raise_interrupt,
 )
 
@@ -1668,10 +1671,25 @@ class TestTerminationSignalsReachCleanup:
             with terminating_signals_raise_interrupt():
                 os.kill(os.getpid(), signal.SIGHUP)
 
-    def test_the_guard_restores_the_previous_dispositions(self) -> None:
+    @pytest.mark.parametrize("signum", (signal.SIGTERM, signal.SIGHUP))
+    def test_a_signal_inside_the_exit_guard_exits_with_its_conventional_status(
+        self, signum: signal.Signals
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            with terminating_signals_exit():
+                os.kill(os.getpid(), signum)
+
+        assert exc_info.value.code == 128 + signum
+
+    @pytest.mark.parametrize(
+        "guard", (terminating_signals_raise_interrupt, terminating_signals_exit)
+    )
+    def test_the_guard_restores_the_previous_dispositions(
+        self, guard: Callable[[], AbstractContextManager[None]]
+    ) -> None:
         before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP))
 
-        with terminating_signals_raise_interrupt():
+        with guard():
             pass
 
         assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == before

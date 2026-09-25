@@ -67,6 +67,8 @@ def execution_cli_values(args: "ExecutionOptionValues") -> dict[str, object | No
         values["default-agent"] = args.default_agent
     if args.default_sandbox is not None:
         values["default-sandbox"] = args.default_sandbox
+    if args.debug is not None:
+        values["debug"] = args.debug
     return values
 
 

@@ -266,6 +266,7 @@ class ExecutionOptionValues(Protocol):
     trace: bool
     no_trace: bool
     trace_file: str | None
+    debug: bool | None
 
 
 @dataclass(slots=True)
@@ -288,6 +289,8 @@ class ExecArgs:
     default_agent: str | None = None
     # An AgL ``AgentSandbox`` literal used to seed std/config::default-sandbox.
     default_sandbox: str | None = None
+    # Seeds std/config::debug (None = no override).
+    debug: bool | None = None
     # Static artifacts produced only when CLI ambiguity required early discovery.
     pipeline_cache: object | None = field(default=None, repr=False, compare=False)
 
@@ -308,6 +311,8 @@ class ReplArgs:
     default_agent: str | None = None
     # An AgL ``AgentSandbox`` literal used to seed std/config::default-sandbox.
     default_sandbox: str | None = None
+    # Seeds std/config::debug (None = no override).
+    debug: bool | None = None
     # Force the plain, non-interactive line front end even on a tty; the
     # auto-detected default (non-tty stdin/stdout, or TERM=dumb) needs no flag.
     plain: bool = False

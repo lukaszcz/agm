@@ -240,6 +240,7 @@ The settings and their types are:
 | `default-agent` | `Agent` | Default value for `ask` calls. |
 | `default-sandbox` | `AgentSandbox` | Default `sandbox` value for `ask`-like calls. |
 | `timeout` | `Option[text]` | Shell-exec timeout. |
+| `debug` | `bool` | Keep `std/fs` temporary paths when the host session ends. |
 
 A write takes effect **positionally**, exactly like any `var` mutation: it
 governs the statements that follow it, in program order. An assignment target

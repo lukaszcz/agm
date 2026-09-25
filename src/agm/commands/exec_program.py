@@ -116,6 +116,7 @@ from agm.config.qualified_keys import (
 from agm.core.cleanup import preserve_primary_error
 from agm.core.fs import read_text_arg
 from agm.core.log import LiveTracePathResolver, prepare_trace_log_from_decision
+from agm.core.process import terminating_signals_exit
 from agm.core.toml import toml_dict
 from agm.packages.activation import load_activation_index
 from agm.packages.manifest import command_paths_for_program
@@ -695,8 +696,12 @@ def run(
     # preflight already lowered, so the graph is type-checked, match-compiled and
     # lowered exactly once. Keep result-to-exit handling inside the cleanup
     # boundary: a failed result is a primary program failure, just like an
-    # exception, and must not be replaced by a secondary close failure.
-    with preserve_primary_error(session_host.close_all, label="agent session cleanup"):
+    # exception, and must not be replaced by a secondary close failure. A
+    # termination signal exits through the same boundary, so cleanup still runs.
+    with (
+        terminating_signals_exit(),
+        preserve_primary_error(session_host.close_all, label="agent session cleanup"),
+    ):
         result = runtime.run_prepared(
             prepared,
             trace_file=trace_file,

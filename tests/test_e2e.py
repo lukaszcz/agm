@@ -9557,6 +9557,46 @@ def _install_transparent_sandbox_shims(
 class TestExecCommand:
     """agm exec: run an AgL workflow program through the checkout CLI."""
 
+    @pytest.mark.parametrize(("flags", "kept"), (([], 0), (["--debug"], 1)))
+    def test_exec_removes_temp_paths_when_terminated_unless_debugging(
+        self, tmp_path: Path, env: dict[str, str], flags: list[str], kept: int
+    ) -> None:
+        os_temp = tmp_path / "os-temp"
+        os_temp.mkdir()
+        env["TMPDIR"] = str(os_temp)
+        ready = tmp_path / "ready"
+        program = tmp_path / "main.agl"
+        program.write_text(
+            "import std/fs\n"
+            "program def main() -> unit =\n"
+            "  let dir = fs::temp-dir()\n"
+            f'  fs::write("{ready}", dir)\n'
+            '  let _: text = exec("sleep 30")\n'
+        )
+
+        process = subprocess.Popen(
+            _agm_argv(["exec", "--no-trace", *flags, str(program)]),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_agm_env(env),
+            cwd=tmp_path,
+        )
+        try:
+            _wait_for_path(ready)
+            assert Path(ready.read_text()).is_dir()
+            process.send_signal(signal.SIGTERM)
+            _stdout, stderr = process.communicate(timeout=60)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=60)
+
+        assert process.returncode == 128 + signal.SIGTERM
+        assert "Traceback" not in stderr
+        # A cold process may also leave the parser's own cache file there.
+        assert len(list(os_temp.glob("agm-*"))) == kept
+
     def test_exec_uses_checkout_with_ambient_python_package_and_stdlib(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
@@ -10108,6 +10148,28 @@ class TestCheckCommand:
 
 class TestReplCommand:
     """agm repl: interactive AgL read-eval-print loop."""
+
+    @pytest.mark.parametrize(("flags", "kept"), (([], 0), (["--debug"], 1)))
+    def test_repl_removes_temp_paths_on_exit_unless_debugging(
+        self, tmp_path: Path, env: dict[str, str], flags: list[str], kept: int
+    ) -> None:
+        os_temp = tmp_path / "os-temp"
+        os_temp.mkdir()
+        env["TMPDIR"] = str(os_temp)
+
+        result = run_agm(
+            ["repl", "--no-trace", *flags],
+            env=env,
+            cwd=tmp_path,
+            input=(
+                'import std/fs\nlet t = fs::temp-file()\nfs::append(t, "x")\nfs::read(t)\n:quit\n'
+            ),
+        )
+
+        assert result.returncode == 0
+        assert any(line.split()[-1:] == ['"x"'] for line in result.stdout.splitlines())
+        # A cold process may also leave the parser's own cache file there.
+        assert len(list(os_temp.glob("agm-*"))) == kept
 
     def test_repl_evaluates_entries_from_stdin_and_exits(
         self, tmp_path: Path, env: dict[str, str]

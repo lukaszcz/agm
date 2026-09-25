@@ -695,6 +695,8 @@ class ExecConfig:
     default_sandbox: object | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
+    # Keep debugging artifacts (``std/fs`` temporary paths) past the host session.
+    debug: bool = False
 
 
 def exec_config_from_merged(
@@ -731,6 +733,7 @@ def exec_config_from_merged(
 
     resolved_trace = _optional_bool(effective, "trace")
     resolved_trace_file = _optional_str(effective, "trace-file")
+    resolved_debug = _optional_bool(effective, "debug")
     # Keep every explicitly supplied Agent/AgentSandbox value raw (a string or
     # a native TOML table) so exec/repl can decode it through the shared
     # host-value decoder at their AgL host boundary; other commands stay free
@@ -746,6 +749,7 @@ def exec_config_from_merged(
         trace_file=resolved_trace_file,
         default_agent=resolved_default_agent,
         default_sandbox=resolved_default_sandbox,
+        debug=resolved_debug,
     )
 
 

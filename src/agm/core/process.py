@@ -106,7 +106,29 @@ def _wait_for_process_group_exit(pgid: int, *, grace: float) -> None:
 
 
 @contextlib.contextmanager
-def terminating_signals_raise_interrupt() -> Iterator[None]:
+def _terminating_signals_handled_by(
+    handler: Callable[[int, FrameType | None], NoReturn],
+) -> Iterator[None]:
+    """Install *handler* for SIGTERM and SIGHUP inside the block."""
+    previous = {
+        number: signal.signal(number, handler) for number in (signal.SIGTERM, signal.SIGHUP)
+    }
+    try:
+        yield
+    finally:
+        for number, restored in previous.items():
+            signal.signal(number, restored)
+
+
+def _raise_interrupt(_signum: int, _frame: FrameType | None) -> NoReturn:
+    raise KeyboardInterrupt
+
+
+def _raise_exit(signum: int, _frame: FrameType | None) -> NoReturn:
+    raise SystemExit(128 + signum)
+
+
+def terminating_signals_raise_interrupt() -> AbstractContextManager[None]:
     """Deliver SIGTERM and SIGHUP as ``KeyboardInterrupt`` inside the block.
 
     Under the default disposition a termination signal tears the interpreter
@@ -118,18 +140,17 @@ def terminating_signals_raise_interrupt() -> Iterator[None]:
     same teardown as Ctrl-C, so the scope goes away with its children rather
     than outliving them both.
     """
+    return _terminating_signals_handled_by(_raise_interrupt)
 
-    def raise_interrupt(_signum: int, _frame: FrameType | None) -> NoReturn:
-        raise KeyboardInterrupt
 
-    previous = {
-        number: signal.signal(number, raise_interrupt) for number in (signal.SIGTERM, signal.SIGHUP)
-    }
-    try:
-        yield
-    finally:
-        for number, handler in previous.items():
-            signal.signal(number, handler)
+def terminating_signals_exit() -> AbstractContextManager[None]:
+    """Deliver SIGTERM and SIGHUP as ``SystemExit(128 + signum)`` inside the block.
+
+    Unwinds like :func:`terminating_signals_raise_interrupt`, so ``finally``
+    cleanup runs, but is not mistaken for Ctrl-C by a host that treats
+    ``KeyboardInterrupt`` as "cancel this step" (the REPL).
+    """
+    return _terminating_signals_handled_by(_raise_exit)
 
 
 def _run_cleanup_command(

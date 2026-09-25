@@ -180,6 +180,16 @@ def _strict_json_option() -> bool | None:
     )
 
 
+def _debug_option() -> bool | None:
+    option = execution_option_spec("debug")
+    return typer.Option(
+        None,
+        *option.declarations,
+        metavar=option.metavar,
+        help="Keep temporary files and directories after exit.",
+    )
+
+
 def _max_call_depth_option() -> int | None:
     option = execution_option_spec("max_call_depth")
     return typer.Option(
@@ -1093,6 +1103,7 @@ def exec_cmd(
     no_stdlib: bool = _no_stdlib_option(),
     timeout: str | None = _timeout_option(),
     no_timeout: bool = _no_timeout_option(),
+    debug: bool | None = _debug_option(),
 ) -> None:
     # ``_RUN_CONTEXT_SETTINGS`` disables Click's built-in ``--help`` interception
     # (``help_option_names: []``) and lets unknown options through, so the whole
@@ -1151,6 +1162,7 @@ def exec_cmd(
         no_stdlib=no_stdlib,
         timeout=timeout,
         no_timeout=no_timeout,
+        debug=debug,
         pipeline_cache=discovery.cached_artifacts(file),
     )
     _reject_run_option_conflict("exec", execution_option_conflict(exec_args))
@@ -1178,6 +1190,7 @@ def repl_cmd(
     no_stdlib: bool = _no_stdlib_option(),
     timeout: str | None = _timeout_option(),
     no_timeout: bool = _no_timeout_option(),
+    debug: bool | None = _debug_option(),
     plain: bool = typer.Option(
         False,
         "--plain",
@@ -1197,6 +1210,7 @@ def repl_cmd(
         trace=trace,
         timeout=timeout,
         no_timeout=no_timeout,
+        debug=debug,
         no_stdlib=no_stdlib,
         plain=plain,
     )

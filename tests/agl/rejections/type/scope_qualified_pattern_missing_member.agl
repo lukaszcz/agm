@@ -1,0 +1,10 @@
+scope Paint
+  enum Col
+    | Red
+end Paint
+
+program def main() -> unit =
+  let c: Paint::Col = Paint::Col::Red
+  case c of
+    | Paint::Missing => print "missing"
+    | _ => print "other"

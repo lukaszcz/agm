@@ -675,13 +675,21 @@ class ScopeNode:
     local_use_contributions: list[LocalUseContribution] = field(default_factory=list)
     imported_use_contributions: list[ImportedUseContribution] = field(default_factory=list)
 
-    def lookup(self, name: str) -> BindingRef | None:
-        """Search lexical bindings and named-scope members outward."""
+    def lookup(
+        self, name: str, *, member_predicate: Callable[[BindingRef], bool] | None = None
+    ) -> BindingRef | None:
+        """Search lexical bindings and named-scope members outward.
+
+        A named-scope member *member_predicate* rejects is skipped, so the
+        search continues outward past it.
+        """
         scope: ScopeNode | None = self
         while scope is not None:
             ref = scope.bindings.get(name)
             if ref is None and scope.scope_path:
                 ref = scope.members.get(name)
+                if ref is not None and member_predicate is not None and not member_predicate(ref):
+                    ref = None
             if ref is not None:
                 return ref
             scope = scope.parent
@@ -881,6 +889,12 @@ class ModuleResolution:
         Maps unqualified ``is`` test node ids to every visible constructor
         candidate for their source spelling. Typecheck selects by the left
         operand's nominal enum type.
+    ``scope_qualified_spellings``
+        Qualified pattern and ``is`` test node ids whose qualifier names a
+        local plain scope. Their constructor selection is complete: typecheck
+        rejects a spelling no published constructor fits against the matched
+        type and never reads the qualifier as a module route. A local/module
+        route clash is left out, deferred to typecheck.
     ``pattern_slots``
         Scope-created field-directed pattern-slot metadata keyed by slot id.
         Branch-body references resolve directly to the shared slot binding.
@@ -930,6 +944,7 @@ class ModuleResolution:
     is_test_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = field(
         default_factory=dict
     )
+    scope_qualified_spellings: frozenset[int] = frozenset()
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
     method_declarations: dict[DeclarationKey, ReceiverOwner] = field(default_factory=dict)

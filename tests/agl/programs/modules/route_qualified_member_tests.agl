@@ -1,0 +1,35 @@
+# A module route or the current-module anchor qualifies an enum member
+# directly; the scrutinee's enum selects the member in an `is` test exactly as
+# it does in a pattern.
+import palette
+
+enum Tone
+  | Warm
+  | Cool
+
+def color-of(pick: text) -> palette::Color =
+  if
+    | pick == "red" => palette::Color::Red
+    | else => palette::Color::Blue
+
+def tone-of(pick: text) -> Tone =
+  if
+    | pick == "red" => Tone::Warm
+    | else => Tone::Cool
+
+program def main(pick: text) -> unit =
+  let c = color-of(pick)
+  print(c is palette::Red)
+  print(
+    case c of
+    | palette::Red => "red"
+    | palette::Blue => "blue"
+  )
+  let t = tone-of(pick)
+  print(t is ::Warm)
+  print(t is not ::Cool)
+  print(
+    case t of
+    | ::Warm => "warm"
+    | ::Cool => "cool"
+  )

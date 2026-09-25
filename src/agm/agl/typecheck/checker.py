@@ -52,7 +52,6 @@ from agm.agl.diagnostics import (
     Diagnostic,
     dollar_spacing_hint,
     static_root_message,
-    type_name_not_a_value,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, is_std_config_root, spell_declaration
@@ -197,7 +196,7 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, TypeExpr
+from agm.agl.syntax.types import AppliedT, TypeExpr, render_qualified_name
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.arguments import bind_call_args, bind_constructor_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
@@ -332,6 +331,11 @@ def _type_argument_mismatch(
         f"but the value has type '{actual!r}'.",
         span=span,
     )
+
+
+def _not_an_enum_type(owner: str, span: SourceSpan) -> AglTypeError:
+    """Return the diagnostic for an enum-owner qualifier naming no enum."""
+    return AglTypeError(f"'{owner}' is not a known enum type.", span=span)
 
 
 def _enum_owner_mismatch(
@@ -2296,24 +2300,20 @@ class _Checker:
         return None if ref is None else self._constructors.normalize_constructor_ref(ref)
 
     def _constructor_signature(
-        self,
-        node_id: int,
-        qualifier: QualifierChain | None,
-        ctor_ref: ConstructorRef,
-        span: SourceSpan,
+        self, ref: VarRef, ctor_ref: ConstructorRef, span: SourceSpan
     ) -> tuple[ConstructorRef, ConstructorSignature]:
-        """Return the signature of the constructor *ctor_ref* names at *node_id*.
+        """Return the signature of the constructor *ctor_ref* that *ref* spells.
 
         An applied owner ``Owner[A]::Member`` selects the member at those
         arguments. A constructor spelled through an alias records the
         declaration it constructs for lowering.
         """
         selected, sig = selected_constructor_signature(
-            self._env, qualifier, ctor_ref, span, type_vars=self._current_type_vars
+            self._env, ref, ctor_ref, span, type_vars=self._current_type_vars
         )
         if sig.result_template.decl_id != ctor_ref.owner_decl_node_id:
             self._record_selected_constructor_ref(
-                node_id, ConstructorRef.for_nominal(sig.result_template)
+                ref.node_id, ConstructorRef.for_nominal(sig.result_template)
             )
         return selected, sig
 
@@ -2443,9 +2443,7 @@ class _Checker:
     def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
         # Constructor references, qualified or bare, share one scope result.
         if (ctor_ref := self._constructor_ref_for(node.node_id)) is not None:
-            ctor_ref, ctor_sig = self._constructor_signature(
-                node.node_id, node.qualifier, ctor_ref, node.span
-            )
+            ctor_ref, ctor_sig = self._constructor_signature(node, ctor_ref, node.span)
             if ctor_sig.type_params:
                 return self._constructors.check_generic_constructor_as_value(
                     ctor_ref=ctor_ref, span=node.span, expected=expected, sig=ctor_sig
@@ -2454,9 +2452,6 @@ class _Checker:
                 owner=ctor_sig.result_template, span=node.span, expected=expected
             )
         ref = self._binding_for(node.node_id)
-        if ref.kind is BinderKind.constructor_binding:
-            # Scope gives every constructible type its constructor.
-            raise type_name_not_a_value(node.name, node.span)
         typ = self._require_binding_type(ref)
         if ref.kind is BinderKind.function_binding and ref.is_builtin:
             return self._builtin_value_type(
@@ -2699,7 +2694,11 @@ class _Checker:
             and (ctor_ref := self._constructor_ref_for(node.expr.node_id)) is not None
         ):
             typ = self._constructors.check_constructor_type_apply(
-                ctor_ref=ctor_ref, type_args=node.type_args, span=node.span, expected=expected
+                ref=node.expr,
+                ctor_ref=ctor_ref,
+                type_args=node.type_args,
+                span=node.span,
+                expected=expected,
             )
             self._record_node_type(node.expr.node_id, typ)
             return typ
@@ -3583,9 +3582,7 @@ class _Checker:
         ):
             if node.type_args and applies_owner(node.callee.qualifier):
                 raise self._qualified_constructor_typed_call_error(node.span)
-            _selected, sig = self._constructor_signature(
-                node.callee.node_id, node.callee.qualifier, ctor_ref, node.span
-            )
+            _selected, sig = self._constructor_signature(node.callee, ctor_ref, node.span)
             return self._constructors.check_constructor_callee_call(
                 node,
                 ctor_ref=ctor_ref,
@@ -3684,9 +3681,6 @@ class _Checker:
                     callee_ref=callee_ref,
                     hole_indices=hole_indices,
                 )
-            if callee_ref.kind is BinderKind.constructor_binding:
-                # Scope gives every constructible type its constructor.
-                raise type_name_not_a_value(node.callee.name, node.span)
         # Member call (``p.f(...)``)? A non-partial call whose callee resolves to
         # a method takes the declared-name path so named arguments and defaults
         # work exactly as they do for the qualified ``Type::f(p, ...)`` spelling.
@@ -5175,20 +5169,18 @@ class _Checker:
                     if direct_member is not None:
                         constructor = ConstructorRef.for_nominal(direct_member)
             if constructor is None:
-                self._check_variant_qualification(
-                    qualifier=node.qualifier,
-                    variant=node.variant,
-                    enum_type=enum_type,
-                    span=node.span,
+                unpublished = self._unpublished_enum_member(
+                    node.node_id, node.qualifier, node.variant, enum_type, (), node.span
                 )
-                if node.variant not in self._env.type_table.enum_member_names(enum_type):
-                    raise _variant_not_in_enum(node.variant, enum_type, node.span)
+                self._record_selected_constructor_ref(
+                    node.node_id, ConstructorRef.for_nominal(unpublished)
+                )
                 return BoolType()
 
             member = self._enum_member_for_constructor_candidate(enum_type, constructor)
             if member is None:
                 raise self._constructor_outside_enum(
-                    node.variant, enum_type, constructor, node.span
+                    node.variant, enum_type, (constructor,), node.span
                 )
 
             self._validate_enum_constructor_qualification(
@@ -5287,7 +5279,7 @@ class _Checker:
         """Validate the optional enum-type qualifier on a variant reference."""
         if qualifier is None:
             return
-        local_match = self._local_qualified_enum(qualifier, span)
+        local_match = self._local_qualified_owner(qualifier, span)
         if local_match is not None:
             local_owner, resolved_enum, type_params = local_match
             if qualifier.anchor is None and self._env.has_qualified_import_member(
@@ -5298,6 +5290,8 @@ class _Checker:
                     f"'{variant}'. {qualification_repair_guidance()}",
                     span=span,
                 )
+            if not isinstance(resolved_enum, EnumType):
+                raise _not_an_enum_type(local_owner, span)
             # Identity is the declaration, never the name: two declarations
             # sharing one name path (a REPL redeclaration) are unrelated enums.
             # Within one declaration the owner selects the member at its own
@@ -5341,7 +5335,19 @@ class _Checker:
     def _local_qualified_enum(
         self, qualifier: QualifierChain, span: SourceSpan
     ) -> tuple[str, EnumType, tuple[str, ...]] | None:
-        """Resolve a non-module enum qualifier to its owner and the parameters it leaves open.
+        """Resolve a non-module enum qualifier to its owner and the parameters it leaves open."""
+        local_match = self._local_qualified_owner(qualifier, span)
+        if local_match is None:
+            return None
+        local_owner, owner, type_params = local_match
+        if not isinstance(owner, EnumType):
+            return None
+        return local_owner, owner, type_params
+
+    def _local_qualified_owner(
+        self, qualifier: QualifierChain, span: SourceSpan
+    ) -> tuple[str, Type, tuple[str, ...]] | None:
+        """Resolve a non-module type qualifier to its owner and the parameters it leaves open.
 
         An unapplied owner is its template over its own parameters; an applied
         owner resolves like the same type expression and leaves none open.
@@ -5360,8 +5366,6 @@ class _Checker:
             )
         else:
             type_params = tuple(sorted(free_type_vars(owner)))
-        if not isinstance(owner, EnumType):
-            return None
         return local_owner, owner, type_params
 
     def _require_enum_owner_match(
@@ -5376,10 +5380,7 @@ class _Checker:
             template = form.type_template
             resolved = None if template is None else template.template
             if not isinstance(resolved, EnumType):
-                raise AglTypeError(
-                    f"'{rendered_owner}' is not a known enum type.",
-                    span=span,
-                )
+                raise _not_an_enum_type(rendered_owner, span)
             raise _enum_owner_mismatch(rendered_owner, resolved, enum_type, span)
 
     def _check_module_qualified_variant(
@@ -6068,7 +6069,13 @@ class _Checker:
         callee = cast(VarRef, call.callee)
         ctor = self._resolve_constructor_alias(callee)
         if ctor is not None:
-            owner = constructor_signature_of(self._env, ctor, callee.span)[1].result_template
+            _ctor, signature = constructor_signature_of(
+                self._env,
+                ctor,
+                callee.span,
+                spelling=render_qualified_name(callee.qualifier, callee.name),
+            )
+            owner = signature.result_template
             field_kinds = self._env.type_table.field_kinds(owner)
             bound = bind_constructor_args(
                 field_kinds,
@@ -6415,16 +6422,16 @@ class _Checker:
                         span=pattern.span,
                     )
             if selected is None:
-                self._check_variant_qualification(
-                    qualifier=pattern.qualifier,
-                    variant=pattern.name,
-                    enum_type=subj_type,
-                    span=pattern.span,
+                selected_member = self._unpublished_enum_member(
+                    pattern.node_id,
+                    pattern.qualifier,
+                    pattern.name,
+                    subj_type,
+                    self._pattern_constructor_candidates(pattern),
+                    pattern.span,
                 )
-                named_member = self._env.type_table.enum_member_names(subj_type).get(pattern.name)
-                if named_member is None:
-                    raise _variant_not_in_enum(pattern.name, subj_type, pattern.span)
-                selected_member = named_member
+                if pattern.qualifier is not None:
+                    constructor_ref = ConstructorRef.for_nominal(selected_member)
             else:
                 constructor_ref, selected_member = selected
                 self._validate_enum_constructor_qualification(
@@ -6462,14 +6469,15 @@ class _Checker:
                     )
                 # A constructor scope resolved for this record already names it.
                 elif constructor_ref is None:
-                    # An owning enum's qualifier check reports why the route fails.
-                    for enum_owner in enum_owners:
-                        self._check_variant_qualification(
-                            qualifier=pattern.qualifier,
-                            variant=pattern.name,
-                            enum_type=enum_owner,
-                            span=pattern.span,
-                        )
+                    if pattern.node_id not in self._resolved.scope_qualified_spellings:
+                        # An owning enum's qualifier check reports why the route fails.
+                        for enum_owner in enum_owners:
+                            self._check_variant_qualification(
+                                qualifier=pattern.qualifier,
+                                variant=pattern.name,
+                                enum_type=enum_owner,
+                                span=pattern.span,
+                            )
                     raise AglTypeError(
                         f"Qualified constructor pattern '{pattern.name}' does not belong to "
                         f"'{subj_type!r}'.",
@@ -6484,17 +6492,12 @@ class _Checker:
                 f"type '{subj_type!r}'.",
                 span=pattern.span,
             )
-        if constructor_ref is None:
-            enum_member = (
-                self._env.type_table.enum_member_names(subj_type)[pattern.name]
-                if isinstance(subj_type, EnumType) and pattern.qualifier
-                else owner_type
-                if pattern.name == owner_type.name
-                and self._env.type_table.is_enum_member(owner_type)
-                else None
-            )
-            if enum_member is not None:
-                constructor_ref = ConstructorRef.for_nominal(enum_member)
+        if (
+            constructor_ref is None
+            and pattern.name == owner_type.name
+            and self._env.type_table.is_enum_member(owner_type)
+        ):
+            constructor_ref = ConstructorRef.for_nominal(owner_type)
         if constructor_ref is None:
             raise AglTypeError(
                 f"Constructor pattern '{pattern.name}' does not belong to '{owner_type!r}'.",
@@ -6615,19 +6618,49 @@ class _Checker:
         )
 
     def _constructor_outside_enum(
-        self, variant: str, enum_type: EnumType, constructor: ConstructorRef, span: SourceSpan
+        self,
+        variant: str,
+        enum_type: EnumType,
+        constructors: tuple[ConstructorRef, ...],
+        span: SourceSpan,
     ) -> AglTypeError:
-        """Return why *constructor* constructs no member of *enum_type*.
+        """Return why *constructors* construct no member of *enum_type*.
 
         A constructor of one of its members at other type arguments is a type
         argument mismatch; anything else does not belong to the enum.
         """
-        constructed = constructed_template(self._env, constructor).template
-        if isinstance(constructed, RecordType):
-            member = self._env.type_table.enum_member_by_decl(enum_type, constructed.decl_id)
-            if member is not None:
-                return _type_argument_mismatch(variant, constructed, member, span)
+        for constructor in constructors:
+            constructed = constructed_template(self._env, constructor).template
+            if isinstance(constructed, RecordType):
+                member = self._env.type_table.enum_member_by_decl(enum_type, constructed.decl_id)
+                if member is not None:
+                    return _type_argument_mismatch(variant, constructed, member, span)
         return _variant_not_in_enum(variant, enum_type, span)
+
+    def _unpublished_enum_member(
+        self,
+        node_id: int,
+        qualifier: QualifierChain | None,
+        variant: str,
+        enum_type: EnumType,
+        candidates: tuple[ConstructorRef, ...],
+        span: SourceSpan,
+    ) -> RecordType:
+        """Return the member of *enum_type* a spelling no published *candidates* select.
+
+        A module route or the current-module anchor may qualify the member
+        directly (``mylib::Red``). A local scope's candidates are all it
+        qualifies, so a spelling none of them fits names no member.
+        """
+        if node_id in self._resolved.scope_qualified_spellings:
+            raise self._constructor_outside_enum(variant, enum_type, candidates, span)
+        self._check_variant_qualification(
+            qualifier=qualifier, variant=variant, enum_type=enum_type, span=span
+        )
+        member = self._env.type_table.enum_member_names(enum_type).get(variant)
+        if member is None:
+            raise _variant_not_in_enum(variant, enum_type, span)
+        return member
 
     @staticmethod
     def _unique_constructor_candidate(

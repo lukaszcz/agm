@@ -1,0 +1,52 @@
+# A type declared in a named scope lives only in the type namespace: inside
+# its region, a scoped enum or structural alias never hides an outer def or
+# var, an imported function, or the builtin `render`, and each name keeps
+# denoting the scoped type in annotations and qualifiers.
+import lib::{paint}
+
+def Col(n: int) -> int = n * 10
+
+def Cnt(n: int) -> int = n + 2
+
+var tally = 0
+
+scope Shades
+  enum render
+    | A
+    | B
+
+  enum paint
+    | Red
+    | Blue
+
+  enum Col
+    | Light
+    | Dark
+
+  type Cnt = int
+
+  enum tally
+    | Low
+    | High
+
+  def pick(start: int) -> paint = if start > 1 => paint::Blue else => paint::Red
+
+  def shade(start: int) -> Col = if start > 1 => Col::Dark else => Col::Light
+
+  def report(start: int) -> unit =
+    let kind: render = if start > 1 => render::B else => render::A
+    let count: Cnt = Cnt(start)
+    tally := tally + count
+    print(render(start))
+    print(paint(start))
+    print(Col(start))
+    print("%{count} %{tally}")
+    print("%{kind is render::B} %{pick(start) is paint::Blue} %{shade(start) is Col::Dark}")
+    print(
+      case shade(start) of
+      | Col::Light => "light"
+      | Col::Dark => "dark"
+    )
+end Shades
+
+program def main(start: int) -> unit = Shades::report(start)

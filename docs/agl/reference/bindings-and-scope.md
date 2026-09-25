@@ -384,9 +384,9 @@ An enum, an alias of an enum, and an alias of a structural type have no
 constructor of their own (an enum's members are its constructors); neither
 does an alias whose target is one of its own type parameters, since a type
 parameter shadows any type of the same name (in `type G[Col] = Col`, `Col`
-is the parameter). Such a name lives only in the type namespace, so a value
-of the same spelling — a builtin, an imported function — stays visible
-beside it:
+is the parameter). Such a name lives only in the type namespace, at the
+module root or in a named scope, so a value of the same spelling — a builtin,
+an imported function, an enclosing declaration — stays visible beside it:
 
 ```agl
 enum render

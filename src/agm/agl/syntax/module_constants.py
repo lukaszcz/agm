@@ -90,7 +90,15 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import BoolT, DecimalT, IntT, TextT, TypeExpr, render_type_expr
+from agm.agl.syntax.types import (
+    BoolT,
+    DecimalT,
+    IntT,
+    TextT,
+    TypeExpr,
+    render_qualified_name,
+    render_type_expr,
+)
 from agm.agl.value_syntax.lexical import scalar_text
 
 __all__ = ["FoldFailure", "ModuleConstants", "Scalar", "constant_key", "fold_scalar"]
@@ -434,11 +442,4 @@ class ModuleConstants:
 
 def _spelling(expr: VarRef) -> str:
     """Return a reference as it was written, for a diagnostic."""
-    qualifier = expr.qualifier
-    if qualifier is None:
-        return expr.name
-    route = qualifier.render()
-    if qualifier.anchored or "/" in route:
-        return f"{route}::{expr.name}"
-    anchor = "::" if qualifier.anchor is QualifierAnchor.CURRENT_MODULE else ""
-    return anchor + "::".join((*(segment.name for segment in qualifier.segments), expr.name))
+    return render_qualified_name(expr.qualifier, expr.name)

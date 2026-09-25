@@ -7235,7 +7235,9 @@ class TestIsTest:
         assert "enum" in str(err).lower()
 
     def test_is_unknown_variant_raises(self) -> None:
-        err = reject_type("enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is Status::Gone")
+        err = reject_type(
+            "enum Status\n  | Pass\n  | Fail\nlet s: Status = Pass()\ns is Status::Gone"
+        )
         assert "variant" in str(err).lower()
 
     def test_is_test_wrong_qualifier_raises(self) -> None:
@@ -12499,27 +12501,6 @@ class TestGenericConstructorAsValue:
 class TestNonGenericConstructorsUnchanged:
     """Verify that non-generic constructors continue to work as before."""
 
-    def test_unresolved_local_type_binding_is_reported_as_a_type_error(self) -> None:
-        program = parse_program("Color")
-        value = program.body.items[0]
-        assert isinstance(value, VarRef)
-        type_binding = BindingRef(
-            name="Color",
-            mutable=False,
-            decl_span=value.span,
-            decl_node_id=value.node_id,
-            kind=BinderKind.constructor_binding,
-        )
-        resolved = _ModuleResolution(
-            program=program,
-            resolution={value.node_id: type_binding},
-            builtin_calls={},
-            root_scope=ScopeNode(node_id=program.node_id, bindings={"Color": type_binding}),
-        )
-
-        with pytest.raises(AglTypeError):
-            check_resolved(resolved)
-
     def test_non_generic_type_arg_rejected(self) -> None:
         err = reject_type("record Point\n  x: int\n  y: int\nPoint::[int](x = 1, y = 2)")
         assert (
@@ -12682,14 +12663,13 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
 
     def test_generic_record_name_as_variant_qualifier_rejected(self) -> None:
         # A generic *record* used as a variant qualifier on an enum scrutinee
-        # is not a known enum type (covers the non-enum generic-kind branch).
-        err = reject_type(
-            self._OPTION
-            + "record Box[T]\n  value: T\n"
-            + "let o: Option[int] = some(value = 5)\n"
-            + "if o is Box::some => print 1\n"
+        # is not a known enum type, alike in `is` and in a pattern.
+        prefix = (
+            self._OPTION + "record Box[T]\n  value: T\n" + "let o: Option[int] = some(value = 5)\n"
         )
-        assert "enum or record" in str(err).lower()
+        is_err = reject_type(prefix + "if o is Box::some => print 1\n")
+        pattern_err = reject_type(prefix + "print (case o of | Box::some => 1 | _ => 0)\n")
+        assert str(is_err) == str(pattern_err)
 
     def test_mismatched_generic_enum_qualifier_rejected(self) -> None:
         # A qualifier naming a different generic enum than the scrutinee.

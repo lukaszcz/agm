@@ -26,9 +26,17 @@ from agm.agl.semantics.types import (
     free_type_vars,
     substitute,
 )
-from agm.agl.syntax.nodes import Call, CallArg, Expr, NamedArg, Placeholder, QualifierChain
+from agm.agl.syntax.nodes import (
+    Call,
+    CallArg,
+    Expr,
+    NamedArg,
+    Placeholder,
+    QualifierChain,
+    VarRef,
+)
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import TypeExpr
+from agm.agl.syntax.types import TypeExpr, render_qualified_name
 from agm.agl.typecheck.arguments import bind_constructor_args
 from agm.agl.typecheck.env import (
     AglTypeError,
@@ -68,15 +76,15 @@ def _nominal_constructor_signature(
 
 
 def _constructible_nominal(
-    template: Type, name: str, span: SourceSpan
+    template: Type, spelling: str, span: SourceSpan
 ) -> RecordType | ExceptionType:
-    """Return *template*, the record or exception a constructor-position *name* denotes.
+    """Return *template*, the record or exception a constructor written *spelling* denotes.
 
     Scope presumes an alias constructible when it selects no declaration for
     the alias's target; the checked target decides.
     """
     if not isinstance(template, (RecordType, ExceptionType)):
-        raise type_name_not_a_value(name, span)
+        raise type_name_not_a_value(spelling, span)
     return template
 
 
@@ -112,15 +120,15 @@ def constructed_template(env: TypeEnvironment, ctor_ref: ConstructorRef) -> Type
 
 
 def constructor_signature_of(
-    env: TypeEnvironment, ctor_ref: ConstructorRef, span: SourceSpan
+    env: TypeEnvironment, ctor_ref: ConstructorRef, span: SourceSpan, *, spelling: str
 ) -> tuple[ConstructorRef, ConstructorSignature]:
-    """Return *ctor_ref* with its constructed type's parameters, and its constructor signature.
+    """Return *ctor_ref*, written *spelling*, with its type's parameters and its signature.
 
     Scope owns the source spelling and identity; :func:`constructed_template`
     reads the constructed type from that identity.
     """
     template = constructed_template(env, ctor_ref)
-    owner = _constructible_nominal(template.template, ctor_ref.owner_name, span)
+    owner = _constructible_nominal(template.template, spelling, span)
     return replace(ctor_ref, type_params=template.type_params), _nominal_constructor_signature(
         env.type_table, owner, ctor_ref.owner_name, template.type_params
     )
@@ -152,22 +160,24 @@ def applied_owner_member(
 
 def selected_constructor_signature(
     env: TypeEnvironment,
-    qualifier: QualifierChain | None,
+    ref: VarRef,
     ctor_ref: ConstructorRef,
     span: SourceSpan,
     *,
     type_vars: frozenset[str],
 ) -> tuple[ConstructorRef, ConstructorSignature]:
-    """Return the constructor *ctor_ref* spelled with *qualifier*, and its signature.
+    """Return the constructor *ctor_ref* that *ref* spells, and its signature.
 
     An applied owner ``Owner[A]::Member`` selects the member concretely at
     those arguments; any other spelling constructs what *ctor_ref* identifies.
     """
     member = applied_owner_member(
-        env, qualifier, ctor_ref.member or ctor_ref.owner_name, type_vars=type_vars, span=span
+        env, ref.qualifier, ctor_ref.member or ctor_ref.owner_name, type_vars=type_vars, span=span
     )
     if member is None:
-        return constructor_signature_of(env, ctor_ref, span)
+        return constructor_signature_of(
+            env, ctor_ref, span, spelling=render_qualified_name(ref.qualifier, ref.name)
+        )
     return replace(ctor_ref, type_params=()), _nominal_constructor_signature(
         env.type_table, member, ctor_ref.owner_name, ()
     )
@@ -402,19 +412,22 @@ class ConstructorChecker:
     def check_constructor_type_apply(
         self,
         *,
+        ref: VarRef,
         ctor_ref: ConstructorRef,
         type_args: tuple[TypeExpr, ...],
         span: SourceSpan,
         expected: Type | None,
     ) -> Type:
-        """Type an explicitly instantiated constructor used as a value.
+        """Type the constructor *ref* spells, explicitly instantiated and used as a value.
 
         Direct members accept their captured parameters.  An inline generic
         enum member also accepts its owner's complete parameter list, which is
         substituted through the member's captured result and field templates.
         """
         type_params = self._explicit_constructor_type_params(ctor_ref, type_args, span)
-        ctor_ref, sig = constructor_signature_of(self._ctx._env, ctor_ref, span)
+        ctor_ref, sig = constructor_signature_of(
+            self._ctx._env, ctor_ref, span, spelling=render_qualified_name(ref.qualifier, ref.name)
+        )
         result = self._instantiate_constructor_value(
             type_params=type_params,
             type_args=type_args,

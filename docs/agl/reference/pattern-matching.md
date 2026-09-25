@@ -173,7 +173,10 @@ qualification itself uses `::`, never `.`. A named scope qualifies a pattern,
 or an `is`/`is not` right-hand side ([Expressions](expressions.md)), through
 the same chain, so a scoped constructor or exception is written with its
 exact path (`Shapes::Point(x)`, `mylib::Shapes::Point(x)`); see
-[Scopes](scopes.md).
+[Scopes](scopes.md). A leading segment naming both a local scope and a module
+route is ambiguous in a spelling the scope declares no constructor for; `/` or
+`::` selects the reading
+([Lexical structure](lexical-structure.md#qualifier-chains)).
 
 **Payload sub-patterns** follow the same positional-greedy binding as calls:
 

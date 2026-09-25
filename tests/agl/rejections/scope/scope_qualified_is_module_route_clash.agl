@@ -1,0 +1,9 @@
+import palette
+
+scope palette
+  record Other
+end palette
+
+program def main() -> unit =
+  let c: palette::Color = palette::Color::Red
+  print(c is palette::Red)

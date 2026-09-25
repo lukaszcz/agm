@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "red_selects_the_first_members",
+      "module_roots": [
+        "program_modules/modules/route_qualified_members"
+      ],
+      "params": {
+        "pick": "red"
+      },
+      "expect": {
+        "stdout": "true\nred\ntrue\ntrue\nwarm\n"
+      }
+    },
+    {
+      "name": "other_selects_the_second_members",
+      "module_roots": [
+        "program_modules/modules/route_qualified_members"
+      ],
+      "params": {
+        "pick": "other"
+      },
+      "expect": {
+        "stdout": "false\nblue\nfalse\nfalse\ncool\n"
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+scope Paint
+
+  scope Inner
+    enum Dir
+      | Up
+  end Inner
+end Paint
+
+program def main() -> unit =
+  let d: Paint::Inner::Dir = Paint::Inner::Dir::Up
+  print(d is Paint::Inner::Gone)

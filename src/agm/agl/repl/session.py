@@ -58,7 +58,6 @@ if TYPE_CHECKING:
         ImportDecl,
         InfixAssoc,
         Program,
-        QualifierChain,
         ScopeRegion,
         TypeAlias,
         VarRef,
@@ -125,8 +124,7 @@ class _InfoReference:
     binding: "BindingRef | None"
     constructor: "ConstructorRef | None"
     alias: "TypeAlias | None"
-    qualifier: "QualifierChain | None"
-    span: "SourceSpan"
+    reference: "VarRef"
 
 
 # Bootstrap images retain complete frontend graphs, so keep only a small working
@@ -1877,8 +1875,7 @@ class ReplSession:
             binding=binding,
             constructor=constructor,
             alias=self._alias_declaration(reference),
-            qualifier=reference.qualifier,
-            span=reference.span,
+            reference=reference,
         )
 
     def _canonical_library_identities(
@@ -1956,7 +1953,11 @@ class ReplSession:
         from agm.agl.typecheck.constructors import selected_constructor_signature
 
         return selected_constructor_signature(
-            self._type_env, reference.qualifier, constructor, reference.span, type_vars=frozenset()
+            self._type_env,
+            reference.reference,
+            constructor,
+            reference.reference.span,
+            type_vars=frozenset(),
         )[1]
 
     def type_names(self) -> frozenset[str]:

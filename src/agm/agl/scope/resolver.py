@@ -199,7 +199,14 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, AppliedT, NameT, render_type_expr
+from agm.agl.syntax.types import (
+    TYPE_PARAMETER_WILDCARD,
+    AppliedT,
+    NameT,
+    render_qualified_name,
+    render_qualifier_path,
+    render_type_expr,
+)
 from agm.agl.syntax.visitor import walk
 
 _T = TypeVar("_T")
@@ -565,6 +572,8 @@ class _Resolver:
         # Bare ``is`` spellings remain candidate sets until typecheck knows the
         # nominal type of the left operand.
         self._is_test_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
+        # Qualified pattern and ``is`` spellings whose qualifier names a local plain scope.
+        self._scope_qualified_spellings: set[int] = set()
         # Each case branch creates one shared slot per pattern binding name.
         # The checker selects its final target after the branch is classified.
         self._pattern_slots: dict[int, PatternSlot] = {}
@@ -759,6 +768,7 @@ class _Resolver:
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             pattern_constructor_spellings=dict(self._pattern_constructor_spellings),
             is_test_constructor_candidates=dict(self._is_test_constructor_candidates),
+            scope_qualified_spellings=frozenset(self._scope_qualified_spellings),
             pattern_slots=dict(self._pattern_slots),
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
             method_declarations=dict(self._method_declarations),
@@ -1681,9 +1691,7 @@ class _Resolver:
                         self._add_constructor_candidate(
                             member.name, cref, scope_path=type_scope, inject_bare=not path
                         )
-                        continue
-                    assert isinstance(member, VariantRef)
-                    if not path:
+                    elif not path:
                         for cref in self._referenced_member_constructor_candidates(member):
                             self._add_constructor_candidate(cref.owner_name, cref)
             elif isinstance(item, ExceptionDef):
@@ -3151,7 +3159,7 @@ class _Resolver:
             self._resolve_qualified_assign(node, target)
             return
         name = target.name
-        ref = self._current_scope().lookup(name)
+        ref = self._lookup_value(name)
         if ref is None:
             ref = self._lookup_bare_contribution(name, node.span, self._is_value_contribution)
             # Try structured bare import contributions as a fallback, so a bare target
@@ -3300,17 +3308,20 @@ class _Resolver:
                 self._is_test_constructor_candidates[expr.node_id] = candidates
                 if len(candidates) == 1:
                     self._constructor_refs[expr.node_id] = candidates[0]
-            elif (
-                not self._resolve_constructor_chain(
-                    expr.node_id, expr.qualifier, expr.variant, defer_route_diagnostics=True
+            else:
+                resolved = self._resolve_constructor_chain(
+                    expr.node_id, expr.qualifier, expr.variant, defer_diagnostics=True
                 )
-                and self._validate_local_scope_chain(expr.qualifier) is None
-            ):
-                # A module route naming a root record or exception, e.g. `mod::Child`;
-                # a local-scope qualifier's route clash stays deferred to the checker.
-                imported = self._imported_atom_constructor(expr.qualifier, expr.variant)
-                if imported is not None:
-                    self._constructor_refs[expr.node_id] = imported
+                local_path = self._validate_local_scope_chain(expr.qualifier)
+                if local_path is not None:
+                    self._note_scope_qualified_spelling(
+                        expr.node_id, expr.qualifier, local_path, expr.variant
+                    )
+                elif not resolved:
+                    # A module route naming a root record or exception, e.g. `mod::Child`.
+                    imported = self._imported_atom_constructor(expr.qualifier, expr.variant)
+                    if imported is not None:
+                        self._constructor_refs[expr.node_id] = imported
             self._resolve_expr(expr.expr)
         elif isinstance(expr, Cast):
             self._resolve_expr(expr.expr)
@@ -3389,7 +3400,7 @@ class _Resolver:
         # A builtin spelling is reserved in bare namespace lookups. Qualified
         # module and scope members may share it, but cannot intercept the
         # builtin after a ``use`` or other bare contribution.
-        ref = self._current_scope().lookup(node.name)
+        ref = self._lookup_value(node.name)
         if node.name in _BUILTIN_CALL_NAMES and (
             ref is None
             or (ref.kind is BinderKind.function_binding and not self._is_builtin_function_ref(ref))
@@ -3513,6 +3524,21 @@ class _Resolver:
             f"Built-in function '{ref.name}' cannot be referenced as a value; "
             f"call it directly ({reason}).",
             span=node.span,
+        )
+
+    def _lookup_value(self, name: str, scope: ScopeNode | None = None) -> BindingRef | None:
+        """Look up *name* in the value namespace from *scope* or the current scope.
+
+        A named-scope type with no constructor of its own binds no value, so it
+        never hides an outer, imported, or builtin value of the same spelling.
+        """
+        start = self._current_scope() if scope is None else scope
+        return start.lookup(name, member_predicate=self._is_value_member)
+
+    def _is_value_member(self, ref: BindingRef) -> bool:
+        """Whether a named-scope member denotes a value rather than only a type."""
+        return ref.kind is not BinderKind.constructor_binding or bool(
+            self._scoped_constructor_candidates.get((ref.scope_path, ref.name))
         )
 
     def _record_varref_binding(
@@ -3674,9 +3700,15 @@ class _Resolver:
             return True
         if defer_route_diagnostics:
             return False
+        raise self._local_scope_route_ambiguity(chain, name, path)
+
+    def _local_scope_route_ambiguity(
+        self, chain: QualifierChain, name: str, path: ScopePath
+    ) -> AglScopeError:
+        """Return the error for *chain*'s leading segment naming both *path* and a module route."""
         local_kind = "a type name" if path in self._type_paths else "a local scope"
-        raise AglScopeError(
-            f"Qualifier '{relative_path[0]}' is both {local_kind} and a module route for "
+        return AglScopeError(
+            f"Qualifier '{chain.segments[0].name}' is both {local_kind} and a module route for "
             f"'{name}'. {qualification_repair_guidance()}",
             span=chain.span,
         )
@@ -3687,7 +3719,8 @@ class _Resolver:
         Local paths are considered before import routes. A member absent from
         a local type path, or qualified by a type owner a ``use`` contributes,
         is left to the qualified chain resolver, which owns constructor
-        diagnostics.
+        diagnostics. A type member with no constructor of its own is a type
+        name, not a value.
         """
         chain = node.qualifier
         if chain is None or chain.anchor is QualifierAnchor.MODULE or not chain.segments:
@@ -3745,11 +3778,12 @@ class _Resolver:
         self._check_local_scope_route_ambiguity(chain, node.name, path)
         self._require_textually_visible(ref, node.span)
         if ref.kind is BinderKind.constructor_binding:
+            # One declaration owns each scoped spelling, so it has at most one constructor.
             candidates = self._scoped_constructor_candidates.get((path, node.name), ())
-            if len(candidates) == 1:
-                self._constructor_refs[node.node_id] = candidates[0]
-                return True
-            return False
+            if not candidates:
+                raise type_name_not_a_value(render_qualified_name(chain, node.name), node.span)
+            self._constructor_refs[node.node_id] = candidates[0]
+            return True
         self._resolution[node.node_id] = ref
         return True
 
@@ -3876,14 +3910,14 @@ class _Resolver:
         chain: QualifierChain,
         variant: str,
         *,
-        defer_route_diagnostics: bool = False,
+        defer_diagnostics: bool = False,
     ) -> bool:
         """Record a constructor result when *chain* ends at a type owner.
 
         Patterns and ``is`` tests retain type-checker qualification verdicts.
-        They resolve a valid owner here, but defer a bad imported route or a
-        local/import clash until the checker can assess it against the enum
-        being matched.
+        They resolve a valid owner here, but defer a bad imported route, a
+        local/import clash, or a member a local type path lacks until the
+        checker can assess it against the enum being matched.
         """
         opened = self._use_constructor_candidates(chain, variant)
         if opened is not None:
@@ -3898,11 +3932,13 @@ class _Resolver:
         local_path = self._validate_local_scope_chain(chain)
         if local_path in self._type_paths:
             if not self._check_local_scope_route_ambiguity(
-                chain, variant, local_path, defer_route_diagnostics=defer_route_diagnostics
+                chain, variant, local_path, defer_route_diagnostics=defer_diagnostics
             ):
                 return False
             constructor = self._local_owner_constructor(chain, local_path, variant)
             if constructor is None:
+                if defer_diagnostics:
+                    return False
                 raise AglScopeError(
                     f"Variant '{variant}' does not exist in enum or record "
                     f"'{'::'.join(local_path)}'.",
@@ -3918,7 +3954,7 @@ class _Resolver:
             scoped = self._scoped_constructor_candidates.get((local_path, variant), ())
             if len(scoped) == 1:
                 if not self._check_local_scope_route_ambiguity(
-                    chain, variant, local_path, defer_route_diagnostics=defer_route_diagnostics
+                    chain, variant, local_path, defer_route_diagnostics=defer_diagnostics
                 ):
                     return False
                 self._constructor_refs[node_id] = scoped[0]
@@ -3926,7 +3962,7 @@ class _Resolver:
         try:
             owner = self._imported_chain_owner(chain, variant)
         except AglScopeError:
-            if defer_route_diagnostics:
+            if defer_diagnostics:
                 return False
             raise
         if owner is not None:
@@ -4015,7 +4051,7 @@ class _Resolver:
         Raises when the type qualifies no constructor at all.
         """
         if not self._is_constructible_type_ref((self._module_id, _bare_atom(path))):
-            raise type_name_not_a_value(chain.render(), chain.span)
+            raise type_name_not_a_value(render_qualifier_path(chain), chain.span)
         scoped = self._scoped_constructor_candidates.get((path, variant), ())
         if scoped:
             return scoped[0]
@@ -4068,7 +4104,7 @@ class _Resolver:
                 return None
             owner_qname = _ref_qname(owner_ref)
             if not self._is_constructible_type_ref(owner_qname):
-                rendered = chain.render()
+                rendered = render_qualifier_path(chain)
                 if self._type_owners.is_declared(owner_qname):
                     raise type_name_not_a_value(rendered, chain.span)
                 raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
@@ -4342,6 +4378,10 @@ class _Resolver:
         if constructor is not None:
             self._constructor_refs[node.node_id] = constructor
             return
+        if self._type_owners.is_declared(qname):
+            raise type_name_not_a_value(
+                render_qualified_name(module_qualifier, node.name), node.span
+            )
         self._resolution[node.node_id] = self._make_cross_module_ref(
             qname[0], node.name, qname[1], node.span
         )
@@ -4499,7 +4539,7 @@ class _Resolver:
         if type_name_selection(
             site, NameT(node.name, node.span, node.node_id, qualifier=node.qualifier)
         ):
-            raise type_name_not_a_value(node.name, node.span)
+            raise type_name_not_a_value(render_qualified_name(node.qualifier, node.name), node.span)
 
     def _is_type_contribution(self, ref: BindingRef) -> bool:
         """Whether a shared contribution denotes a type."""
@@ -4581,7 +4621,7 @@ class _Resolver:
     def _resolve_field_access(self, expr: FieldAccess) -> None:
         """Resolve a field-access expression by resolving its object as a value."""
         if isinstance(expr.obj, VarRef) and expr.obj.qualifier is None:
-            existing = self._current_scope().lookup(expr.obj.name)
+            existing = self._lookup_value(expr.obj.name)
             if expr.obj.name in self._declared_type_names and (
                 existing is None or existing.kind is BinderKind.constructor_binding
             ):
@@ -4757,9 +4797,9 @@ class _Resolver:
         return self._type_owners.referenced_member_refs(self._module_id, member)
 
     def _qualified_pattern_constructor_candidates(
-        self, node: ConstructorPattern | VarRef
+        self, node: ConstructorPattern, chain: QualifierChain
     ) -> tuple[ConstructorRef, ...]:
-        """Select the constructors a qualified pattern spelling can match.
+        """Select the constructors pattern *node*, qualified by *chain*, can match.
 
         Ordering mirrors qualified value resolution: a scope-use contribution or
         a local scope member is considered before an import route owning the
@@ -4767,8 +4807,6 @@ class _Resolver:
         pattern name as its variant. A spelling that resolves to nothing yields
         an empty tuple, deferring the diagnostic to type checking.
         """
-        chain = node.qualifier
-        assert chain is not None
         relative_path = tuple(segment.name for segment in chain.segments)
         if chain.anchor is QualifierAnchor.CURRENT_MODULE and not relative_path:
             # ``::Name`` names this module's own root declaration and must not
@@ -4789,6 +4827,7 @@ class _Resolver:
             return tuple(opened)
         local_path = self._validate_local_scope_chain(chain)
         if local_path is not None:
+            self._note_scope_qualified_spelling(node.node_id, chain, local_path, node.name)
             if local_path in self._type_paths:
                 constructor = self._local_owner_constructor(chain, local_path, node.name)
                 return () if constructor is None else (constructor,)
@@ -4798,11 +4837,31 @@ class _Resolver:
         imported = self._imported_atom_constructor(chain, node.name)
         if imported is not None:
             return (imported,)
-        if self._resolve_constructor_chain(
-            node.node_id, chain, node.name, defer_route_diagnostics=True
-        ):
+        if self._resolve_constructor_chain(node.node_id, chain, node.name, defer_diagnostics=True):
             return (self._constructor_refs[node.node_id],)
         return ()
+
+    def _note_scope_qualified_spelling(
+        self, node_id: int, chain: QualifierChain, path: ScopePath, name: str
+    ) -> None:
+        """Record a pattern or ``is`` spelling qualified by the local plain scope *path*.
+
+        Its constructor selection here is complete, so the checker never reads
+        the scope as a module route. A type path selects through its owner
+        instead. A spelling the scope does not publish, behind a leading
+        segment that is also a module route, is ambiguous between the two; a
+        route contributing the spelling itself stays deferred to the checker.
+        """
+        if path in self._type_paths:
+            return
+        if (
+            chain.anchor is None
+            and not self._scoped_constructor_candidates.get((path, name))
+            and qualifier_candidates(self._import_env, (chain.segments[0].name,), anchored=False)
+        ):
+            raise self._local_scope_route_ambiguity(chain, name, path)
+        if self._check_local_scope_route_ambiguity(chain, name, path, defer_route_diagnostics=True):
+            self._scope_qualified_spellings.add(node_id)
 
     def _imported_atom_constructor(self, chain: QualifierChain, name: str) -> ConstructorRef | None:
         """Return the constructor an import route owning the complete ``chain::name`` atom names."""
@@ -4886,7 +4945,7 @@ class _Resolver:
             # A qualified spelling never falls back to the bare one: every
             # failure yields an empty set so the checker can judge the
             # spelling against the type actually being matched.
-            candidates = self._qualified_pattern_constructor_candidates(node)
+            candidates = self._qualified_pattern_constructor_candidates(node, node.qualifier)
             self._pattern_constructor_candidates[node.node_id] = candidates
             if len(candidates) == 1:
                 self._constructor_refs[node.node_id] = candidates[0]
@@ -4968,7 +5027,9 @@ class _Resolver:
             slot_id = self._next_pattern_slot_id
             self._next_pattern_slot_id += 1
             match_site_slots[name] = slot_id
-            alternative = scope.parent.lookup(name) if scope.parent is not None else None
+            alternative = (
+                self._lookup_value(name, scope.parent) if scope.parent is not None else None
+            )
             self._pattern_slots[slot_id] = PatternSlot(
                 slot_id=slot_id,
                 name=name,

@@ -7,6 +7,7 @@ from typing import TypeVar
 
 import pytest
 
+from agm.agl.diagnostics import AglTypeError, type_name_not_a_value
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph
 from agm.agl.parser import parse_program
@@ -15,6 +16,7 @@ from agm.agl.scope.imports import (
     QualResolutionFound,
     SingleTarget,
     build_import_env,
+    qualification_repair_guidance,
     resolve_qualified,
 )
 from agm.agl.scope.program import resolve_program
@@ -379,9 +381,104 @@ def test_module_anchored_constructor_chain_never_falls_back_to_a_local_type() ->
         resolve_inline_entry("enum A | value\n/A::value")
 
 
-def test_nonconstructible_scoped_type_falls_back_to_the_legacy_constructor_diagnostic() -> None:
-    with pytest.raises(AglScopeError):
-        resolve_inline_entry("type A::Count = int\nA::Count")
+_ANY_SPAN = SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+_TYPE_NAMES = (
+    "enum Root\n  | A\n\n"
+    "type Count = int\n\n"
+    "scope S\n"
+    "  enum Col\n    | Red\n\n"
+    "  type C = Col\n\n"
+    "  type T = int\n\n"
+    "  scope N\n"
+    "    enum Dir\n      | Up\n"
+    "  end N\n"
+    "end S\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("source", "spelling"),
+    (
+        (f"{_TYPE_NAMES}print(Root)", "Root"),
+        (f"{_TYPE_NAMES}print(Count)", "Count"),
+        (f"{_TYPE_NAMES}print(::Count)", "::Count"),
+        (f"{_TYPE_NAMES}print(S::Col)", "S::Col"),
+        (f"{_TYPE_NAMES}print(::S::Col)", "::S::Col"),
+        (f"{_TYPE_NAMES}print(S::C)", "S::C"),
+        (f"{_TYPE_NAMES}print(S::N::Dir)", "S::N::Dir"),
+        (f"{_TYPE_NAMES}print(S::T)", "S::T"),
+        (f"{_TYPE_NAMES}print(S::T::Red)", "S::T"),
+        (f"{_TYPE_NAMES}scope S\n  def f() -> unit = print(Col)\nend S", "Col"),
+        (f"{_TYPE_NAMES}scope S\n  def f() -> unit = print(N::Dir)\nend S", "N::Dir"),
+        ("type A::Count = int\nA::Count", "A::Count"),
+    ),
+)
+def test_type_name_without_a_constructor_is_not_a_value_at_any_scope_depth(
+    source: str, spelling: str
+) -> None:
+    """A scoped enum, enum alias, or structural alias is rejected, spelled as written."""
+    with pytest.raises(AglTypeError) as exc_info:
+        resolve_inline_entry(source)
+
+    assert str(exc_info.value) == str(type_name_not_a_value(spelling, _ANY_SPAN))
+
+
+_TYPE_NAME_LIB = (
+    "enum Col\n  | Red\n\ntype T = int\n\nscope S\n  enum E\n    | X\n\n  type U = int\nend S\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("use", "spelling"),
+    (
+        ("lib::Col", "lib::Col"),
+        ("lib::T", "lib::T"),
+        ("lib::S::E", "lib::S::E"),
+        ("lib::S::U", "lib::S::U"),
+        ("lib::S::U::X", "lib::S::U"),
+        ("/lib::S::E", "/lib::S::E"),
+    ),
+)
+def test_imported_type_name_without_a_constructor_is_not_a_value(
+    tmp_path: Path, use: str, spelling: str
+) -> None:
+    """An imported enum or structural alias is rejected as a value, spelled as written."""
+    modules = {"entry": f"import lib\nprint({use})\n", "lib": _TYPE_NAME_LIB}
+
+    with pytest.raises(AglTypeError) as exc_info:
+        _entry_resolution(tmp_path, modules)
+
+    assert str(exc_info.value) == str(type_name_not_a_value(spelling, _ANY_SPAN))
+
+
+_PALETTE_SCOPE = (
+    "import palette\n\n"
+    "scope palette\n  record Other\nend palette\n\n"
+    "let c: palette::Color = palette::Color::Red\n"
+)
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "print(c is palette::Red)",
+        "print(case c of | palette::Red => 1 | _ => 2)",
+        "print(case /palette::Pixel(x = 1) of | palette::Pixel(x) => x | _ => 2)",
+    ),
+)
+def test_local_scope_qualifying_nothing_is_ambiguous_with_a_same_named_module_route(
+    tmp_path: Path, use: str
+) -> None:
+    """A pattern or ``is`` spelling the local scope does not publish never falls to the route."""
+    modules = {
+        "entry": f"{_PALETTE_SCOPE}{use}\n",
+        "palette": "enum Color\n  | Red\n  | Blue\n\nrecord Pixel\n  x: int\n",
+    }
+
+    with pytest.raises(AglScopeError) as exc_info:
+        _entry_resolution(tmp_path, modules)
+
+    assert qualification_repair_guidance() in str(exc_info.value)
 
 
 @pytest.mark.parametrize(

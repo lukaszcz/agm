@@ -1,0 +1,13 @@
+import palette
+
+scope palette
+  record Other
+end palette
+
+program def main() -> unit =
+  let c: palette::Color = palette::Color::Red
+  print(
+    case c of
+    | palette::Red => 1
+    | _ => 2
+  )

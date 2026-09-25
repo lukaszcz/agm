@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglError
+from agm.agl.diagnostics import AglError, type_name_not_a_value
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
@@ -23,6 +23,7 @@ from agm.agl.semantics.types import (
     contains_inference_var,
 )
 from agm.agl.semantics.values import BoolValue, IntValue, TextValue
+from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck import (
     AglTypeError,
     ArrayType,
@@ -1456,14 +1457,24 @@ _NONCONSTRUCTIBLE_TYPES = (
 )
 
 
+_ANY_SPAN = SourceSpan(1, 1, 1, 1, 0, 0)
+
+
 @pytest.mark.parametrize(
-    "use",
-    ("%sPlain(n = 1)", "let x = %sPlain", "%sC(n = 1)", "print(%sC)", "%sFn(1)", "let f = %sFn"),
+    ("use", "name"),
+    (
+        ("%sPlain(n = 1)", "Plain"),
+        ("let x = %sPlain", "Plain"),
+        ("%sC(n = 1)", "C"),
+        ("print(%sC)", "C"),
+        ("%sFn(1)", "Fn"),
+        ("let f = %sFn", "Fn"),
+    ),
 )
 def test_local_type_name_without_constructor_reads_like_an_imported_one(
-    tmp_path: Path, use: str
+    tmp_path: Path, use: str, name: str
 ) -> None:
-    """A local enum or constructor-less alias used as a value is the imported one's type error."""
+    """A local or imported enum or constructor-less alias used as a value is one type error."""
     with pytest.raises(AglTypeError) as local:
         check_agl_program(tmp_path / "local", {"entry": f"{_NONCONSTRUCTIBLE_TYPES}\n{use % ''}"})
     with pytest.raises(AglTypeError) as imported:
@@ -1472,16 +1483,28 @@ def test_local_type_name_without_constructor_reads_like_an_imported_one(
             {"entry": f"import lib\n{use % 'lib::'}", "lib": _NONCONSTRUCTIBLE_TYPES},
         )
 
-    assert local.value.to_diagnostic().message == imported.value.to_diagnostic().message
+    assert str(local.value) == str(type_name_not_a_value(name, _ANY_SPAN))
+    assert str(imported.value) == str(type_name_not_a_value(f"lib::{name}", _ANY_SPAN))
 
 
-@pytest.mark.parametrize("use", ('P("a")', "let make = P"))
+@pytest.mark.parametrize(
+    ("source", "spelling"),
+    (
+        ('type P = path\nP("a")', "P"),
+        ("type P = path\nlet make = P", "P"),
+        ('scope S\n  type P = path\nend S\n\nS::P("a")', "S::P"),
+        ("scope S\n  type P = path\nend S\n\nlet make = ::S::P", "::S::P"),
+        ("type Q[T] = path\nlet make = Q::[int]", "Q"),
+    ),
+)
 def test_alias_of_a_builtin_alias_without_the_standard_library_is_a_type_name(
-    tmp_path: Path, use: str
+    tmp_path: Path, source: str, spelling: str
 ) -> None:
     """An alias of the builtin 'path' alias, with no standard library declaring it, is a type."""
-    with pytest.raises(AglTypeError):
-        check_agl_program(tmp_path, {"entry": f"type P = path\n{use}"}, default_stdlib=False)
+    with pytest.raises(AglTypeError) as raised:
+        check_agl_program(tmp_path, {"entry": source}, default_stdlib=False)
+
+    assert str(raised.value) == str(type_name_not_a_value(spelling, _ANY_SPAN))
 
 
 _OWNER_TYPES = "enum Col\n  | Red\n  | Paint(n: int)\n\ntype C = Col\n"
@@ -1998,8 +2021,8 @@ def test_is_test_uses_local_enum_when_alias_route_has_another_owner(tmp_path: Pa
         "Red", scope_path=("Color",), module_id=ENTRY_ID
     )
     # Negative control: the module alias is not a route to the variant, so a
-    # member only the aliased module declares stays unresolvable.
-    with pytest.raises(AglScopeError):
+    # member only the aliased module declares is missing from the local enum.
+    with pytest.raises(AglTypeError):
         check_agl_program(
             tmp_path / "alias-route",
             {

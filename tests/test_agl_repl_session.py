@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-from agm.agl.diagnostics import AglError
+from agm.agl.diagnostics import AglError, type_name_not_a_value
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ModuleId
 from agm.agl.repl import EntryResult, ReplSession
@@ -51,7 +51,9 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
     UnitValue,
+    Value,
 )
+from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck import AglTypeError
 from agm.packages.layout import MODULE_TREE_DIRNAME
 from tests._agl_helpers import REPO_STDLIB_ROOT, agent_value, repl_session_with_root
@@ -625,8 +627,6 @@ class TestPersistence:
 
     def test_graph_loader_agl_error_retains_related_notes(self) -> None:
         from unittest.mock import patch
-
-        from agm.agl.syntax.spans import SourceSpan
 
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("load failed", related=(("constraint", related),))
@@ -1325,6 +1325,80 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert result.ok, result.diagnostics
         assert isinstance(result.value, RecordValue)
         assert result.value.fields["amount"] == IntValue(1)
+
+
+_PAINT_SCOPE = (
+    "scope Paint\n"
+    "  enum Col\n    | Red\n    | Blue\n\n"
+    "  type Palette = Col\n\n"
+    "  record Pixel\n    x: int\n\n"
+    "  type Px = Pixel\n"
+    "end Paint"
+)
+
+
+class TestScopeQualifiedConstructorsAcrossEntries:
+    """A scope declared in an earlier entry qualifies patterns and ``is`` tests."""
+
+    @pytest.mark.parametrize(
+        ("entry", "expected"),
+        [
+            ("c is Paint::Col::Red", BoolValue(False)),
+            ("c is Paint::Palette::Blue", BoolValue(True)),
+            ("case c of | Paint::Palette::Red => 1 | Paint::Col::Blue => 2", IntValue(2)),
+            ("case Paint::Px(x = 4) of | Paint::Pixel(x) => x", IntValue(4)),
+            ("case Paint::Pixel(x = 5) of | Paint::Px(x) => x", IntValue(5)),
+        ],
+    )
+    def test_qualified_spellings_select_like_values(self, entry: str, expected: Value) -> None:
+        s = open_session()
+        assert s.eval_entry(_PAINT_SCOPE).ok
+        assert s.eval_entry("let c: Paint::Col = Paint::Palette::Blue").ok
+
+        result = s.eval_entry(entry)
+
+        assert result.ok, result.diagnostics
+        assert result.value == expected
+
+    @pytest.mark.parametrize(
+        "form",
+        ["c is {}", "case c of | {}(x) => 1 | _ => 2"],
+    )
+    @pytest.mark.parametrize("member", ["Missing", "Palette", "Pixel", "Px"])
+    def test_spelling_outside_the_enum_is_rejected_like_its_bare_spelling(
+        self, form: str, member: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry(_PAINT_SCOPE).ok
+        assert s.eval_entry("let c: Paint::Col = Paint::Col::Red").ok
+
+        qualified = s.eval_entry(form.format(f"Paint::{member}"))
+        bare = s.eval_entry(form.format(member))
+
+        assert not qualified.ok
+        assert not bare.ok
+        assert [d.message for d in qualified.diagnostics] == [d.message for d in bare.diagnostics]
+
+    def test_missing_member_of_a_scoped_enum_is_rejected_alike_by_is_and_patterns(self) -> None:
+        s = open_session()
+        assert s.eval_entry(_PAINT_SCOPE).ok
+        assert s.eval_entry("let c: Paint::Col = Paint::Col::Red").ok
+
+        tested = s.eval_entry("c is Paint::Col::Nope")
+        matched = s.eval_entry("case c of | Paint::Col::Nope => 1 | _ => 2")
+
+        assert not tested.ok
+        assert [d.message for d in tested.diagnostics] == [d.message for d in matched.diagnostics]
+
+    @pytest.mark.parametrize("type_name", ["Paint::Col", "Paint::Palette", "::Paint::Col"])
+    def test_scoped_enum_type_is_not_a_value(self, type_name: str) -> None:
+        s = open_session()
+        assert s.eval_entry(_PAINT_SCOPE).ok
+
+        result = s.eval_entry(f"print({type_name})")
+
+        expected = type_name_not_a_value(type_name, SourceSpan(1, 1, 1, 1, 0, 0))
+        assert [d.message for d in result.diagnostics] == [str(expected)]
 
 
 # ---------------------------------------------------------------------------

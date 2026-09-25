@@ -211,24 +211,32 @@ def render_type_expr(type_expr: TypeExpr, *, parenthesize_function: bool = False
         rendered = f"{params} -> {render_type_expr(type_expr.result)}"
         return f"({rendered})" if parenthesize_function else rendered
     if isinstance(type_expr, (NameT, AppliedT)):
-        qualifier = type_expr.qualifier
-        prefix = ""
-        if qualifier is not None:
-            anchor = "" if qualifier.anchor is None else qualifier.anchor.value
-            segments = "::".join(
-                segment.name
-                + (
-                    "[" + ", ".join(render_type_expr(arg) for arg in segment.type_args) + "]"
-                    if segment.type_args is not None
-                    else ""
-                )
-                for segment in qualifier.segments
-            )
-            prefix = f"{anchor}{segments}" if not segments else f"{anchor}{segments}::"
         args = (
             "[" + ", ".join(render_type_expr(arg) for arg in type_expr.args) + "]"
             if isinstance(type_expr, AppliedT)
             else ""
         )
-        return f"{prefix}{type_expr.name}{args}"
+        return render_qualified_name(type_expr.qualifier, type_expr.name) + args
     raise AssertionError(f"unexpected type expression: {type_expr!r}")
+
+
+def render_qualifier_path(qualifier: QualifierChain) -> str:
+    """Render *qualifier*'s anchor and segments, without its member, as written."""
+    anchor = "" if qualifier.anchor is None else qualifier.anchor.value
+    return anchor + "::".join(
+        segment.name
+        + (
+            "[" + ", ".join(render_type_expr(arg) for arg in segment.type_args) + "]"
+            if segment.type_args is not None
+            else ""
+        )
+        for segment in qualifier.segments
+    )
+
+
+def render_qualified_name(qualifier: QualifierChain | None, name: str) -> str:
+    """Render *name* behind its optional *qualifier* as written."""
+    if qualifier is None:
+        return name
+    path = render_qualifier_path(qualifier)
+    return f"{path}::{name}" if qualifier.segments else f"{path}{name}"

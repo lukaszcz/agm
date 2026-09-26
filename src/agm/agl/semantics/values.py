@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import TypeAlias
 
 from agm.agl.ir.ids import ContractId, FunctionId, NominalId, SymbolId
-from agm.util.decimal import int_in_range
+from agm.util.decimal import compare_numbers
 
 # ---------------------------------------------------------------------------
 # JSON-tree comparison helpers
@@ -47,7 +47,7 @@ def _json_eq(left: object, right: object) -> bool:
     if isinstance(left, bool) or isinstance(right, bool):
         return isinstance(left, bool) and isinstance(right, bool) and left == right
     if isinstance(left, (int, decimal.Decimal)) and isinstance(right, (int, decimal.Decimal)):
-        return decimal.Decimal(left) == decimal.Decimal(right)
+        return compare_numbers(left, right) == 0
     if isinstance(left, list) and isinstance(right, list):
         if len(left) != len(right):
             return False
@@ -514,25 +514,14 @@ def key_token(value: Value) -> Hashable:
 def value_equal(left: Value, right: Value) -> bool:
     """Return AgL equality for one value position.
 
-    ``int`` and ``decimal`` widen when compared directly. Structural equality
-    remains responsible for recursive positions, where values retain their
-    exact element types and therefore do not widen. AgL source never reaches
-    this branch with an out-of-range int operand -- the lowerer's
-    ``IntToDecimal`` coercion widens (and range-checks) any mixed int/decimal
-    equality operand at compile time -- but an FFI companion can still
-    produce an ``IntValue`` of arbitrary magnitude uncoerced (e.g. indexing a
-    live array view), so an out-of-range int is decided ``False`` via the
-    cheap ``int_in_range`` check rather than constructing ``Decimal(int)`` for
-    a magnitude that can never equal any valid decimal anyway.
+    An ``int`` and a ``decimal`` compared directly -- by ``==``, array
+    membership, or an FFI live view's ``index`` -- compare exactly, whatever
+    the int's magnitude (:func:`~agm.util.decimal.compare_numbers`).
+    Structural equality remains responsible for recursive positions, where
+    values retain their exact element types.
     """
-    if isinstance(left, IntValue) and isinstance(right, DecimalValue):
-        if not int_in_range(left.value):
-            return False
-        return decimal.Decimal(left.value) == right.value
-    if isinstance(left, DecimalValue) and isinstance(right, IntValue):
-        if not int_in_range(right.value):
-            return False
-        return left.value == decimal.Decimal(right.value)
+    if isinstance(left, (IntValue, DecimalValue)) and isinstance(right, (IntValue, DecimalValue)):
+        return compare_numbers(left.value, right.value) == 0
     return values_equal(left, right)
 
 

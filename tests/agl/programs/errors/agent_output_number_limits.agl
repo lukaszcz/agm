@@ -1,0 +1,19 @@
+# An agent response holding a number no value can hold -- an exponent past any
+# decimal, an integer literal longer than the integer digit limit, an
+# integral decimal too large to narrow to `int`, or a non-finite constant --
+# is an ordinary parse failure in both strict and lenient JSON modes: it
+# reaches the `on-parse-error` policy (here, one retry) instead of crashing.
+record Reading
+  n: decimal
+
+record Count
+  n: int
+
+program def main() -> unit =
+  let meter: Agent = AgentCommand("meter")
+  let reading: Reading = meter.ask("Read the meter.", on-parse-error = Retry(n = 1))
+  print reading.n
+  let count: Count = meter.ask("Count the items.", on-parse-error = Retry(n = 1))
+  print count.n
+  let raw: json = meter.ask("Report raw data.", on-parse-error = Retry(n = 1))
+  print raw

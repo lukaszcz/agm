@@ -147,19 +147,32 @@ Decoding a number into a `decimal` — from JSON, an agent or `std/http`
 response, a host-supplied program argument, or an extern return value —
 rejects one outside this range, or non-finite, with that boundary's own
 error, so a `decimal` value can never arise out of range. A `json`-typed
-value is exempt and may hold a number of any magnitude.
+value is exempt from the range and may hold a number of any magnitude, but
+always a finite one: every boundary that creates a `json` value — JSON or
+TOML parsing, an agent or `std/http` response, a host-supplied program
+argument, an extern return value or live-view write — rejects `NaN` or an
+infinity with that boundary's own error. Each also rejects a number no
+`decimal` can hold at all (such as `1e99999999999999999999`) and an integer
+written with more than 4300 digits.
 
 A `decimal` operator (`+ - *` or `/`) rounds its result to 28 significant
-digits; unary `-` is exact. A result that underflows below the range loses
+digits; unary `-` is exact, including in a constant expression. A result that underflows below the range loses
 precision and may become zero instead of raising; one that overflows above
 it, or is otherwise invalid (such as division by zero), raises the catchable
 `ArithmeticError` ([Exceptions](exceptions.md#arithmeticerror)), labelled
 with the operator. Converting an `int` to `decimal` — an explicit `as decimal`
-cast, or the implicit widening a mixed-operand operator or a `decimal`-typed
-context applies — raises the same way when the `int` falls outside the range,
-labelled with the triggering operator or `as decimal` for a non-operator
-context. `as?` tolerates this the same way it tolerates a reference cycle:
-`as? decimal` yields `None` instead of raising.
+cast, or the implicit widening a mixed-operand arithmetic operator, a `dict`
+key lookup with `in`, or a `decimal`-typed context applies — raises the same
+way when the `int` falls outside the range, labelled with the triggering
+operator or `as decimal` for a non-operator context. `as?` tolerates this the
+same way it tolerates a reference cycle: `as? decimal` yields `None` instead
+of raising.
+
+Comparing an `int` with a `decimal` never widens: `== != < <= > >=` and
+array membership (`in`) compare the two exact values, whatever the `int`'s
+magnitude, so they never raise and neither the range nor the precision
+affects the result (`10.pow(30) + 1 == 1000000000000000000000000000001.0` is
+true).
 
 On the JSON wire both kinds are plain JSON numbers, parsed and emitted
 exactly. A wire number written without a fraction or exponent reads as an
@@ -168,7 +181,9 @@ kind, the number converts as the cast would: an `int` widens to `decimal`, and
 a `decimal` narrows to `int` only when integral
 ([`decimal as int` integrality](#decimal-as-int-integrality)), so `2.0` fills
 an `int` target and `2.5` does not. A `decimal` or `json` target keeps the
-number's exact value, trailing zeros included (visible in its JSON encoding).
+number's exact value, trailing zeros included. Its JSON encoding shows them,
+except for a number whose coefficient digits plus exponent magnitude exceed
+10,000: that one is encoded in scientific notation without trailing zeros.
 
 ### `bool`
 
@@ -1067,8 +1082,8 @@ regions](scopes.md), but not in ordinary expression blocks.
 Typing is exact nominal matching with these implicit coercions:
 
 1. **`int` widens to `decimal`.** An `int` value is accepted wherever a
-   `decimal` is expected. Mixed arithmetic yields `decimal`, and `1 == 1.0`
-   is true.
+   `decimal` is expected. Mixed arithmetic yields `decimal`. Comparisons
+   accept mixed operands without widening, so `1 == 1.0` is true.
 2. **A `json` target accepts any *scalar* JSON-shaped value** — `null`,
    `bool`, `int`, `decimal`, or `text` — storing it in canonical `json`
    representation.
@@ -1254,8 +1269,10 @@ exception — see [Parsing values](#parsing-values) above.
 
 ### `decimal as int` integrality
 
-`decimal as int` succeeds only when the decimal value has no fractional part:
-`3.0 as int` yields `3`, while `3.5 as int` raises `CastError`.
+`decimal as int` succeeds only when the decimal value has no fractional part
+and the resulting integer has at most 4300 digits: `3.0 as int` yields `3`,
+while `3.5 as int` raises `CastError`, as does a decimal of `1e4300` or more.
+The same rule narrows a `json` or wire number to `int`.
 
 ### Nominal types `as json` — structural encoding
 
@@ -1326,7 +1343,8 @@ data and raising `ValueParseError` rather than `JsonParseError`
 
 Every **data** type has full value equality (`==` / `!=`):
 
-- Scalars compare by value; `int` and `decimal` compare numerically.
+- Scalars compare by value; `int` and `decimal` compare numerically and
+  exactly ([Numbers](#numbers-int-and-decimal)).
 - Arrays compare element-wise; dictionaries compare by key set and per-key
   values.
 - Records compare by nominal type and field values; enum values compare by

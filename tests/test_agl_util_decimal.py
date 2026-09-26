@@ -8,11 +8,18 @@ clearer to verify directly than through an AgL program.
 from __future__ import annotations
 
 import decimal
+import sys
+
+import pytest
 
 from agm.util.decimal import (
     AGL_DECIMAL_CONTEXT,
+    compare_numbers,
     decimal_in_range,
+    holds_non_finite_number,
     int_in_range,
+    narrows_to_int,
+    parse_json_decimal,
     strip_trailing_zeros,
 )
 
@@ -126,3 +133,136 @@ def test_bit_length_threshold_is_exact() -> None:
 
     exact = (10 ** (AGL_DECIMAL_CONTEXT.Emax + 1)).bit_length()
     assert _INT_RANGE_THRESHOLD_BITS == exact
+
+
+class TestParseJsonDecimal:
+    def test_parses_a_number_token_exactly(self) -> None:
+        value = parse_json_decimal("1.50e3")
+        assert value.as_tuple() == decimal.Decimal("1.50e3").as_tuple()
+
+    def test_keeps_an_exponent_outside_the_pinned_range(self) -> None:
+        assert parse_json_decimal("1e9999999") == decimal.Decimal("1e9999999")
+
+    @pytest.mark.parametrize("token", ["1e99999999999999999999", "-1e-99999999999999999999"])
+    def test_exponent_no_decimal_can_hold_is_a_value_error(self, token: str) -> None:
+        with pytest.raises(ValueError):
+            parse_json_decimal(token)
+
+    @pytest.mark.parametrize("token", ["inf", "-inf", "+inf", "nan", "-nan", "sNaN"])
+    def test_non_finite_token_is_a_value_error(self, token: str) -> None:
+        with pytest.raises(ValueError):
+            parse_json_decimal(token)
+
+    def test_does_not_depend_on_the_ambient_context(self) -> None:
+        with decimal.localcontext() as context:
+            context.traps[decimal.InvalidOperation] = False
+            with pytest.raises(ValueError):
+                parse_json_decimal("1e99999999999999999999")
+
+
+class TestNarrowsToInt:
+    @pytest.mark.parametrize("text", ["0", "-0.0", "2.0e3", "1e4299", "0e99999999999", "-12"])
+    def test_integral_decimal_within_the_digit_limit_narrows(self, text: str) -> None:
+        assert narrows_to_int(decimal.Decimal(text)) is True
+
+    @pytest.mark.parametrize("text", ["2.5", "1e-3", "Infinity", "-Infinity", "NaN"])
+    def test_fractional_or_non_finite_decimal_does_not_narrow(self, text: str) -> None:
+        assert narrows_to_int(decimal.Decimal(text)) is False
+
+    @pytest.mark.parametrize("text", ["1e4300", "1e999999999999", "-1e999999999999"])
+    def test_integral_decimal_past_the_digit_limit_does_not_narrow(self, text: str) -> None:
+        assert narrows_to_int(decimal.Decimal(text)) is False
+
+    def test_digit_limit_follows_the_interpreter_limit(self) -> None:
+        previous_limit = sys.get_int_max_str_digits()
+        try:
+            sys.set_int_max_str_digits(640)
+            assert narrows_to_int(decimal.Decimal("1e639")) is True
+            assert narrows_to_int(decimal.Decimal("1e640")) is False
+            sys.set_int_max_str_digits(0)
+            assert narrows_to_int(decimal.Decimal("1e4299")) is True
+            assert narrows_to_int(decimal.Decimal("1e999999999999")) is False
+        finally:
+            sys.set_int_max_str_digits(previous_limit)
+
+
+class TestCompareNumbers:
+    @pytest.mark.parametrize(
+        ("left", "right", "expected"),
+        [
+            (1, 2, -1),
+            (2, 2, 0),
+            (decimal.Decimal("1.5"), decimal.Decimal("1.50"), 0),
+            (decimal.Decimal("-1.5"), decimal.Decimal("1.5"), -1),
+            (2, decimal.Decimal("2.0"), 0),
+            (2, decimal.Decimal("1.5"), 1),
+            (1, decimal.Decimal("1.5"), -1),
+            (0, decimal.Decimal("-0.0"), 0),
+            (0, decimal.Decimal("0.5"), -1),
+            (0, decimal.Decimal("-0.5"), 1),
+            (-1, decimal.Decimal("0"), -1),
+            (-2, decimal.Decimal("-1.5"), -1),
+            (-1, decimal.Decimal("-1.5"), 1),
+            (-1, decimal.Decimal("1.5"), -1),
+            (1, decimal.Decimal("0.001"), 1),
+            (1, decimal.Decimal("1e-999999999999"), 1),
+            (1, decimal.Decimal("1e999999999999"), -1),
+            (10**30 + 1, decimal.Decimal("1000000000000000000000000000001.0"), 0),
+            (10**30 + 1, decimal.Decimal("1000000000000000000000000000000.5"), 1),
+            (10**30 + 1, decimal.Decimal("1000000000000000000000000000001.5"), -1),
+            (10**30, decimal.Decimal("1e30"), 0),
+            (10**30, decimal.Decimal("1.0000000000000000000000000000001e30"), -1),
+        ],
+    )
+    def test_sign_of_the_exact_difference(
+        self, left: int | decimal.Decimal, right: int | decimal.Decimal, expected: int
+    ) -> None:
+        assert compare_numbers(left, right) == expected
+        assert compare_numbers(right, left) == -expected
+
+    def test_int_far_outside_the_decimal_range_is_decided_by_magnitude(self) -> None:
+        huge = 2**3_400_000
+        assert compare_numbers(huge, decimal.Decimal("1.5")) == 1
+        assert compare_numbers(-huge, decimal.Decimal("1.5")) == -1
+        assert compare_numbers(decimal.Decimal("9.9e999999"), huge) == -1
+
+    def test_large_int_near_a_large_decimal_compares_exactly(self) -> None:
+        big = 10**5000
+        assert compare_numbers(big, decimal.Decimal("1e5000")) == 0
+        assert compare_numbers(big + 1, decimal.Decimal("1e5000")) == 1
+        assert compare_numbers(big - 1, decimal.Decimal("1e5000")) == -1
+
+    def test_never_rounds_under_the_pinned_context(self) -> None:
+        with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+            assert compare_numbers(10**40 + 1, decimal.Decimal(10**40)) == 1
+
+
+class TestHoldsNonFiniteNumber:
+    @pytest.mark.parametrize(
+        "obj",
+        [
+            None,
+            True,
+            1,
+            1.5,
+            "inf",
+            decimal.Decimal("1e999999999999"),
+            [1, {"a": [decimal.Decimal("2.5")]}],
+        ],
+    )
+    def test_finite_json_shapes(self, obj: object) -> None:
+        assert holds_non_finite_number(obj) is False
+
+    @pytest.mark.parametrize(
+        "obj",
+        [
+            float("inf"),
+            float("nan"),
+            decimal.Decimal("-Infinity"),
+            decimal.Decimal("NaN"),
+            [1, [float("-inf")]],
+            {"a": {"b": decimal.Decimal("sNaN")}},
+        ],
+    )
+    def test_non_finite_number_anywhere(self, obj: object) -> None:
+        assert holds_non_finite_number(obj) is True

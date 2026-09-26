@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import IO, Literal, Self, TypeVar, cast
 from uuid import uuid4
 
@@ -28,7 +28,7 @@ from agm.agent.session.protocol import (
 from agm.agent.spec import AgentPi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.process import CapturedOutput, kill_process_group
-from agm.util.decimal import decimal_in_range
+from agm.util.decimal import decimal_in_range, parse_json_decimal
 from agm.util.unicode import loads_json
 
 _RpcOperation = Literal[
@@ -383,10 +383,10 @@ class PiRpcSessionBackend:
             decoded: object = loads_json(
                 line,
                 parse_constant=_reject_nonfinite_json,
-                parse_float=_parse_json_float,
+                parse_float=parse_json_decimal,
                 object_pairs_hook=_json_object,
             )
-        except (json.JSONDecodeError, ValueError, InvalidOperation) as exc:
+        except ValueError as exc:
             raise _RpcProtocolError("Pi RPC returned malformed JSONL") from exc
         if not isinstance(decoded, dict):
             raise _RpcProtocolError("Pi RPC JSONL event was not an object")
@@ -597,13 +597,6 @@ def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def _parse_json_float(value: str) -> Decimal:
-    decimal = Decimal(value)
-    if not decimal.is_finite():
-        raise ValueError("non-finite JSON number")
-    return decimal
-
-
 def _reject_nonfinite_json(value: str) -> object:
     raise ValueError(f"non-finite JSON number {value}")
 
@@ -807,8 +800,8 @@ def _bounded_decimal(value: object) -> Decimal | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, Decimal, str)):
         return None
     try:
-        decimal = Decimal(str(value))
-    except (InvalidOperation, ValueError):
+        decimal = parse_json_decimal(str(value))
+    except ValueError:
         return None
     return decimal if decimal_in_range(decimal) else None
 

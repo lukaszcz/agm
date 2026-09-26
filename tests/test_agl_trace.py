@@ -1352,9 +1352,13 @@ class TestCompanionTraceHook:
         source = "extern def emit() -> unit\nemit()\n()\n"
         companion = (
             "from agl import runtime\n"
+            "from decimal import Decimal\n"
             "import math\n\n"
             "def emit():\n"
-            "    runtime.trace('probe', {'text': chr(0xD800), 'number': math.nan})\n"
+            "    runtime.trace(\n"
+            "        'probe',\n"
+            "        {'text': chr(0xD800), 'number': math.nan, 'decimal': Decimal('-Infinity')},\n"
+            "    )\n"
         )
         entry_path = _write_extern_entry(tmp_path, source, companion)
         result = run_inline_command(
@@ -1366,6 +1370,7 @@ class TestCompanionTraceHook:
         probe_recs = [record for record in records if record.get("kind") == "probe"]
         assert probe_recs[0]["text"] == "<str has no JSON representation>"
         assert probe_recs[0]["number"] == "<float has no JSON representation>"
+        assert probe_recs[0]["decimal"] == "<Decimal has no JSON representation>"
 
     def test_companion_trace_direct_call_outside_evaluation_is_a_silent_noop(
         self, tmp_path: Path

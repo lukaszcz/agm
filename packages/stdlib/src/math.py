@@ -9,7 +9,7 @@ from collections.abc import Callable
 from agl import nominals
 
 from agm.agl.runtime.boundary import raise_arithmetic_error
-from agm.agl.semantics.arithmetic import AGL_DECIMAL_CONTEXT
+from agm.util.decimal import AGL_DECIMAL_CONTEXT
 
 ArithmeticError = nominals.std.errors.ArithmeticError
 

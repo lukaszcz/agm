@@ -1,0 +1,17 @@
+import std/http
+
+# An HTTP JSON body holding a number no value can hold is rejected like any
+# other malformed body: an exponent past any decimal, an over-long integer
+# literal, or a non-finite constant fails `json?`, and an integral decimal too
+# large to narrow to `int` fails the `as?` cast into an `int` field.
+record Count
+  n: int
+
+program def main() -> unit =
+  let response = http::get("https://x/count")
+  case response.json?() of
+    | Option::Some(value) =>
+        case value as? Count of
+          | Option::Some(value) => print(value.n)
+          | Option::None => print("not a count")
+    | Option::None => print("not json")

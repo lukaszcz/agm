@@ -1,0 +1,60 @@
+{
+  "scenarios": [
+    {
+      "name": "exponent_past_any_decimal_is_rejected_everywhere",
+      "params": {"token": "1e99999999999999999999"},
+      "expect": {
+        "stdout": "true\ntrue\ntrue\ntrue\njson parse error\ntoml parse error\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "integral_decimal_too_large_for_int_stays_json_but_never_narrows",
+      "params": {"token": "1e999999999999"},
+      "expect": {
+        "stdout": "true\ntrue\nfalse\ntrue\njson parsed\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "integer_literal_over_the_digit_limit_is_rejected_everywhere",
+      "params": {"token": "1", "copies": 5000},
+      "expect": {
+        "stdout": "true\ntrue\ntrue\ntrue\njson parse error\ntoml parse error\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "toml_infinity_is_a_parse_error",
+      "params": {"token": "inf"},
+      "expect": {
+        "stdout": "true\ntrue\ntrue\ntrue\njson parse error\ntoml parse error\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "toml_nan_is_a_parse_error",
+      "params": {"token": "-nan"},
+      "expect": {
+        "stdout": "true\ntrue\ntrue\ntrue\njson parse error\ntoml parse error\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "integral_decimal_within_limits_narrows_to_int",
+      "params": {"token": "2.0e3"},
+      "expect": {
+        "stdout": "false\nfalse\nfalse\nfalse\njson parsed\nfalse\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "fractional_decimal_is_not_an_int",
+      "params": {"token": "2.5"},
+      "expect": {
+        "stdout": "false\ntrue\nfalse\ntrue\njson parsed\ntrue\n",
+        "calls": {}
+      }
+    }
+  ]
+}

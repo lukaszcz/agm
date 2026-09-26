@@ -207,7 +207,10 @@ invalid `str` produces text that fails wherever the program first encodes it.
 A `json` payload crosses without being copied, so the companion carries two
 obligations: the payload must be JSON-shaped — dicts keyed by `str`, lists,
 `str`, `int`, `decimal.Decimal`, `bool`, `None` — and a payload it passed or
-received must not be retained and mutated afterwards.
+received must not be retained and mutated afterwards. A returned or written
+payload holding a non-finite number (a `float` or `decimal.Decimal` infinity or
+NaN) is rejected: a return raises `ExternError`, and a live-view write raises
+`TypeError` in the companion.
 
 ```python
 from agl import array, dict, json

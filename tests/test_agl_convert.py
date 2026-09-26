@@ -186,6 +186,13 @@ class TestParseJsonStrict:
         with pytest.raises(StrictJsonParseError):
             parse_json_strict('"\\ud800"')
 
+    @pytest.mark.parametrize(
+        "text", ["1e99999999999999999999", '{"n": [-1e-99999999999999999999]}']
+    )
+    def test_rejects_an_exponent_no_decimal_can_hold(self, text: str) -> None:
+        with pytest.raises(StrictJsonParseError):
+            parse_json_strict(text)
+
     def test_combines_surrogate_escape_pair(self) -> None:
         # Built from parts so no tool between here and the file can fold the
         # adjacent escapes into the astral character they denote.
@@ -237,6 +244,11 @@ class TestAglValidator:
     def test_non_integral_decimal_rejected_as_integer(self) -> None:
         validator = validator_for_schema('{"type": "integer"}')
         assert len(list(validator.iter_errors(Decimal("1.5")))) == 1
+
+    @pytest.mark.parametrize("text", ["Infinity", "-Infinity", "1e999999999999"])
+    def test_integral_decimal_that_cannot_narrow_rejected_as_integer(self, text: str) -> None:
+        validator = validator_for_schema('{"type": "integer"}')
+        assert len(list(validator.iter_errors(Decimal(text)))) == 1
 
     def test_int_still_accepted_as_integer(self) -> None:
         validator = validator_for_schema('{"type": "integer"}')
@@ -519,6 +531,11 @@ class TestDecodeValueErrors:
     def test_decimal_type_got_non_finite_decimal(self) -> None:
         with pytest.raises(ValueError):
             decode_value(ScalarDecode(kind=ScalarKind.DECIMAL), Decimal("Infinity"))
+
+    @pytest.mark.parametrize("text", ["Infinity", "-Infinity", "1e999999999999"])
+    def test_int_type_got_integral_decimal_that_cannot_narrow(self, text: str) -> None:
+        with pytest.raises(ValueError):
+            decode_value(ScalarDecode(kind=ScalarKind.INT), Decimal(text))
 
     def test_bool_type_got_int(self) -> None:
         with pytest.raises(ValueError, match="bool"):

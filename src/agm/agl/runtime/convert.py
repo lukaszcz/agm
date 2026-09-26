@@ -6,9 +6,10 @@ host parameter decoding:
 
 - :exc:`StrictJsonParseError` — raised by :func:`parse_json_strict` on any
   malformed or non-conforming input.
-- :func:`parse_json_strict` — strict ``json.loads`` with ``parse_float=Decimal``
-  and ``parse_constant`` that rejects non-standard constants
-  (``NaN`` / ``Infinity`` / ``-Infinity``) even when nested inside containers.
+- :func:`parse_json_strict` — strict ``json.loads`` with exact decimal
+  numbers that rejects non-standard constants (``NaN`` / ``Infinity`` /
+  ``-Infinity``) even when nested inside containers, and any number no
+  decimal can hold.
   Also rejects any trailing/leading non-whitespace and a lone surrogate
   escape.  Returns the raw parsed Python object.
 - :func:`agl_validator_class` / :func:`validator_for_schema` — the Draft
@@ -57,6 +58,7 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
+from agm.util.decimal import narrows_to_int, parse_json_decimal
 from agm.util.unicode import loads_json
 
 if TYPE_CHECKING:
@@ -76,6 +78,8 @@ class StrictJsonParseError(Exception):
     - Malformed JSON (syntax errors).
     - Non-standard constants: ``NaN``, ``Infinity``, ``-Infinity`` (including
       when nested inside containers such as ``[NaN]`` or ``{"x": Infinity}``).
+    - A number no decimal can hold, or an integer past the interpreter's
+      digit limit.
     - Trailing or leading non-whitespace beyond the JSON value.
     - Empty / whitespace-only input.
     """
@@ -102,8 +106,9 @@ def agl_validator_class() -> type[Validator]:
 
     Its ``integer`` check also accepts an integral ``Decimal``: a wire number
     written with a fraction or exponent parses as ``Decimal``
-    (``parse_float=Decimal``), and an ``int`` target accepts it when integral,
-    as ``decimal as int`` would (:func:`_decode_scalar` then narrows it).
+    (``parse_float=Decimal``), and an ``int`` target accepts it when it
+    narrows (:func:`~agm.util.decimal.narrows_to_int`), as ``decimal as int``
+    would (:func:`_decode_scalar` then narrows it).
     Everything else uses the base Draft 2020-12 check; ``bool`` is never
     accepted.
     """
@@ -116,7 +121,7 @@ def agl_validator_class() -> type[Validator]:
 
         def is_integer_or_integral_decimal(checker: TypeChecker, instance: object) -> bool:
             if isinstance(instance, Decimal):
-                return instance == instance.to_integral_value()
+                return narrows_to_int(instance)
             return base.is_type(instance, "integer")
 
         _VALIDATOR_CLASS = extend(
@@ -149,13 +154,13 @@ def validator_for_schema(json_schema: str) -> Validator:
 
 
 def _reject_constant(c: str) -> object:
-    """Raise :exc:`StrictJsonParseError` for any non-standard JSON constant.
+    """Raise :exc:`ValueError` for any non-standard JSON constant.
 
     Passed as ``parse_constant`` to :func:`json.loads` so that ``NaN``,
     ``Infinity``, and ``-Infinity`` are rejected even when they appear nested
     inside containers such as ``[NaN]`` or ``{"x": Infinity}``.
     """
-    raise StrictJsonParseError(f"Non-standard JSON constant {c!r} is not permitted in strict mode")
+    raise ValueError(f"Non-standard JSON constant {c!r} is not permitted")
 
 
 def parse_json_strict(text: str) -> object:
@@ -168,7 +173,9 @@ def parse_json_strict(text: str) -> object:
       rejected even when nested inside containers (e.g. ``[NaN]``,
       ``{"x": Infinity}``).  They are not valid JSON.
     - Floating-point numbers are parsed as :class:`decimal.Decimal` (never
-      ``float``), preserving exact precision.
+      ``float``), preserving exact precision; one no decimal can hold
+      (``1e99999999999999999999``) is rejected, as is an integer past the
+      interpreter's digit limit.
     - A ``\\uD8xx``/``\\uDCxx`` escape that does not combine with an adjacent
       partner into one scalar character is rejected.
 
@@ -185,11 +192,11 @@ def parse_json_strict(text: str) -> object:
         # verifies that only whitespace follows the first value — so trailing junk
         # such as "42 extra" is already rejected with JSONDecodeError.
         #
-        # parse_constant=_reject_constant ensures NaN/Infinity/-Infinity raise
-        # StrictJsonParseError even when nested inside containers like [NaN].
-        obj: object = loads_json(stripped, parse_float=Decimal, parse_constant=_reject_constant)
-    except StrictJsonParseError:
-        raise
+        # parse_constant=_reject_constant rejects NaN/Infinity/-Infinity even
+        # when nested inside containers like [NaN].
+        obj: object = loads_json(
+            stripped, parse_float=parse_json_decimal, parse_constant=_reject_constant
+        )
     except ValueError as exc:
         raise StrictJsonParseError(f"JSON parse error: {exc}") from exc
 
@@ -324,7 +331,7 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
                 raise ValueError("Expected integer, got bool")
             if isinstance(obj, int):
                 return IntValue(obj)
-            if isinstance(obj, Decimal) and obj == obj.to_integral_value():
+            if isinstance(obj, Decimal) and narrows_to_int(obj):
                 return IntValue(int(obj))
             raise ValueError(f"Expected integer, got {type(obj).__name__} {obj!r}")
         case ScalarKind.DECIMAL:

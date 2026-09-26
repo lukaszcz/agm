@@ -30,19 +30,17 @@ import enum
 from typing import assert_never
 
 from agm.agl.ir.builtin_nominals import BuiltinNominals
+from agm.agl.ir.operations import AS_DECIMAL_OPERATION
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import TextValue
-from agm.util.decimal import AGL_DECIMAL_CONTEXT, decimal_in_range, int_in_range
+from agm.util.decimal import decimal_in_range, int_in_range
 
 __all__ = [
-    "AGL_DECIMAL_CONTEXT",
     "AglArithmeticSignal",
     "ArithmeticSignalKind",
     "arithmetic_message",
     "arithmetic_signal_raise",
     "checked_decimal",
-    "decimal_in_range",
-    "int_in_range",
     "int_to_decimal",
     "signal_kind_for",
 ]
@@ -118,7 +116,7 @@ def checked_decimal(value: int | decimal.Decimal) -> decimal.Decimal:
     return value
 
 
-def int_to_decimal(n: int, operation: str = "as decimal") -> decimal.Decimal:
+def int_to_decimal(n: int, operation: str = AS_DECIMAL_OPERATION) -> decimal.Decimal:
     """Convert an AgL int to an exact, range-checked decimal.
 
     Raises :class:`AglArithmeticSignal` (kind ``OVERFLOW``, labelled
@@ -127,7 +125,7 @@ def int_to_decimal(n: int, operation: str = "as decimal") -> decimal.Decimal:
     huge out-of-range *n* just to reject it. An in-range *n* widens exactly,
     with no rounding. The single shared conversion for every
     AgL-reachable int-to-decimal site: the ``as``/``as?`` cast and the
-    implicit coercion default to *operation* ``"as decimal"``; a mixed
+    implicit coercion default to *operation* :data:`AS_DECIMAL_OPERATION`; a mixed
     binary operator's own int operand instead labels *operation* with the
     operator itself (``lower.lowerer._lower_arith`` and friends).
     """

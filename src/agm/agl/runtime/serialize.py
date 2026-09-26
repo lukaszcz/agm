@@ -491,22 +491,18 @@ _MAX_FIXED_POINT_DIGITS = 10_000
 
 
 def _decimal_text(d: Decimal) -> str:
-    """Exact unquoted JSON-number text for a ``Decimal`` (no float round trip).
+    """Exact unquoted JSON-number text for a finite ``Decimal`` (no float round trip).
 
-    A non-finite value (``Infinity``/``-Infinity``/``NaN`` -- reachable only
-    through a ``json``-typed value, since every other decimal creation site
-    rejects one) renders as ``str``/``format`` already does for it, matching
-    what a bare ``print`` or a failed cast's own rendering of the raw value
-    shows. A finite value renders as plain fixed-point (``format(d, "f")``)
+    Every decimal creation site, ``json`` values included, rejects a
+    non-finite number. Renders as plain fixed-point (``format(d, "f")``)
     whenever its length stays bounded; above :data:`_MAX_FIXED_POINT_DIGITS`,
     the minimal-coefficient scientific form (``str`` on the trailing-zero-
     stripped value, e.g. ``"1E+40"``) is emitted instead -- still exact, and
     still a valid JSON number (``int exp``).
     """
-    if not d.is_finite():
-        return format(d, "f")
     _, digits, exponent = d.as_tuple()
-    exponent = cast(int, exponent)  # d is finite here
+    # Finite: only NaN and infinity carry a letter exponent.
+    exponent = cast(int, exponent)
     if len(digits) + abs(exponent) <= _MAX_FIXED_POINT_DIGITS:
         return format(d, "f")
     return str(strip_trailing_zeros(d))

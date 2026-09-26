@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 __all__ = [
+    "AS_DECIMAL_OPERATION",
     "ArithKind",
     "ArithOp",
     "CmpOp",
@@ -87,7 +88,11 @@ class NumericKind(enum.Enum):
 
 
 class CompareKind(enum.Enum):
-    """Kind tag for comparison operations: integer, decimal, text, or structural."""
+    """Kind tag for comparison operations: integer, decimal, text, or structural.
+
+    A ``DECIMAL`` ordering may pair an int with a decimal operand: mixed
+    numbers compare exactly, without widening the int.
+    """
 
     INT = "int"
     DECIMAL = "decimal"
@@ -136,6 +141,10 @@ class IterKind(enum.Enum):
 # Coercion closed union
 # ---------------------------------------------------------------------------
 
+#: ``ArithmeticError`` operation label of an int-to-decimal widening outside
+#: any operator: a cast or an implicit coercion.
+AS_DECIMAL_OPERATION = "as decimal"
+
 
 @dataclass(frozen=True, slots=True)
 class IntToDecimal:
@@ -143,11 +152,11 @@ class IntToDecimal:
 
     *operation* labels the ``ArithmeticError`` raised when the int falls
     outside the decimal range: the operator for a mixed binary-operator
-    operand (e.g. ``"+"``, ``"=="``), or ``"as decimal"`` for a cast or an
-    implicit non-operator context.
+    operand (e.g. ``"+"``, ``"in"``), or :data:`AS_DECIMAL_OPERATION` for a
+    cast or an implicit non-operator context.
     """
 
-    operation: str = "as decimal"
+    operation: str = AS_DECIMAL_OPERATION
 
 
 @dataclass(frozen=True, slots=True)

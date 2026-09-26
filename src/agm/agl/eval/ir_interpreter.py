@@ -153,7 +153,6 @@ from agm.agl.runtime.serialize import AglNonDataValue, encode_scalar
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.trace import TraceStore, noop_trace
 from agm.agl.semantics.arithmetic import (
-    AGL_DECIMAL_CONTEXT,
     AglArithmeticSignal,
     arithmetic_signal_raise,
     int_to_decimal,
@@ -192,6 +191,7 @@ from agm.config.engine_keys import (
 from agm.core.cleanup import preserve_primary_error
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
+from agm.util.decimal import AGL_DECIMAL_CONTEXT
 from agm.util.recursion import raised_recursion_limit
 
 if TYPE_CHECKING:

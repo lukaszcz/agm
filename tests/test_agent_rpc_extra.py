@@ -7,7 +7,7 @@ import itertools
 import os
 import queue
 import subprocess
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
@@ -93,6 +93,19 @@ def _reap_child_after_send(monkeypatch: pytest.MonkeyPatch) -> None:
         },
         {"raw": '{"type":"message_update"}'},
         {"raw": '{"type":"response","id":"$id","command":"prompt","success":true,"x":NaN}'},
+        {
+            "raw": (
+                '{"type":"response","id":"$id","command":"prompt","success":true,'
+                '"x":1e99999999999999999999}'
+            )
+        },
+        {
+            "raw": (
+                '{"type":"response","id":"$id","command":"prompt","success":true,"x":'
+                + "9" * 5000
+                + "}"
+            )
+        },
         {"raw": '{"type":"response","id":"$id","id":"again","command":"prompt","success":true}'},
         {
             "raw": (
@@ -388,10 +401,6 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
         rpc._require_not_cancelled({"data": {"cancelled": True}}, "fork")
     with pytest.raises(rpc._RpcProtocolError):
         rpc._validate_response({"type": "response", "id": "", "command": "x", "success": True})
-    assert rpc._bounded_decimal("1.5") is not None
-    assert rpc._bounded_decimal(True) is None
-    assert rpc._bounded_decimal("NaN") is None
-    assert rpc._bounded_decimal("1e1000000") is None
 
     class Process:
         stdin = io.BytesIO()
@@ -419,8 +428,6 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = rpc.PiRpcSessionBackend(_child(object()), idle_timeout=None)
 
-    with pytest.raises(InvalidOperation):
-        rpc._parse_json_float("1e999999999999999999999999")
     with pytest.raises(rpc._RpcProtocolError):
         rpc._validate_response({"id": "id", "command": "", "success": True})
     with pytest.raises(rpc._RpcProtocolError):
@@ -477,7 +484,6 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
         "contextUsage": empty_context,
     }
     assert rpc._stats_from_response({"data": missing_percent}).context_percent == Decimal("0")
-    assert rpc._bounded_decimal("invalid") is None
 
     class RunningProcess:
         stdin = cast(io.BufferedWriter, io.BytesIO())
@@ -521,8 +527,6 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
     with pytest.raises(SessionHostError):
         rpc.PiRpcSessionBackend.open(AgentPi("", "", ""))
 
-    with pytest.raises(ValueError):
-        rpc._parse_json_float("Infinity")
     assert (
         rpc._terminal_prompt_failure(
             {"type": "compaction_end", "result": "kept", "willRetry": False}
@@ -837,6 +841,30 @@ def test_malformed_payload_reports_the_protocol_violation_not_the_child_exit(
     assert isinstance(raised.value.__cause__, rpc._RpcProtocolError)
     assert backend._child is None
     backend.close()
+
+
+def _stats_with(cost: object, percent: object) -> dict[str, object]:
+    return {
+        "data": {
+            "tokens": {"input": 1, "output": 2},
+            "cost": cost,
+            "contextUsage": {"percent": percent},
+        }
+    }
+
+
+@pytest.mark.parametrize("value", [True, "NaN", "invalid", "1e1000000", Decimal("1e-1000030")])
+@pytest.mark.parametrize("field", ["cost", "percent"])
+def test_stats_reject_malformed_or_out_of_range_numbers(field: str, value: object) -> None:
+    """A stats number that is not a finite decimal within the AgL range is malformed."""
+    response = _stats_with(value, 1) if field == "cost" else _stats_with(1, value)
+    with pytest.raises(rpc._RpcProtocolError):
+        rpc._stats_from_response(response)
+
+
+def test_stats_accept_textual_and_decimal_numbers() -> None:
+    stats = rpc._stats_from_response(_stats_with("1.5", Decimal("2.5")))
+    assert (stats.cost, stats.context_percent) == (Decimal("1.5"), Decimal("2.5"))
 
 
 def test_malformed_payload_is_reported_when_no_child_remains() -> None:

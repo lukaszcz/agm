@@ -53,7 +53,7 @@ def _sanitize(value: object, active: frozenset[int]) -> object:
     if isinstance(value, float):
         return value if isfinite(value) else non_data_marker("float")
     if isinstance(value, Decimal):
-        return dumps_exact(value, indent=None)
+        return dumps_exact(value, indent=None) if value.is_finite() else non_data_marker("Decimal")
     if isinstance(value, AglJson):
         return _sanitize(value.value, active)
     if isinstance(value, Mapping):

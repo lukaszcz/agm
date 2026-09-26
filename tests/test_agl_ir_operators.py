@@ -396,7 +396,7 @@ def test_arith_div_by_zero_raises_sentinel() -> None:
     """div() raises decimal.DivisionByZero on a zero divisor (caught and
     classified by the interpreter, not by arith.py itself)."""
     from agm.agl.eval.arith import div
-    from agm.agl.semantics.arithmetic import AGL_DECIMAL_CONTEXT
+    from agm.util.decimal import AGL_DECIMAL_CONTEXT
 
     with decimal.localcontext(AGL_DECIMAL_CONTEXT):
         with pytest.raises(decimal.DivisionByZero):
@@ -406,7 +406,7 @@ def test_arith_div_by_zero_raises_sentinel() -> None:
 def test_arith_zero_by_zero_is_a_division_by_zero() -> None:
     """``0 / 0`` is classified as a division by zero, not an invalid operation."""
     from agm.agl.eval.arith import div
-    from agm.agl.semantics.arithmetic import AGL_DECIMAL_CONTEXT
+    from agm.util.decimal import AGL_DECIMAL_CONTEXT
 
     with decimal.localcontext(AGL_DECIMAL_CONTEXT):
         with pytest.raises(decimal.DivisionByZero):

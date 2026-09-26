@@ -461,6 +461,19 @@ class TestDecodeParamValue:
         with pytest.raises(ValueError, match="JSON-compatible"):
             decode_param_value(_decoder(IntType()), {1, 2, 3})
 
+    @pytest.mark.parametrize(
+        ("target", "raw"),
+        [
+            (JsonType(), float("inf")),
+            (JsonType(), {"rate": [Decimal("-Infinity")]}),
+            (DecimalType(), Decimal("NaN")),
+            (_option_type(JsonType()), OptionSome(float("nan"))),
+        ],
+    )
+    def test_rejects_a_native_non_finite_number(self, target: AglType, raw: object) -> None:
+        with pytest.raises(ValueError):
+            decode_param_value(_decoder(target), raw)
+
     def test_is_json_shaped_dict_with_non_str_key_is_false(self) -> None:
         """_is_json_shaped: a dict with non-str keys is not JSON-shaped (covers
         the dict branch of _is_json_shaped).

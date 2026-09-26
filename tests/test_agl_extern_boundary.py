@@ -362,6 +362,26 @@ def test_array_view_index_with_an_out_of_range_int_element_never_equals_a_decima
         view.index(Decimal("1.5"))
 
 
+def test_array_view_index_compares_int_and_decimal_exactly() -> None:
+    """The live-view search agrees with AgL ``==``: mixed int/decimal equality
+    is exact, including an in-range int past 28 significant digits."""
+    near = 10**30 + 1
+    view = AglArrayView(
+        ArrayValue(
+            [
+                DecimalValue(Decimal("1000000000000000000000000000000")),
+                DecimalValue(Decimal("1000000000000000000000000000001.0")),
+                IntValue(2),
+            ]
+        ),
+        _NO_DESCRIPTORS,
+    )
+
+    assert view.index(near) == 1
+    assert view.index(Decimal("2.0")) == 2
+    assert near in view
+
+
 def test_array_view_slice_setitem_replaces_a_range_of_elements() -> None:
     array_value = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
     view = AglArrayView(array_value, _NO_DESCRIPTORS)
@@ -905,6 +925,40 @@ def test_json_payload_accepts_every_scalar_json_shape() -> None:
 
 def test_json_payload_accepts_nested_containers() -> None:
     assert decode_boundary_value(AglJson({"x": []})) == JsonValue({"x": []})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        float("inf"),
+        float("nan"),
+        Decimal("-Infinity"),
+        Decimal("NaN"),
+        {"x": [1, float("-inf")]},
+    ],
+)
+def test_json_payload_rejects_a_non_finite_number(payload: object) -> None:
+    with pytest.raises(BoundaryViolation):
+        decode_boundary_value(AglJson(payload))
+
+
+def test_json_extern_return_with_a_non_finite_number_raises_extern_error(
+    tmp_path: Path,
+) -> None:
+    exc = evaluate_ir_raises_with_externs(
+        "extern def reading() -> json\nlet _ = reading()\n()\n",
+        "from agl import json\ndef reading(): return json({'n': float('inf')})\n",
+        tmp_path,
+    )
+    assert exc.type_name == "ExternError"
+    assert exc.fields["function"] == "reading"
+
+
+def test_array_view_json_write_with_a_non_finite_number_raises() -> None:
+    view = AglArrayView(ArrayValue([JsonValue(1)]), _NO_DESCRIPTORS)
+
+    with pytest.raises(BoundaryTypeError):
+        view[0] = AglJson(float("nan"))
 
 
 def test_json_payload_crosses_the_boundary_without_copying() -> None:

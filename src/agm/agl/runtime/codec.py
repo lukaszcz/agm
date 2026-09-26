@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol, cast
 
 import json_repair
@@ -34,16 +33,17 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.runtime.convert import (
     _EMPTY_DEFS,
+    StrictJsonParseError,
     _clean_validation_message,
     agl_validator_class,
     decode_value,
+    parse_json_strict,
 )
 from agm.agl.runtime.request import ValidationError
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import Type
 from agm.agl.semantics.values import TextValue, Value
 from agm.agl.type_schema import build_format_instructions, derive_schema_and_decode
-from agm.util.unicode import loads_json
 
 if TYPE_CHECKING:
     from jsonschema import ValidationError as JsonschemaValidationError
@@ -231,18 +231,25 @@ class TextCodec:
 _FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```")
 
 
+#: Syntax-only JSON decoder: every number token and constant stays its own
+#: text, so a syntactically valid document is recognized as such -- and kept
+#: off the repair path, which would rewrite an unrepresentable number --
+#: before :func:`~agm.agl.runtime.convert.parse_json_strict` judges its numbers.
+_SYNTAX_DECODER = json.JSONDecoder(parse_int=str, parse_float=str, parse_constant=str)
+
+
 def _try_direct_parse(text: str) -> tuple[bool, str]:
-    """Attempt a direct stdlib json.loads on *text* (stripped).
+    """Check whether *text* is syntactically one JSON value.
 
     Returns ``(success, text)`` where:
-    - ``success=True`` and ``text`` is the stripped input if it is valid JSON.
+    - ``success=True`` and ``text`` is the input if it is valid JSON syntax.
     - ``success=False`` and ``text`` is empty if parsing fails.
 
-    The returned text is the original *text* (not re-serialised), so
-    ``json.loads(text, parse_float=Decimal)`` will preserve decimal precision.
+    The returned text is the original *text* (not re-serialised), so its
+    numbers are later parsed exactly.
     """
     try:
-        json.loads(text, parse_float=Decimal)
+        _SYNTAX_DECODER.decode(text)
         return True, text
     except json.JSONDecodeError:
         return False, ""
@@ -267,7 +274,6 @@ def _count_top_level_values(candidate: str) -> int:
     (e.g. trailing prose ``json-repair`` already cleaned up), the count
     reflects only the leading values it could decode.
     """
-    decoder = json.JSONDecoder()
     index = 0
     length = len(candidate)
     count = 0
@@ -277,7 +283,7 @@ def _count_top_level_values(candidate: str) -> int:
         while index < length and candidate[index].isspace():
             index += 1
         try:
-            decoded: tuple[object, int] = decoder.raw_decode(candidate, index)
+            decoded: tuple[object, int] = _SYNTAX_DECODER.raw_decode(candidate, index)
         except json.JSONDecodeError:
             break
         end: int = decoded[1]
@@ -336,10 +342,10 @@ def _extract_json_text(raw: str) -> str | None | object:
        top-level values into an array.
 
     When ``json-repair`` is needed, it returns the repaired JSON *text*
-    (without ``return_objects=True``), which is then re-parsed with
-    ``json.loads(parse_float=Decimal)``.  Note that ``json-repair`` may
-    lose decimal precision for very high-precision numbers; the direct-parse
-    path (step 0 / step 1 inner) avoids this.
+    (without ``return_objects=True``), which is then re-parsed strictly.
+    Note that ``json-repair`` may lose decimal precision for very
+    high-precision numbers; the direct-parse path (step 0 / step 1 inner)
+    avoids this.
     """
     stripped = raw.strip()
 
@@ -576,9 +582,9 @@ def _parse_json_core(
     """
     if strict:
         try:
-            parsed_obj: object = loads_json(raw, parse_float=Decimal)
-        except json.JSONDecodeError as exc:
-            return ParseResult.failure(f"Strict JSON parse failed: {exc}")
+            parsed_obj = parse_json_strict(raw)
+        except StrictJsonParseError as exc:
+            return ParseResult.failure(f"Strict JSON parse failed: {exc.message}")
         return _validate_and_decode_core(raw.strip(), parsed_obj, schema_dict, decode_schema, defs)
 
     json_text = _extract_json_text(raw)
@@ -592,9 +598,9 @@ def _parse_json_core(
             f"Could not extract a JSON value from the agent response: {raw!r}"
         )
     try:
-        parsed_obj = loads_json(json_text, parse_float=Decimal)
-    except json.JSONDecodeError as exc:
-        return ParseResult.failure(f"JSON parse failed after repair attempt: {exc}")
+        parsed_obj = parse_json_strict(json_text)
+    except StrictJsonParseError as exc:
+        return ParseResult.failure(f"JSON parse failed after repair attempt: {exc.message}")
     return _validate_and_decode_core(json_text, parsed_obj, schema_dict, decode_schema, defs)
 
 
@@ -666,12 +672,15 @@ class JsonCodec:
     Parsing strategy:
     - **Lenient** (default): extract exactly one JSON value from chatty output
       (fences/prose), repair trivially malformed JSON via ``json-repair``
-      (which returns a repaired JSON *string*), then re-parse with
-      ``json.loads(parse_float=Decimal)`` to preserve decimal exactness.
+      (which returns a repaired JSON *string*), then re-parse it strictly
+      (``parse_json_strict``) to preserve decimal exactness.
       Validate against the derived JSON Schema.
     - **Strict** (``strict_json=True``): parse exactly one bare JSON value
-      via stdlib ``json.loads`` (surrounding whitespace permitted; nothing
+      via ``parse_json_strict`` (surrounding whitespace permitted; nothing
       else).  No fence stripping or repair.
+
+    Either way a non-finite number, or one no decimal or int can hold, is a
+    parse failure.
 
     Schema validation is always strict in both modes (rules 3–6 of
     never relaxed).
@@ -736,12 +745,12 @@ class JsonCodec:
 
         Lenient mode (``strict_json=False``, the default):
           1. Attempt to extract/repair exactly one JSON text from *raw*.
-          2. Re-parse the repaired text with ``json.loads(parse_float=Decimal)``.
+          2. Re-parse the repaired text strictly.
           3. Validate against *schema*.
           4. Convert to the appropriate typed ``Value`` per *decode*.
 
         Strict mode (``strict_json=True``):
-          1. ``json.loads`` on the stripped raw string — no repair, no fence
+          1. Strict parse of the stripped raw string — no repair, no fence
              stripping.  Fails if there is any surrounding non-whitespace.
           2. Validate and convert as in lenient mode.
 
@@ -753,8 +762,8 @@ class JsonCodec:
         derives them from a checker ``Type``.
 
         Decimal exactness: ``json-repair`` always produces a
-        JSON *string* (not Python objects), which is then re-parsed via
-        ``json.loads(parse_float=Decimal)``.  Decimal values are never
+        JSON *string* (not Python objects), which is then re-parsed
+        strictly.  Decimal values are never
         routed through Python ``float``.
         """
         return _parse_json_core(

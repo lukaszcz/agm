@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "int_far_outside_the_decimal_range_compares_exactly",
+      "params": {
+        "exponent": 3400000
+      },
+      "expect": {
+        "stdout": "[false, true, false, false, true, true]\n[true, true, true, false, false, true]\n[false, true]\n[true, true]\nother\ndict lookup: in\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "int_within_the_decimal_range_compares_exactly",
+      "params": {
+        "exponent": 1
+      },
+      "expect": {
+        "stdout": "[false, true, false, false, true, true]\n[true, true, true, false, true, true]\n[true, true]\n[true, true]\ntwo\ntrue\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "zero_int_compares_exactly",
+      "params": {
+        "exponent": 0
+      },
+      "expect": {
+        "stdout": "[false, true, true, true, false, false]\n[true, true, false, false, false, false]\n[false, true]\n[true, true]\nother\nfalse\n",
+        "calls": {}
+      }
+    }
+  ]
+}

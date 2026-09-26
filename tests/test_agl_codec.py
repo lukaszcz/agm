@@ -1758,6 +1758,45 @@ class TestDecimalExactness:
         assert w.value == Decimal("1.5")
 
 
+class TestUnrepresentableNumbers:
+    """A number no value can hold is a parse failure, never an escaping exception."""
+
+    @pytest.mark.parametrize("strict_json", [False, True])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("1e99999999999999999999", id="huge-exponent"),
+            pytest.param("1" * 5000, id="over-long-integer"),
+            pytest.param('{"k": [' + "9" * 5000 + "]}", id="nested-over-long-integer"),
+            pytest.param('{"k": NaN}', id="nan"),
+            pytest.param('{"k": -Infinity}', id="negative-infinity"),
+            pytest.param('```json\n{"k": 1e99999999999999999999}\n```', id="fenced-huge-exponent"),
+            pytest.param('Here it is: {"k": 1e99999999999999999999}', id="prose-huge-exponent"),
+        ],
+    )
+    def test_json_target_rejects_the_number(self, raw: str, strict_json: bool) -> None:
+        result = _parse_typed(JsonCodec(), raw, JsonType(), strict_json=strict_json)
+        assert result.ok is False
+
+    @pytest.mark.parametrize("strict_json", [False, True])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("1e999999999999", id="integral-past-digit-limit"),
+            pytest.param("Infinity", id="infinity"),
+            pytest.param("1" * 5000, id="over-long-integer"),
+        ],
+    )
+    def test_int_target_rejects_the_number(self, raw: str, strict_json: bool) -> None:
+        result = _parse_typed(JsonCodec(), raw, IntType(), strict_json=strict_json)
+        assert result.ok is False
+
+    def test_over_long_integers_among_several_values_are_not_an_escaping_error(self) -> None:
+        raw = "1" * 5000 + " " + "2" * 5000
+        result = _parse_typed(JsonCodec(), raw, JsonType(), strict_json=False)
+        assert result.ok is False
+
+
 # ---------------------------------------------------------------------------
 # 6. Typed Value construction
 # ---------------------------------------------------------------------------

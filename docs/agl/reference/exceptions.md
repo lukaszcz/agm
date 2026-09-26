@@ -571,7 +571,9 @@ and parses.
 A `std/json` parsing function received text that is not a well-formed JSON
 document, including a document holding a lone `\uD800`-`\uDFFF` escape. An
 adjacent high and low escape pair is not lone: it denotes one character and
-parses.
+parses. A number a `json` value cannot hold (`NaN`, an infinity, one no
+`decimal` can hold, or an integer of more than 4300 digits) is rejected the
+same way ([Numbers](types.md#numbers-int-and-decimal)).
 
 ```text
 raw: text   # the input text that failed to parse
@@ -580,7 +582,8 @@ raw: text   # the input text that failed to parse
 ### `TomlParseError`
 
 A `std/toml` parsing function received text that is not a well-formed TOML
-document.
+document, or one holding a number a `json` value cannot hold (`inf`, `nan`,
+one no `decimal` can hold, or an integer of more than 4300 digits).
 
 ```text
 raw: text   # the input text that failed to parse
@@ -589,9 +592,8 @@ raw: text   # the input text that failed to parse
 ### `TomlRenderError`
 
 `std/toml::render` received a JSON value that TOML cannot represent: a
-non-object root, a value containing `null`, an integer outside TOML's signed
-64-bit range, or a signaling/payload `decimal` NaN. It carries only the base
-fields.
+non-object root, a value containing `null`, or an integer outside TOML's
+signed 64-bit range. It carries only the base fields.
 
 ```text
 (base fields only)
@@ -662,12 +664,12 @@ how equality and tracing treat one.
 | Engine-setting write the host rejects (unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `std/value::parse` — input is neither strict JSON nor an AgL value-syntax literal, or does not conform to the target type | `ValueParseError` |
-| `std/json` parsing — input is not well-formed JSON, including a lone surrogate escape | `JsonParseError` |
+| `std/json` parsing — input is not well-formed JSON, including a lone surrogate escape, or holds a number a `json` value cannot hold | `JsonParseError` |
 | `std/fs` directory entry, match, or temporary directory that is not valid Unicode | `FsError` |
 | `std/path` or `std/process` host text that is not valid Unicode | `EncodingError` |
 | `std/http` response whose declared charset is outside the supported text encodings, or whose body does not decode under it | `HttpDecodeError` |
-| `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
-| `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |
+| `std/toml` parsing — input is not well-formed TOML, or holds a number a `json` value cannot hold | `TomlParseError` |
+| `std/toml` rendering — root is not an object, a value is `null`, or an integer is outside signed 64-bit range | `TomlRenderError` |
 | `std/regex` pattern compilation — Python `re` rejects the pattern | `RegexError` |
 | Rendering, `as text`, or `as json` encounters a reference cycle, including a record-closed cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |

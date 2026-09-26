@@ -550,6 +550,7 @@ def test_codex_reply_combines_a_surrogate_escape_pair(monkeypatch: pytest.Monkey
         '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}',
         '{"type":"thread.started","thread_id":"first"}\n{"type":"item.completed","item":'
         '{"type":"agent_message","text":"\\ud800"}}',
+        pytest.param('{"type":"thread.started","n":' + "9" * 5000 + "}", id="over-long-integer"),
     ],
 )
 def test_codex_rejects_malformed_or_incomplete_jsonl(
@@ -712,6 +713,8 @@ def test_service_maps_cli_lifecycle_transport_failures_to_host_errors(
         ("fork", "[]"),
         ("fork", "{}"),
         ("fork", '{"session_id": "\\ud800"}'),
+        pytest.param("compact", '{"n": ' + "9" * 5000 + "}", id="compact-over-long-integer"),
+        pytest.param("fork", '{"n": ' + "9" * 5000 + "}", id="fork-over-long-integer"),
     ],
 )
 def test_claude_lifecycle_protocol_errors_are_host_errors(

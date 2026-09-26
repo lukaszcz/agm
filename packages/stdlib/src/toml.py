@@ -11,6 +11,7 @@ import tomlkit
 from agl import AglException, json, nominals
 
 from agm.agl.runtime.boundary import raise_parse_error
+from agm.util.decimal import parse_json_decimal
 
 TomlParseError = nominals.std.toml.TomlParseError
 TomlRenderError = nominals.std.toml.TomlRenderError
@@ -32,8 +33,10 @@ def _json_value(value: object) -> object:
 
 def parse(raw: str) -> object:
     try:
-        parsed = cast(dict[str, object], tomllib.loads(raw, parse_float=Decimal))
-    except tomllib.TOMLDecodeError:
+        parsed = cast(dict[str, object], tomllib.loads(raw, parse_float=parse_json_decimal))
+    except ValueError:
+        # TOMLDecodeError, a non-finite or unrepresentable float, or an
+        # integer past the interpreter's digit limit.
         raise_parse_error(TomlParseError, raw, "Could not parse TOML.")
     return json(_json_value(parsed))
 
@@ -46,12 +49,6 @@ def _validate_renderable(value: object) -> None:
     """Raise for JSON values outside TOML's value domain."""
     if value is None:
         _render_error("TOML cannot represent null values.")
-    if (
-        isinstance(value, Decimal)
-        and value.is_nan()
-        and (value.is_snan() or value.as_tuple().digits)
-    ):
-        _render_error("TOML cannot represent signaling or payload NaN values.")
     if type(value) is int and not _TOML_INT_MIN <= value <= _TOML_INT_MAX:
         _render_error("TOML integers must fit in a signed 64-bit value.")
     if isinstance(value, dict):
@@ -63,10 +60,6 @@ def _validate_renderable(value: object) -> None:
 
 
 def _decimal_literal(value: Decimal) -> str:
-    if value.is_nan():
-        return "-nan" if value.is_signed() else "nan"
-    if value.is_infinite():
-        return "-inf" if value.is_signed() else "inf"
     if value.is_zero():
         return "-0.0" if value.is_signed() else "0.0"
     literal = str(value)

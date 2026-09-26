@@ -3,13 +3,15 @@
 Used by the IR evaluator.
 This module is the single source of truth for operator semantics.
 
-IMPORTANT: Only imports from stdlib, agm.agl.semantics.values, and agm.agl.ir.operations.
-No syntax, scope, or typecheck imports are permitted here.
+IMPORTANT: Only imports from stdlib, agm.agl.semantics.values, agm.agl.ir.operations,
+and agm.util.decimal. No syntax, scope, or typecheck imports are permitted here.
 
-Every DECIMAL-kind operand here is already a ``DecimalValue``: mixed int/decimal
-operands are widened at compile time by the lowerer's ``IntToDecimal``
-coercion (``lower.lowerer``), labelled with the triggering operator, so this
-module never widens an int itself. A trapped ``decimal.DecimalException``
+Every DECIMAL-kind arithmetic operand here is already a ``DecimalValue``: mixed
+int/decimal operands are widened at compile time by the lowerer's
+``IntToDecimal`` coercion (``lower.lowerer``), labelled with the triggering
+operator, so this module never widens an int itself. Comparisons instead take
+a mixed int/decimal pair unwidened and compare it exactly
+(:func:`~agm.util.decimal.compare_numbers`). A trapped ``decimal.DecimalException``
 (overflow, division by zero, invalid operation) propagates uncaught to the
 caller, which classifies and labels it (``eval.ir_interpreter``).
 """
@@ -30,6 +32,7 @@ from agm.agl.semantics.values import (
     Value,
     value_equal,
 )
+from agm.util.decimal import compare_numbers
 
 __all__ = [
     "add",
@@ -45,12 +48,11 @@ __all__ = [
 
 
 def value_eq(left: Value, right: Value) -> bool:
-    """Value equality with int↔decimal widening.
+    """Value equality; an int and a decimal compare exactly.
 
-    Delegates the structural comparison to ``values_equal``, which is
-    cycle-safe and co-inductive, so ``==`` on a cyclic structured value
-    terminates instead of recursing forever. The widening here only applies
-    at this top level, never inside a container (unchanged from before).
+    Delegates to ``value_equal``, whose structural comparison is cycle-safe
+    and co-inductive, so ``==`` on a cyclic structured value terminates
+    instead of recursing forever.
     """
     return value_equal(left, right)
 
@@ -69,14 +71,13 @@ def _cmp(op: CmpOp, lv: _Ordered, rv: _Ordered) -> bool:
 
 
 def order(op: CmpOp, left: Value, right: Value) -> bool:
-    """Ordering comparison (LT/LE/GT/GE). Operands are already same-typed."""
-    if isinstance(left, IntValue) and isinstance(right, IntValue):
+    """Ordering comparison (LT/LE/GT/GE) of two texts, or of two numbers compared exactly."""
+    if isinstance(left, TextValue):
+        right = cast(TextValue, right)
         return _cmp(op, left.value, right.value)
-    if isinstance(left, DecimalValue) and isinstance(right, DecimalValue):
-        return _cmp(op, left.value, right.value)
-    left = cast(TextValue, left)
-    right = cast(TextValue, right)
-    return _cmp(op, left.value, right.value)
+    left = cast("IntValue | DecimalValue", left)
+    right = cast("IntValue | DecimalValue", right)
+    return _cmp(op, compare_numbers(left.value, right.value), 0)
 
 
 def contains(kind: ContainsKind, item: Value, container: Value) -> bool:

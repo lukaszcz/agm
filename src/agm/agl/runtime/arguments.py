@@ -31,6 +31,7 @@ from agm.agl.semantics.arguments import (
     BindParam,
     bind_arguments,
 )
+from agm.util.decimal import holds_non_finite_number
 from agm.util.unicode import require_scalar_text, surrogate_index, visible_text
 
 if TYPE_CHECKING:
@@ -221,15 +222,17 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
         """Cross an already-native (non-string) host value into JSON-native form.
 
         Round-trips through the same strict-parse boundary a textual value's
-        JSON branch uses, so a native ``float`` becomes ``Decimal`` via
-        ``parse_float=Decimal`` and a value with no JSON shape (a TOML
-        datetime, say) reports a clean error instead of reaching JSON-Schema
+        JSON branch uses, so a native ``float`` becomes an exact ``Decimal``,
+        and a value with no JSON shape (a TOML datetime, say) or a non-finite
+        number reports a clean error instead of reaching JSON-Schema
         validation as a foreign type. Shared by the top-level native branch
         and an ``OptionSome`` payload's non-string inner value, so neither can
         drift from the other.
         """
         if not _is_json_shaped(value):
             raise ValueError(f"expected a JSON-compatible value, got {type(value).__name__}")
+        if holds_non_finite_number(value):
+            raise ValueError("expected a JSON-compatible value, got a non-finite number")
         return parse_json_strict(dumps_exact(cast(JsonShaped, value), indent=None))
 
     defs = dict(decoder.defs)

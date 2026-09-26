@@ -110,8 +110,6 @@ def test_toml_render_round_trips_tables_and_rejects_unrepresentable_json() -> No
         (Decimal("0E+3"), "0.0"),
         (Decimal("-0E+3"), "-0.0"),
         (Decimal("1E+2"), "1E+2"),
-        (Decimal("-NaN"), "-nan"),
-        (Decimal("-Infinity"), "-inf"),
     ),
 )
 def test_toml_render_emits_standard_decimal_literals(value: Decimal, literal: str) -> None:
@@ -125,11 +123,7 @@ def test_toml_render_emits_standard_decimal_literals(value: Decimal, literal: st
     assert isinstance(parsed.raw, dict)
     parsed_value = parsed.raw["value"]
     assert isinstance(parsed_value, Decimal)
-    if value.is_nan():
-        assert parsed_value.is_nan()
-        assert parsed_value.is_signed() == value.is_signed()
-    else:
-        assert parsed_value == value
+    assert parsed_value == value
 
 
 @pytest.mark.parametrize("value", (-(2**63), 2**63 - 1))
@@ -142,15 +136,23 @@ def test_toml_render_accepts_signed_64_bit_integer_bounds(value: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "value", (Decimal("sNaN"), Decimal("-sNaN42"), Decimal("NaN42"), Decimal("-NaN42"))
+    "literal",
+    (
+        "inf",
+        "-inf",
+        "+nan",
+        "-nan",
+        pytest.param("1e99999999999999999999", id="huge-exponent"),
+        pytest.param("9" * 5000, id="over-long-integer"),
+    ),
 )
-def test_toml_render_rejects_signaling_and_payload_nans_with_a_typed_error(value: Decimal) -> None:
+def test_toml_parse_rejects_numbers_a_json_value_cannot_hold(literal: str) -> None:
     companion = _toml_companion()
 
     with pytest.raises(AglException) as exc_info:
-        companion.render(AglJson({"value": value}))
+        companion.parse(f"value = {literal}")
 
-    assert exc_info.value.value.nominal == _TOML_RENDER_ERROR
+    assert exc_info.value.value.nominal == _TOML_PARSE_ERROR
 
 
 @pytest.mark.parametrize("value", (-(2**63) - 1, 2**63))

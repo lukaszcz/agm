@@ -670,9 +670,11 @@ see [Parsing values](types.md#parsing-values).
 ### Equality: `==` and `!=`
 
 `==` is **equality** (a single `=` is never a comparison — it is a
-binder/named-argument separator). Both operands must have the same type after
-`int → decimal` widening. Equality is full value equality
-([Types](types.md)).
+binder/named-argument separator). Both operands must have the same type, or
+one `int` and the other `decimal`. Equality is full value equality
+([Types](types.md)); an `int` and a `decimal` compare exactly, without
+widening, so the comparison never raises
+([Numbers](types.md#numbers-int-and-decimal)).
 
 Operands whose type is, or transitively contains, a function or `unit` value
 are a static error — this applies to bare values as well as to
@@ -685,8 +687,9 @@ a type — is comparable only where its declaration bounds it `Eq` or
 
 ### Ordering: `<` `<=` `>` `>=`
 
-Both operands must be numeric or both `text`. Text ordering is lexicographic
-by code point.
+Both operands must be numeric or both `text`. Numbers order exactly, an `int`
+against a `decimal` included, without widening. Text ordering is
+lexicographic by code point.
 
 ### Membership: `in`
 
@@ -701,7 +704,10 @@ Element membership requires the array's element type to satisfy `Eq`; a bare
 generic element type needs an `Eq`/`Hashable` bound, as for `==`
 (see [Constraint blocks](generics.md#constraint-blocks)). Key membership
 requires the dict's key type to satisfy `Hashable`; the tested value must
-have (or directedly coerce to) that key type.
+have (or directedly coerce to) that key type. An `int` tested against
+`decimal` elements compares exactly, as `==` does; an `int` tested against
+`decimal` keys widens, raising `ArithmeticError` labelled `in` when it falls
+outside the decimal range.
 
 ### Arithmetic: `+` `-` `*` `/` and unary `-`
 

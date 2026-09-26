@@ -1,0 +1,14 @@
+# Negating a decimal is exact wherever it is evaluated: the compile-time
+# duplicate-key check on a dict literal's constant keys, and a template folded
+# from a constant, agree with runtime negation. Keys that differ only past the
+# 28th significant digit, or only in the sign of zero, stay distinct.
+let negative-zero = -0.0
+let tiny-gap = -1.00000000000000000000000000000001
+
+program def main(offset: decimal) -> unit =
+  let keys = {tiny-gap: "a", -1.00000000000000000000000000000002: "b"}
+  print(keys)
+  let labels = {"%{negative-zero}": "folded", "0": "zero"}
+  print(labels)
+  print(tiny-gap - offset)
+  print(-(tiny-gap - offset))

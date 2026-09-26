@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "zero_offset_keeps_every_digit_of_the_negation",
+      "params": {"offset": "0"},
+      "expect": {
+        "stdout": "{-1.00000000000000000000000000000001: \"a\", -1.00000000000000000000000000000002: \"b\"}\n{\"-0\": \"folded\", \"0\": \"zero\"}\n-1\n1\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "subtraction_rounds_but_negation_does_not",
+      "params": {"offset": "0.5"},
+      "expect": {
+        "stdout": "{-1.00000000000000000000000000000001: \"a\", -1.00000000000000000000000000000002: \"b\"}\n{\"-0\": \"folded\", \"0\": \"zero\"}\n-1.5\n1.5\n",
+        "calls": {}
+      }
+    }
+  ]
+}

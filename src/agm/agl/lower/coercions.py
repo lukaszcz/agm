@@ -19,14 +19,14 @@ and enum values are never recursed into. The whole rule:
 
 from __future__ import annotations
 
-from agm.agl.ir.operations import Coercion, IntToDecimal, ToJson
+from agm.agl.ir.operations import AS_DECIMAL_OPERATION, Coercion, IntToDecimal, ToJson
 from agm.agl.semantics.types import DecimalType, IntType, JsonType, Type, is_scalar_json_shaped
 
 __all__ = ["compile_coercion"]
 
 
 def compile_coercion(
-    source: Type, target: Type, *, operation: str = "as decimal"
+    source: Type, target: Type, *, operation: str = AS_DECIMAL_OPERATION
 ) -> Coercion | None:
     """Compile an implicit coercion from *source* to *target*.
 

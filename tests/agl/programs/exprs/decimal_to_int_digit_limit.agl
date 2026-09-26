@@ -1,0 +1,12 @@
+import std/math
+
+# An integral decimal narrows to `int` only while the integer stays within
+# 4300 digits, whether cast directly or first carried in a `json` value.
+program def main(exponent: int) -> unit =
+  let power = 10.0.pow(exponent)
+  print((power as? int).is-some())
+  print(((power as json) as? int).is-some())
+  try
+    print(power as int == 10.pow(exponent))
+  catch CastError as e =>
+    print("cast error: %{e.source-type} -> %{e.target-type}")

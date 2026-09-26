@@ -170,7 +170,9 @@ def fold_scalar(
             return operand
         if isinstance(operand, bool) or not isinstance(operand, (int, decimal.Decimal)):
             return FoldFailure("'-' applies to a number only", expr.span)
-        return -operand
+        # Exact sign flip, as at run time: `-` on a Decimal rounds to the
+        # ambient precision and drops the sign of zero.
+        return operand.copy_negate() if isinstance(operand, decimal.Decimal) else -operand
     if isinstance(expr, UnaryNot):
         operand = fold_scalar(expr.operand, resolve_ref=resolve_ref)
         if isinstance(operand, FoldFailure):

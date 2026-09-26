@@ -321,6 +321,18 @@ def _receiver_owner_sort_key(owner: ReceiverOwner) -> tuple[tuple[str, ...], Sco
     return (owner.module_id.segments, owner.scope_path)
 
 
+def _constructor_candidate_sort_key(
+    candidate: ConstructorRef,
+) -> tuple[tuple[str, ...], ScopePath, str, int]:
+    """Order constructor candidates by their declaration identity, never by set order."""
+    return (
+        candidate.owner_module_id.segments,
+        candidate.owner_path,
+        candidate.owner_name,
+        candidate.owner_decl_node_id,
+    )
+
+
 def _constraints_related(a: ConstraintKind, b: ConstraintKind) -> bool:
     """True if *a* and *b* are the same kind or one implies the other."""
     return a in close_constraints(frozenset({b})) or b in close_constraints(frozenset({a}))
@@ -3573,10 +3585,11 @@ class _Resolver:
             else candidates
         )
         if len(resolved_candidates) >= 2:
+            ordered = sorted(resolved_candidates, key=_constructor_candidate_sort_key)
             raise self._ambiguous_constructor(
                 node.name,
-                resolved_candidates,
-                self._bare_constructor_repair(resolved_candidates[0], node.name),
+                ordered,
+                self._bare_constructor_repair(ordered[0], node.name),
                 node.span,
             )
         if len(resolved_candidates) == 1:

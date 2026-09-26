@@ -14,6 +14,9 @@ that a same-module ``def`` or ``let`` of that name claims the value spelling.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -1027,6 +1030,44 @@ def test_ambiguous_constructor_repair_resolves_where_written(
         _check(tmp_path / "ambiguous", f"{header}let probe = {spelling}\n()")
     repair = caught.value.repair
     _check(tmp_path / "repaired", f"{header}let probe: {subject} = {repair}\nprobe is {repair}")
+
+
+_AMBIGUOUS_BARE_REPORT = """\
+import sys
+from pathlib import Path
+
+from agm.agl.scope.symbols import AmbiguousConstructorError
+from tests._agl_helpers import check_agl_program
+
+modules = {
+    "a/lib": "enum Color = Red | Green",
+    "b/lib": "enum Color = Red | Blue",
+    "entry": "import a/lib::*\\nimport b/lib::*\\nlet probe = Red\\n()",
+}
+try:
+    check_agl_program(Path(sys.argv[1]), modules, default_stdlib=False)
+except AmbiguousConstructorError as error:
+    print(error.repair)
+    print(error)
+"""
+
+
+def test_ambiguous_constructor_report_is_independent_of_hash_seed(tmp_path: Path) -> None:
+    """The reported candidates and repair never follow set iteration order."""
+    reports = {
+        subprocess.run(
+            [sys.executable, "-c", _AMBIGUOUS_BARE_REPORT, str(tmp_path / f"seed-{seed}")],
+            cwd=Path(__file__).resolve().parent.parent,
+            env={**os.environ, "PYTHONHASHSEED": str(seed)},
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        for seed in range(4)
+    }
+
+    assert len(reports) == 1
+    assert next(iter(reports)).strip()
 
 
 def test_ambiguous_constructor_repair_of_an_unrouted_member_names_its_declaration(

@@ -77,7 +77,7 @@ from agm.agl.scope.imports import (
     render_qualifier,
     resolve_qualified,
     resolve_qualified_member,
-    try_resolve_qualified_member,
+    route_spelling,
 )
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
@@ -96,6 +96,7 @@ from agm.agl.scope.symbols import (
     ImportedUseContribution,
     LocalUseContribution,
     ModuleResolution,
+    NoVisibleConstructorError,
     PatternSlot,
     ReceiverOwner,
     ResolvedUseTarget,
@@ -709,7 +710,13 @@ class _Resolver:
                             cname,
                             cref,
                             scope_path=cref.owner_path,
+                            # A root enum's referenced member is re-injected
+                            # below, only while that enum still references it.
                             inject_bare=(
+                                not cref.owner_path
+                                or cref.inline_enum_owner_decl_node_id is not None
+                            )
+                            and (
                                 cname,
                                 cref.owner_module_id,
                                 cref.owner_decl_node_id,
@@ -718,24 +725,17 @@ class _Resolver:
                         )
                     else:
                         self._add_constructor_candidate(cname, cref)
+        # Pre-pass 4: collect constructor candidates from RecordDef/EnumDef.
+        self._collect_constructor_candidates()
         # Earlier entries' root enums this entry does not redeclare keep
-        # injecting their referenced members, as in one file, unless a later
-        # declaration of a member's path superseded it.
+        # injecting their referenced members, as in one file, while each
+        # member is still the declaration at its name path.
         redeclared = {item.name for item, path in self._type_declarations if not path}
         for type_path, owner in self._repl_session_type_paths.items():
             if len(type_path) == 1 and type_path[0] not in redeclared:
                 self._inject_referenced_members(
-                    cref
-                    for cref in owner.injected
-                    if not any(
-                        _supersedes(cref, current)
-                        for current in self._scoped_constructor_candidates.get(
-                            (cref.owner_path, cref.owner_name), ()
-                        )
-                    )
+                    cref for cref in owner.injected if self._is_current_declaration(cref)
                 )
-        # Pre-pass 4: collect constructor candidates from RecordDef/EnumDef.
-        self._collect_constructor_candidates()
 
         # Define root functions as value bindings; scoped members are already
         # present in their named-scope layers.
@@ -1744,6 +1744,19 @@ class _Resolver:
                     self._add_constructor_candidate(
                         item.name, alias_ref, scope_path=path, inject_bare=not path
                     )
+
+    def _is_current_declaration(self, cref: ConstructorRef) -> bool:
+        """Whether *cref*'s declaration is still the one at its name path.
+
+        Another module's declaration always is; this REPL entry's is looked up
+        in its scope layers, whose root falls back to earlier entries' root.
+        """
+        if cref.owner_module_id != self._module_id:
+            return True
+        current = self._scope_nodes[cref.owner_path].members.get(cref.owner_name)
+        if current is None and not cref.owner_path:
+            current = self._repl_session_scope_nodes[()].members.get(cref.owner_name)
+        return current is not None and current.decl_node_id == cref.owner_decl_node_id
 
     def _inject_referenced_members(self, crefs: Iterable[ConstructorRef]) -> None:
         """Inject the bare names of *crefs*, the records a root enum references."""
@@ -3324,7 +3337,7 @@ class _Resolver:
                 self._resolve_expr(expr.operand)
             case IsTest():
                 candidates = (
-                    self._bare_constructor_candidates(expr.variant)
+                    self._visible_bare_constructor_candidates(expr.variant, expr.span)
                     if expr.qualifier is None
                     else self._qualified_constructor_candidates(
                         expr.node_id, expr.qualifier, expr.variant, expr.span
@@ -3560,19 +3573,47 @@ class _Resolver:
             else candidates
         )
         if len(resolved_candidates) >= 2:
-            first = resolved_candidates[0]
             raise self._ambiguous_constructor(
                 node.name,
                 resolved_candidates,
-                spell_declaration(
-                    first.owner_module_id,
-                    (*first.owner_path, node.name),
-                    local_to=self._module_id,
-                ),
+                self._bare_constructor_repair(resolved_candidates[0], node.name),
                 node.span,
             )
         if len(resolved_candidates) == 1:
             self._constructor_refs[node.node_id] = resolved_candidates[0]
+
+    def _bare_constructor_repair(self, candidate: ConstructorRef, name: str) -> str:
+        """Spell *candidate*, which bare *name* selects among others, as its owner is visible.
+
+        An imported member is qualified by the owner name a root import tail
+        makes bare, renamed as that import exposes it, else by its shortest
+        unique import route; anything else by its declaration path.
+        """
+        if candidate.owner_module_id != self._module_id:
+            origin = (
+                candidate.owner_module_id,
+                _bare_atom((*candidate.owner_path, candidate.owner_name)),
+            )
+            unqualified = self._import_env.unqualified
+            owner = next(
+                (
+                    atom[0]
+                    for atom, qnames in unqualified.items()
+                    if isinstance(atom, tuple)
+                    and atom[1:] == (name,)
+                    and origin in qnames
+                    and len(unqualified.get(atom[0], ())) == 1
+                ),
+                None,
+            )
+            if owner is not None:
+                return f"{owner}::{name}"
+            routed = route_spelling(self._import_env, origin)
+            if routed is not None:
+                return routed
+        return spell_declaration(
+            candidate.owner_module_id, (*candidate.owner_path, name), local_to=self._module_id
+        )
 
     def _ambiguous_constructor(
         self,
@@ -3811,10 +3852,6 @@ class _Resolver:
                 self._resolve_varref_qualified(node, chain)
                 return
             except AglScopeError as error:
-                if self._imports_declared_constructor(chain, node.name):
-                    # The import route filters out a declared member; no
-                    # constructor chain may reach it either.
-                    raise
                 direct_error = error
         if self._resolve_constructor_chain(node.node_id, chain, node.name):
             return
@@ -3854,23 +3891,6 @@ class _Resolver:
         return AglScopeError(
             f"Unknown scope path '{'::'.join(segment.name for segment in chain.segments)}'.",
             span=chain.span,
-        )
-
-    def _imports_declared_constructor(self, chain: QualifierChain, name: str) -> bool:
-        """Whether imported ``chain::name`` spells a constructor its owner declares as a member."""
-        atom_path = (*tuple(segment.name for segment in chain.segments[1:]), name)
-        if len(atom_path) < 2:
-            return False
-        owner = try_resolve_qualified_member(
-            self._import_env,
-            tuple(chain.segments[0].name.split("/")),
-            _bare_atom(atom_path[:-1]),
-            anchored=chain.anchored,
-        )
-        return (
-            owner is not None
-            and (owner[0], _bare_atom((*_bare_path(owner[1]), name)))
-            in self._cross_module_constructor_refs
         )
 
     def _qualified_import_resolution(self, chain: QualifierChain, name: str) -> QualResolution:
@@ -3957,13 +3977,14 @@ class _Resolver:
         checker can assess it against the type being matched.
         """
         try:
-            owner = self._imported_chain_owner(chain, variant)
+            owner_ref = self._imported_chain_owner(chain)
         except AglScopeError:
             if defer_diagnostics:
                 return None
             raise
-        if owner is not None:
-            return owner
+        if owner_ref is not None:
+            self._reject_hidden_member(chain, owner_ref, variant)
+            return self._owner_constructor(_ref_qname(owner_ref), chain, variant)
         if (
             chain.anchor is not QualifierAnchor.MODULE
             and len(chain.segments) == 1
@@ -4097,8 +4118,8 @@ class _Resolver:
         _reject_referenced_member(type_owner, render_qualifier_path(chain), variant, chain.span)
         return None if type_owner is None else type_owner.select(variant, chain.segments[-1].name)
 
-    def _imported_chain_owner(self, chain: QualifierChain, variant: str) -> ConstructorRef | None:
-        """Resolve a type-owning segment reached through imports.
+    def _imported_chain_owner(self, chain: QualifierChain) -> BindingRef | None:
+        """Resolve a constructible type owner reached through imports.
 
         The final chain segment is selected as a normal imported member; any
         preceding segments are its route.  A one-segment chain may instead
@@ -4138,9 +4159,34 @@ class _Resolver:
                 if self._type_owners.is_declared(owner_qname):
                     raise type_name_not_a_value(rendered, chain.span)
                 raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
-        if owner_ref is None:
-            return None
-        return self._owner_constructor(_ref_qname(owner_ref), chain, variant)
+        return owner_ref
+
+    def _reject_hidden_member(
+        self, chain: QualifierChain, owner_ref: BindingRef, variant: str
+    ) -> None:
+        """Reject imported owner *chain* spelling a declared *variant* its import surface hides.
+
+        A member the owner declares is reachable through its owner only where
+        the written spelling's complete path is: a route's member atom, or a
+        bare import tail's ``Owner::variant`` atom, both of which ``hiding``
+        filters. Values, patterns, and ``is`` tests reject it alike.
+        """
+        declared = (
+            owner_ref.module_id,
+            _bare_atom((*owner_ref.scope_path, owner_ref.name, variant)),
+        )
+        if declared not in self._cross_module_constructor_refs:
+            return
+        reached = (
+            self._import_env.unqualified.get((chain.segments[0].name, variant), frozenset())
+            if len(chain.segments) == 1
+            else {self._try_resolve_qualified_qname(chain, variant)}
+        )
+        if declared not in reached:
+            raise AglScopeError(
+                f"'{render_qualified_name(chain, variant)}' is hidden by its import.",
+                span=chain.span,
+            )
 
     def _nearest_layer[T](
         self, read: Callable[[ScopeNode], set[T]], start: ScopeNode | None = None
@@ -4915,7 +4961,7 @@ class _Resolver:
             if declared is not None:
                 return declared
             injected = {
-                candidate: candidate.owner_path[0]
+                candidate: render_qualified_name(chain, f"{candidate.owner_path[0]}::{name}")
                 for candidate in own
                 if _is_root_inline_member(candidate)
             }
@@ -4950,11 +4996,10 @@ class _Resolver:
                 if isinstance(atom, str)
             )
         if len(injected) > 1:
-            first, enum_name = next(iter(injected.items()))
             raise self._ambiguous_constructor(
                 render_qualified_name(chain, name),
                 tuple(injected),
-                render_qualified_name(chain, f"{enum_name}::{first.owner_name}"),
+                next(iter(injected.values())),
                 chain.span,
             )
         if injected:
@@ -4975,14 +5020,17 @@ class _Resolver:
     def _route_injected_members(
         self, chain: QualifierChain, name: str
     ) -> dict[ConstructorRef, str]:
-        """Map each root enum inline member one-segment route *chain* injects as *name* to its enum.
+        """Map each root enum inline member one-segment route *chain* injects as *name*.
 
-        The enum is named as the route exposes it, so a re-exported enum's
-        members are injected too.
+        A re-exported enum's members are injected too. Each maps to its
+        owner-qualified spelling where *chain* is written: through *chain*
+        when it matches one module, else through a route selecting only its
+        exposing module.
         """
         route = tuple(chain.segments[0].name.split("/"))
+        surfaces = qualifier_members(self._import_env, route, anchored=chain.anchored)
         injected: dict[ConstructorRef, str] = {}
-        for _module, members in qualifier_members(self._import_env, route, anchored=chain.anchored):
+        for module, members in surfaces:
             for atom, origin in members.items():
                 path = _bare_path(atom)
                 constructor = self._cross_module_constructor_refs.get(origin)
@@ -4991,7 +5039,13 @@ class _Resolver:
                     and constructor is not None
                     and _is_root_inline_member(constructor)
                 ):
-                    injected.setdefault(constructor, path[0])
+                    injected.setdefault(
+                        constructor,
+                        render_qualified_name(chain, "::".join(path))
+                        if len(surfaces) == 1
+                        else route_spelling(self._import_env, origin)
+                        or spell_declaration(module, path),
+                    )
         return injected
 
     def _try_resolve_qualified_qname(
@@ -5024,6 +5078,15 @@ class _Resolver:
                     return owned
             scope = scope.parent
         return tuple(self._constructor_candidates.get(name, ()))
+
+    def _visible_bare_constructor_candidates(
+        self, name: str, span: SourceSpan
+    ) -> tuple[ConstructorRef, ...]:
+        """Return a bare pattern or ``is`` spelling's candidates, rejecting a spelling with none."""
+        candidates = self._bare_constructor_candidates(name)
+        if not candidates:
+            raise NoVisibleConstructorError(f"'{name}' is not a visible constructor.", span=span)
+        return candidates
 
     def _owned_scope_constructor_candidates(
         self, scope_path: ScopePath, name: str
@@ -5063,7 +5126,7 @@ class _Resolver:
                 return
             if node.qualifier is None:
                 self._pattern_constructor_candidates[node.node_id] = (
-                    self._bare_constructor_candidates(node.name)
+                    self._visible_bare_constructor_candidates(node.name, node.span)
                 )
                 return
             # A qualified spelling never falls back to the bare one: every
@@ -5088,7 +5151,7 @@ class _Resolver:
             binds = candidate.is_as_pattern or candidate.nested
             if not binds:
                 if not constructor_candidates:
-                    raise AglScopeError(
+                    raise NoVisibleConstructorError(
                         f"Bare case pattern '{candidate.name}' is not a visible constructor. "
                         "Use '_' or '_ as name' for a catch-all binder.",
                         span=candidate.span,

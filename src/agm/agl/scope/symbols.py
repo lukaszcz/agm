@@ -993,6 +993,10 @@ class AmbiguousConstructorError(AglScopeError):
         self.repair = repair
 
 
+class NoVisibleConstructorError(AglScopeError):
+    """A bare pattern or ``is`` spelling that no visible constructor has."""
+
+
 class RouteClashError(AglScopeError):
     """A qualifier whose leading segment is both a local scope or type and a module route."""
 

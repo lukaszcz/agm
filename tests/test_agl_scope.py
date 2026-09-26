@@ -46,7 +46,6 @@ from agm.agl.syntax.nodes import (
     LetDecl,
     NameTarget,
     Param,
-    PatternField,
     Program,
     RecordDef,
     ScopeRegion,
@@ -2785,20 +2784,9 @@ class TestDirectASTConstruction:
         assert r.resolution[n_ref.node_id].kind == BinderKind.let_binding
 
     def test_is_test_resolved(self) -> None:
-        from agm.agl.syntax.nodes import IsTest
-
-        let_x = _make_let("x", _make_intlit(1))
-        x_ref = _make_varref("x")
-        expr = IsTest(
-            expr=x_ref,
-            qualifier=None,
-            variant="Pass",
-            negated=False,
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(let_x, expr)
-        assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
+        resolved = parse_and_resolve("enum Status\n  | Pass\nlet x: Status = Pass\nx is Pass")
+        x_ref = _find_varref(resolved.program, "x")
+        assert resolved.resolution[x_ref.node_id].kind == BinderKind.let_binding
 
     def test_field_access_on_varref(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
@@ -2856,29 +2844,12 @@ class TestDirectASTConstruction:
         assert r.resolution[matched_ref.node_id].kind == BinderKind.pattern_slot
 
     def test_case_constructor_pattern_with_field(self) -> None:
-        let_x = _make_let("x", _make_intlit(1))
-        sub_pattern = VarPattern(name="issues", span=_sp(), node_id=_nid())
-        pf = PatternField(name="issues", pattern=sub_pattern, span=_sp(), node_id=_nid())
-        ctor_pattern = ConstructorPattern(
-            qualifier=None, name="Fail", positional=(), named=(pf,), span=_sp(), node_id=_nid()
+        resolved = parse_and_resolve(
+            "record Fail\n  issues: int\nlet x = Fail(issues = 1)\n"
+            "case x of | Fail(issues = issues) => issues"
         )
-        issues_ref = _make_varref("issues")
-        branch = CaseBranch(
-            pattern=ctor_pattern,
-            body=issues_ref,
-            span=_sp(),
-            node_id=_nid(),
-        )
-        from agm.agl.syntax.nodes import Case
-
-        case_node = Case(
-            subject=_make_varref("x"),
-            branches=(branch,),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        r = resolve_program(let_x, case_node)
-        assert r.resolution[issues_ref.node_id].kind == BinderKind.pattern_slot
+        issues_ref = _find_varref(resolved.program, "issues")
+        assert resolved.resolution[issues_ref.node_id].kind == BinderKind.pattern_slot
 
     def test_as_pattern_binds_even_when_name_is_a_constructor(self) -> None:
         resolved = parse_and_resolve(
@@ -2902,24 +2873,10 @@ class TestDirectASTConstruction:
         reject_scope("case 0 of | _ as captured as captured => captured")
 
     def test_duplicate_pattern_var_rejected(self) -> None:
-        let_x = _make_let("x", _make_intlit(1))
-        sub1 = VarPattern(name="dup", span=_sp(5), node_id=_nid())
-        sub2 = VarPattern(name="dup", span=_sp(5), node_id=_nid())
-        pf1 = PatternField(name="a", pattern=sub1, span=_sp(5), node_id=_nid())
-        pf2 = PatternField(name="b", pattern=sub2, span=_sp(5), node_id=_nid())
-        ctor_pat = ConstructorPattern(
-            qualifier=None,
-            name="Pair",
-            positional=(),
-            named=(pf1, pf2),
-            span=_sp(5),
-            node_id=_nid(),
+        err = reject_scope(
+            "record Pair\n  a: int\n  b: int\nlet x = Pair(a = 1, b = 2)\n"
+            "case x of | Pair(a = dup, b = dup) => ()"
         )
-        branch = CaseBranch(pattern=ctor_pat, body=_make_unitlit(), span=_sp(5), node_id=_nid())
-        from agm.agl.syntax.nodes import Case
-
-        case_node = Case(subject=_make_varref("x"), branches=(branch,), span=_sp(5), node_id=_nid())
-        err = reject_program(let_x, case_node)
         assert "dup" in err.to_diagnostic().message
 
     def test_pattern_var_shadows_outer_accepted(self) -> None:

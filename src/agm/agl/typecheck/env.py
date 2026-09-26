@@ -1314,7 +1314,7 @@ class TypeEnvironment:
         """Return the handle of a non-generic nominal declaration scope resolved."""
         return self._type_table.named(module_id, scope_path[-1], scope_path[:-1]).handle()
 
-    def has_qualified_import_member(self, qualifier: QualifierChain, name: str) -> bool:
+    def _has_qualified_import_member(self, qualifier: QualifierChain, name: str) -> bool:
         """Return whether a qualifier route contributes *name* after filtering."""
         if self._import_env is None:
             return False
@@ -1333,7 +1333,7 @@ class TypeEnvironment:
         span: SourceSpan | None,
     ) -> None:
         """Reject a qualified local/import collision unless both routes select one declaration."""
-        if qualifier.anchor is not None or not self.has_qualified_import_member(qualifier, name):
+        if qualifier.anchor is not None or not self._has_qualified_import_member(qualifier, name):
             return
         imported_qname = self._try_resolve_import_qname(qualifier, name)
         if imported_qname is not None and self._qname_decl_key(imported_qname) == selected_key:

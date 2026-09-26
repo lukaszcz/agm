@@ -7231,7 +7231,7 @@ class TestIsTest:
         assert "enum-typed" in str(error).lower()
 
     def test_is_non_enum_raises(self) -> None:
-        err = reject_type("let x = 1\nx is Status")
+        err = reject_type("enum Status\n  | Pass\nlet x = 1\nx is Pass")
         assert "enum" in str(err).lower()
 
     def test_is_unknown_variant_raises(self) -> None:

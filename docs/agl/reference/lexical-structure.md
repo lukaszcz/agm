@@ -251,11 +251,10 @@ anchors that route to the complete module path; otherwise it may be a suffix
 route or an alias. Subsequent `::` segments name scopes or types. A single
 leading segment can be either a local scope/type or a module route; use `/` for
 the module reading or `::` for the current-module reading when both would
-resolve. The route resolves the name when its module exposes it or, directly
-before the name, injects it as an [enum
-member](modules.md#module-qualified-enum-members); a plain scope not declaring
-the name leaves it to the route. Either way the spelling is ambiguous in every
-position. Scope segments never suffix-match.
+resolve. Both readings existing is ambiguous in every position when the route
+resolves the name (exposes it, or injects it as an [enum
+member](modules.md#module-qualified-enum-members) directly before it) or the
+segment is a plain scope not declaring it. Scope segments never suffix-match.
 
 Every route and chain segment is byte-adjacent through `::`: `foo/bar::thing`
 is a qualifier, while `foo / bar::thing` is division followed by a separate

@@ -21,7 +21,12 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import AglError, AglTypeError, ReferencedMemberError
-from agm.agl.scope.symbols import AglScopeError, AmbiguousConstructorError, RouteClashError
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    AmbiguousConstructorError,
+    NoVisibleConstructorError,
+    RouteClashError,
+)
 from tests._agl_helpers import check_agl_program
 
 _LIBRARIES = {
@@ -47,12 +52,19 @@ _LIBRARIES = {
     "palette": "enum P = Red | Green",
     "base": "enum Color = Red | Green",
     "mid": "import base\nexport base::{Color}\nenum Light = Red | Off",
+    "ren": "import base\nexport base::{Color as Hue}\nenum Light = Red | Off",
+    "a/lib": "enum Color = Red | Green",
+    "b/lib": "enum Color = Red | Blue",
+    "x/a/lib": "enum Color = Red | Violet",
     "boxes": "enum Box[T] = Full(v: T) | Empty\ntype IntFull = Box[int]::Full",
     "picker": (
         "enum Color = Red | Green(shade: int)\n"
         "def pick() -> Color = Green(shade = 1)\n"
         "def green() -> Color::Green = Green(shade = 2)"
     ),
+    "hidmid": "import picker\nexport picker hiding Color::Red",
+    "shade": "enum Tone = Shared | Dark",
+    "raiser": 'exception Boom\ndef boom() -> Boom = Boom(message = "x")',
     "scoped": (
         "scope shapes\n"
         "  record Saved\n"
@@ -997,6 +1009,15 @@ def test_module_routed_owner_selects_only_its_own_inline_member(
             "enum A = Red | Green\nenum B = Red | Blue\n", "::Red", "A", id="current-module"
         ),
         pytest.param("import dup::*\n", "Red", "dup::A", id="bare"),
+        pytest.param("import a/lib\nimport b/lib\n", "lib::Red", "a/lib::Color", id="shared-route"),
+        pytest.param(
+            "import a/lib\nimport x/a/lib\n", "lib::Red", "/a/lib::Color", id="shared-suffix"
+        ),
+        pytest.param("import mid::*\n", "Red", "mid::Color", id="bare-re-export"),
+        pytest.param("import ren::*\n", "Red", "ren::Hue", id="bare-renamed-re-export"),
+        pytest.param(
+            "import a/lib::*\nimport b/lib::*\n", "Red", "a/lib::Color", id="bare-shared-owner"
+        ),
     ],
 )
 def test_ambiguous_constructor_repair_resolves_where_written(
@@ -1008,6 +1029,17 @@ def test_ambiguous_constructor_repair_resolves_where_written(
     _check(tmp_path / "repaired", f"{header}let probe: {subject} = {repair}\nprobe is {repair}")
 
 
+def test_ambiguous_constructor_repair_of_an_unrouted_member_names_its_declaration(
+    tmp_path: Path,
+) -> None:
+    header = "import middle::*\nimport shade::*\n"
+    with pytest.raises(AmbiguousConstructorError) as caught:
+        _check(tmp_path / "ambiguous", f"{header}let probe = Shared\n()")
+    repair = caught.value.repair
+    entry = f"import other\n{header}let probe: middle::Mixed = {repair}(id = 1)\nprobe is {repair}"
+    _check(tmp_path / "repaired", entry)
+
+
 @pytest.mark.parametrize(
     "use",
     [
@@ -1016,13 +1048,16 @@ def test_ambiguous_constructor_repair_resolves_where_written(
         pytest.param("case pick() of | Green(shade) => shade | _ => 0", id="binding-pattern"),
         pytest.param("pick() is Red", id="is"),
         pytest.param("case green() of | Green(shade) => shade", id="member-typed-pattern"),
+        pytest.param("boom() is Boom", id="exception-is"),
     ],
 )
 @pytest.mark.parametrize(
     ("header", "accepted"),
     [
-        pytest.param("import picker::{pick, green}\n", False, id="function-only"),
-        pytest.param("import picker::*\n", True, id="members-visible"),
+        pytest.param(
+            "import picker::{pick, green}\nimport raiser::{boom}\n", False, id="function-only"
+        ),
+        pytest.param("import picker::*\nimport raiser::*\n", True, id="members-visible"),
     ],
 )
 def test_bare_member_spelling_needs_a_visible_constructor(
@@ -1032,8 +1067,60 @@ def test_bare_member_spelling_needs_a_visible_constructor(
     if accepted:
         _check(tmp_path, header + use)
         return
-    with pytest.raises(AglError):
+    with pytest.raises(NoVisibleConstructorError):
         _check(tmp_path, header + use)
+
+
+@pytest.mark.parametrize(
+    "use",
+    [
+        pytest.param("case pick() of | Red => 0 | _ => 1", id="bare-pattern"),
+        pytest.param("case pick() of | Red() => 0 | _ => 1", id="applied-pattern"),
+        pytest.param("pick() is Red", id="is"),
+        pytest.param("boom() is Other", id="exception-is"),
+    ],
+)
+def test_bare_spelling_of_only_other_types_constructors_is_a_type_error(
+    tmp_path: Path, use: str
+) -> None:
+    """Visible candidates of other types leave the rejection to the matched type."""
+    header = (
+        "import picker::{pick}\nimport raiser::{boom}\nenum Local = Red | Blue\nexception Other\n"
+    )
+    with pytest.raises(AglTypeError):
+        _check(tmp_path, header + use)
+
+
+@pytest.mark.parametrize("position", ["value", "pattern", "is"])
+@pytest.mark.parametrize(
+    ("header", "owner", "route"),
+    [
+        pytest.param("import picker hiding Color::Red\n", "picker::Color", "picker", id="route"),
+        pytest.param("import hidmid\n", "hidmid::Color", "hidmid", id="re-export"),
+        pytest.param("import picker::* hiding Color::Red\n", "Color", "", id="bare-owner"),
+    ],
+)
+@pytest.mark.parametrize(("member", "hidden"), [("Red", True), ("Green", False)])
+def test_hidden_member_is_unreachable_through_its_owner_in_every_position(
+    tmp_path: Path, header: str, owner: str, route: str, member: str, hidden: bool, position: str
+) -> None:
+    """``hiding`` removes an owner-qualified path from values, patterns, and ``is`` tests alike."""
+    spelling = f"{owner}::{member}"
+    pick = f"{route}::pick()" if route else "pick()"
+    arguments, binders = ("(shade = 1)", "(shade)") if member == "Green" else ("", "")
+    program = (
+        header
+        + {
+            "value": f"let probe: {owner} = {spelling}{arguments}\n()",
+            "pattern": f"case {pick} of | {spelling}{binders} => 0 | _ => 1",
+            "is": f"{pick} is {spelling}",
+        }[position]
+    )
+    if not hidden:
+        _check(tmp_path, program)
+        return
+    with pytest.raises(AglScopeError):
+        _check(tmp_path, program)
 
 
 _SCOPED_INT_FULL = (

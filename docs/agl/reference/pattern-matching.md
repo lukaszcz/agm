@@ -71,7 +71,7 @@ case result of
 ```
 
 At a `case` branch root, a bare name is never a variable binder: it must
-denote a visible fieldless enum-member constructor. By contrast, a bare `let`-root name
+denote a visible fieldless constructor. By contrast, a bare `let`-root name
 always introduces an immutable binder visible in the continuation; see
 [Bindings and scope](bindings-and-scope.md#let--immutable-binding). Ordinary
 value bindings do not alter case-constructor lookup; capitalization carries no
@@ -110,7 +110,7 @@ enum, and optionally destructures its fields. A pattern is a constructor
 pattern when it is one of:
 
 - a **bare name at a `case` branch root that denotes a visible constructor** —
-  matches a fieldless enum member only (see below),
+  matches a fieldless record only (see below),
 - a **call form** `name(…)`, where the parentheses may be empty, or
 - a **qualified** `Enum::member`, `Record::Record(…)`,
   `module::Enum::member`, or `module::Record` form.
@@ -130,7 +130,8 @@ def summarize(review: Review) -> text =
 The first branch could equivalently use bare `Pass` or explicit `Pass()`.
 
 When a bare name is classified as a constructor, it matches **fieldless**
-members only. A bare name for a member that has fields is a static error:
+records only, whether an enum member, a standalone record, or an alias leading
+to one. A bare name for a record that has fields is a static error:
 write `Fail()` to ignore its fields or destructure them. Empty parentheses
 ignore every field, including named-only fields. The call and qualified forms
 apply to every member record and to standalone records; the bare form is a
@@ -147,8 +148,8 @@ spelling no visible constructor of that type shares is a static error, even
 when the type has a member of that name — for instance when only a function
 returning the type was imported. When two enums contribute the same
 unqualified member spelling, or a record constructor spelling collides with an
-injected member name, the scrutinee type selects the intended constructor, so
-the pattern needs no qualification.
+injected member name, the scrutinee type selects the intended constructor when
+both are visible, so the pattern needs no qualification.
 
 #### Module-qualified constructor patterns
 
@@ -168,10 +169,8 @@ case value of
 The prefix may name an owning enum type (`Color::Red`), a module and owning
 type (`mylib::Color::Red` or `mylib::Point`), or the current module
 (`::Color::Red` or `::Point`). An enum owner qualifies only its inline
-members: when `mylib`'s `Color` references `Shared` from module `other`, write
-`other::Shared`, never `mylib::Color::Shared`. A module qualifier alone
-(`mylib::Red`, `::Red`) selects an inline member of one of that module's root
-enums; see
+members, and a module qualifier alone (`mylib::Red`, `::Red`) selects from that
+module's surface; see
 [Module-qualified enum members](modules.md#module-qualified-enum-members).
 Qualification states the owner explicitly
 but is not required when the scrutinee type selects a same-spelled constructor;

@@ -11,7 +11,6 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.imports import (
     ImportEnv,
-    ModuleContribution,
     QualResolutionFound,
     QualResolutionMissingMember,
     SingleTarget,
@@ -217,29 +216,6 @@ def test_ambiguous_imported_owner_is_rejected_by_scope(tmp_path: Path) -> None:
     }
 
     assert _program_outcome(tmp_path, modules) == "scope"
-
-
-def test_typecheck_import_member_query_uses_the_shared_route_environment() -> None:
-    from agm.agl.typecheck.env import TypeEnvironment
-
-    module = ModuleId.from_path("pkg/types")
-    import_env = ImportEnv(
-        contributions={
-            module: ModuleContribution(
-                module=module,
-                members={},
-                path_enabled=True,
-                aliases=frozenset(),
-                path_members={"Color": (module, "Color")},
-            )
-        },
-        unqualified={},
-    )
-    env = TypeEnvironment(import_env=import_env)
-
-    assert env.has_qualified_import_member(_qualifier("types"), "Color")
-    assert not env.has_qualified_import_member(_qualifier("types"), "Missing")
-    assert not TypeEnvironment().has_qualified_import_member(_qualifier("types"), "Color")
 
 
 def test_import_hiding_removes_a_qualified_owner_at_the_route_seam() -> None:

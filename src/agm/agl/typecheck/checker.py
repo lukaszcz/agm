@@ -318,6 +318,11 @@ def _variant_not_in_enum(variant: str, enum_type: EnumType, span: SourceSpan) ->
     )
 
 
+def _pattern_outside_owner(name: str, owner: RecordType, span: SourceSpan) -> AglTypeError:
+    """Return the diagnostic for a constructor pattern *name* no candidate of *owner* has."""
+    return AglTypeError(f"Constructor pattern '{name}' does not belong to '{owner!r}'.", span=span)
+
+
 def _type_argument_mismatch(
     spelled: str,
     selected: RecordType | EnumType,
@@ -6385,10 +6390,7 @@ class _Checker:
                 span=pattern.span,
             )
         if constructor_ref is None:
-            raise AglTypeError(
-                f"Constructor pattern '{pattern.name}' does not belong to '{owner_type!r}'.",
-                span=pattern.span,
-            )
+            raise _pattern_outside_owner(pattern.name, owner_type, pattern.span)
         return owner_type, fields, context_desc, constructor_ref
 
     def _pattern_constructor_candidates(
@@ -6463,7 +6465,7 @@ class _Checker:
         return selected
 
     def _record_constructor_pattern_ref(
-        self, pattern: ConstructorPattern, record_type: RecordType
+        self, pattern: ConstructorPattern | VarPattern, record_type: RecordType
     ) -> ConstructorRef | None:
         """Select the unique scope-published constructor for this exact record.
 
@@ -6548,7 +6550,7 @@ class _Checker:
         constructors: tuple[ConstructorRef, ...],
         span: SourceSpan,
     ) -> AglTypeError:
-        """Return why *constructors* construct no member of *enum_type*.
+        """Return why visible *constructors* spelled *variant* construct no *enum_type* member.
 
         A constructor of one of its members at other type arguments is a type
         argument mismatch; anything else does not belong to the enum.
@@ -6559,7 +6561,10 @@ class _Checker:
                 member = self._env.type_table.enum_member_by_decl(enum_type, constructed.decl_id)
                 if member is not None:
                     return _type_argument_mismatch(variant, constructed, member, span)
-        return _variant_not_in_enum(variant, enum_type, span)
+        return AglTypeError(
+            f"Visible constructor '{variant}' does not belong to enum '{enum_type.name}'.",
+            span=span,
+        )
 
     def _unselected_member_error(
         self,
@@ -6573,14 +6578,13 @@ class _Checker:
         """Return why no published *candidates* spelled *variant* select a member of *enum_type*.
 
         Scope selects every member a qualified spelling can name, so one none
-        of *candidates* fits names no member: a local scope's candidates are
-        all it qualifies, and an owner's failure is reported against it.
+        of *candidates* fits names no member: a bare spelling's and a local
+        scope's candidates are all it can select, and an owner's failure is
+        reported against it. Scope rejects a bare spelling with no candidate.
         """
-        if node_id in self._resolved.scope_qualified_spellings:
-            return self._constructor_outside_enum(variant, enum_type, candidates, span)
-        if qualifier is not None:
+        if qualifier is not None and node_id not in self._resolved.scope_qualified_spellings:
             return self._variant_qualification_error(qualifier, variant, enum_type, span)
-        return _variant_not_in_enum(variant, enum_type, span)
+        return self._constructor_outside_enum(variant, enum_type, candidates, span)
 
     @staticmethod
     def _unique_constructor_candidate(
@@ -6617,15 +6621,9 @@ class _Checker:
     def _check_top_level_bare_constructor(self, pattern: VarPattern, subj_type: Type) -> None:
         """Finalize a top-level bare pattern as a nullary constructor."""
         if isinstance(subj_type, RecordType):
-            candidates = self._resolved.pattern_constructor_candidates.get(pattern.node_id, ())
-            candidate = next(
-                (item for item in candidates if item.owner_decl_node_id == subj_type.decl_id), None
-            )
+            candidate = self._record_constructor_pattern_ref(pattern, subj_type)
             if candidate is None:
-                raise AglTypeError(
-                    f"Constructor pattern '{pattern.name}' does not belong to '{subj_type!r}'.",
-                    span=pattern.span,
-                )
+                raise _pattern_outside_owner(pattern.name, subj_type, pattern.span)
             if self._env.type_table.record_fields(subj_type):
                 raise AglTypeError(
                     f"Constructor '{subj_type.name}' requires fields.", span=pattern.span

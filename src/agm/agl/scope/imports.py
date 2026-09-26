@@ -51,6 +51,7 @@ __all__ = [
     "render_qualifier",
     "resolve_qualified",
     "resolve_qualified_member",
+    "route_spelling",
     "declares_bare_constructor",
     "try_resolve_qualified_member",
 ]
@@ -682,6 +683,23 @@ def try_resolve_qualified_member(
     """Resolve ``qualifier::member``, returning ``None`` for any non-unique verdict."""
     result = resolve_qualified(env, qualifier, member, anchored=anchored)
     return result.qname if isinstance(result, QualResolutionFound) else None
+
+
+def route_spelling(env: ImportEnv, origin: QName) -> str | None:
+    """Return the shortest ``route::path`` spelling that resolves to *origin* through *env*.
+
+    Every import route exposing *origin* is tried; ``None`` when none selects
+    it uniquely.
+    """
+    spellings = (
+        f"{render_qualifier(qualifier, anchored=anchored)}::{'::'.join(_path(atom))}"
+        for contribution in env.contributions.values()
+        for atom, qname in contribution.members.items()
+        if qname == origin
+        for qualifier, anchored in contribution_routes(contribution)
+        if try_resolve_qualified_member(env, qualifier, atom, anchored=anchored) == origin
+    )
+    return min(spellings, key=len, default=None)
 
 
 def resolve_qualified_member(

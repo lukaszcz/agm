@@ -8,7 +8,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import AglScopeError, NoVisibleConstructorError
 from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import Case, ConstructorPattern, FuncDef, LetDecl
 from agm.agl.typecheck import AglTypeError, CheckedProgram, check_program
@@ -84,14 +84,26 @@ def test_applied_enum_owner_does_not_select_a_referenced_member() -> None:
 
 
 def test_enum_alias_does_not_match_a_referenced_record_member() -> None:
-    reject(
-        "record R\n"
-        "  value: int\n"
-        "enum E = ::R\n"
-        "type Alias = E\n"
-        "let value: E = R(value = 1)\n"
-        "case value of | Alias(value) => value"
-    )
+    """An enum alias constructs nothing, so it is no visible constructor to match."""
+    with pytest.raises(NoVisibleConstructorError):
+        accept(
+            "record R\n"
+            "  value: int\n"
+            "enum E = ::R\n"
+            "type Alias = E\n"
+            "let value: E = R(value = 1)\n"
+            "case value of | Alias(value) => value"
+        )
+
+
+@pytest.mark.parametrize("pattern", ("U", "U()", "Unit0", "Unit0()"))
+def test_fieldless_record_alias_pattern_matches_bare_and_applied(pattern: str) -> None:
+    accept(f"record Unit0\ntype U = Unit0\nlet x = Unit0\ncase x of | {pattern} => 1")
+
+
+@pytest.mark.parametrize("pattern", ("V", "V()"))
+def test_record_alias_pattern_of_another_record_is_rejected_bare_and_applied(pattern: str) -> None:
+    reject(f"record Unit0\nrecord Other\ntype V = Other\nlet x = Unit0\ncase x of | {pattern} => 1")
 
 
 def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> None:

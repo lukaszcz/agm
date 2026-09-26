@@ -576,10 +576,11 @@ is expected, and comparing values across them is a type error. Every spelling
 that names the type or one of its constructors — a constructor call, a type
 annotation, a `catch` clause, a constructor pattern or `is` test, bare or
 qualified — means the declaration in effect where it is written, so one
-written after the redeclaration does not apply to an earlier value: a
-superseded member is spellable in no pattern or `is` test. An earlier value
-still matches `_`, renders, and casts to an alias declared before the
-redeclaration.
+written after the redeclaration does not apply to an earlier value. A pattern
+or `is` test spells a superseded member only through an alias declared before
+the redeclaration: after `type OldTint = A::Tint` and `type OldA = A`,
+`OldTint(level)` and `tinted is OldA::Tint` still match. An earlier value also
+matches `_`, renders, and casts to such an alias.
 
 A failed entry that would have redeclared the type changes nothing — the
 previous declaration, its methods, and every binding built from it remain in

@@ -1341,6 +1341,64 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert not s.eval_entry("Deep").ok
         assert s.eval_entry("s::Deep").ok
 
+    @pytest.mark.parametrize(
+        "redeclaration", ("type Deep = int", "enum Deep = A | B", "enum Deep[T] = X(v: T)")
+    )
+    def test_retained_root_enum_injects_no_superseded_referenced_record(
+        self, redeclaration: str
+    ) -> None:
+        """A referenced record superseded by another type is no longer the enum's bare member."""
+        s = open_session()
+        assert s.eval_entry("record Deep").ok
+        assert s.eval_entry("enum N\n  | ::Deep\n  | Own").ok
+        assert s.eval_entry("let own: N = N::Own").ok
+        assert s.eval_entry(redeclaration).ok
+
+        assert not s.eval_entry("let v: N = Deep").ok
+        assert not s.eval_entry("own is Deep").ok
+
+    def test_retained_root_enum_injects_no_record_superseded_in_the_same_entry(self) -> None:
+        s = open_session()
+        assert s.eval_entry("scope s\n  record Deep\nend s").ok
+        assert s.eval_entry("enum N\n  | ::s::Deep\n  | Own").ok
+
+        result = s.eval_entry("scope s\n  record Deep\n    y: int\nend s\n\nlet v: N = Deep")
+
+        assert not result.ok
+
+    def test_retained_root_enum_keeps_injecting_an_imported_referenced_record(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text("record Deep\n", encoding="utf-8")
+        s = ReplSession(cwd=tmp_path)
+        assert s.eval_entry("import lib").ok
+        assert s.eval_entry("enum N\n  | lib::Deep\n  | Own").ok
+
+        result = s.eval_entry("let deep: N = Deep\ndeep is Deep")
+
+        assert result.value == BoolValue(True), result.diagnostics
+
+    @pytest.mark.parametrize(
+        "declarations",
+        (
+            ("scope s\n  record Deep\nend s\n\nenum N\n  | ::s::Deep\n  | Own",),
+            ("scope s\n  record Deep\nend s", "enum N\n  | ::s::Deep\n  | Own"),
+        ),
+    )
+    def test_referenced_member_injection_does_not_depend_on_entry_grouping(
+        self, declarations: tuple[str, ...]
+    ) -> None:
+        s = open_session()
+        for declaration in declarations:
+            assert s.eval_entry(declaration).ok
+
+        injected = s.eval_entry("let deep: N = Deep\ndeep is Deep")
+        assert s.eval_entry("enum N\n  | Own").ok
+
+        assert injected.value == BoolValue(True), injected.diagnostics
+        assert not s.eval_entry("Deep").ok
+        assert s.eval_entry("s::Deep").ok
+
     def test_root_enum_reference_to_a_scoped_record_stays_bare_within_one_entry(self) -> None:
         s = open_session()
 
@@ -1391,19 +1449,15 @@ class TestScopeQualifiedConstructorsAcrossEntries:
         ["c is {}", "case c of | {}(x) => 1 | _ => 2"],
     )
     @pytest.mark.parametrize("member", ["Missing", "Palette", "Pixel", "Px"])
-    def test_spelling_outside_the_enum_is_rejected_like_its_bare_spelling(
+    def test_spelling_outside_the_enum_is_rejected_qualified_and_bare(
         self, form: str, member: str
     ) -> None:
         s = open_session()
         assert s.eval_entry(_PAINT_SCOPE).ok
         assert s.eval_entry("let c: Paint::Col = Paint::Col::Red").ok
 
-        qualified = s.eval_entry(form.format(f"Paint::{member}"))
-        bare = s.eval_entry(form.format(member))
-
-        assert not qualified.ok
-        assert not bare.ok
-        assert [d.message for d in qualified.diagnostics] == [d.message for d in bare.diagnostics]
+        assert not s.eval_entry(form.format(f"Paint::{member}")).ok
+        assert not s.eval_entry(form.format(member)).ok
 
     def test_missing_member_of_a_scoped_enum_is_rejected_alike_by_is_and_patterns(self) -> None:
         s = open_session()
@@ -2993,6 +3047,30 @@ enum Agent
         assert field.value == IntValue(3), field.diagnostics
         assert echoed.ok, echoed.diagnostics
         assert render_entry_result(echoed, echo=True) == "A::Tint(\n  level = 3\n)"
+
+    @pytest.mark.parametrize(
+        ("use", "expected"),
+        (
+            ("case tinted of\n  | OldTint(level) => level\n  | _ => 0", IntValue(3)),
+            ("tinted is OldA::Tint", BoolValue(True)),
+            ("case tinted of\n  | OldA::Tint(level) => level\n  | _ => 0", IntValue(3)),
+            ("tinted is OldTint", BoolValue(True)),
+        ),
+    )
+    def test_superseded_enum_member_is_spelled_through_an_earlier_alias(
+        self, use: str, expected: Value
+    ) -> None:
+        """Only an alias declared before the redeclaration still spells a superseded member."""
+        session = open_session()
+        assert session.eval_entry("enum A\n  | Red\n  | Tint(level: int)").ok
+        assert session.eval_entry("type OldTint = A::Tint").ok
+        assert session.eval_entry("type OldA = A").ok
+        assert session.eval_entry("let tinted: A = A::Tint(level = 3)").ok
+        assert session.eval_entry("enum A\n  | Red\n  | Blue").ok
+
+        result = session.eval_entry(use)
+
+        assert result.value == expected, result.diagnostics
 
     def test_same_spelling_enum_member_supersession_keeps_old_and_new_identities_incompatible(
         self,

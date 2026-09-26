@@ -332,6 +332,7 @@ class EffectHandlers:
         contract_id: ContractId,
         max_attempts: int,
         sandbox_expr: IrExpr,
+        env_expr: IrExpr,
     ) -> Value:
         """Handle IrAsk: dispatch an Agent enum value and parse output."""
         agent_val = self._ctx._eval(agent_expr)
@@ -342,6 +343,7 @@ class EffectHandlers:
             )
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
         permission_mode, sandbox = self._decode_sandbox(sandbox_expr)
+        env = self._decode_environ(self._ctx._eval(env_expr))
 
         output_contract, json_schema = self._contract_carriers(contract_id)
         return self._eval_agent_method_ask(
@@ -354,7 +356,20 @@ class EffectHandlers:
             json_schema=json_schema,
             permission_mode=permission_mode,
             sandbox=sandbox,
+            env=env,
         )
+
+    def _decode_environ(self, value: Value) -> dict[str, str]:
+        """Decode an ``Environ`` (or a bare ``dict[text, text]``) into a plain dict.
+
+        Shared by ``exec`` and every agent-call/session env operand, which all
+        evaluate the same ``std/env::Environ``-shaped default or override.
+        """
+        vars_value: Value = (
+            value if isinstance(value, DictValue) else cast(RecordValue, value).fields["vars"]
+        )
+        entries = cast(DictValue, vars_value).entries
+        return {name: cast(TextValue, entry).value for name, entry in entries.items()}
 
     def _decode_sandbox(self, sandbox_expr: IrExpr) -> tuple[PermissionMode, SandboxLimits | None]:
         """Evaluate and decode an ask/ask-request call's ``sandbox`` operand."""
@@ -493,45 +508,65 @@ class EffectHandlers:
     def eval_ir_session_open(self, node: IrSessionOpen) -> Value:
         """Open a host-backed session and mint its opaque AgL record.
 
-        The session's sandboxing is fixed here, at open, to ``node.sandbox``
-        (the call's own operand, or a ``default-sandbox`` load when omitted)
-        -- for its whole lifetime. The evaluated operand is reused verbatim
-        as the returned record's own ``sandbox`` field, so it reports exactly
-        what the call was opened with.
+        The session's sandboxing and environment are fixed here, at open, to
+        ``node.sandbox``/``node.env`` (the call's own operands, or the
+        ``default-sandbox``/``environ`` defaults when omitted) -- for its
+        whole lifetime. The evaluated sandbox operand is reused verbatim as
+        the returned record's own ``sandbox`` field, so it reports exactly
+        what the call was opened with; the environment is never exposed on
+        the record.
         """
         agent = cast(RecordValue, self._ctx._eval(node.agent))
         transport_value = None if node.transport is None else self._ctx._eval(node.transport)
         name = self._text_of(self._ctx._eval(node.name))
         sandbox_value = self._ctx._eval(node.sandbox)
         permission_mode, sandbox = self._decode_sandbox_setting(sandbox_value)
+        env = self._decode_environ(self._ctx._eval(node.env))
         try:
             spec = self._decode_agent_spec(agent)
             transport = self._resolve_session_transport(spec, transport_value)
             handle = self._ctx._session_host.open(
-                spec, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+                spec,
+                transport,
+                name=name,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
             )
         except SessionHostError as error:
             self._session_error(error)
         return self._session_value(handle, agent, transport, sandbox_value)
 
     def eval_ir_session_default(
-        self, _node: IrSessionDefault, default_agent: Value, default_sandbox: Value
+        self,
+        _node: IrSessionDefault,
+        default_agent: Value,
+        default_sandbox: Value,
+        default_env: Value | None,
     ) -> Value:
         """Lazily obtain the session whose agent is current at first use.
 
-        Its sandboxing is likewise fixed at this first use, to the
-        ``default-sandbox`` setting current then -- never per ask. A later
-        call reads the mode fixed at that first open back from the host's own
-        snapshot, so the returned record's ``sandbox`` field stays stable
-        even after a later write to ``default-sandbox``.
+        Its sandboxing and environment are likewise fixed at this first use,
+        to the ``default-sandbox``/``environ`` settings current then -- never
+        per ask. A later call reads the mode fixed at that first open back
+        from the host's own snapshot, so the returned record's ``sandbox``
+        field stays stable even after a later write to ``default-sandbox``
+        (and the session keeps using the environment fixed then, even after a
+        later ``setenv``). *default_env* is ``None`` once the caller already
+        knows the default session exists: the host ignores ``env`` in that
+        case, so its decode is skipped rather than wastefully repeated on
+        every free ``ask``.
         """
         agent = cast(RecordValue, default_agent)
         permission_mode, sandbox = self._decode_sandbox_setting(default_sandbox)
+        env = {} if default_env is None else self._decode_environ(default_env)
         try:
             spec = self._decode_agent_spec(agent)
             transport = self._resolve_session_transport(spec, None)
             host = self._ctx._session_host
-            handle = host.default(spec, transport, permission_mode=permission_mode, sandbox=sandbox)
+            handle = host.default(
+                spec, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
+            )
             snapshot = host.snapshot(handle)
         except SessionHostError as error:
             self._session_error(error)
@@ -627,6 +662,7 @@ class EffectHandlers:
         json_schema: object | None,
         permission_mode: PermissionMode,
         sandbox: SandboxLimits | None,
+        env: dict[str, str],
     ) -> Value:
         """Run one ``Agent::ask`` call in a short-lived conversation.
 
@@ -652,6 +688,7 @@ class EffectHandlers:
                 output_contract=output_contract,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
                 dispatch=lambda request: self._dispatch_session_agent(
                     handle,
                     request,
@@ -674,6 +711,7 @@ class EffectHandlers:
                 single_prompt=max_attempts == 1,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
         except SessionAgentError as error:
             self._invalid_agent_error(agent, error)
@@ -698,10 +736,15 @@ class EffectHandlers:
             max_attempts=node.max_attempts,
             node=node,
             output_contract=output_contract,
-            # A session's sandbox mode is fixed at open, never per-ask: every
-            # session-routed request carries no sandboxing here.
+            # A session's sandbox mode and environment, fixed at open, are
+            # never per-ask: every session-routed request carries neither
+            # here. The session host owns the session's real environment
+            # (fixed at open) and applies it itself when dispatching, so this
+            # placeholder is never read; it only satisfies AgentRequest.env
+            # being required.
             permission_mode=PermissionMode.NONE,
             sandbox=None,
+            env={},
             dispatch=lambda request: self._dispatch_session_agent(
                 handle,
                 request,
@@ -735,6 +778,7 @@ class EffectHandlers:
         dispatch: Callable[[AgentRequest], str],
         permission_mode: PermissionMode,
         sandbox: SandboxLimits | None,
+        env: dict[str, str],
     ) -> Value:
         """Run the session ask retry loop."""
         contract = self._ctx._program.contracts[contract_id]
@@ -749,6 +793,7 @@ class EffectHandlers:
             request = AgentRequest(
                 agent=spec,
                 prompt=prompt,
+                env=env,
                 attempt=attempt,
                 previous_invalid_output=last_raw,
                 validation_errors=list(last_errors),
@@ -1109,18 +1154,7 @@ class EffectHandlers:
         # Evaluate every call operand once. Retried parsing reruns the shell,
         # not the argument expressions, just as an ordinary call would.
         cmd = self._text_of(self._ctx._eval(command_expr))
-        environ = self._ctx._eval(env_expr)
-        vars_value: Value
-        if isinstance(environ, DictValue):
-            vars_value = environ
-        else:
-            assert isinstance(environ, RecordValue)
-            vars_value = environ.fields["vars"]
-        assert isinstance(vars_value, DictValue)
-        env: dict[str, str] = {}
-        for name, value in vars_value.entries.items():
-            assert isinstance(value, TextValue)
-            env[name] = value.value
+        env = self._decode_environ(self._ctx._eval(env_expr))
         nominals = self._ctx._program.builtin_nominals
         cwd_value = self._ctx._eval(cwd_expr)
         assert isinstance(cwd_value, RecordValue)

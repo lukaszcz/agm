@@ -239,12 +239,23 @@ class BuiltinCallChecker:
     """
 
     _ASK_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
+        {"agent", "format", "strict-json", "on-parse-error", "sandbox", "env"}
+    )
+
+    # ask-request never accepts 'env': the built request record has no env
+    # field (printing a record must never leak secrets).
+    _ASK_REQUEST_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
         {"agent", "format", "strict-json", "on-parse-error", "sandbox"}
     )
 
     _EXEC_ALLOWED_NAMED_ARGS: frozenset[str] = frozenset(
         {"env", "cwd", "timeout", "sandbox", "format", "strict-json", "on-parse-error"}
     )
+
+    # ask arguments meaningful only when the call carries its own agent: a
+    # bare 'ask' with no 'agent' dispatches through the fixed-at-open default
+    # session, so neither has any effect there.
+    _SESSION_FIXED_ASK_ARGS: frozenset[str] = frozenset({"sandbox", "env"})
 
     def __init__(self, ctx: BuiltinCheckCtx) -> None:
         self._ctx = ctx
@@ -369,10 +380,16 @@ class BuiltinCallChecker:
     # --- Session statics ---
 
     def check_session_open(self, node: Call) -> Type:
-        """Type-check ``Session::open(agent, transport?, name?, sandbox?)``."""
+        """Type-check ``Session::open(agent, transport?, name?, sandbox?, env?)``."""
         session_transport = self.contract_type("SessionTransport")
         assert isinstance(session_transport, EnumType)
         transport = self._ctx._env.type_table.option_handle(session_transport)
+        # Resolved whenever 'std/env' is loaded, whether the call names 'env'
+        # or supplies it positionally: a standard library without 'std/env'
+        # loaded never has to name 'Environ' just to open a session without
+        # it, exactly as 'ask'/'exec' stay lazy.
+        env_type_def = self._ctx._env.type_table.get(STD_ENV_ID, "Environ")
+        env_type: Type = UnitType() if env_type_def is None else env_type_def.handle()
         return self._check_static_call(
             node,
             "Session::open",
@@ -401,6 +418,12 @@ class BuiltinCallChecker:
                     kind=ParamZone.STANDARD,
                     has_default=True,
                 ),
+                ParamSpec(
+                    name="env",
+                    type=env_type,
+                    kind=ParamZone.STANDARD,
+                    has_default=True,
+                ),
             ),
             self.contract_type("Session"),
         )
@@ -421,6 +444,7 @@ class BuiltinCallChecker:
         for forbidden, label in (
             ("agent", "an explicit agent"),
             ("sandbox", "an explicit sandbox mode"),
+            ("env", "an explicit environment"),
         ):
             if any(argument.name == forbidden for argument in node.named_args):
                 raise AglTypeError(f"Session.ask does not accept {label}.", span=node.span)
@@ -661,19 +685,19 @@ class BuiltinCallChecker:
 
         A bare call with no explicit ``agent`` dispatches through the default
         session at lowering (see ``lower.lowerer``'s ``ASK`` case), which, like
-        any session ask, carries no per-call sandbox operand: an explicit
-        ``sandbox`` here would be silently ineffective, so it is rejected the
-        same way ``Session.ask`` rejects one.
+        any session ask, carries no per-call sandbox or environment operand:
+        an explicit ``sandbox``/``env`` here would be silently ineffective, so
+        each is rejected the same way ``Session.ask`` rejects them.
         """
         if receiver_type is None and not any(
             argument.name == "agent" for argument in node.named_args
         ):
             for argument in node.named_args:
-                if argument.name == "sandbox":
+                if argument.name in self._SESSION_FIXED_ASK_ARGS:
                     raise AglTypeError(
-                        "ask does not accept an explicit sandbox mode without an explicit "
-                        "agent: without 'agent', ask dispatches through the default session, "
-                        "which fixes its sandbox mode at open.",
+                        f"ask does not accept an explicit {argument.name!r} without an "
+                        "explicit agent: without 'agent', ask dispatches through the default "
+                        "session, which fixes its sandbox mode and environment at open.",
                         span=node.span,
                     )
         # Target type: explicit type argument overrides context.
@@ -741,11 +765,15 @@ class BuiltinCallChecker:
     ) -> None:
         """Check target-independent syntax, then queue contract materialization."""
         callee = kind.value
+        base_allowed = (
+            self._ASK_REQUEST_ALLOWED_NAMED_ARGS
+            if kind is BuiltinObligationKind.ASK_REQUEST
+            else self._ASK_ALLOWED_NAMED_ARGS
+        )
         named = self._validate_ask_like_arguments(
             node,
             callee,
-            allowed_named=self._ASK_ALLOWED_NAMED_ARGS
-            - ({"agent"} if receiver_type is not None else set()),
+            allowed_named=base_allowed - ({"agent"} if receiver_type is not None else set()),
             receiver_type=receiver_type,
             agent_request_type=agent_request_type,
         )
@@ -836,6 +864,11 @@ class BuiltinCallChecker:
                 sandbox_na.value.span,
                 sandbox_na.value,
             )
+        if "env" in named:
+            env_na = named["env"]
+            env_type = self._resolve_environ_type(callee, env_na.span)
+            env_type_actual = self._ctx._check_expr(env_na.value, expected=env_type)
+            self._ctx._assert_assignable_from(env_type_actual, env_type, env_na.span, env_na.value)
         return named
 
     def finalize(self, obligation: PendingBuiltinObligation) -> None:
@@ -925,17 +958,25 @@ class BuiltinCallChecker:
         )
         return target_type
 
+    def _resolve_environ_type(self, subject: str, span: SourceSpan) -> Type:
+        """Resolve the loaded ``std/env::Environ`` type for an 'env' argument.
+
+        Shared by every built-in that accepts an ``env`` operand (``exec``,
+        ``ask``, ``Agent::ask``, ``Session::open``).
+        """
+        env_type_def = self._ctx._env.type_table.get(STD_ENV_ID, "Environ")
+        if env_type_def is None:
+            raise AglTypeError(
+                f"{subject} 'env' requires std/env::Environ, which this standard library "
+                "does not provide.",
+                span=span,
+            )
+        return env_type_def.handle()
+
     def _check_exec_spawn_options(self, named: dict[str, NamedArg]) -> None:
         """Check the non-codec ``exec`` options against their stdlib types."""
         if "env" in named:
-            env_type_def = self._ctx._env.type_table.get(STD_ENV_ID, "Environ")
-            if env_type_def is None:
-                raise AglTypeError(
-                    "exec 'env' requires std/env::Environ, which this standard library "
-                    "does not provide.",
-                    span=named["env"].span,
-                )
-            env_type = env_type_def.handle()
+            env_type = self._resolve_environ_type("exec", named["env"].span)
             actual = self._ctx._check_expr(named["env"].value, expected=env_type)
             self._ctx._assert_assignable_from(
                 actual, env_type, named["env"].span, named["env"].value

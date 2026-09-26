@@ -1,5 +1,6 @@
 import std/agent::{Agent, AgentSandbox, ParsePolicy}
 import std/config
+import std/env::Environ
 import std/errors::Exception
 import std/option::Option
 
@@ -28,6 +29,7 @@ builtin def Session::open(
   transport: Option[SessionTransport] = None,
   name: text = "",
   sandbox: AgentSandbox = std/config::default-sandbox,
+  env: Environ = std/env::environ,
 ) -> Session
 builtin def Session::default() -> Session
 builtin def Session::ask[T](

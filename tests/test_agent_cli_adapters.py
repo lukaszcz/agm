@@ -21,8 +21,16 @@ from agm.util.interp import InterpolationError
 from tests._agl_helpers import unavailable_sandbox_context
 
 
-def _open(backend: AgentCommandSessionBackend, command: str, *, name: str = "") -> None:
-    backend.open(SessionOpenRequest(agent=AgentCommand(command), transport="cli", name=name))
+def _open(
+    backend: AgentCommandSessionBackend,
+    command: str,
+    *,
+    name: str = "",
+    env: dict[str, str] | None = None,
+) -> None:
+    backend.open(
+        SessionOpenRequest(agent=AgentCommand(command), transport="cli", name=name, env=env or {})
+    )
 
 
 def _capture_result() -> ProcessCaptureResult:
@@ -44,7 +52,7 @@ def test_open_requires_an_agent_command() -> None:
     backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
 
     with pytest.raises(SessionHostError) as raised:
-        backend.open(SessionOpenRequest(agent=object(), transport="cli"))
+        backend.open(SessionOpenRequest(agent=object(), transport="cli", env={}))
 
     assert raised.value.operation == "open"
 
@@ -88,6 +96,7 @@ def test_single_prompt_command_session_does_not_require_a_session_id_placeholder
         "cli",
         lambda handle: service.ask(handle, SessionAskRequest(prompt="question")),
         single_prompt=True,
+        env={},
     )
 
     assert response.content == "answer"
@@ -167,6 +176,44 @@ def test_asks_reuse_one_underlying_id_with_a_symmetric_command_shape(
     assert len(captured) == 2
     assert _non_prompt_args(captured[0]) == _non_prompt_args(captured[1])
     assert captured[0][1] == captured[1][1]
+
+
+def test_ask_runs_the_process_under_the_environment_fixed_at_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The env supplied to ``open`` reaches the underlying process, verbatim."""
+    captured_envs: list[dict[str, str] | None] = []
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured_envs.append(kwargs.get("env"))
+        return _capture_result()
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, "runner --session %{SESSION_ID}", env={"ONLY": "this"})
+
+    backend.ask(SessionAskRequest(prompt="question"))
+
+    assert captured_envs == [{"ONLY": "this"}]
+
+
+def test_ask_runs_the_process_under_an_explicitly_empty_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``env = {}`` at open means an empty environment, never the AGM process's own."""
+    captured_envs: list[dict[str, str] | None] = []
+
+    def fake_run_capture_result(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
+        captured_envs.append(kwargs.get("env"))
+        return _capture_result()
+
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", fake_run_capture_result)
+    backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    _open(backend, "runner --session %{SESSION_ID}", env={})
+
+    backend.ask(SessionAskRequest(prompt="question"))
+
+    assert captured_envs == [{}]
 
 
 def test_ask_interpolates_mixed_prompt_session_and_escaped_placeholders(
@@ -414,7 +461,7 @@ def test_unsupported_operations_are_rejected_by_the_session_service(
 ) -> None:
     backend = AgentCommandSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     service = SessionService(lambda agent, transport: backend)
-    handle = service.open(AgentCommand("runner --session %{SESSION_ID}"), "cli")
+    handle = service.open(AgentCommand("runner --session %{SESSION_ID}"), "cli", env={})
 
     if not callable(invoke):
         raise AssertionError("test operation must be callable")

@@ -35,7 +35,6 @@ from agm.agent.session.protocol import (
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, PermissionMode
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.cleanup import preserve_primary_error
-from agm.core.env import clone_env
 from agm.sandbox.prepare import SandboxContext, sandbox_run_for
 from agm.sandbox.request import PreparedSandboxCommand, SandboxLimits
 from agm.util.interp import InterpolationError
@@ -123,7 +122,7 @@ class _CliPromptBackend(SandboxFixture):
                     prompt,
                     runner=command,
                     temp_files=temp_files,
-                    env=clone_env(),
+                    env=self._env,
                     delivery=delivery,
                     session_id=session_id,
                     sandbox=sandbox_run_for(sandbox, self._get_sandbox_context),

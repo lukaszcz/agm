@@ -38,8 +38,9 @@ class _SessionHost:
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
-        del name, permission_mode, sandbox
+        del name, permission_mode, sandbox, env
         return "session"
 
     def close_all(self) -> None:
@@ -136,6 +137,7 @@ class _RecordingSessionService(SessionService):
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
         handle = super().open(
             agent,
@@ -145,6 +147,7 @@ class _RecordingSessionService(SessionService):
             single_prompt=single_prompt,
             permission_mode=permission_mode,
             sandbox=sandbox,
+            env=env,
         )
         self.opened_handle = handle
         return handle

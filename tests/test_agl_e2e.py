@@ -82,6 +82,7 @@ builtin def Session::open(
   transport: Option[SessionTransport] = None,
   name: text = "",
   sandbox: AgentSandbox = std/config::default-sandbox,
+  env: Environ = std/env::environ,
 ) -> Session
 builtin def Session::default() -> Session
 """
@@ -341,9 +342,15 @@ class _ScriptedSessionService:
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
         handle = self._service.open(
-            agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+            agent,
+            transport,
+            name=name,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
         )
         self._sessions[handle] = self._agent.sessions[-1]
         self._backends[handle] = self._agent.sessions[-1].backend
@@ -357,6 +364,7 @@ class _ScriptedSessionService:
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
         handle = self._service.open(
             agent,
@@ -365,6 +373,7 @@ class _ScriptedSessionService:
             single_prompt=single_prompt,
             permission_mode=permission_mode,
             sandbox=sandbox,
+            env=env,
         )
         self._sessions[handle] = self._agent.sessions[-1]
         self._backends[handle] = self._agent.sessions[-1].backend
@@ -381,6 +390,7 @@ class _ScriptedSessionService:
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> Any:
         def register(handle: str) -> Any:
             self._sessions[handle] = self._agent.sessions[-1]
@@ -401,6 +411,7 @@ class _ScriptedSessionService:
             single_prompt=single_prompt,
             permission_mode=permission_mode,
             sandbox=sandbox,
+            env=env,
         )
 
     def default(
@@ -411,9 +422,15 @@ class _ScriptedSessionService:
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
         handle = self._service.default(
-            agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+            agent,
+            transport,
+            name=name,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
         )
         if handle not in self._sessions:
             self._sessions[handle] = self._agent.sessions[-1]
@@ -492,7 +509,9 @@ class _ScenarioSessionHost:
     def __init__(self, agents: dict[str, ScriptedAgent]) -> None:
         self._services = {name: agent.session_service() for name, agent in agents.items()}
         self._handles: dict[str, _ScriptedSessionService] = {}
-        self._snapshots: dict[str, tuple[Any, str, PermissionMode, SandboxLimits | None]] = {}
+        self._snapshots: dict[
+            str, tuple[Any, str, PermissionMode, SandboxLimits | None, dict[str, str]]
+        ] = {}
         self._default_handle: str | None = None
 
     def open(
@@ -503,6 +522,7 @@ class _ScenarioSessionHost:
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
         service = self._service_for(agent)
         try:
@@ -512,11 +532,12 @@ class _ScenarioSessionHost:
                 name=name,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
-        self._snapshots[handle] = (agent, transport, permission_mode, sandbox)
+        self._snapshots[handle] = (agent, transport, permission_mode, sandbox, env or {})
         return handle
 
     def open_ephemeral(
@@ -527,6 +548,7 @@ class _ScenarioSessionHost:
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
         service = self._service_for(agent)
         try:
@@ -536,11 +558,12 @@ class _ScenarioSessionHost:
                 single_prompt=single_prompt,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
-        self._snapshots[handle] = (agent, transport, permission_mode, sandbox)
+        self._snapshots[handle] = (agent, transport, permission_mode, sandbox, env or {})
         return handle
 
     def with_ephemeral(
@@ -552,12 +575,13 @@ class _ScenarioSessionHost:
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> Any:
         service = self._service_for(agent)
 
         def register(handle: str) -> Any:
             self._handles[handle] = service
-            self._snapshots[handle] = (agent, transport, permission_mode, sandbox)
+            self._snapshots[handle] = (agent, transport, permission_mode, sandbox, env or {})
             return action(handle)
 
         def retire(handle: str) -> None:
@@ -573,6 +597,7 @@ class _ScenarioSessionHost:
                 single_prompt=single_prompt,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
         except SessionHostError as error:
             self._raise_host_error(error)
@@ -585,6 +610,7 @@ class _ScenarioSessionHost:
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: SandboxLimits | None = None,
+        env: dict[str, str] | None = None,
     ) -> str:
         if self._default_handle is not None:
             return self._default_handle
@@ -596,11 +622,12 @@ class _ScenarioSessionHost:
                 name=name,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
         except SessionHostError as error:
             self._raise_host_error(error)
         self._handles[handle] = service
-        self._snapshots[handle] = (agent, transport, permission_mode, sandbox)
+        self._snapshots[handle] = (agent, transport, permission_mode, sandbox, env or {})
         self._default_handle = handle
         return handle
 
@@ -672,10 +699,10 @@ class _ScenarioSessionHost:
         from agm.agl.runtime.sessions import SessionSnapshot
 
         try:
-            agent, transport, permission_mode, sandbox = self._snapshots[handle]
+            agent, transport, permission_mode, sandbox, env = self._snapshots[handle]
         except KeyError:
             raise AglSessionHostError("unknown session", "snapshot") from None
-        return SessionSnapshot(agent, transport, permission_mode, sandbox)
+        return SessionSnapshot(agent, transport, permission_mode, sandbox, env=env)
 
     def close(self, handle: str) -> None:
         service = self._service_for_handle(handle, "close")
@@ -2064,12 +2091,16 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
         if name == "session":
             source = source.replace(_SESSION_STATIC_DECLARATIONS, "")
         if name == "agent":
-            source = source.replace(
-                "  agent: Agent = std/config::default-agent,\n",
-                '  agent: Agent = AgentCommand(command = ""),\n',
-            ).replace(
-                "  sandbox: AgentSandbox = std/config::default-sandbox,\n",
-                "  sandbox: AgentSandbox = Disabled,\n",
+            source = (
+                source.replace(
+                    "  agent: Agent = std/config::default-agent,\n",
+                    '  agent: Agent = AgentCommand(command = ""),\n',
+                )
+                .replace(
+                    "  sandbox: AgentSandbox = std/config::default-sandbox,\n",
+                    "  sandbox: AgentSandbox = Disabled,\n",
+                )
+                .replace("  env: Environ = std/env::environ,\n", "")
             )
         if name == "exec":
             source = source.replace(

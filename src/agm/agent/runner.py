@@ -647,7 +647,7 @@ def prepare_rendered_prompt_run(
     represent as an ordinary spawn failure.
     """
     command = runner.copy()
-    child_env = env if env else os.environ
+    child_env = env
     if delivery is PromptDelivery.FILE:
         with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
             handle.write(rendered_prompt)
@@ -728,10 +728,11 @@ def run_prepared_prompt_result(
             timed_out=False,
             spawn_error=sandbox.message,
         )
-    # An empty ``prepared.env`` means the child inherits ``os.environ`` (see the
-    # ``env=None`` passed to ``run_capture_result`` below); interpolate argv
-    # holes against the same effective mapping so both agree on variable values.
-    child_env = prepared.env if prepared.env else os.environ
+    # ``prepared.env`` is the exact environment the child receives, even when
+    # empty: an empty mapping means an empty environment, never a fallback to
+    # ``os.environ``. Interpolate argv holes against that same mapping so both
+    # agree on variable values.
+    child_env = prepared.env
     argv = prepared.argv or command_with_prompt_target(
         prepared.command,
         prepared.effective_file,
@@ -743,7 +744,7 @@ def run_prepared_prompt_result(
         cwd_for_run: Path | None = sandbox.cwd
         interrupt_cleanup_cmd = sandbox.interrupt_cleanup_cmd
     else:
-        env_for_run = prepared.env if prepared.env else None
+        env_for_run = prepared.env
         cwd_for_run = None
         interrupt_cleanup_cmd = None
     try:

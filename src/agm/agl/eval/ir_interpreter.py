@@ -515,6 +515,10 @@ class IrInterpreter:
         )
         self._get_sandbox_context = get_sandbox_context
         self._close_sessions = close_sessions
+        # Once the free-ask default session exists, its environment is fixed
+        # forever: skip evaluating and decoding ``environ`` on every later
+        # free ask in this run, only doing so while creating it.
+        self._default_session_opened = False
         # Bootstrap the setting fields so declared defaults can be evaluated by
         # the ordinary, typeless evaluator. Constant defaults cannot read a
         # setting or invoke a host operation, so this temporary state is never
@@ -1488,11 +1492,15 @@ class IrInterpreter:
             if isinstance(node, IrSessionOpen):
                 return self._effects.eval_ir_session_open(node)
             if isinstance(node, IrSessionDefault):
-                return self._effects.eval_ir_session_default(
+                default_env = None if self._default_session_opened else self._eval(node.env)
+                result = self._effects.eval_ir_session_default(
                     node,
                     self._load_builtin_setting("default-agent"),
                     self._load_builtin_setting("default-sandbox"),
+                    default_env,
                 )
+                self._default_session_opened = True
+                return result
             if isinstance(node, IrSessionAsk):
                 return self._effects.eval_ir_session_ask(node)
             return self._effects.eval_ir_session_op(node)
@@ -2088,10 +2096,17 @@ class IrInterpreter:
                 contract_id=contract_id,
                 max_attempts=max_attempts,
                 sandbox=sandbox_expr,
+                env=env_expr,
             ):
                 try:
                     return self._effects.eval_ir_ask(
-                        node, agent_expr, prompt_expr, contract_id, max_attempts, sandbox_expr
+                        node,
+                        agent_expr,
+                        prompt_expr,
+                        contract_id,
+                        max_attempts,
+                        sandbox_expr,
+                        env_expr,
                     )
                 except AglRaise as exc:
                     if exc.span is None:

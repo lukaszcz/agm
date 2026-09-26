@@ -9410,6 +9410,7 @@ class TestHostContractBuiltinIdentity:
         host-minted record carrying the agent, so a scoped ``Agent`` receiver
         creates no field whose value could disagree with its static type."""
         result = accept_type(
+            "import std/env::{Environ, environ}\n"
             "scope A\n"
             f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
             "builtin def Agent::ask[T](\n"
@@ -9419,12 +9420,13 @@ class TestHostContractBuiltinIdentity:
             "  strict-json: bool = false,\n"
             "  on-parse-error: ParsePolicy = ParsePolicy::Abort,\n"
             "  sandbox: AgentSandbox = Disabled,\n"
+            "  env: Environ = environ,\n"
             ") -> T\n"
             'let g: Agent = Agent::AgentCommand("x")\n'
             'let r: text = g.ask("hi")\n'
             "end A\n()\n"
         )
-        region = result.resolved.program.body.items[0]
+        region = result.resolved.program.body.items[1]
         assert isinstance(region, ScopeRegion)
         receiver_decl, answer_decl = [item for item in region.items if isinstance(item, LetDecl)]
         receiver_type = result.type_env.get_binding_type(receiver_decl.node_id)
@@ -10854,6 +10856,78 @@ class TestAskSandboxArgument:
         # An explicit ``agent`` routes directly to the agent, not the default
         # session, so ``sandbox`` is meaningful here.
         accept_type('ask("Q", agent = AgentCommand("a"), sandbox = AgentSandbox::Native)')
+
+
+class TestAskEnvArgument:
+    """``env`` is accepted on every ask-like call except ``ask-request`` and a
+    session-routed ``ask``."""
+
+    _IMPORT = "import std/env::Environ\n"
+
+    def test_ask_accepts_ambient_environ(self) -> None:
+        accept_type(self._IMPORT + 'ask("Q", agent = AgentCommand("a"), env = std/env::environ)')
+
+    def test_ask_accepts_extended_environ(self) -> None:
+        accept_type(
+            self._IMPORT + 'ask("Q", agent = AgentCommand("a"), '
+            'env = std/env::environ.extended({"A": "B"}))'
+        )
+
+    def test_ask_rejects_wrong_type_env(self) -> None:
+        err = reject_type('ask("Q", agent = AgentCommand("a"), env = "unrestricted")')
+        assert "Environ" in str(err)
+        assert "text" in str(err)
+
+    def test_ask_request_rejects_env_even_with_an_explicit_agent(self) -> None:
+        # ask-request never dispatches, so its built record carries no
+        # environment field to fill: 'env' is simply not a recognized argument.
+        err = reject_type(
+            self._IMPORT + 'ask-request("Q", agent = AgentCommand("a"), env = std/env::environ)'
+        )
+        assert "env" in str(err)
+
+    def test_agent_receiver_ask_accepts_env(self) -> None:
+        accept_type(self._IMPORT + 'let a = AgentCommand("a")\na.ask("Q", env = std/env::environ)')
+
+    def test_agent_receiver_ask_request_rejects_env(self) -> None:
+        err = reject_type(
+            self._IMPORT + 'let a = AgentCommand("a")\na.ask-request("Q", env = std/env::environ)'
+        )
+        assert "env" in str(err)
+
+    def test_bare_ask_without_agent_rejects_an_explicit_env(self) -> None:
+        # No explicit ``agent`` -> dispatches through the default session at
+        # lowering, which fixes its environment at open, exactly like
+        # ``Session.ask``.
+        err = reject_type(self._IMPORT + 'ask("Q", env = std/env::environ)')
+        assert "env" in str(err).lower()
+
+    def test_bare_ask_with_explicit_agent_accepts_env(self) -> None:
+        # An explicit ``agent`` routes directly to the agent, not the default
+        # session, so ``env`` is meaningful here.
+        accept_type(self._IMPORT + 'ask("Q", agent = AgentCommand("a"), env = std/env::environ)')
+
+    def test_session_ask_rejects_an_explicit_env(self) -> None:
+        # A session's environment is fixed once, at open; a per-ask override
+        # would be silently ineffective.
+        err = reject_type(
+            self._IMPORT + 'let s = Session::open(agent = AgentCommand("a"))\n'
+            's.ask("Q", env = std/env::environ)'
+        )
+        assert "env" in str(err).lower()
+
+    def test_session_open_accepts_env(self) -> None:
+        accept_type(
+            self._IMPORT
+            + 'let s = Session::open(agent = AgentCommand("a"), env = std/env::environ)\n'
+            "()"
+        )
+
+    def test_session_open_rejects_wrong_type_env(self) -> None:
+        err = reject_type(
+            'let s = Session::open(agent = AgentCommand("a"), env = "unrestricted")\n()'
+        )
+        assert "Environ" in str(err)
 
 
 class TestExecUnknownArgs:

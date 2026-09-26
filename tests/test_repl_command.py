@@ -347,6 +347,7 @@ class TestReplRun:
             def __init__(self) -> None:
                 self._sessions: dict[str, tuple[AgentSpec, str]] = {}
                 self._sandboxing: dict[str, tuple[PermissionMode, SandboxLimits | None]] = {}
+                self._envs: dict[str, dict[str, str]] = {}
                 self._default_handle: str | None = None
                 self.opened: list[str] = []
                 self.prompts: list[tuple[str, str]] = []
@@ -361,12 +362,14 @@ class TestReplRun:
                 name: str = "",
                 permission_mode: PermissionMode = PermissionMode.NONE,
                 sandbox: SandboxLimits | None = None,
+                env: dict[str, str] | None = None,
             ) -> str:
                 del name
                 assert isinstance(agent, AgentPi)
                 handle = f"session-{len(self._sessions) + 1}"
                 self._sessions[handle] = (agent, transport)
                 self._sandboxing[handle] = (permission_mode, sandbox)
+                self._envs[handle] = env or {}
                 self.opened.append(agent.provider)
                 return handle
 
@@ -378,6 +381,7 @@ class TestReplRun:
                 name: str = "",
                 permission_mode: PermissionMode = PermissionMode.NONE,
                 sandbox: SandboxLimits | None = None,
+                env: dict[str, str] | None = None,
             ) -> str:
                 if self._default_handle is None:
                     self._default_handle = self.open(
@@ -386,6 +390,7 @@ class TestReplRun:
                         name=name,
                         permission_mode=permission_mode,
                         sandbox=sandbox,
+                        env=env,
                     )
                 return self._default_handle
 
@@ -396,7 +401,9 @@ class TestReplRun:
             def snapshot(self, handle: str) -> SessionSnapshot:
                 agent, transport = self._sessions[handle]
                 permission_mode, sandbox = self._sandboxing[handle]
-                return SessionSnapshot(agent, transport, permission_mode, sandbox)
+                return SessionSnapshot(
+                    agent, transport, permission_mode, sandbox, env=self._envs[handle]
+                )
 
             def close_all(self) -> None:
                 self.close_calls += 1

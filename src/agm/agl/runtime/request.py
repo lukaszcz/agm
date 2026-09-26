@@ -89,11 +89,15 @@ class AgentRequest:
     sees the value or its nominal identity. ``permission_mode`` and
     ``sandbox`` are the decoded form of the call's ``sandbox`` argument
     (``agl.runtime.sandbox_values.decode_agent_sandbox``); their defaults keep
-    every caller that does not decode a sandbox unaffected.
+    every caller that does not decode a sandbox unaffected. ``env`` is the
+    decoded form of the call's ``environ`` argument and is required: every
+    AgL agent call resolves an environment (the ambient one by default), so
+    no dispatcher ever falls back to the host process environment silently.
     """
 
     agent: "AgentSpec"
     prompt: str
+    env: dict[str, str] = field(repr=False)
     attempt: int = 0
     previous_invalid_output: str | None = None
     validation_errors: list[ValidationError] = field(default_factory=list)

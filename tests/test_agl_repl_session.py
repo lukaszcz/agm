@@ -4374,12 +4374,12 @@ class TestReset:
 
         host = AgentDispatcherSessionHost(None)
         agent = AgentCommand(command="worker")
-        first = host.default(agent, "Cli")
+        first = host.default(agent, "Cli", env={})
         session = open_session(session_host=host)
 
         session.reset()
 
-        assert host.default(agent, "Cli") != first
+        assert host.default(agent, "Cli", env={}) != first
 
     def test_reset_clears_all_state(self) -> None:
         s = open_session()

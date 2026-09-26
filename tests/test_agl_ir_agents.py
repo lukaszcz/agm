@@ -585,6 +585,37 @@ result
     assert ir["result"] == TextValue("default response")
 
 
+def test_ask_dispatches_with_the_ambient_environment() -> None:
+    """A dispatched ``ask`` request carries the process environment by default."""
+    env_log: list[dict[str, str]] = []
+    source = 'let result: text = ask("hi", agent = AgentCommand("worker"))\nresult'
+    evaluate_ir_with_agents(
+        source,
+        scripts={"worker": ["ok"]},
+        process_environment={"AMBIENT": "present"},
+        env_log=env_log,
+    )
+    assert env_log == [{"AMBIENT": "present"}]
+
+
+def test_ask_dispatches_with_an_extended_environment() -> None:
+    """``environ.extended(...)`` reaches the dispatched request, layered on the ambient one."""
+    env_log: list[dict[str, str]] = []
+    source = (
+        "import std/env::*\n"
+        'let result: text = ask("hi", agent = AgentCommand("worker"), '
+        'env = environ.extended({"EXTRA": "value"}))\n'
+        "result"
+    )
+    evaluate_ir_with_agents(
+        source,
+        scripts={"worker": ["ok"]},
+        process_environment={"BASE": "original"},
+        env_log=env_log,
+    )
+    assert env_log == [{"BASE": "original", "EXTRA": "value"}]
+
+
 # ---------------------------------------------------------------------------
 # ask-request builds an AgentRequest record
 # ---------------------------------------------------------------------------
@@ -895,7 +926,7 @@ def test_validate_ir_ask_missing_contract(request_only: bool) -> None:
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
-    ask_node = node_type(
+    ask_kwargs: dict[str, object] = dict(
         location=dummy_loc,
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
@@ -903,6 +934,9 @@ def test_validate_ir_ask_missing_contract(request_only: bool) -> None:
         max_attempts=1,
         sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
+    if node_type is IrAsk:
+        ask_kwargs["env"] = IrConstText(location=dummy_loc, value="unused")
+    ask_node = node_type(**ask_kwargs)
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
         modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(ask_node,))},
@@ -940,7 +974,7 @@ def test_validate_ir_ask_max_attempts_zero(request_only: bool) -> None:
         is_unit=False,
     )
     node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
-    ask_node = node_type(
+    ask_kwargs: dict[str, object] = dict(
         location=dummy_loc,
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
@@ -948,6 +982,9 @@ def test_validate_ir_ask_max_attempts_zero(request_only: bool) -> None:
         max_attempts=0,  # invalid!
         sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
+    if node_type is IrAsk:
+        ask_kwargs["env"] = IrConstText(location=dummy_loc, value="unused")
+    ask_node = node_type(**ask_kwargs)
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
         modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(ask_node,))},
@@ -2172,6 +2209,7 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
         contract_id=cid,
         max_attempts=1,
         sandbox=IrConstText(location=dummy_loc, value="unused"),
+        env=IrConstText(location=dummy_loc, value="unused"),
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -2278,7 +2316,7 @@ def test_validate_ir_ask_shallow_does_not_check_contracts(request_only: bool) ->
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     bad_cid = ContractId(999)
     node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
-    node = node_type(
+    node_kwargs: dict[str, object] = dict(
         location=dummy_loc,
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
@@ -2286,6 +2324,9 @@ def test_validate_ir_ask_shallow_does_not_check_contracts(request_only: bool) ->
         max_attempts=1,
         sandbox=IrConstText(location=dummy_loc, value="unused"),
     )
+    if node_type is IrAsk:
+        node_kwargs["env"] = IrConstText(location=dummy_loc, value="unused")
+    node = node_type(**node_kwargs)
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
         modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
@@ -2979,7 +3020,7 @@ def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
     contract_id = ContractId(0)
     node: IrAsk | IrAskRequest
     node_type: type[IrAsk] | type[IrAskRequest] = IrAskRequest if request_only else IrAsk
-    node = node_type(
+    node_kwargs: dict[str, object] = dict(
         location=location,
         agent=IrConstInt(location=location, value=1),
         prompt=IrConstText(location=location, value="prompt"),
@@ -2987,6 +3028,9 @@ def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
         max_attempts=1,
         sandbox=IrConstText(location=location, value="unused"),
     )
+    if node_type is IrAsk:
+        node_kwargs["env"] = IrConstText(location=location, value="unused")
+    node = node_type(**node_kwargs)
     contracts: dict[ContractId, ContractRequest] = {
         contract_id: ContractRequest(
             codec_name="text",
@@ -3048,6 +3092,7 @@ def test_ir_ask_rejects_a_non_agent_sandbox_value() -> None:
         contract_id=contract_id,
         max_attempts=1,
         sandbox=IrConstInt(location=location, value=1),
+        env=IrConstText(location=location, value="unused"),
     )
     contracts: dict[ContractId, ContractRequest] = {
         contract_id: ContractRequest(

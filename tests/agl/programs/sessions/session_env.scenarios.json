@@ -1,0 +1,79 @@
+{
+  "scenarios": [
+    {
+      "name": "ambient_environ_reaches_session_open",
+      "params": {"mode": "ambient-environ-reaches-session-open"},
+      "process_environment": {"BASE": "original"},
+      "agents": {"impl": ["hi-response"]},
+      "expect": {
+        "stdout": "original\nhi-response\n",
+        "calls": {"impl": 0},
+        "sessions": [{"agent": "impl", "tag": "session-1", "opened": true}],
+        "session_prompts": [
+          {"agent": "impl", "session": "session-1", "call": 0, "equals": "hi"}
+        ]
+      }
+    },
+    {
+      "name": "explicit_environ_reaches_agent_receiver_ask",
+      "params": {"mode": "explicit-environ-reaches-agent-receiver-ask"},
+      "agents": {"impl": ["child-answer"]},
+      "expect": {
+        "stdout": "child-answer\n",
+        "calls": {"impl": 1}
+      }
+    },
+    {
+      "name": "extended_environ_reaches_free_ask",
+      "params": {"mode": "extended-environ-reaches-free-ask"},
+      "process_environment": {"BASE": "original"},
+      "agents": {"impl": ["extended-answer"]},
+      "expect": {
+        "stdout": "extended-answer\n",
+        "calls": {"impl": 1}
+      }
+    },
+    {
+      "name": "setenv_before_open_then_again_after",
+      "params": {"mode": "setenv-before-open-then-again-after"},
+      "agents": {"impl": ["hi-response"]},
+      "expect": {
+        "stdout": "hi-response\nadded\n",
+        "calls": {"impl": 0},
+        "sessions": [{"agent": "impl", "tag": "session-1", "opened": true}],
+        "session_prompts": [
+          {"agent": "impl", "session": "session-1", "call": 0, "equals": "hi"}
+        ]
+      }
+    },
+    {
+      "name": "fork_shares_the_parents_fixed_environment",
+      "params": {"mode": "fork-shares-the-parents-fixed-environment"},
+      "agents": {"ask": ["one-answer", "two-answer"]},
+      "expect": {
+        "stdout": "one-answer\ntwo-answer\n",
+        "calls": {"ask": 0},
+        "sessions": [
+          {"agent": "ask", "tag": "session-1", "opened": true, "parent": null},
+          {"agent": "ask", "tag": "session-2", "opened": true, "parent": "session-1"}
+        ],
+        "session_prompts": [
+          {"agent": "ask", "session": "session-1", "call": 0, "equals": "one"},
+          {"agent": "ask", "session": "session-2", "call": 0, "equals": "two"}
+        ],
+        "session_operations": [
+          {"agent": "ask", "session": "session-1", "operation": "fork", "outcome": "success"}
+        ]
+      }
+    },
+    {
+      "name": "default_free_ask_with_an_explicit_agent",
+      "params": {"mode": "default"},
+      "agents": {"impl": ["default-answer"]},
+      "expect": {
+        "stdout": "default-answer\n",
+        "calls": {"impl": 1}
+      }
+    }
+  ]
+}

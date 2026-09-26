@@ -49,9 +49,13 @@ class SessionOpenRequest:
     ``single_prompt`` states that this session serves exactly one prompt, so a
     backend need not establish a conversation it will never continue. Handle
     lifetime is owned separately by the session service. ``permission_mode``/
-    ``sandbox`` fix the sandboxing every process this session spawns runs
-    under, for the session's whole lifetime; their defaults keep a caller that
-    does not decode a sandbox unaffected.
+    ``sandbox``/``env`` fix the sandboxing and environment every process this
+    session spawns runs under, for the session's whole lifetime; the
+    ``permission_mode``/``sandbox`` defaults keep a caller that does not
+    decode either unaffected. ``env`` is required: every session resolves an
+    environment at open (the ambient one by default), so no backend ever
+    falls back to the host process environment silently. An empty dict is an
+    explicit empty environment, not "unspecified".
     """
 
     agent: object
@@ -60,6 +64,7 @@ class SessionOpenRequest:
     single_prompt: bool = False
     permission_mode: PermissionMode = PermissionMode.NONE
     sandbox: SandboxLimits | None = None
+    env: dict[str, str] = field(repr=False, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,25 +151,28 @@ class SessionBackend(Protocol):
 
 
 class SandboxFixture:
-    """Sandboxing fixed once, at ``open``, for a session backend's whole lifetime.
+    """Sandboxing and environment fixed once, at ``open``, for a backend's whole lifetime.
 
     Every process a session spawns -- its first prompt and every later native
     call (fork's replacement, compaction, ...) -- reuses the same
-    ``permission_mode``/``sandbox``; there is no per-call override. Shared by
-    every session backend family (CLI, RPC) so "fix at open" and "carry into a
-    freshly spawned sibling" are each written once.
+    ``permission_mode``/``sandbox``/``env``; there is no per-call override.
+    Shared by every session backend family (CLI, RPC) so "fix at open" and
+    "carry into a freshly spawned sibling" are each written once.
     """
 
     def __init__(self) -> None:
         self._permission_mode: PermissionMode = PermissionMode.NONE
         self._sandbox: SandboxLimits | None = None
+        self._env: dict[str, str] = {}
 
     def _fix_sandbox(self, request: SessionOpenRequest) -> None:
-        """Fix this backend's sandboxing for its whole session lifetime."""
+        """Fix this backend's sandboxing and environment for its whole session lifetime."""
         self._permission_mode = request.permission_mode
         self._sandbox = request.sandbox
+        self._env = request.env
 
     def _adopt_sandbox_from(self, other: "SandboxFixture") -> None:
-        """Carry an already-fixed sandboxing into a freshly spawned sibling backend."""
+        """Carry an already-fixed sandboxing/environment into a freshly spawned sibling."""
         self._permission_mode = other._permission_mode
         self._sandbox = other._sandbox
+        self._env = other._env

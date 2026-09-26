@@ -10,7 +10,6 @@ from agm.agent.transport import AgentCallInfo
 from agm.agl.ir.builtin_nominals import BuiltinNominals, resolve_standard_member_name
 from agm.agl.runtime.request import AgentCallHostError, AgentRequest, AgentResponse
 from agm.agl.semantics.values import RecordValue, TextValue, Value
-from agm.core.env import clone_env
 from agm.sandbox.request import PreparedSandboxCommand
 
 if TYPE_CHECKING:
@@ -51,7 +50,7 @@ def _run_request(
             request.prompt,
             runner=command,
             temp_files=temp_files,
-            env=clone_env(),
+            env=request.env,
             delivery=delivery,
             sandbox=sandbox,
         )

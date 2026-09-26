@@ -2508,11 +2508,13 @@ class _Lowerer:
             transport = call_node.args[1] if len(call_node.args) > 1 else named.get("transport")
             session_name = call_node.args[2] if len(call_node.args) > 2 else named.get("name")
             sandbox = call_node.args[3] if len(call_node.args) > 3 else named.get("sandbox")
+            env = call_node.args[4] if len(call_node.args) > 4 else named.get("env")
             operands = _BuiltinOperands(
                 value=self.lower_expr(call_node.args[0] if call_node.args else named["agent"]),
                 transport=None if transport is None else self.lower_expr(transport),
                 name=None if session_name is None else self.lower_expr(session_name),
                 sandbox=self._lower_optional(sandbox),
+                env=self._lower_optional(env),
             )
         elif op is BuiltinKind.RESOURCE or op is BuiltinKind.RESOURCE_DIR:
             operands = _BuiltinOperands(
@@ -2602,7 +2604,7 @@ class _Lowerer:
                 # ambient default session.
                 session = operands.session
                 if session is None and operands.agent is None:
-                    session = IrSessionDefault(location=loc)
+                    session = IrSessionDefault(location=loc, env=self._default_environ_operand(loc))
                 assert operands.target_type is not None, "compiler bug: ask without a target type"
                 return self._lower_ask_operands(
                     node_id=node_id,
@@ -2613,6 +2615,7 @@ class _Lowerer:
                     agent=operands.agent,
                     session=session,
                     sandbox=operands.sandbox,
+                    env=operands.env,
                     max_attempts=operands.max_attempts,
                 )
 
@@ -2628,6 +2631,7 @@ class _Lowerer:
                     agent=operands.agent,
                     session=None,
                     sandbox=operands.sandbox,
+                    env=None,
                     max_attempts=operands.max_attempts,
                 )
 
@@ -2657,10 +2661,11 @@ class _Lowerer:
                         else operands.name
                     ),
                     sandbox=operands.sandbox or self._default_sandbox_operand(loc),
+                    env=operands.env or self._default_environ_operand(loc),
                 )
 
             case BuiltinStaticKind.SESSION_DEFAULT:
-                return IrSessionDefault(location=loc)
+                return IrSessionDefault(location=loc, env=self._default_environ_operand(loc))
 
             case IrSessionOpKind():
                 return IrSessionOp(
@@ -3710,6 +3715,14 @@ class _Lowerer:
             key=builtin_var_key(STD_CONFIG_ID, (), "default-sandbox"),
         )
 
+    def _default_environ_operand(self, loc: Location) -> IrExpr:
+        """Read the ambient environment, or empty when ``std/env`` isn't loaded."""
+        return (
+            IrBuiltinLoad(location=loc, key=builtin_var_key(STD_ENV_ID, (), "environ"))
+            if self._has_std_env
+            else IrMakeDict(location=loc, entries=())
+        )
+
     def _lower_ask_operands(
         self,
         *,
@@ -3721,6 +3734,7 @@ class _Lowerer:
         agent: IrExpr | None,
         session: IrExpr | None,
         sandbox: IrExpr | None,
+        env: IrExpr | None,
         max_attempts: int,
     ) -> IrExpr:
         """Build an ask operation from already-lowered direct or closure operands."""
@@ -3749,6 +3763,9 @@ class _Lowerer:
 
         def selected_sandbox() -> IrExpr:
             return sandbox or self._default_sandbox_operand(loc)
+
+        def selected_env() -> IrExpr:
+            return env or self._default_environ_operand(loc)
 
         if is_request:
             selected_agent = agent or IrBuiltinLoad(
@@ -3781,6 +3798,7 @@ class _Lowerer:
             contract_id=contract_id,
             max_attempts=max_attempts,
             sandbox=selected_sandbox(),
+            env=selected_env(),
         )
 
     # ------------------------------------------------------------------
@@ -3789,11 +3807,7 @@ class _Lowerer:
 
     def _default_exec_operands(self, loc: Location) -> tuple[IrExpr, IrExpr, IrExpr, IrExpr]:
         """Build exec's ambient environment, cwd, timeout, and sandbox defaults."""
-        env: IrExpr = (
-            IrBuiltinLoad(location=loc, key=builtin_var_key(STD_ENV_ID, (), "environ"))
-            if self._has_std_env
-            else IrMakeDict(location=loc, entries=())
-        )
+        env = self._default_environ_operand(loc)
         option_none = self._link.builtin_nominals.resolve_standard_member("Option", "None")
         cwd = IrMakeRecord(location=loc, nominal=option_none.nominal, fields=())
         timeout = IrBuiltinLoad(

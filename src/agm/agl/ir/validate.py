@@ -1369,12 +1369,17 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_expr(val, ctx)
 
         case IrAsk(
-            agent=agent_expr, prompt=prompt_expr, contract_id=contract_id, sandbox=sandbox_expr
+            agent=agent_expr,
+            prompt=prompt_expr,
+            contract_id=contract_id,
+            sandbox=sandbox_expr,
+            env=env_expr,
         ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
             _validate_expr(sandbox_expr, ctx)
+            _validate_expr(env_expr, ctx)
             if ctx.deep:
                 if contract_id not in ctx.program.contracts:
                     raise InvalidIrError(
@@ -1387,7 +1392,11 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                     )
 
         case IrSessionOpen(
-            agent=agent_expr, transport=transport_expr, name=name_expr, sandbox=sandbox_expr
+            agent=agent_expr,
+            transport=transport_expr,
+            name=name_expr,
+            sandbox=sandbox_expr,
+            env=env_expr,
         ):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
@@ -1395,9 +1404,11 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 _validate_expr(transport_expr, ctx)
             _validate_expr(name_expr, ctx)
             _validate_expr(sandbox_expr, ctx)
+            _validate_expr(env_expr, ctx)
 
-        case IrSessionDefault():
+        case IrSessionDefault(env=env_expr):
             _validate_location(node.location, ctx)
+            _validate_expr(env_expr, ctx)
 
         case IrSessionAsk(session=session_expr, prompt=prompt_expr, contract_id=contract_id):
             _validate_location(node.location, ctx)

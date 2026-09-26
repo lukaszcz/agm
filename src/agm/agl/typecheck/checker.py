@@ -48,7 +48,13 @@ from typing import Literal, Protocol, TypeGuard, assert_never, cast
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic, dollar_spacing_hint, static_root_message
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, ModuleId, is_std_config_root, spell_declaration
+from agm.agl.modules.ids import (
+    ENTRY_ID,
+    STD_ENV_ID,
+    ModuleId,
+    is_std_config_root,
+    spell_declaration,
+)
 from agm.agl.scope.imports import (
     qualification_repair_guidance,
 )
@@ -451,8 +457,8 @@ def _as_builtin_method(
 
     *exclude* drops the named root params the receiver already fixes:
     every receiver drops ``agent`` (the receiver owns it); ``Session::ask``
-    also drops ``sandbox``, since a session's mode is fixed at open, not
-    chosen per ask.
+    also drops ``sandbox`` and ``env``, since a session's mode and
+    environment are fixed at open, not chosen per ask.
     """
     return replace(
         signature,
@@ -491,6 +497,7 @@ def _session_static_signature(kind: BuiltinStaticKind) -> FunctionSignature:
                 ),
                 _std_param("name", TextType(), has_default=True),
                 _std_param("sandbox", BUILTIN_PRELUDE_TYPES["AgentSandbox"], has_default=True),
+                _std_param("env", RecordType(name="Environ"), has_default=True),
             ),
             result=BUILTIN_PRELUDE_TYPES["Session"],
         )
@@ -522,7 +529,7 @@ def _builtin_function_signature(
                 root = _builtin_function_signature(name)
                 assert root is not None
                 return _as_builtin_method(
-                    root, _SESSION_PRELUDE_TYPE, exclude=frozenset({"agent", "sandbox"})
+                    root, _SESSION_PRELUDE_TYPE, exclude=frozenset({"agent", "sandbox", "env"})
                 )
             session_self = _self_param(_SESSION_PRELUDE_TYPE)
             return {
@@ -590,6 +597,7 @@ def _builtin_function_signature(
                         BUILTIN_PRELUDE_TYPES["AgentSandbox"],
                         has_default=True,
                     ),
+                    _std_param("env", RecordType(name="Environ"), has_default=True),
                 ),
                 result=t,
                 type_params=("T",),
@@ -642,6 +650,7 @@ def _builtin_function_signature_alternates(
     method_receiver_name: str | None = None,
     allow_stdlib_session_declaration: bool = False,
     static_kind: BuiltinStaticKind | None = None,
+    type_table: TypeTable | None = None,
 ) -> tuple[FunctionSignature, ...]:
     expected = _builtin_function_signature(
         name,
@@ -653,9 +662,28 @@ def _builtin_function_signature_alternates(
     )
     if expected is None:
         return ()
-    if name == "ask" and not is_method:
+    # A redeclaration may omit the trailing ``env`` parameter only when there
+    # is no ``Environ`` type to name it with (``std/env`` is not loaded).
+    env_omittable = type_table is None or type_table.get(STD_ENV_ID, "Environ") is None
+    if env_omittable and (
+        (name == "ask" and is_method and method_receiver_name == "Agent")
+        or static_kind is BuiltinStaticKind.SESSION_OPEN
+    ):
+        # A scoped ``Agent::ask``/``Session::open`` redeclaration with no
+        # ``Environ`` type to name legitimately omits the trailing ``env``
+        # parameter -- accept that shape too.
         return (
             expected,
+            replace(expected, params=tuple(p for p in expected.params if p.name != "env")),
+        )
+    if env_omittable and name == "ask" and not is_method:
+        # A scoped free ``ask`` redeclaration with no ``Environ`` type to name
+        # legitimately omits the trailing ``env`` parameter -- accept that
+        # shape too, alongside the fully reduced single-parameter shape some
+        # scoped fixtures use.
+        return (
+            expected,
+            replace(expected, params=tuple(p for p in expected.params if p.name != "env")),
             FunctionSignature(params=(_std_param("prompt", TextType()),), result=TextType()),
         )
     if name == "exec":
@@ -1167,6 +1195,7 @@ class _Checker:
                 method_receiver_name=method_receiver_name,
                 allow_stdlib_session_declaration=self._module_id.is_standard_library,
                 static_kind=static_kind,
+                type_table=self._env.type_table,
             )
             if not any(
                 _signature_matches(rerooted_sig, expected_sig, self._env.type_table)

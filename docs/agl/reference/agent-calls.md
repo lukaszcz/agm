@@ -23,7 +23,8 @@ reviewer.ask::[Review]("Review %{artifact}", on-parse-error = Retry(n = 2))
 ask(prompt: text, agent: Agent = std/config::default-agent,
     format: text = "", strict-json: bool = false,
     on-parse-error: ParsePolicy = ParsePolicy::Abort,
-    sandbox: AgentSandbox = std/config::default-sandbox) -> T
+    sandbox: AgentSandbox = std/config::default-sandbox,
+    env: Environ = std/env::environ) -> T
 ```
 
 where `T` is the **target type** — determined from the calling context (see
@@ -35,7 +36,8 @@ An `Agent` value also provides the method form:
 Agent::ask(self, prompt: text, format: text = "",
            strict-json: bool = false,
            on-parse-error: ParsePolicy = ParsePolicy::Abort,
-           sandbox: AgentSandbox = std/config::default-sandbox) -> T
+           sandbox: AgentSandbox = std/config::default-sandbox,
+           env: Environ = std/env::environ) -> T
 ```
 
 Free `ask` uses the snapshot default `Session` when `agent` is omitted; its
@@ -217,22 +219,23 @@ branch.close()
 ```
 
 `Session::open(agent, transport = None, name = "", sandbox =
-std/config::default-sandbox)` opens a session; `Session::default()` returns
-the same lazy default session used by free `ask`. `compact(instructions =
-"")`, `reset()`, `fork()`, `stats()`, `set-name(name)`, and `close()` are
-session operations. `reset` keeps the AgL session value but starts a fresh
-backend conversation; `fork` returns a new session whose history begins from
-the parent and whose `sandbox` is inherited from it unchanged; `close` is
-idempotent, but later use of that session raises `SessionError`. Backend
-support for the other operations is runtime-dependent; an unsupported
-operation raises `SessionError`.
+std/config::default-sandbox, env = std/env::environ)` opens a session;
+`Session::default()` returns the same lazy default session used by free
+`ask`. `compact(instructions = "")`, `reset()`, `fork()`, `stats()`,
+`set-name(name)`, and `close()` are session operations. `reset` keeps the AgL
+session value but starts a fresh backend conversation; `fork` returns a new
+session whose history begins from the parent and whose `sandbox` and `env`
+are inherited from it unchanged; `close` is idempotent, but later use of that
+session raises `SessionError`. Backend support for the other operations is
+runtime-dependent; an unsupported operation raises `SessionError`.
 
-`sandbox` selects the session's sandboxing mode once, at open, exactly as it
-does for `ask`; the opened session's `.sandbox` field reports it, and it
-never changes for that session's lifetime — not on a later
-`std/config::default-sandbox` write, and not through `Session::ask`, which
-has no `sandbox` argument. `Session::default()` snapshots
-`std/config::default-sandbox` the same way it snapshots `default-agent`, on
+`sandbox` and `env` select the session's sandboxing mode and process
+environment once, at open, exactly as they do for `ask`; the opened session's
+`.sandbox` field reports the former, and neither changes for that session's
+lifetime — not on a later `std/config::default-sandbox` write or
+`std/env::setenv` call, and not through `Session::ask`, which has neither
+argument. `Session::default()` snapshots `std/config::default-sandbox` and
+the ambient `std/env::environ` the same way it snapshots `default-agent`, on
 first use. A `Sandbox`'s `settings` path is normalized (trailing separators
 and `./` segments collapse), so a session's `.sandbox` field may report an
 equivalent but textually different spelling than the one last written.
@@ -463,6 +466,24 @@ fixed when that session opens (see `Session::ask` above), so an explicit
 `sandbox` on such a call is a static error. Pair `sandbox` with an explicit
 `agent` argument, or use the `reviewer.ask(...)` receiver form.
 
+### `env`
+
+The complete process environment given to the agent process, an `Environ`
+value ([Types](types.md)). When omitted, it defaults to the current ambient
+`std/env::environ` — the same default `exec` uses. Use
+`environ.extended(overrides)` when a call needs an explicit overlay:
+
+<!-- agl-check: fragment -->
+```agl
+let r: Review = reviewer.ask("Review %{a}", env = environ.extended({"TOKEN": token}))
+```
+
+`env`, like `sandbox`, requires an explicit agent: a free `ask` call with no
+`agent` argument dispatches through the default session, whose environment is
+fixed when that session opens, so an explicit `env` on such a call is a
+static error. Pair `env` with an explicit `agent` argument, or use the
+`reviewer.ask(...)` receiver form.
+
 ## The prompt
 
 The `prompt` argument is a template rendered using the uniform interpolation
@@ -675,8 +696,10 @@ here is the request record rather than the output the request asks for. Without
 one, the request describes a `text` output, as `ask` does. `sandbox` is
 recorded on the built request unchanged; since `ask-request` never dispatches,
 it accepts `sandbox` even without an explicit `agent` (unlike `ask`, it never
-routes through a session). The builder never dispatches, retries, parses, or
-emits trace events.
+routes through a session). Unlike `ask`, `ask-request` has no `env`
+parameter: the built `AgentRequest` record carries no environment field
+either, since a printed or inspected record must never risk leaking secrets.
+The builder never dispatches, retries, parses, or emits trace events.
 
 <!-- agl-check: fragment -->
 ```agl

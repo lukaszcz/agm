@@ -505,18 +505,19 @@ record Session
 ```
 
 Create one with `Session::open(agent, transport = None, name = "", sandbox =
-std/config::default-sandbox)`, or obtain the lazy default conversation with
-`Session::default()`. Its methods are `ask`, `compact`, `reset`, `fork`,
-`stats`, `set-name`, and `close`; each can also be projected as a
-receiver-capturing function value. `Session::open`, `Session::default`, and
-qualified method names are function values as well. Backend support for
-optional lifecycle operations varies. See
+std/config::default-sandbox, env = std/env::environ)`, or obtain the lazy
+default conversation with `Session::default()`. Its methods are `ask`,
+`compact`, `reset`, `fork`, `stats`, `set-name`, and `close`; each can also be
+projected as a receiver-capturing function value. `Session::open`,
+`Session::default`, and qualified method names are function values as well.
+Backend support for optional lifecycle operations varies. See
 [Agent calls](agent-calls.md#sessions).
 
-`sandbox` fixes the session's sandboxing mode for its whole lifetime, decided
-once when the session opens; `Session::ask` has no `sandbox` argument, and a
-later write to `std/config::default-sandbox` never reaches an already-open
-session. `fork` carries the parent's `sandbox` to the child unchanged.
+`sandbox` and `env` fix the session's sandboxing mode and process environment
+for its whole lifetime, decided once when the session opens; `Session::ask`
+has neither argument, and a later write to `std/config::default-sandbox` or
+`std/env::setenv` never reaches an already-open session. `fork` carries the
+parent's `sandbox` and `env` to the child unchanged.
 
 Source cannot invoke the `Session` constructor. A `Session`, or a nominal or
 container value that transitively contains one, is opaque non-data: it cannot

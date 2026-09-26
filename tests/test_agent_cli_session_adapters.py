@@ -61,11 +61,14 @@ class CaptureTransport:
     def __init__(self, outcomes: list[CaptureOutcome]) -> None:
         self.outcomes = outcomes
         self.calls: list[tuple[list[str], str | None]] = []
+        self.envs: list[dict[str, str] | None] = []
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def run(argv: list[str], **kwargs: object) -> ProcessCaptureResult:
             stdin_text = kwargs.get("stdin_text")
             self.calls.append((argv, stdin_text if isinstance(stdin_text, str) else None))
+            env = kwargs.get("env")
+            self.envs.append(env if isinstance(env, dict) else None)
             outcome = self.outcomes.pop(0)
             return ProcessCaptureResult(
                 returncode=outcome.returncode,
@@ -87,6 +90,7 @@ def _open(
     single_prompt: bool = False,
     permission_mode: PermissionMode = PermissionMode.NONE,
     sandbox: SandboxLimits | None = None,
+    env: dict[str, str] | None = None,
 ) -> None:
     if not isinstance(
         backend,
@@ -106,6 +110,7 @@ def _open(
             single_prompt=single_prompt,
             permission_mode=permission_mode,
             sandbox=sandbox,
+            env=env or {},
         )
     )
 
@@ -746,7 +751,7 @@ def test_service_maps_cli_lifecycle_transport_failures_to_host_errors(
     transport.install(monkeypatch)
     backend = ClaudeCliSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     service = SessionService(lambda _agent, _transport: backend)
-    handle = service.open(AgentClaude("", ""), "cli")
+    handle = service.open(AgentClaude("", ""), "cli", env={})
     service.ask(handle, SessionAskRequest("start"))
 
     with pytest.raises(SessionHostError) as raised:
@@ -1358,6 +1363,7 @@ def test_claude_session_open_sandbox_mode_wraps_open_compact_and_fork_argv(
             transport="cli",
             permission_mode=PermissionMode.UNRESTRICTED,
             sandbox=SandboxLimits(),
+            env={"FIXED": "at-open"},
         )
     )
 
@@ -1368,6 +1374,13 @@ def test_claude_session_open_sandbox_mode_wraps_open_compact_and_fork_argv(
     assert len(transport.calls) == 3
     for argv, _stdin in transport.calls:
         _sandbox_wrapped_argv_prefix(argv, home)
+    # Every native call this session made -- the initial prompt, compaction,
+    # and the fork itself -- ran under the same environment fixed at open
+    # (the sandbox backend may add its own entries on top, but never drops
+    # or changes the fixed one).
+    assert transport.envs[0] == transport.envs[1] == transport.envs[2]
+    assert transport.envs[0] is not None and transport.envs[0]["FIXED"] == "at-open"
     assert isinstance(child, ClaudeCliSessionBackend)
     assert child._permission_mode == PermissionMode.UNRESTRICTED
     assert child._sandbox == SandboxLimits()
+    assert child._env == {"FIXED": "at-open"}

@@ -2523,6 +2523,7 @@ class TestIrAsk:
                     contract_id=contract_id,
                     max_attempts=1,
                     sandbox=IrConstText(_LOC, "unused"),
+                    env=IrConstText(_LOC, "unused"),
                 ),
             )
         )

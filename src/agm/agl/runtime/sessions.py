@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, NoReturn, Protocol, TypeVar, runtime_checkable
 
@@ -43,14 +43,15 @@ def default_session_transport(spec: "AgentSpec") -> "SessionTransport":
 class SessionSnapshot:
     """The opening identity the host associates with an opaque handle.
 
-    ``permission_mode``/``sandbox`` are the mode this session's handle was
-    fixed under at open -- never a per-ask override.
+    ``permission_mode``/``sandbox``/``env`` are the mode and environment this
+    session's handle was fixed under at open -- never a per-ask override.
     """
 
     agent: "AgentSpec"
     transport: str
     permission_mode: PermissionMode
     sandbox: "SandboxLimits | None"
+    env: dict[str, str] = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +125,7 @@ class EphemeralSessionHost(Protocol):
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> _T: ...
 
 
@@ -144,6 +146,7 @@ class SessionHost(Protocol):
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str: ...
 
     def open_ephemeral(
@@ -154,6 +157,7 @@ class SessionHost(Protocol):
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str: ...
 
     def default(
@@ -164,6 +168,7 @@ class SessionHost(Protocol):
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str: ...
 
     def ask(self, handle: str, prompt: str) -> str: ...
@@ -196,13 +201,14 @@ def with_ephemeral_session(
     single_prompt: bool = False,
     permission_mode: PermissionMode = PermissionMode.NONE,
     sandbox: "SandboxLimits | None" = None,
+    env: dict[str, str],
 ) -> _T:
     """Run *action* through one host ephemeral handle and always release it.
 
     ``single_prompt`` tells the host the handle serves exactly one prompt, so a
     backend need not establish a conversation it will never continue.
-    ``permission_mode``/``sandbox`` fix this one-shot session's sandboxing at
-    open, for its whole (short) lifetime.
+    ``permission_mode``/``sandbox``/``env`` fix this one-shot session's
+    sandboxing and environment at open, for its whole (short) lifetime.
     """
     if isinstance(host, EphemeralSessionHost):
         return host.with_ephemeral(
@@ -212,6 +218,7 @@ def with_ephemeral_session(
             single_prompt=single_prompt,
             permission_mode=permission_mode,
             sandbox=sandbox,
+            env=env,
         )
     handle = host.open_ephemeral(
         agent,
@@ -219,6 +226,7 @@ def with_ephemeral_session(
         single_prompt=single_prompt,
         permission_mode=permission_mode,
         sandbox=sandbox,
+        env=env,
     )
     with preserve_primary_error(
         lambda: host.close(handle), label="ephemeral agent session cleanup"
@@ -249,8 +257,9 @@ class AgentDispatcherSessionHost(SessionHost):
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
-        del name, permission_mode, sandbox
+        del name, permission_mode, sandbox, env
         self._unavailable("open")
 
     def open_ephemeral(
@@ -261,10 +270,11 @@ class AgentDispatcherSessionHost(SessionHost):
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         del single_prompt
         handle = self._new_handle()
-        self._sessions[handle] = SessionSnapshot(agent, transport, permission_mode, sandbox)
+        self._sessions[handle] = SessionSnapshot(agent, transport, permission_mode, sandbox, env)
         return handle
 
     def default(
@@ -275,25 +285,28 @@ class AgentDispatcherSessionHost(SessionHost):
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         del name
         if self._default_handle is None:
             self._default_handle = self._new_handle()
             self._sessions[self._default_handle] = SessionSnapshot(
-                agent, transport, permission_mode, sandbox
+                agent, transport, permission_mode, sandbox, env
             )
         return self._default_handle
 
     def ask(self, handle: str, prompt: str) -> str:
-        request = AgentRequest(agent=self._agent_for(handle, "ask"), prompt=prompt)
+        snapshot = self._snapshot_for(handle, "ask")
+        request = AgentRequest(agent=snapshot.agent, prompt=prompt, env=snapshot.env)
         return self.ask_request(handle, request).content
 
     def ask_request(self, handle: str, request: AgentRequest) -> AgentResponse:
         """Dispatch *request* under this handle's fixed-at-open sandboxing.
 
-        *request*'s own ``permission_mode``/``sandbox`` are replaced with the
-        snapshot's, exactly as the production host applies a session's fixed
-        mode rather than a per-ask value: there is no per-ask override.
+        *request*'s own ``permission_mode``/``sandbox``/``env`` are replaced
+        with the snapshot's, exactly as the production host applies a
+        session's fixed mode and environment rather than a per-ask value:
+        there is no per-ask override.
         """
         snapshot = self._snapshot_for(handle, "ask")
         if self._dispatcher is None:
@@ -305,7 +318,10 @@ class AgentDispatcherSessionHost(SessionHost):
                 call_info=None,
             )
         effective_request = replace(
-            request, permission_mode=snapshot.permission_mode, sandbox=snapshot.sandbox
+            request,
+            permission_mode=snapshot.permission_mode,
+            sandbox=snapshot.sandbox,
+            env=snapshot.env,
         )
         try:
             from agm.agl.runtime.agents import dispatch_agent_value

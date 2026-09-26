@@ -483,7 +483,7 @@ def test_composed_prompt_is_unchanged_when_no_output_contract(
     )
     agent = AgentCommand(command="runner")
 
-    dispatch(AgentRequest(agent=agent, prompt="Do X."))
+    dispatch(AgentRequest(agent=agent, prompt="Do X.", env={}))
 
     assert fake_agent_transport.calls == [("Do X.", ["runner"])]
 
@@ -506,7 +506,7 @@ def test_composed_prompt_appends_format_instructions_after_the_prompt(
         json_schema=None,
     )
 
-    request = AgentRequest(agent=agent, prompt="Do X.", output_contract=contract)
+    request = AgentRequest(agent=agent, prompt="Do X.", env={}, output_contract=contract)
     request.prompt = compose_agent_prompt(request)
     dispatch(request)
 
@@ -535,7 +535,7 @@ def test_composed_prompt_omits_format_instructions_when_the_contract_has_none(
         json_schema=None,
     )
 
-    dispatch(AgentRequest(agent=agent, prompt="Do X.", output_contract=contract))
+    dispatch(AgentRequest(agent=agent, prompt="Do X.", env={}, output_contract=contract))
 
     assert fake_agent_transport.calls == [("Do X.", ["runner"])]
 
@@ -554,6 +554,7 @@ def test_composed_prompt_includes_retry_feedback_on_a_retry_attempt(
     request = AgentRequest(
         agent=agent,
         prompt="Do X.",
+        env={},
         attempt=1,
         previous_invalid_output="the-bad-output-xyz",
         validation_errors=[
@@ -582,7 +583,7 @@ def test_composed_prompt_has_no_retry_feedback_on_the_first_attempt(
     )
     agent = AgentCommand(command="runner")
 
-    dispatch(AgentRequest(agent=agent, prompt="Do X.", attempt=0))
+    dispatch(AgentRequest(agent=agent, prompt="Do X.", env={}, attempt=0))
 
     prompt = fake_agent_transport.calls[0][0]
     assert "Your previous response did not match" not in prompt
@@ -610,6 +611,7 @@ def test_composed_prompt_orders_format_instructions_before_retry_feedback(
     request = AgentRequest(
         agent=agent,
         prompt="Do X.",
+        env={},
         attempt=1,
         previous_invalid_output="bad",
         output_contract=contract,
@@ -650,7 +652,7 @@ def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.Monk
         idle_timeout=None, get_sandbox_context=hermetic_get_sandbox_context()
     )
 
-    response = dispatch(AgentRequest(agent=agent, prompt="hello"))
+    response = dispatch(AgentRequest(agent=agent, prompt="hello", env={}))
 
     assert response.content == "ok"
     cmd = captured["cmd"]
@@ -663,11 +665,11 @@ def test_codex_agent_dispatch_delivers_prompt_via_stdin(monkeypatch: pytest.Monk
 def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Runner mutations neither reach the host nor leak into a later agent call."""
+    """Runner mutations neither reach ``environ`` nor leak into a later agent call."""
     from agm.core.process import CapturedOutput, ProcessCaptureResult
 
     variable = "AGL_AGENT_HOST_ENV"
-    monkeypatch.setenv(variable, "original")
+    seed = {variable: "original"}
     received: list[dict[str, str]] = []
 
     def fake_run_capture_result(
@@ -700,11 +702,12 @@ def test_agent_runner_gets_a_fresh_copy_of_the_host_environment(
         'let second: text = ask("two", agent = AgentCommand("runner"), '
         "sandbox = AgentSandbox::Disabled)\n"
         "second",
+        process_environment=seed,
     )
 
     assert result.ok, result.diagnostics
     assert [env[variable] for env in received] == ["original", "original"]
-    assert os.environ[variable] == "original"
+    assert seed[variable] == "original"
 
 
 def test_unresolvable_command_hole_becomes_a_typed_error() -> None:
@@ -718,7 +721,7 @@ def test_unresolvable_command_hole_becomes_a_typed_error() -> None:
     )
 
     with pytest.raises(AgentCallHostError) as exc_info:
-        dispatch(AgentRequest(agent=agent, prompt="hello"))
+        dispatch(AgentRequest(agent=agent, prompt="hello", env={}))
 
     assert exc_info.value.cause == "spawn_failure"
 
@@ -880,6 +883,44 @@ def test_default_sandbox_mode_wraps_the_argv_and_honours_run_config_memory(
     assert tail[: len(argv_prefix)] == argv_prefix
 
 
+def test_sandbox_preparation_receives_the_asks_evaluated_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sandbox preparation gets ``ask``'s own evaluated ``env``, not a fresh host copy.
+
+    Regression coverage for the bug this fix addresses: an agent call used to
+    spawn under a bare ``clone_env()`` of the AGM process, so ``std/env``
+    edits (``setenv``, an explicit ``env =``) never reached a sandboxed call.
+    """
+    home = tmp_path / "home"
+    write_sandbox_home(home)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "/usr/bin/tool")
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "agm.agent.runner.run_capture_result", _capturing_run_capture_result(captured)
+    )
+
+    runtime = PipelineDriver(
+        agent_dispatcher=value_driven_agent_factory(
+            idle_timeout=None, get_sandbox_context=session_sandbox_context(home)
+        ),
+        get_sandbox_context=None,
+    )
+    result = run_inline_code(
+        runtime,
+        'let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer',
+        process_environment={"MARKER": "from-ask"},
+    )
+
+    assert result.ok, result.diagnostics
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    env = kwargs["env"]
+    assert isinstance(env, dict)
+    assert env["MARKER"] == "from-ask"
+
+
 def test_interpolated_agent_command_sandboxes_under_the_real_executable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -910,6 +951,7 @@ def test_interpolated_agent_command_sandboxes_under_the_real_executable(
     result = run_inline_code(
         runtime,
         'let answer: text = ask("hello", agent = AgentCommand("\\%{TOOL}/bin/agent"))\nanswer',
+        process_environment=dict(os.environ),
     )
 
     assert result.ok, result.diagnostics
@@ -950,6 +992,7 @@ def test_agent_call_info_argv_is_the_wrapped_argv(
         AgentRequest(
             agent=AgentClaude("sonnet", "medium"),
             prompt="hello",
+            env={},
             sandbox=SandboxLimits(),
         )
     )

@@ -145,11 +145,15 @@ def test_ask_surfaces_declare_every_named_argument_they_accept() -> None:
     canonical signature (:func:`_builtin_function_signature`) without being
     rejected outright.
     """
-    for name in ("ask", "ask-request"):
+    expected_named_args = {
+        "ask": BuiltinCallChecker._ASK_ALLOWED_NAMED_ARGS,
+        "ask-request": BuiltinCallChecker._ASK_REQUEST_ALLOWED_NAMED_ARGS,
+    }
+    for name, allowed in expected_named_args.items():
         signature = _builtin_function_signature(name)
         assert signature is not None
         optional = {param.name for param in signature.params if param.has_default}
-        assert optional == BuiltinCallChecker._ASK_ALLOWED_NAMED_ARGS
+        assert optional == allowed
 
 
 def test_builtin_function_signature_mismatches_are_rejected() -> None:

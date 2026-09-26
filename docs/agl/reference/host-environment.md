@@ -37,9 +37,11 @@ Per dispatch, an agent receives the rendered prompt, the output contract
 (format instructions plus derived JSON Schema, so schema-capable backends
 can use native structured output), the attempt number, and — on corrective
 retries — the previous invalid output with its validation errors
-([Agent calls](agent-calls.md)). The agent returns raw text. Hosts must pass
-the rendered prompt through verbatim, with no second template or
-environment-variable expansion.
+([Agent calls](agent-calls.md)). The agent process is spawned under the
+call's `env` argument, exactly as `exec` spawns its command
+([Shell execution](shell-execution.md#spawn-parameters)). The agent returns
+raw text. Hosts must pass the rendered prompt through verbatim, with no
+second template or environment-variable expansion.
 
 Transport failures (spawn failure, nonzero exit, timeout) surface as the
 catchable `AgentCallError` with an enumerated `cause`; exit 0 with empty

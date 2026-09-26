@@ -451,14 +451,14 @@ def test_helpers_and_spawn_edges(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", no_pipes)
     with pytest.raises(SessionHostError):
         rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context).open(
-            SessionOpenRequest(AgentPi("", "", ""), "rpc")
+            SessionOpenRequest(AgentPi("", "", ""), "rpc", env={})
         )
 
 
 def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
     with pytest.raises(SessionHostError):
-        backend.open(SessionOpenRequest(AgentClaude("model", "high"), "rpc"))
+        backend.open(SessionOpenRequest(AgentClaude("model", "high"), "rpc", env={}))
 
     with pytest.raises(InvalidOperation):
         rpc._parse_json_float("1e999999999999999999999999")
@@ -561,7 +561,7 @@ def test_rpc_private_protocol_edge_cases(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(subprocess, "Popen", fail_popen)
     with pytest.raises(SessionHostError):
         rpc.PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context).open(
-            SessionOpenRequest(AgentPi("", "", ""), "rpc")
+            SessionOpenRequest(AgentPi("", "", ""), "rpc", env={})
         )
 
     with pytest.raises(ValueError):
@@ -582,7 +582,7 @@ def test_open_rejects_an_already_live_child_and_dead_child_is_cleared(
     RpcStub(tmp_path, monkeypatch)
     backend = open_backend()
     with pytest.raises(SessionHostError):
-        backend.open(SessionOpenRequest(AgentPi("provider", "model", "high"), "again"))
+        backend.open(SessionOpenRequest(AgentPi("provider", "model", "high"), "again", env={}))
     backend.close()
 
     class DeadProcess:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, NoReturn, TypeVar
 from uuid import uuid4
 
@@ -45,6 +45,7 @@ class _HostSession:
     ephemeral: bool = False
     permission_mode: PermissionMode = PermissionMode.NONE
     sandbox: "SandboxLimits | None" = None
+    env: dict[str, str] = field(default_factory=dict, repr=False)
 
 
 class AglSessionHost:
@@ -62,12 +63,18 @@ class AglSessionHost:
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         handle = self._open(
-            agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+            agent,
+            transport,
+            name=name,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
         )
         self._sessions[handle] = _HostSession(
-            agent, transport, permission_mode=permission_mode, sandbox=sandbox
+            agent, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
         )
         return handle
 
@@ -79,6 +86,7 @@ class AglSessionHost:
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         """Open one short-lived session for an AgL ask lifecycle."""
         handle = self._open(
@@ -88,9 +96,15 @@ class AglSessionHost:
             single_prompt=single_prompt,
             permission_mode=permission_mode,
             sandbox=sandbox,
+            env=env,
         )
         self._sessions[handle] = _HostSession(
-            agent, transport, ephemeral=True, permission_mode=permission_mode, sandbox=sandbox
+            agent,
+            transport,
+            ephemeral=True,
+            permission_mode=permission_mode,
+            sandbox=sandbox,
+            env=env,
         )
         return handle
 
@@ -103,6 +117,7 @@ class AglSessionHost:
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> _T:
         """Run *action* in one ephemeral session and release it afterward."""
 
@@ -113,6 +128,7 @@ class AglSessionHost:
                 ephemeral=True,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
             return action(handle)
 
@@ -125,6 +141,7 @@ class AglSessionHost:
                 single_prompt=single_prompt,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
         )
 
@@ -138,6 +155,7 @@ class AglSessionHost:
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         return self._call_host(
             lambda: self._service.open(
@@ -148,6 +166,7 @@ class AglSessionHost:
                 single_prompt=single_prompt,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
         )
 
@@ -159,6 +178,7 @@ class AglSessionHost:
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         handle = self._call_host(
             lambda: self._service.default(
@@ -167,11 +187,14 @@ class AglSessionHost:
                 name=name,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
         )
         self._sessions.setdefault(
             handle,
-            _HostSession(agent, transport, permission_mode=permission_mode, sandbox=sandbox),
+            _HostSession(
+                agent, transport, permission_mode=permission_mode, sandbox=sandbox, env=env
+            ),
         )
         return handle
 
@@ -239,6 +262,7 @@ class AglSessionHost:
             transport=session.transport,
             permission_mode=session.permission_mode,
             sandbox=session.sandbox,
+            env=session.env,
         )
 
     def close(self, handle: str) -> None:
@@ -369,11 +393,13 @@ class SessionService:
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         """Open a backend session and return its host-generated handle id.
 
-        *permission_mode*/*sandbox* fix the sandboxing this session's backend
-        runs every process under, for the session's whole lifetime.
+        *permission_mode*/*sandbox*/*env* fix the sandboxing and environment
+        this session's backend runs every process under, for the session's
+        whole lifetime.
         """
         backend = self._backend_factory(agent, transport)
         backend.open(
@@ -384,6 +410,7 @@ class SessionService:
                 single_prompt=single_prompt,
                 permission_mode=permission_mode,
                 sandbox=sandbox,
+                env=env,
             )
         )
         handle = str(uuid4())
@@ -405,11 +432,17 @@ class SessionService:
         name: str = "",
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> str:
         """Return the lazily opened default session, snapshotting its first agent."""
         if self._default_handle is None:
             self._default_handle = self.open(
-                agent, transport, name=name, permission_mode=permission_mode, sandbox=sandbox
+                agent,
+                transport,
+                name=name,
+                permission_mode=permission_mode,
+                sandbox=sandbox,
+                env=env,
             )
         return self._default_handle
 
@@ -522,6 +555,7 @@ class SessionService:
         single_prompt: bool = False,
         permission_mode: PermissionMode = PermissionMode.NONE,
         sandbox: "SandboxLimits | None" = None,
+        env: dict[str, str],
     ) -> _T:
         """Run *action* in a short-lived session and release it afterward."""
         handle = self.open(
@@ -532,6 +566,7 @@ class SessionService:
             single_prompt=single_prompt,
             permission_mode=permission_mode,
             sandbox=sandbox,
+            env=env,
         )
 
         def close() -> None:

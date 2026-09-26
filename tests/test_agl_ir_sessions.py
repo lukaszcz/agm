@@ -348,8 +348,9 @@ def test_well_formed_session_nodes_pass_deep_validation() -> None:
             transport=IrConstText(location=_LOC, value="transport"),
             name=IrConstText(location=_LOC, value="name"),
             sandbox=IrConstText(location=_LOC, value="sandbox"),
+            env=IrConstText(location=_LOC, value="env"),
         ),
-        IrSessionDefault(location=_LOC),
+        IrSessionDefault(location=_LOC, env=IrConstText(location=_LOC, value="env")),
         IrSessionAsk(
             location=_LOC,
             session=session,

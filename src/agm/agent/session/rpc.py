@@ -29,7 +29,6 @@ from agm.agent.session.protocol import (
 )
 from agm.agent.spec import AgentPi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
-from agm.core.env import clone_env
 from agm.core.process import CapturedOutput, stop_process
 from agm.sandbox.backend import SandboxSettingsError, SandboxUnavailableError
 from agm.sandbox.prepare import SandboxContext, sandbox_run_for
@@ -238,7 +237,7 @@ class PiRpcSessionBackend(SandboxFixture):
         )
 
     def _spawn(self, agent: AgentPi, command: list[str], operation: str) -> _RpcChild:
-        env = clone_env()
+        env = self._env
         sandbox_run = sandbox_run_for(self._sandbox, self._get_sandbox_context)
         prepared: PreparedSandboxCommand | None = None
         argv = command
@@ -258,7 +257,7 @@ class PiRpcSessionBackend(SandboxFixture):
                 text=False,
                 bufsize=0,
                 start_new_session=True,
-                env=prepared.env if prepared is not None else None,
+                env=(prepared.env if prepared is not None else env),
                 cwd=prepared.cwd if prepared is not None else None,
             )
         except (OSError, ValueError) as exc:

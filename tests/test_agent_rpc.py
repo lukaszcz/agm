@@ -47,7 +47,10 @@ def record(name, value):
     with (root / name).open("a") as out:
         out.write(json.dumps(value) + "\n")
         out.flush()
-record("starts.jsonl", {"pid": os.getpid(), "argv": argv, "session": session})
+record(
+    "starts.jsonl",
+    {"pid": os.getpid(), "argv": argv, "session": session, "env": dict(os.environ)},
+)
 def expand(value, command):
     if isinstance(value, str):
         return value.replace("$id", command["id"]).replace(
@@ -175,11 +178,27 @@ class RpcStub:
         (self.root / f"release-{command}").touch()
 
 
-def open_backend(*, timeout: float | None = None) -> PiRpcSessionBackend:
+def open_backend(
+    *, timeout: float | None = None, env: dict[str, str] | None = None
+) -> PiRpcSessionBackend:
+    """Open a Pi RPC backend, snapshotting the real process env by default.
+
+    The stub child (``RpcStub``) needs ``PI_RPC_STUB_ROOT`` and the
+    monkeypatched ``PATH`` a test set on the real process environment before
+    calling this, so the default env is an explicit snapshot of it -- never
+    an implicit host fallback -- unless a test passes its own *env*.
+    """
     backend = PiRpcSessionBackend(
         idle_timeout=timeout, get_sandbox_context=unavailable_sandbox_context
     )
-    backend.open(SessionOpenRequest(AgentPi("provider", "model", "high"), "rpc", "named"))
+    backend.open(
+        SessionOpenRequest(
+            AgentPi("provider", "model", "high"),
+            "rpc",
+            "named",
+            env=dict(os.environ) if env is None else env,
+        )
+    )
     return backend
 
 
@@ -673,7 +692,7 @@ def test_close_and_close_all_terminate_children(
             get_sandbox_context=unavailable_sandbox_context
         )
     )
-    handle = service.open(AgentPi("", "", ""), "rpc")
+    handle = service.open(AgentPi("", "", ""), "rpc", env=dict(os.environ))
     child_pid = stub.wait_for("starts.jsonl", 2)[1]["pid"]
     service.close_all()
     service.close_all()
@@ -765,6 +784,7 @@ def test_open_spawns_the_rpc_child_wrapped_under_sandbox_mode(
             "named",
             permission_mode=PermissionMode.UNRESTRICTED,
             sandbox=SandboxLimits(),
+            env=dict(os.environ),
         )
     )
 
@@ -772,6 +792,41 @@ def test_open_spawns_the_rpc_child_wrapped_under_sandbox_mode(
     assert (log_dir / "systemd-run").exists()
     assert (log_dir / "srt").exists()
     backend.close()
+
+
+def test_open_spawns_the_rpc_child_under_the_environment_given_at_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real spawned Pi RPC child process sees exactly the env given at
+    open -- never a silent fallback to the test process's own environment."""
+    stub = RpcStub(tmp_path, monkeypatch)
+    fixed_env = {**os.environ, "ONLY_FOR_THIS_SESSION": "fixed-at-open"}
+    backend = PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    backend.open(SessionOpenRequest(AgentPi("provider", "model", "high"), "rpc", env=fixed_env))
+
+    started = stub.wait_for("starts.jsonl")
+
+    assert started[0]["env"] == fixed_env
+    backend.close()
+
+
+def test_fork_spawns_the_replacement_under_the_same_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forking a session spawns its replacement Pi RPC child under the exact
+    same environment fixed at open, never the ambient process's own."""
+    stub = RpcStub(tmp_path, monkeypatch)
+    fixed_env = {**os.environ, "ONLY_FOR_THIS_SESSION": "fixed-at-open"}
+    backend = PiRpcSessionBackend(get_sandbox_context=unavailable_sandbox_context)
+    backend.open(SessionOpenRequest(AgentPi("provider", "model", "high"), "rpc", env=fixed_env))
+    stub.wait_for("starts.jsonl")
+
+    child = backend.fork()
+
+    started = stub.wait_for("starts.jsonl", count=2)
+    assert started[1]["env"] == fixed_env
+    backend.close()
+    child.close()
 
 
 def test_ephemeral_host_ask_spawns_the_rpc_child_sandboxed(
@@ -802,6 +857,7 @@ def test_ephemeral_host_ask_spawns_the_rpc_child_sandboxed(
         single_prompt=True,
         permission_mode=PermissionMode.UNRESTRICTED,
         sandbox=SandboxLimits(),
+        env=dict(os.environ),
     )
 
     assert answer == "answer"
@@ -834,6 +890,7 @@ def test_open_prepare_failure_unavailable_becomes_a_session_host_error(
                 "rpc",
                 permission_mode=PermissionMode.UNRESTRICTED,
                 sandbox=SandboxLimits(),
+                env={},
             )
         )
     assert raised.value.operation == "open"
@@ -863,6 +920,7 @@ def test_open_prepare_failure_no_settings_becomes_a_session_host_error(
                 "rpc",
                 permission_mode=PermissionMode.UNRESTRICTED,
                 sandbox=SandboxLimits(),
+                env=dict(os.environ),
             )
         )
     assert raised.value.operation == "open"
@@ -898,6 +956,7 @@ def test_close_and_fork_replacement_close_the_prepared_sandbox_command(
             "rpc",
             permission_mode=PermissionMode.UNRESTRICTED,
             sandbox=SandboxLimits(),
+            env=dict(os.environ),
         )
     )
     assert closed == []  # Nothing closed yet: the child is still alive.
@@ -947,6 +1006,7 @@ def test_spawn_closes_the_prepared_command_when_popen_itself_fails(
                 "rpc",
                 permission_mode=PermissionMode.UNRESTRICTED,
                 sandbox=SandboxLimits(),
+                env=dict(os.environ),
             )
         )
     assert raised.value.operation == "open"
@@ -984,6 +1044,7 @@ def test_close_still_releases_the_prepared_command_when_stop_process_raises(
             "rpc",
             permission_mode=PermissionMode.UNRESTRICTED,
             sandbox=SandboxLimits(),
+            env=dict(os.environ),
         )
     )
 

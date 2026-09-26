@@ -509,6 +509,7 @@ def _make_scripted_registry(
     *,
     default_responses: list[str] | None = None,
     call_log: list[tuple[str, str]] | None = None,
+    env_log: list[dict[str, str]] | None = None,
 ) -> AgentFn:
     def make_agent(name: str, responses: list[str]) -> AgentFn:
         remaining = iter(responses)
@@ -516,6 +517,8 @@ def _make_scripted_registry(
         def agent(request: AgentRequest) -> AgentResponse:
             if call_log is not None:
                 call_log.append((name, request.prompt))
+            if env_log is not None:
+                env_log.append(dict(request.env))
             return AgentResponse(content=next(remaining))
 
         return agent
@@ -541,9 +544,17 @@ def evaluate_ir_with_agents(
     scripts: dict[str, list[str]],
     *,
     default_responses: list[str] | None = None,
+    process_environment: dict[str, str] | None = None,
+    env_log: list[dict[str, str]] | None = None,
 ) -> dict[str, Value]:
-    agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
-    return completed_bindings(run_inline_ir(source, agent_dispatcher=agent_dispatcher))
+    agent_dispatcher = _make_scripted_registry(
+        scripts, default_responses=default_responses, env_log=env_log
+    )
+    return completed_bindings(
+        run_inline_ir(
+            source, agent_dispatcher=agent_dispatcher, process_environment=process_environment
+        )
+    )
 
 
 def evaluate_ir_raises_with_agents(
@@ -551,9 +562,14 @@ def evaluate_ir_raises_with_agents(
     scripts: dict[str, list[str]],
     *,
     default_responses: list[str] | None = None,
+    process_environment: dict[str, str] | None = None,
 ) -> RunError:
     agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
-    return uncaught_error(run_inline_ir(source, agent_dispatcher=agent_dispatcher))
+    return uncaught_error(
+        run_inline_ir(
+            source, agent_dispatcher=agent_dispatcher, process_environment=process_environment
+        )
+    )
 
 
 def shell_caps() -> HostCapabilities:

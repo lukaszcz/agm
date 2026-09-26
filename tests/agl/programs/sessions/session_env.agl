@@ -1,0 +1,30 @@
+# env on ask/Agent::ask/Session::open: the ambient default, an explicit
+# Environ literal, environ.extended, std/env read/write functions used
+# alongside agent calls, and a fork continuing to work -- every accepted
+# shape typechecks and runs together.
+import std/env::*
+
+program def main(mode: text) -> unit =
+  if
+    | mode == "ambient-environ-reaches-session-open" =>
+        print environ.get("BASE")
+        let session = Session::open(AgentCommand("impl"))
+        print session.ask("hi")
+    | mode == "explicit-environ-reaches-agent-receiver-ask" =>
+        let worker = AgentCommand("impl")
+        print worker.ask("hi", env = Environ(vars = {"ONLY": "child"}))
+    | mode == "extended-environ-reaches-free-ask" =>
+        print ask("hi", agent = AgentCommand("impl"), env = environ.extended({"EXTRA": "value"}))
+    | mode == "setenv-before-open-then-again-after" =>
+        setenv("BEFORE", "seen")
+        let session = Session::open(AgentCommand("impl"))
+        setenv("AFTER", "added")
+        print session.ask("hi")
+        print environ.get("AFTER")
+    | mode == "fork-shares-the-parents-fixed-environment" =>
+        let parent = Session::open(AgentClaude("model", "high"))
+        let child = parent.fork()
+        print parent.ask("one")
+        print child.ask("two")
+    | else =>
+        print(ask("hi", agent = AgentCommand("impl")))

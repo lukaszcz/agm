@@ -1060,7 +1060,7 @@ class IrCopyValue:
 
 @dataclass(frozen=True, slots=True)
 class IrAsk:
-    """IR host-op: ask(prompt, agent:, on_parse_error:, sandbox:) builtin call.
+    """IR host-op: ask(prompt, agent:, on_parse_error:, sandbox:, env:) builtin call.
 
     Evaluates ``agent`` (an ``Agent`` enum value), ``prompt`` (text), dispatches
     through the value-driven agent runtime, parses the response via the contract,
@@ -1068,7 +1068,9 @@ class IrAsk:
 
     ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
     ``sandbox`` evaluates to an ``AgentSandbox`` value, decoded once and reused
-    across every retry attempt.
+    across every retry attempt. ``env`` evaluates to an ``Environ`` value (or an
+    empty dict without ``std/env``), likewise decoded once and reused across
+    every retry attempt and process this call spawns.
     """
 
     location: Location
@@ -1077,6 +1079,7 @@ class IrAsk:
     contract_id: "ContractId"
     max_attempts: int
     sandbox: "IrExpr"
+    env: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1088,7 +1091,10 @@ class IrSessionOpen:
     default, so the host receives a concrete session name. ``sandbox``
     likewise always holds an expression -- the operand, or a
     ``default-sandbox`` load when omitted -- and fixes this session's
-    sandboxing for its whole lifetime.
+    sandboxing for its whole lifetime. ``env`` always holds an expression too
+    -- the operand, or the ambient ``std/env::environ`` (an empty dict
+    without ``std/env``) -- and likewise fixes this session's environment for
+    its whole lifetime.
     """
 
     location: Location
@@ -1096,6 +1102,7 @@ class IrSessionOpen:
     transport: "IrExpr | None"
     name: "IrExpr"
     sandbox: "IrExpr"
+    env: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1114,11 +1121,14 @@ class IrContract:
 class IrSessionDefault:
     """IR host-op: obtain the lazily managed default session.
 
-    Evaluation reads the current ``default-agent`` register; the host creates
-    its default session from that agent once, then returns the same snapshot.
+    Evaluation reads the current ``default-agent``/``default-sandbox``
+    registers and ``env``; the host creates its default session from that
+    agent, sandbox mode, and environment once, then returns the same
+    snapshot on every later use, even after a later write to any of them.
     """
 
     location: Location
+    env: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1170,7 +1180,9 @@ class IrAskRequest:
     ``ask`` would have dispatched: it carries the same output contract and the
     same retry budget, and evaluating it neither dispatches nor parses.
     ``sandbox`` evaluates to the ``AgentSandbox`` value carried verbatim into
-    the built record's own ``sandbox`` field.
+    the built record's own ``sandbox`` field. ``ask-request`` accepts no
+    ``env`` operand: printing the built record must never leak secrets, so it
+    carries no environment field to fill.
     """
 
     location: Location

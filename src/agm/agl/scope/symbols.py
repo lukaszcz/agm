@@ -427,7 +427,9 @@ class TypeOwner:
     none of them, but spelling one is a focused error rather than an unknown
     name. ``alias`` is an alias path's declaration. ``injected`` holds, for an
     enum declaration only, its referenced members' record constructors, whose
-    names a root enum injects bare.
+    names a root enum injects bare. ``hidden`` holds the names of the inline
+    members an alias's target spelling cannot reach, since its import hides
+    them: they are left out of ``members``.
     """
 
     constructor: ConstructorRef | None
@@ -436,6 +438,7 @@ class TypeOwner:
     referenced: frozenset[str] = frozenset()
     alias: TypeAlias | None = None
     injected: tuple[ConstructorRef, ...] = ()
+    hidden: frozenset[str] = frozenset()
 
     @property
     def constructs(self) -> bool:
@@ -923,6 +926,10 @@ class ModuleResolution:
         Maps each enum declaration's node id to :attr:`TypeOwner.referenced`:
         the names spelling the members it only references. Typecheck records
         these, so an owner spelling of one is rejected alike in every position.
+    ``hidden_alias_members``
+        Maps each alias path this module declares or retains to
+        :attr:`TypeOwner.hidden`, when non-empty, so typecheck rejects the
+        hidden member's type spelling through the alias too.
     """
 
     program: Program
@@ -954,6 +961,7 @@ class ModuleResolution:
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
     type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
     referenced_member_names: dict[int, frozenset[str]] = field(default_factory=dict)
+    hidden_alias_members: dict[ScopePath, frozenset[str]] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

@@ -25,7 +25,7 @@ from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.types import ParamBindingInfo
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import AglScopeError, NoVisibleConstructorError
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -1241,6 +1241,122 @@ class TestCrossEntryScopeCollision:
         assert result.diagnostics
 
 
+_OWN = "let own: N = N::Own\n"
+_SCOPED_DEEP = "scope s\n  record Deep\nend s"
+_SCOPED_E = "scope s\n  enum E\n    | A\n    | B\nend s"
+_BOX = ("record Box", "scope Box\n  record Extra\nend Box", "enum N\n  | ::Box::Extra\n  | Own")
+
+# Declarations, the entry-size groupings that keep each entry's references meaning the
+# same declarations, and probes with their result (``None``: rejected).
+_GROUPING_CASES: dict[
+    str, tuple[tuple[str, ...], tuple[tuple[int, ...], ...], tuple[tuple[str, Value | None], ...]]
+] = {
+    "scoped-record-referenced": (
+        (_SCOPED_DEEP, "enum N\n  | ::s::Deep\n  | Own"),
+        ((2,), (1, 1)),
+        (
+            ("let deep: N = Deep\ndeep is Deep", BoolValue(True)),
+            (_OWN + "case own of\n  | Deep => 1\n  | _ => 2", IntValue(2)),
+            (_OWN + "own is Deep", BoolValue(False)),
+        ),
+    ),
+    "scoped-record-referenced-then-enum-redeclared": (
+        (_SCOPED_DEEP, "enum N\n  | ::s::Deep\n  | Own", "enum N\n  | Own"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("Deep", None),
+            (_OWN + "case own of\n  | Deep => 1\n  | _ => 2", None),
+            (_OWN + "own is Deep", None),
+            ("case s::Deep of\n  | s::Deep => 1", IntValue(1)),
+        ),
+    ),
+    "scoped-inline-member-referenced": (
+        (_SCOPED_E, "enum N\n  | ::s::E::A\n  | Own"),
+        ((2,), (1, 1)),
+        (
+            ("let e: s::E = A\ne is A", BoolValue(True)),
+            (_OWN + "case own of\n  | A => 1\n  | _ => 2", IntValue(2)),
+            (_OWN + "own is A", BoolValue(False)),
+        ),
+    ),
+    "scoped-inline-member-referenced-then-enum-redeclared": (
+        (_SCOPED_E, "enum N\n  | ::s::E::A\n  | Own", "enum N\n  | Own"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("A", None),
+            ("let e: s::E = s::E::A\ncase e of\n  | A => 1\n  | _ => 2", None),
+            ("let e: s::E = s::E::A\ne is A", None),
+            ("let e: s::E = s::E::A\ne is s::E::A", BoolValue(True)),
+        ),
+    ),
+    "root-enum-superseded": (
+        ("enum E = A | B", "enum N\n  | ::E::A\n  | Own", "enum E = C | D"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("A", None),
+            ("E::A", None),
+            (_OWN + "case own of\n  | A => 1\n  | _ => 2", None),
+            (_OWN + "own is E::A", None),
+            ("let e: E = E::C\ne is E::C", BoolValue(True)),
+        ),
+    ),
+    "scoped-enum-superseded": (
+        (_SCOPED_E, "enum N\n  | ::s::E::A\n  | Own", "scope s\n  enum E = C | D\nend s"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("A", None),
+            ("s::E::A", None),
+            (_OWN + "case own of\n  | s::E::A => 1\n  | _ => 2", None),
+            (_OWN + "own is A", None),
+            ("let e: s::E = s::E::C\ne is s::E::C", BoolValue(True)),
+        ),
+    ),
+    "referenced-record-superseded": (
+        ("record Deep", "enum N\n  | ::Deep\n  | Own", "type Deep = int"),
+        ((2, 1), (1, 1, 1)),
+        (
+            ("let v: N = Deep", None),
+            (_OWN + "case own of\n  | Deep => 1\n  | _ => 2", None),
+            (_OWN + "own is Deep", None),
+            (_OWN + "own is N::Own", BoolValue(True)),
+        ),
+    ),
+    "member-scope-retired": (
+        (
+            "enum Color = Red | Green",
+            "scope Color::Red\n  record Extra\nend Color::Red",
+            "enum N\n  | ::Color::Red::Extra\n  | Own",
+            "enum Color = Blue",
+        ),
+        ((2, 2), (3, 1), (1, 1, 2), (1, 2, 1), (2, 1, 1), (1, 1, 1, 1)),
+        (
+            ("Extra", None),
+            (_OWN + "case own of\n  | Extra => 1\n  | _ => 2", None),
+            (_OWN + "own is Extra", None),
+            ("let c: Color = Color::Blue\nc is Color::Blue", BoolValue(True)),
+        ),
+    ),
+    "type-scope-owner-replaced": (
+        (*_BOX, "type Box = int"),
+        ((1, 3), (2, 2), (3, 1), (1, 1, 2), (1, 2, 1), (2, 1, 1), (1, 1, 1, 1)),
+        (
+            ("let e: N = Extra\ne is Extra", BoolValue(True)),
+            (_OWN + "case own of\n  | Extra => 1\n  | _ => 2", IntValue(2)),
+            (_OWN + "own is Extra", BoolValue(False)),
+            ("let b: Box = 3\nb", IntValue(3)),
+        ),
+    ),
+}
+
+
+def _grouping_params() -> list[object]:
+    return [
+        pytest.param(case, sizes, id=f"{case}-{'+'.join(map(str, sizes))}")
+        for case, (_, groupings, _) in _GROUPING_CASES.items()
+        for sizes in groupings
+    ]
+
+
 class TestBareConstructorVisibilityAcrossEntries:
     """A declaration's bare-name reach must not depend on the entry boundary.
 
@@ -1378,26 +1494,81 @@ class TestBareConstructorVisibilityAcrossEntries:
 
         assert result.value == BoolValue(True), result.diagnostics
 
+    @pytest.mark.parametrize(("case", "sizes"), _grouping_params())
+    def test_constructor_visibility_does_not_depend_on_entry_grouping(
+        self, case: str, sizes: tuple[int, ...]
+    ) -> None:
+        """Every grouping of the same declarations into entries leaves the same constructors."""
+        sources, _, probes = _GROUPING_CASES[case]
+        s = open_session()
+        start = 0
+        for size in sizes:
+            entry = s.eval_entry("\n\n".join(sources[start : start + size]))
+            assert entry.ok, entry.diagnostics
+            start += size
+
+        for probe, expected in probes:
+            result = s.eval_entry(probe)
+            if expected is None:
+                assert not result.ok, probe
+            else:
+                assert result.value == expected, (probe, result.diagnostics)
+
+    def test_retired_member_scope_leaves_its_referenced_record_undefined(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum Color = Red | Green").ok
+        assert s.eval_entry("scope Color::Red\n  record Extra\nend Color::Red").ok
+        assert s.eval_entry("enum N\n  | ::Color::Red::Extra\n  | Own").ok
+        assert s.eval_entry("let own: N = N::Own").ok
+        assert s.eval_entry("enum Color = Blue").ok
+
+        assert s.eval_entry("1").value == IntValue(1)
+        assert not s.eval_entry("Extra").ok
+        assert not s.eval_entry("own is Extra").ok
+        assert not s.eval_entry("case own of\n  | Extra => 1\n  | _ => 2").ok
+
     @pytest.mark.parametrize(
-        "declarations",
+        "probe",
         (
-            ("scope s\n  record Deep\nend s\n\nenum N\n  | ::s::Deep\n  | Own",),
-            ("scope s\n  record Deep\nend s", "enum N\n  | ::s::Deep\n  | Own"),
+            "{q}::A",
+            "own is {q}::A",
+            "case own of\n  | {q}::A => 1\n  | _ => 2",
+            "A",
+            "own is A",
+            "case own of\n  | A => 1\n  | _ => 2",
+        ),
+        ids=(
+            "qualified-value",
+            "qualified-is",
+            "qualified-pattern",
+            "bare-value",
+            "bare-is",
+            "bare-pattern",
         ),
     )
-    def test_referenced_member_injection_does_not_depend_on_entry_grouping(
-        self, declarations: tuple[str, ...]
+    @pytest.mark.parametrize("same_entry", (False, True), ids=("later-entry", "same-entry"))
+    @pytest.mark.parametrize(
+        ("qualifier", "declare"),
+        (("E", "{}"), ("s::E", "scope s\n  {}\nend s")),
+        ids=("root", "scoped"),
+    )
+    def test_superseded_enum_member_is_gone_from_the_enum_referencing_it(
+        self, qualifier: str, declare: str, same_entry: bool, probe: str
     ) -> None:
         s = open_session()
-        for declaration in declarations:
-            assert s.eval_entry(declaration).ok
+        assert s.eval_entry(declare.format("enum E = A | B")).ok
+        assert s.eval_entry(f"enum N\n  | ::{qualifier}::A\n  | Own").ok
+        assert s.eval_entry("let own: N = N::Own").ok
+        redeclare = declare.format("enum E = C | D")
+        use = probe.format(q=qualifier)
 
-        injected = s.eval_entry("let deep: N = Deep\ndeep is Deep")
-        assert s.eval_entry("enum N\n  | Own").ok
+        if same_entry:
+            result = s.eval_entry(f"{redeclare}\n\n{use}")
+        else:
+            assert s.eval_entry(redeclare).ok
+            result = s.eval_entry(use)
 
-        assert injected.value == BoolValue(True), injected.diagnostics
-        assert not s.eval_entry("Deep").ok
-        assert s.eval_entry("s::Deep").ok
+        assert not result.ok
 
     def test_root_enum_reference_to_a_scoped_record_stays_bare_within_one_entry(self) -> None:
         s = open_session()
@@ -1448,16 +1619,30 @@ class TestScopeQualifiedConstructorsAcrossEntries:
         "form",
         ["c is {}", "case c of | {}(x) => 1 | _ => 2"],
     )
-    @pytest.mark.parametrize("member", ["Missing", "Palette", "Pixel", "Px"])
+    @pytest.mark.parametrize(
+        ("member", "qualified_error"),
+        [
+            ("Missing", AglScopeError),
+            ("Palette", AglTypeError),
+            ("Pixel", AglTypeError),
+            ("Px", AglTypeError),
+        ],
+    )
     def test_spelling_outside_the_enum_is_rejected_qualified_and_bare(
-        self, form: str, member: str
+        self, form: str, member: str, qualified_error: type[AglError]
     ) -> None:
+        """A member the scope lacks is a scope error, one outside the enum a type error."""
         s = open_session()
         assert s.eval_entry(_PAINT_SCOPE).ok
         assert s.eval_entry("let c: Paint::Col = Paint::Col::Red").ok
 
-        assert not s.eval_entry(form.format(f"Paint::{member}")).ok
-        assert not s.eval_entry(form.format(member)).ok
+        with pytest.raises(AglError) as qualified:
+            s.type_of(form.format(f"Paint::{member}"))
+        with pytest.raises(AglError) as bare:
+            s.type_of(form.format(member))
+
+        assert type(qualified.value) is qualified_error
+        assert type(bare.value) is NoVisibleConstructorError
 
     def test_missing_member_of_a_scoped_enum_is_rejected_alike_by_is_and_patterns(self) -> None:
         s = open_session()
@@ -1479,6 +1664,28 @@ class TestScopeQualifiedConstructorsAcrossEntries:
 
         expected = type_name_not_a_value(type_name, SourceSpan(1, 1, 1, 1, 0, 0))
         assert [d.message for d in result.diagnostics] == [str(expected)]
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::Red",
+        "case c of\n  | C::Red => 1\n  | _ => 2",
+        "c is C::Red",
+        "fn(r: C::Red) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_retained_alias_does_not_reach_a_member_its_import_hides(tmp_path: Path, use: str) -> None:
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    assert s.eval_entry("import m::* hiding Color::Red").ok
+    assert s.eval_entry("type C = Color").ok
+    assert s.eval_entry("let c: C = C::Green").ok
+
+    with pytest.raises(AglTypeError):
+        s.type_of(use)
+    assert s.eval_entry("c is C::Green").value == BoolValue(True)
 
 
 # ---------------------------------------------------------------------------
@@ -2069,6 +2276,25 @@ class TestBuiltinIdentityAcrossEntries:
         )
         assert result.ok, result.diagnostics
         assert result.error is None
+
+    def test_imported_builtin_override_leaves_the_session_one_the_bare_name(
+        self, tmp_path: Path
+    ) -> None:
+        """A module's override of a builtin the session already overrides joins
+        it without displacing it: the bare spelling keeps selecting the
+        session's declaration, the qualified one reaches the module's."""
+        declaration = f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+        (tmp_path / "lib.agl").write_text(declaration, encoding="utf-8")
+        value = 'ExecResult(stdout = "", exit-code = 0, stderr = "", timed-out = false)'
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+        assert session.eval_entry(declaration).ok
+        assert session.eval_entry(f"let mine = {value}").ok
+        assert session.eval_entry("import lib::{ExecResult}").ok
+
+        again = session.eval_entry(f"{value} == mine")
+        assert again.ok, again.diagnostics
+        assert not session.eval_entry(f"lib::{value} == mine").ok
 
     def test_unpromoted_builtin_record_declaration_does_not_displace_the_live_one(
         self,

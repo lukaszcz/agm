@@ -54,6 +54,7 @@ from agm.agl.constraints import ConstraintKind, close_constraints
 from agm.agl.diagnostics import (
     AglError,
     ReferencedMemberError,
+    hidden_member,
     static_root_message,
     type_name_not_a_value,
 )
@@ -118,7 +119,7 @@ from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.scope.type_names import type_name_selection
-from agm.agl.scope.type_owners import TypeOwnerIndex
+from agm.agl.scope.type_owners import TypeOwnerIndex, owned_constructors
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -338,26 +339,6 @@ def _constraints_related(a: ConstraintKind, b: ConstraintKind) -> bool:
     return a in close_constraints(frozenset({b})) or b in close_constraints(frozenset({a}))
 
 
-def _supersedes(candidate: ConstructorRef, cref: ConstructorRef) -> bool:
-    """Whether *cref* is a later declaration of *candidate*'s own name path.
-
-    An ambient candidate seeded from an earlier REPL entry names the very
-    path this entry's own declaration now owns, so a fresh constructor
-    reference must reach the newest declaration rather than the one the
-    session happened to seed first.  Only a full name path (module, scope
-    path, and owner name) identifies the same owner; two distinct owners
-    never share one, so genuine constructor overloading — two types' same
-    named variant, or one name declared in different modules — is untouched.
-    The same declaration contributed twice (over overlapping import routes)
-    is not a later declaration and is deduplicated before this rule runs.
-    """
-    return candidate.owner_decl_node_id != cref.owner_decl_node_id and (
-        candidate.owner_module_id,
-        candidate.owner_path,
-        candidate.owner_name,
-    ) == (cref.owner_module_id, cref.owner_path, cref.owner_name)
-
-
 def _is_root_inline_member(constructor: ConstructorRef) -> bool:
     """Whether *constructor* is an inline member of an enum declared at its module root."""
     return (
@@ -370,12 +351,19 @@ def _unknown_scope_member(name: str, path: ScopePath, span: SourceSpan) -> AglSc
     return AglScopeError(f"Unknown member '{name}' in scope path '{'::'.join(path)}'.", span=span)
 
 
-def _reject_referenced_member(
+def _reject_unselectable_member(
     owner: TypeOwner | None, spelling: str, member: str, span: SourceSpan | None
 ) -> None:
-    """Raise when *spelling*, selecting *owner*, names a member *owner*'s enum only references."""
-    if owner is not None and member in owner.referenced:
+    """Raise when *spelling*, selecting *owner*, names a member *owner* does not select.
+
+    That is a member its enum only references, or one its alias's import hides.
+    """
+    if owner is None:
+        return
+    if member in owner.referenced:
         raise ReferencedMemberError(spelling, member, span=span)
+    if member in owner.hidden:
+        raise hidden_member(f"{spelling}::{member}", span)
 
 
 # ---------------------------------------------------------------------------
@@ -602,10 +590,6 @@ class _Resolver:
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
-        # Every prefix of every registered candidate's ``owner_path``, so
-        # "does any candidate live under this type scope?" is a set lookup
-        # rather than a scan of both candidate tables.
-        self._constructor_owner_scopes: set[ScopePath] = set()
         # Resolved single-candidate constructor refs: VarRef.node_id -> ConstructorRef.
         self._constructor_refs: dict[int, ConstructorRef] = {}
         # Scope records constructor candidates for bare pattern names. The
@@ -678,7 +662,6 @@ class _Resolver:
         self,
         *,
         ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
-        ambient_bare_constructor_keys: frozenset[tuple[str, ModuleId, int]] = frozenset(),
     ) -> ModuleResolution:
         """Resolve the prepared program's constructors and bodies; the second phase.
 
@@ -687,67 +670,21 @@ class _Resolver:
         the prepared headers' constructors, then collects this module's own,
         then walks the bodies.
 
-        *ambient_constructor_candidates* carries constructor candidates from
-        prior REPL entries so that constructor references to types declared in
-        earlier entries resolve correctly in subsequent entries.
-
-        *ambient_bare_constructor_keys* carries the ``(name, owner_module_id,
-        owner_decl_node_id)`` identity of every candidate that was bare-visible
-        (as opposed to only qualifier-visible) at the end of a prior REPL
-        entry.  For a same-module candidate whose owner path is a retained
-        named scope, this decides whether it stays bare here too: it replays
-        the prior entry's own bare/qualified split instead of re-deriving it
-        from the owner path's shape, which cannot distinguish a plain
-        declaration nested in a named scope from a root enum's reference to
-        one.
+        *ambient_constructor_candidates* carries the other modules'
+        constructors that import tails make bare here.
         """
         program = self._program
         root = self._root_scope
         for complete in self._deferred_constructors:
             complete()
-        # Seed ambient constructor candidates (from prior REPL entries) before
-        # the local constructor pre-pass so local declarations can shadow them.
         if ambient_constructor_candidates:
             for cname, crefs in ambient_constructor_candidates.items():
                 for cref in crefs:
-                    # Retained metadata names the member record's owning
-                    # scope. Whether the candidate is also bare here mirrors
-                    # whichever it was in the entry that declared it, not the
-                    # shape of its owner path.
-                    if (
-                        cref.owner_module_id == self._module_id
-                        and cref.owner_path in self._repl_session_scope_nodes
-                    ):
-                        self._add_constructor_candidate(
-                            cname,
-                            cref,
-                            scope_path=cref.owner_path,
-                            # A root enum's referenced member is re-injected
-                            # below, only while that enum still references it.
-                            inject_bare=(
-                                not cref.owner_path
-                                or cref.inline_enum_owner_decl_node_id is not None
-                            )
-                            and (
-                                cname,
-                                cref.owner_module_id,
-                                cref.owner_decl_node_id,
-                            )
-                            in ambient_bare_constructor_keys,
-                        )
-                    else:
-                        self._add_constructor_candidate(cname, cref)
-        # Pre-pass 4: collect constructor candidates from RecordDef/EnumDef.
-        self._collect_constructor_candidates()
-        # Earlier entries' root enums this entry does not redeclare keep
-        # injecting their referenced members, as in one file, while each
-        # member is still the declaration at its name path.
-        redeclared = {item.name for item, path in self._type_declarations if not path}
-        for type_path, owner in self._repl_session_type_paths.items():
-            if len(type_path) == 1 and type_path[0] not in redeclared:
-                self._inject_referenced_members(
-                    cref for cref in owner.injected if self._is_current_declaration(cref)
-                )
+                    self._add_constructor_candidate(cname, cref)
+        type_owners = self._declared_type_owners()
+        # Pre-pass 4: collect constructor candidates from the module's current
+        # types: the earlier REPL entries' this entry leaves current, then its own.
+        self._collect_constructor_candidates({**self._repl_session_type_paths, **type_owners})
 
         # Define root functions as value bindings; scoped members are already
         # present in their named-scope layers.
@@ -770,7 +707,6 @@ class _Resolver:
         self._validate_extern_backing()
         self._validate_local_use_contributions()
         self._validate_retained_imported_use_routes()
-        type_owners = self._declared_type_owners()
 
         return ModuleResolution(
             program=program,
@@ -803,6 +739,11 @@ class _Resolver:
                 declaration.node_id: type_owners[(*path, declaration.name)].referenced
                 for declaration, path in self._type_declarations
                 if isinstance(declaration, EnumDef)
+            },
+            hidden_alias_members={
+                path: owner.hidden
+                for path, owner in {**self._repl_session_type_paths, **type_owners}.items()
+                if owner.hidden
             },
         )
 
@@ -1081,7 +1022,7 @@ class _Resolver:
             owner = self._foreign_receiver_owner((*region_path, *owner_path), span)
         if owner is None:
             return
-        _reject_referenced_member(
+        _reject_unselectable_member(
             self._type_owners.owner((owner.module_id, _bare_atom(owner.scope_path))),
             "::".join(owner_path),
             type_path[-1],
@@ -1590,63 +1531,19 @@ class _Resolver:
                     ),
                 )
 
-    def _remove_seeded_builtin_candidate(self, name: str, scope_path: ScopePath) -> None:
-        """Let a source builtin declaration replace the seeded host constructor."""
+    def _remove_seeded_builtin_candidate(self, name: str) -> None:
+        """Let a source root builtin declaration replace the seeded host constructor."""
         self._constructor_candidates[name] = [
             ref
             for ref in self._constructor_candidates.get(name, [])
             if not ref.owner_module_id.is_reserved
         ]
-        key = (scope_path, name)
+        key = ((), name)
         self._scoped_constructor_candidates[key] = [
             ref
             for ref in self._scoped_constructor_candidates.get(key, [])
             if not ref.owner_module_id.is_reserved
         ]
-
-    def _remove_constructor_candidates_in_type_scope(self, type_scope: ScopePath) -> None:
-        """Remove retained member constructors of a redeclared local enum.
-
-        A first declaration registers nothing under its own scope, so the
-        common case leaves both tables untouched without inspecting them.
-        """
-        if type_scope not in self._constructor_owner_scopes:
-            return
-
-        candidates = (
-            candidate
-            for refs in (
-                *self._constructor_candidates.values(),
-                *self._scoped_constructor_candidates.values(),
-            )
-            for candidate in refs
-        )
-        member_scopes = {
-            (*candidate.owner_path, candidate.owner_name)
-            for candidate in candidates
-            if candidate.owner_module_id == self._module_id
-            and candidate.owner_path == type_scope
-            and candidate.inline_enum_owner_decl_node_id is not None
-        }
-        if not member_scopes:
-            return
-
-        def keep(candidate: ConstructorRef) -> bool:
-            owner = (*candidate.owner_path, candidate.owner_name)
-            return candidate.owner_module_id != self._module_id or not any(
-                owner[: len(member_scope)] == member_scope for member_scope in member_scopes
-            )
-
-        self._constructor_candidates = {
-            name: kept
-            for name, candidates in self._constructor_candidates.items()
-            if (kept := [candidate for candidate in candidates if keep(candidate)])
-        }
-        self._scoped_constructor_candidates = {
-            key: kept
-            for key, candidates in self._scoped_constructor_candidates.items()
-            if (kept := [candidate for candidate in candidates if keep(candidate)])
-        }
 
     def _add_constructor_candidate(
         self,
@@ -1656,24 +1553,8 @@ class _Resolver:
         scope_path: ScopePath = (),
         inject_bare: bool = True,
     ) -> None:
-        """Add *cref* to the candidates list for *ctor_key*, superseding a stale owner.
-
-        A candidate that *cref* supersedes (see :func:`_supersedes`) is
-        replaced in place; otherwise a candidate already claiming this
-        spelling keeps it and *cref* is dropped.  The spelling is claimed by
-        another candidate with the same owner name in the same module
-        (a duplicate type declaration — the type-builder pass raises a clear
-        "already declared" error for that; we must not conflate it with
-        genuine constructor overloading across distinct types), by the same
-        owner at the same path in the scoped table, and, in the bare table,
-        by a host-seeded built-in of the same name.
-        """
+        """Add *cref* to *ctor_key*'s candidates in *scope_path*, and bare if *inject_bare*."""
         cref = self._canonical_constructor_ref(cref)
-        if cref.owner_module_id == self._module_id:
-            owner_path = cref.owner_path
-            self._constructor_owner_scopes.update(
-                owner_path[:index] for index in range(len(owner_path) + 1)
-            )
         scoped_key = (scope_path, ctor_key)
         self._scoped_constructor_candidates[scoped_key] = self._place_candidate(
             self._scoped_constructor_candidates.get(scoped_key, []), cref
@@ -1688,11 +1569,10 @@ class _Resolver:
     def _place_candidate(
         existing: list[ConstructorRef], cref: ConstructorRef
     ) -> list[ConstructorRef]:
-        """Return *existing* with *cref* superseding, yielding to, or joining it.
+        """Return *existing* with *cref* joining it, or replacing a built-in in place.
 
-        Replacement happens in place so candidate order — which decides the
-        representative binding and the reported one on an ambiguity — does
-        not depend on when a declaration was superseded.
+        The same declaration contributed twice (over overlapping import
+        routes) joins once.
         """
         if any(
             candidate.owner_module_id == cref.owner_module_id
@@ -1710,70 +1590,18 @@ class _Resolver:
                         return existing
                     if candidate.owner_module_id.owns_standard_builtins:
                         return [*existing[:index], cref, *existing[index + 1 :]]
-        for index, candidate in enumerate(existing):
-            if _supersedes(candidate, cref):
-                return [*existing[:index], cref, *existing[index + 1 :]]
         return [*existing, cref]
 
-    def _collect_constructor_candidates(self) -> None:
-        """Build constructor candidates for every collected declaration path."""
+    def _collect_constructor_candidates(self, owners: Mapping[ScopePath, TypeOwner]) -> None:
+        """Build constructor candidates from the module's current type *owners*."""
         self._seed_builtin_constructor_candidates()
         for item, path in self._type_declarations:
-            if isinstance(item, RecordDef):
-                cref = self._constructor_metadata_by_decl_id[(self._module_id, item.node_id)]
-                if item.is_builtin and not path:
-                    self._remove_seeded_builtin_candidate(item.name, path)
-                self._add_constructor_candidate(
-                    item.name, cref, scope_path=path, inject_bare=not path
-                )
-            elif isinstance(item, EnumDef):
-                type_scope = path + (item.name,)
-                self._remove_constructor_candidates_in_type_scope(type_scope)
-                for member in item.members:
-                    if isinstance(member, VariantDef):
-                        cref = self._constructor_metadata_by_decl_id[
-                            (self._module_id, member.node_id)
-                        ]
-                        self._add_constructor_candidate(
-                            member.name, cref, scope_path=type_scope, inject_bare=not path
-                        )
-                if not path:
-                    self._inject_referenced_members(
-                        self._type_owners.declared_owner(
-                            (self._module_id, item.name), item
-                        ).injected
-                    )
-            elif isinstance(item, ExceptionDef):
-                cref = self._constructor_metadata_by_decl_id[(self._module_id, item.node_id)]
-                self._add_constructor_candidate(
-                    item.name, cref, scope_path=path, inject_bare=not path
-                )
-            else:
-                alias_ref = self._type_owners.alias_constructor(
-                    item, (self._module_id, _bare_atom((*path, item.name)))
-                )
-                if alias_ref is not None:
-                    self._add_constructor_candidate(
-                        item.name, alias_ref, scope_path=path, inject_bare=not path
-                    )
-
-    def _is_current_declaration(self, cref: ConstructorRef) -> bool:
-        """Whether *cref*'s declaration is still the one at its name path.
-
-        Another module's declaration always is; this REPL entry's is looked up
-        in its scope layers, whose root falls back to earlier entries' root.
-        """
-        if cref.owner_module_id != self._module_id:
-            return True
-        current = self._scope_nodes[cref.owner_path].members.get(cref.owner_name)
-        if current is None and not cref.owner_path:
-            current = self._repl_session_scope_nodes[()].members.get(cref.owner_name)
-        return current is not None and current.decl_node_id == cref.owner_decl_node_id
-
-    def _inject_referenced_members(self, crefs: Iterable[ConstructorRef]) -> None:
-        """Inject the bare names of *crefs*, the records a root enum references."""
-        for cref in crefs:
-            self._add_constructor_candidate(cref.owner_name, cref)
+            if isinstance(item, RecordDef) and item.is_builtin and not path:
+                self._remove_seeded_builtin_candidate(item.name)
+        for name, constructor, scope_path, bare in owned_constructors(self._module_id, owners):
+            self._add_constructor_candidate(
+                name, constructor, scope_path=scope_path, inject_bare=bare
+            )
 
     def _root_declaring_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
         """Candidates that declare *name* itself in this module's root.
@@ -3589,43 +3417,58 @@ class _Resolver:
             raise self._ambiguous_constructor(
                 node.name,
                 ordered,
-                self._bare_constructor_repair(ordered[0], node.name),
+                self._bare_constructor_repair(ordered[0], node),
                 node.span,
             )
         if len(resolved_candidates) == 1:
             self._constructor_refs[node.node_id] = resolved_candidates[0]
 
-    def _bare_constructor_repair(self, candidate: ConstructorRef, name: str) -> str:
-        """Spell *candidate*, which bare *name* selects among others, as its owner is visible.
+    def _bare_constructor_repair(self, candidate: ConstructorRef, node: VarRef) -> str:
+        """Spell *candidate*, which bare *node* selects among others, as it resolves at *node*.
 
         An imported member is qualified by the owner name a root import tail
-        makes bare, renamed as that import exposes it, else by its shortest
-        unique import route; anything else by its declaration path.
+        makes bare, renamed as that import exposes it, while that name selects
+        the imported owner where *node* is written; else by its shortest unique
+        import route. Anything else is spelled by its declaration path.
         """
-        if candidate.owner_module_id != self._module_id:
-            origin = (
-                candidate.owner_module_id,
-                _bare_atom((*candidate.owner_path, candidate.owner_name)),
+        path = (*candidate.owner_path, node.name)
+        if candidate.owner_module_id == self._module_id:
+            return spell_declaration(self._module_id, path, local_to=self._module_id)
+        origin = (
+            candidate.owner_module_id,
+            _bare_atom((*candidate.owner_path, candidate.owner_name)),
+        )
+        unqualified = self._import_env.unqualified
+        owner = next(
+            (
+                atom[0]
+                for atom, qnames in unqualified.items()
+                if isinstance(atom, tuple)
+                and atom[1:] == (node.name,)
+                and origin in qnames
+                and len(unqualified.get(atom[0], ())) == 1
+            ),
+            None,
+        )
+        if owner is not None and self._selects_imported_type(
+            NameT(owner, node.span, node.node_id), unqualified[owner]
+        ):
+            return f"{owner}::{node.name}"
+        return self._routed_spelling(origin, candidate.owner_module_id, path)
+
+    def _selects_imported_type(self, spelling: NameT, imported: frozenset[QName]) -> bool:
+        """Whether bare qualifier *spelling* names no local scope here and selects *imported*."""
+        return (
+            not any(
+                (*base, spelling.name) in self._scope_paths for base in self._lexical_scope_bases()
             )
-            unqualified = self._import_env.unqualified
-            owner = next(
-                (
-                    atom[0]
-                    for atom, qnames in unqualified.items()
-                    if isinstance(atom, tuple)
-                    and atom[1:] == (name,)
-                    and origin in qnames
-                    and len(unqualified.get(atom[0], ())) == 1
-                ),
-                None,
-            )
-            if owner is not None:
-                return f"{owner}::{name}"
-            routed = route_spelling(self._import_env, origin)
-            if routed is not None:
-                return routed
-        return spell_declaration(
-            candidate.owner_module_id, (*candidate.owner_path, name), local_to=self._module_id
+            and self._visible_type_selection(spelling) == imported
+        )
+
+    def _routed_spelling(self, origin: QName, module: ModuleId, path: ScopePath) -> str:
+        """Spell imported *origin* by its shortest unique route, else as *path* in *module*."""
+        return route_spelling(self._import_env, origin) or spell_declaration(
+            module, path, local_to=self._module_id
         )
 
     def _ambiguous_constructor(
@@ -4061,7 +3904,7 @@ class _Resolver:
         if (owner_ref.module_id, declared_child) in self._decl_info:
             return set()
         type_owner = self._type_owners.owner(_ref_qname(owner_ref))
-        _reject_referenced_member(type_owner, render_qualifier_path(chain), variant, chain.span)
+        _reject_unselectable_member(type_owner, render_qualifier_path(chain), variant, chain.span)
         if type_owner is not None and type_owner.constructor is None:
             # A nominal enum's members arrive only as use contributions, which honor hiding.
             return set()
@@ -4096,7 +3939,7 @@ class _Resolver:
                     else target.imported_routes
                 )
                 for module_id, path in targets:
-                    _reject_referenced_member(
+                    _reject_unselectable_member(
                         self._type_owners.owner((module_id, _bare_atom((*path, *rest)))),
                         render_qualifier_path(chain),
                         variant,
@@ -4128,7 +3971,7 @@ class _Resolver:
         use.
         """
         type_owner = self._type_owners.owner(owner)
-        _reject_referenced_member(type_owner, render_qualifier_path(chain), variant, chain.span)
+        _reject_unselectable_member(type_owner, render_qualifier_path(chain), variant, chain.span)
         return None if type_owner is None else type_owner.select(variant, chain.segments[-1].name)
 
     def _imported_chain_owner(self, chain: QualifierChain) -> BindingRef | None:
@@ -4196,10 +4039,7 @@ class _Resolver:
             else {self._try_resolve_qualified_qname(chain, variant)}
         )
         if declared not in reached:
-            raise AglScopeError(
-                f"'{render_qualified_name(chain, variant)}' is hidden by its import.",
-                span=chain.span,
-            )
+            raise hidden_member(render_qualified_name(chain, variant), chain.span)
 
     def _nearest_layer[T](
         self, read: Callable[[ScopeNode], set[T]], start: ScopeNode | None = None
@@ -4608,11 +4448,15 @@ class _Resolver:
 
     def _names_visible_type(self, spelling: NameT) -> bool:
         """Whether type name *spelling* selects a type visible at its use."""
+        return bool(self._visible_type_selection(spelling))
+
+    def _visible_type_selection(self, spelling: NameT) -> frozenset[QName]:
+        """Return the declarations type name *spelling* selects at its use."""
         scope: ScopeNode | None = self._scope
         while scope is not None and not scope.scope_path:
             scope = scope.parent
         site = self._type_owners.site(self._module_id, () if scope is None else scope.scope_path)
-        return bool(type_name_selection(site, spelling))
+        return type_name_selection(site, spelling)
 
     def _is_type_contribution(self, ref: BindingRef) -> bool:
         """Whether a shared contribution denotes a type."""
@@ -4870,10 +4714,10 @@ class _Resolver:
         a local scope member is considered before an import route owning the
         complete atom, and only then is the chain read as a type owner with
         *name* as its variant, else as a module qualifier. A local scope's
-        selection is complete, and a module qualifier selecting nothing fails
-        as the same value spelling does. A type owner selecting nothing yields
-        an empty tuple, deferring the diagnostic to type checking against the
-        matched type.
+        selection is complete; a local scope lacking *name*, or a module
+        qualifier selecting nothing, fails as the same value spelling does. A
+        type owner selecting nothing yields an empty tuple, deferring the
+        diagnostic to type checking against the matched type.
         """
         opened = self._use_constructor_candidates(chain, name)
         if opened is not None:
@@ -4891,6 +4735,8 @@ class _Resolver:
             constructor = self._local_owner_constructor(chain, local_path, name)
             return () if constructor is None else (constructor,)
         if local_path is not None:
+            if name not in self._scope_nodes[local_path].members:
+                raise _unknown_scope_member(name, local_path, span)
             # The scope's selection is complete; typecheck never reads it as a module route.
             self._scope_qualified_spellings.add(node_id)
             return tuple(self._scoped_constructor_candidates.get((local_path, name), ()))
@@ -5056,8 +4902,7 @@ class _Resolver:
                         constructor,
                         render_qualified_name(chain, "::".join(path))
                         if len(surfaces) == 1
-                        else route_spelling(self._import_env, origin)
-                        or spell_declaration(module, path),
+                        else self._routed_spelling(origin, module, path),
                     )
         return injected
 

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import AglTypeError as AglTypeError
-from agm.agl.diagnostics import Diagnostic, ReferencedMemberError
+from agm.agl.diagnostics import Diagnostic, ReferencedMemberError, hidden_member
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_declaration
@@ -1074,6 +1074,8 @@ class TypeEnvironment:
       import-tail-exposed type names.
     - ``module_id`` is the owning module of the current env.  ``::Name``
       (empty-segment qualifier) resolves against this module's own types.
+    - ``hidden_alias_members`` maps each program alias of an enum to the
+      members its target's import hides (``ModuleResolution.hidden_alias_members``).
 
     Every environment the checker or match compiler actually queries carries
     these fields. Absent program tables are empty: on the transient,
@@ -1097,6 +1099,7 @@ class TypeEnvironment:
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
         declared_seed: DeclaredHeaderSeed | None = None,
+        hidden_alias_members: Mapping[DeclKey, frozenset[str]] | None = None,
     ) -> None:
         # Shared nominal type-declaration table (dual-write target alongside
         # ``_types``): defaults to a fresh table seeded with built-in prelude
@@ -1162,6 +1165,10 @@ class TypeEnvironment:
             program_alias_resolver
         )
         self._import_env: ImportEnv | None = import_env
+        # Alias -> the inline members of its enum its target's import hides.
+        self._hidden_alias_members: Mapping[DeclKey, frozenset[str]] = (
+            {} if hidden_alias_members is None else hidden_alias_members
+        )
         self._module_id: ModuleId = module_id
         # Scope resolution supplies every local path, including regions with no
         # type declarations, so failed qualified type references retain their
@@ -1427,9 +1434,11 @@ class TypeEnvironment:
             owner_template = self._enum_owner_template(owner_expr, span)
             if owner_template is None:
                 return None
-            enum_template, type_params, aliased = owner_template
-            if not aliased:
+            enum_template, type_params, alias = owner_template
+            if alias is None:
                 return None
+            if member in self._hidden_alias_members.get(alias, ()):
+                raise hidden_member(f"{render_qualifier_path(qualifier)}::{member}", span)
             selected = self.owner_inline_member(
                 enum_template, render_qualifier_path(qualifier), member, span=span
             )
@@ -1472,8 +1481,8 @@ class TypeEnvironment:
 
     def _enum_owner_template(
         self, owner: NameT, span: SourceSpan | None
-    ) -> tuple[EnumType, tuple[str, ...], bool] | None:
-        """Return the enum template *owner* names, its parameters, and whether it is an alias."""
+    ) -> tuple[EnumType, tuple[str, ...], DeclKey | None] | None:
+        """Return the enum template *owner* names, its parameters, and the alias naming it."""
         key = self.type_name_declaration(owner, span=span)
         if key is None:
             return None
@@ -1486,7 +1495,7 @@ class TypeEnvironment:
         if not isinstance(enum_type, EnumType):
             return None
         aliased = (enum_type.module_id, enum_type.scope_path, enum_type.name) != key
-        return enum_type, template.type_params, aliased
+        return enum_type, template.type_params, key if aliased else None
 
     def register_type(self, name: str, typ: Type) -> None:
         self._types[name] = typ

@@ -6580,7 +6580,8 @@ class _Checker:
         Scope selects every member a qualified spelling can name, so one none
         of *candidates* fits names no member: a bare spelling's and a local
         scope's candidates are all it can select, and an owner's failure is
-        reported against it. Scope rejects a bare spelling with no candidate.
+        reported against it. Scope rejects a bare spelling with no candidate and
+        a local scope spelling naming no member of the scope.
         """
         if qualifier is not None and node_id not in self._resolved.scope_qualified_spellings:
             return self._variant_qualification_error(qualifier, variant, enum_type, span)

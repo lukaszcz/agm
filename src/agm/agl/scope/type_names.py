@@ -19,7 +19,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv, NameAtom, QName, try_resolve_qualified_member
 from agm.agl.scope.symbols import ScopePath
 from agm.agl.scope.symbols import to_bare_atom as _atom
-from agm.agl.syntax.nodes import QualifierAnchor
+from agm.agl.syntax.nodes import QualifierAnchor, QualifierChain
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 
@@ -27,6 +27,7 @@ __all__ = [
     "TypeContributions",
     "TypeNameSite",
     "bare_type_selection",
+    "imported_member_selection",
     "nominal_selection",
     "type_name_selection",
 ]
@@ -85,13 +86,41 @@ def type_name_selection(site: TypeNameSite, type_expr: NameT | AppliedT) -> froz
         layer = site.contributions(_atom((*segments, type_expr.name)))
         if layer is not None:
             return layer[1]
-    if anchor is QualifierAnchor.CURRENT_MODULE or not qualifier.segments:
+    return _routed_selection(site, qualifier, (type_expr.name,))
+
+
+def imported_member_selection(
+    site: TypeNameSite, owner: NameT | AppliedT, member: str
+) -> frozenset[QName]:
+    """Return what path ``owner::member`` selects through *site*'s imports, *owner* as written.
+
+    The spelling reaches a member only through an import surface exposing its
+    complete path, which ``hiding`` filters: the nearest layer contributing it,
+    a bare owner's root import tails, else the owner's module route.
+    """
+    qualifier = owner.qualifier
+    segments = () if qualifier is None else qualifier.route_segments
+    path = _atom((*segments, owner.name, member))
+    if qualifier is None or qualifier.anchor is None:
+        layer = site.contributions(path)
+        if layer is not None:
+            return layer[1]
+    if qualifier is None:
+        return site.import_env.unqualified.get(path, frozenset())
+    return _routed_selection(site, qualifier, (owner.name, member))
+
+
+def _routed_selection(
+    site: TypeNameSite, qualifier: QualifierChain, tail: tuple[str, ...]
+) -> frozenset[QName]:
+    """Return what *qualifier*'s module route selects for *tail* below its later segments."""
+    if qualifier.anchor is QualifierAnchor.CURRENT_MODULE or not qualifier.segments:
         return frozenset()
     routed = try_resolve_qualified_member(
         site.import_env,
         tuple(qualifier.segments[0].name.split("/")),
-        _atom((*(segment.name for segment in qualifier.segments[1:]), type_expr.name)),
-        anchored=anchor is QualifierAnchor.MODULE,
+        _atom((*(segment.name for segment in qualifier.segments[1:]), *tail)),
+        anchored=qualifier.anchored,
     )
     return frozenset() if routed is None else frozenset({routed})
 

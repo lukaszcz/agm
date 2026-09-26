@@ -11,7 +11,7 @@ no declaration is presumed constructible, leaving the verdict to typecheck.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
@@ -28,18 +28,32 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
-from agm.agl.scope.type_names import TypeNameSite, nominal_selection
+from agm.agl.scope.type_names import (
+    TypeNameSite,
+    imported_member_selection,
+    nominal_selection,
+)
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
+    Item,
     QualifierAnchor,
     RecordDef,
     TypeAlias,
     VariantDef,
     VariantRef,
+    static_type_items,
 )
+from agm.agl.syntax.types import AppliedT, NameT
 
-__all__ = ["ModuleTypeContributions", "TypeOwnerIndex"]
+__all__ = [
+    "ModuleTypeContributions",
+    "TypeOwnerIndex",
+    "beneath",
+    "declared_member_scopes",
+    "owned_constructors",
+    "retired_member_scopes",
+]
 
 ModuleTypeContributions = Callable[
     [ModuleId, ScopePath, NameAtom, Callable[[QName], bool]],
@@ -200,12 +214,24 @@ class TypeOwnerIndex:
         target = self.owner(next(iter(targets))) if len(targets) == 1 else None
         if target is None:
             return presumed
+        reachable = target.members
+        if next(iter(targets))[0] != module_id and isinstance(
+            declaration.type_expr, (NameT, AppliedT)
+        ):
+            site = self.site(module_id, path[:-1], declaration.type_params)
+            reachable = {
+                name: member
+                for name, member in target.members.items()
+                if (member.owner_module_id, _atom((*member.owner_path, member.owner_name)))
+                in imported_member_selection(site, declaration.type_expr, name)
+            }
         return TypeOwner(
             constructor,
             target.names | {declaration.name} if target.names else frozenset(),
-            target.members,
+            reachable,
             target.referenced,
             declaration,
+            hidden=target.hidden | (target.members.keys() - reachable.keys()),
         )
 
     def _alias_selection(self, qname: QName, alias: TypeAlias) -> frozenset[QName] | None:
@@ -279,3 +305,83 @@ class TypeOwnerIndex:
             targets = self._alias_selection(current, declaration)
             current = next(iter(targets)) if targets is not None and len(targets) == 1 else None
         return ()
+
+
+def declared_member_scopes(items: tuple[Item, ...]) -> dict[ScopePath, frozenset[str]]:
+    """Map each type path *items* declare to the inline member names it owns scopes for."""
+    return {
+        (*(segment.name for segment in item.scope_path), item.name): frozenset(
+            member.name for member in item.members if isinstance(member, VariantDef)
+        )
+        if isinstance(item, EnumDef)
+        else frozenset()
+        for item in static_type_items(items)
+    }
+
+
+def retired_member_scopes(
+    retained: Mapping[ScopePath, TypeOwner], declared: Mapping[ScopePath, frozenset[str]]
+) -> frozenset[ScopePath]:
+    """Return the member scopes that redeclaring the *declared* type paths retires.
+
+    A replaced enum's inline member keeps its scope only while the
+    replacement declares an inline member of that name again (see
+    :func:`declared_member_scopes`).
+    """
+    return frozenset(
+        (*path, name)
+        for path, names in declared.items()
+        if (prior := retained.get(path)) is not None and prior.alias is None
+        for name in prior.members.keys() - names
+    )
+
+
+def beneath(path: ScopePath, scopes: Iterable[ScopePath]) -> bool:
+    """Whether *path* is one of *scopes* or lies inside one."""
+    return any(path[: len(scope)] == scope for scope in scopes)
+
+
+def owned_constructors(
+    module_id: ModuleId, owners: Mapping[ScopePath, TypeOwner]
+) -> Iterator[tuple[str, ConstructorRef, ScopePath, bool]]:
+    """Yield ``(name, constructor, scope_path, bare)`` for module *module_id*'s type *owners*.
+
+    A record, exception, or constructible alias is a candidate in its
+    declaring scope, an enum's inline members in the enum's scope, and either
+    is also bare when declared at the root. A root enum injects its referenced
+    members bare, each only while it is the declaration *owners* hold at its
+    own path.
+    """
+    for path, owner in owners.items():
+        bare = len(path) == 1
+        if owner.constructor is None:
+            if owner.alias is None:
+                for name, member in owner.members.items():
+                    yield name, member, path, bare
+                if bare:
+                    for injected in owner.injected:
+                        if _is_current(module_id, owners, injected):
+                            yield injected.owner_name, injected, (), True
+        elif owner.names:
+            yield path[-1], owner.constructor, path[:-1], bare
+
+
+def _is_current(
+    module_id: ModuleId, owners: Mapping[ScopePath, TypeOwner], constructor: ConstructorRef
+) -> bool:
+    """Whether *constructor* is still what *owners* declare at its own path.
+
+    Another module's declaration always is.
+    """
+    if constructor.owner_module_id != module_id:
+        return True
+    at_path = owners.get((*constructor.owner_path, constructor.owner_name))
+    enum = owners.get(constructor.owner_path)
+    current = (
+        at_path.constructor
+        if at_path is not None
+        else None
+        if enum is None
+        else enum.members.get(constructor.owner_name)
+    )
+    return current is not None and current.owner_decl_node_id == constructor.owner_decl_node_id

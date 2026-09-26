@@ -326,13 +326,7 @@ class EntryPipeline:
 
         return resolve_program(
             graph,
-            entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
             entry_ambient_type_names=self._ctx._ambient_type_names,
-            entry_ambient_bare_constructor_keys=frozenset(
-                (cname, ref.owner_module_id, ref.owner_decl_node_id)
-                for cname, crefs in self._ctx._ambient_bare_constructor_candidates.items()
-                for ref in crefs
-            ),
             entry_parent_scope=self._ctx._session_scope,
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,

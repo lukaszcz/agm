@@ -34,6 +34,13 @@ def reject(source: str) -> None:
         accept(source)
 
 
+def rejection(source: str) -> AglTypeError | AglScopeError:
+    """Return the error scope or type checking rejects *source* with."""
+    with pytest.raises((AglTypeError, AglScopeError)) as caught:
+        accept(source)
+    return caught.value
+
+
 def accept_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
     graph = make_graph_from_files(tmp_path, modules)
     return check_program(resolve_program(graph), _CAPS)
@@ -85,15 +92,16 @@ def test_applied_enum_owner_does_not_select_a_referenced_member() -> None:
 
 def test_enum_alias_does_not_match_a_referenced_record_member() -> None:
     """An enum alias constructs nothing, so it is no visible constructor to match."""
-    with pytest.raises(NoVisibleConstructorError):
-        accept(
-            "record R\n"
-            "  value: int\n"
-            "enum E = ::R\n"
-            "type Alias = E\n"
-            "let value: E = R(value = 1)\n"
-            "case value of | Alias(value) => value"
-        )
+    error = rejection(
+        "record R\n"
+        "  value: int\n"
+        "enum E = ::R\n"
+        "type Alias = E\n"
+        "let value: E = R(value = 1)\n"
+        "case value of | Alias(value) => value"
+    )
+
+    assert type(error) is NoVisibleConstructorError
 
 
 @pytest.mark.parametrize("pattern", ("U", "U()", "Unit0", "Unit0()"))

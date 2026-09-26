@@ -56,8 +56,9 @@ contribution:
 A selected scope path includes its complete public subtree. An item rename adds
 a corresponding bare path while leaving the selected source path available.
 `hiding` removes a path and its subtree from both qualified and bare access,
-including through its owner: after `import m::* hiding Color::Red`, neither
-`m::Color::Red` nor `Color::Red` reaches that member.
+including through its owner and through any alias of the owner spelled via that
+import: after `import m::* hiding Color::Red` and `type C = Color`, none of
+`m::Color::Red`, `Color::Red`, or `C::Red` reaches that member, in any position.
 It may accompany a plain import or a `::*` tail, but not a positive selection.
 Selected and hidden paths must be public declarations of every module matched
 by a wildcard.

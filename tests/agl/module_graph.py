@@ -54,6 +54,7 @@ standard library, through the same parse-then-``build_repl_graph`` sequence
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
@@ -70,7 +71,7 @@ from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.parser.wrap import wrap_inline_program
 from agm.agl.scope import ModuleResolution
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import ConstructorRef, ScopeNode
+from agm.agl.scope.symbols import ScopeNode, ScopePath, TypeOwner
 from agm.agl.syntax.nodes import Block, ExportDecl, FuncDef, ImportDecl, Program, static_items
 from agm.agl.syntax.spans import SourceId
 from agm.agl.typecheck import CheckedModule
@@ -249,7 +250,7 @@ def resolve_entry(
     source: str,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
     default_stdlib: bool = True,
@@ -264,9 +265,9 @@ def resolve_entry(
     the module docstring) — so it always mirrors the source the test wrote.
 
     Parameters mirror the entry-scoped parameters of ``resolve_program``:
-    *parent_scope*, *ambient_constructor_candidates*, and
-    *ambient_type_names* forward to that function's ``entry_parent_scope``,
-    ``entry_ambient_constructor_candidates`` and ``entry_ambient_type_names``
+    *parent_scope*, *retained_type_owners*, and *ambient_type_names* forward
+    to that function's ``entry_parent_scope``,
+    ``entry_repl_session_type_paths`` and ``entry_ambient_type_names``
     respectively; *origin_path* forwards to
     ``build_repl_graph``'s ``path``.
 
@@ -285,7 +286,7 @@ def resolve_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_repl_session_type_paths=retained_type_owners,
         entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
@@ -297,7 +298,7 @@ def resolve_inline_entry(
     source: str,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
     default_stdlib: bool = True,
@@ -318,7 +319,7 @@ def resolve_inline_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_repl_session_type_paths=retained_type_owners,
         entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
@@ -384,7 +385,7 @@ def resolve_and_check_inline_entry(
     capabilities: HostCapabilities,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
     seed_env: TypeEnvironment | None = None,
@@ -401,7 +402,7 @@ def resolve_and_check_inline_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_repl_session_type_paths=retained_type_owners,
         entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
@@ -419,7 +420,7 @@ def resolve_and_check_entry(
     capabilities: HostCapabilities,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
     seed_env: TypeEnvironment | None = None,
@@ -445,7 +446,7 @@ def resolve_and_check_entry(
     )
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_repl_session_type_paths=retained_type_owners,
         entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
@@ -549,7 +550,7 @@ def resolve_program_ast(
     *,
     origin_path: Path | None = None,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
 ) -> ModuleResolution:
     """Resolve an already-parsed *program* as the entry of a real, single-module graph.
@@ -562,7 +563,7 @@ def resolve_program_ast(
     graph = _single_module_graph(program, origin_path=origin_path)
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_repl_session_type_paths=retained_type_owners,
         entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
@@ -575,7 +576,7 @@ def resolve_inline_program_ast(
     next_node_id: int = 1_000_000,
     origin_path: Path | None = None,
     parent_scope: ScopeNode | None = None,
-    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
 ) -> ModuleResolution:
     """Resolve test-only hand-built inline AST with the command entry transform."""
@@ -583,7 +584,7 @@ def resolve_inline_program_ast(
     graph = _single_module_graph(wrapped, origin_path=origin_path)
     resolved_program = resolve_program(
         graph,
-        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_repl_session_type_paths=retained_type_owners,
         entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )

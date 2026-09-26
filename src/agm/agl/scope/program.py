@@ -73,7 +73,12 @@ from agm.agl.scope.symbols import (
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.scope.symbols import to_bare_path as _path
-from agm.agl.scope.type_owners import TypeOwnerIndex
+from agm.agl.scope.type_owners import (
+    TypeOwnerIndex,
+    beneath,
+    declared_member_scopes,
+    retired_member_scopes,
+)
 from agm.agl.semantics.type_table import source_enum_member_decl_id, source_nominal_decl_id
 from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
@@ -678,9 +683,7 @@ def _reusable(
 def resolve_program(
     graph: ModuleGraph,
     *,
-    entry_ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
     entry_ambient_type_names: frozenset[str] = frozenset(),
-    entry_ambient_bare_constructor_keys: frozenset[tuple[str, ModuleId, int]] = frozenset(),
     entry_parent_scope: ScopeNode | None = None,
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -693,16 +696,9 @@ def resolve_program(
     ----------
     graph:
         A loaded module graph from :func:`~agm.agl.modules.loader.build_repl_graph`.
-    entry_ambient_constructor_candidates:
-        Constructor candidates from prior REPL entries.  These are merged with
-        import-tail-exposed constructor candidates for the entry module.
     entry_ambient_type_names:
         Type names from prior REPL entries, used for qualified constructor
         access in the entry module.
-    entry_ambient_bare_constructor_keys:
-        Identity keys of the candidates that were bare-visible at the end of
-        the prior REPL entry, replaying that entry's own bare/qualified split
-        for a same-module candidate whose owner path is a retained scope.
     entry_parent_scope:
         When given, the entry module's root scope is parented to this scope
         so name lookups fall through to session bindings (REPL incremental
@@ -716,7 +712,8 @@ def resolve_program(
     entry_repl_session_type_paths:
         Type-owned scope paths among the retained layers, each mapped to the
         :class:`~agm.agl.scope.symbols.TypeOwner` resolved when it was declared,
-        so an alias keeps the target it resolved to then.
+        so an alias keeps the target it resolved to then. The entry derives
+        its retained constructors from these owners.
     cached_modules:
         Resolutions from an earlier compilation of the same modules -- a REPL
         session's own image. A cached entry is reused only while it holds the
@@ -886,6 +883,28 @@ def resolve_program(
         contributions=type_contributions,
     )
 
+    # What earlier REPL entries retain stays current unless the entry
+    # redeclares its path or retires the member scope it lies in.
+    declared = declared_member_scopes(graph.modules[graph.entry_id].program.body.items)
+    retired = retired_member_scopes(entry_repl_session_type_paths or {}, declared)
+    retained_type_owners = (
+        None
+        if entry_repl_session_type_paths is None
+        else {
+            path: owner
+            for path, owner in entry_repl_session_type_paths.items()
+            if path not in declared and not beneath(path, retired)
+        }
+    )
+    retained_scope_nodes = (
+        None
+        if entry_repl_session_scope_nodes is None
+        else {
+            path: node
+            for path, node in entry_repl_session_scope_nodes.items()
+            if not beneath(path, retired)
+        }
+    )
     for mid, loaded in graph.modules.items():
         cached = _reusable(cached_modules, mid, loaded)
         if cached is not None:
@@ -903,15 +922,15 @@ def resolve_program(
             cross_module_type_owners=cross_module_type_owners,
             all_public_types=all_public_types,
             type_owners=(
-                type_owners.with_retained(mid, entry_repl_session_type_paths)
-                if is_entry and entry_repl_session_type_paths is not None
+                type_owners.with_retained(mid, retained_type_owners)
+                if is_entry and retained_type_owners is not None
                 else type_owners
             ),
             allow_root_statements=is_entry and entry_parent_scope is not None,
             is_standard_library_module=mid.is_standard_library,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
-            repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
-            repl_session_type_paths=entry_repl_session_type_paths if is_entry else None,
+            repl_session_scope_nodes=retained_scope_nodes if is_entry else None,
+            repl_session_type_paths=retained_type_owners if is_entry else None,
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
             parent_scope=entry_parent_scope if is_entry else None,
@@ -924,19 +943,7 @@ def resolve_program(
         cross_module_candidates = _build_cross_module_constructor_candidates(
             import_envs[mid], all_public_types, cross_module_constructor_refs, type_owners
         )
-        constructor_candidates = cross_module_candidates
-        if is_entry:
-            constructor_candidates = dict(entry_ambient_constructor_candidates or {})
-            for name, refs in cross_module_candidates.items():
-                constructor_candidates[name] = dedupe_constructor_candidates(
-                    (*constructor_candidates.get(name, ()), *refs)
-                )
-        resolved = resolver.resolve(
-            ambient_constructor_candidates=constructor_candidates or None,
-            ambient_bare_constructor_keys=(
-                entry_ambient_bare_constructor_keys if is_entry else frozenset()
-            ),
-        )
+        resolved = resolver.resolve(ambient_constructor_candidates=cross_module_candidates or None)
         resolved_modules[mid] = ResolvedModule(
             module_id=mid,
             resolved=resolved,

@@ -7484,7 +7484,7 @@ class TestExceptionIsTest:
             "d is Lib::Unknown"
         )
         err = reject_type(src)
-        assert isinstance(err, AglTypeError)
+        assert type(err) is AglScopeError
         assert err.span is not None
         assert src[err.span.start_offset : err.span.end_offset] == "d is Lib::Unknown"
 
@@ -9581,7 +9581,7 @@ class TestSeedEnv:
             "  | Node(value, left, right) => value",
             default_capabilities(),
             parent_scope=r1.resolved.root_scope,
-            ambient_constructor_candidates=r1.resolved.constructor_candidates,
+            retained_type_owners=r1.resolved.type_owners,
             seed_env=r1.type_env,
         )
         decl = r2.resolved.program.body.items[0]
@@ -9629,7 +9629,7 @@ def test_nullary_candidate_defers_duplicate_pattern_binder_until_typecheck_selec
             _nullary_duplicate_pattern_source("mark", "Mark", "mark()", bare_first=bare_first),
             default_capabilities(),
             parent_scope=prior.resolved.root_scope,
-            ambient_constructor_candidates=prior.resolved.constructor_candidates,
+            retained_type_owners=prior.resolved.type_owners,
             ambient_type_names=frozenset(
                 path[0] for path in prior.resolved.declared_type_paths if len(path) == 1
             ),

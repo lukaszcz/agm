@@ -58,6 +58,7 @@ _LIBRARIES = {
     "ren": "import base\nexport base::{Color as Hue}\nenum Light = Red | Off",
     "a/lib": "enum Color = Red | Green",
     "b/lib": "enum Color = Red | Blue",
+    "c/lib": "enum Other = Red | X",
     "x/a/lib": "enum Color = Red | Violet",
     "boxes": "enum Box[T] = Full(v: T) | Empty\ntype IntFull = Box[int]::Full",
     "picker": (
@@ -1002,34 +1003,77 @@ def test_module_routed_owner_selects_only_its_own_inline_member(
         _check(tmp_path, entry)
 
 
+_OWNER_TAILS = "import a/lib::*\nimport c/lib::*\n"
+"""Two root import tails sharing a member name whose owner names differ."""
+
+
 @pytest.mark.parametrize(
-    ("header", "spelling", "subject"),
+    ("header", "spelling", "subject", "region"),
     [
-        pytest.param("import dup\n", "dup::Red", "dup::A", id="route"),
-        pytest.param("import dup as D\n", "D::Red", "D::A", id="import-alias"),
-        pytest.param("import mid\n", "mid::Red", "mid::Color", id="re-export"),
+        pytest.param("import dup\n", "dup::Red", "dup::A", None, id="route"),
+        pytest.param("import dup as D\n", "D::Red", "D::A", None, id="import-alias"),
+        pytest.param("import mid\n", "mid::Red", "mid::Color", None, id="re-export"),
         pytest.param(
-            "enum A = Red | Green\nenum B = Red | Blue\n", "::Red", "A", id="current-module"
+            "enum A = Red | Green\nenum B = Red | Blue\n", "::Red", "A", None, id="current-module"
         ),
-        pytest.param("import dup::*\n", "Red", "dup::A", id="bare"),
-        pytest.param("import a/lib\nimport b/lib\n", "lib::Red", "a/lib::Color", id="shared-route"),
+        pytest.param("import dup::*\n", "Red", "dup::A", None, id="bare"),
         pytest.param(
-            "import a/lib\nimport x/a/lib\n", "lib::Red", "/a/lib::Color", id="shared-suffix"
+            "import a/lib\nimport b/lib\n", "lib::Red", "a/lib::Color", None, id="shared-route"
         ),
-        pytest.param("import mid::*\n", "Red", "mid::Color", id="bare-re-export"),
-        pytest.param("import ren::*\n", "Red", "ren::Hue", id="bare-renamed-re-export"),
         pytest.param(
-            "import a/lib::*\nimport b/lib::*\n", "Red", "a/lib::Color", id="bare-shared-owner"
+            "import a/lib\nimport x/a/lib\n", "lib::Red", "/a/lib::Color", None, id="shared-suffix"
+        ),
+        pytest.param("import mid::*\n", "Red", "mid::Color", None, id="bare-re-export"),
+        pytest.param("import ren::*\n", "Red", "ren::Hue", None, id="bare-renamed-re-export"),
+        pytest.param(
+            "import a/lib::*\nimport b/lib::*\n",
+            "Red",
+            "a/lib::Color",
+            None,
+            id="bare-shared-owner",
+        ),
+        pytest.param(_OWNER_TAILS, "Red", "a/lib::Color", None, id="bare-owner"),
+        pytest.param(
+            _OWNER_TAILS + "scope Color\n  record Z\nend Color\n",
+            "Red",
+            "a/lib::Color",
+            None,
+            id="bare-owner-shadowed-by-a-scope",
+        ),
+        pytest.param(
+            _OWNER_TAILS + "type Color = int\n",
+            "Red",
+            "a/lib::Color",
+            None,
+            id="bare-owner-shadowed-by-a-type",
+        ),
+        pytest.param(
+            _OWNER_TAILS,
+            "Red",
+            "a/lib::Color",
+            "  scope Color\n    record Z\n  end Color\n",
+            id="bare-owner-shadowed-in-a-region",
         ),
     ],
 )
 def test_ambiguous_constructor_repair_resolves_where_written(
-    tmp_path: Path, header: str, spelling: str, subject: str
+    tmp_path: Path, header: str, spelling: str, subject: str, region: str | None
 ) -> None:
+    """*region*, when given, opens a scope region declaring it around the uses."""
+
+    def entry(*lines: str) -> str:
+        if region is None:
+            return header + "".join(f"{line}\n" for line in lines) + "()"
+        body = "".join(f"  {line}\n" for line in lines)
+        return f"{header}scope R\n{region}{body}end R\n()"
+
     with pytest.raises(AmbiguousConstructorError) as caught:
-        _check(tmp_path / "ambiguous", f"{header}let probe = {spelling}\n()")
+        _check(tmp_path / "ambiguous", entry(f"let probe = {spelling}"))
     repair = caught.value.repair
-    _check(tmp_path / "repaired", f"{header}let probe: {subject} = {repair}\nprobe is {repair}")
+    _check(
+        tmp_path / "repaired",
+        entry(f"let probe: {subject} = {repair}", f"let tested = probe is {repair}"),
+    )
 
 
 _AMBIGUOUS_BARE_REPORT = """\
@@ -1132,20 +1176,49 @@ def test_bare_spelling_of_only_other_types_constructors_is_a_type_error(
         _check(tmp_path, header + use)
 
 
-@pytest.mark.parametrize("position", ["value", "pattern", "is"])
+@pytest.mark.parametrize("position", ["value", "pattern", "is", "type"])
 @pytest.mark.parametrize(
     ("header", "owner", "route"),
     [
         pytest.param("import picker hiding Color::Red\n", "picker::Color", "picker", id="route"),
         pytest.param("import hidmid\n", "hidmid::Color", "hidmid", id="re-export"),
         pytest.param("import picker::* hiding Color::Red\n", "Color", "", id="bare-owner"),
+        pytest.param(
+            "import picker::* hiding Color::Red\ntype C = Color\n", "C", "", id="bare-owner-alias"
+        ),
+        pytest.param(
+            "import picker hiding Color::Red\ntype C = picker::Color\n",
+            "C",
+            "picker",
+            id="route-alias",
+        ),
+        pytest.param(
+            "import picker hiding Color::Red\ntype C = /picker::Color\n",
+            "C",
+            "picker",
+            id="anchored-route-alias",
+        ),
+        pytest.param(
+            (
+                "import picker::* hiding Color::Red\n\n"
+                "scope s\n  type C = Color\nend s\n\n"
+                "type D = s::C\n"
+            ),
+            "D",
+            "",
+            id="alias-chain",
+        ),
     ],
 )
 @pytest.mark.parametrize(("member", "hidden"), [("Red", True), ("Green", False)])
 def test_hidden_member_is_unreachable_through_its_owner_in_every_position(
     tmp_path: Path, header: str, owner: str, route: str, member: str, hidden: bool, position: str
 ) -> None:
-    """``hiding`` removes an owner-qualified path from values, patterns, and ``is`` tests alike."""
+    """``hiding`` removes the member's declaration from every spelling through its owner.
+
+    Hiding subtracts the declaration, so an alias whose target is spelled
+    through the hiding import cannot reach it either.
+    """
     spelling = f"{owner}::{member}"
     pick = f"{route}::pick()" if route else "pick()"
     arguments, binders = ("(shade = 1)", "(shade)") if member == "Green" else ("", "")
@@ -1155,12 +1228,13 @@ def test_hidden_member_is_unreachable_through_its_owner_in_every_position(
             "value": f"let probe: {owner} = {spelling}{arguments}\n()",
             "pattern": f"case {pick} of | {spelling}{binders} => 0 | _ => 1",
             "is": f"{pick} is {spelling}",
+            "type": f"def probe(x: {spelling}) -> int = 1\n()",
         }[position]
     )
     if not hidden:
         _check(tmp_path, program)
         return
-    with pytest.raises(AglScopeError):
+    with pytest.raises(AglTypeError):
         _check(tmp_path, program)
 
 

@@ -584,9 +584,10 @@ matches `_`, renders, and casts to such an alias.
 
 A failed entry that would have redeclared the type changes nothing — the
 previous declaration, its methods, and every binding built from it remain in
-effect. Redeclaring a record referenced by an existing enum does not change
-that enum's member set; redeclaring an enum creates new identities for its
-inline member records.
+effect. Redeclaring a record referenced by an existing enum, or the enum
+declaring a referenced member, does not change that enum's member set, but the
+superseded member is no longer injected as a bare name; redeclaring an enum
+creates new identities for its inline member records.
 
 ## Record types
 

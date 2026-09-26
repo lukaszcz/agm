@@ -890,6 +890,27 @@ class TestScopedConstructorCandidateUnion:
         assert owners == {("A", "B")}
 
 
+class TestMissingLocalScopeMember:
+    """A plain scope lacking the member fails alike in value, pattern and ``is`` position."""
+
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "Paint::Missing",
+            "c is Paint::Missing",
+            "case c of\n  | Paint::Missing => 1\n  | _ => 2",
+        ),
+        ids=("value", "is", "pattern"),
+    )
+    def test_is_a_scope_error_in_every_position(self, use: str) -> None:
+        error = reject_scope(
+            "scope Paint\n  enum Col = Red | Blue\nend Paint\n\n"
+            f"let c: Paint::Col = Paint::Col::Red\n{use}\n"
+        )
+
+        assert type(error) is AglScopeError
+
+
 class TestConstructorCandidateDeduplication:
     """``dedupe_constructor_candidates`` keeps each distinct candidate once."""
 
@@ -2297,6 +2318,21 @@ class TestCaseScoping:
         r = parse_and_resolve("let x = 1\ncase x of\n  | _ => 0\n")
         assert _ref(r, "x").kind == BinderKind.let_binding
 
+    def test_case_constructor_pattern_with_field(self) -> None:
+        resolved = parse_and_resolve(
+            "record Fail\n  issues: int\nlet x = Fail(issues = 1)\n"
+            "case x of | Fail(issues = issues) => issues"
+        )
+        issues_ref = _find_varref(resolved.program, "issues")
+        assert resolved.resolution[issues_ref.node_id].kind == BinderKind.pattern_slot
+
+
+class TestIsTestScoping:
+    def test_is_test_resolved(self) -> None:
+        resolved = parse_and_resolve("enum Status\n  | Pass\nlet x: Status = Pass\nx is Pass")
+        x_ref = _find_varref(resolved.program, "x")
+        assert resolved.resolution[x_ref.node_id].kind == BinderKind.let_binding
+
 
 # ---------------------------------------------------------------------------
 # Try/catch scoping
@@ -2376,7 +2412,7 @@ class TestParentScopeSeam:
         This covers the len(candidates)==0 branch in _resolve_varref."""
         prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
         session_scope = prior.root_scope
-        # No ambient_constructor_candidates passed → candidates is empty for 'Pass'.
+        # No retained type owners passed → candidates is empty for 'Pass'.
         entry = resolve_entry(
             "Pass()",
             parent_scope=session_scope,
@@ -2391,14 +2427,14 @@ class TestParentScopeSeam:
         assert call_node.callee.node_id not in entry.constructor_refs
 
     def test_ambient_nullary_variant_retains_bare_pattern_metadata(self) -> None:
-        prior = parse_and_resolve("enum Flag\n  | mark\nmark()")
+        prior = parse_and_resolve_repl("enum Flag\n  | mark\nmark()")
         entry = resolve_entry(
             "enum Packet\n"
             "  | packet(left: int, right: int)\n"
             "let item = packet(1, 2)\n"
             "case item of | packet(mark, _ as mark) => mark",
             parent_scope=prior.root_scope,
-            ambient_constructor_candidates=prior.constructor_candidates,
+            retained_type_owners=prior.type_owners,
         )
 
         assert entry.constructor_candidates["mark"][0].can_match_bare_pattern
@@ -2481,32 +2517,25 @@ class TestParentScopeSeam:
 
         with pytest.raises(AglScopeError):
             if candidate_source == "ambient":
-                prior = parse_and_resolve(f"{declaration}\n{value}")
+                prior = parse_and_resolve_repl(f"{declaration}\n{value}")
                 resolve_entry(
                     entry_source,
                     parent_scope=prior.root_scope,
-                    ambient_constructor_candidates=prior.constructor_candidates,
+                    retained_type_owners=prior.type_owners,
                     ambient_type_names=_root_type_names(prior),
                 )
             else:
                 parse_and_resolve(f"{declaration}\n{entry_source}")
 
-    def test_ambient_constructor_candidates_resolve_prior_entry_ctor(self) -> None:
-        """Constructor from a prior REPL entry resolves via ambient_constructor_candidates."""
-        from agm.agl.scope.symbols import ConstructorRef
-
+    def test_retained_type_owners_resolve_prior_entry_ctor(self) -> None:
+        """Constructor from a prior REPL entry resolves via its retained type owners."""
         # Simulate a prior entry that declared enum Review | Pass | Fail.
-        prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
-        # Build ambient candidates from the prior entry's resolution.
-        ambient: dict[str, tuple[ConstructorRef, ...]] = {
-            name: crefs for name, crefs in prior.constructor_candidates.items()
-        }
+        prior = parse_and_resolve_repl("enum Review\n  | Pass\n  | Fail\nPass()")
         # New entry references Pass() with a parent scope that has the constructor binding.
-        session_scope = prior.root_scope
         entry = resolve_entry(
             "Pass()",
-            parent_scope=session_scope,
-            ambient_constructor_candidates=ambient,
+            parent_scope=prior.root_scope,
+            retained_type_owners=prior.type_owners,
         )
         # The VarRef/Call for Pass() must be in constructor_refs.
         from agm.agl.syntax.nodes import Call as _Call
@@ -2537,19 +2566,12 @@ class TestParentScopeSeam:
 
     def test_ambient_type_names_resolve_qualified_prior_entry_ctor(self) -> None:
         """Qualified constructor from a prior REPL entry resolves via ambient_type_names."""
-        from agm.agl.scope.symbols import ConstructorRef
-
-        prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
-        ambient_candidates: dict[str, tuple[ConstructorRef, ...]] = {
-            name: crefs for name, crefs in prior.constructor_candidates.items()
-        }
-        ambient_type_names = _root_type_names(prior)
-        session_scope = prior.root_scope
+        prior = parse_and_resolve_repl("enum Review\n  | Pass\n  | Fail\nPass()")
         entry = resolve_entry(
             "Review::Pass()",
-            parent_scope=session_scope,
-            ambient_constructor_candidates=ambient_candidates,
-            ambient_type_names=ambient_type_names,
+            parent_scope=prior.root_scope,
+            retained_type_owners=prior.type_owners,
+            ambient_type_names=_root_type_names(prior),
         )
         from agm.agl.syntax.nodes import Call as _Call
         from agm.agl.syntax.nodes import VarRef as _VarRef
@@ -2783,11 +2805,6 @@ class TestDirectASTConstruction:
         r = resolve_program(let_n, expr)
         assert r.resolution[n_ref.node_id].kind == BinderKind.let_binding
 
-    def test_is_test_resolved(self) -> None:
-        resolved = parse_and_resolve("enum Status\n  | Pass\nlet x: Status = Pass\nx is Pass")
-        x_ref = _find_varref(resolved.program, "x")
-        assert resolved.resolution[x_ref.node_id].kind == BinderKind.let_binding
-
     def test_field_access_on_varref(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
         x_ref = _make_varref("x")
@@ -2842,14 +2859,6 @@ class TestDirectASTConstruction:
         )
         r = resolve_program(let_x, case_node)
         assert r.resolution[matched_ref.node_id].kind == BinderKind.pattern_slot
-
-    def test_case_constructor_pattern_with_field(self) -> None:
-        resolved = parse_and_resolve(
-            "record Fail\n  issues: int\nlet x = Fail(issues = 1)\n"
-            "case x of | Fail(issues = issues) => issues"
-        )
-        issues_ref = _find_varref(resolved.program, "issues")
-        assert resolved.resolution[issues_ref.node_id].kind == BinderKind.pattern_slot
 
     def test_as_pattern_binds_even_when_name_is_a_constructor(self) -> None:
         resolved = parse_and_resolve(

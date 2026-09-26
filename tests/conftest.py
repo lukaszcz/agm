@@ -21,6 +21,7 @@ from agm.agl.self_validation import self_validation_enabled, set_self_validation
 from agm.core import dry_run, process
 from agm.core import http as core_http
 from agm.core.process import CapturedOutput
+from agm.project import layout as project_layout
 from tests import _command_coverage
 from tests._durations import (
     pytest_runtest_protocol,
@@ -274,6 +275,26 @@ def isolate_host_environment(
     for name in tuple(os.environ):
         if name.lower().endswith("_proxy"):
             monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def fence_project_discovery_at_temp_root(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hide project markers above the suite's temporary root from project discovery.
+
+    Discovery walks every ancestor of its starting directory, so a ``.agm``
+    directory above ``TMPDIR`` -- such as the developer's own AGM home -- would
+    otherwise decide what a test's temporary tree resolves to.  Every directory
+    above the base temporary directory belongs to the host, never to a test.
+    """
+    host_dirs = frozenset(tmp_path_factory.getbasetemp().resolve().parents)
+    discover = project_layout._project_dir_from_workspace
+    monkeypatch.setattr(
+        project_layout,
+        "_project_dir_from_workspace",
+        lambda workspace_dir: None if workspace_dir in host_dirs else discover(workspace_dir),
+    )
 
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parent.parent / "packages" / "stdlib"

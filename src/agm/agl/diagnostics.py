@@ -268,6 +268,14 @@ def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
     )
 
 
+def hidden_member(spelling: str, span: SourceSpan | None) -> AglTypeError:
+    """Return the diagnostic for owner-qualified *spelling* naming a member its import hides.
+
+    Scope raises it for values, patterns, and ``is`` tests, typecheck for types.
+    """
+    return AglTypeError(f"'{spelling}' is hidden by its import.", span=span)
+
+
 class ReferencedMemberError(AglTypeError):
     """An enum owner spelling that selects a member the enum only references.
 

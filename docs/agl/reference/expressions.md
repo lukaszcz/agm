@@ -115,9 +115,9 @@ key with no comparable value under these rules is left to run time, like
 any pair of genuinely computed keys: two entries whose keys compute an
 equal value at run time raise catchable `DuplicateKeyError` instead.
 
-An empty dictionary may obtain its value type from an expected dictionary
-type or another constraint in the same enclosing expression; otherwise it
-needs an annotation:
+An empty dictionary may obtain its key and value types from an expected
+dictionary type or another constraint in the same enclosing expression;
+otherwise it needs an annotation:
 
 ```agl
 let metadata: dict[text, json] = {}
@@ -706,8 +706,8 @@ generic element type needs an `Eq`/`Hashable` bound, as for `==`
 (see [Constraint blocks](generics.md#constraint-blocks)). Key membership
 requires the dict's key type to satisfy `Hashable`; the tested value must
 have (or directedly coerce to) that key type. An `int` tested against
-`decimal` elements or keys compares exactly, as `==` does, so membership never
-raises: an `int` outside the decimal range is in no `decimal`-keyed dict.
+`decimal` elements or keys compares exactly and never raises; see
+[Numbers](types.md#numbers-int-and-decimal).
 
 ### Arithmetic: `+` `-` `*` `/` and unary `-`
 
@@ -1039,7 +1039,7 @@ An expected type propagates top-down where it helps:
 | `let x: T = e` / `var x: T = e` | `T` into `e` |
 | `x := e` | declared type of `x` into `e` |
 | Constructor argument | declared field type |
-| `array[T]` / `dict[text, V]` expectation | element/value type into each element |
+| `array[T]` / `dict[K, V]` expectation | element type into each element; key/value type into each key/value |
 | `case` / `if` expression with outer expectation | into every branch |
 | `ask` / typed `exec` | becomes the call's target type |
 | Function call | each parameter type into the corresponding argument |

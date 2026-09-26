@@ -141,8 +141,22 @@ refers to, so mutating an array or dict through one is not a rebinding and is
 not restricted. A bare `name := value` — an actual rebinding, with no index —
 remains a static error unless `name` is a mutable `var` binding. Array
 assignment uses the same negative-index and `IndexError` rules as array
-access. Dictionary assignment updates existing keys only; assigning to a
-missing key raises `KeyError`.
+access. A dictionary index follows [Indexing](expressions.md#indexing): it
+has, or coerces to, the key type, which must be `Hashable`. Dictionary
+assignment updates existing keys only; assigning to a missing key raises
+`KeyError`. It replaces only the value: the stored key, as originally
+inserted, is kept even when the index is an equal but differently written
+value:
+
+```agl
+program def main() -> unit =
+  let price: json = 1.50
+  let labels: dict[json, text] = {price: "x"}
+  labels[1.5] := "y"
+  print(labels)   # {1.50: "y"}
+  let counts: dict[decimal, int] = {1.5: 0, 2.0: 0}
+  counts[2] := 1  # the int index coerces to the decimal key
+```
 
 `:=` can also update a field declared with `var` on a record or enum-member
 record. The receiver may be any record-typed postfix expression, including a
@@ -207,9 +221,9 @@ program def main(threshold: int) -> unit =
   print budget
 ```
 
-A `:=` that ends its line is otherwise a
-[line continuation](lexical-structure.md#layout-rules); the suite form wins when
-the next line is indented further.
+A `:=` that ends its line is otherwise a [line
+continuation](lexical-structure.md#layout-indentation-newlines-continuation);
+the suite form wins when the next line is indented further.
 
 ## `def` — function declarations
 

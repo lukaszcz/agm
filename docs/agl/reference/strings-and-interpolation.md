@@ -155,7 +155,7 @@ enabled; with `--no-stdlib`, import a route to the method first.
 | `int`, `decimal`, `bool` | plain scalar text |
 | `json` | compact JSON by default; use `render(value, pretty = true)` for indented display |
 | `array[E]` | `[e1, e2, …]` — AgL array syntax |
-| `dict[K, V]` | `{k1: value1, k2: value2}` — AgL dict syntax; each key in value syntax on one line: a `text` key quoted (`{"a": 1}`), any other key its own rendering (`{1: "one"}`, `{Color::Red: 1}`, `{Point(x = 1, y = 2): "p"}`) |
+| `dict[K, V]` | `{k1: value1, k2: value2}` — AgL dict syntax, each key in value syntax: a `text` key quoted (`{"a": 1}`), any other key as it renders (`{1: "one"}`, `{Color::Red: 1}`) |
 | record | `TypeName(v1, v2, f3 = value3, …)` — AgL constructor form, positional fields first (see note below). Fieldless: bare `TypeName` (no parens) — a nullary constructor is an auto-value, so its bare spelling round-trips as written. |
 | enum | inline member: same constructor form, qualified `TypeName::Member(…)`; fieldless inline member: `TypeName::Member` (no parens). A referenced member retains its record's own display form. |
 | exception | `TypeName(v1, v2, f3 = value3, …)` — same constructor form, positional fields spanning the whole `extends` chain (base fields first) |

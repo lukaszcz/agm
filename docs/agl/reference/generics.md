@@ -374,11 +374,9 @@ generic body knows nothing about it beyond that it exists. You may only
 contents is a static error. You cannot:
 
 - compare it with `==`, `!=`, `<`, `<=`, `>`, `>=` (`x == x` on a `T` is
-  rejected) — a `{Eq T}`/`{Hashable T}` bound lifts `==`/`!=`, and `in` over
-  `array[T]`; a `{Hashable T}` bound additionally lifts indexing (`d[t]`),
-  indexed assignment (`d[t] := v`), and `in` over `dict[T, V]` when `T` is
-  the key; ordering never lifts, bound or not (see [Constraint
-  blocks](#constraint-blocks)),
+  rejected) — an `Eq` bound lifts equality and a `Hashable` bound also
+  hashing, but ordering never lifts; see [Constraint
+  blocks](#constraint-blocks),
 - do arithmetic on it,
 - access a field (`x.foo`) or index (`x[0]`) of it,
 - test it with `is` / `is not`.
@@ -423,14 +421,13 @@ def member[T]{Hashable T}(x: T, xs: array[T]) -> bool = x in xs
 on `==`/`!=` and `in` for that parameter — and for any type that mentions
 it, such as `array[T]` or `Option[T]` — wherever it appears in the
 declaration's body, including its receiver's parameters for a method. A
-`Hashable` bound on `T` additionally lifts dict hashing operations (a
-non-empty literal, indexing, indexed assignment, `in`) at a `dict[T, V]` key
-position.
-Without a bound, those operations remain rejected on the parameter at any
-depth. A constraint names only a type parameter already in scope from the
-declaration or its receiver; naming the same parameter twice, or pairing it
-with both `Eq` and `Hashable`, is a static error. A block is rejected on a
-declaration with no type parameters.
+`Hashable` bound on `T` additionally lifts the dict [hashing
+operations](types.md#arrayt-and-dictk-v) on a `dict[T, V]`. Without a bound,
+those operations remain rejected on the parameter at any depth. A constraint
+names only a type parameter already in scope from the declaration or its
+receiver; naming the same parameter twice, or pairing it with both `Eq` and
+`Hashable`, is a static error. A block is rejected on a declaration with no
+type parameters.
 
 `Eq` is exactly the equality [Values and
 equality](types.md#values-and-equality) defines for concrete data. An opaque

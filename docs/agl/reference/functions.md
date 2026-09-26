@@ -16,7 +16,7 @@ builtin_func_def ::= attributes? "builtin" NEWLINE? "def" func_decl_head type_pa
 extern_func_def  ::= attributes? "extern" NEWLINE? "def" func_decl_head type_params? constraint_block? "(" param_list? ")" "->" type_expr
 func_decl_head   ::= decl_head | builtin_receiver "::" name
 decl_head     ::= [scope_path "::"] name
-builtin_receiver ::= "array" "[" name "]" | "dict" "[" "text" "," name "]"
+builtin_receiver ::= "array" "[" name "]" | "dict" "[" (name | "text") "," name "]"
                    | "text" | "json" | "int" | "decimal" | "bool"
 func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"

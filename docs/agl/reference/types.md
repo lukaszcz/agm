@@ -17,7 +17,7 @@ bool
 int
 decimal
 array[T]
-dict[K, T]
+dict[K, V]
 () -> B
 A -> B
 (A, B, …) -> C
@@ -78,17 +78,8 @@ constructs a `Source[array[text]]::Member`, while `Rows::Member(value = 1)`
 and a `Rows::Member(…)` pattern or `is` test on a `Source[int]` value are
 static errors.
 
-`dict[K, T]` admits any key type `K` structurally. A *hashing operation* on
-a concrete key — a non-empty dict literal `{k: v, …}`, indexing (`d[k]`),
-indexed assignment (`d[k] := v`), and `k in d` — requires `K` to be
-`Hashable` ([Constraint blocks](generics.md#constraint-blocks)); every other
-operation (the type itself, empty `{}`, `for`, rendering, `==`,
-`copy`/`shallow-copy`) accepts any `K`, including a structurally
-non-hashable one such as `array`. Casting or parsing into a dict from `text`
-or `json` requires a `text` key
-(see [Casts and convertibility](#casts-and-convertibility)). There are no
-union types, no string-literal types, and no optional/nullable types; model
-alternatives and optionality with enums.
+There are no union types, no string-literal types, and no optional/nullable
+types; model alternatives and optionality with enums.
 
 User declarations may themselves be **generic** — `record`, `enum`, `type`
 aliases, and `def` functions can declare type parameters. See
@@ -208,7 +199,7 @@ enum MaybeText
   | Present(value: text)
 ```
 
-### `array[T]` and `dict[K, T]`
+### `array[T]` and `dict[K, V]`
 
 Homogeneous containers, and **mutable reference values**: binding, assignment,
 passing as an argument, and storing in a field never copy an array or dict —
@@ -217,6 +208,15 @@ with indexing (`xs[0]`, `metadata["key"]`). An array or dict can be updated
 in place through an index with `:=` — see [Bindings and scope](bindings-and-scope.md#--destructive-assignment)
 for the assignment-root rules and evaluation order. There is no `len`
 operator.
+
+`dict[K, V]` admits any key type `K`. Only a *hashing operation* — a
+non-empty dict literal `{k: v, …}`, indexing (`d[k]`), indexed assignment
+(`d[k] := v`), and `k in d` — requires `K` to be `Hashable`
+([Constraint blocks](generics.md#constraint-blocks)). The other operations —
+the type itself, empty `{}`, `for`, rendering, `copy`/`shallow-copy`, and
+`==` — do not, so `K` may be non-hashable, such as `array[int]`; `==` still
+needs `Eq` on the whole dict type. A dict whose key is not `text` has no JSON
+form; see [Convertibility to `json`](#convertibility-to-json).
 
 A record or enum-member record may mark an individual field with `var`.
 That field is a mutable reference slot: `receiver.field := value` updates the
@@ -237,7 +237,7 @@ See [Copying values](#copying-values) below for `copy`/`shallow-copy`.)
 
 #### Builtin-type methods
 
-`array[T]`, `dict[K, T]`, `text`, `json`, `int`, `decimal`, and `bool` can
+`array[T]`, `dict[K, V]`, `text`, `json`, `int`, `decimal`, and `bool` can
 have methods declared by any module. `std/prelude` re-exports the standard
 library receiver scopes, making their exported methods visible by default;
 `hiding` can remove an individual method route. With `--no-stdlib`, import a
@@ -580,11 +580,12 @@ written after the redeclaration does not apply to an earlier value. A pattern
 or `is` test spells a superseded member only through an alias declared before
 the redeclaration: after `type OldTint = A::Tint` and `type OldA = A`,
 `OldTint(level)` and `tinted is OldA::Tint` still match. An earlier value also
-matches `_`, renders, and casts to such an alias. An alias keeps the declaration it named, permanently: a later redeclaration
-or import that would otherwise select something else there never retargets
-it. Which of that declaration's members it reaches follows the current
-imports and `use` hiding, while its own spelling still names that
-declaration, exactly as reaching them directly is hidden or allowed.
+matches `_`, renders, and casts to such an alias. An alias keeps the
+declaration it named, permanently: a later redeclaration or import that would
+otherwise select something else there never retargets it. Which of that
+declaration's members it reaches follows the current imports and `use` hiding,
+while its own spelling still names that declaration, exactly as reaching them
+directly is hidden or allowed.
 
 A failed entry that would have redeclared the type changes nothing — the
 previous declaration, its methods, and every binding built from it remain in
@@ -841,7 +842,7 @@ the following breaks the chain:
 
 - an enum member that does not need another value of the same (or a
   mutually recursive) type — a **base case**, such as `Leaf` above;
-- an `array[T]`/`dict[K, T]` field whose element type is the recursive
+- an `array[T]`/`dict[K, V]` field whose element type is the recursive
   type — the empty array or dict is always a value, regardless of `T`, as
   with `Category.subcategories` above.
 
@@ -1220,14 +1221,20 @@ function type, or the opaque host-created `Session` — is reachable from it:
 
 - the scalars `text`, `json`, `bool`, `int`, `decimal` always convert;
 - `array[E]` converts iff `E` does; `dict[K, V]` converts iff `K` is `text`
-  and `V` does — only a `text` key has a JSON representation, regardless of
-  whether `K` is otherwise non-data-reaching;
+  and `V` does;
 - a record, enum, or exception converts iff no non-data type is reachable
   from its declaration, transitively through its fields (and, for an
   exception, through its `extends` ancestors and its catchable descendants,
   since a value statically typed as a base may hold a descendant at
   runtime);
 - `unit`, function, and `Session` values never convert.
+
+Only a `text` key has a JSON form, so a type that reaches a dict with any
+other key type, at any depth, has no JSON form. Such a type cannot be cast
+to `json`, cast from `text` or `json` or parsed from `text`, decoded from
+agent or `exec` output or from a program or module parameter, or appear in an
+`extern def` signature or as an extern target type argument; each is a static
+error. `as text` still renders it.
 
 This makes `array[R] as json`, `dict[text, R] as json`, nested containers
 (`array[array[R]]`, `dict[text, array[R]]`), and a recursive declaration such
@@ -1250,7 +1257,7 @@ Redundant casts to the same type are accepted with no warning and are no-ops;
 to its own type (`xs as array[int]`) is a true no-op: it yields the *same*
 value, not a copy, so a mutation through the result is visible through `xs`
 and vice versa. This differs from `as json` on a container, which builds an
-independent snapshot (see [`array[T]` and `dict[K, T]`](#arrayt-and-dictk-t)
+independent snapshot (see [`array[T]` and `dict[K, V]`](#arrayt-and-dictk-v)
 above).
 
 A **fallible** cast may raise `CastError` if the value does not conform to

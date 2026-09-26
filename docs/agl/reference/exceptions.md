@@ -490,14 +490,15 @@ length: int
 Raised by missing dictionary keys during indexing or indexed dictionary
 assignment, and by standard-library lookups of a missing dictionary or JSON
 object key. `key` is always `text`: the missing key rendered in AgL value
-syntax, exactly as it renders inside a dict. A `text` key is quoted and
-escaped, any other key takes its own spelling; as AgL string literals, a
-missing `"a"` gives `"\"a\""`, `42` gives `"42"`, `Color::Red` gives
-`"Color::Red"`, and `Point(x = 1, y = 2)` gives `"Point(x = 1, y = 2)"`. The
-rendering parses back to an equal key: `parse::[K](e.key)` for any non-`text`
-key type `K` that `parse` accepts, and as a quoted text literal wherever value
-syntax reads one (a top-level `parse::[text]` takes its input verbatim).
-Exception keys, and keys containing exceptions, render but do not parse.
+syntax, exactly as it renders inside a dict
+([Rendering](strings-and-interpolation.md#uniform-rendering-rules)); as AgL
+string literals, a missing `"a"` gives `"\"a\""`, `42` gives `"42"`,
+`Color::Red` gives `"Color::Red"`, and `Point(x = 1, y = 2)` gives
+`"Point(x = 1, y = 2)"`. The rendering parses back to an equal key:
+`parse::[K](e.key)` for any non-`text` key type `K` that `parse` accepts, and
+as a quoted text literal wherever value syntax reads one (a top-level
+`parse::[text]` takes its input verbatim). Exception keys, and keys containing
+exceptions, render but do not parse.
 
 ```text
 key: text
@@ -507,9 +508,7 @@ key: text
 
 Raised by a dict literal whose key expressions compute an equal key twice at
 run time (two constant keys that are equal are a static error instead). `key`
-is always `text`, rendered in AgL value syntax: a `text` key quoted, any
-other key type in its own spelling (e.g. a duplicate `dict[Point, V]` key
-renders `"Point(x = 1, y = 2)"`).
+is always `text`, rendered as for [`KeyError`](#keyerror).
 
 ```text
 key: text

@@ -376,9 +376,9 @@ bound a receiver parameter as well as the declaration's own; see
 
 All three function declaration forms accept the same `func_decl_head` surface.
 A builtin receiver may be declared in any module and must use the bare generic
-form (`array[E]` or `dict[K, V]`); see [Methods](functions.md#methods).
-`extern_func_def` is never followed by a body;
-it declares a function implemented by a companion Python file (see
+form (`array[E]` or `dict[K, V]`) or `dict[text, V]`; see
+[Methods](functions.md#methods). `extern_func_def` is never followed by a
+body; it declares a function implemented by a companion Python file (see
 [Python FFI](ffi.md)) rather than an AgL expression.
 
 ## Infix declarations

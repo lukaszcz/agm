@@ -1901,7 +1901,9 @@ class ReplSession:
         separately, for qualified constructor access (``Owner::variant``)
         across REPL entries and for :meth:`type_names`.
         """
-        return frozenset(path[0] for path in self._session_type_paths if len(path) == 1)
+        from agm.agl.scope.type_owners import root_type_names
+
+        return root_type_names(self._session_type_paths)
 
     def type_names(self) -> frozenset[str]:
         """Return the names of types declared in prior promoted entries.

@@ -30,6 +30,9 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, ArrayT, DictT, NameT, TextT
 from agm.agl.typecheck.env import AglTypeError
 
+SessionBuiltinDeclarations = Mapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]]
+"""A REPL session's builtin identities from earlier, still-live entries, keyed by scoped name."""
+
 
 @dataclass(frozen=True, slots=True)
 class BuiltinMethodReceiver:
@@ -382,7 +385,7 @@ def _entry_declared_scoped_names(resolved: ModuleResolution) -> frozenset[tuple[
 def validate_builtin_declaration_uniqueness(
     modules: Mapping[ModuleId, ModuleResolution],
     entry_id: ModuleId,
-    session_builtins: Mapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]] | None = None,
+    session_builtins: SessionBuiltinDeclarations | None = None,
 ) -> None:
     """Reject a builtin name declared more than once at the same scope path.
 

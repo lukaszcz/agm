@@ -71,6 +71,7 @@ from agm.agl.scope.symbols import (
     duplicate_binder_message,
     immutable_assignment_message,
 )
+from agm.agl.scope.type_names import owner_type_expr
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import (
     OPTION_TYPE_DEF,
@@ -229,7 +230,6 @@ from agm.agl.typecheck.env import (
     assert_checked_module_closed,
     dereference_slot_binding,
     dereference_slot_constructor_ref,
-    owner_type_expr,
 )
 from agm.agl.typecheck.function_inference import (
     BuiltinResolvedReceiver,

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglError, AglTypeError, ReferencedMemberError
+from agm.agl.diagnostics import AglError, AglTypeError, HiddenMemberError, ReferencedMemberError
 from agm.agl.scope.symbols import (
     AglScopeError,
     AmbiguousConstructorError,
@@ -67,6 +67,7 @@ _LIBRARIES = {
         "def green() -> Color::Green = Green(shade = 2)"
     ),
     "hidmid": "import picker\nexport picker hiding Color::Red",
+    "gpicker": "enum Color[T] = Red | Green(shade: T)",
     "shade": "enum Tone = Shared | Dark",
     "raiser": 'exception Boom\ndef boom() -> Boom = Boom(message = "x")',
     "scoped": (
@@ -1234,7 +1235,42 @@ def test_hidden_member_is_unreachable_through_its_owner_in_every_position(
     if not hidden:
         _check(tmp_path, program)
         return
-    with pytest.raises(AglTypeError):
+    with pytest.raises(HiddenMemberError):
+        _check(tmp_path, program)
+
+
+@pytest.mark.parametrize("position", ["value", "type"])
+@pytest.mark.parametrize(
+    ("header", "owner"),
+    [
+        pytest.param("import gpicker hiding Color::Red\n", "gpicker::Color[int]", id="route"),
+        pytest.param("import gpicker::* hiding Color::Red\n", "Color[int]", id="bare-owner"),
+        pytest.param(
+            "import gpicker::* hiding Color::Red\ntype C[T] = Color[T]\n",
+            "C[int]",
+            id="bare-owner-alias",
+        ),
+    ],
+)
+def test_hidden_member_through_an_applied_generic_owner_is_rejected(
+    tmp_path: Path, header: str, owner: str, position: str
+) -> None:
+    """``hiding`` on a generic enum's member is honoured through an applied owner too.
+
+    An applied owner (``E[int]::A``) or a parameterized alias (``C[int]::A``)
+    reaches a member through the same import surface as its unapplied
+    spelling; hiding it there must reject it here alike, in value and type
+    position.
+    """
+    spelling = f"{owner}::Red"
+    program = (
+        header
+        + {
+            "value": f"let probe = {spelling}\n()",
+            "type": f"def probe(x: {spelling}) -> int = 1\n()",
+        }[position]
+    )
+    with pytest.raises(HiddenMemberError):
         _check(tmp_path, program)
 
 

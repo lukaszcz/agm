@@ -24,11 +24,17 @@ from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 
 __all__ = [
+    "MemberAbsent",
+    "MemberHidden",
+    "MemberSelected",
+    "MemberSelection",
     "TypeContributions",
     "TypeNameSite",
     "bare_type_selection",
     "imported_member_selection",
     "nominal_selection",
+    "owner_member_selection",
+    "owner_type_expr",
     "type_name_selection",
 ]
 
@@ -156,3 +162,73 @@ def nominal_selection(
     ):
         return None
     return _type_name_selection(site, type_expr)
+
+
+def owner_type_expr(qualifier: QualifierChain) -> NameT | AppliedT:
+    """Return the type expression a non-empty qualifier's last segment names as an owner."""
+    owner_segment = qualifier.segments[-1]
+    prefix_segments = qualifier.segments[:-1]
+    owner_qualifier = (
+        None
+        if not prefix_segments and qualifier.anchor is None
+        else QualifierChain(
+            anchor=qualifier.anchor,
+            segments=prefix_segments,
+            member=owner_segment.name,
+            span=qualifier.span,
+            node_id=qualifier.node_id,
+        )
+    )
+    if owner_segment.type_args is None:
+        return NameT(
+            name=owner_segment.name,
+            qualifier=owner_qualifier,
+            span=owner_segment.span,
+            node_id=owner_segment.node_id,
+        )
+    return AppliedT(
+        name=owner_segment.name,
+        args=owner_segment.type_args,
+        qualifier=owner_qualifier,
+        span=owner_segment.span,
+        node_id=owner_segment.node_id,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MemberSelected:
+    """``owner::member`` is reachable at the site, naming *qname*."""
+
+    qname: QName
+
+
+@dataclass(frozen=True, slots=True)
+class MemberHidden:
+    """*owner* declares ``member``, but no route at the site currently reaches it."""
+
+
+@dataclass(frozen=True, slots=True)
+class MemberAbsent:
+    """*owner* declares no ``member`` at all."""
+
+
+MemberSelection = MemberSelected | MemberHidden | MemberAbsent
+"""The tri-state verdict for ``owner::member`` at a site: reachable, hidden, or absent."""
+
+
+def owner_member_selection(
+    site: TypeNameSite, owner: NameT | AppliedT, member: str, declared: QName | None
+) -> MemberSelection:
+    """Return whether ``owner::member`` is reachable at *site*, hidden, or undeclared.
+
+    *declared* is the identity *owner*'s own declaration selects for *member*
+    (a direct enum, an alias, an applied ``E[int]``, or a module-qualified
+    ``m::E`` owner alike), or ``None`` when *owner* declares no such member.
+    Reachability is *declared*'s membership in :func:`imported_member_selection`
+    at *site*: the same import surface a value, pattern, or type-position
+    reference of ``owner::member`` resolves through.
+    """
+    if declared is None:
+        return MemberAbsent()
+    reached = imported_member_selection(site, owner, member)
+    return MemberSelected(declared) if declared in reached else MemberHidden()

@@ -118,8 +118,13 @@ from agm.agl.scope.symbols import binding_qname as _ref_qname
 from agm.agl.scope.symbols import import_item_path as _item_path
 from agm.agl.scope.symbols import to_bare_atom as _bare_atom
 from agm.agl.scope.symbols import to_bare_path as _bare_path
-from agm.agl.scope.type_names import type_name_selection
-from agm.agl.scope.type_owners import TypeOwnerIndex, owned_constructors
+from agm.agl.scope.type_names import (
+    MemberHidden,
+    owner_member_selection,
+    owner_type_expr,
+    type_name_selection,
+)
+from agm.agl.scope.type_owners import TypeOwnerIndex, owned_constructors, root_type_names
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_MEMBER_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -502,8 +507,8 @@ class _Resolver:
         # Root-level (unscoped) names among the retained type-owned paths
         # above, the single derivation both an entry's ambient type-name
         # visibility and its bare root-enum member injection read.
-        self._repl_session_root_type_names: frozenset[str] = frozenset(
-            path[0] for path in self._repl_session_type_paths if len(path) == 1
+        self._repl_session_root_type_names: frozenset[str] = root_type_names(
+            self._repl_session_type_paths
         )
         # This module's canonical source file, or None for a module with no
         # backing file (inline `-c` sources, direct REPL entries). Drives the
@@ -3918,11 +3923,12 @@ class _Resolver:
             return None
         type_owner = self._type_owners.owner(_ref_qname(owner_ref))
         _reject_unselectable_member(type_owner, render_qualifier_path(chain), variant, chain.span)
-        if (
-            type_owner is not None
-            and type_owner.constructor is None
-            and type_owner.select(variant, relative_path[-1]) is not None
-        ):
+        member = (
+            None
+            if type_owner is None or type_owner.constructor is not None
+            else type_owner.members.get(variant)
+        )
+        if member is not None:
             # A nominal enum's (or an enum alias's) own inline members arrive only as
             # use contributions, which honor hiding: none was open above, so a name
             # the owner's own (unfiltered) declaration still selects is one this
@@ -4058,12 +4064,9 @@ class _Resolver:
         )
         if declared not in self._cross_module_constructor_refs:
             return
-        reached = (
-            self._import_env.unqualified.get((chain.segments[0].name, variant), frozenset())
-            if len(chain.segments) == 1
-            else {self._try_resolve_qualified_qname(chain, variant)}
-        )
-        if declared not in reached:
+        site = self._type_owners.site(self._module_id, self._scope.scope_path)
+        selection = owner_member_selection(site, owner_type_expr(chain), variant, declared)
+        if isinstance(selection, MemberHidden):
             raise hidden_member(render_qualified_name(chain, variant), chain.span)
 
     def _nearest_layer[T](

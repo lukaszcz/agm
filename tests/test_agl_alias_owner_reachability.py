@@ -1,13 +1,9 @@
 """An alias's owner-qualified members must reach through every alias on its chain.
 
-A type alias's members and hidden set are filtered against what its own
-declaration site's imports or ``use`` allow. An alias of another alias
-inherits that filtering already applied at the inner alias's own site, unfiltered,
-so a chain of aliases still reaches every member the innermost one does,
-rather than losing them to a second, redundant filter. A local
-``use ... hiding`` is honoured through an alias exactly as an import's
-``hiding`` is, whether the alias's target is declared locally or reached
-through an imported module.
+A chain of aliases reaches every member its innermost link does, rather than
+losing them to a redundant second filter. A local ``use ... hiding`` is
+honoured through an alias exactly as it is directly, whether the alias's
+target is declared locally or reached through an imported module.
 """
 
 from __future__ import annotations
@@ -16,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglTypeError
+from agm.agl.diagnostics import AglTypeError, HiddenMemberError
 from tests._agl_helpers import check_agl_program
 
 _LIBRARIES = {
@@ -81,18 +77,36 @@ class TestUseHidingThroughAliasIsHonouredLocally:
     )
 
     def test_hidden_member_through_alias_is_rejected(self, tmp_path: Path) -> None:
-        with pytest.raises(AglTypeError):
+        with pytest.raises(HiddenMemberError):
             check_agl_program(tmp_path, {"entry": self._SOURCE.format(expr="C::A")})
 
     def test_sibling_member_through_the_same_alias_still_works(self, tmp_path: Path) -> None:
         check_agl_program(tmp_path, {"entry": self._SOURCE.format(expr="C::B")})
 
+    def test_sibling_member_of_a_use_opened_owner_is_reachable_in_a_pattern(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-hidden member of a use-opened owner stays reachable spelled
+        directly (no alias) in pattern position, exactly as it does through
+        an alias."""
+        source = (
+            "use s::* hiding E::A\n"
+            "\n"
+            "scope s\n  enum E = A | B\nend s\n"
+            "\n"
+            "program def main() -> unit\n"
+            "  let v = E::B\n"
+            "  case v of\n"
+            "    | E::B => print(1)\n"
+            "    | _ => print(0)\n"
+        )
+        check_agl_program(tmp_path, {"entry": source})
+
     def test_hidden_member_is_rejected_directly_too(self, tmp_path: Path) -> None:
         """A direct spelling of a hidden member raises the same error class as an alias's.
 
         ``E::A`` and its alias spelling ``C::A`` name the same hidden fact, so
-        both must raise through the one shared diagnostic helper
-        (:func:`~agm.agl.diagnostics.hidden_member`), not a use-route-specific
+        both must raise the same diagnostic, not a use-route-specific
         ambiguity error.
         """
         source = (
@@ -102,7 +116,7 @@ class TestUseHidingThroughAliasIsHonouredLocally:
             "\n"
             "program def main() -> unit\n  print(E::A)\n"
         )
-        with pytest.raises(AglTypeError):
+        with pytest.raises(HiddenMemberError):
             check_agl_program(tmp_path, {"entry": source})
 
     def test_hidden_member_is_rejected_directly_too_in_type_position(self, tmp_path: Path) -> None:
@@ -116,7 +130,7 @@ class TestUseHidingThroughAliasIsHonouredLocally:
             "\n"
             "program def main() -> unit\n  print(1)\n"
         )
-        with pytest.raises(AglTypeError):
+        with pytest.raises(HiddenMemberError):
             check_agl_program(tmp_path, {"entry": source})
 
     def test_unknown_member_in_type_position_stays_unknown(self, tmp_path: Path) -> None:
@@ -124,8 +138,8 @@ class TestUseHidingThroughAliasIsHonouredLocally:
 
         ``E`` is reached the same way as the hidden-member case above (opened by
         ``use``, unreachable as a module route), but no ``hiding`` clause and no
-        inline declaration excludes ``Zzz``: the owner-fallback that checks for a
-        hidden member must leave this as the plain unknown-qualifier error.
+        inline declaration excludes ``Zzz``, so this stays the plain
+        unknown-qualifier error rather than :class:`HiddenMemberError`.
         """
         source = (
             "use s::* hiding E::A\n"
@@ -136,8 +150,9 @@ class TestUseHidingThroughAliasIsHonouredLocally:
             "\n"
             "program def main() -> unit\n  print(1)\n"
         )
-        with pytest.raises(AglTypeError):
+        with pytest.raises(AglTypeError) as excinfo:
             check_agl_program(tmp_path, {"entry": source})
+        assert not isinstance(excinfo.value, HiddenMemberError)
 
 
 class TestUseHidingThroughAliasStaysHonouredWhenImported:
@@ -146,7 +161,7 @@ class TestUseHidingThroughAliasStaysHonouredWhenImported:
     def test_hidden_member_through_alias_of_an_imported_use_is_rejected(
         self, tmp_path: Path
     ) -> None:
-        with pytest.raises(AglTypeError):
+        with pytest.raises(HiddenMemberError):
             check_agl_program(
                 tmp_path,
                 {

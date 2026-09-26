@@ -57,7 +57,15 @@ from agm.agl.scope.symbols import (
     resolve_bare_contribution_layer,
     to_bare_atom,
 )
-from agm.agl.scope.type_names import TypeNameSite, bare_type_selection, type_name_selection
+from agm.agl.scope.type_names import (
+    MemberHidden,
+    TypeNameSite,
+    bare_type_selection,
+    nominal_selection,
+    owner_member_selection,
+    owner_type_expr,
+    type_name_selection,
+)
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
@@ -110,37 +118,6 @@ def _split_scoped_type_name(name: str) -> tuple[ScopePath, str]:
     """Split a source spelling only at the environment's UI boundary."""
     *scope_path, declared_name = name.split("::")
     return tuple(scope_path), declared_name
-
-
-def owner_type_expr(qualifier: QualifierChain) -> NameT | AppliedT:
-    """Return the type expression a non-empty qualifier's last segment names as an owner."""
-    owner_segment = qualifier.segments[-1]
-    prefix_segments = qualifier.segments[:-1]
-    owner_qualifier = (
-        None
-        if not prefix_segments and qualifier.anchor is None
-        else QualifierChain(
-            anchor=qualifier.anchor,
-            segments=prefix_segments,
-            member=owner_segment.name,
-            span=qualifier.span,
-            node_id=qualifier.node_id,
-        )
-    )
-    if owner_segment.type_args is None:
-        return NameT(
-            name=owner_segment.name,
-            qualifier=owner_qualifier,
-            span=owner_segment.span,
-            node_id=owner_segment.node_id,
-        )
-    return AppliedT(
-        name=owner_segment.name,
-        args=owner_segment.type_args,
-        qualifier=owner_qualifier,
-        span=owner_segment.span,
-        node_id=owner_segment.node_id,
-    )
 
 
 def _is_own_builtin_declaration(name: str, typ: Type) -> bool:
@@ -1373,11 +1350,6 @@ class TypeEnvironment:
         import_env, route, atom = self._import_route_member(qualifier, name)
 
         def unknown_qualifier(rendered: str) -> AglTypeError:
-            # No route names this qualifier: before reporting that, check whether
-            # it instead names a local enum whose own (unfiltered) declaration
-            # still selects this member -- a local ``hiding`` or narrower ``use``
-            # tail excludes it, rather than no declaration existing at all.
-            self._reject_hidden_owner_member(qualifier, name, span)
             return AglTypeError(f"Unknown module qualifier '{rendered}::'.", span=span)
 
         return resolve_qualified_member(
@@ -1442,14 +1414,16 @@ class TypeEnvironment:
             if owner_template is None:
                 return None
             enum_template, type_params, alias = owner_template
+            self._reject_hidden_owner_member(qualifier, owner_expr, owner_template, member, span)
             if alias is None:
                 return None
-            if member in self._hidden_alias_members.get(alias, ()):
-                raise hidden_member(f"{render_qualifier_path(qualifier)}::{member}", span)
             selected = self.owner_inline_member(
                 enum_template, render_qualifier_path(qualifier), member, span=span
             )
             return None if selected is None else OwnerMember(selected, type_params)
+        owner_template = self._enum_owner_template(owner_expr, span)
+        if owner_template is not None:
+            self._reject_hidden_owner_member(qualifier, owner_expr, owner_template, member, span)
         owner = self.resolve_type_expr(owner_expr, span=span, type_vars=type_vars)
         if not isinstance(owner, EnumType):
             raise AglTypeError(f"'{owner_expr.name}' is not a generic enum type.", span=span)
@@ -1472,23 +1446,42 @@ class TypeEnvironment:
         return selected
 
     def _reject_hidden_owner_member(
-        self, qualifier: QualifierChain, name: str, span: SourceSpan | None
+        self,
+        qualifier: QualifierChain,
+        owner_expr: NameT | AppliedT,
+        owner_template: tuple[EnumType, tuple[str, ...], DeclKey | None],
+        member: str,
+        span: SourceSpan | None,
     ) -> None:
-        """Raise when ``qualifier::name`` names a direct enum's own inline member no open use
-        or import route currently reaches.
+        """Raise when *owner_expr*'s *member* is hidden: an alias's snapshot, or a fresh query.
 
-        Reaching this fallback already means no route opened it, so a name the enum's own
-        (unfiltered) declaration still selects is one a local ``hiding`` -- or a narrower
-        ``use`` tail -- excludes, not a name that does not exist. An aliased owner never
-        reaches this fallback: its own hidden members are already rejected, against the
-        alias's own written spelling, before a route lookup can fail.
+        An alias's own hidden set is a declaration-time snapshot
+        (:attr:`_hidden_alias_members`), taken against the alias's own written
+        spelling. A direct (non-alias) enum owner has none: its member is
+        checked fresh, at this qualifier's site, but only when *owner_expr*
+        itself was reached indirectly -- through a ``use`` contribution or an
+        import route -- since a direct lexical hit never depends on hiding.
         """
-        owner_template = self._enum_owner_template(owner_type_expr(qualifier), span)
-        if owner_template is None:
+        enum_template, _, alias = owner_template
+        if alias is not None:
+            if member in self._hidden_alias_members.get(alias, ()):
+                raise hidden_member(f"{render_qualifier_path(qualifier)}::{member}", span)
             return
-        enum_type, _, _ = owner_template
-        if self.owner_inline_member(enum_type, render_qualifier_path(qualifier), name, span=span):
-            raise hidden_member(f"{render_qualifier_path(qualifier)}::{name}", span)
+        site = self._type_name_site()
+        owner_selection = nominal_selection(site, owner_expr)
+        if owner_selection is None or not owner_selection[1]:
+            return
+        declared = (
+            (
+                enum_template.module_id,
+                to_bare_atom((*enum_template.scope_path, enum_template.name, member)),
+            )
+            if self.type_table.inline_member(enum_template, member) is not None
+            else None
+        )
+        selection = owner_member_selection(site, owner_expr, member, declared)
+        if isinstance(selection, MemberHidden):
+            raise hidden_member(f"{render_qualifier_path(qualifier)}::{member}", span)
 
     def _reject_referenced_owner_member(
         self, qualifier: QualifierChain, name: str, span: SourceSpan | None

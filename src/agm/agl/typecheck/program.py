@@ -141,6 +141,7 @@ from agm.agl.typecheck.checker import (
 )
 from agm.agl.typecheck.constant_bindings import ModuleConstantBindings
 from agm.agl.typecheck.declaration_validation import (
+    SessionBuiltinDeclarations,
     validate_builtin_declaration_uniqueness,
     validate_method_declaration_collisions,
 )
@@ -1216,8 +1217,7 @@ def _prepare_program(
     entry_seed_env: TypeEnvironment | None = None,
     cached_checked_modules: Mapping[ModuleId, CheckedModule | CheckedModuleImage] | None = None,
     retainable: RetainedSources | None = None,
-    session_builtin_declarations: Mapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]]
-    | None = None,
+    session_builtin_declarations: SessionBuiltinDeclarations | None = None,
 ) -> _PreparedProgram:
     """Run Phases 1-3 of :func:`check_program`: prepare, but do not check, every module.
 
@@ -1437,8 +1437,7 @@ def check_program(
     capabilities: HostCapabilities,
     entry_seed_env: TypeEnvironment | None = None,
     cached_checked_modules: Mapping[ModuleId, CheckedModule | CheckedModuleImage] | None = None,
-    session_builtin_declarations: Mapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]]
-    | None = None,
+    session_builtin_declarations: SessionBuiltinDeclarations | None = None,
 ) -> CheckedProgram:
     """Run the full type-checking pass over a :class:`ResolvedProgram`.
 

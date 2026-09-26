@@ -18,7 +18,12 @@ from unittest.mock import patch
 
 import pytest
 
-from agm.agl.diagnostics import AglError, ReferencedMemberError, type_name_not_a_value
+from agm.agl.diagnostics import (
+    AglError,
+    HiddenMemberError,
+    ReferencedMemberError,
+    type_name_not_a_value,
+)
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ModuleId
 from agm.agl.repl import EntryResult, ReplSession
@@ -1357,6 +1362,27 @@ def _grouping_params() -> list[object]:
     ]
 
 
+def _all_groupings(n: int) -> tuple[tuple[int, ...], ...]:
+    """Every way to split *n* declarations, in order, into one or more entries."""
+    if n == 0:
+        return ((),)
+    return tuple((first, *rest) for first in range(1, n + 1) for rest in _all_groupings(n - first))
+
+
+def _grouping_params_for(n: int) -> list[object]:
+    """``sizes`` params covering every grouping of *n* declarations into entries."""
+    return [pytest.param(sizes, id="+".join(map(str, sizes))) for sizes in _all_groupings(n)]
+
+
+def _eval_grouped(session: ReplSession, decls: tuple[str, ...], sizes: tuple[int, ...]) -> None:
+    """Evaluate *decls* on *session* as one entry per *sizes*; every entry must succeed."""
+    start = 0
+    for size in sizes:
+        entry = session.eval_entry("\n".join(decls[start : start + size]))
+        assert entry.ok, entry.diagnostics
+        start += size
+
+
 class TestBareConstructorVisibilityAcrossEntries:
     """A declaration's bare-name reach must not depend on the entry boundary.
 
@@ -1676,9 +1702,9 @@ class TestRetainedAliasTargetIdentity:
     """A retained alias keeps the target identity it resolved at its own
     declaration, forever: a later local redeclaration of the alias's target
     spelling, or a later import that shadows it, must never re-select what
-    the alias names. Re-selecting instead of storing the target risks
-    resolving to a declaration whose members the alias's checked program
-    never saw, crashing the checker (see ``TypeOwnerIndex.owner``).
+    the alias names -- a stale member of the earlier declaration becomes a
+    static error rather than crashing, and the alias's own member stays
+    reachable.
     """
 
     def _session(self, tmp_path: Path) -> ReplSession:
@@ -1686,41 +1712,76 @@ class TestRetainedAliasTargetIdentity:
         (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
         return ReplSession(cwd=tmp_path)
 
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "C::X",
+            "case d of\n  | C::X => 1\n  | _ => 2",
+            "d is C::X",
+            "fn(x: C::X) => 1",
+        ),
+        ids=("value", "pattern", "is", "type"),
+    )
     def test_a_local_redeclaration_of_the_alias_target_leaves_a_stale_member_a_static_error(
-        self, tmp_path: Path
+        self, tmp_path: Path, use: str
     ) -> None:
         s = self._session(tmp_path)
         assert s.eval_entry("import m::*\ntype C = Color").ok
         assert s.eval_entry("enum Color = X | Y").ok
+        assert s.eval_entry("let d: C = m::Color::Red").ok
 
-        stale = s.eval_entry("C::X")
-        assert not stale.ok
-        assert stale.diagnostics
+        with pytest.raises(AglError) as excinfo:
+            s.type_of(use)
+        assert not isinstance(excinfo.value, HiddenMemberError)
 
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "C::Red",
+            "case d of\n  | C::Red => 1\n  | _ => 2",
+            "d is C::Red",
+            "fn(x: C::Red) => 1",
+        ),
+        ids=("value", "pattern", "is", "type"),
+    )
     def test_a_local_redeclaration_of_the_alias_target_leaves_its_own_member_reachable(
-        self, tmp_path: Path
+        self, tmp_path: Path, use: str
     ) -> None:
         s = self._session(tmp_path)
         assert s.eval_entry("import m::*\ntype C = Color").ok
         assert s.eval_entry("enum Color = X | Y").ok
+        assert s.eval_entry("let d: C = m::Color::Red").ok
 
-        value = s.eval_entry("let d = C::Red\nd")
+        s.type_of(use)
+
+        value = s.eval_entry("let d2 = C::Red\nd2")
         assert value.ok, value.diagnostics
-
         matched = s.eval_entry("let c: C = m::Color::Red\ncase c of | C::Red => 1 | _ => 2")
         assert matched.value == IntValue(1)
 
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "C::Green",
+            "case c of\n  | C::Green => 1\n  | _ => 2",
+            "c is C::Green",
+            "fn(x: C::Green) => 1",
+        ),
+        ids=("value", "pattern", "is", "type"),
+    )
     def test_a_later_wildcard_import_of_a_same_named_module_does_not_retarget_the_alias(
-        self, tmp_path: Path
+        self, tmp_path: Path, use: str
     ) -> None:
         s = self._session(tmp_path)
         assert s.eval_entry("import m::*\ntype C = Color").ok
         assert s.eval_entry("import n::*").ok
+        assert s.eval_entry("let c: C = m::Color::Green").ok
+
+        s.type_of(use)
 
         value = s.eval_entry("let x = C::Red\nx")
         assert value.ok, value.diagnostics
-
-        tested = s.eval_entry("let c: C = m::Color::Green\nc is C::Green")
+        tested = s.eval_entry("c is C::Green")
         assert tested.value == BoolValue(True)
 
 
@@ -1779,6 +1840,109 @@ def test_an_enum_referenced_member_through_an_alias_with_a_retired_target_is_a_s
 @pytest.mark.parametrize(
     "use",
     (
+        "C::A",
+        "case d of\n  | C::A => 1\n  | _ => 2",
+        "d is C::A",
+        "fn(x: C::A) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_alias_keeps_its_declaration_time_target_once_a_same_path_enum_is_declared_again(
+    use: str,
+) -> None:
+    """An alias's target identity survives its path being retired and reused.
+
+    ``Foo::Old`` is retired (superseding ``Foo | Old`` with ``Foo | New``)
+    and then redeclared, so a fresh ``Foo::Old::E`` occupies the same scope
+    path the alias's original target did. The alias's target is the original
+    declaration, not that path, so it still reaches its own declaration-time
+    members (``A``) and never the unrelated new declaration's (``X``).
+    """
+    s = ReplSession()
+    for decl in (
+        "enum Foo | Old",
+        "enum Foo::Old::E = A | B",
+        "use Foo::Old::*",
+        "type C = E",
+        "enum Foo | New",
+        "enum Foo | Old",
+        "enum Foo::Old::E = X | Y",
+    ):
+        entry = s.eval_entry(decl)
+        assert entry.ok, entry.diagnostics
+
+    assert s.eval_entry("let d: C = C::A").ok
+    s.type_of(use)
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::X",
+        "case d of\n  | C::X => 1\n  | _ => 2",
+        "d is C::X",
+        "fn(x: C::X) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_alias_rejects_a_member_of_a_same_path_enum_declared_after_its_target_is_retired(
+    use: str,
+) -> None:
+    """The unrelated, later-declared enum at the alias's target's retired path
+    never lends the alias its own members: ``X`` is a member of the fresh
+    ``Foo::Old::E``, not of the declaration the alias actually names, so it
+    is a static error rather than a stale-identity crash."""
+    s = ReplSession()
+    for decl in (
+        "enum Foo | Old",
+        "enum Foo::Old::E = A | B",
+        "use Foo::Old::*",
+        "type C = E",
+        "enum Foo | New",
+        "enum Foo | Old",
+        "enum Foo::Old::E = X | Y",
+    ):
+        entry = s.eval_entry(decl)
+        assert entry.ok, entry.diagnostics
+
+    assert s.eval_entry("let d: C = C::A").ok
+    with pytest.raises(AglError) as excinfo:
+        s.type_of(use)
+    assert not isinstance(excinfo.value, HiddenMemberError)
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::A",
+        "case d of\n  | C::A => 1\n  | _ => 2",
+        "d is C::A",
+        "fn(x: C::A) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+def test_alias_reaches_its_target_member_after_its_path_is_redeclared_as_a_record(use: str) -> None:
+    """A retained alias's target keeps naming its own declaration even when a
+    later declaration at the same path is a record rather than another enum:
+    the identity comparison, not the path's current shape, decides whether
+    the alias's own member is still reachable."""
+    s = ReplSession()
+    for decl in (
+        "scope s\n  enum E = A | B\nend s",
+        "use s::*",
+        "type C = E",
+        "scope s\n  record E\nend s",
+    ):
+        entry = s.eval_entry(decl)
+        assert entry.ok, entry.diagnostics
+
+    assert s.eval_entry("let d: C = C::A").ok
+    s.type_of(use)
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
         "C::Red",
         "case c of\n  | C::Red => 1\n  | _ => 2",
         "c is C::Red",
@@ -1793,16 +1957,12 @@ def test_retained_alias_does_not_reach_a_member_its_import_hides(tmp_path: Path,
     assert s.eval_entry("type C = Color").ok
     assert s.eval_entry("let c: C = C::Green").ok
 
-    with pytest.raises(AglTypeError):
+    with pytest.raises(HiddenMemberError):
         s.type_of(use)
     assert s.eval_entry("c is C::Green").value == BoolValue(True)
 
 
-@pytest.mark.parametrize(
-    "sizes",
-    ((3,), (2, 1), (1, 2), (1, 1, 1)),
-    ids=("3", "2+1", "1+2", "1+1+1"),
-)
+@pytest.mark.parametrize("sizes", _grouping_params_for(3))
 def test_retained_alias_hidden_set_is_recomputed_against_a_later_import(
     tmp_path: Path, sizes: tuple[int, ...]
 ) -> None:
@@ -1816,12 +1976,9 @@ def test_retained_alias_hidden_set_is_recomputed_against_a_later_import(
     """
     (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
     s = ReplSession(cwd=tmp_path)
-    decls = ("import m::* hiding Color::Red", "type C = Color", "import m::{Color}")
-    start = 0
-    for size in sizes:
-        entry = s.eval_entry("\n".join(decls[start : start + size]))
-        assert entry.ok, entry.diagnostics
-        start += size
+    _eval_grouped(
+        s, ("import m::* hiding Color::Red", "type C = Color", "import m::{Color}"), sizes
+    )
 
     value = s.eval_entry("let v = C::Red\nv")
     assert value.ok, value.diagnostics
@@ -1832,11 +1989,7 @@ def test_retained_alias_hidden_set_is_recomputed_against_a_later_import(
     assert s.eval_entry("let c: C = Color::Red\nc is C::Red").value == BoolValue(True)
 
 
-@pytest.mark.parametrize(
-    "sizes",
-    ((3,), (2, 1), (1, 2), (1, 1, 1)),
-    ids=("3", "2+1", "1+2", "1+1+1"),
-)
+@pytest.mark.parametrize("sizes", _grouping_params_for(3))
 def test_retained_alias_of_an_imported_alias_reaches_members(
     tmp_path: Path, sizes: tuple[int, ...]
 ) -> None:
@@ -1851,37 +2004,53 @@ def test_retained_alias_of_an_imported_alias_reaches_members(
     (tmp_path / "base.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
     (tmp_path / "m2.agl").write_text("import base\ntype K = base::Color\n", encoding="utf-8")
     s = ReplSession(cwd=tmp_path)
-    decls = ("import m2::*", "type C = K", "let x: C = C::Green")
-    start = 0
-    for size in sizes:
-        entry = s.eval_entry("\n".join(decls[start : start + size]))
-        assert entry.ok, entry.diagnostics
-        start += size
+    _eval_grouped(s, ("import m2::*", "type C = K", "let x: C = C::Green"), sizes)
 
     assert s.eval_entry("x").ok
     assert s.eval_entry("fn(g: C::Green) => 1").ok
     matched = s.eval_entry("case x of\n  | C::Green => 1\n  | _ => 2")
     assert matched.value == IntValue(1)
+    assert s.eval_entry("x is C::Green").value == BoolValue(True)
 
 
-def test_a_narrowing_local_use_hides_an_alias_member_declared_between_two_uses() -> None:
+@pytest.mark.parametrize(
+    "use",
+    (
+        "C::A",
+        "case d of\n  | C::A => 1\n  | _ => 2",
+        "d is C::A",
+        "fn(x: C::A) => 1",
+    ),
+    ids=("value", "pattern", "is", "type"),
+)
+@pytest.mark.parametrize(
+    "sizes",
+    ((1, 1, 1, 1), (1, 2, 1)),
+    ids=("1+1+1+1", "1+2+1"),
+)
+def test_a_narrowing_local_use_hides_an_alias_member_declared_between_two_uses(
+    sizes: tuple[int, ...], use: str
+) -> None:
     """A local ``use ... hiding`` that narrows an earlier glob ``use`` must be
-    honoured through an alias exactly as it is directly, in both value and
-    type position, matching file mode (the scope/typecheck mismatch fix 2
-    addresses).
+    honoured through an alias exactly as it is directly, in every position,
+    matching file mode, regardless of how the declarations are split into
+    entries -- every grouping that keeps each entry's own header items ahead
+    of its non-header ones, the only ones any module admits.
     """
     s = ReplSession()
-    for decl in (
-        "scope s\n  enum E = A | B\nend s",
-        "use s::*",
-        "type C = E",
-        "use s::* hiding E::A",
-    ):
-        entry = s.eval_entry(decl)
-        assert entry.ok, entry.diagnostics
+    _eval_grouped(
+        s,
+        (
+            "scope s\n  enum E = A | B\nend s",
+            "use s::*",
+            "type C = E",
+            "use s::* hiding E::A\nlet d: C = C::B",
+        ),
+        sizes,
+    )
 
-    assert not s.eval_entry("let d = C::A\nd").ok
-    assert not s.eval_entry("fn(x: C::A) => 1").ok
+    with pytest.raises(HiddenMemberError):
+        s.type_of(use)
 
 
 # ---------------------------------------------------------------------------
@@ -2569,41 +2738,56 @@ class TestBuiltinDeclarationSupersessionAcrossEntries:
         assert second.ok, second.diagnostics
         assert s.eval_entry("print(1)").ok
 
+    @pytest.mark.parametrize(
+        "grouping", (pytest.param("single-entry"), pytest.param("two-entries"))
+    )
     def test_a_builtin_structural_alias_declared_in_an_entry_and_an_import_still_clash(
-        self, tmp_path: Path
+        self, tmp_path: Path, grouping: str
     ) -> None:
         (tmp_path / "libp.agl").write_text("builtin type path = text", encoding="utf-8")
         session = ReplSession(cwd=tmp_path, default_stdlib=False)
         assert not session.open()
-        assert session.eval_entry("builtin type path = text").ok
 
-        result = session.eval_entry("import libp")
+        if grouping == "single-entry":
+            result = session.eval_entry("builtin type path = text\nimport libp")
+        else:
+            assert session.eval_entry("builtin type path = text").ok
+            result = session.eval_entry("import libp")
 
         assert not result.ok
         assert result.diagnostics
 
+    @pytest.mark.parametrize(
+        "grouping", (pytest.param("single-entry"), pytest.param("two-entries"))
+    )
     def test_a_scoped_builtin_def_declared_in_an_entry_and_an_import_still_clash(
-        self, tmp_path: Path
+        self, tmp_path: Path, grouping: str
     ) -> None:
-        (tmp_path / "libs.agl").write_text(
-            "scope S\n  builtin def print[T](value: T) -> unit\nend S", encoding="utf-8"
-        )
+        declaration = "scope S\n  builtin def print[T](value: T) -> unit\nend S"
+        (tmp_path / "libs.agl").write_text(declaration, encoding="utf-8")
         session = ReplSession(cwd=tmp_path, default_stdlib=False)
         assert not session.open()
-        assert session.eval_entry("scope S\n  builtin def print[T](value: T) -> unit\nend S").ok
 
-        result = session.eval_entry("import libs")
+        if grouping == "single-entry":
+            result = session.eval_entry(f"{declaration}\nimport libs")
+        else:
+            assert session.eval_entry(declaration).ok
+            result = session.eval_entry("import libs")
 
         assert not result.ok
         assert result.diagnostics
 
+    @pytest.mark.parametrize(
+        "grouping", (pytest.param("single-entry"), pytest.param("separate-entries"))
+    )
     def test_a_plain_alias_of_a_scoped_builtin_enum_does_not_clash_with_an_unrelated_import(
-        self, tmp_path: Path
+        self, tmp_path: Path, grouping: str
     ) -> None:
         """A plain (non-``builtin``) alias of a ``builtin enum`` must not itself
         be counted as a builtin identity: importing an unrelated module that
-        declares the SAME builtin enum under a DIFFERENT scope must not be
-        rejected as though the alias's scope had redeclared it."""
+        separately declares its own builtin enum at the same scope path the
+        local alias occupies must not be rejected as though the alias's own
+        scope had redeclared a builtin there."""
         agent_variants = (
             "\n    | AgentCommand(command: text)"
             "\n    | AgentClaude(model: text, thinking: text)"
@@ -2615,8 +2799,14 @@ class TestBuiltinDeclarationSupersessionAcrossEntries:
         )
         session = ReplSession(cwd=tmp_path, default_stdlib=False)
         assert not session.open()
-        assert session.eval_entry(f"scope A\n  builtin enum Agent{agent_variants}\nend A").ok
-        assert session.eval_entry("scope B\n  type Agent = A::Agent\nend B").ok
+        own_enum = f"scope A\n  builtin enum Agent{agent_variants}\nend A"
+        own_alias = "scope B\n  type Agent = A::Agent\nend B"
+
+        if grouping == "single-entry":
+            assert session.eval_entry(f"{own_enum}\n{own_alias}").ok
+        else:
+            assert session.eval_entry(own_enum).ok
+            assert session.eval_entry(own_alias).ok
 
         result = session.eval_entry("import libeb")
 

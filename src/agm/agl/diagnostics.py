@@ -268,12 +268,24 @@ def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
     )
 
 
-def hidden_member(spelling: str, span: SourceSpan | None) -> AglTypeError:
+def hidden_member(spelling: str, span: SourceSpan | None) -> "HiddenMemberError":
     """Return the diagnostic for owner-qualified *spelling* naming a member its import hides.
 
     Scope raises it for values, patterns, and ``is`` tests, typecheck for types.
     """
-    return AglTypeError(f"'{spelling}' is hidden by its import.", span=span)
+    return HiddenMemberError(spelling, span=span)
+
+
+class HiddenMemberError(AglTypeError):
+    """An owner spelling that names a member no route at its site currently reaches.
+
+    An import or a ``use`` hides it -- directly, or through an alias whose
+    target it hides. Raised wherever owner selection fails: by scope for
+    values, patterns, and ``is`` tests, by typecheck for type annotations.
+    """
+
+    def __init__(self, spelling: str, *, span: SourceSpan | None) -> None:
+        super().__init__(f"'{spelling}' is hidden by its import or 'use'.", span=span)
 
 
 class ReferencedMemberError(AglTypeError):

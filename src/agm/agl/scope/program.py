@@ -170,8 +170,9 @@ class ResolvedProgram:
         Entry-only: the enum inline-member scopes this resolution retires
         relative to ``entry_repl_session_type_paths`` (see
         :func:`~agm.agl.scope.type_owners.retired_member_scopes`). Empty for a
-        non-REPL resolution. The REPL promotes this same set rather than
-        recomputing it.
+        non-REPL resolution. The REPL promotes only the scopes of this same
+        set that lie under a type path it also promotes, rather than
+        recomputing them.
     """
 
     modules: dict[ModuleId, ResolvedModule]

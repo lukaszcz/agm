@@ -580,11 +580,11 @@ written after the redeclaration does not apply to an earlier value. A pattern
 or `is` test spells a superseded member only through an alias declared before
 the redeclaration: after `type OldTint = A::Tint` and `type OldA = A`,
 `OldTint(level)` and `tinted is OldA::Tint` still match. An earlier value also
-matches `_`, renders, and casts to such an alias. An alias's own declaration
-fixes which target it names, permanently: a later redeclaration or import
-that would otherwise select something else there never retargets it, though
-a member the alias's own imports hide, or later stop hiding, is hidden or
-reachable through the alias exactly as it is written directly.
+matches `_`, renders, and casts to such an alias. An alias keeps the declaration it named, permanently: a later redeclaration
+or import that would otherwise select something else there never retargets
+it. Which of that declaration's members it reaches follows the current
+imports and `use` hiding, while its own spelling still names that
+declaration, exactly as reaching them directly is hidden or allowed.
 
 A failed entry that would have redeclared the type changes nothing — the
 previous declaration, its methods, and every binding built from it remain in

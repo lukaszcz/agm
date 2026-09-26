@@ -1,0 +1,55 @@
+# Dict keys render in AgL value syntax wherever a dict renders -- `print`,
+# interpolation, `as text`, and the multi-line `render`: a text key quoted and
+# escaped like nested text, every other key in its own spelling (numbers,
+# `true`/`false`, qualified enum members, constructor forms, JSON). A key
+# always renders on one line, even inside multi-line output. Each mode renders
+# one key kind through every surface; the round-trip mode parses a rendered
+# text-keyed dict back to an equal value.
+
+enum Color
+  | Red
+  | Tint(level: int)
+
+record Point
+  x: int
+  y: int
+
+def show[T](value: T, rendered: text) -> unit =
+  print(value)
+  print("%{value}")
+  print(value as text)
+  print(rendered)
+
+program def main(mode: text) -> unit =
+  case mode of
+    | "text" =>
+        let d: dict[text, int] = {"a": 1, "b c": 2, "say \"hi\"": 3, "50%": 4}
+        show(d, render(d))
+    | "int" =>
+        let d: dict[int, text] = {1: "one", -2: "minus two"}
+        show(d, render(d))
+    | "decimal" =>
+        let d: dict[decimal, bool] = {1.50: true, 2: false}
+        show(d, render(d))
+    | "bool" =>
+        let d: dict[bool, int] = {true: 1, false: 0}
+        show(d, render(d))
+    | "enum" =>
+        let d: dict[Color, text] = {Red: "red", Tint(level = 2): "tint"}
+        show(d, render(d))
+    | "record" =>
+        let d: dict[Point, text] = {Point(x = 1, y = 2): "a", Point(x = -1, y = 0): "b"}
+        show(d, render(d))
+    | "json" =>
+        let d: dict[json, int] = {null: 0, ("s" as json): 1, ({"k": [1, 2]} as json): 2}
+        show(d, render(d))
+    | "nested" =>
+        let d: dict[text, dict[Point, array[Color]]] = {"grid": {Point(x = 0, y = 0): [Red]}}
+        show(d, render(d))
+    | "round_trip_text" =>
+        let d: dict[text, Point] = {"a b": Point(x = 1, y = 2), "q\"uote": Point(x = 3, y = 4)}
+        print(parse::[dict[text, Point]](render(d)) == d)
+        print(parse::[dict[text, Point]](d as text) == d)
+        print(parse::[dict[text, Point]]("%{d}") == d)
+    | _ =>
+        print "unknown mode"

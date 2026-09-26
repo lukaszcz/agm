@@ -105,6 +105,35 @@ class TestValueDirectedBoundary:
         )
         assert exc.fields["python-type"] == ""
 
+    @pytest.mark.parametrize(
+        ("key", "rendered"),
+        (
+            ('"a \\"b\\""', '"a \\"b\\""'),
+            ("-42", "-42"),
+            ("True", "true"),
+            ("Point(x=1, y=-2)", "Point(x = 1, y = -2)"),
+        ),
+    )
+    def test_raised_key_error_carries_the_key_in_value_syntax(
+        self, tmp_path: Path, key: str, rendered: str
+    ) -> None:
+        source = (
+            "record Point\n  x: int\n  y: int\n"
+            "exception Missing extends Exception\n  key: text\n"
+            "extern def lookup() -> int\n"
+            "let _ = lookup()\n()\n"
+        )
+        companion = (
+            "from agl import Missing, Point\n"
+            "from agm.agl.runtime.boundary import raise_key_error\n"
+            f"def lookup(): raise_key_error(Missing, 'no such key', {key})\n"
+        )
+
+        exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
+
+        assert exc.type_name == "Missing"
+        assert exc.fields["key"] == rendered
+
     def test_agl_dict_rejects_non_text_keys(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
             "extern def f() -> dict[text, int]\nlet _ = f()\n()\n",

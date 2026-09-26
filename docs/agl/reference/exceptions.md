@@ -488,9 +488,16 @@ length: int
 ### `KeyError`
 
 Raised by missing dictionary keys during indexing or indexed dictionary
-assignment. `key` is always `text`: a `text` key crosses verbatim, and any
-other key type is rendered in AgL value syntax (e.g. a missing
-`dict[Point, V]` key becomes `"Point(x = 1, y = 2)"`).
+assignment, and by standard-library lookups of a missing dictionary or JSON
+object key. `key` is always `text`: the missing key rendered in AgL value
+syntax, exactly as it renders inside a dict. A `text` key is quoted and
+escaped, any other key takes its own spelling; as AgL string literals, a
+missing `"a"` gives `"\"a\""`, `42` gives `"42"`, `Color::Red` gives
+`"Color::Red"`, and `Point(x = 1, y = 2)` gives `"Point(x = 1, y = 2)"`. The
+rendering parses back to an equal key: `parse::[K](e.key)` for any non-`text`
+key type `K` that `parse` accepts, and as a quoted text literal wherever value
+syntax reads one (a top-level `parse::[text]` takes its input verbatim).
+Exception keys, and keys containing exceptions, render but do not parse.
 
 ```text
 key: text

@@ -1,10 +1,9 @@
 # dict[K, V] type-checks for any key type K, but a hashing operation
 # (indexing, :=, in) still requires Hashable K -- enforced structurally for
-# a concrete key. Non-empty dict literals are text-keyed, so every
-# non-text-keyed dict here starts and stays empty, exercising the
-# missing-key KeyError path (its key field rendered in AgL value syntax for
-# a non-text key), `in` on an absent key, zero-iteration `for`, and directed
-# index coercion (an int index into dict[decimal, V]). Modes 5-7 cover the
+# a concrete key. The non-text-keyed dicts here start empty, exercising the
+# missing-key KeyError path (its key field rendered in AgL value syntax),
+# `in` on an absent key, zero-iteration `for`, and directed index coercion
+# (an int index into dict[decimal, V]). Modes 5-7 cover the
 # remaining scalar and generic-nominal Hashable key kinds (bool, json,
 # Box[int]). The wildcard branch (mode 8 and any other value) checks that
 # non-hashing operations (the type itself, `{}`, `for`, rendering, dict

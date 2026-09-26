@@ -12,7 +12,7 @@ from typing import NoReturn, Protocol, Self, SupportsIndex, cast, overload
 
 from agm.agl.ir.ids import Location, NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind, ValueDescriptors
-from agm.agl.runtime.render import render_value
+from agm.agl.runtime.render import render_key_value_syntax, render_value
 from agm.agl.semantics.arithmetic import (
     arithmetic_message,
     checked_decimal,
@@ -120,9 +120,14 @@ def raise_index_error(
     raise AglException(exc_cls(message=message, index=index, length=length))
 
 
-def raise_key_error(exc_cls: AglExceptionClass, message: str, key: str) -> NoReturn:
-    """Raise an AgL ``KeyError``-shaped exception for the missing *key*."""
-    raise AglException(exc_cls(message=message, key=key))
+def raise_key_error(exc_cls: AglExceptionClass, message: str, key: object) -> NoReturn:
+    """Raise an AgL ``KeyError``-shaped exception for the missing host *key*.
+
+    The exception's ``key`` field is *key* rendered in AgL value syntax (text
+    quoted), exactly as a missing-key index failure renders it.
+    """
+    rendered = render_key_value_syntax(decode_boundary_value(key), current_descriptors())
+    raise AglException(exc_cls(message=message, key=rendered))
 
 
 def raise_parse_error(exc_cls: AglExceptionClass, raw: str, message: str) -> NoReturn:

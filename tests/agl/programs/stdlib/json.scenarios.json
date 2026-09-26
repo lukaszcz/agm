@@ -27,14 +27,14 @@
     {
       "name": "raising_object_lookup_reports_a_typed_key_error",
       "params": {"mode": 4},
-      "expect": {"stdout": "missing\n", "calls": {}}
+      "expect": {"stdout": "\"missing\"\n", "calls": {}}
     },
     {
       "name": "raising_get_on_an_array_reports_a_typed_key_error",
       "params": {"mode": 5},
       "expect": {
         "stdout": "",
-        "raises": {"type": "KeyError", "fields": {"key": "missing"}},
+        "raises": {"type": "KeyError", "fields": {"key": "\"missing\""}},
         "calls": {}
       }
     },
@@ -43,7 +43,7 @@
       "params": {"mode": 6},
       "expect": {
         "stdout": "",
-        "raises": {"type": "KeyError", "fields": {"key": "missing"}},
+        "raises": {"type": "KeyError", "fields": {"key": "\"missing\""}},
         "calls": {}
       }
     },

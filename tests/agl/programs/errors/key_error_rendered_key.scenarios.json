@@ -1,0 +1,49 @@
+{
+  "scenarios": [
+    {
+      "name": "text_index_key_is_quoted_and_round_trips",
+      "params": {"mode": "text"},
+      "expect": {"stdout": "\"say \\\"hi\\\" 100\\%\"\ntrue\n"}
+    },
+    {
+      "name": "text_indexed_assignment_key_is_quoted",
+      "params": {"mode": "text_assign"},
+      "expect": {"stdout": "\"b c\"\n[\"b c\"]\n"}
+    },
+    {
+      "name": "int_key_renders_as_number_and_round_trips",
+      "params": {"mode": "int"},
+      "expect": {"stdout": "-42\ntrue\n"}
+    },
+    {
+      "name": "enum_member_key_renders_qualified_and_round_trips",
+      "params": {"mode": "enum"},
+      "expect": {"stdout": "Color::Tint(level = 2)\ntrue\n"}
+    },
+    {
+      "name": "nullary_enum_member_key_on_assignment_round_trips",
+      "params": {"mode": "nullary_enum"},
+      "expect": {"stdout": "Color::Red\ntrue\n"}
+    },
+    {
+      "name": "record_key_renders_as_constructor_and_round_trips",
+      "params": {"mode": "record"},
+      "expect": {"stdout": "Point(x = 1, y = -2)\ntrue\n"}
+    },
+    {
+      "name": "std_dict_get_missing_text_key_is_quoted",
+      "params": {"mode": "dict_get"},
+      "expect": {"stdout": "\"missing key\"\n[\"missing key\"]\n"}
+    },
+    {
+      "name": "std_dict_remove_missing_text_key_is_quoted",
+      "params": {"mode": "dict_remove"},
+      "expect": {"stdout": "\"gone\"\n[\"gone\"]\n"}
+    },
+    {
+      "name": "std_json_get_missing_key_is_quoted",
+      "params": {"mode": "json_get"},
+      "expect": {"stdout": "\"b\\\"c\"\n[\"b\\\"c\"]\n"}
+    }
+  ]
+}

@@ -4200,6 +4200,37 @@ class TestEchoData:
         assert result.ok, result.diagnostics
         assert render_entry_result(result, echo=True) == rendered
 
+    @pytest.mark.parametrize(
+        ("source", "rendered"),
+        (
+            ('{"a b": 1, "q\\"": 2}', '{\n  "a b": 1,\n  "q\\"": 2\n}'),
+            ("{1: [true]}", "{\n  1: [\n    true\n  ]\n}"),
+            ("{1.50: 1}", "{\n  1.5: 1\n}"),
+            ("{false: 1}", "{\n  false: 1\n}"),
+            ("{Color::Tint(level = 2): 1}", "{\n  Color::Tint(level = 2): 1\n}"),
+            ("{Point(x = 1, y = 2): 1}", "{\n  Point(x = 1, y = 2): 1\n}"),
+            ('{({"k": [1]} as json): 1}', '{\n  {"k": [1]}: 1\n}'),
+        ),
+    )
+    def test_dict_echo_renders_each_key_on_one_line_in_value_syntax(
+        self, source: str, rendered: str
+    ) -> None:
+        """REPL echo spells every dict key in value syntax, one line per key."""
+        from agm.agl.repl.render import render_entry_result
+
+        session = open_session()
+        assert session.eval_entry("enum Color\n  | Red\n  | Tint(level: int)").ok
+        assert session.eval_entry("record Point\n  x: int\n  y: int").ok
+        expression = session.eval_entry(source)
+        binding = session.eval_entry(f"let d = {source}")
+
+        assert expression.ok, expression.diagnostics
+        assert binding.ok, binding.diagnostics
+        assert render_entry_result(expression, echo=True) == rendered
+        echoed_binding = render_entry_result(binding, echo=True)
+        assert echoed_binding is not None
+        assert echoed_binding.endswith(f" = {rendered}")
+
     @pytest.mark.parametrize("binder", ("let", "var"))
     def test_trailing_binder_echoes_declared_value(self, binder: str) -> None:
         from agm.agl.repl.render import render_entry_result

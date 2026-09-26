@@ -9,8 +9,9 @@ and REPL display.  Callers choose two display options:
 - ``quote_strings``: quote a top-level ``text`` value as an AgL string literal
   when ``True``; leave top-level text verbatim when ``False``.
 
-Nested ``text`` values are always quoted so structured output remains parseable
-as AgL surface syntax.  A record or exception renders its nominal's
+Nested ``text`` values (including ``text`` dict keys) are always quoted so
+structured output remains parseable as AgL surface syntax; every dict key
+renders in one-line value syntax.  A record or exception renders its nominal's
 ``positional_fields`` bare, then the rest as ``name = value``.
 """
 
@@ -174,9 +175,9 @@ def _render(
         try:
             items = []
             for key, child in value.items():
-                rendered_key = _render_child(
-                    key, descriptors, pretty=pretty, level=level + 1, active=active
-                )
+                # A key is immutable data, so it needs no cycle guard, and it
+                # stays on one line even in pretty output.
+                rendered_key = render_key_value_syntax(key, descriptors)
                 rendered = _render_child(
                     child, descriptors, pretty=pretty, level=level + 1, active=active
                 )
@@ -243,10 +244,10 @@ def render_value(
 
 
 def render_key_value_syntax(value: Value, descriptors: ValueDescriptors) -> str:
-    """Render a dict key in AgL value syntax: text quoted, every other kind its own spelling.
+    """Render a dict key in one-line AgL value syntax: text quoted, others their own spelling.
 
-    Used to render a raised exception's ``key`` field (``KeyError``,
-    ``DuplicateKeyError``), so it always shows in the syntax it would parse
-    back from.
+    The one key spelling: a rendered dict's keys and a raised exception's
+    ``key`` field (``KeyError``, ``DuplicateKeyError``) both use it, so a key
+    always shows in the syntax it would parse back from.
     """
     return render_value(value, descriptors, quote_strings=True)

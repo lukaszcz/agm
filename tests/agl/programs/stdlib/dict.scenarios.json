@@ -29,7 +29,7 @@
       "params": {"mode": 4},
       "expect": {
         "stdout": "",
-        "raises": {"type": "KeyError", "fields": {"key": "missing"}},
+        "raises": {"type": "KeyError", "fields": {"key": "\"missing\""}},
         "calls": {}
       }
     },
@@ -38,7 +38,7 @@
       "params": {"mode": 5},
       "expect": {
         "stdout": "",
-        "raises": {"type": "KeyError", "fields": {"key": "missing"}},
+        "raises": {"type": "KeyError", "fields": {"key": "\"missing\""}},
         "calls": {}
       }
     },

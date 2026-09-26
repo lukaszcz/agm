@@ -14,7 +14,7 @@
       "params": {"mode": 2},
       "expect": {
         "stdout": "",
-        "raises": {"type": "KeyError", "fields": {"key": "MISSING"}},
+        "raises": {"type": "KeyError", "fields": {"key": "\"MISSING\""}},
         "calls": {}
       }
     }

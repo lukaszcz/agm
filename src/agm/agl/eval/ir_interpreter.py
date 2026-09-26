@@ -702,17 +702,12 @@ class IrInterpreter:
                 )
             case AglMissingKey():
                 rendered_key = render_key_value_syntax(err.key, self._descriptors)
-                # KeyError.key is text-typed: a text key crosses verbatim, and
-                # any other key is rendered in AgL value syntax.
-                key_field = err.key if isinstance(err.key, TextValue) else TextValue(rendered_key)
                 return AglRaise(
                     _make_exc_value(
                         "KeyError",
                         f"Dict key {rendered_key} is missing",
                         nominals=self._program.builtin_nominals,
-                        fields={
-                            "key": key_field,
-                        },
+                        fields={"key": TextValue(rendered_key)},
                     ),
                 )
             case _ as unreachable:  # pragma: no cover

@@ -605,8 +605,9 @@ render(value: T, pretty: bool = true, quote-strings: bool = true) -> text
 ```
 
 `pretty` selects single-line versus multi-line indented rendering for
-structured values and JSON. `quote-strings` controls only a top-level `text`
-argument; when it is `false`, rendering text is identity.
+structured values and JSON; a dict key always renders on one line.
+`quote-strings` controls only a top-level `text` argument; when it is
+`false`, rendering text is identity.
 
 ```agl
 program def main() -> unit =

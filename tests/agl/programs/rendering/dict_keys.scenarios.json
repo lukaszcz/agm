@@ -1,0 +1,85 @@
+{
+  "scenarios": [
+    {
+      "name": "text_keys_quoted_and_escaped",
+      "params": {
+        "mode": "text"
+      },
+      "expect": {
+        "stdout": "{\"a\": 1, \"b c\": 2, \"say \\\"hi\\\"\": 3, \"50\\%\": 4}\n{\"a\": 1, \"b c\": 2, \"say \\\"hi\\\"\": 3, \"50\\%\": 4}\n{\"a\": 1, \"b c\": 2, \"say \\\"hi\\\"\": 3, \"50\\%\": 4}\n{\n  \"a\": 1,\n  \"b c\": 2,\n  \"say \\\"hi\\\"\": 3,\n  \"50\\%\": 4\n}\n"
+      }
+    },
+    {
+      "name": "int_keys_render_as_numbers",
+      "params": {
+        "mode": "int"
+      },
+      "expect": {
+        "stdout": "{1: \"one\", -2: \"minus two\"}\n{1: \"one\", -2: \"minus two\"}\n{1: \"one\", -2: \"minus two\"}\n{\n  1: \"one\",\n  -2: \"minus two\"\n}\n"
+      }
+    },
+    {
+      "name": "decimal_keys_render_normalized",
+      "params": {
+        "mode": "decimal"
+      },
+      "expect": {
+        "stdout": "{1.5: true, 2: false}\n{1.5: true, 2: false}\n{1.5: true, 2: false}\n{\n  1.5: true,\n  2: false\n}\n"
+      }
+    },
+    {
+      "name": "bool_keys_render_bare",
+      "params": {
+        "mode": "bool"
+      },
+      "expect": {
+        "stdout": "{true: 1, false: 0}\n{true: 1, false: 0}\n{true: 1, false: 0}\n{\n  true: 1,\n  false: 0\n}\n"
+      }
+    },
+    {
+      "name": "enum_keys_render_as_qualified_members",
+      "params": {
+        "mode": "enum"
+      },
+      "expect": {
+        "stdout": "{Color::Red: \"red\", Color::Tint(level = 2): \"tint\"}\n{Color::Red: \"red\", Color::Tint(level = 2): \"tint\"}\n{Color::Red: \"red\", Color::Tint(level = 2): \"tint\"}\n{\n  Color::Red: \"red\",\n  Color::Tint(level = 2): \"tint\"\n}\n"
+      }
+    },
+    {
+      "name": "record_keys_render_as_constructors",
+      "params": {
+        "mode": "record"
+      },
+      "expect": {
+        "stdout": "{Point(x = 1, y = 2): \"a\", Point(x = -1, y = 0): \"b\"}\n{Point(x = 1, y = 2): \"a\", Point(x = -1, y = 0): \"b\"}\n{Point(x = 1, y = 2): \"a\", Point(x = -1, y = 0): \"b\"}\n{\n  Point(x = 1, y = 2): \"a\",\n  Point(x = -1, y = 0): \"b\"\n}\n"
+      }
+    },
+    {
+      "name": "json_keys_render_as_compact_json",
+      "params": {
+        "mode": "json"
+      },
+      "expect": {
+        "stdout": "{null: 0, \"s\": 1, {\"k\": [1, 2]}: 2}\n{null: 0, \"s\": 1, {\"k\": [1, 2]}: 2}\n{null: 0, \"s\": 1, {\"k\": [1, 2]}: 2}\n{\n  null: 0,\n  \"s\": 1,\n  {\"k\": [1, 2]}: 2\n}\n"
+      }
+    },
+    {
+      "name": "nested_dict_keys_render_at_every_level",
+      "params": {
+        "mode": "nested"
+      },
+      "expect": {
+        "stdout": "{\"grid\": {Point(x = 0, y = 0): [Color::Red]}}\n{\"grid\": {Point(x = 0, y = 0): [Color::Red]}}\n{\"grid\": {Point(x = 0, y = 0): [Color::Red]}}\n{\n  \"grid\": {\n    Point(x = 0, y = 0): [\n      Color::Red\n    ]\n  }\n}\n"
+      }
+    },
+    {
+      "name": "rendered_text_keyed_dict_parses_back_equal",
+      "params": {
+        "mode": "round_trip_text"
+      },
+      "expect": {
+        "stdout": "true\ntrue\ntrue\n"
+      }
+    }
+  ]
+}

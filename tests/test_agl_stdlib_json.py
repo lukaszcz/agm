@@ -72,7 +72,7 @@ def test_json_companion_get_handles_object_and_non_object_receivers() -> None:
     for raw in ([], True):
         with pytest.raises(AglException) as exc_info:
             companion.get(AglJson(raw), "missing")
-        assert exc_info.value.value.fields["key"] == TextValue("missing")
+        assert exc_info.value.value.fields["key"] == TextValue('"missing"')
         assert decode_boundary_value(companion.get_option(AglJson(raw), "missing")) == RecordValue(
             _OPTION_NONE, {}
         )

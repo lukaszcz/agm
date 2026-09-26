@@ -254,7 +254,7 @@ class TestCompareNumbers:
         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
             assert compare_numbers(10**40 + 1, decimal.Decimal(10**40)) == 1
             assert compare_numbers(big + 1, exact_decimal(big)) == 1
-            assert compare_numbers(-big, exact_decimal(-big) - decimal.Decimal("0.5")) == 1
+            assert compare_numbers(-big, decimal.Decimal(f"{-big}.5")) == 1
 
     @pytest.mark.parametrize("n", [2, 7**9000])
     def test_long_fraction_compares_without_scaling_by_its_exponent(self, n: int) -> None:

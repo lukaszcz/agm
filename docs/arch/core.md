@@ -28,7 +28,7 @@ Dry-run is a global mode set from `--dry-run`. Because the process and filesyste
 
 ## Generic Utilities
 
-`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the scalar-text rules every point where text enters AgL applies, so a surrogate is rejected at its source rather than at the sink that would encode it; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; a `ContextVar` scoping guard; and an overlap-safe raise of the process-global recursion limit, used by the AgL interpreter, whose runs may overlap on threads; and the pinned AgL decimal context with exact number parsing, conversion, and int/decimal comparison. Because AgL ints are unbounded, importing `agm` lifts Python's int/text digit limit for the whole process (`src/agm/__init__.py`), tests included.
+`util/` is a dependency-free leaf usable from any layer: graph algorithms (Tarjan SCC, Kahn toposort, nearest-hit BFS) used by AgL module loading and type-table analyses; newline normalization shared by the lexer and diagnostics; the scalar-text rules every point where text enters AgL applies, so a surrogate is rejected at its source rather than at the sink that would encode it; the AgL identifier grammar; the `%{name}` interpolation parser shared by prompts, runner commands, config paths, and AgL; a `ContextVar` scoping guard; an overlap-safe raise of the process-global recursion limit, used by the AgL interpreter, whose runs may overlap on threads; and the pinned AgL decimal context with exact number parsing, conversion, and int/decimal comparison.
 
 ## Code Entry Points
 
@@ -39,4 +39,5 @@ Dry-run is a global mode set from `--dry-run`. Because the process and filesyste
 - `src/agm/core/cleanup.py` — primary-error-preserving cleanup; `src/agm/core/dry_run.py` — global dry-run state; `src/agm/core/log.py` — logging and JSONL append.
 - `src/agm/core/pyenv.py` — requirement satisfaction and installation for AGM's interpreter environment.
 - `src/agm/core/http.py` — the `requests`-backed HTTP transport seam: session, request/response streaming, failure classification, charset decoding.
+- `src/agm/__init__.py` — lifts Python's int/text digit limit for the whole process, tests included, because AgL ints are unbounded.
 - `src/agm/util/graph.py`, `text.py`, `unicode.py`, `ident.py`, `interp.py`, `scoping.py`, `recursion.py`, `decimal.py` — the pure helpers.

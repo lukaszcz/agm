@@ -42,6 +42,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.typecheck.env import CheckedModule
+from agm.util.decimal import exact_decimal
 
 from .model import (
     BinderProvenance,
@@ -274,8 +275,10 @@ def _canonical_literal(pattern: LiteralPattern) -> Constructor:
     match literal:
         case BoolLit():
             return BoolConstructor(literal.value)
-        case IntLit() | DecimalLit():
-            return LiteralConstructor(LiteralKind.NUMERIC, decimal.Decimal(literal.value))
+        case IntLit():
+            return LiteralConstructor(LiteralKind.NUMERIC, exact_decimal(literal.value))
+        case DecimalLit():
+            return LiteralConstructor(LiteralKind.NUMERIC, literal.value)
         case StringLit():
             return LiteralConstructor(LiteralKind.TEXT, literal.value)
         case NullLit():

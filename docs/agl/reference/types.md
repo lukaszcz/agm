@@ -151,9 +151,9 @@ value is exempt from the range and may hold a number of any magnitude, but
 always a finite one: JSON or TOML parsing, an agent or `std/http` response,
 and a host-supplied program argument reject `NaN` or an infinity with that
 boundary's own error, and an extern never passes one
-([FFI](ffi.md)). Each also rejects a number no `decimal` can hold at all
-(such as `1e99999999999999999999`). An integer of any length, written or
-decoded, is an exact `int`.
+([FFI](ffi.md)). Each of those boundaries also rejects a number no `decimal`
+can hold at all (such as `1e99999999999999999999`). An integer of any length,
+written or decoded, is an exact `int`.
 
 A `decimal` operator (`+ - *` or `/`) rounds its result to 28 significant
 digits; unary `-` is exact, including in a constant expression. A result that

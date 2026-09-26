@@ -555,6 +555,11 @@ _CMP_OP_MAP: dict[BinOp, CmpOp] = {
 }
 
 
+def _int_against_decimal(operand: Type, expected: Type) -> bool:
+    """Whether an *operand* compared at *expected* is an int compared with decimals, exactly."""
+    return isinstance(expected, DecimalType) and isinstance(operand, IntType)
+
+
 class _Lowerer:
     """Holds all mutable state for one lowering pass."""
 
@@ -2157,7 +2162,7 @@ class _Lowerer:
         exactly, so the int is never widened through the range-checked
         int-to-decimal coercion; no other coercion a comparison needs can fail.
         """
-        if isinstance(expected, DecimalType) and isinstance(operand.type, IntType):
+        if _int_against_decimal(operand.type, expected):
             return operand.ir
         return self._coerce_ir(operand.ir, operand.type, expected, operand.location)
 
@@ -2234,7 +2239,7 @@ class _Lowerer:
         elif isinstance(container_type, DictType):
             kind = (
                 ContainsKind.DICT_INT_NEEDLE
-                if isinstance(container_type.key, DecimalType) and isinstance(item.type, IntType)
+                if _int_against_decimal(item.type, container_type.key)
                 else ContainsKind.DICT
             )
             item_ir = self._compared_operand(item, container_type.key)

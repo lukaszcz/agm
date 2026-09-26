@@ -100,6 +100,7 @@ from agm.agl.syntax.types import (
     render_type_expr,
 )
 from agm.agl.value_syntax.lexical import scalar_text
+from agm.util.decimal import exact_decimal
 
 __all__ = ["FoldFailure", "ModuleConstants", "Scalar", "constant_key", "fold_scalar"]
 
@@ -315,7 +316,7 @@ def constant_key(
         return _BoolKey(folded)
     if isinstance(folded, str):
         return _TextKey(folded)
-    return _NumKey(decimal.Decimal(folded))
+    return _NumKey(folded if isinstance(folded, decimal.Decimal) else exact_decimal(folded))
 
 
 def _call_key(

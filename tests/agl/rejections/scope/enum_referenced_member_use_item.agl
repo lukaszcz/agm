@@ -1,0 +1,10 @@
+record Saved
+  id: int
+
+enum Status = ::Saved | Fresh(n: int)
+
+scope inner
+  use Status::{Saved}
+end inner
+
+program def main() -> unit = ()

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglError, type_name_not_a_value
+from agm.agl.diagnostics import AglError, ReferencedMemberError, type_name_not_a_value
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
@@ -1211,21 +1211,26 @@ def test_used_enum_alias_follows_a_qualified_target_in_its_declaring_module(
     )
 
 
-def test_used_alias_of_referenced_enum_member_selects_the_record_constructor(
-    tmp_path: Path,
-) -> None:
+def test_used_alias_of_enum_selects_only_its_inline_members(tmp_path: Path) -> None:
+    library = "record Shared\n  value: int\nenum E = ::Shared | Own(value: int)\ntype Alias = E"
     checked = check_agl_program(
         tmp_path,
         {
-            "entry": ("import lib\nuse lib::{Alias}\nlet value = Alias::Shared(value = 1)\nvalue"),
-            "lib": "record Shared\n  value: int\nenum E = ::Shared\ntype Alias = E",
+            "entry": "import lib\nuse lib::{Alias}\nlet value = Alias::Own(value = 1)\nvalue",
+            "lib": library,
         },
         default_stdlib=False,
     )
 
     assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == RecordType(
-        "Shared", module_id=ModuleId.from_path("lib")
+        "Own", module_id=ModuleId.from_path("lib"), scope_path=("E",)
     )
+    with pytest.raises(ReferencedMemberError):
+        check_agl_program(
+            tmp_path,
+            {"entry": "import lib\nuse lib::{Alias}\nAlias::Shared(value = 1)", "lib": library},
+            default_stdlib=False,
+        )
 
 
 @pytest.mark.parametrize(

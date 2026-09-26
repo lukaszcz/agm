@@ -1,0 +1,8 @@
+record Saved
+  id: int
+
+enum Status = ::Saved | Fresh(n: int)
+
+def Status::Saved::label(self) -> int = self.id
+
+program def main() -> unit = ()

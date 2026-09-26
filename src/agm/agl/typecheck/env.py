@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from agm.agl.constraints import ConstraintBounds
 from agm.agl.diagnostics import AglTypeError as AglTypeError
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import Diagnostic, ReferencedMemberError
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, spell_declaration
@@ -96,7 +96,7 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import Expr, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.qualifiers import enclosing_scope_bases
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
+from agm.agl.syntax.types import AppliedT, NameT, TypeExpr, render_qualifier_path
 from agm.agl.zones import ParamZone
 
 #: Every built-in name a module's type namespace carries a reserved fallback
@@ -1417,28 +1417,63 @@ class TypeEnvironment:
         from the instantiated enum yields its concrete record handle directly.
         An alias of an enum is its target, so ``Alias::Member`` selects the
         member of the alias's template, quantified over the alias's own type
-        parameters. ``None`` when the qualifier names no such owner.
+        parameters. ``None`` when the qualifier names no such owner, or names
+        an enum directly: its declaration scope then resolves the member.
         """
         if not qualifier.segments:
             return None
         owner_expr = owner_type_expr(qualifier)
         if isinstance(owner_expr, NameT):
-            alias = self._enum_alias_template(owner_expr, span)
-            if alias is None:
+            owner_template = self._enum_owner_template(owner_expr, span)
+            if owner_template is None:
                 return None
-            enum_template, type_params = alias
-            selected = self.type_table.inline_member(enum_template, member)
+            enum_template, type_params, aliased = owner_template
+            if not aliased:
+                return None
+            selected = self.owner_inline_member(
+                enum_template, render_qualifier_path(qualifier), member, span=span
+            )
             return None if selected is None else OwnerMember(selected, type_params)
         owner = self.resolve_type_expr(owner_expr, span=span, type_vars=type_vars)
         if not isinstance(owner, EnumType):
             raise AglTypeError(f"'{owner_expr.name}' is not a generic enum type.", span=span)
-        selected = self.type_table.inline_member(owner, member)
+        selected = self.owner_inline_member(
+            owner, render_qualifier_path(qualifier), member, span=span
+        )
         return None if selected is None else OwnerMember(selected, ())
 
-    def _enum_alias_template(
+    def owner_inline_member(
+        self, owner: EnumType, spelling: str, member: str, *, span: SourceSpan | None
+    ) -> RecordType | None:
+        """Return the member an owner spelled *spelling* selects from enum *owner*, if declared.
+
+        Only inline members are in the enum's scope; spelling a member *owner*
+        only references is a :class:`ReferencedMemberError`.
+        """
+        selected = self.type_table.inline_member(owner, member)
+        if selected is None and self.type_table.references_member(owner, member):
+            raise ReferencedMemberError(spelling, member, span=span)
+        return selected
+
+    def _reject_referenced_owner_member(
+        self, qualifier: QualifierChain, name: str, span: SourceSpan | None
+    ) -> None:
+        """Raise when ``qualifier::name``, naming no declaration, spells a referenced member."""
+        if not qualifier.segments:
+            return
+        owner_expr = owner_type_expr(qualifier)
+        if not isinstance(owner_expr, NameT):
+            return
+        owner_template = self._enum_owner_template(owner_expr, span)
+        if owner_template is not None:
+            self.owner_inline_member(
+                owner_template[0], render_qualifier_path(qualifier), name, span=span
+            )
+
+    def _enum_owner_template(
         self, owner: NameT, span: SourceSpan | None
-    ) -> tuple[EnumType, tuple[str, ...]] | None:
-        """Return the enum template and parameters of the alias *owner* names, if any."""
+    ) -> tuple[EnumType, tuple[str, ...], bool] | None:
+        """Return the enum template *owner* names, its parameters, and whether it is an alias."""
         key = self.type_name_declaration(owner, span=span)
         if key is None:
             return None
@@ -1448,11 +1483,10 @@ class TypeEnvironment:
         if template is None:
             return None
         enum_type = template.template
-        if not isinstance(enum_type, EnumType) or (
-            (enum_type.module_id, enum_type.scope_path, enum_type.name) == key
-        ):
+        if not isinstance(enum_type, EnumType):
             return None
-        return enum_type, template.type_params
+        aliased = (enum_type.module_id, enum_type.scope_path, enum_type.name) != key
+        return enum_type, template.type_params, aliased
 
     def register_type(self, name: str, typ: Type) -> None:
         self._types[name] = typ
@@ -2402,6 +2436,7 @@ class TypeEnvironment:
     ) -> Type:
         """Resolve ``module::Name[args]`` through the module import environment."""
         rendered = qualifier.render()
+        self._reject_referenced_owner_member(qualifier, name, span)
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._import_env is None:
@@ -2544,6 +2579,7 @@ class TypeEnvironment:
                     span=span,
                 )
                 return opened
+        self._reject_referenced_owner_member(qualifier, name, span)
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._import_env is None:

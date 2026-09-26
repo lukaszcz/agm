@@ -160,14 +160,14 @@ def render_witness(witness: MatchWitness) -> str:
             constructor_name = witness.variant
             if witness.qualification is not None:
                 constructor_name = f"{witness.qualification.owner_spelling}::{witness.variant}"
-            if not witness.fields:
-                return constructor_name
         else:
             constructor_name = (
                 witness.record_type.name
                 if witness.qualification is None
                 else witness.qualification.owner_spelling
             )
+        if not witness.fields:
+            return constructor_name
         fields = ", ".join(
             f"{field.name} = {render_witness(field.witness)}" for field in witness.fields
         )

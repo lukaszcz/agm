@@ -266,3 +266,23 @@ def type_name_not_a_value(name: str, span: SourceSpan) -> AglTypeError:
         "use it with a constructor call (e.g. 'EnumName::Variant' or 'RecordName(...)').",
         span=span,
     )
+
+
+class ReferencedMemberError(AglTypeError):
+    """An enum owner spelling that selects a member the enum only references.
+
+    Only an enum's inline members are in its scope; a referenced member keeps
+    its own declaration path, so ``Owner::member`` names nothing. Raised
+    wherever owner selection fails -- by scope for values and method
+    receivers, by typecheck for types, patterns, and ``is`` tests. ``owner``
+    is the owner as spelled and ``member`` the referenced member's name.
+    """
+
+    def __init__(self, owner: str, member: str, *, span: SourceSpan | None) -> None:
+        super().__init__(
+            f"'{member}' is a referenced member of enum '{owner}', not one of its inline "
+            f"members; spell it at its own declaration path or by its bare name.",
+            span=span,
+        )
+        self.owner = owner
+        self.member = member

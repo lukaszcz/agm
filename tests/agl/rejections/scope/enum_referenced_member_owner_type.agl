@@ -1,0 +1,8 @@
+record Saved
+  id: int
+
+enum Status = ::Saved | Fresh(n: int)
+
+def identify(saved: Status::Saved) -> int = saved.id
+
+program def main() -> unit = print(identify(Saved(id = 1)))

@@ -1,0 +1,5 @@
+import library
+
+program def main() -> unit =
+  let status: library::Status = library::Status::Saved(id = 1)
+  print status

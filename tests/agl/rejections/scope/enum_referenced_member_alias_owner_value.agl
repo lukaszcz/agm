@@ -1,0 +1,9 @@
+record Saved
+  id: int
+
+enum Status = ::Saved | Fresh(n: int)
+type Current = Status
+
+program def main() -> unit =
+  let status: Status = Current::Saved(id = 1)
+  print status

@@ -1,0 +1,5 @@
+import library::Status
+
+def identify(saved: Status::Saved) -> int = saved.id
+
+program def main() -> unit = print(identify(library::Saved(id = 1)))

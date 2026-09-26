@@ -1,0 +1,6 @@
+import middle
+import other
+
+program def main() -> unit =
+  let mixed: middle::Mixed = other::Shared(id = 1)
+  print(mixed is middle::Shared)

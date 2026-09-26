@@ -1,0 +1,9 @@
+import scoped
+
+program def main() -> unit =
+  let status: scoped::shapes::Status = scoped::shapes::Saved(id = 1)
+  let label =
+    case status of
+      | scoped::shapes::Status::Saved(id) => id
+      | scoped::shapes::Status::Fresh(n) => n
+  print(label)

@@ -51,7 +51,11 @@ from typing import TYPE_CHECKING, TypeVar, assert_never
 
 from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
 from agm.agl.constraints import ConstraintKind, close_constraints
-from agm.agl.diagnostics import static_root_message, type_name_not_a_value
+from agm.agl.diagnostics import (
+    ReferencedMemberError,
+    static_root_message,
+    type_name_not_a_value,
+)
 from agm.agl.modules.ids import RESERVED_ID, ModuleId, spell_declaration
 from agm.agl.scope.attributes import recognize_attributes
 from agm.agl.scope.imports import (
@@ -335,6 +339,14 @@ def _supersedes(candidate: ConstructorRef, cref: ConstructorRef) -> bool:
         candidate.owner_path,
         candidate.owner_name,
     ) == (cref.owner_module_id, cref.owner_path, cref.owner_name)
+
+
+def _reject_referenced_member(
+    owner: TypeOwner | None, spelling: str, member: str, span: SourceSpan | None
+) -> None:
+    """Raise when *spelling*, selecting *owner*, names a member *owner*'s enum only references."""
+    if owner is not None and member in owner.referenced:
+        raise ReferencedMemberError(spelling, member, span=span)
 
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1010,7 @@ class _Resolver:
             owner = self._foreign_receiver_owner(owner_path, receiver.span)
         if owner is None:
             if receiver.type_expr is None:
+                self._reject_referenced_receiver(region_path, type_path, receiver.span)
                 raise AglScopeError("'self' requires an enclosing type scope.", span=receiver.span)
             return
         if receiver.default is not None:
@@ -1007,6 +1020,25 @@ class _Resolver:
             )
         key = (self._module_id, owner_path, declaration.name)
         self._method_declarations[key] = owner
+
+    def _reject_referenced_receiver(
+        self, region_path: ScopePath, type_path: ScopePath, span: SourceSpan
+    ) -> None:
+        """Raise when a receiver path spells a member its enum owner only references."""
+        if len(type_path) < 2:
+            return
+        owner_path = type_path[:-1]
+        owner = self._lexical_receiver_owner(region_path, owner_path, {}, span)
+        if owner is None:
+            owner = self._foreign_receiver_owner((*region_path, *owner_path), span)
+        if owner is None:
+            return
+        _reject_referenced_member(
+            self._type_owners.owner((owner.module_id, _bare_atom(owner.scope_path))),
+            "::".join(owner_path),
+            type_path[-1],
+            span,
+        )
 
     def _alias_receiver_paths(self) -> Mapping[ScopePath, TypeAlias]:
         """Return the module's alias scope paths with their declarations, computed once.
@@ -3954,11 +3986,13 @@ class _Resolver:
             _bare_atom(relative_path), chain.span, self._is_type_contribution
         )
         if owner_ref is None:
+            self._reject_use_alias_referenced_member(chain, variant)
             return None
         declared_child = _bare_atom((*owner_ref.scope_path, owner_ref.name, variant))
         if (owner_ref.module_id, declared_child) in self._decl_info:
             return set()
         type_owner = self._type_owners.owner(_ref_qname(owner_ref))
+        _reject_referenced_member(type_owner, render_qualifier_path(chain), variant, chain.span)
         if type_owner is not None and type_owner.constructor is None:
             # A nominal enum's members arrive only as use contributions, which honor hiding.
             return set()
@@ -3968,6 +4002,38 @@ class _Resolver:
                 f"'{variant}' is not a member of '{'::'.join(relative_path)}'.", span=chain.span
             )
         return {constructor}
+
+    def _reject_use_alias_referenced_member(self, chain: QualifierChain, variant: str) -> None:
+        """Raise when a whole-target ``use`` alias spells a referenced member of its enum target.
+
+        ``use Status as S`` contributes only what ``Status``'s scope declares
+        beneath ``S``, so ``S::member`` of a member ``Status`` merely
+        references reaches no contribution.
+        """
+        alias, *rest = (segment.name for segment in chain.segments)
+        layer: ScopeNode | None = self._scope
+        while layer is not None:
+            contributions: list[LocalUseContribution | ImportedUseContribution] = [
+                *layer.local_use_contributions,
+                *layer.imported_use_contributions,
+            ]
+            for contribution in contributions:
+                if contribution.declaration.alias != alias:
+                    continue
+                target = contribution.target
+                targets = (
+                    ((self._module_id, target.local_path),)
+                    if target.local_path is not None
+                    else target.imported_routes
+                )
+                for module_id, path in targets:
+                    _reject_referenced_member(
+                        self._type_owners.owner((module_id, _bare_atom((*path, *rest)))),
+                        render_qualifier_path(chain),
+                        variant,
+                        chain.span,
+                    )
+            layer = layer.parent
 
     def _local_owner_constructor(
         self, chain: QualifierChain, path: ScopePath, variant: str
@@ -3981,17 +4047,20 @@ class _Resolver:
         scoped = self._scoped_constructor_candidates.get((path, variant), ())
         if scoped:
             return scoped[0]
-        return self._owner_constructor((self._module_id, _bare_atom(path)), path[-1], variant)
+        return self._owner_constructor((self._module_id, _bare_atom(path)), chain, variant)
 
-    def _owner_constructor(self, owner: QName, written: str, variant: str) -> ConstructorRef | None:
-        """Return the constructor ``written::variant`` selects below type path *owner*.
+    def _owner_constructor(
+        self, owner: QName, chain: QualifierChain, variant: str
+    ) -> ConstructorRef | None:
+        """Return the constructor ``chain::variant`` selects below type path *owner*.
 
         The owner is resolved by declaration identity, each alias on its chain
-        where that alias is declared; *written* is the owner's spelling at the
+        where that alias is declared; *chain* is the owner's spelling at the
         use.
         """
         type_owner = self._type_owners.owner(owner)
-        return None if type_owner is None else type_owner.select(variant, written)
+        _reject_referenced_member(type_owner, render_qualifier_path(chain), variant, chain.span)
+        return None if type_owner is None else type_owner.select(variant, chain.segments[-1].name)
 
     def _imported_chain_owner(self, chain: QualifierChain, variant: str) -> ConstructorRef | None:
         """Resolve a type-owning segment reached through imports.
@@ -4036,7 +4105,7 @@ class _Resolver:
                 raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
         if owner_ref is None:
             return None
-        return self._owner_constructor(_ref_qname(owner_ref), chain.segments[-1].name, variant)
+        return self._owner_constructor(_ref_qname(owner_ref), chain, variant)
 
     def _nearest_layer[T](
         self, read: Callable[[ScopeNode], set[T]], start: ScopeNode | None = None

@@ -70,14 +70,16 @@ def test_referenced_enum_member_aliases_match_in_patterns_and_is_tests() -> None
     )
 
 
-def test_generic_referenced_enum_member_patterns_validate_the_applied_owner() -> None:
-    accept(
+def test_applied_enum_owner_does_not_select_a_referenced_member() -> None:
+    source = (
         "record R[T]\n"
         "  value: T\n"
         "enum E[T] = ::R[T]\n"
         "let value: E[int] = R(value = 1)\n"
-        "case value of | E[int]::R(value) => value"
+        "case value of | {pattern}(value) => value"
     )
+    accept(source.format(pattern="R"))
+    reject(source.format(pattern="E[int]::R"))
 
 
 def test_enum_alias_does_not_match_a_referenced_record_member() -> None:
@@ -150,10 +152,10 @@ def test_module_qualified_pattern_rejects_wrong_phantom_generic_enum_owner(
     )
 
 
-def test_module_qualified_record_pattern_accepts_each_referencing_enum_owner(
+def test_module_qualified_record_pattern_rejects_a_referencing_enum_owner(
     tmp_path: Path,
 ) -> None:
-    accept_graph(
+    reject_graph(
         tmp_path,
         {
             "lib": "record Shared\n  value: int\nenum First = ::Shared\nenum Second = ::Shared\n",

@@ -348,6 +348,14 @@ class _TypeBuilder:
                 for member in item.members:
                     if isinstance(member, VariantDef):
                         self._register_inline_member_handle(item, member)
+                self._env.type_table.declare_referenced_members(
+                    self._enum_identity(item),
+                    frozenset(
+                        member.chain.member
+                        for member in item.members
+                        if isinstance(member, VariantRef)
+                    ),
+                )
                 self._enum_defs[item.name] = item
             elif isinstance(item, ExceptionDef):
                 self._register_name(
@@ -420,6 +428,11 @@ class _TypeBuilder:
             ):
                 self._env.unregister_name(f"{enum.name}::{typedef.name}")
 
+    def _enum_identity(self, enum: EnumDef) -> int:
+        """Return the declaration identity of *enum*, declared in this module."""
+        enum_scope_path = tuple(segment.name for segment in enum.scope_path)
+        return _decl_identity(self._module_id, enum_scope_path, _bare_name(enum.name), enum.node_id)
+
     def _register_inline_member_handle(self, enum: EnumDef, member: VariantDef) -> None:
         """Register an inline enum member as its scoped record type."""
         member_name = f"{enum.name}::{member.name}"
@@ -446,9 +459,7 @@ class _TypeBuilder:
             decl_id=decl_id,
         )
         self._env.type_table.declare_inline_member(
-            _decl_identity(self._module_id, enum_scope_path, enum_name, enum.node_id),
-            enum.type_params,
-            template,
+            self._enum_identity(enum), enum.type_params, template
         )
         if type_params:
             self._env.register_generic_type(

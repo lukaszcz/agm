@@ -499,6 +499,9 @@ class TypeTable:
         # them a phase before the enum's body registers (see
         # :meth:`declare_inline_member`); a superseded enum keeps its own.
         self._inline_members: dict[DeclId, dict[str, tuple[tuple[str, ...], RecordType]]] = {}
+        # Enum identity -> the terminal names of its referenced members,
+        # declared with its shell like its inline members.
+        self._referenced_members: dict[DeclId, frozenset[str]] = {}
 
     def register(self, typedef: TypeDef) -> None:
         """Register *typedef* under its own declaration identity.
@@ -569,6 +572,14 @@ class TypeTable:
         """
         self._inline_members.setdefault(enum_id, {})[member.name] = (type_params, member)
 
+    def declare_referenced_members(self, enum_id: DeclId, names: frozenset[str]) -> None:
+        """Record the terminal names of enum *enum_id*'s referenced members."""
+        self._referenced_members[enum_id] = names
+
+    def references_member(self, owner: EnumType, name: str) -> bool:
+        """Whether *owner* references, rather than declares, a member named *name*."""
+        return name in self._referenced_members.get(owner.decl_id, frozenset())
+
     def inline_member(self, owner: EnumType, name: str) -> RecordType | None:
         """Return *owner*'s inline member *name* at *owner*'s type arguments, if declared."""
         declared = self._inline_members.get(owner.decl_id, {}).get(name)
@@ -576,6 +587,15 @@ class TypeTable:
             return None
         type_params, member = declared
         return substitute(member, dict(zip(type_params, owner.type_args, strict=True)))
+
+    def is_inline_member(self, owner: EnumType, record: RecordType) -> bool:
+        """Whether *record*'s declaration is an inline member of *owner*, not a referenced one.
+
+        Only inline members are in the enum's scope, so this is what every
+        owner-qualified spelling ``Owner::member`` can select.
+        """
+        declared = self._inline_members.get(owner.decl_id, {}).get(record.name)
+        return declared is not None and declared[1].decl_id == record.decl_id
 
     def get(
         self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
@@ -1088,15 +1108,28 @@ class TypeTable:
     def record_matches_enum_member(
         self, enum: EnumType, type_params: tuple[str, ...], member_name: str, record: RecordType
     ) -> bool:
-        """Return whether *record* is the named member of *enum* over *type_params*.
+        """Return whether *record* is the inline member *member_name* of *enum* over *type_params*.
+
+        This is what the owner-qualified spelling ``Enum::member_name`` selects.
+        """
+        return (
+            record.name == member_name
+            and self.is_inline_member(enum, record)
+            and self.inline_member_matches_owner(enum, type_params, record)
+        )
+
+    def inline_member_matches_owner(
+        self, enum: EnumType, type_params: tuple[str, ...], member: RecordType
+    ) -> bool:
+        """Return whether *member*, inline in *enum*'s declaration, fits *enum*'s arguments.
 
         The owner's own *type_params* are inferred; every other owner argument
         must match exactly.
         """
-        member = self.enum_member_names(enum).get(member_name)
-        if member is None or member.decl_id != record.decl_id:
-            return False
-        return match_nominal_owner_template(TypeTemplate(member, type_params), record) is not None
+        template = TypeTemplate(
+            cast(RecordType, self.inline_member(enum, member.name)), type_params
+        )
+        return match_nominal_owner_template(template, member) is not None
 
     def is_enum_member(self, handle: RecordType) -> bool:
         """Return whether *handle* names a declaration registered as an enum member.
@@ -1836,6 +1869,7 @@ class TypeTable:
             self._name_index[name_key] = decl_id
         for enum_id, members in other._inline_members.items():
             self._inline_members.setdefault(enum_id, {}).update(members)
+        self._referenced_members.update(other._referenced_members)
         # Orphan status travels with the declaration: a session seeds a fresh
         # table from its accumulated one on every entry, so a declaration
         # orphaned once must stay orphaned for the rest of the session.

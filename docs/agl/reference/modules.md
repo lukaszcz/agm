@@ -50,7 +50,8 @@ contribution:
 
 - `import m` contributes qualified routes only.
 - `import m::*` makes every public member bare.
-- `import m::{f, Config::timeout}` makes those members bare.
+- `import m::{f, Config::timeout}` makes those paths bare: `f` and
+  `Config::timeout`, not `timeout`.
 
 A selected scope path includes its complete public subtree. An item rename adds
 a corresponding bare path while leaving the selected source path available.

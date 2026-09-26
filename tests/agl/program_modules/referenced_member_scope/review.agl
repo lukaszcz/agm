@@ -1,0 +1,1 @@
+enum Review = Pass | Fail(reason: text)

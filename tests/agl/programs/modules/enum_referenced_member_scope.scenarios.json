@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "inline_member_through_imported_owner",
+      "module_roots": ["program_modules/referenced_member_scope"],
+      "params": {"pick": 3},
+      "expect": {
+        "stdout": "fresh 3\nrouted fresh 3\nfalse\nfalse\ntrue\ntrue\n2\n6\nown 3\nfalse\ntrue\npass\ntrue\nscoped fresh 3\ntrue\n"
+      }
+    },
+    {
+      "name": "referenced_member_at_its_own_path",
+      "module_roots": ["program_modules/referenced_member_scope"],
+      "params": {"pick": -4},
+      "expect": {
+        "stdout": "saved 4\nrouted saved 9\ntrue\ntrue\nfalse\nfalse\n2\n-8\nshared 1\ntrue\nfalse\nfail late\nfalse\nscoped saved 2\nfalse\n"
+      }
+    }
+  ]
+}

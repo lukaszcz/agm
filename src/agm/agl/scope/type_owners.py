@@ -52,10 +52,11 @@ class TypeOwnerIndex:
     """Memoized :class:`TypeOwner` of every program type path.
 
     Record, exception, and inline enum member paths own their own
-    constructors; an enum path owns its members; an alias path owns its own
-    constructor and selects through the owner of its target. *contributions*
-    answers what a module's lexical layers contribute, so alias targets see
-    ``use`` declarations. *retained* supplies the owners of
+    constructors; an enum path owns only the inline members its scope
+    declares, a referenced member staying at its own path; an alias path owns
+    its own constructor and selects through the owner of its target.
+    *contributions* answers what a module's lexical layers contribute, so
+    alias targets see ``use`` declarations. *retained* supplies the owners of
     *retained_module*'s paths that earlier REPL entries declared, already
     resolved against the declarations they saw.
     """
@@ -160,7 +161,11 @@ class TypeOwnerIndex:
         if isinstance(declaration, (RecordDef, ExceptionDef)):
             return TypeOwner(self._constructor_refs[qname], frozenset({declaration.name}))
         if isinstance(declaration, EnumDef):
-            return TypeOwner(None, members=self._enum_members(module_id, path, declaration))
+            return TypeOwner(
+                None,
+                members=self._enum_members(module_id, path, declaration),
+                referenced=self._referenced_names(module_id, declaration),
+            )
         constructor = ConstructorRef.for_alias(declaration, module_id, path[:-1])
         # Typecheck judges a target scope selects no declaration for, so the
         # alias is presumed constructible; an alias cycle meets it that way.
@@ -176,6 +181,7 @@ class TypeOwnerIndex:
             constructor,
             target.names | {declaration.name} if target.names else frozenset(),
             target.members,
+            target.referenced,
             declaration,
         )
 
@@ -189,18 +195,22 @@ class TypeOwnerIndex:
     def _enum_members(
         self, module_id: ModuleId, path: ScopePath, declaration: EnumDef
     ) -> dict[str, ConstructorRef]:
-        """Return an enum's resolvable members by their spelling in its declaration."""
-        members: dict[str, ConstructorRef] = {}
-        for member in declaration.members:
-            if isinstance(member, VariantDef):
-                members[member.name] = self._constructor_refs[
-                    (module_id, _atom((*path, member.name)))
-                ]
-                continue
-            referenced = self.referenced_member_refs(module_id, member)
-            if len(referenced) == 1:
-                members[member.chain.member] = referenced[0]
-        return members
+        """Return the members an enum's scope declares -- its inline members -- by name."""
+        return {
+            member.name: self._constructor_refs[(module_id, _atom((*path, member.name)))]
+            for member in declaration.members
+            if isinstance(member, VariantDef)
+        }
+
+    def _referenced_names(self, module_id: ModuleId, declaration: EnumDef) -> frozenset[str]:
+        """Return the names spelling an enum's resolved referenced members and their records."""
+        return frozenset(
+            name
+            for member in declaration.members
+            if isinstance(member, VariantRef)
+            and (refs := self.referenced_member_refs(module_id, member))
+            for name in (member.chain.member, *(ref.owner_name for ref in refs))
+        )
 
     def _resolve_referenced_member(
         self, module_id: ModuleId, member: VariantRef

@@ -1,0 +1,6 @@
+enum Review = Pass | Fail(reason: text)
+enum Verdict = ::Review::Pass | Maybe
+
+program def main() -> unit =
+  let verdict: Verdict = Verdict::Maybe
+  print(verdict is ::Pass)

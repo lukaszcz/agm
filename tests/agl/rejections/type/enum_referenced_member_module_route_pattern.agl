@@ -1,0 +1,10 @@
+import middle
+import other
+
+program def main() -> unit =
+  let mixed: middle::Mixed = other::Shared(id = 1)
+  let label =
+    case mixed of
+      | middle::Shared(id) => id
+      | middle::Own(n) => n
+  print(label)

@@ -196,7 +196,12 @@ from agm.agl.syntax.nodes import (
     static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, TypeExpr, render_qualified_name
+from agm.agl.syntax.types import (
+    AppliedT,
+    TypeExpr,
+    render_qualified_name,
+    render_qualifier_path,
+)
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.arguments import bind_call_args, bind_constructor_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
@@ -5276,7 +5281,13 @@ class _Checker:
         enum_type: EnumType,
         span: SourceSpan,
     ) -> None:
-        """Validate the optional enum-type qualifier on a variant reference."""
+        """Validate the optional enum-type qualifier on a variant reference.
+
+        An owner qualifier selects from the enum's scope, and a module route
+        alone qualifies the terminal name the enum injects; either way only an
+        inline member qualifies, since a referenced member keeps its own
+        declaration path.
+        """
         if qualifier is None:
             return
         local_match = self._local_qualified_owner(qualifier, span)
@@ -5296,41 +5307,37 @@ class _Checker:
             # sharing one name path (a REPL redeclaration) are unrelated enums.
             # Within one declaration the owner selects the member at its own
             # arguments, inferring the parameters an unapplied owner leaves open.
-            member = self._env.type_table.enum_member_names(enum_type).get(variant)
-            if resolved_enum.decl_id != enum_type.decl_id or (
-                member is not None
-                and not self._env.type_table.record_matches_enum_member(
-                    resolved_enum, type_params, variant, member
-                )
+            if resolved_enum.decl_id != enum_type.decl_id:
+                raise _enum_owner_mismatch(local_owner, resolved_enum, enum_type, span)
+            member = self._owner_inline_member(
+                render_qualifier_path(qualifier), variant, enum_type, span
+            )
+            if not self._env.type_table.inline_member_matches_owner(
+                resolved_enum, type_params, member
             ):
                 raise _enum_owner_mismatch(local_owner, resolved_enum, enum_type, span)
             return
-        if len(qualifier.segments) == 2:
-            module_qualifier = QualifierChain(
-                anchor=qualifier.anchor,
-                segments=(qualifier.segments[0],),
-                member=qualifier.member,
-                span=qualifier.span,
-                node_id=qualifier.node_id,
-            )
-            self._check_module_qualified_variant(
-                module_qualifier, qualifier.segments[1].name, enum_type, span
-            )
+        if len(qualifier.segments) >= 2:
+            # A module route, then the owning enum's path within that module.
+            module_qualifier = replace(qualifier, segments=qualifier.segments[:-1])
+            enum_name = qualifier.segments[-1].name
         elif qualifier.anchor is QualifierAnchor.CURRENT_MODULE and qualifier.segments:
-            self._check_module_qualified_variant(
-                QualifierChain(
-                    anchor=qualifier.anchor,
-                    segments=(),
-                    member=qualifier.member,
-                    span=qualifier.span,
-                    node_id=qualifier.node_id,
-                ),
-                qualifier.segments[0].name,
-                enum_type,
-                span,
-            )
+            module_qualifier = replace(qualifier, segments=())
+            enum_name = qualifier.segments[0].name
         else:
-            self._check_module_qualified_variant(qualifier, enum_type.name, enum_type, span)
+            module_qualifier = qualifier
+            enum_name = enum_type.name
+        owner = self._check_module_qualified_variant(module_qualifier, enum_name, enum_type, span)
+        self._owner_inline_member(owner, variant, enum_type, span)
+
+    def _owner_inline_member(
+        self, owner: str, variant: str, enum_type: EnumType, span: SourceSpan
+    ) -> RecordType:
+        """Return the inline member *variant* of *enum_type* that owner spelling *owner* selects."""
+        member = self._env.owner_inline_member(enum_type, owner, variant, span=span)
+        if member is None:
+            raise _variant_not_in_enum(variant, enum_type, span)
+        return member
 
     def _local_qualified_enum(
         self, qualifier: QualifierChain, span: SourceSpan
@@ -5388,8 +5395,8 @@ class _Checker:
         enum_name: str,
         enum_type: EnumType,
         span: SourceSpan,
-    ) -> None:
-        """Validate a module-qualified enum-type qualifier, e.g. ``mylib::Color``."""
+    ) -> str:
+        """Validate a module-qualified enum qualifier (``mylib::Color``); return its spelling."""
         form = (
             self._env.resolve_imported_enum_owner_form(module_qualifier, enum_name, span=span)
             if module_qualifier.route_segments
@@ -5405,7 +5412,7 @@ class _Checker:
                 else f"{rendered}::{enum_name}"
             )
             self._require_enum_owner_match(form, enum_type, owner, span)
-            return
+            return owner
         rendered = module_qualifier.render()
         raise AglTypeError(f"'{rendered}::{enum_name}' is not a known enum type.", span=span)
 
@@ -6454,9 +6461,12 @@ class _Checker:
                     if not self._env.type_table.record_matches_enum_member(
                         enum_type, type_params, pattern.name, subj_type
                     ):
-                        named = self._env.type_table.enum_member_names(enum_type).get(pattern.name)
-                        if named is None:
-                            raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
+                        named = self._owner_inline_member(
+                            render_qualifier_path(pattern.qualifier),
+                            pattern.name,
+                            enum_type,
+                            pattern.span,
+                        )
                         self._require_selected_member(pattern.name, named, subj_type, pattern.span)
                 elif (
                     applied_member := self._applied_member(

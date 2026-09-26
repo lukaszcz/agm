@@ -1,0 +1,70 @@
+# An imported enum's scope holds only its inline members; a referenced member
+# stays reachable at its own declaration path and by its injected bare name. A
+# module route qualifies an inline member's bare constructor directly.
+import library
+import library::Status
+import library::{Status::Fresh}
+import middle
+import other
+import review
+import scoped
+
+def describe(status: Status) -> text =
+  case status of
+    | Saved(id) => "saved %{id}"
+    | Status::Fresh(n) => "fresh %{n}"
+
+def describe-routed(status: library::Status) -> text =
+  case status of
+    | library::Saved(id) => "routed saved %{id}"
+    | library::Status::Fresh(n) => "routed fresh %{n}"
+
+def fresh-count(fresh: library::Status::Fresh) -> int = fresh.n
+
+def mixed-label(mixed: middle::Mixed) -> text =
+  case mixed of
+    | other::Shared(id) => "shared %{id}"
+    | middle::Own(n) => "own %{n}"
+
+def review-label(verdict: review::Review) -> text =
+  case verdict of
+    | review::Pass => "pass"
+    | review::Fail(reason) => "fail %{reason}"
+
+def scoped-label(status: scoped::shapes::Status) -> text =
+  case status of
+    | scoped::shapes::Saved(id) => "scoped saved %{id}"
+    | scoped::shapes::Status::Fresh(n) => "scoped fresh %{n}"
+
+program def main(pick: int) -> unit =
+  let status: Status =
+    if pick > 0 => library::Status::Fresh(n = pick)
+    else => Saved(id = 0 - pick)
+  let direct: Status =
+    if pick > 0 => Status::Fresh(n = pick)
+    else => library::Saved(id = 9)
+  print(describe(status))
+  print(describe-routed(direct))
+  print(status is Saved)
+  print(status is library::Saved)
+  print(direct is Status::Fresh)
+  print(direct is library::Status::Fresh)
+  print(fresh-count(Status::Fresh(n = 2)))
+  let item: Status::Fresh = Status::Fresh(n = pick * 2)
+  print(item.n)
+  let mixed: middle::Mixed =
+    if pick > 0 => middle::Mixed::Own(n = pick)
+    else => other::Shared(id = 1)
+  print(mixed-label(mixed))
+  print(mixed is other::Shared)
+  print(mixed is middle::Own)
+  let verdict: review::Review =
+    if pick > 0 => review::Review::Pass
+    else => review::Review::Fail(reason = "late")
+  print(review-label(verdict))
+  print(verdict is review::Pass)
+  let scoped-status: scoped::shapes::Status =
+    if pick > 0 => scoped::shapes::Status::Fresh(n = pick)
+    else => scoped::shapes::Saved(id = 2)
+  print(scoped-label(scoped-status))
+  print(scoped-status is scoped::shapes::Status::Fresh)

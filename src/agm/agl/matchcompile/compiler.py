@@ -385,6 +385,7 @@ def _witness_for_occurrence(
     occurrence: Occurrence,
     constraints: dict[OccurrenceId, _Constraint],
     occurrences: tuple[Occurrence, ...],
+    type_table: TypeTable,
     case_context: MatchCaseContext,
 ) -> MatchWitness:
     constraint = constraints.get(occurrence.id)
@@ -397,8 +398,14 @@ def _witness_for_occurrence(
         return BoolWitness(constructor.value)
     if isinstance(constructor, LiteralConstructor):
         return LiteralWitness(constructor.kind, constructor.value)
-    spelling = _source_spelling(constructor, occurrence.type, case_context)
-    if isinstance(occurrence.type, EnumType) and spelling is None:
+    subject_type = occurrence.type
+    if isinstance(subject_type, EnumType) and not type_table.is_inline_member(
+        subject_type, constructor.record_type
+    ):
+        # A referenced member is spelled at its own declaration path, like a record.
+        subject_type = constructor.record_type
+    spelling = _source_spelling(constructor, subject_type, case_context)
+    if isinstance(subject_type, EnumType) and spelling is None:
         return WildcardWitness()
     children_by_index = {
         child.provenance.field_index: child
@@ -411,7 +418,7 @@ def _witness_for_occurrence(
         WitnessField(
             field.name,
             _witness_for_occurrence(
-                children_by_index[index], constraints, occurrences, case_context
+                children_by_index[index], constraints, occurrences, type_table, case_context
             )
             if index in children_by_index
             else WildcardWitness(),
@@ -426,9 +433,9 @@ def _witness_for_occurrence(
         )
     else:
         qualification = None
-    if isinstance(occurrence.type, EnumType):
+    if isinstance(subject_type, EnumType):
         return EnumWitness(
-            occurrence.type,
+            subject_type,
             constructor.record_type.name,
             fields,
             qualification,
@@ -502,7 +509,7 @@ def _witness_for_root(
     case_context: MatchCaseContext,
 ) -> MatchWitness:
     if root.id in constraints:
-        return _witness_for_occurrence(root, constraints, occurrences, case_context)
+        return _witness_for_occurrence(root, constraints, occurrences, type_table, case_context)
     signature = signature_for_type(root.type, type_table)
     whole_domain: _Constraint
     if isinstance(signature, OpenSignature):
@@ -513,6 +520,7 @@ def _witness_for_root(
         root,
         {**constraints, root.id: whole_domain},
         occurrences,
+        type_table,
         case_context,
     )
 

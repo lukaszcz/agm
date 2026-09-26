@@ -1,0 +1,12 @@
+record Saved
+  id: int
+
+enum Status = ::Saved | Fresh(n: int)
+type Current = Status
+
+def describe(status: Status) -> int =
+  case status of
+    | Current::Saved(id) => id
+    | Current::Fresh(n) => n
+
+program def main() -> unit = print(describe(Saved(id = 1)))

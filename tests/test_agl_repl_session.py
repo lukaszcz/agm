@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 
-from agm.agl.diagnostics import AglError, type_name_not_a_value
+from agm.agl.diagnostics import AglError, ReferencedMemberError, type_name_not_a_value
 from agm.agl.ir.static_keys import StaticBindingKey
 from agm.agl.modules.ids import ModuleId
 from agm.agl.repl import EntryResult, ReplSession
@@ -3106,6 +3106,28 @@ enum Agent
     def test_retained_enum_alias_member_keeps_the_alias_type_arguments(self, entry: str) -> None:
         s = self._session_with_retained_enum_aliases()
 
+        assert not s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "A::Saved(id = 1)",
+            "case status of | A::Saved(id) => id | _ => 0",
+            "status is A::Saved",
+            "status as A::Saved",
+        ],
+        ids=["value", "pattern", "is-test", "type"],
+    )
+    def test_retained_enum_alias_selects_only_inline_members(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Saved\n  id: int\nenum Status = ::Saved | Fresh(n: int)").ok
+        assert s.eval_entry("type A = Status\nlet status: Status = Saved(id = 1)").ok
+        assert s.eval_entry("A::Fresh(n = 2).n").value == IntValue(2)
+
+        with pytest.raises(ReferencedMemberError) as raised:
+            s.type_of(entry)
+
+        assert raised.value.member == "Saved"
         assert not s.eval_entry(entry).ok
 
     @pytest.mark.parametrize("name", ["Col", "C", "I"])

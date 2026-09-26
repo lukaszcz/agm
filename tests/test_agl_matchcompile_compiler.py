@@ -1135,17 +1135,13 @@ def test_local_enum_witness_prefers_bare_constructor_over_blocked_short_owner(
     assert render_witness(witness) == "Missing"
 
 
-def test_witness_qualifies_a_reference_sharing_the_enum_names_last_segment() -> None:
-    """A member reached through a qualified enum reference never renders bare.
+def test_referenced_member_witness_spells_its_own_declaration_path() -> None:
+    """A referenced member's witness names the record's own path, never the enum's scope.
 
-    ``Go`` is declared two scopes deep, under ``Outer::S``, and ``enum S``
-    references it as ``Outer::S::Go``. The member's own declaring path
-    (``Outer::S``) shares its last segment with the referencing enum's name
-    (``S``), which is exactly the shape a same-shaped, unrelated declaration
-    could collide on -- so the witness must always spell it out fully
-    qualified rather than gamble on the shared last segment being safe.
+    ``Go`` is declared under ``Outer::S`` and ``enum S`` references it, so
+    ``S::Go`` names no member while ``Outer::S::Go`` does.
     """
-    _, _, compiled = _compile(
+    source = (
         "scope Outer\n"
         "\n"
         "  scope S\n"
@@ -1158,14 +1154,35 @@ def test_witness_qualifies_a_reference_sharing_the_enum_names_last_segment() -> 
         "  | Outer::S::Go\n"
         "  | Placeholder\n"
         "def inspect(value: S) -> int =\n"
-        "  case value of | Placeholder => 0\n"
+        "  case value of | Placeholder => 0{arm}\n"
         "inspect(S::Placeholder)\n"
     )
+    _, _, compiled = _compile(source.format(arm=""))
 
-    witness = cast(EnumWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    witness = cast(RecordWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    rendered = render_witness(witness)
 
-    assert witness.qualification is not None
-    assert render_witness(witness) == "S::Go(n = _)"
+    assert rendered == "Outer::S::Go(n = _)"
+    _, _, completed = _compile(source.format(arm=f" | {rendered} => 1"))
+    assert completed.issues == ()
+
+
+def test_imported_referenced_member_witness_spells_its_own_module_path(tmp_path: Path) -> None:
+    modules = {
+        "lib": "record Saved\n  id: int\nenum Status = ::Saved | Fresh(n: int)",
+        "entry": (
+            "import lib\n"
+            "def inspect(value: lib::Status) -> int =\n"
+            "  case value of | lib::Status::Fresh(n) => n\n"
+        ),
+    }
+    compiled = _compile_graph_case(tmp_path, modules)
+    witness = cast(RecordWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    rendered = render_witness(witness)
+
+    assert rendered == "lib::Saved(id = _)"
+    modules["entry"] += f"    | {rendered} => 0\n"
+    assert _compile_graph_case(tmp_path, modules).issues == ()
 
 
 def test_stdlib_option_witness_still_renders_bare() -> None:
@@ -1179,6 +1196,37 @@ def test_stdlib_option_witness_still_renders_bare() -> None:
 
     assert witness.qualification is None
     assert render_witness(witness) == "None"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param(
+            "let value: Optional[int] = Some(value = 1)\n"
+            "case value of | Some(value) => value | Default => 0{arm}\n",
+            "None",
+            id="optional",
+        ),
+        pytest.param(
+            "enum Review = Pass | Fail(reason: text)\n"
+            "enum Verdict = ::Review::Pass | Maybe\n"
+            "def inspect(value: Verdict) -> int =\n"
+            "  case value of | Maybe => 0{arm}\n"
+            "inspect(Verdict::Maybe)\n",
+            "Review::Pass",
+            id="referenced-inline-member-of-another-enum",
+        ),
+    ],
+)
+def test_fieldless_referenced_member_witness_renders_bare(source: str, expected: str) -> None:
+    """A fieldless record witness is spelled like a nullary constructor, without parentheses."""
+    _, _, compiled = _compile(source.format(arm=""))
+    witness = cast(RecordWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+    rendered = render_witness(witness)
+
+    assert rendered == expected
+    _, _, completed = _compile(source.format(arm=f" | {rendered} => 1"))
+    assert completed.issues == ()
 
 
 def test_imported_record_witness_preserves_a_checker_accepted_source_qualification(

@@ -421,19 +421,23 @@ class TypeOwner:
     target's own name and every alias name on the chain leading to it, and for
     an alias presumed constructible its own name; it is empty for an enum or
     structural target, whose owner constructs nothing itself. ``members`` maps
-    an enum target's member names to their own constructors. ``alias`` is an
-    alias path's declaration.
+    the names an enum target's scope declares -- its inline members -- to their
+    own constructors. ``referenced`` holds the names of the resolved members an
+    enum target only references: they keep their own paths, so the owner selects
+    none of them, but spelling one is a focused error rather than an unknown
+    name. ``alias`` is an alias path's declaration.
     """
 
     constructor: ConstructorRef | None
     names: frozenset[str] = frozenset()
     members: Mapping[str, ConstructorRef] = field(default_factory=dict)
+    referenced: frozenset[str] = frozenset()
     alias: TypeAlias | None = None
 
     @property
     def constructs(self) -> bool:
-        """Whether the owner qualifies any constructor."""
-        return bool(self.names or self.members)
+        """Whether the owner qualifies constructors: its own, or its enum members'."""
+        return bool(self.names or self.members or self.referenced)
 
     def select(self, name: str, written: str) -> ConstructorRef | None:
         """Return the constructor ``Owner::name`` selects, with the owner spelled *written*.

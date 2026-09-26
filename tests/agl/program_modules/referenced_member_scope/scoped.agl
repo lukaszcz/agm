@@ -1,0 +1,6 @@
+scope shapes
+  record Saved
+    id: int
+
+  enum Status = ::shapes::Saved | Fresh(n: int)
+end shapes

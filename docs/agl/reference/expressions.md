@@ -821,7 +821,8 @@ The left operand must have enum or exception type.
 For an **enum** left operand, the right-hand name must be one of that enum's
 members. A member may be written by its bare injected name, its record
 declaration name, or a qualified enum-member spelling. The test compares
-nominal member identity. When one bare spelling exposes members from several
+nominal member identity. A bare name selects among the constructors visible
+where the test is written: when one bare spelling exposes members from several
 enums, the left operand's enum type selects the member; several distinct
 matching members remain ambiguous.
 

@@ -574,8 +574,10 @@ is expected, and comparing values across them is a type error. Every spelling
 that names the type — a constructor call, a type annotation, a `catch`
 clause, a type-qualified constructor pattern — means the declaration in
 effect where it is written, so one written after the redeclaration does not
-apply to an earlier value. A bare member pattern is directed by the value being matched instead, so an
-earlier value can still be destructured.
+apply to an earlier value. A bare member pattern with parentheses (`Red(shade)`,
+`Green()`) is directed by the value being matched instead, so an earlier value
+can still be destructured; a parenthesis-free bare pattern or bare `is` test
+selects only a visible constructor, never a superseded member.
 
 A failed entry that would have redeclared the type changes nothing — the
 previous declaration, its methods, and every binding built from it remain in

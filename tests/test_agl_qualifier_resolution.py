@@ -164,7 +164,7 @@ def test_type_name_and_module_route_clash_stays_rejected_in_both_positions(
     }
 
     assert _program_outcome(tmp_path / "expression", expression) == "scope"
-    assert _program_outcome(tmp_path / "pattern", pattern) == "typecheck"
+    assert _program_outcome(tmp_path / "pattern", pattern) == "scope"
 
 
 def test_import_tail_keeps_an_unselected_qualified_owner_reachable() -> None:

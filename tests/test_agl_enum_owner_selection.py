@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.diagnostics import AglError, AglTypeError, ReferencedMemberError
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import AglScopeError, AmbiguousConstructorError, RouteClashError
 from tests._agl_helpers import check_agl_program
 
 _LIBRARIES = {
@@ -39,6 +39,14 @@ _LIBRARIES = {
     "gen": "enum Box[T] = Full(v: T) | Empty",
     "fnlib": "enum Color = Red | Green\ndef Red() -> int = 5",
     "letlib": "enum Color = Red | Green\nlet Red = 5",
+    "rootenum": "enum Red = X\nenum Color = Red | Green",
+    "structural": "type Red = int\nenum Color = Red | Green",
+    "enumalias": "enum Other = X\ntype Red = Other\nenum Color = Red | Green",
+    "generic": "enum Red[T] = X(v: T)\nenum Color = Red | Green",
+    "kinds": "enum Color = A | B\nenum Kind = Color | Other",
+    "palette": "enum P = Red | Green",
+    "base": "enum Color = Red | Green",
+    "mid": "import base\nexport base::{Color}\nenum Light = Red | Off",
     "scoped": (
         "scope shapes\n"
         "  record Saved\n"
@@ -550,6 +558,164 @@ _MIXED = {"header": "import middle\nimport other\n", "subject": "middle::Mixed"}
             AglScopeError,
             id="current-module-ambiguous",
         ),
+        # Only a declaration bearing a constructor claims the name: a module's
+        # type without one leaves its inline member reachable.
+        pytest.param(
+            _Spelling(
+                header="import rootenum\n",
+                subject="rootenum::Color",
+                sample="rootenum::Color::Green",
+                spelling="rootenum::Red",
+            ),
+            None,
+            id="route-member-named-like-a-root-enum",
+        ),
+        pytest.param(
+            _Spelling(
+                header="import structural\n",
+                subject="structural::Color",
+                sample="structural::Color::Green",
+                spelling="structural::Red",
+            ),
+            None,
+            id="route-member-named-like-a-structural-alias",
+        ),
+        pytest.param(
+            _Spelling(
+                header="import enumalias\n",
+                subject="enumalias::Color",
+                sample="enumalias::Color::Green",
+                spelling="enumalias::Red",
+            ),
+            None,
+            id="route-member-named-like-an-enum-alias",
+        ),
+        pytest.param(
+            _Spelling(
+                header="import generic\n",
+                subject="generic::Color",
+                sample="generic::Color::Green",
+                spelling="generic::Red",
+            ),
+            None,
+            id="route-member-named-like-a-generic-enum",
+        ),
+        pytest.param(
+            _Spelling(
+                header="import kinds\n",
+                subject="kinds::Kind",
+                sample="kinds::Kind::Other",
+                spelling="kinds::Color",
+            ),
+            None,
+            id="route-member-named-like-the-enum-of-another",
+        ),
+        pytest.param(
+            _Spelling(
+                header="enum Red = X\nenum Color = Red | Green\n",
+                subject="Color",
+                sample="Color::Green",
+                spelling="::Red",
+            ),
+            None,
+            id="current-module-member-named-like-a-root-enum",
+        ),
+        pytest.param(
+            _Spelling(
+                header="type Red = int\nenum Color = Red | Green\n",
+                subject="Color",
+                sample="Color::Green",
+                spelling="::Red",
+            ),
+            None,
+            id="current-module-member-named-like-a-structural-alias",
+        ),
+        pytest.param(
+            _Spelling(
+                header="enum Red[T] = X(v: T)\nenum Color = Red | Green\n",
+                subject="Color",
+                sample="Color::Green",
+                spelling="Red",
+            ),
+            None,
+            id="bare-member-named-like-a-generic-enum",
+        ),
+        # A route also injects the inline members of the enums it re-exports.
+        pytest.param(
+            _Spelling(
+                header="import mid\n",
+                subject="mid::Color",
+                sample="mid::Color::Red",
+                spelling="mid::Green",
+            ),
+            None,
+            id="route-re-exported-enum-member",
+        ),
+        pytest.param(
+            _Spelling(
+                header="import mid\n",
+                subject="mid::Color",
+                sample="mid::Color::Green",
+                spelling="mid::Red",
+            ),
+            AmbiguousConstructorError,
+            id="route-re-exported-and-own-member",
+        ),
+        # A leading segment that is both a local scope or type and a module
+        # route contributing the name is ambiguous, whether the route declares
+        # the name or injects it.
+        pytest.param(
+            _Spelling(
+                header="import palette\nenum palette = Red | Blue\n",
+                subject="palette",
+                sample="palette::Blue",
+                spelling="palette::Red",
+            ),
+            RouteClashError,
+            id="local-type-and-route-injecting-the-member",
+        ),
+        pytest.param(
+            _Spelling(
+                header=(
+                    "import palette\n\n"
+                    "scope palette\n"
+                    "  record Red\n"
+                    "end palette\n\n"
+                    "enum W = ::palette::Red | Other\n"
+                ),
+                subject="W",
+                sample="W::Other",
+                spelling="palette::Red",
+            ),
+            RouteClashError,
+            id="local-scope-and-route-injecting-the-member",
+        ),
+        pytest.param(
+            _Spelling(
+                header="import claimed\nenum claimed = Red | Blue\n",
+                subject="claimed",
+                sample="claimed::Blue",
+                spelling="claimed::Red",
+            ),
+            RouteClashError,
+            id="local-type-and-route-declaring-the-name",
+        ),
+        pytest.param(
+            _Spelling(
+                header=(
+                    "import review\n\n"
+                    "scope review\n"
+                    "  def helper() -> int = 1\n"
+                    "end review\n\n"
+                    "enum Mine = Pass | Other\n"
+                ),
+                subject="Mine",
+                sample="Mine::Other",
+                spelling="review::Pass",
+            ),
+            RouteClashError,
+            id="local-scope-lacking-the-name-and-route",
+        ),
         # A record declaring the name owns the spelling; no member is injected over it.
         pytest.param(
             _Spelling(
@@ -813,3 +979,24 @@ def test_module_routed_owner_selects_only_its_own_inline_member(
     entry = "import review\nimport dup\nimport funcs\nlet p: review::Review = review::Pass\n" + use
     with pytest.raises(error):
         _check(tmp_path, entry)
+
+
+@pytest.mark.parametrize(
+    ("header", "spelling", "subject"),
+    [
+        pytest.param("import dup\n", "dup::Red", "dup::A", id="route"),
+        pytest.param("import dup as D\n", "D::Red", "D::A", id="import-alias"),
+        pytest.param("import mid\n", "mid::Red", "mid::Color", id="re-export"),
+        pytest.param(
+            "enum A = Red | Green\nenum B = Red | Blue\n", "::Red", "A", id="current-module"
+        ),
+        pytest.param("import dup::*\n", "Red", "dup::A", id="bare"),
+    ],
+)
+def test_ambiguous_constructor_repair_resolves_where_written(
+    tmp_path: Path, header: str, spelling: str, subject: str
+) -> None:
+    with pytest.raises(AmbiguousConstructorError) as caught:
+        _check(tmp_path / "ambiguous", f"{header}let probe = {spelling}\n()")
+    repair = caught.value.repair
+    _check(tmp_path / "repaired", f"{header}let probe: {subject} = {repair}\nprobe is {repair}")

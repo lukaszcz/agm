@@ -213,17 +213,24 @@ module-and-scope nominal identity.
 ### Module-qualified enum members
 
 A module qualifier followed by a terminal name, as in `mylib::Red` or `::Red`,
-selects a constructor from that module's own declarations: the record,
-exception, or alias the module declares at its root under that name, else the
-one inline member of one of the module's root enums with that name. `::` never
-reaches an imported, prelude, or builtin constructor, so `::Some` names nothing
-unless the current module declares `Some`. The spelling denotes the same
-constructor in a value, a pattern, and an `is` test, except that a same-named
-`def` or `let` of the module claims the value spelling while pattern and `is`
-lookup stay independent (see [claiming a constructor's
+selects a constructor from that module's surface: the record or exception
+(or an alias of one) it declares at its root under that name, else the one
+inline member with that name of the root enums it declares or, for an import
+route, re-exports. After `export base::{Color}` in `mid`, `mid::Red` selects
+`base`'s `Color::Red`. Only a declaration with a constructor claims the name:
+next to `enum Color = Red | Green`, a root `enum Red`, `enum Red[T]`, or `type
+Red = int` leaves `mylib::Red` selecting `Color::Red`. `::` never reaches an
+imported, prelude, or builtin constructor, so `::Some` names nothing unless the
+current module declares `Some`. The spelling denotes the same constructor in a
+value, a pattern, and an `is` test, except that a same-named `def` or `let` of
+the module claims the value spelling while pattern and `is` lookup stay
+independent (see [claiming a constructor's
 spelling](bindings-and-scope.md#overload-sets-shadowing-and-ambiguity)). Two
-such inline members make it ambiguous in every position; qualify it with the
-owning enum (`mylib::Color::Red`). A referenced member keeps its own
+such inline members, whether declared or re-exported, make it ambiguous in
+every position; qualify it with the owning enum (`mylib::Color::Red`), as
+the diagnostic suggests through the same qualifier. A local scope or type
+sharing the route's name can make the spelling ambiguous ([Qualifier
+chains](lexical-structure.md#qualifier-chains)). A referenced member keeps its own
 declaration path: when `mylib`'s `Color` references `Shared` from `other`,
 write `other::Shared` or the bare `Shared`, never `mylib::Shared` (or `::Shared`
 inside `mylib`). Only an import route or `::` is a module qualifier: after

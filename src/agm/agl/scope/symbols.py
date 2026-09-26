@@ -425,7 +425,9 @@ class TypeOwner:
     own constructors. ``referenced`` holds the names of the resolved members an
     enum target only references: they keep their own paths, so the owner selects
     none of them, but spelling one is a focused error rather than an unknown
-    name. ``alias`` is an alias path's declaration.
+    name. ``alias`` is an alias path's declaration. ``injected`` holds, for an
+    enum declaration only, its referenced members' record constructors, whose
+    names a root enum injects bare.
     """
 
     constructor: ConstructorRef | None
@@ -433,6 +435,7 @@ class TypeOwner:
     members: Mapping[str, ConstructorRef] = field(default_factory=dict)
     referenced: frozenset[str] = frozenset()
     alias: TypeAlias | None = None
+    injected: tuple[ConstructorRef, ...] = ()
 
     @property
     def constructs(self) -> bool:
@@ -975,6 +978,22 @@ class AglScopeError(AglError):
     (first-error abort policy).  Carries an optional ``SourceSpan`` for
     precise source location.
     """
+
+
+class AmbiguousConstructorError(AglScopeError):
+    """A constructor spelling that selects several constructors.
+
+    ``repair`` is one qualified spelling that selects a single candidate,
+    written through the same module qualifier when the ambiguous spelling has one.
+    """
+
+    def __init__(self, message: str, *, repair: str, span: SourceSpan) -> None:
+        super().__init__(message, span=span)
+        self.repair = repair
+
+
+class RouteClashError(AglScopeError):
+    """A qualifier whose leading segment is both a local scope or type and a module route."""
 
 
 class ImmutableAssignmentError(AglScopeError):

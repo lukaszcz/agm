@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.repl import ReplSession
-from agm.agl.semantics.values import BoolValue, IntValue, TextValue
+from agm.agl.semantics.values import IntValue, TextValue
 
 
 def _open_session(root: Path | None = None) -> ReplSession:
@@ -145,7 +145,7 @@ class TestRedeclarations:
         assert session.eval_entry("enum E\n  | B(fresh: text)").ok
         assert session.eval_entry('let new: E = B(fresh = "new")').ok
 
-        assert session.eval_entry("old is A").value == BoolValue(True)
+        assert not session.eval_entry("old is A").ok
         assert session.eval_entry("(old as OldA).old").value == IntValue(1)
         assert session.eval_entry("(new as E::B).fresh").value == TextValue("new")
         assert not session.eval_entry("old as E::B").ok

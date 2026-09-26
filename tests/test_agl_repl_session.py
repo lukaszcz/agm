@@ -1316,6 +1316,31 @@ class TestBareConstructorVisibilityAcrossEntries:
         assert isinstance(bare.value, RecordValue)
         assert bare.value.fields["amount"] == IntValue(1)
 
+    def test_later_root_enum_reference_makes_an_earlier_scoped_record_bare(self) -> None:
+        """A referenced member's terminal name is injected as in file mode."""
+        s = open_session()
+        assert s.eval_entry("scope s\n  record Deep\nend s").ok
+        assert s.eval_entry("enum N\n  | ::s::Deep\n  | Own").ok
+        assert s.eval_entry("let own: N = N::Own").ok
+
+        value = s.eval_entry("let deep: N = Deep\ndeep is Deep")
+        pattern = s.eval_entry("case own of\n  | Deep => 1\n  | _ => 2")
+        tested = s.eval_entry("own is Deep")
+
+        assert value.value == BoolValue(True), value.diagnostics
+        assert pattern.value == IntValue(2), pattern.diagnostics
+        assert tested.value == BoolValue(False), tested.diagnostics
+
+    def test_redeclared_root_enum_no_longer_injects_its_referenced_member(self) -> None:
+        s = open_session()
+        assert s.eval_entry("scope s\n  record Deep\nend s").ok
+        assert s.eval_entry("enum N\n  | ::s::Deep\n  | Own").ok
+        assert s.eval_entry("enum N\n  | Own").ok
+
+        assert not s.eval_entry("s::Deep is Deep").ok
+        assert not s.eval_entry("Deep").ok
+        assert s.eval_entry("s::Deep").ok
+
     def test_root_enum_reference_to_a_scoped_record_stays_bare_within_one_entry(self) -> None:
         s = open_session()
 
@@ -2844,7 +2869,11 @@ enum Agent
     def test_referenced_enum_keeps_its_original_record_member_after_record_supersession(
         self,
     ) -> None:
-        """A retained enum selects its member by handle, not its record's current name."""
+        """A retained enum selects its member by handle, not its record's current name.
+
+        A bare ``is`` test selects only a visible constructor, which the
+        superseding record now is.
+        """
         session = open_session()
         assert session.eval_entry("record R\n  old: int").ok
         assert session.eval_entry("type OldR = R").ok
@@ -2859,8 +2888,7 @@ enum Agent
 
         assert matched.ok, matched.diagnostics
         assert matched.value == IntValue(1)
-        assert tested.ok, tested.diagnostics
-        assert tested.value == BoolValue(True)
+        assert not tested.ok
         assert narrowed.ok, narrowed.diagnostics
         assert narrowed.value == IntValue(1)
         assert not not_a_member.ok
@@ -2894,7 +2922,11 @@ enum Agent
         assert decoded.value.fields == {"value": IntValue(1)}
 
     def test_enum_supersession_remints_inline_members_without_invalidating_old_ones(self) -> None:
-        """Old and new enum-member handles remain independently matchable and castable."""
+        """Old and new enum-member handles remain independently matchable and castable.
+
+        A bare ``is`` test selects only a visible constructor, so it names no
+        superseded member.
+        """
         session = open_session()
         assert session.eval_entry("enum E\n  | A(old: int)").ok
         assert session.eval_entry("type OldA = E::A").ok
@@ -2912,8 +2944,7 @@ enum Agent
 
         assert old_case.ok, old_case.diagnostics
         assert old_case.value == IntValue(1)
-        assert old_is.ok, old_is.diagnostics
-        assert old_is.value == BoolValue(True)
+        assert not old_is.ok
         assert old_cast.ok, old_cast.diagnostics
         assert old_cast.value == IntValue(1)
         assert new_case.ok, new_case.diagnostics
@@ -2923,6 +2954,16 @@ enum Agent
         assert new_cast.ok, new_cast.diagnostics
         assert new_cast.value == TextValue("new")
         assert not current_member_on_old_value.ok
+
+    def test_superseded_enum_member_is_no_visible_bare_constructor(self) -> None:
+        """Bare patterns and ``is`` tests select only visible constructors."""
+        session = open_session()
+        assert session.eval_entry("enum A\n  | Red\n  | Green").ok
+        assert session.eval_entry("let old: A = A::Green").ok
+        assert session.eval_entry("enum A\n  | Red\n  | Blue").ok
+
+        assert not session.eval_entry("old is Green").ok
+        assert not session.eval_entry("case old of\n  | Green => 1\n  | _ => 2").ok
 
     def test_same_spelling_enum_member_supersession_keeps_old_and_new_identities_incompatible(
         self,

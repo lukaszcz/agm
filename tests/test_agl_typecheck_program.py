@@ -16,7 +16,7 @@ from agm.agl.diagnostics import AglError, ReferencedMemberError, type_name_not_a
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import AglScopeError, RouteClashError
 from agm.agl.semantics.types import (
     InferenceVarType,
     contains_inference_var,
@@ -2015,28 +2015,26 @@ def test_slash_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) 
     assert _binding_value_type(cg, ENTRY_ID, "ok") == BoolType()
 
 
-def test_is_test_uses_local_enum_when_alias_route_has_another_owner(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("test", "error"),
+    [
+        pytest.param("c is ::Color::Red", None, id="anchored-local-owner"),
+        pytest.param("c is Color::Red", RouteClashError, id="local-owner-or-module-alias"),
+    ],
+)
+def test_is_test_owner_spelling_both_local_enum_and_module_alias(
+    tmp_path: Path, test: str, error: type[AglError] | None
+) -> None:
+    """A module alias injects its root enums' members, so it clashes with a same-named enum."""
     modules = {
-        "entry": ("import lib as Color\nenum Color | Red\nlet c: Color = Red\nc is Color::Red"),
+        "entry": f"import lib as Color\nenum Color | Red\nlet c: Color = ::Red\n{test}",
         "lib": "enum Other | Red",
     }
-
-    checked = check_agl_program(tmp_path, modules)
-
-    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "c")) == RecordType(
-        "Red", scope_path=("Color",), module_id=ENTRY_ID
-    )
-    # Negative control: the module alias is not a route to the variant, so a
-    # member only the aliased module declares is missing from the local enum.
-    with pytest.raises(AglTypeError):
-        check_agl_program(
-            tmp_path / "alias-route",
-            {
-                "entry": modules["entry"].replace("is Color::Red", "is Color::Green"),
-                "lib": "enum Other | Red | Green",
-            },
-            default_stdlib=False,
-        )
+    if error is None:
+        check_agl_program(tmp_path, modules)
+        return
+    with pytest.raises(error):
+        check_agl_program(tmp_path, modules)
 
 
 def test_unknown_enum_owner_form_is_not_visible(tmp_path: Path) -> None:

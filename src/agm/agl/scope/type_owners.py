@@ -182,6 +182,12 @@ class TypeOwnerIndex:
                 None,
                 members=self._enum_members(module_id, path, declaration),
                 referenced=self._referenced_names(module_id, declaration),
+                injected=dedupe_constructor_candidates(
+                    constructor
+                    for member in declaration.members
+                    if isinstance(member, VariantRef)
+                    for constructor in self.referenced_member_refs(module_id, member)
+                ),
             )
         constructor = ConstructorRef.for_alias(declaration, module_id, path[:-1])
         # Typecheck judges a target scope selects no declaration for, so the

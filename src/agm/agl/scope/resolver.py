@@ -84,6 +84,7 @@ from agm.agl.scope.symbols import (
     BUILTIN_METHOD_RECEIVER_NAMES,
     BUILTIN_TYPE_STATIC_OWNER_PATHS,
     AglScopeError,
+    AmbiguousConstructorError,
     BinderKind,
     BindingRef,
     BuiltinKind,
@@ -98,6 +99,7 @@ from agm.agl.scope.symbols import (
     PatternSlot,
     ReceiverOwner,
     ResolvedUseTarget,
+    RouteClashError,
     ScopeNode,
     ScopePath,
     SlotCandidate,
@@ -105,7 +107,6 @@ from agm.agl.scope.symbols import (
     builtin_call_kind,
     builtin_type_static_kind,
     contributed_declarations,
-    dedupe_constructor_candidates,
     duplicate_binder_message,
     is_builtin_type_static_owner,
     is_qualified_function_member,
@@ -349,6 +350,11 @@ def _is_root_inline_member(constructor: ConstructorRef) -> bool:
     return (
         constructor.inline_enum_owner_decl_node_id is not None and len(constructor.owner_path) == 1
     )
+
+
+def _unknown_scope_member(name: str, path: ScopePath, span: SourceSpan) -> AglScopeError:
+    """Return the error for local scope *path* declaring no member *name*."""
+    return AglScopeError(f"Unknown member '{name}' in scope path '{'::'.join(path)}'.", span=span)
 
 
 def _reject_referenced_member(
@@ -712,6 +718,22 @@ class _Resolver:
                         )
                     else:
                         self._add_constructor_candidate(cname, cref)
+        # Earlier entries' root enums this entry does not redeclare keep
+        # injecting their referenced members, as in one file, unless a later
+        # declaration of a member's path superseded it.
+        redeclared = {item.name for item, path in self._type_declarations if not path}
+        for type_path, owner in self._repl_session_type_paths.items():
+            if len(type_path) == 1 and type_path[0] not in redeclared:
+                self._inject_referenced_members(
+                    cref
+                    for cref in owner.injected
+                    if not any(
+                        _supersedes(cref, current)
+                        for current in self._scoped_constructor_candidates.get(
+                            (cref.owner_path, cref.owner_name), ()
+                        )
+                    )
+                )
         # Pre-pass 4: collect constructor candidates from RecordDef/EnumDef.
         self._collect_constructor_candidates()
 
@@ -1703,9 +1725,12 @@ class _Resolver:
                         self._add_constructor_candidate(
                             member.name, cref, scope_path=type_scope, inject_bare=not path
                         )
-                    elif not path:
-                        for cref in self._referenced_member_constructor_candidates(member):
-                            self._add_constructor_candidate(cref.owner_name, cref)
+                if not path:
+                    self._inject_referenced_members(
+                        self._type_owners.declared_owner(
+                            (self._module_id, item.name), item
+                        ).injected
+                    )
             elif isinstance(item, ExceptionDef):
                 cref = self._constructor_metadata_by_decl_id[(self._module_id, item.node_id)]
                 self._add_constructor_candidate(
@@ -1719,6 +1744,11 @@ class _Resolver:
                     self._add_constructor_candidate(
                         item.name, alias_ref, scope_path=path, inject_bare=not path
                     )
+
+    def _inject_referenced_members(self, crefs: Iterable[ConstructorRef]) -> None:
+        """Inject the bare names of *crefs*, the records a root enum references."""
+        for cref in crefs:
+            self._add_constructor_candidate(cref.owner_name, cref)
 
     def _root_declaring_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
         """Candidates that declare *name* itself in this module's root.
@@ -3193,13 +3223,10 @@ class _Resolver:
         """
         local_path = self._validate_local_scope_chain(qualifier)
         if local_path is not None:
+            self._check_local_scope_route_ambiguity(qualifier, name, local_path)
             ref = self._scope_nodes[local_path].members.get(name)
             if ref is None:
-                raise AglScopeError(
-                    f"Unknown member '{name}' in scope path '{'::'.join(local_path)}'.",
-                    span=node.span,
-                )
-            self._check_local_scope_route_ambiguity(qualifier, name, local_path)
+                raise _unknown_scope_member(name, local_path, node.span)
         else:
             ref = self._lookup_qualified_use_contribution(qualifier, name, node.span)
             if ref is None:
@@ -3534,18 +3561,28 @@ class _Resolver:
             else candidates
         )
         if len(resolved_candidates) >= 2:
-            raise self._ambiguous_constructor(node.name, node.name, resolved_candidates, node.span)
+            first = resolved_candidates[0]
+            raise self._ambiguous_constructor(
+                node.name,
+                resolved_candidates,
+                spell_declaration(
+                    first.owner_module_id,
+                    (*first.owner_path, node.name),
+                    local_to=self._module_id,
+                ),
+                node.span,
+            )
         if len(resolved_candidates) == 1:
             self._constructor_refs[node.node_id] = resolved_candidates[0]
 
     def _ambiguous_constructor(
         self,
         spelling: str,
-        name: str,
         candidates: Sequence[ConstructorRef],
+        repair: str,
         span: SourceSpan,
-    ) -> AglScopeError:
-        """Report *spelling*, selecting constructor *name*, as ambiguous among *candidates*."""
+    ) -> AmbiguousConstructorError:
+        """Report *spelling* as ambiguous among *candidates*; *repair* selects the first."""
         owner_names = ", ".join(
             "'"
             + spell_declaration(
@@ -3556,14 +3593,11 @@ class _Resolver:
             + "'"
             for candidate in candidates
         )
-        first = candidates[0]
-        qualifier = spell_declaration(
-            first.owner_module_id, (*first.owner_path, name), local_to=self._module_id
-        )
-        return AglScopeError(
+        return AmbiguousConstructorError(
             f"'{spelling}' is ambiguous: it is declared as a constructor "
             f"in multiple types ({owner_names}). "
-            f"Qualify the reference, e.g. '{qualifier}'.",
+            f"Qualify the reference, e.g. '{repair}'.",
+            repair=repair,
             span=span,
         )
 
@@ -3653,47 +3687,34 @@ class _Resolver:
         return path
 
     def _check_local_scope_route_ambiguity(
-        self,
-        chain: QualifierChain,
-        name: str,
-        path: ScopePath,
-        *,
-        defer_route_diagnostics: bool = False,
-    ) -> bool:
-        """Reject *chain* naming both a local scope path and a module route.
-
-        Shared by qualified value resolution, qualified assignment, and
-        constructor-chain resolution (both the type-owner and the plain-scope
-        branches) so a read, a write, and a constructor reference of the same
-        spelling agree: a leading qualifier segment that is genuinely both a
-        local scope (or type name) and an imported module route is ambiguous
-        regardless of which direction the reference goes or which local
-        declaration it would otherwise resolve to.
-
-        Returns ``True`` when unambiguous. Patterns and ``is`` tests defer
-        the diagnostic until the checker can assess it against the type being
-        matched; those callers pass ``defer_route_diagnostics=True`` and get
-        ``False`` back instead of the raise.
-        """
-        relative_path = tuple(segment.name for segment in chain.segments)
-        if not (
-            chain.anchor is None and qualifier_contributes(self._import_env, relative_path, name)
-        ):
-            return True
-        if defer_route_diagnostics:
-            return False
-        raise self._local_scope_route_ambiguity(chain, name, path)
-
-    def _local_scope_route_ambiguity(
         self, chain: QualifierChain, name: str, path: ScopePath
-    ) -> AglScopeError:
-        """Return the error for *chain*'s leading segment naming both *path* and a module route."""
-        local_kind = "a type name" if path in self._type_paths else "a local scope"
-        return AglScopeError(
-            f"Qualifier '{chain.segments[0].name}' is both {local_kind} and a module route for "
-            f"'{name}'. {qualification_repair_guidance()}",
-            span=chain.span,
-        )
+    ) -> None:
+        """Reject *chain* naming both local scope or type *path* and a module route for *name*.
+
+        Shared by values, assignments, patterns, and ``is`` tests, so every
+        position reports one spelling alike: an unanchored leading segment is
+        ambiguous when it is also a module route contributing *name* --
+        declared on the route's surface or injected as a root enum's inline
+        member -- or, for a plain scope not declaring *name*, any module route.
+        """
+        if chain.anchor is not None:
+            return
+        relative_path = tuple(segment.name for segment in chain.segments)
+        if (
+            qualifier_contributes(self._import_env, relative_path, name)
+            or (len(relative_path) == 1 and self._route_injected_members(chain, name))
+            or (
+                path not in self._type_paths
+                and name not in self._scope_nodes[path].members
+                and qualifier_candidates(self._import_env, relative_path[:1], anchored=False)
+            )
+        ):
+            local_kind = "a type name" if path in self._type_paths else "a local scope"
+            raise RouteClashError(
+                f"Qualifier '{relative_path[0]}' is both {local_kind} and a module route for "
+                f"'{name}'. {qualification_repair_guidance()}",
+                span=chain.span,
+            )
 
     def _resolve_local_scope_member(self, node: VarRef, chain: QualifierChain) -> bool:
         """Resolve a scoped member through ordered lexical scope layers.
@@ -3747,14 +3768,11 @@ class _Resolver:
             return False
 
         ref = self._scope_nodes[path].members.get(node.name)
-        rendered = "::".join(path)
-        if ref is None:
-            if path in self._type_paths:
-                return False
-            raise AglScopeError(
-                f"Unknown member '{node.name}' in scope path '{rendered}'.", span=node.span
-            )
+        if ref is None and path in self._type_paths:
+            return False
         self._check_local_scope_route_ambiguity(chain, node.name, path)
+        if ref is None:
+            raise _unknown_scope_member(node.name, path, node.span)
         self._require_textually_visible(ref, node.span)
         if ref.kind is BinderKind.constructor_binding:
             # One declaration owns each scoped spelling, so it has at most one constructor.
@@ -4390,9 +4408,14 @@ class _Resolver:
             self._constructor_refs[node.node_id] = constructor
             return
         if self._type_owners.is_declared(qname):
-            raise type_name_not_a_value(
-                render_qualified_name(module_qualifier, node.name), node.span
-            )
+            # A type bearing no constructor leaves the name to the module surface.
+            injected = self._module_surface_constructor(module_qualifier, node.name)
+            if injected is None:
+                raise type_name_not_a_value(
+                    render_qualified_name(module_qualifier, node.name), node.span
+                )
+            self._constructor_refs[node.node_id] = injected
+            return
         self._resolution[node.node_id] = self._make_cross_module_ref(qname)
 
     def _lookup_qualified_binding(
@@ -4780,12 +4803,6 @@ class _Resolver:
     # Pattern variable binding
     # ------------------------------------------------------------------
 
-    def _referenced_member_constructor_candidates(
-        self, member: VariantRef
-    ) -> tuple[ConstructorRef, ...]:
-        """Find metadata for a member reference during declaration collection."""
-        return self._type_owners.referenced_member_refs(self._module_id, member)
-
     def _qualified_constructor_candidates(
         self, node_id: int, chain: QualifierChain, name: str, span: SourceSpan
     ) -> tuple[ConstructorRef, ...]:
@@ -4794,11 +4811,11 @@ class _Resolver:
         Ordering mirrors qualified value resolution: a scope-use contribution or
         a local scope member is considered before an import route owning the
         complete atom, and only then is the chain read as a type owner with
-        *name* as its variant, else as a module qualifier. A module qualifier
-        selecting nothing fails as the same value spelling does. A type owner
-        selecting nothing, or also spelling a module route, yields an empty
-        tuple, deferring the diagnostic to type checking against the matched
-        type.
+        *name* as its variant, else as a module qualifier. A local scope's
+        selection is complete, and a module qualifier selecting nothing fails
+        as the same value spelling does. A type owner selecting nothing yields
+        an empty tuple, deferring the diagnostic to type checking against the
+        matched type.
         """
         opened = self._use_constructor_candidates(chain, name)
         if opened is not None:
@@ -4810,19 +4827,16 @@ class _Resolver:
                 )
             return tuple(opened)
         local_path = self._validate_local_scope_chain(chain)
+        if local_path is not None:
+            self._check_local_scope_route_ambiguity(chain, name, local_path)
         if local_path in self._type_paths:
-            if not self._check_local_scope_route_ambiguity(
-                chain, name, local_path, defer_route_diagnostics=True
-            ):
-                return ()
             constructor = self._local_owner_constructor(chain, local_path, name)
             return () if constructor is None else (constructor,)
         if local_path is not None:
-            self._note_scope_qualified_spelling(node_id, chain, local_path, name)
-            scoped = self._scoped_constructor_candidates.get((local_path, name), ())
-            if scoped:
-                return tuple(scoped)
-        module_qualifier = local_path is None and self._is_module_qualifier(chain)
+            # The scope's selection is complete; typecheck never reads it as a module route.
+            self._scope_qualified_spellings.add(node_id)
+            return tuple(self._scoped_constructor_candidates.get((local_path, name), ()))
+        module_qualifier = self._is_module_qualifier(chain)
         if module_qualifier:
             # A module qualifier's selection is complete, as a local scope's is.
             self._scope_qualified_spellings.add(node_id)
@@ -4833,9 +4847,7 @@ class _Resolver:
         )
         if selected is not None:
             return (selected,)
-        if module_qualifier or (
-            local_path is None and chain.anchor is QualifierAnchor.CURRENT_MODULE
-        ):
+        if module_qualifier or chain.anchor is QualifierAnchor.CURRENT_MODULE:
             raise self._module_qualifier_miss(node_id, chain, name, span)
         return ()
 
@@ -4868,25 +4880,6 @@ class _Resolver:
         return AglScopeError(
             f"'{render_qualified_name(chain, name)}' names no constructor.", span=span
         )
-
-    def _note_scope_qualified_spelling(
-        self, node_id: int, chain: QualifierChain, path: ScopePath, name: str
-    ) -> None:
-        """Record a pattern or ``is`` spelling qualified by the local plain scope *path*.
-
-        Its constructor selection here is complete, so the checker never reads
-        the scope as a module route. A leading segment that is also a module
-        route is ambiguous between the two when the scope does not publish the
-        spelling, or when the route contributes it too, as for a value.
-        """
-        if (
-            chain.anchor is None
-            and not self._scoped_constructor_candidates.get((path, name))
-            and qualifier_candidates(self._import_env, (chain.segments[0].name,), anchored=False)
-        ):
-            raise self._local_scope_route_ambiguity(chain, name, path)
-        self._check_local_scope_route_ambiguity(chain, name, path)
-        self._scope_qualified_spellings.add(node_id)
 
     def _imported_atom_constructor(self, chain: QualifierChain, name: str) -> ConstructorRef | None:
         """Return the constructor an import route owning the complete ``chain::name`` atom names."""
@@ -4922,7 +4915,11 @@ class _Resolver:
             declared = next((candidate for candidate in own if not candidate.owner_path), None)
             if declared is not None:
                 return declared
-            injected = tuple(candidate for candidate in own if _is_root_inline_member(candidate))
+            injected = {
+                candidate: candidate.owner_path[0]
+                for candidate in own
+                if _is_root_inline_member(candidate)
+            }
             # Earlier REPL entries' root types, then this entry's.
             roots: Iterable[tuple[str, QName]] = (
                 (root, (self._module_id, root))
@@ -4946,14 +4943,7 @@ class _Resolver:
                     ),
                     span=chain.span,
                 )
-            injected = dedupe_constructor_candidates(
-                constructor
-                for _module, members in surfaces
-                for atom, origin in members.items()
-                if _bare_path(atom)[1:] == (name,)
-                and (constructor := self._cross_module_constructor_refs.get(origin)) is not None
-                and _is_root_inline_member(constructor)
-            )
+            injected = self._route_injected_members(chain, name)
             roots = (
                 (atom, origin)
                 for _module, members in surfaces
@@ -4961,11 +4951,15 @@ class _Resolver:
                 if isinstance(atom, str)
             )
         if len(injected) > 1:
+            first, enum_name = next(iter(injected.items()))
             raise self._ambiguous_constructor(
-                render_qualified_name(chain, name), name, injected, chain.span
+                render_qualified_name(chain, name),
+                tuple(injected),
+                render_qualified_name(chain, f"{enum_name}::{first.owner_name}"),
+                chain.span,
             )
         if injected:
-            return injected[0]
+            return next(iter(injected))
         for root, qname in roots:
             owner = self._type_owners.owner(qname)
             if (
@@ -4978,6 +4972,28 @@ class _Resolver:
                     render_qualified_name(chain, root), name, span=chain.span
                 )
         return None
+
+    def _route_injected_members(
+        self, chain: QualifierChain, name: str
+    ) -> dict[ConstructorRef, str]:
+        """Map each root enum inline member one-segment route *chain* injects as *name* to its enum.
+
+        The enum is named as the route exposes it, so a re-exported enum's
+        members are injected too.
+        """
+        route = tuple(chain.segments[0].name.split("/"))
+        injected: dict[ConstructorRef, str] = {}
+        for _module, members in qualifier_members(self._import_env, route, anchored=chain.anchored):
+            for atom, origin in members.items():
+                path = _bare_path(atom)
+                constructor = self._cross_module_constructor_refs.get(origin)
+                if (
+                    path[1:] == (name,)
+                    and constructor is not None
+                    and _is_root_inline_member(constructor)
+                ):
+                    injected.setdefault(constructor, path[0])
+        return injected
 
     def _try_resolve_qualified_qname(
         self, chain: QualifierChain, name: str

@@ -10,7 +10,7 @@ from agm.agl.matchcompile.diagnostics import qualified_owner_name
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
-from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import AglScopeError, RouteClashError
 from agm.agl.semantics.types import RecordType
 from agm.agl.syntax import QualifierAnchor, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
@@ -1358,9 +1358,8 @@ def test_generic_is_test_type_and_module_constructor_member_collision_is_ambiguo
         },
     )
 
-    resolved = resolve_program(graph)
-    with pytest.raises(AglTypeError, match="module route"):
-        check_program(resolved, base_caps())
+    with pytest.raises(RouteClashError):
+        resolve_program(graph)
 
 
 def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
@@ -1379,14 +1378,8 @@ def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
         },
     )
 
-    resolved = resolve_program(graph)
-    with pytest.raises(AglTypeError) as exc_info:
-        check_program(resolved, base_caps())
-
-    diagnostic = str(exc_info.value)
-    assert "module route" in diagnostic
-    for repair in ("hiding", "longer suffix", "/-anchored", "as"):
-        assert repair in diagnostic
+    with pytest.raises(RouteClashError):
+        resolve_program(graph)
 
 
 def test_nonconstructible_tailed_import_is_not_a_constructor_owner(tmp_path: Path) -> None:
@@ -1452,21 +1445,25 @@ def test_invalid_qualified_pattern_and_is_routes_are_rejected(
         check_program(resolve_program(graph), base_caps())
 
 
-def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "use",
+    ["let other: config = config::On", "flag is config::On", "case flag of | config::On => 1"],
+)
+def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
+    tmp_path: Path, use: str
 ) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
             "entry": (
-                "import support/config\nenum config | On\n"
-                "let flag: config = config::On\nflag is config::On"
+                f"import support/config\nenum config | On\nlet flag: config = ::config::On\n{use}"
             ),
             "support/config": "enum config | On",
         },
     )
 
-    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
+    with pytest.raises(RouteClashError):
+        resolve_program(graph)
 
 
 @pytest.mark.parametrize(

@@ -55,9 +55,6 @@ from agm.agl.diagnostics import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId, is_std_config_root, spell_declaration
-from agm.agl.scope.imports import (
-    qualification_repair_guidance,
-)
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_DISPLAY_NAMES,
     BUILTIN_CALL_NAMES,
@@ -5165,13 +5162,9 @@ class _Checker:
                     subject="'is' member",
                 )
             if constructor is None:
-                unpublished = self._unpublished_enum_member(
+                raise self._unselected_member_error(
                     node.node_id, node.qualifier, node.variant, enum_type, (), node.span
                 )
-                self._record_selected_constructor_ref(
-                    node.node_id, ConstructorRef.for_nominal(unpublished)
-                )
-                return BoolType()
 
             member = self._enum_member_for_constructor_candidate(enum_type, constructor)
             if member is None:
@@ -5230,10 +5223,10 @@ class _Checker:
     ) -> None:
         """Surface a deferred qualifier-route failure for a qualified exception 'is' target.
 
-        The resolver defers a bad route or a local/import clash on ``is``
-        tests (``defer_route_diagnostics``), leaving the constructor
-        unresolved; resolving the spelling as a ``QUALIFIER::Name`` type raises
-        the real cause. A valid route falls through to the caller's mismatch.
+        The resolver defers a bad imported owner route on ``is`` tests,
+        leaving the constructor unresolved; resolving the spelling as a
+        ``QUALIFIER::Name`` type raises the real cause. A valid route falls
+        through to the caller's mismatch.
         """
         self._env.resolve_qualified_name_type(qualifier, variant, span=span)
 
@@ -5274,9 +5267,10 @@ class _Checker:
         """Return why owner-qualified ``qualifier::variant`` selects no member of *enum_type*.
 
         Scope selects every member a module qualifier or a matching owner
-        names, so the owner here is a clash with a module route, no enum,
-        another enum or other arguments of it, or an enum declaring no inline
-        member *variant*: a referenced member keeps its own declaration path.
+        names and rejects an owner that is also a module route, so the owner
+        here is no enum, another enum or other arguments of it, or an enum
+        declaring no inline member *variant*: a referenced member keeps its own
+        declaration path.
         """
         local_match = self._local_qualified_owner(qualifier, span)
         if local_match is None:
@@ -5292,12 +5286,6 @@ class _Checker:
                 return mismatch
             return self._inline_member_error(variant, enum_type, mismatch, span)
         local_owner, resolved, _type_params = local_match
-        if qualifier.anchor is None and self._env.has_qualified_import_member(qualifier, variant):
-            return AglTypeError(
-                f"Qualifier '{local_owner}' is both a type name and a module route for "
-                f"'{variant}'. {qualification_repair_guidance()}",
-                span=span,
-            )
         # Identity is the declaration, never the name: two declarations sharing
         # one name path (a REPL redeclaration) are unrelated enums. Within one
         # declaration the owner selected no member only at other arguments.
@@ -6371,14 +6359,7 @@ class _Checker:
             selected = self._enum_constructor_pattern_ref(pattern, subj_type)
             constructor_ref = None if selected is None else selected[0]
             if selected is None:
-                selected_member = self._unpublished_enum_member(
-                    pattern.node_id,
-                    pattern.qualifier,
-                    pattern.name,
-                    subj_type,
-                    self._pattern_constructor_candidates(pattern),
-                    pattern.span,
-                )
+                selected_member = self._unpublished_enum_member(pattern, subj_type)
             else:
                 constructor_ref, selected_member = selected
                 self._validate_enum_constructor_qualification(
@@ -6579,6 +6560,32 @@ class _Checker:
         return _variant_not_in_enum(variant, enum_type, span)
 
     def _unpublished_enum_member(
+        self, pattern: ConstructorPattern, enum_type: EnumType
+    ) -> RecordType:
+        """Return the member of *enum_type* an applied pattern no published candidate selects.
+
+        A bare applied spelling still destructures a member of the scrutinee's
+        own declaration by its terminal name, so a value built before its enum
+        was redeclared in the REPL stays matchable; a qualified one is
+        reported as :meth:`_unselected_member_error` explains.
+        """
+        member = (
+            self._env.type_table.enum_member_names(enum_type).get(pattern.name)
+            if pattern.qualifier is None
+            else None
+        )
+        if member is None:
+            raise self._unselected_member_error(
+                pattern.node_id,
+                pattern.qualifier,
+                pattern.name,
+                enum_type,
+                self._pattern_constructor_candidates(pattern),
+                pattern.span,
+            )
+        return member
+
+    def _unselected_member_error(
         self,
         node_id: int,
         qualifier: QualifierChain | None,
@@ -6586,22 +6593,18 @@ class _Checker:
         enum_type: EnumType,
         candidates: tuple[ConstructorRef, ...],
         span: SourceSpan,
-    ) -> RecordType:
-        """Return the member of *enum_type* a bare spelling no published *candidates* select.
+    ) -> AglTypeError:
+        """Return why no published *candidates* spelled *variant* select a member of *enum_type*.
 
-        The bare spelling names the enum's member of that terminal name. Scope
-        selects every member a qualified spelling can name, so one none of
-        *candidates* fits names no member: a local scope's candidates are all
-        it qualifies, and an owner's failure is reported against it.
+        Scope selects every member a qualified spelling can name, so one none
+        of *candidates* fits names no member: a local scope's candidates are
+        all it qualifies, and an owner's failure is reported against it.
         """
         if node_id in self._resolved.scope_qualified_spellings:
-            raise self._constructor_outside_enum(variant, enum_type, candidates, span)
+            return self._constructor_outside_enum(variant, enum_type, candidates, span)
         if qualifier is not None:
-            raise self._variant_qualification_error(qualifier, variant, enum_type, span)
-        member = self._env.type_table.enum_member_names(enum_type).get(variant)
-        if member is None:
-            raise _variant_not_in_enum(variant, enum_type, span)
-        return member
+            return self._variant_qualification_error(qualifier, variant, enum_type, span)
+        return _variant_not_in_enum(variant, enum_type, span)
 
     @staticmethod
     def _unique_constructor_candidate(

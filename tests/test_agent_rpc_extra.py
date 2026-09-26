@@ -99,13 +99,6 @@ def _reap_child_after_send(monkeypatch: pytest.MonkeyPatch) -> None:
                 '"x":1e99999999999999999999}'
             )
         },
-        {
-            "raw": (
-                '{"type":"response","id":"$id","command":"prompt","success":true,"x":'
-                + "9" * 5000
-                + "}"
-            )
-        },
         {"raw": '{"type":"response","id":"$id","id":"again","command":"prompt","success":true}'},
         {
             "raw": (

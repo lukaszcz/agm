@@ -418,9 +418,9 @@ def test_mixed_arith_out_of_range_int_operand_labels_the_operator() -> None:
     (and range-checked) by the lowerer's compile-time ``IntToDecimal``
     coercion and labelled with the operator itself, not "as decimal" (the
     ``as``/``as?`` cast's own label)."""
-    # 2.pow(3400000) is well within `int`'s unbounded range but, past ~4300
-    # digits, outside the pinned decimal range -- rejected cheaply by the
-    # bit-length check without ever constructing a `Decimal` from it.
+    # 2.pow(3400000) is a valid unbounded `int` but outside the pinned decimal
+    # range -- rejected cheaply by the bit-length check without ever
+    # constructing a `Decimal` from it.
     source = "let n = 2.pow(3400000)\nlet x = n + 1.0\n()\n"
     ir_exc = evaluate_ir_raises(source)
     assert ir_exc.type_name == "ArithmeticError"

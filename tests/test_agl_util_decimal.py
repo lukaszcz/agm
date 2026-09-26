@@ -8,7 +8,8 @@ clearer to verify directly than through an AgL program.
 from __future__ import annotations
 
 import decimal
-import sys
+import fractions
+import random
 
 import pytest
 
@@ -16,10 +17,12 @@ from agm.util.decimal import (
     AGL_DECIMAL_CONTEXT,
     compare_numbers,
     decimal_in_range,
-    holds_non_finite_number,
+    exact_decimal,
     int_in_range,
+    integral_to_int,
     narrows_to_int,
     parse_json_decimal,
+    reject_json_constant,
     strip_trailing_zeros,
 )
 
@@ -160,30 +163,44 @@ class TestParseJsonDecimal:
                 parse_json_decimal("1e99999999999999999999")
 
 
+class TestRejectJsonConstant:
+    @pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+    def test_every_constant_is_a_value_error(self, token: str) -> None:
+        with pytest.raises(ValueError):
+            reject_json_constant(token)
+
+
 class TestNarrowsToInt:
-    @pytest.mark.parametrize("text", ["0", "-0.0", "2.0e3", "1e4299", "0e99999999999", "-12"])
-    def test_integral_decimal_within_the_digit_limit_narrows(self, text: str) -> None:
+    @pytest.mark.parametrize(
+        "text", ["0", "-0.0", "2.0e3", "1e4300", "-1e999999", "0e99999999999", "-12"]
+    )
+    def test_integral_decimal_within_the_range_narrows(self, text: str) -> None:
         assert narrows_to_int(decimal.Decimal(text)) is True
 
     @pytest.mark.parametrize("text", ["2.5", "1e-3", "Infinity", "-Infinity", "NaN"])
     def test_fractional_or_non_finite_decimal_does_not_narrow(self, text: str) -> None:
         assert narrows_to_int(decimal.Decimal(text)) is False
 
-    @pytest.mark.parametrize("text", ["1e4300", "1e999999999999", "-1e999999999999"])
-    def test_integral_decimal_past_the_digit_limit_does_not_narrow(self, text: str) -> None:
+    @pytest.mark.parametrize("text", ["1e1000000", "-1e999999999999"])
+    def test_integral_decimal_outside_the_range_does_not_narrow(self, text: str) -> None:
         assert narrows_to_int(decimal.Decimal(text)) is False
 
-    def test_digit_limit_follows_the_interpreter_limit(self) -> None:
-        previous_limit = sys.get_int_max_str_digits()
-        try:
-            sys.set_int_max_str_digits(640)
-            assert narrows_to_int(decimal.Decimal("1e639")) is True
-            assert narrows_to_int(decimal.Decimal("1e640")) is False
-            sys.set_int_max_str_digits(0)
-            assert narrows_to_int(decimal.Decimal("1e4299")) is True
-            assert narrows_to_int(decimal.Decimal("1e999999999999")) is False
-        finally:
-            sys.set_int_max_str_digits(previous_limit)
+
+class TestExactConversions:
+    @pytest.mark.parametrize("text", ["0", "-0.00", "3.000", "-12", "1.5e3", "4e5000"])
+    def test_integral_to_int_is_exact(self, text: str) -> None:
+        value = decimal.Decimal(text)
+        assert fractions.Fraction(integral_to_int(value)) == fractions.Fraction(value)
+
+    def test_integral_to_int_never_rounds_under_the_pinned_context(self) -> None:
+        digits = "123456789" * 10
+        with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+            assert integral_to_int(decimal.Decimal(digits + ".000")) == int(digits)
+
+    @pytest.mark.parametrize("n", [0, -7, 10**40 + 1, -(7**9000)])
+    def test_exact_decimal_is_exact(self, n: int) -> None:
+        with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+            assert fractions.Fraction(exact_decimal(n)) == n
 
 
 class TestCompareNumbers:
@@ -233,36 +250,34 @@ class TestCompareNumbers:
         assert compare_numbers(big - 1, decimal.Decimal("1e5000")) == -1
 
     def test_never_rounds_under_the_pinned_context(self) -> None:
+        big = 7**9000
         with decimal.localcontext(AGL_DECIMAL_CONTEXT):
             assert compare_numbers(10**40 + 1, decimal.Decimal(10**40)) == 1
+            assert compare_numbers(big + 1, exact_decimal(big)) == 1
+            assert compare_numbers(-big, exact_decimal(-big) - decimal.Decimal("0.5")) == 1
 
+    @pytest.mark.parametrize("n", [2, 7**9000])
+    def test_long_fraction_compares_without_scaling_by_its_exponent(self, n: int) -> None:
+        # A two-million-digit fraction: scaling the int by 10**2000000, or
+        # converting the coefficient to an int, would take minutes.
+        fraction = "0" * 2_000_000 + "1"
+        value = decimal.Decimal(f"{n}.{fraction}")
+        assert compare_numbers(n, value) == -1
+        assert compare_numbers(n + 1, value) == 1
+        assert compare_numbers(-n, value.copy_negate()) == 1
+        assert compare_numbers(n, decimal.Decimal(f"{n}.{'0' * 2_000_000}")) == 0
 
-class TestHoldsNonFiniteNumber:
-    @pytest.mark.parametrize(
-        "obj",
-        [
-            None,
-            True,
-            1,
-            1.5,
-            "inf",
-            decimal.Decimal("1e999999999999"),
-            [1, {"a": [decimal.Decimal("2.5")]}],
-        ],
-    )
-    def test_finite_json_shapes(self, obj: object) -> None:
-        assert holds_non_finite_number(obj) is False
-
-    @pytest.mark.parametrize(
-        "obj",
-        [
-            float("inf"),
-            float("nan"),
-            decimal.Decimal("-Infinity"),
-            decimal.Decimal("NaN"),
-            [1, [float("-inf")]],
-            {"a": {"b": decimal.Decimal("sNaN")}},
-        ],
-    )
-    def test_non_finite_number_anywhere(self, obj: object) -> None:
-        assert holds_non_finite_number(obj) is True
+    def test_random_pairs_agree_with_exact_fractions(self) -> None:
+        generator = random.Random(20260926)
+        for _ in range(400):
+            bits = generator.choice([8, 64, 9_990, 10_010, 20_000])
+            n = generator.getrandbits(bits) * generator.choice([1, -1])
+            shift = generator.randint(-3, 3)
+            scale = generator.randint(0, 40)
+            offset = generator.randint(-(10**scale), 10**scale)
+            coefficient = n * 10**scale * 10 ** max(shift, 0) // 10 ** max(-shift, 0) + offset
+            value = decimal.Decimal(f"{coefficient}E{-scale}")
+            expected_difference = fractions.Fraction(n) - fractions.Fraction(value)
+            expected = (expected_difference > 0) - (expected_difference < 0)
+            assert compare_numbers(n, value) == expected
+            assert compare_numbers(value, n) == -expected

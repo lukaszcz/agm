@@ -63,16 +63,14 @@ def _json_hash(obj: object) -> int:
     """Stable hash for a JSON-shaped tree.
 
     Must be consistent with ``_json_eq``: objects that compare equal must hash
-    equal.  Because ``_json_eq`` treats numeric int/Decimal equivalently, we
-    normalise numbers to ``Decimal`` before hashing.  Lists and dicts recurse;
-    bools are guarded so ``True`` never hashes the same as ``1``.
+    equal.  ``_json_eq`` compares an int and a Decimal numerically, and Python
+    already hashes numerically equal ints and Decimals alike (``hash(1) ==
+    hash(Decimal("1.0"))``), so numbers hash as themselves.  Lists and dicts
+    recurse; bools are guarded so ``True`` never hashes the same as ``1``.
     """
     if isinstance(obj, bool):
         # Hash True/False distinctly from integers.
         return hash(("__bool__", obj))
-    if isinstance(obj, (int, decimal.Decimal)):
-        # Normalise to Decimal so 1 and Decimal("1") hash the same.
-        return hash(decimal.Decimal(obj))
     if isinstance(obj, list):
         return hash(tuple(_json_hash(e) for e in obj))
     if isinstance(obj, dict):
@@ -520,7 +518,12 @@ def value_equal(left: Value, right: Value) -> bool:
     Structural equality remains responsible for recursive positions, where
     values retain their exact element types.
     """
-    if isinstance(left, (IntValue, DecimalValue)) and isinstance(right, (IntValue, DecimalValue)):
+    if (
+        isinstance(left, IntValue)
+        and isinstance(right, DecimalValue)
+        or isinstance(left, DecimalValue)
+        and isinstance(right, IntValue)
+    ):
         return compare_numbers(left.value, right.value) == 0
     return values_equal(left, right)
 

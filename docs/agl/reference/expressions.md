@@ -705,9 +705,8 @@ generic element type needs an `Eq`/`Hashable` bound, as for `==`
 (see [Constraint blocks](generics.md#constraint-blocks)). Key membership
 requires the dict's key type to satisfy `Hashable`; the tested value must
 have (or directedly coerce to) that key type. An `int` tested against
-`decimal` elements compares exactly, as `==` does; an `int` tested against
-`decimal` keys widens, raising `ArithmeticError` labelled `in` when it falls
-outside the decimal range.
+`decimal` elements or keys compares exactly, as `==` does, so membership never
+raises: an `int` outside the decimal range is in no `decimal`-keyed dict.
 
 ### Arithmetic: `+` `-` `*` `/` and unary `-`
 

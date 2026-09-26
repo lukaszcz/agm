@@ -9,7 +9,7 @@
       }
     },
     {
-      "name": "integral_decimal_too_large_for_int_stays_json_but_never_narrows",
+      "name": "integral_decimal_outside_the_decimal_range_stays_json_but_never_narrows",
       "params": {"token": "1e999999999999"},
       "expect": {
         "stdout": "true\ntrue\nfalse\ntrue\njson parsed\ntrue\n",
@@ -17,10 +17,10 @@
       }
     },
     {
-      "name": "integer_literal_over_the_digit_limit_is_rejected_everywhere",
+      "name": "integer_literal_of_any_length_is_accepted_everywhere",
       "params": {"token": "1", "copies": 5000},
       "expect": {
-        "stdout": "true\ntrue\ntrue\ntrue\njson parse error\ntoml parse error\n",
+        "stdout": "false\nfalse\nfalse\nfalse\njson parsed\nfalse\n",
         "calls": {}
       }
     },

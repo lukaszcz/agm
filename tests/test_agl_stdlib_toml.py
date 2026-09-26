@@ -143,7 +143,6 @@ def test_toml_render_accepts_signed_64_bit_integer_bounds(value: int) -> None:
         "+nan",
         "-nan",
         pytest.param("1e99999999999999999999", id="huge-exponent"),
-        pytest.param("9" * 5000, id="over-long-integer"),
     ),
 )
 def test_toml_parse_rejects_numbers_a_json_value_cannot_hold(literal: str) -> None:

@@ -28,7 +28,7 @@ from agm.agent.session.protocol import (
 from agm.agent.spec import AgentPi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
 from agm.core.process import CapturedOutput, kill_process_group
-from agm.util.decimal import decimal_in_range, parse_json_decimal
+from agm.util.decimal import decimal_in_range, parse_json_decimal, reject_json_constant
 from agm.util.unicode import loads_json
 
 _RpcOperation = Literal[
@@ -382,7 +382,7 @@ class PiRpcSessionBackend:
             # object_pairs_hook rejects a duplicate key.
             decoded: object = loads_json(
                 line,
-                parse_constant=_reject_nonfinite_json,
+                parse_constant=reject_json_constant,
                 parse_float=parse_json_decimal,
                 object_pairs_hook=_json_object,
             )
@@ -595,10 +595,6 @@ def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
             raise ValueError("duplicate JSON object key")
         result[key] = value
     return result
-
-
-def _reject_nonfinite_json(value: str) -> object:
-    raise ValueError(f"non-finite JSON number {value}")
 
 
 def _validate_response(event: dict[str, object]) -> None:

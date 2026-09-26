@@ -3,13 +3,13 @@ import std/toml
 import std/toml::TomlParseError
 import std/value
 
-# A number token no value can hold -- an exponent past any decimal, an
-# integer literal longer than the integer digit limit, a non-finite TOML
-# float, or an integral decimal too large to narrow to `int` -- is rejected
-# by each boundary with its own error: `as?` yields `None`, `try-parse`
-# yields `Err`, `json::parse` raises `JsonParseError`, and `toml::parse`
-# raises `TomlParseError`. A `json` value itself may hold a finite number of
-# any magnitude.
+# A number token no value can hold -- an exponent past any decimal, a
+# non-finite TOML float, or an integral decimal outside the decimal range
+# narrowed to `int` -- is rejected by each boundary with its own error: `as?`
+# yields `None`, `try-parse` yields `Err`, `json::parse` raises
+# `JsonParseError`, and `toml::parse` raises `TomlParseError`. A `json` value
+# itself may hold a finite number of any magnitude, and an integer literal of
+# any length is an exact `int`.
 program def main(token: text, copies: int = 1) -> unit =
   let input = token.repeat(copies)
   print((input as? decimal).is-none())

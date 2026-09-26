@@ -927,40 +927,6 @@ def test_json_payload_accepts_nested_containers() -> None:
     assert decode_boundary_value(AglJson({"x": []})) == JsonValue({"x": []})
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        float("inf"),
-        float("nan"),
-        Decimal("-Infinity"),
-        Decimal("NaN"),
-        {"x": [1, float("-inf")]},
-    ],
-)
-def test_json_payload_rejects_a_non_finite_number(payload: object) -> None:
-    with pytest.raises(BoundaryViolation):
-        decode_boundary_value(AglJson(payload))
-
-
-def test_json_extern_return_with_a_non_finite_number_raises_extern_error(
-    tmp_path: Path,
-) -> None:
-    exc = evaluate_ir_raises_with_externs(
-        "extern def reading() -> json\nlet _ = reading()\n()\n",
-        "from agl import json\ndef reading(): return json({'n': float('inf')})\n",
-        tmp_path,
-    )
-    assert exc.type_name == "ExternError"
-    assert exc.fields["function"] == "reading"
-
-
-def test_array_view_json_write_with_a_non_finite_number_raises() -> None:
-    view = AglArrayView(ArrayValue([JsonValue(1)]), _NO_DESCRIPTORS)
-
-    with pytest.raises(BoundaryTypeError):
-        view[0] = AglJson(float("nan"))
-
-
 def test_json_payload_crosses_the_boundary_without_copying() -> None:
     payload = [1, 2]
 

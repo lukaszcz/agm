@@ -102,10 +102,8 @@ def test_total_cast_agrees(source: str) -> None:
 
 
 #: A real out-of-range int, computed at runtime via `.pow()` rather than
-#: spelled as a literal -- an AgL int literal (and Python's own int-to-str
-#: conversion) cannot exceed ~4300 digits, well under what the pinned range
-#: needs to overflow. The bit-length range check rejects this cheaply,
-#: without ever constructing a ``Decimal`` from it.
+#: spelled as a million-digit literal. The bit-length range check rejects
+#: this cheaply, without ever constructing a ``Decimal`` from it.
 _HUGE_INT_EXPR = "2.pow(3400000)"
 
 

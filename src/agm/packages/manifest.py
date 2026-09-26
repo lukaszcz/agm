@@ -12,7 +12,7 @@ from tomlkit.exceptions import TOMLKitError
 from agm.agl.keywords import is_plain_name
 from agm.agl.modules.ids import ModuleId
 from agm.command_catalog import has_subcommands, invalid_command_path, is_subcommand_path
-from agm.core.toml import TomlDict, load_toml_file, parse_toml_doc, toml_dict
+from agm.core.toml import TomlDict, load_toml_file, parse_toml_doc, toml_data, toml_dict
 from agm.packages.record import is_sha256_hex
 
 _SHA256_PREFIXES = ("sha256=", "sha256:", "sha256-")
@@ -223,7 +223,7 @@ def load_manifest_text(content: str, *, commands_complete: bool = True) -> Packa
     """
 
     try:
-        raw = toml_dict(parse_toml_doc(content).unwrap())
+        raw = toml_dict(toml_data(parse_toml_doc(content)))
     except TOMLKitError as exc:
         raise ManifestError(f"cannot parse package manifest: {exc}") from exc
     return _parse_manifest(raw, commands_complete=commands_complete)

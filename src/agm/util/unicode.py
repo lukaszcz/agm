@@ -109,9 +109,8 @@ def loads_json(
     the result can only have come from such an escape, so the escape pattern
     gates the walk and the walk decides.
 
-    Raises :exc:`ValueError` -- :exc:`json.JSONDecodeError`, an integer past
-    the interpreter's digit limit, or whatever a hook raises -- which every
-    caller maps to its own typed error.
+    Raises :exc:`ValueError` -- :exc:`json.JSONDecodeError` or whatever a
+    hook raises -- which every caller maps to its own typed error.
     """
     result: object = json.loads(
         doc,

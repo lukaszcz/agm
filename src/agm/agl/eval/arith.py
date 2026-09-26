@@ -32,7 +32,7 @@ from agm.agl.semantics.values import (
     Value,
     value_equal,
 )
-from agm.util.decimal import compare_numbers
+from agm.util.decimal import compare_numbers, exact_decimal, int_in_range
 
 __all__ = [
     "add",
@@ -72,6 +72,10 @@ def _cmp(op: CmpOp, lv: _Ordered, rv: _Ordered) -> bool:
 
 def order(op: CmpOp, left: Value, right: Value) -> bool:
     """Ordering comparison (LT/LE/GT/GE) of two texts, or of two numbers compared exactly."""
+    if isinstance(left, IntValue) and isinstance(right, IntValue):
+        return _cmp(op, left.value, right.value)
+    if isinstance(left, DecimalValue) and isinstance(right, DecimalValue):
+        return _cmp(op, left.value, right.value)
     if isinstance(left, TextValue):
         right = cast(TextValue, right)
         return _cmp(op, left.value, right.value)
@@ -89,6 +93,13 @@ def contains(kind: ContainsKind, item: Value, container: Value) -> bool:
         case ContainsKind.DICT:
             container = cast(DictValue, container)
             return container.lookup(item) is not None
+        case ContainsKind.DICT_INT_NEEDLE:
+            container = cast(DictValue, container)
+            needle = cast(IntValue, item).value
+            return (
+                int_in_range(needle)
+                and container.lookup(DecimalValue(exact_decimal(needle))) is not None
+            )
         case ContainsKind.TEXT:
             container = cast(TextValue, container)
             item = cast(TextValue, item)

@@ -571,9 +571,8 @@ and parses.
 A `std/json` parsing function received text that is not a well-formed JSON
 document, including a document holding a lone `\uD800`-`\uDFFF` escape. An
 adjacent high and low escape pair is not lone: it denotes one character and
-parses. A number a `json` value cannot hold (`NaN`, an infinity, one no
-`decimal` can hold, or an integer of more than 4300 digits) is rejected the
-same way ([Numbers](types.md#numbers-int-and-decimal)).
+parses. A number a `json` value cannot hold (`NaN`, an infinity, or one no
+`decimal` can hold) is rejected the same way ([Numbers](types.md#numbers-int-and-decimal)).
 
 ```text
 raw: text   # the input text that failed to parse
@@ -583,7 +582,7 @@ raw: text   # the input text that failed to parse
 
 A `std/toml` parsing function received text that is not a well-formed TOML
 document, or one holding a number a `json` value cannot hold (`inf`, `nan`,
-one no `decimal` can hold, or an integer of more than 4300 digits).
+or one no `decimal` can hold).
 
 ```text
 raw: text   # the input text that failed to parse

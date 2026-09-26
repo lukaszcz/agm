@@ -101,10 +101,16 @@ class CompareKind(enum.Enum):
 
 
 class ContainsKind(enum.Enum):
-    """Kind tag for the ``in`` containment operator: array, dict, or text."""
+    """Kind tag for the ``in`` containment operator: array, dict, or text.
+
+    ``DICT_INT_NEEDLE`` tests an unwidened int needle against ``decimal``
+    keys: it widens only when within the decimal range, and is otherwise
+    absent, so membership never raises.
+    """
 
     ARRAY = "array"
     DICT = "dict"
+    DICT_INT_NEEDLE = "dict-int-needle"
     TEXT = "text"
 
 

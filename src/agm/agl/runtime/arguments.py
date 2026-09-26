@@ -31,7 +31,6 @@ from agm.agl.semantics.arguments import (
     BindParam,
     bind_arguments,
 )
-from agm.util.decimal import holds_non_finite_number
 from agm.util.unicode import require_scalar_text, surrogate_index, visible_text
 
 if TYPE_CHECKING:
@@ -231,8 +230,6 @@ def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
         """
         if not _is_json_shaped(value):
             raise ValueError(f"expected a JSON-compatible value, got {type(value).__name__}")
-        if holds_non_finite_number(value):
-            raise ValueError("expected a JSON-compatible value, got a non-finite number")
         return parse_json_strict(dumps_exact(cast(JsonShaped, value), indent=None))
 
     defs = dict(decoder.defs)
@@ -475,7 +472,7 @@ def _span_for(signature: ProgramSignature, name: str) -> "SourceSpan":
 def _is_json_shaped(obj: object) -> bool:
     """Return ``True`` iff *obj* is a JSON-compatible Python value.
 
-    The closed set: ``None``, ``bool``, ``int``, ``float``,
+    The closed set: ``None``, ``bool``, ``int``, a finite ``float`` or
     ``decimal.Decimal``, ``str``, ``list`` (elements recursively JSON-shaped),
     and ``dict`` (str keys, values recursively JSON-shaped).
 
@@ -484,8 +481,13 @@ def _is_json_shaped(obj: object) -> bool:
     caller can emit a clean diagnostic instead of a cryptic traceback.
     """
     import decimal as _decimal_mod
+    import math
 
-    if obj is None or isinstance(obj, (bool, int, float, str, _decimal_mod.Decimal)):
+    if isinstance(obj, float):
+        return math.isfinite(obj)
+    if isinstance(obj, _decimal_mod.Decimal):
+        return obj.is_finite()
+    if obj is None or isinstance(obj, (bool, int, str)):
         return True
     if isinstance(obj, list):
         return all(_is_json_shaped(e) for e in obj)

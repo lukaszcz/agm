@@ -319,7 +319,7 @@ class TestContainsKind:
         assert ContainsKind.TEXT
 
     def test_exhaustive(self) -> None:
-        assert {m.name for m in ContainsKind} == {"ARRAY", "DICT", "TEXT"}
+        assert {m.name for m in ContainsKind} == {"ARRAY", "DICT", "DICT_INT_NEEDLE", "TEXT"}
 
 
 # ---------------------------------------------------------------------------

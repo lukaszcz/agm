@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from agm.agent.spec import AGENT_SPECS
@@ -99,7 +100,7 @@ def raw_option_str(
     """Return the raw TOML value for *key* as a string, checking primary then fallback.
 
     Preserves the exact string written in the config file (e.g. ``"30s"``).
-    For numeric values (int/float), converts to string (e.g. ``60`` → ``"60"``),
+    For numeric values (int/decimal/float), converts to string (e.g. ``60`` → ``"60"``),
     but only when the value is positive (a zero/negative numeric config value is
     treated as absent).
     Returns ``None`` when the key is absent or empty/invalid in both tables.
@@ -113,7 +114,7 @@ def raw_option_str(
             return val
         if isinstance(val, int) and not isinstance(val, bool) and val > 0:
             return str(val)
-        if isinstance(val, float) and val > 0:
+        if isinstance(val, (float, Decimal)) and val > 0:
             from agm.core.parse import format_timeout
 
             return format_timeout(val)

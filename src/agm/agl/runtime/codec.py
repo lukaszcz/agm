@@ -328,10 +328,11 @@ def _extract_json_text(raw: str) -> str | None | object:
     """Extract a single JSON text from potentially chatty agent output.
 
     Strategy (lenient mode):
-    0. Try direct stdlib ``json.loads`` on the stripped input — if it succeeds
-       (bare valid JSON, possibly with surrounding whitespace), return the
-       stripped text verbatim.  This preserves full decimal precision since
-       we never route through ``json-repair`` for already-valid JSON.
+    0. Check the stripped input's JSON syntax alone (:func:`_try_direct_parse`)
+       — if it is one valid JSON value, return the stripped text verbatim.
+       Its numbers are judged only by the later strict parse, so an
+       unrepresentable number fails there instead of being rewritten by
+       ``json-repair``, and full decimal precision is preserved.
     1. Check for a Markdown code fence (```json ... ``` or ``` ... ```).
        If found, try direct parse on the fenced content; if that fails,
        try ``repair_json`` on the fenced content.
@@ -679,7 +680,7 @@ class JsonCodec:
       via ``parse_json_strict`` (surrounding whitespace permitted; nothing
       else).  No fence stripping or repair.
 
-    Either way a non-finite number, or one no decimal or int can hold, is a
+    Either way a non-finite number, or one no decimal can hold, is a
     parse failure.
 
     Schema validation is always strict in both modes (rules 3–6 of

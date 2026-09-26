@@ -1,31 +1,31 @@
-"""Pure, context-free ``decimal.Decimal`` helpers: the pinned context and its range.
+"""Pure, context-free number helpers: the pinned decimal context, its range, and exact conversions.
 
-Agm-import-free leaf: only ``collections.abc``/``decimal``/``math``/``sys``/``typing``
-from the standard library.
+Agm-import-free leaf: only ``decimal``/``math``/``typing`` from the standard library.
 Every AgL decimal value, at every point it is created, is
 finite and lies within :data:`AGL_DECIMAL_CONTEXT`'s exponent range --
 :func:`decimal_in_range` (or, for an ``int`` not yet converted,
 :func:`int_in_range`) is the shared test every creation site validates
-against. The AgL-specific signal/raise machinery built on top of this lives
-in ``agm.agl.semantics.arithmetic``.
+against. Alongside: exact JSON-number parsing, decimal-to-int narrowing, and
+exact int/decimal comparison. The AgL-specific signal/raise machinery built
+on top of this lives in ``agm.agl.semantics.arithmetic``.
 """
 
 from __future__ import annotations
 
 import decimal
 import math
-import sys
-from collections.abc import Sequence
 from typing import cast
 
 __all__ = [
     "AGL_DECIMAL_CONTEXT",
     "compare_numbers",
     "decimal_in_range",
-    "holds_non_finite_number",
+    "exact_decimal",
     "int_in_range",
+    "integral_to_int",
     "narrows_to_int",
     "parse_json_decimal",
+    "reject_json_constant",
     "strip_trailing_zeros",
 ]
 
@@ -192,30 +192,53 @@ def parse_json_decimal(text: str) -> decimal.Decimal:
     return value
 
 
-def narrows_to_int(value: decimal.Decimal) -> bool:
-    """Whether *value* is integral and ``int(value)`` stays within the interpreter's digit limit.
+def reject_json_constant(token: str) -> object:
+    """Raise :exc:`ValueError` for ``NaN``/``Infinity``/``-Infinity``, wherever it appears.
 
-    The limit is ``sys.get_int_max_str_digits()`` (its default when disabled),
-    so a narrowed int can always be rendered; checked before the integrality
-    test, which a huge exponent would otherwise make expensive.
+    The ``parse_constant`` hook of every JSON decoder.
     """
-    limit = sys.get_int_max_str_digits() or sys.int_info.default_max_str_digits
-    return (
-        value.is_finite()
-        and (value.is_zero() or value.adjusted() < limit)
-        and value == value.to_integral_value()
-    )
+    raise ValueError(f"non-finite JSON constant {token!r}")
+
+
+def narrows_to_int(value: decimal.Decimal) -> bool:
+    """Whether *value* is an integral decimal within the pinned range, so it narrows to an int.
+
+    The range bounds the narrowed int's size: a ``json`` or wire number is
+    exempt from it, and ``1e999999999999`` must not become a
+    trillion-digit int.
+    """
+    return decimal_in_range(value) and value == value.to_integral_value()
+
+
+def integral_to_int(value: decimal.Decimal) -> int:
+    """The exact ``int`` equal to the finite, integral *value*.
+
+    Converts through decimal text: ``int(Decimal)`` is quadratic in digit
+    count, text conversion is subquadratic both ways.
+    """
+    return int(format(value.to_integral_value(), "f"))
+
+
+def exact_decimal(n: int) -> decimal.Decimal:
+    """The exact ``Decimal`` equal to *n*, through text as in :func:`integral_to_int`."""
+    return decimal.Decimal(str(n))
 
 
 _LOG10_2: float = math.log10(2)
+
+#: Up to this bit length an int is compared with a decimal natively: CPython
+#: converts it exactly and cheaply. Beyond it, :func:`_compare_magnitudes`.
+_NATIVE_COMPARISON_BITS = 10_000
 
 
 def _compare_magnitudes(magnitude: int, value: decimal.Decimal) -> int:
     """Sign of ``magnitude - value`` for a positive int and a positive finite decimal.
 
     Decided from ``bit_length()`` and ``adjusted()`` whenever the orders of
-    magnitude differ (with a one-digit margin for float error), so a huge int
-    is never converted to a decimal; otherwise compared as exact integers.
+    magnitude differ (with a one-digit margin for float error). Otherwise
+    *value*'s integer part, no longer than *magnitude* by more than a couple
+    of digits, decides; on a tie, a nonzero fraction makes *value* larger.
+    Never scales either side by a power of ten.
     """
     bits = magnitude.bit_length()
     adjusted = value.adjusted()
@@ -223,47 +246,30 @@ def _compare_magnitudes(magnitude: int, value: decimal.Decimal) -> int:
         return 1
     if adjusted > math.floor(bits * _LOG10_2) + 1:
         return -1
-    _sign, digits, raw_exponent = value.as_tuple()
-    # Finite: only NaN and infinity carry a letter exponent.
-    exponent = cast(int, raw_exponent)
-    coefficient = int(decimal.Decimal((0, digits, 0)))
-    if exponent >= 0:
-        left, right = magnitude, coefficient * _pow10(exponent)
-    else:
-        left, right = magnitude * _pow10(-exponent), coefficient
-    return (left > right) - (left < right)
+    floor = value.to_integral_value(rounding=decimal.ROUND_FLOOR)
+    whole = integral_to_int(floor)
+    if magnitude != whole:
+        return 1 if magnitude > whole else -1
+    return 0 if floor == value else -1
 
 
 def compare_numbers(left: int | decimal.Decimal, right: int | decimal.Decimal) -> int:
     """Sign (-1/0/1) of the exact difference ``left - right`` of two finite numbers.
 
     Never rounds and never raises: a mixed int/decimal pair is compared
-    without widening the int, whatever its magnitude.
+    without widening the int, whatever its magnitude, and in time
+    subquadratic in both operands' digit counts.
     """
     if isinstance(left, int) and isinstance(right, decimal.Decimal):
         return -compare_numbers(right, left)
-    if isinstance(left, decimal.Decimal) and isinstance(right, int):
-        right_sign = (right > 0) - (right < 0)
+    if (
+        isinstance(left, decimal.Decimal)
+        and isinstance(right, int)
+        and right.bit_length() > _NATIVE_COMPARISON_BITS
+    ):
+        right_sign = 1 if right > 0 else -1
         left_sign = 0 if left.is_zero() else (-1 if left.is_signed() else 1)
-        if left_sign != right_sign or right_sign == 0:
-            return (left_sign > right_sign) - (left_sign < right_sign)
+        if left_sign != right_sign:
+            return 1 if left_sign > right_sign else -1
         return -right_sign * _compare_magnitudes(abs(right), left.copy_abs())
     return (left > right) - (left < right)
-
-
-def holds_non_finite_number(obj: object) -> bool:
-    """Return whether *obj* holds a non-finite float or decimal anywhere a JSON document can.
-
-    Walks dict values, lists, and tuples; every other leaf is finite or not a number.
-    """
-    if isinstance(obj, float):
-        return not math.isfinite(obj)
-    if isinstance(obj, decimal.Decimal):
-        return not obj.is_finite()
-    if isinstance(obj, dict):
-        mapping = cast("dict[object, object]", obj)
-        return any(holds_non_finite_number(value) for value in mapping.values())
-    if isinstance(obj, (list, tuple)):
-        sequence = cast("Sequence[object]", obj)
-        return any(holds_non_finite_number(item) for item in sequence)
-    return False

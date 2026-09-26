@@ -2153,7 +2153,7 @@ class _Lowerer:
     def _compared_operand(self, operand: _Operand, expected: Type) -> IrExpr:
         """Coerce a compared operand to *expected*, leaving an int compared with decimals as is.
 
-        Equality, ordering, and array membership compare an int with a decimal
+        Equality, ordering, and membership compare an int with a decimal
         exactly, so the int is never widened through the range-checked
         int-to-decimal coercion; no other coercion a comparison needs can fail.
         """
@@ -2232,10 +2232,12 @@ class _Lowerer:
             kind = ContainsKind.ARRAY
             item_ir = self._compared_operand(item, container_type.elem)
         elif isinstance(container_type, DictType):
-            # A key lookup hashes the needle, so an int needle for decimal
-            # keys still widens, range-checked.
-            kind = ContainsKind.DICT
-            item_ir = self._coerce_operand(item, container_type.key, operation="in")
+            kind = (
+                ContainsKind.DICT_INT_NEEDLE
+                if isinstance(container_type.key, DecimalType) and isinstance(item.type, IntType)
+                else ContainsKind.DICT
+            )
+            item_ir = self._compared_operand(item, container_type.key)
         else:  # TextType
             kind = ContainsKind.TEXT
             item_ir = item.ir

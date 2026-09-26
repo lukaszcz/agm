@@ -30,6 +30,6 @@ Effects are dispatched by contract identity through `eval/effects.py`, the seam 
 
 - `src/agm/agl/eval/ir_interpreter.py` — the interpreter, frame model, entry invocation, recursion boundary.
 - `src/agm/agl/eval/effects.py` — agent and shell effect handlers; `conversions.py`, `arith.py`, `indexing.py` — cast execution, decimal arithmetic, container access.
-- `src/agm/agl/semantics/arithmetic.py` — AgL arithmetic-signal classification and the catchable `ArithmeticError` construction, built on the pinned decimal context and range invariant in `src/agm/util/decimal.py`. Mixed int/decimal comparisons are not widened by lowering: operators, `value_equal` (array membership, FFI view `index`), and `json` equality share `util/decimal.compare_numbers`, which is exact and never raises.
+- `src/agm/agl/semantics/arithmetic.py` — AgL arithmetic-signal classification and the catchable `ArithmeticError` construction, built on the pinned decimal context and range invariant in `src/agm/util/decimal.py`. Mixed int/decimal comparisons are not widened by lowering: operators, `value_equal` (array membership, FFI view `index`), and `json` equality share `util/decimal.compare_numbers`, which is exact and never raises; an int needle against `decimal` dict keys (`ContainsKind.DICT_INT_NEEDLE`) widens only in range and is otherwise absent.
 - `src/agm/agl/semantics/copying.py`, `cycles.py`, `values.py` — copying, cycle guards, value equality.
 - Tests: `tests/test_agl_ir_*.py`, `test_agl_convert.py`, `test_agl_copy.py`, `test_agl_recursion_depth.py`.

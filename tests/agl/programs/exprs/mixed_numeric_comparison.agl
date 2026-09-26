@@ -1,10 +1,11 @@
+import std/array
 import std/math
 
 # Comparing an `int` with a `decimal` -- `==`, `!=`, `<`, `<=`, `>`, `>=`,
-# array membership, and a literal pattern -- is exact and never raises, even
-# for an `int` far outside the decimal range: the `int` is never widened.
-# Only a hashing lookup (`in` on a `dict[decimal, V]`) widens its `int`
-# needle, raising `ArithmeticError` labelled with `in` when it cannot.
+# array and dict-key membership (`in`), and a literal pattern -- is exact and
+# never raises, even for an `int` far outside the decimal range: the `int` is
+# never widened. An index key and a call argument do widen it, raising
+# `ArithmeticError` when it falls outside the range.
 program def main(exponent: int) -> unit =
   let n = 2.pow(exponent)
   let near = 10.pow(30) + 1
@@ -16,6 +17,11 @@ program def main(exponent: int) -> unit =
     | 2.0 => "two"
     | _ => "other"
   print(match-label)
+  let names = {1.0: "one", 1.5: "a", 2.0: "two"}
+  print([n in names, near in names, 2 in names])
   try
-    print(n in {1.5: "a", 2.0: "b"})
-  catch ArithmeticError as e => print("dict lookup: %{e.operation}")
+    print(names[n])
+  catch ArithmeticError as e => print("index: %{e.operation}")
+  try
+    print([1.5, 2.0].contains(n))
+  catch ArithmeticError as e => print("argument: %{e.operation}")

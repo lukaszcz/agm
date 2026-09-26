@@ -191,7 +191,7 @@ from agm.config.engine_keys import (
 from agm.core.cleanup import preserve_primary_error
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
-from agm.util.decimal import AGL_DECIMAL_CONTEXT
+from agm.util.decimal import AGL_DECIMAL_CONTEXT, integral_to_int
 from agm.util.recursion import raised_recursion_limit
 
 if TYPE_CHECKING:
@@ -290,29 +290,37 @@ def _engine_default_settings() -> Mapping[str, Value]:
     return _ENGINE_DEFAULT_SETTINGS
 
 
-# Memo for :func:`_literal_key_value`, keyed by the frozen, hashable case key.
+# Memos for :func:`_literal_key_value`, keyed by the frozen, hashable case key:
+# one for an int subject, one for every other subject.
 _LITERAL_KEY_VALUES: dict[IrLiteralCaseKey, Value] = {}
+_INT_SUBJECT_LITERAL_KEY_VALUES: dict[IrLiteralCaseKey, Value] = {}
 
 
-def _literal_key_value(key: IrLiteralCaseKey) -> Value:
+def _literal_key_value(key: IrLiteralCaseKey, *, int_subject: bool) -> Value:
     """Materialize the runtime value represented by one typeless scalar key.
 
+    An integral numeric key tested against an int subject materializes as an
+    ``IntValue``, so dispatch compares two ints rather than a mixed pair.
     Memoized on *key*: a literal case arm always materializes the same immutable
     ``Value``, so the hot case-dispatch path reuses one instance instead of
     reallocating per arm per evaluation.
     """
-    cached = _LITERAL_KEY_VALUES.get(key)
+    memo = _INT_SUBJECT_LITERAL_KEY_VALUES if int_subject else _LITERAL_KEY_VALUES
+    cached = memo.get(key)
     if cached is not None:
         return cached
-    value = _make_literal_key_value(key)
-    _LITERAL_KEY_VALUES[key] = value
+    value = _make_literal_key_value(key, int_subject=int_subject)
+    memo[key] = value
     return value
 
 
-def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
+def _make_literal_key_value(key: IrLiteralCaseKey, *, int_subject: bool) -> Value:
     """Build the runtime value for one typeless scalar key (uncached)."""
     if key.kind is IrLiteralKind.NUMERIC:
-        return DecimalValue(cast(decimal.Decimal, key.scalar_value))
+        number = cast(decimal.Decimal, key.scalar_value)
+        if int_subject and number == number.to_integral_value():
+            return IntValue(integral_to_int(number))
+        return DecimalValue(number)
     if key.kind is IrLiteralKind.BOOL:
         return BoolValue(cast(bool, key.scalar_value))
     if key.kind is IrLiteralKind.TEXT:
@@ -1718,12 +1726,15 @@ class IrInterpreter:
                         if isinstance(subject_val, (RecordValue, ExceptionValue))
                         else None
                     )
+                    int_subject = isinstance(subject_val, IntValue)
                     for arm in arms:
                         key = arm.key
                         if isinstance(key, IrNominalCaseKey):
                             selected = subject_nominal == key.nominal
                         else:
-                            selected = value_eq(subject_val, _literal_key_value(key))
+                            selected = value_eq(
+                                subject_val, _literal_key_value(key, int_subject=int_subject)
+                            )
                         if not selected:
                             continue
                         if arm.field_bindings:

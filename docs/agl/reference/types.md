@@ -148,31 +148,33 @@ response, a host-supplied program argument, or an extern return value —
 rejects one outside this range, or non-finite, with that boundary's own
 error, so a `decimal` value can never arise out of range. A `json`-typed
 value is exempt from the range and may hold a number of any magnitude, but
-always a finite one: every boundary that creates a `json` value — JSON or
-TOML parsing, an agent or `std/http` response, a host-supplied program
-argument, an extern return value or live-view write — rejects `NaN` or an
-infinity with that boundary's own error. Each also rejects a number no
-`decimal` can hold at all (such as `1e99999999999999999999`) and an integer
-written with more than 4300 digits.
+always a finite one: JSON or TOML parsing, an agent or `std/http` response,
+and a host-supplied program argument reject `NaN` or an infinity with that
+boundary's own error, and an extern never passes one
+([FFI](ffi.md)). Each also rejects a number no `decimal` can hold at all
+(such as `1e99999999999999999999`). An integer of any length, written or
+decoded, is an exact `int`.
 
 A `decimal` operator (`+ - *` or `/`) rounds its result to 28 significant
-digits; unary `-` is exact, including in a constant expression. A result that underflows below the range loses
-precision and may become zero instead of raising; one that overflows above
-it, or is otherwise invalid (such as division by zero), raises the catchable
-`ArithmeticError` ([Exceptions](exceptions.md#arithmeticerror)), labelled
-with the operator. Converting an `int` to `decimal` — an explicit `as decimal`
-cast, or the implicit widening a mixed-operand arithmetic operator, a `dict`
-key lookup with `in`, or a `decimal`-typed context applies — raises the same
+digits; unary `-` is exact, including in a constant expression. A result that
+underflows below the range loses precision and may become zero instead of
+raising; one that overflows above it, or is otherwise invalid (such as
+division by zero), raises the catchable `ArithmeticError`
+([Exceptions](exceptions.md#arithmeticerror)), labelled with the operator.
+Converting an `int` to `decimal` — an explicit `as decimal` cast, or the
+implicit widening a mixed-operand arithmetic operator, a `dict` index key, a
+call argument, or another `decimal`-typed context applies — raises the same
 way when the `int` falls outside the range, labelled with the triggering
 operator or `as decimal` for a non-operator context. `as?` tolerates this the
 same way it tolerates a reference cycle: `as? decimal` yields `None` instead
 of raising.
 
-Comparing an `int` with a `decimal` never widens: `== != < <= > >=` and
-array membership (`in`) compare the two exact values, whatever the `int`'s
-magnitude, so they never raise and neither the range nor the precision
-affects the result (`10.pow(30) + 1 == 1000000000000000000000000000001.0` is
-true).
+Comparing an `int` with a `decimal` never widens: the comparison operators
+`== != < <= > >=` and the membership operator `in` compare the two exact
+values, whatever the `int`'s magnitude, so they never raise and neither the
+range nor the precision affects the result
+(`10.pow(30) + 1 == 1000000000000000000000000000001.0` is true). An `int`
+outside the range is never `in` a `dict` with `decimal` keys.
 
 On the JSON wire both kinds are plain JSON numbers, parsed and emitted
 exactly. A wire number written without a fraction or exponent reads as an
@@ -1271,10 +1273,11 @@ exception — see [Parsing values](#parsing-values) above.
 
 ### `decimal as int` integrality
 
-`decimal as int` succeeds only when the decimal value has no fractional part
-and the resulting integer has at most 4300 digits: `3.0 as int` yields `3`,
-while `3.5 as int` raises `CastError`, as does a decimal of `1e4300` or more.
-The same rule narrows a `json` or wire number to `int`.
+`decimal as int` succeeds only when the decimal value has no fractional part:
+`3.0 as int` yields `3`, while `3.5 as int` raises `CastError`. The same rule
+narrows a `json` or wire number to `int`, which must also lie within the
+`decimal` range: a `json` number of magnitude `1e1000000` or more does not
+narrow.
 
 ### Nominal types `as json` — structural encoding
 

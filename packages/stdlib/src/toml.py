@@ -35,8 +35,7 @@ def parse(raw: str) -> object:
     try:
         parsed = cast(dict[str, object], tomllib.loads(raw, parse_float=parse_json_decimal))
     except ValueError:
-        # TOMLDecodeError, a non-finite or unrepresentable float, or an
-        # integer past the interpreter's digit limit.
+        # TOMLDecodeError, or a non-finite or unrepresentable float.
         raise_parse_error(TomlParseError, raw, "Could not parse TOML.")
     return json(_json_value(parsed))
 

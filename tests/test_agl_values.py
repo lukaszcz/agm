@@ -120,6 +120,29 @@ def test_json_value_hash_consistent_with_eq() -> None:
     # (No hash collision requirement here — just that equal things hash equal.)
 
 
+@pytest.mark.parametrize(
+    ("whole", "same"),
+    [
+        (2, decimal.Decimal("2.0")),
+        (-(10**30), decimal.Decimal("-1e30")),
+        (10**5000, decimal.Decimal("1e5000")),
+        (-(10**5000), decimal.Decimal("-1.000e5000")),
+        ([{"n": 10**5000}], [{"n": decimal.Decimal("10e4999")}]),
+    ],
+)
+def test_equal_int_and_decimal_json_keys_are_one_dict_key(whole: object, same: object) -> None:
+    """Equal int and decimal ``json`` numbers, of any size, hash equal and share a dict key."""
+    from agm.agl.semantics.values import DictValue, JsonValue, TextValue
+
+    assert JsonValue(whole) == JsonValue(same)
+    assert hash(JsonValue(whole)) == hash(JsonValue(same))
+    entries = DictValue()
+    entries.insert(JsonValue(whole), TextValue("whole"))
+    assert entries.lookup(JsonValue(same)) == TextValue("whole")
+    assert not entries.insert(JsonValue(same), TextValue("same"))
+    assert len(entries) == 1
+
+
 def test_json_value_nested_list_eq() -> None:
     """Nested JsonValue list equality follows the same bool/int rules."""
     from agm.agl.semantics.values import JsonValue

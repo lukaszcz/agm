@@ -204,13 +204,12 @@ decoding bytes checks it (for example with `agm.util.unicode`) or decodes
 strictly; this is not checked at the boundary, so a companion that returns an
 invalid `str` produces text that fails wherever the program first encodes it.
 
-A `json` payload crosses without being copied, so the companion carries two
-obligations: the payload must be JSON-shaped — dicts keyed by `str`, lists,
-`str`, `int`, `decimal.Decimal`, `bool`, `None` — and a payload it passed or
-received must not be retained and mutated afterwards. A returned or written
-payload holding a non-finite number (a `float` or `decimal.Decimal` infinity or
-NaN) is rejected: a return raises `ExternError`, and a live-view write raises
-`TypeError` in the companion.
+A `json` payload crosses without being copied or checked, so the companion
+carries two obligations: a payload it returns or writes must be JSON-shaped —
+dicts keyed by `str`, lists, `str`, `int`, finite `decimal.Decimal`, `bool`,
+`None` — and it never mutates a payload it received, nor retains and mutates
+one it passed. A payload it receives has the same shape: its numbers are
+`int` or finite `decimal.Decimal`, never `float`.
 
 ```python
 from agl import array, dict, json

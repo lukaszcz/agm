@@ -9,7 +9,7 @@ from collections.abc import Callable
 from agl import nominals
 
 from agm.agl.runtime.boundary import raise_arithmetic_error
-from agm.util.decimal import AGL_DECIMAL_CONTEXT
+from agm.util.decimal import AGL_DECIMAL_CONTEXT, integral_to_int
 
 ArithmeticError = nominals.std.errors.ArithmeticError
 
@@ -31,7 +31,7 @@ def int_pow(value: int, exponent: int) -> int:
 
 @_in_agl_context
 def _to_integral(value: decimal.Decimal, rounding: str) -> int:
-    return int(value.to_integral_value(rounding=rounding))
+    return integral_to_int(value.to_integral_value(rounding=rounding))
 
 
 def floor(value: decimal.Decimal) -> int:

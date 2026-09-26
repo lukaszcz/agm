@@ -174,6 +174,12 @@ class TestPrintRecord:
         rec = print_recs[0]
         assert "line" in rec or "span" in rec
 
+    def test_print_record_holds_an_integer_literal_of_any_length(self, tmp_path: Path) -> None:
+        trace_path = tmp_path / "trace.jsonl"
+        _run_inline(PipelineDriver(), f"print({'9' * 5000} + 1)", trace_file=trace_path)
+        print_recs = [r for r in _load_jsonl(trace_path) if r.get("kind") == "print"]
+        assert [r.get("rendered") for r in print_recs] == ["1" + "0" * 5000]
+
 
 class TestExecCommandRecord:
     def _exec_record(
@@ -1239,6 +1245,18 @@ class TestCompanionTraceHook:
         # `emit()` is the call on line 2 of `source`.
         assert rec.get("line") == 2
         assert rec.get("col") == 1
+
+    def test_companion_trace_payload_holds_an_integer_of_any_length(self, tmp_path: Path) -> None:
+        trace_path = tmp_path / "trace.jsonl"
+        source = "extern def emit() -> unit\nemit()\n()\n"
+        companion = (
+            "from agl import runtime\n\n"
+            "def emit():\n    runtime.trace('probe', {'value': 10**5000})\n"
+        )
+        entry_path = _write_extern_entry(tmp_path, source, companion)
+        run_inline_command(PipelineDriver(), source, entry_path=entry_path, trace_file=trace_path)
+        probe_recs = [r for r in _load_jsonl(trace_path) if r.get("kind") == "probe"]
+        assert [r.get("value") for r in probe_recs] == [10**5000]
 
     def test_companion_trace_origin_is_the_calling_module_path(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"

@@ -58,7 +58,12 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
-from agm.util.decimal import narrows_to_int, parse_json_decimal
+from agm.util.decimal import (
+    integral_to_int,
+    narrows_to_int,
+    parse_json_decimal,
+    reject_json_constant,
+)
 from agm.util.unicode import loads_json
 
 if TYPE_CHECKING:
@@ -78,8 +83,7 @@ class StrictJsonParseError(Exception):
     - Malformed JSON (syntax errors).
     - Non-standard constants: ``NaN``, ``Infinity``, ``-Infinity`` (including
       when nested inside containers such as ``[NaN]`` or ``{"x": Infinity}``).
-    - A number no decimal can hold, or an integer past the interpreter's
-      digit limit.
+    - A number no decimal can hold.
     - Trailing or leading non-whitespace beyond the JSON value.
     - Empty / whitespace-only input.
     """
@@ -106,9 +110,9 @@ def agl_validator_class() -> type[Validator]:
 
     Its ``integer`` check also accepts an integral ``Decimal``: a wire number
     written with a fraction or exponent parses as ``Decimal``
-    (``parse_float=Decimal``), and an ``int`` target accepts it when it
-    narrows (:func:`~agm.util.decimal.narrows_to_int`), as ``decimal as int``
-    would (:func:`_decode_scalar` then narrows it).
+    (:func:`~agm.util.decimal.parse_json_decimal`), and an ``int`` target
+    accepts it when it narrows (:func:`~agm.util.decimal.narrows_to_int`), as
+    ``decimal as int`` would (:func:`_decode_scalar` then narrows it).
     Everything else uses the base Draft 2020-12 check; ``bool`` is never
     accepted.
     """
@@ -153,16 +157,6 @@ def validator_for_schema(json_schema: str) -> Validator:
 # ---------------------------------------------------------------------------
 
 
-def _reject_constant(c: str) -> object:
-    """Raise :exc:`ValueError` for any non-standard JSON constant.
-
-    Passed as ``parse_constant`` to :func:`json.loads` so that ``NaN``,
-    ``Infinity``, and ``-Infinity`` are rejected even when they appear nested
-    inside containers such as ``[NaN]`` or ``{"x": Infinity}``.
-    """
-    raise ValueError(f"Non-standard JSON constant {c!r} is not permitted")
-
-
 def parse_json_strict(text: str) -> object:
     """Parse *text* as a single strict JSON value.
 
@@ -174,8 +168,7 @@ def parse_json_strict(text: str) -> object:
       ``{"x": Infinity}``).  They are not valid JSON.
     - Floating-point numbers are parsed as :class:`decimal.Decimal` (never
       ``float``), preserving exact precision; one no decimal can hold
-      (``1e99999999999999999999``) is rejected, as is an integer past the
-      interpreter's digit limit.
+      (``1e99999999999999999999``) is rejected.
     - A ``\\uD8xx``/``\\uDCxx`` escape that does not combine with an adjacent
       partner into one scalar character is rejected.
 
@@ -192,10 +185,10 @@ def parse_json_strict(text: str) -> object:
         # verifies that only whitespace follows the first value — so trailing junk
         # such as "42 extra" is already rejected with JSONDecodeError.
         #
-        # parse_constant=_reject_constant rejects NaN/Infinity/-Infinity even
-        # when nested inside containers like [NaN].
+        # parse_constant rejects NaN/Infinity/-Infinity even when nested
+        # inside containers like [NaN].
         obj: object = loads_json(
-            stripped, parse_float=parse_json_decimal, parse_constant=_reject_constant
+            stripped, parse_float=parse_json_decimal, parse_constant=reject_json_constant
         )
     except ValueError as exc:
         raise StrictJsonParseError(f"JSON parse error: {exc}") from exc
@@ -332,7 +325,7 @@ def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
             if isinstance(obj, int):
                 return IntValue(obj)
             if isinstance(obj, Decimal) and narrows_to_int(obj):
-                return IntValue(int(obj))
+                return IntValue(integral_to_int(obj))
             raise ValueError(f"Expected integer, got {type(obj).__name__} {obj!r}")
         case ScalarKind.DECIMAL:
             if isinstance(obj, bool):

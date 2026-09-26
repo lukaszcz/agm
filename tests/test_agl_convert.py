@@ -173,14 +173,9 @@ class TestParseJsonStrict:
         with pytest.raises(StrictJsonParseError):
             parse_json_strict("1 2")
 
-    def test_rejects_integer_over_python_digit_limit(self) -> None:
-        previous_limit = sys.get_int_max_str_digits()
-        try:
-            sys.set_int_max_str_digits(640)
-            with pytest.raises(StrictJsonParseError):
-                parse_json_strict("1" * 641)
-        finally:
-            sys.set_int_max_str_digits(previous_limit)
+    def test_parses_an_integer_of_any_length_exactly(self) -> None:
+        digits = "7" * 5000
+        assert parse_json_strict(f"[{digits}]") == [int(digits)]
 
     def test_rejects_lone_surrogate_escape(self) -> None:
         with pytest.raises(StrictJsonParseError):

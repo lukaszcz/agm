@@ -1,8 +1,8 @@
 # An agent response holding a number no value can hold -- an exponent past any
-# decimal, an integer literal longer than the integer digit limit, an
-# integral decimal too large to narrow to `int`, or a non-finite constant --
-# is an ordinary parse failure in both strict and lenient JSON modes: it
-# reaches the `on-parse-error` policy (here, one retry) instead of crashing.
+# decimal, an integral decimal outside the decimal range narrowed to `int`, or
+# a non-finite constant -- is an ordinary parse failure in both strict and
+# lenient JSON modes: it reaches the `on-parse-error` policy (here, one retry)
+# instead of crashing. An integer literal of any length decodes exactly.
 record Reading
   n: decimal
 

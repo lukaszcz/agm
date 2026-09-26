@@ -40,7 +40,6 @@ from agm.agl.semantics.values import (
     Value,
     value_equal,
 )
-from agm.util.decimal import holds_non_finite_number
 from agm.util.scoping import ScopedVar
 
 
@@ -864,9 +863,9 @@ def decode_boundary_value(obj: object) -> Value:
     a nominal purely from ``type(obj)``, which is why a value built at
     companion import time, on a worker thread, or retained past the call
     that produced it all decode the same way. A ``Decimal`` outside the
-    pinned context's range, and a ``json`` payload holding a non-finite
-    number, are rejected here as a :class:`BoundaryViolation`, like any other
-    unrepresentable extern return value.
+    pinned context's range is rejected here as a :class:`BoundaryViolation`,
+    like any other unrepresentable extern return value. A ``json`` payload is
+    not walked: its shape and finite numbers are the companion's obligation.
     """
     return _decode_boundary_value(obj, {})
 
@@ -887,8 +886,6 @@ def _decode_boundary_value(obj: object, memo: dict[int, Value]) -> Value:
     if isinstance(obj, str):
         return TextValue(obj)
     if isinstance(obj, AglJson):
-        if holds_non_finite_number(obj.value):
-            raise BoundaryViolation("a json value cannot hold a non-finite number")
         return JsonValue(obj.value)
     if isinstance(obj, AglArrayView):
         return obj._value

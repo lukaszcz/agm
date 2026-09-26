@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -477,7 +478,7 @@ def _parse_codex_jsonl(output: str) -> tuple[str, str]:
             continue
         try:
             event = loads_json(line)
-        except ValueError as exc:
+        except json.JSONDecodeError as exc:
             raise _CodexProtocolError("Codex returned malformed JSONL") from exc
         if not isinstance(event, dict):
             raise _CodexProtocolError("Codex JSONL event was not an object")
@@ -556,7 +557,7 @@ def _json_object(output: str, *, operation: SessionOperation) -> dict[str, objec
     """Decode the one JSON object returned by a Claude lifecycle command."""
     try:
         payload: object = loads_json(output)
-    except ValueError as exc:
+    except json.JSONDecodeError as exc:
         raise SessionHostError(
             f"Claude did not return JSON for {operation.value}", operation.value
         ) from exc

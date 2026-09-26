@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Generic, TypeVar
 
@@ -601,7 +602,7 @@ def _optional_bool(table: TomlDict, key: str, *, default: bool = False) -> bool:
 
 def _optional_timeout(table: TomlDict, key: str) -> float | None:
     value = table.get(key)
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool) and value > 0:
         return float(value)
     if isinstance(value, str) and value.strip():
         return parse_timeout(value)

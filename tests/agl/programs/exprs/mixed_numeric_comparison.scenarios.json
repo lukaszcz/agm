@@ -6,7 +6,7 @@
         "exponent": 3400000
       },
       "expect": {
-        "stdout": "[false, true, false, false, true, true]\n[true, true, true, false, false, true]\n[false, true]\n[true, true]\nother\ndict lookup: in\n",
+        "stdout": "[false, true, false, false, true, true]\n[true, true, true, false, false, true]\n[false, true]\n[true, true]\nother\n[false, false, true]\nindex: as decimal\nargument: as decimal\n",
         "calls": {}
       }
     },
@@ -16,7 +16,7 @@
         "exponent": 1
       },
       "expect": {
-        "stdout": "[false, true, false, false, true, true]\n[true, true, true, false, true, true]\n[true, true]\n[true, true]\ntwo\ntrue\n",
+        "stdout": "[false, true, false, false, true, true]\n[true, true, true, false, true, true]\n[true, true]\n[true, true]\ntwo\n[true, false, true]\ntwo\ntrue\n",
         "calls": {}
       }
     },
@@ -26,7 +26,7 @@
         "exponent": 0
       },
       "expect": {
-        "stdout": "[false, true, true, true, false, false]\n[true, true, false, false, false, false]\n[false, true]\n[true, true]\nother\nfalse\n",
+        "stdout": "[false, true, true, true, false, false]\n[true, true, false, false, false, false]\n[false, true]\n[true, true]\nother\n[true, false, true]\none\nfalse\n",
         "calls": {}
       }
     }

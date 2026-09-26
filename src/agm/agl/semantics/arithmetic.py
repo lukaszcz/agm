@@ -33,7 +33,7 @@ from agm.agl.ir.builtin_nominals import BuiltinNominals
 from agm.agl.ir.operations import AS_DECIMAL_OPERATION
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import TextValue
-from agm.util.decimal import decimal_in_range, int_in_range
+from agm.util.decimal import decimal_in_range, exact_decimal, int_in_range
 
 __all__ = [
     "AglArithmeticSignal",
@@ -110,7 +110,7 @@ def checked_decimal(value: int | decimal.Decimal) -> decimal.Decimal:
     if isinstance(value, int):
         if not int_in_range(value):
             raise ValueError("int is outside the decimal range")
-        return decimal.Decimal(value)
+        return exact_decimal(value)
     if not decimal_in_range(value):
         raise ValueError("decimal is outside the pinned range")
     return value

@@ -1766,8 +1766,6 @@ class TestUnrepresentableNumbers:
         "raw",
         [
             pytest.param("1e99999999999999999999", id="huge-exponent"),
-            pytest.param("1" * 5000, id="over-long-integer"),
-            pytest.param('{"k": [' + "9" * 5000 + "]}", id="nested-over-long-integer"),
             pytest.param('{"k": NaN}', id="nan"),
             pytest.param('{"k": -Infinity}', id="negative-infinity"),
             pytest.param('```json\n{"k": 1e99999999999999999999}\n```', id="fenced-huge-exponent"),
@@ -1782,19 +1780,30 @@ class TestUnrepresentableNumbers:
     @pytest.mark.parametrize(
         "raw",
         [
-            pytest.param("1e999999999999", id="integral-past-digit-limit"),
+            pytest.param("1e999999999999", id="integral-outside-decimal-range"),
             pytest.param("Infinity", id="infinity"),
-            pytest.param("1" * 5000, id="over-long-integer"),
         ],
     )
     def test_int_target_rejects_the_number(self, raw: str, strict_json: bool) -> None:
         result = _parse_typed(JsonCodec(), raw, IntType(), strict_json=strict_json)
         assert result.ok is False
 
-    def test_over_long_integers_among_several_values_are_not_an_escaping_error(self) -> None:
-        raw = "1" * 5000 + " " + "2" * 5000
-        result = _parse_typed(JsonCodec(), raw, JsonType(), strict_json=False)
-        assert result.ok is False
+    @pytest.mark.parametrize("strict_json", [False, True])
+    @pytest.mark.parametrize(
+        ("target", "expected"),
+        [
+            (IntType(), IntValue(int("9" * 5000))),
+            (DecimalType(), DecimalValue(Decimal("9" * 5000))),
+            (JsonType(), JsonValue({"k": [int("9" * 5000)]})),
+        ],
+    )
+    def test_an_integer_of_any_length_decodes_exactly(
+        self, target: Type, expected: object, strict_json: bool
+    ) -> None:
+        raw = '{"k": [' + "9" * 5000 + "]}" if isinstance(target, JsonType) else "9" * 5000
+        result = _parse_typed(JsonCodec(), raw, target, strict_json=strict_json)
+        assert result.ok is True
+        assert result.value == expected
 
 
 # ---------------------------------------------------------------------------

@@ -237,9 +237,7 @@ def _ref(r: ModuleResolution, name: str, occurrence: int = -1) -> BindingRef:
 def _root_type_names(r: ModuleResolution) -> frozenset[str]:
     """Return the bare names of *r*'s root-level type declarations.
 
-    Mirrors what a REPL host threads as ``ambient_type_names`` into a later
-    entry's resolution: root paths in ``declared_type_paths`` are exactly the
-    single-segment ones.
+    Root paths in ``declared_type_paths`` are exactly the single-segment ones.
     """
     return frozenset(path[0] for path in r.declared_type_paths if len(path) == 1)
 
@@ -2522,7 +2520,6 @@ class TestParentScopeSeam:
                     entry_source,
                     parent_scope=prior.root_scope,
                     retained_type_owners=prior.type_owners,
-                    ambient_type_names=_root_type_names(prior),
                 )
             else:
                 parse_and_resolve(f"{declaration}\n{entry_source}")
@@ -2564,14 +2561,13 @@ class TestParentScopeSeam:
         # Field access on a parameter creates no constructor reference.
         assert fa_node.node_id not in entry.constructor_refs
 
-    def test_ambient_type_names_resolve_qualified_prior_entry_ctor(self) -> None:
-        """Qualified constructor from a prior REPL entry resolves via ambient_type_names."""
+    def test_retained_type_owners_resolve_qualified_prior_entry_ctor(self) -> None:
+        """Qualified constructor from a prior REPL entry resolves via its retained type owners."""
         prior = parse_and_resolve_repl("enum Review\n  | Pass\n  | Fail\nPass()")
         entry = resolve_entry(
             "Review::Pass()",
             parent_scope=prior.root_scope,
             retained_type_owners=prior.type_owners,
-            ambient_type_names=_root_type_names(prior),
         )
         from agm.agl.syntax.nodes import Call as _Call
         from agm.agl.syntax.nodes import VarRef as _VarRef

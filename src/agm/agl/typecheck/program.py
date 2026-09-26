@@ -1216,6 +1216,8 @@ def _prepare_program(
     entry_seed_env: TypeEnvironment | None = None,
     cached_checked_modules: Mapping[ModuleId, CheckedModule | CheckedModuleImage] | None = None,
     retainable: RetainedSources | None = None,
+    session_builtin_declarations: Mapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]]
+    | None = None,
 ) -> _PreparedProgram:
     """Run Phases 1-3 of :func:`check_program`: prepare, but do not check, every module.
 
@@ -1234,6 +1236,10 @@ def _prepare_program(
     is journaled per module and replayed on a later compilation instead of
     re-resolving every declaration body and function header. Omitted, every
     module's headers are prepared from source.
+
+    *session_builtin_declarations* carries a REPL session's builtin
+    identities from earlier, still-live entries -- see
+    :func:`~agm.agl.typecheck.declaration_validation.validate_builtin_declaration_uniqueness`.
     """
     cached_checked_modules = cached_checked_modules or {}
 
@@ -1351,7 +1357,9 @@ def _prepare_program(
                 )
             register_method_header(env, item, signature, receiver, mid)
 
-    validate_builtin_declaration_uniqueness(program_modules, resolved.entry_id)
+    validate_builtin_declaration_uniqueness(
+        program_modules, resolved.entry_id, session_builtin_declarations
+    )
     validate_method_declaration_collisions(program_modules, shared_type_table)
 
     # Candidate discovery follows the reverse-topological dependency SCC
@@ -1429,6 +1437,8 @@ def check_program(
     capabilities: HostCapabilities,
     entry_seed_env: TypeEnvironment | None = None,
     cached_checked_modules: Mapping[ModuleId, CheckedModule | CheckedModuleImage] | None = None,
+    session_builtin_declarations: Mapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]]
+    | None = None,
 ) -> CheckedProgram:
     """Run the full type-checking pass over a :class:`ResolvedProgram`.
 
@@ -1454,6 +1464,12 @@ def check_program(
         there for the next compilation -- except under an ``entry_seed_env``,
         whose session types this call seeds the shared type table from, so its
         results are not a function of the loaded modules alone.
+    session_builtin_declarations:
+        A REPL session's builtin type and def identities from earlier,
+        still-live entries, keyed by scoped name to the declaring module and
+        its enclosing scope path -- see
+        :func:`~agm.agl.typecheck.declaration_validation.validate_builtin_declaration_uniqueness`.
+        ``None`` outside the REPL.
 
     Returns
     -------
@@ -1501,6 +1517,7 @@ def check_program(
         # loaded modules alone -- the same condition that keeps its checked
         # modules out of the artifact cache below.
         retainable=retainable if entry_seed_env is None else None,
+        session_builtin_declarations=session_builtin_declarations,
     )
     module_envs = prepared.module_envs
     program_type_table = prepared.program_type_table

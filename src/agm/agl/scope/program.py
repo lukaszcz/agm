@@ -166,12 +166,19 @@ class ResolvedProgram:
     ``graph``
         The loaded module graph, retained so consumers that need module
         reachability use its import/export adjacency rather than scope data.
+    ``retired_member_scopes``
+        Entry-only: the enum inline-member scopes this resolution retires
+        relative to ``entry_repl_session_type_paths`` (see
+        :func:`~agm.agl.scope.type_owners.retired_member_scopes`). Empty for a
+        non-REPL resolution. The REPL promotes this same set rather than
+        recomputing it.
     """
 
     modules: dict[ModuleId, ResolvedModule]
     all_public_funcs: dict[QName, FuncDef]
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
     graph: ModuleGraph
+    retired_member_scopes: frozenset[ScopePath] = frozenset()
 
     @property
     def entry_id(self) -> ModuleId:
@@ -683,7 +690,6 @@ def _reusable(
 def resolve_program(
     graph: ModuleGraph,
     *,
-    entry_ambient_type_names: frozenset[str] = frozenset(),
     entry_parent_scope: ScopeNode | None = None,
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -696,9 +702,6 @@ def resolve_program(
     ----------
     graph:
         A loaded module graph from :func:`~agm.agl.modules.loader.build_repl_graph`.
-    entry_ambient_type_names:
-        Type names from prior REPL entries, used for qualified constructor
-        access in the entry module.
     entry_parent_scope:
         When given, the entry module's root scope is parented to this scope
         so name lookups fall through to session bindings (REPL incremental
@@ -934,7 +937,7 @@ def resolve_program(
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
             parent_scope=entry_parent_scope if is_entry else None,
-            ambient_type_names=entry_ambient_type_names | type_names if is_entry else type_names,
+            ambient_type_names=type_names,
         )
 
     for mid, resolver in resolvers.items():
@@ -960,4 +963,5 @@ def resolve_program(
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
         graph=graph,
+        retired_member_scopes=retired,
     )

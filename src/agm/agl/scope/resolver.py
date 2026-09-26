@@ -499,6 +499,12 @@ class _Resolver:
         # Each retained type-owned path maps to the owner it resolved to when
         # declared, so a retained alias keeps its target after a redeclaration.
         self._repl_session_type_paths = dict(repl_session_type_paths or {})
+        # Root-level (unscoped) names among the retained type-owned paths
+        # above, the single derivation both an entry's ambient type-name
+        # visibility and its bare root-enum member injection read.
+        self._repl_session_root_type_names: frozenset[str] = frozenset(
+            path[0] for path in self._repl_session_type_paths if len(path) == 1
+        )
         # This module's canonical source file, or None for a module with no
         # backing file (inline `-c` sources, direct REPL entries). Drives the
         # `extern def` placement check — externs require a file-backed module.
@@ -632,9 +638,10 @@ class _Resolver:
 
     def _prepare(self, program: Program, ambient_type_names: frozenset[str]) -> None:
         """Collect *program*'s declarations and resolve its header contributions."""
-        if ambient_type_names:
-            self._declared_type_names.update(ambient_type_names)
-            self._type_paths.update((name,) for name in ambient_type_names)
+        combined_ambient_type_names = ambient_type_names | self._repl_session_root_type_names
+        if combined_ambient_type_names:
+            self._declared_type_names.update(combined_ambient_type_names)
+            self._type_paths.update((name,) for name in combined_ambient_type_names)
 
         # Published on the returned ModuleResolution as ``static_root``: true
         # for every importable module and for a loose file with its own
@@ -682,9 +689,20 @@ class _Resolver:
                 for cref in crefs:
                     self._add_constructor_candidate(cname, cref)
         type_owners = self._declared_type_owners()
+        # A retained path's owner is re-derived through the index rather than
+        # read off its stored, declaration-time value: an indirect alias's
+        # reachable members/hidden set can go stale as later entries change
+        # what is imported (``TypeOwnerIndex.owner``). Constructor candidates
+        # and ``hidden_alias_members`` share this one derivation, so scope and
+        # typecheck (which reads ``hidden_alias_members``) never disagree.
+        current_type_owners = {
+            path: owner
+            for path in {**self._repl_session_type_paths, **type_owners}
+            if (owner := self._type_owners.owner((self._module_id, _bare_atom(path)))) is not None
+        }
         # Pre-pass 4: collect constructor candidates from the module's current
         # types: the earlier REPL entries' this entry leaves current, then its own.
-        self._collect_constructor_candidates({**self._repl_session_type_paths, **type_owners})
+        self._collect_constructor_candidates(current_type_owners)
 
         # Define root functions as value bindings; scoped members are already
         # present in their named-scope layers.
@@ -741,9 +759,7 @@ class _Resolver:
                 if isinstance(declaration, EnumDef)
             },
             hidden_alias_members={
-                path: owner.hidden
-                for path, owner in {**self._repl_session_type_paths, **type_owners}.items()
-                if owner.hidden
+                path: owner.hidden for path, owner in current_type_owners.items() if owner.hidden
             },
         )
 
@@ -3900,13 +3916,22 @@ class _Resolver:
         if owner_ref is None:
             self._reject_use_alias_referenced_member(chain, variant)
             return None
+        type_owner = self._type_owners.owner(_ref_qname(owner_ref))
+        _reject_unselectable_member(type_owner, render_qualifier_path(chain), variant, chain.span)
+        if (
+            type_owner is not None
+            and type_owner.constructor is None
+            and type_owner.select(variant, relative_path[-1]) is not None
+        ):
+            # A nominal enum's (or an enum alias's) own inline members arrive only as
+            # use contributions, which honor hiding: none was open above, so a name
+            # the owner's own (unfiltered) declaration still selects is one this
+            # route hides rather than lacks.
+            raise hidden_member(render_qualified_name(chain, variant), chain.span)
         declared_child = _bare_atom((*owner_ref.scope_path, owner_ref.name, variant))
         if (owner_ref.module_id, declared_child) in self._decl_info:
             return set()
-        type_owner = self._type_owners.owner(_ref_qname(owner_ref))
-        _reject_unselectable_member(type_owner, render_qualifier_path(chain), variant, chain.span)
         if type_owner is not None and type_owner.constructor is None:
-            # A nominal enum's members arrive only as use contributions, which honor hiding.
             return set()
         constructor = None if type_owner is None else type_owner.select(variant, relative_path[-1])
         if constructor is None:
@@ -4828,7 +4853,7 @@ class _Resolver:
             roots: Iterable[tuple[str, QName]] = (
                 (root, (self._module_id, root))
                 for root in (
-                    *(path[0] for path in self._repl_session_type_paths if len(path) == 1),
+                    *self._repl_session_root_type_names,
                     *(item.name for item, path in self._type_declarations if not path),
                 )
             )

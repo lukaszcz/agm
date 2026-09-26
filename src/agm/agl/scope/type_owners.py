@@ -12,6 +12,7 @@ no declaration is presumed constructible, leaving the verdict to typecheck.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import replace
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
@@ -92,7 +93,7 @@ class TypeOwnerIndex:
         self._retained_module = retained_module
         self._retained = retained or {}
         self._owners: dict[QName, TypeOwner] = {}
-        self._alias_targets: dict[QName, frozenset[QName] | None] = {}
+        self._alias_targets: dict[QName, tuple[frozenset[QName], bool] | None] = {}
         self._referenced_members: dict[tuple[ModuleId, int], tuple[ConstructorRef, ...]] = {}
 
     def with_retained(
@@ -159,15 +160,69 @@ class TypeOwnerIndex:
         return self._referenced_members[key]
 
     def owner(self, qname: QName) -> TypeOwner | None:
-        """Return what type path *qname* selects, or ``None`` when it names no type."""
+        """Return what type path *qname* selects, or ``None`` when it names no type.
+
+        A retained alias's target identity (:attr:`TypeOwner.target`) is
+        never re-selected: it is exactly what its declaring entry resolved,
+        forever, however later entries redeclare or import around it. Only
+        when that target was reached through a ``use`` contribution or an
+        import route (:attr:`TypeOwner.indirect`) does a later entry
+        re-derive the alias's reachable ``members``/``hidden`` -- a
+        projection of the target's current owner through the alias's own
+        written spelling, re-evaluated at this entry's site, but only while
+        that spelling still selects the same stored target (see
+        :meth:`_rederive_retained_alias`). A retained alias reached by a
+        direct hit never depends on imports, so it is replayed verbatim.
+        """
         declaration = self._all_public_types.get(qname)
         if declaration is not None:
             return self.declared_owner(qname, declaration)
         retained = self._retained_owner(qname)
         if retained is not None:
+            if retained.indirect and retained.alias is not None and retained.target is not None:
+                return self._rederive_retained_alias(
+                    qname, retained, retained.alias, retained.target
+                )
             return retained
         member = self._member_constructor(qname)
         return None if member is None else TypeOwner(member, frozenset({member.owner_name}))
+
+    def _rederive_retained_alias(
+        self, qname: QName, retained: TypeOwner, alias: TypeAlias, target: QName
+    ) -> TypeOwner:
+        """Re-derive a retained indirect alias's reachable ``members``/``hidden``.
+
+        Never re-selects *target*: takes its current owner (its full member
+        set, itself re-derived the same way when it is in turn a retained
+        indirect alias) and filters it through *alias*'s own written target
+        spelling, evaluated at this entry's site. That filtering runs only
+        while the spelling still selects *target* -- otherwise the route the
+        alias was declared through no longer exists (the target is shadowed
+        by a later declaration, ambiguous, or gone), and the declaration-time
+        ``members``/``hidden`` in *retained* stand unchanged.
+        """
+        target_owner = self.owner(target)
+        if target_owner is None:
+            return retained
+        selection = self._alias_selection(qname, alias)
+        current_targets = None if selection is None else selection[0]
+        if current_targets != frozenset({target}):
+            return retained
+        reachable = target_owner.members
+        if target_owner.alias is None and isinstance(alias.type_expr, (NameT, AppliedT)):
+            module_id, atom = qname
+            site = self.site(module_id, _path(atom)[:-1], alias.type_params)
+            reachable = {
+                name: member
+                for name, member in target_owner.members.items()
+                if (member.owner_module_id, _atom((*member.owner_path, member.owner_name)))
+                in imported_member_selection(site, alias.type_expr, name)
+            }
+        return replace(
+            retained,
+            members=reachable,
+            hidden=target_owner.hidden | (target_owner.members.keys() - reachable.keys()),
+        )
 
     def declared_owner(
         self, qname: QName, declaration: RecordDef | EnumDef | ExceptionDef | TypeAlias
@@ -182,7 +237,7 @@ class TypeOwnerIndex:
     def alias_constructor(self, alias: TypeAlias, qname: QName) -> ConstructorRef | None:
         """Return alias *qname*'s constructor, unless it denotes a structural type or an enum."""
         owner = self.declared_owner(qname, alias)
-        return owner.constructor if owner.names else None
+        return owner.constructor if owner.constructible else None
 
     def _resolve(
         self, qname: QName, declaration: RecordDef | EnumDef | ExceptionDef | TypeAlias
@@ -208,15 +263,24 @@ class TypeOwnerIndex:
         # alias is presumed constructible; an alias cycle meets it that way.
         presumed = TypeOwner(constructor, frozenset({declaration.name}), alias=declaration)
         self._owners[qname] = presumed
-        targets = self._alias_selection(qname, declaration)
-        if targets is None:
+        selection = self._alias_selection(qname, declaration)
+        if selection is None:
             return TypeOwner(None, alias=declaration)
-        target = self.owner(next(iter(targets))) if len(targets) == 1 else None
+        targets, indirect = selection
+        target_qname = next(iter(targets)) if len(targets) == 1 else None
+        target = self.owner(target_qname) if target_qname is not None else None
         if target is None:
             return presumed
         reachable = target.members
-        if next(iter(targets))[0] != module_id and isinstance(
-            declaration.type_expr, (NameT, AppliedT)
+        # Filter reachable members against what the site's own hiding allows
+        # only when the target is the enum declaration itself: an alias
+        # target already filtered its own ``members``/``hidden`` at its own
+        # site, which this owner inherits unfiltered below. A direct hit (no
+        # ``hiding`` is possible) also skips filtering.
+        if (
+            indirect
+            and target.alias is None
+            and isinstance(declaration.type_expr, (NameT, AppliedT))
         ):
             site = self.site(module_id, path[:-1], declaration.type_params)
             reachable = {
@@ -232,10 +296,18 @@ class TypeOwnerIndex:
             target.referenced,
             declaration,
             hidden=target.hidden | (target.members.keys() - reachable.keys()),
+            indirect=indirect,
+            target=target_qname,
         )
 
-    def _alias_selection(self, qname: QName, alias: TypeAlias) -> frozenset[QName] | None:
-        """Return what alias *qname*'s target selects where declared; ``None`` if structural."""
+    def _alias_selection(
+        self, qname: QName, alias: TypeAlias
+    ) -> tuple[frozenset[QName], bool] | None:
+        """Return what alias *qname*'s target selects where declared, and whether indirectly.
+
+        ``None`` if the target is structural. See :func:`nominal_selection`
+        for the second element of a non-``None`` result.
+        """
         if qname not in self._alias_targets:
             site = self.site(qname[0], _path(qname[1])[:-1], alias.type_params)
             self._alias_targets[qname] = nominal_selection(site, alias.type_expr)
@@ -285,7 +357,8 @@ class TypeOwnerIndex:
     def _constructors_through(self, qname: QName) -> tuple[ConstructorRef, ...]:
         """Follow aliases from *qname* to the record constructor at the end of the chain.
 
-        A retained path reads the owner an earlier REPL entry resolved for it.
+        A retained path follows the target identity an earlier REPL entry
+        resolved for it (:attr:`TypeOwner.target`), never re-selecting it.
         """
         seen: set[QName] = set()
         current: QName | None = qname
@@ -295,14 +368,18 @@ class TypeOwnerIndex:
             if constructor is not None:
                 return (constructor,)
             declaration = self._all_public_types.get(current)
-            retained = self._retained_owner(current) if declaration is None else None
-            if retained is not None and retained.alias is None:
-                return () if retained.constructor is None else (retained.constructor,)
-            if retained is not None:
-                declaration = retained.alias
+            if declaration is None:
+                retained = self._retained_owner(current)
+                if retained is None:
+                    return ()
+                if retained.alias is None:
+                    return () if retained.constructor is None else (retained.constructor,)
+                current = retained.target
+                continue
             if not isinstance(declaration, TypeAlias):
                 return ()
-            targets = self._alias_selection(current, declaration)
+            selection = self._alias_selection(current, declaration)
+            targets = None if selection is None else selection[0]
             current = next(iter(targets)) if targets is not None and len(targets) == 1 else None
         return ()
 
@@ -362,7 +439,7 @@ def owned_constructors(
                     for injected in owner.injected:
                         if _is_current(module_id, owners, injected):
                             yield injected.owner_name, injected, (), True
-        elif owner.names:
+        elif owner.constructible:
             yield path[-1], owner.constructor, path[:-1], bare
 
 
@@ -376,12 +453,9 @@ def _is_current(
     if constructor.owner_module_id != module_id:
         return True
     at_path = owners.get((*constructor.owner_path, constructor.owner_name))
-    enum = owners.get(constructor.owner_path)
-    current = (
-        at_path.constructor
-        if at_path is not None
-        else None
-        if enum is None
-        else enum.members.get(constructor.owner_name)
-    )
+    if at_path is not None:
+        current = at_path.constructor
+    else:
+        enum = owners.get(constructor.owner_path)
+        current = None if enum is None else enum.members.get(constructor.owner_name)
     return current is not None and current.owner_decl_node_id == constructor.owner_decl_node_id

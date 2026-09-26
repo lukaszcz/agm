@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Literal, assert_never
+from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.modules.ids import ModuleId, spell_declaration
 from agm.agl.scope.symbols import BUILTIN_METHOD_RECEIVER_NAMES, ModuleResolution
@@ -19,6 +19,7 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     FuncDef,
+    Item,
     RecordDef,
     TypeAlias,
     static_function_items,
@@ -307,17 +308,47 @@ def _module_visit_order(module_id: ModuleId, entry_id: ModuleId) -> tuple[bool, 
     return (module_id == entry_id, module_id.segments)
 
 
+def is_bare_declaration(
+    item: Item,
+) -> TypeGuard[RecordDef | EnumDef | ExceptionDef | TypeAlias | FuncDef]:
+    """Whether *item* is one of the AST kinds sharing the bare-declaration name space.
+
+    A record/enum/exception/alias type and a def share one name space within
+    the declaration's scope path (see :func:`is_builtin_bare_declaration`).
+    """
+    return isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias, FuncDef))
+
+
+def is_builtin_bare_declaration(
+    item: Item,
+) -> TypeGuard[RecordDef | EnumDef | ExceptionDef | TypeAlias | FuncDef]:
+    """Whether *item* is a builtin type or builtin def sharing the bare-declaration namespace.
+
+    A ``builtin`` type (record/enum/exception/alias) and a ``builtin def``
+    share one name space within the declaration's scope path. A ``builtin
+    var`` is neither, and is excluded. This lets a builtin method coexist with
+    the root builtin it dispatches to while retaining one declaration per
+    scoped host identity.
+    """
+    return is_bare_declaration(item) and item.is_builtin
+
+
+def bare_declaration_scoped_name(item: Item) -> tuple[str, ...] | None:
+    """Return *item*'s full scoped name (its scope path plus its own name).
+
+    ``None`` when *item* is not one of the bare-declaration kinds
+    (:func:`is_bare_declaration`).
+    """
+    if is_bare_declaration(item):
+        return (*(segment.name for segment in item.scope_path), item.name)
+    return None
+
+
 def _builtin_bare_declarations(
     modules: Mapping[ModuleId, ModuleResolution],
     entry_id: ModuleId,
 ) -> list[tuple[ModuleId, tuple[str, ...], str, SourceSpan]]:
     """List every builtin type and builtin def declaration by scoped name.
-
-    A ``builtin`` type (record/enum/exception/alias) and a ``builtin def`` share one
-    name space within the declaration's scope path. A ``builtin var`` is
-    neither, and is excluded. This lets a builtin method coexist with the
-    root builtin it dispatches to while retaining one declaration per scoped
-    host identity.
 
     Modules are visited in :func:`_module_visit_order`, and each module's
     items in source order (named scope regions inlined), so a program with
@@ -327,18 +358,31 @@ def _builtin_bare_declarations(
     for module_id in sorted(modules, key=partial(_module_visit_order, entry_id=entry_id)):
         resolved = modules[module_id]
         for item in static_items(resolved.program.body.items):
-            if not isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias, FuncDef)):
-                continue
-            if not item.is_builtin:
-                continue
-            path = tuple(segment.name for segment in item.scope_path)
-            found.append((module_id, path, item.name, item.span))
+            if is_builtin_bare_declaration(item):
+                path = tuple(segment.name for segment in item.scope_path)
+                found.append((module_id, path, item.name, item.span))
     return found
+
+
+def _entry_declared_scoped_names(resolved: ModuleResolution) -> frozenset[tuple[str, ...]]:
+    """Return every scoped name the entry module itself declares, builtin or not.
+
+    A REPL entry's own fresh declaration at a scoped name supersedes
+    whatever a still-live earlier entry recorded there (see
+    ``session_builtins`` below), whether or not either declaration is a
+    ``builtin`` one.
+    """
+    return frozenset(
+        name
+        for item in static_items(resolved.program.body.items)
+        if (name := bare_declaration_scoped_name(item)) is not None
+    )
 
 
 def validate_builtin_declaration_uniqueness(
     modules: Mapping[ModuleId, ModuleResolution],
     entry_id: ModuleId,
+    session_builtins: Mapping[tuple[str, ...], tuple[ModuleId, tuple[str, ...]]] | None = None,
 ) -> None:
     """Reject a builtin name declared more than once at the same scope path.
 
@@ -346,8 +390,25 @@ def validate_builtin_declaration_uniqueness(
     boundary. Its scoped name, rather than its bare spelling, is the identity:
     a root builtin and a method under a receiver type intentionally coexist.
     Types and defs still share one namespace at any one scoped name.
+
+    ``session_builtins`` carries builtin identities a REPL session already
+    holds from an earlier, still-live entry -- outside *modules*, this call's
+    own module graph -- keyed by scoped name, so a later entry importing the
+    same scoped builtin is rejected exactly as it would be declared in one
+    module. Their declaring source is gone by the time a later entry runs, so
+    the conflict is reported at the new declaration alone, without a
+    "declared here" note. A name the entry module itself declares is excluded:
+    that redeclaration supersedes the session's prior identity there rather
+    than clashing with it.
     """
-    first_seen: dict[tuple[str, ...], tuple[ModuleId, tuple[str, ...], SourceSpan]] = {}
+    entry_declared = (
+        _entry_declared_scoped_names(modules[entry_id]) if session_builtins else frozenset()
+    )
+    first_seen: dict[tuple[str, ...], tuple[ModuleId, tuple[str, ...], SourceSpan | None]] = {
+        key: (module_id, path, None)
+        for key, (module_id, path) in (session_builtins or {}).items()
+        if key not in entry_declared
+    }
     for module_id, path, name, span in _builtin_bare_declarations(modules, entry_id):
         key = (*path, name)
         prior = first_seen.get(key)
@@ -357,11 +418,14 @@ def validate_builtin_declaration_uniqueness(
         prior_module_id, prior_path, prior_span = prior
         first_spelling = spell_declaration(prior_module_id, (*prior_path, name))
         duplicate_spelling = spell_declaration(module_id, (*path, name))
+        related = (
+            () if prior_span is None else ((f"'{first_spelling}' is declared here", prior_span),)
+        )
         raise AglTypeError(
             f"Builtin '{name}' is declared more than once: as '{first_spelling}' and as "
             f"'{duplicate_spelling}'.",
             span=span,
-            related=((f"'{first_spelling}' is declared here", prior_span),),
+            related=related,
         )
 
 

@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.program import ResolvedProgram
+    from agm.agl.scope.symbols import ScopePath
     from agm.agl.semantics.values import Value
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Item, Program, ScopeRegion
@@ -52,6 +53,7 @@ class LoadedCheckedProgram:
     entry_uses: "tuple[ImportDecl | ScopeRegion, ...]"
     entry_infix_ambient: "dict[str, tuple[int, InfixAssoc]]"
     raw_param_values: "dict[StaticBindingKey, object]"
+    retired_member_scopes: "frozenset[ScopePath]"
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +118,7 @@ class EntryPipeline:
                 host_env.capabilities,
                 entry_seed_env=self._ctx._type_env,
                 cached_checked_modules=self._ctx._retained_checked_modules,
+                session_builtin_declarations=self._ctx._session_builtin_declarations,
             )
         self._retain_module_artifacts(resolved_program, checked_program)
         raw_param_values = self._resolve_new_module_params(checked_program, new_modules)
@@ -128,6 +131,7 @@ class EntryPipeline:
             entry_uses=entry_uses,
             entry_infix_ambient=graph.entry_infix_ambient,
             raw_param_values=raw_param_values,
+            retired_member_scopes=resolved_program.retired_member_scopes,
         )
 
     def _resolve_new_module_params(
@@ -185,6 +189,7 @@ class EntryPipeline:
         entry_uses = loaded.entry_uses
         entry_infix_ambient = loaded.entry_infix_ambient
         raw_param_values = loaded.raw_param_values
+        retired_member_scopes = loaded.retired_member_scopes
         entry_cm = checked_program.modules[checked_program.entry_id]
 
         # Collect warnings from all passes.
@@ -238,6 +243,7 @@ class EntryPipeline:
             entry_infix_ambient=entry_infix_ambient,
             contract_payloads=contract_payloads,
             raw_param_values=raw_param_values,
+            retired_member_scopes=retired_member_scopes,
         )
 
     def resolve_and_check_program(
@@ -267,6 +273,7 @@ class EntryPipeline:
             host_env.capabilities,
             entry_seed_env=self._ctx._type_env,
             cached_checked_modules=self._ctx._retained_checked_modules,
+            session_builtin_declarations=self._ctx._session_builtin_declarations,
         )
 
     def resolve_program(
@@ -326,7 +333,6 @@ class EntryPipeline:
 
         return resolve_program(
             graph,
-            entry_ambient_type_names=self._ctx._ambient_type_names,
             entry_parent_scope=self._ctx._session_scope,
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
@@ -520,6 +526,7 @@ class EntryPipeline:
         entry_infix_ambient: Mapping[str, tuple[int, InfixAssoc]],
         contract_payloads: Mapping[int, "ContractPayload"],
         raw_param_values: Mapping["StaticBindingKey", object],
+        retired_member_scopes: "frozenset[ScopePath]",
     ) -> EntryResult:
         """Lower and execute one program entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import HostConfigurationError, IrInterpreter
@@ -783,6 +790,8 @@ class EntryPipeline:
                 promoted_scope_region_paths=promoted_scope_region_paths,
                 promoted_use_declaration_ids=promoted_use_declaration_ids,
                 infix_ambient=entry_infix_ambient,
+                retired_scopes=retired_member_scopes,
+                entry_module_id=checked_program.entry_id,
             )
 
         def partial_failure(

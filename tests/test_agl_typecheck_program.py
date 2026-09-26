@@ -1360,6 +1360,28 @@ def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child(tmp_path: Pa
         )
 
 
+def test_use_of_enum_alias_does_not_restore_explicitly_hidden_child_in_is_position(
+    tmp_path: Path,
+) -> None:
+    """The same hiding is honoured for the ``is`` spelling, not only construction."""
+    with pytest.raises(AglScopeError):
+        check_agl_program(
+            tmp_path,
+            {
+                "entry": (
+                    "import lib\n"
+                    "use lib::* hiding Alias::some\n"
+                    "let value: Alias = lib::Alias::some(value = 1)\n"
+                    "let result = value is Alias::some\n"
+                    "result"
+                ),
+                "lib": (
+                    "enum Option\n  | some(value: int)\ntype Alias = Option\nrecord Alias::some"
+                ),
+            },
+        )
+
+
 def test_imported_generic_alias_to_record_constructs_transparently(tmp_path: Path) -> None:
     """A generic alias constructs its nominal record target."""
     checked = check_agl_program(

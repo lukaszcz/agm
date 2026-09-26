@@ -362,6 +362,15 @@ class ReplSession:
         # Each retained type-owned path maps to the owner it resolved to when
         # declared, so a retained alias keeps its target across entries.
         self._session_type_paths: dict[tuple[str, ...], TypeOwner] = {}
+        # Builtin type and def identities of the current declarations, keyed by
+        # scoped name to the declaring module and its enclosing scope path. A
+        # REPL entry's own source cannot see an earlier entry's builtin
+        # declaration in its module graph (each entry recompiles a fresh entry
+        # module), so ``validate_builtin_declaration_uniqueness`` reads this
+        # instead to catch a later entry importing the same scoped builtin.
+        self._session_builtin_declarations: dict[
+            tuple[str, ...], tuple[ModuleId, tuple[str, ...]]
+        ] = {}
         self._type_env: TypeEnvironment = TypeEnvironment()
         self._type_env.seal()
         self._link_image = LinkImage()
@@ -369,9 +378,6 @@ class ReplSession:
         self._next_node_id: int = 0
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
-        # Type names declared in prior promoted entries, for qualified constructor
-        # access (``Owner::variant``) across REPL entries.
-        self._ambient_type_names: frozenset[str] = frozenset()
 
         # Module roots configuration.
         # These are stored so _ensure_roots() can assemble the RootSet lazily.
@@ -1035,17 +1041,15 @@ class ReplSession:
         promoted_scope_region_paths: frozenset[tuple[str, ...]],
         promoted_use_declaration_ids: frozenset[int],
         infix_ambient: Mapping[str, tuple[int, "InfixAssoc"]],
+        retired_scopes: frozenset[tuple[str, ...]],
+        entry_module_id: ModuleId,
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
         from dataclasses import replace
 
         from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
-        from agm.agl.scope.type_owners import (
-            beneath,
-            declared_member_scopes,
-            retired_member_scopes,
-        )
+        from agm.agl.scope.type_owners import beneath
         from agm.agl.syntax.nodes import (
             EnumDef,
             ExceptionDef,
@@ -1057,6 +1061,10 @@ class ReplSession:
             VarDecl,
             VariantDef,
             static_items,
+        )
+        from agm.agl.typecheck.declaration_validation import (
+            bare_declaration_scoped_name,
+            is_builtin_bare_declaration,
         )
         from agm.agl.typecheck.env import TypeEnvironment, assert_checked_module_closed
 
@@ -1111,6 +1119,15 @@ class ReplSession:
             if item.node_id in promoted_declaration_ids
         )
         replaced_type_name_paths = promoted_type_name_paths if partial else entry_type_name_paths
+        replaced_type_paths = frozenset((*path, name) for path, name in replaced_type_name_paths)
+        # ``retired_scopes`` (from the checked program's resolution) reflects
+        # every type path this entry's own module redeclares, not only the
+        # ones this promotion actually promotes: a partial entry must retire
+        # only the member scopes of a type path it actually replaced, or it
+        # wrongly retires a redeclaration's scopes it never promoted.
+        retired_scopes = frozenset(
+            scope for scope in retired_scopes if scope[:-1] in replaced_type_paths
+        )
         unpromoted_type_name_paths = entry_type_name_paths - promoted_type_name_paths
         unpromoted_type_scope_paths = frozenset(
             (*path, name) for path, name in unpromoted_type_name_paths
@@ -1141,16 +1158,6 @@ class ReplSession:
             for path, name in replaced_type_name_paths
             if (*path, name) in self._session_scope_nodes
         )
-        replaced_type_paths = {(*path, name) for path, name in replaced_type_name_paths}
-        retired_scopes = retired_member_scopes(
-            self._session_type_paths,
-            {
-                path: names
-                for path, names in declared_member_scopes(program.body.items).items()
-                if path in replaced_type_paths
-            },
-        )
-
         # Every replacement of an enum owner, including replacement by a
         # record or alias, retires its prior inline member scopes. Nested
         # standalone declarations remain and are copied back below.
@@ -1160,6 +1167,25 @@ class ReplSession:
         for type_path in tuple(self._session_type_paths):
             if beneath(type_path, retired_scopes):
                 del self._session_type_paths[type_path]
+        for scoped_name in tuple(self._session_builtin_declarations):
+            if beneath(scoped_name, retired_scopes):
+                del self._session_builtin_declarations[scoped_name]
+        # A promoted declaration at a scoped name always supersedes whatever
+        # this session recorded there, builtin or not: drop the old entry
+        # first, then re-record it only when the fresh declaration is itself
+        # a ``builtin`` one.
+        for item in entry_declarations:
+            if item.node_id not in promoted_declaration_ids:
+                continue
+            declared_name = bare_declaration_scoped_name(item)
+            if declared_name is None:
+                continue
+            self._session_builtin_declarations.pop(declared_name, None)
+            if is_builtin_bare_declaration(item):
+                self._session_builtin_declarations[declared_name] = (
+                    entry_module_id,
+                    declared_name[:-1],
+                )
 
         for name, ref in promotion_bindings.items():
             if ref.decl_node_id not in promoted_binding_node_ids:
@@ -1203,13 +1229,17 @@ class ReplSession:
                 required_scope_paths.update(
                     member_path[:length] for length in range(1, len(member_path) + 1)
                 )
+        # ``required_scope_paths`` is already prefix-closed: its seed,
+        # ``promoted_scope_region_paths``, is prefix-closed by construction
+        # (region nesting plus the frontier monotonicity `collect_regions`
+        # guarantees in ``lower/repl.py``), and both loops above add every
+        # ancestor of the paths they contribute. So a path has some longer
+        # entry inside it exactly when it is some entry's immediate parent --
+        # a single precomputed set instead of an all-pairs scan below.
+        parents_of_required = frozenset(path[:-1] for path in required_scope_paths if path)
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)
-            promoted_region = path in promoted_scope_region_paths or any(
-                declaration_path[: len(path)] == path
-                for declaration_path in required_scope_paths
-                if len(declaration_path) > len(path)
-            )
+            promoted_region = path in promoted_scope_region_paths or path in parents_of_required
             if session_node is not None:
                 if node.is_scope_region and promoted_region:
                     session_node.is_scope_region = True
@@ -1328,7 +1358,20 @@ class ReplSession:
             for type_path in promoted_type_paths
         )
 
-        if not partial:
+        # A redeclared enum owner's retired inline members (see ``retired_scopes``
+        # above) stay registered in the type namespace across entries: checking
+        # an entry seeds its environment forward from the prior one, which never
+        # removes a name nothing in this entry redeclares. Retire them from the
+        # type namespace too, deriving the set from the same retirement this
+        # promotion already applied to session scope state, rather than a second
+        # accumulation.
+        retired_type_names = frozenset(
+            name
+            for name in checked.type_env.all_declared_type_names()
+            if beneath(tuple(name.split("::")), retired_scopes)
+        )
+
+        if not partial and not retired_type_names:
             # The checked environment already includes the prior sealed session
             # state and is itself sealed at the checked-output boundary. Reuse it
             # directly instead of copying the accumulated session a second time.
@@ -1341,22 +1384,23 @@ class ReplSession:
             # between them.
             new_type_env = TypeEnvironment()
             new_type_env.seed_from(checked.type_env)
-            new_type_env.rewind_from(
-                self._type_env,
-                type_names=unpromoted_type_names,
-                binding_node_ids=entry_binding_node_ids - promoted_binding_node_ids,
-                functions={
-                    item.node_id: item.name
-                    for item in entry_declarations
-                    if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
-                },
-            )
+            if partial:
+                new_type_env.rewind_from(
+                    self._type_env,
+                    type_names=unpromoted_type_names,
+                    binding_node_ids=entry_binding_node_ids - promoted_binding_node_ids,
+                    functions={
+                        item.node_id: item.name
+                        for item in entry_declarations
+                        if isinstance(item, FuncDef)
+                        and item.node_id not in promoted_declaration_ids
+                    },
+                )
+            for name in retired_type_names:
+                new_type_env.unregister_name(name)
             new_type_env.seal()
             self._type_env = new_type_env
 
-        self._ambient_type_names |= frozenset(
-            name for path, name in promoted_type_name_paths if not path
-        )
         if not partial:
             self._source_log.append(text)
         promoted_infix = [
@@ -1849,6 +1893,16 @@ class ReplSession:
             type_vars=frozenset(),
         )[1]
 
+    @property
+    def _ambient_type_names(self) -> frozenset[str]:
+        """Root-declared type names from prior promoted entries.
+
+        Derived from :attr:`_session_type_paths` rather than accumulated
+        separately, for qualified constructor access (``Owner::variant``)
+        across REPL entries and for :meth:`type_names`.
+        """
+        return frozenset(path[0] for path in self._session_type_paths if len(path) == 1)
+
     def type_names(self) -> frozenset[str]:
         """Return the names of types declared in prior promoted entries.
 
@@ -1885,13 +1939,13 @@ class ReplSession:
         self._session_scope = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes = {(): self._session_scope}
         self._session_type_paths = {}
+        self._session_builtin_declarations = {}
         self._type_env = TypeEnvironment()
         self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame = {}
         self._next_node_id = 0
         self._source_log = []
-        self._ambient_type_names = frozenset()
         # Restore the current-value map to the seed, so a prior
         # ``std/config::KEY := VALUE`` write does not bleed past :reset.
         # ``_engine_seed`` is now populated with any declared default learned

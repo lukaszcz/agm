@@ -429,7 +429,16 @@ class TypeOwner:
     enum declaration only, its referenced members' record constructors, whose
     names a root enum injects bare. ``hidden`` holds the names of the inline
     members an alias's target spelling cannot reach, since its import hides
-    them: they are left out of ``members``.
+    them: they are left out of ``members``. ``target`` holds, for an alias
+    with a nominal target, the target's own ``QName``: the identity a REPL
+    entry retains and never re-selects, however later entries redeclare or
+    import around it. ``indirect`` holds, for an alias, whether ``target``
+    was reached through a ``use`` contribution or an import route rather than
+    this module's own nearest declaration: only then can a retained alias's
+    ``members``/``hidden`` become stale as later entries change what is
+    imported, so only then does a REPL entry re-derive them (against the same
+    ``target``); a direct hit's target identity, once resolved, never depends
+    on anything that can later change.
     """
 
     constructor: ConstructorRef | None
@@ -439,11 +448,22 @@ class TypeOwner:
     alias: TypeAlias | None = None
     injected: tuple[ConstructorRef, ...] = ()
     hidden: frozenset[str] = frozenset()
+    indirect: bool = False
+    target: QName | None = None
 
     @property
     def constructs(self) -> bool:
         """Whether the owner qualifies constructors: its own, or its enum members'."""
         return bool(self.names or self.members or self.referenced)
+
+    @property
+    def constructible(self) -> bool:
+        """Whether the owner's own bare spelling names a constructor.
+
+        True for a record, exception, or constructible alias; false for an
+        enum or a structural target.
+        """
+        return self.constructor is not None and bool(self.names)
 
     def select(self, name: str, written: str) -> ConstructorRef | None:
         """Return the constructor ``Owner::name`` selects, with the owner spelled *written*.

@@ -70,6 +70,21 @@ def bare_type_selection(
 
 def type_name_selection(site: TypeNameSite, type_expr: NameT | AppliedT) -> frozenset[QName]:
     """Return every declaration *type_expr*'s name selects at *site*; several are ambiguous."""
+    return _type_name_selection(site, type_expr)[0]
+
+
+def _type_name_selection(
+    site: TypeNameSite, type_expr: NameT | AppliedT
+) -> tuple[frozenset[QName], bool]:
+    """Return *type_expr*'s selection at *site*, and whether it was reached indirectly.
+
+    A direct hit (the site's own nearest lexical declaration) carries no
+    ``hiding``: the second element is ``False`` only then. Every other route
+    -- a bare name's contributions or root import tails, an unanchored
+    qualified path's contributions, or a qualified name's module route --
+    already reflects whatever ``hiding`` applies there, so the second element
+    is ``True``.
+    """
     qualifier = type_expr.qualifier
     anchor = None if qualifier is None else qualifier.anchor
     segments = () if qualifier is None else qualifier.route_segments
@@ -79,14 +94,14 @@ def type_name_selection(site: TypeNameSite, type_expr: NameT | AppliedT) -> froz
         ):
             path = (*base, *segments, type_expr.name)
             if site.declares(path):
-                return frozenset({(site.module_id, _atom(path))})
+                return frozenset({(site.module_id, _atom(path))}), False
     if qualifier is None:
-        return bare_type_selection(site, type_expr.name)[0]
+        return bare_type_selection(site, type_expr.name)[0], True
     if anchor is None:
         layer = site.contributions(_atom((*segments, type_expr.name)))
         if layer is not None:
-            return layer[1]
-    return _routed_selection(site, qualifier, (type_expr.name,))
+            return layer[1], True
+    return _routed_selection(site, qualifier, (type_expr.name,)), True
 
 
 def imported_member_selection(
@@ -125,11 +140,14 @@ def _routed_selection(
     return frozenset() if routed is None else frozenset({routed})
 
 
-def nominal_selection(site: TypeNameSite, type_expr: TypeExpr) -> frozenset[QName] | None:
-    """Return what *type_expr* selects at *site*, or ``None`` when it is structural.
+def nominal_selection(
+    site: TypeNameSite, type_expr: TypeExpr
+) -> tuple[frozenset[QName], bool] | None:
+    """Return what *type_expr* selects at *site* and whether that was indirect.
 
-    A structural type expression is not a type name, or is the bare name of
-    one of the site's type parameters.
+    ``None`` when *type_expr* is structural: not a type name, or the bare name
+    of one of the site's type parameters. See :func:`_type_name_selection` for
+    the second element.
     """
     if not isinstance(type_expr, (NameT, AppliedT)) or (
         isinstance(type_expr, NameT)
@@ -137,4 +155,4 @@ def nominal_selection(site: TypeNameSite, type_expr: TypeExpr) -> frozenset[QNam
         and type_expr.name in site.type_params
     ):
         return None
-    return type_name_selection(site, type_expr)
+    return _type_name_selection(site, type_expr)

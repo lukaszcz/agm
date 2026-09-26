@@ -1371,14 +1371,21 @@ class TypeEnvironment:
     ) -> QName:
         """Resolve a module route followed by one structured type path."""
         import_env, route, atom = self._import_route_member(qualifier, name)
+
+        def unknown_qualifier(rendered: str) -> AglTypeError:
+            # No route names this qualifier: before reporting that, check whether
+            # it instead names a local enum whose own (unfiltered) declaration
+            # still selects this member -- a local ``hiding`` or narrower ``use``
+            # tail excludes it, rather than no declaration existing at all.
+            self._reject_hidden_owner_member(qualifier, name, span)
+            return AglTypeError(f"Unknown module qualifier '{rendered}::'.", span=span)
+
         return resolve_qualified_member(
             import_env,
             route,
             atom,
             anchored=qualifier.anchored,
-            unknown_qualifier=lambda rendered: AglTypeError(
-                f"Unknown module qualifier '{rendered}::'.", span=span
-            ),
+            unknown_qualifier=unknown_qualifier,
             missing_member=lambda rendered: AglTypeError(
                 f"Type '{name}' is not accessible via qualifier '{rendered}::'.", span=span
             ),
@@ -1464,6 +1471,25 @@ class TypeEnvironment:
             raise ReferencedMemberError(spelling, member, span=span)
         return selected
 
+    def _reject_hidden_owner_member(
+        self, qualifier: QualifierChain, name: str, span: SourceSpan | None
+    ) -> None:
+        """Raise when ``qualifier::name`` names a direct enum's own inline member no open use
+        or import route currently reaches.
+
+        Reaching this fallback already means no route opened it, so a name the enum's own
+        (unfiltered) declaration still selects is one a local ``hiding`` -- or a narrower
+        ``use`` tail -- excludes, not a name that does not exist. An aliased owner never
+        reaches this fallback: its own hidden members are already rejected, against the
+        alias's own written spelling, before a route lookup can fail.
+        """
+        owner_template = self._enum_owner_template(owner_type_expr(qualifier), span)
+        if owner_template is None:
+            return
+        enum_type, _, _ = owner_template
+        if self.owner_inline_member(enum_type, render_qualifier_path(qualifier), name, span=span):
+            raise hidden_member(f"{render_qualifier_path(qualifier)}::{name}", span)
+
     def _reject_referenced_owner_member(
         self, qualifier: QualifierChain, name: str, span: SourceSpan | None
     ) -> None:
@@ -1480,7 +1506,7 @@ class TypeEnvironment:
             )
 
     def _enum_owner_template(
-        self, owner: NameT, span: SourceSpan | None
+        self, owner: NameT | AppliedT, span: SourceSpan | None
     ) -> tuple[EnumType, tuple[str, ...], DeclKey | None] | None:
         """Return the enum template *owner* names, its parameters, and the alias naming it."""
         key = self.type_name_declaration(owner, span=span)

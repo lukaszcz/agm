@@ -1510,7 +1510,10 @@ class TestBareConstructorVisibilityAcrossEntries:
         for probe, expected in probes:
             result = s.eval_entry(probe)
             if expected is None:
-                assert not result.ok, probe
+                # Rejected statically (an unknown/hidden name), not crashed at
+                # runtime for an unrelated reason.
+                assert result.diagnostics, probe
+                assert result.error is None, probe
             else:
                 assert result.value == expected, (probe, result.diagnostics)
 
@@ -1568,7 +1571,10 @@ class TestBareConstructorVisibilityAcrossEntries:
             assert s.eval_entry(redeclare).ok
             result = s.eval_entry(use)
 
-        assert not result.ok
+        # Rejected statically (the superseded member is gone), not crashed at
+        # runtime for an unrelated reason.
+        assert result.diagnostics
+        assert result.error is None
 
     def test_root_enum_reference_to_a_scoped_record_stays_bare_within_one_entry(self) -> None:
         s = open_session()
@@ -1666,6 +1672,110 @@ class TestScopeQualifiedConstructorsAcrossEntries:
         assert [d.message for d in result.diagnostics] == [str(expected)]
 
 
+class TestRetainedAliasTargetIdentity:
+    """A retained alias keeps the target identity it resolved at its own
+    declaration, forever: a later local redeclaration of the alias's target
+    spelling, or a later import that shadows it, must never re-select what
+    the alias names. Re-selecting instead of storing the target risks
+    resolving to a declaration whose members the alias's checked program
+    never saw, crashing the checker (see ``TypeOwnerIndex.owner``).
+    """
+
+    def _session(self, tmp_path: Path) -> ReplSession:
+        (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+        (tmp_path / "n.agl").write_text("enum Color = Red | Blue\n", encoding="utf-8")
+        return ReplSession(cwd=tmp_path)
+
+    def test_a_local_redeclaration_of_the_alias_target_leaves_a_stale_member_a_static_error(
+        self, tmp_path: Path
+    ) -> None:
+        s = self._session(tmp_path)
+        assert s.eval_entry("import m::*\ntype C = Color").ok
+        assert s.eval_entry("enum Color = X | Y").ok
+
+        stale = s.eval_entry("C::X")
+        assert not stale.ok
+        assert stale.diagnostics
+
+    def test_a_local_redeclaration_of_the_alias_target_leaves_its_own_member_reachable(
+        self, tmp_path: Path
+    ) -> None:
+        s = self._session(tmp_path)
+        assert s.eval_entry("import m::*\ntype C = Color").ok
+        assert s.eval_entry("enum Color = X | Y").ok
+
+        value = s.eval_entry("let d = C::Red\nd")
+        assert value.ok, value.diagnostics
+
+        matched = s.eval_entry("let c: C = m::Color::Red\ncase c of | C::Red => 1 | _ => 2")
+        assert matched.value == IntValue(1)
+
+    def test_a_later_wildcard_import_of_a_same_named_module_does_not_retarget_the_alias(
+        self, tmp_path: Path
+    ) -> None:
+        s = self._session(tmp_path)
+        assert s.eval_entry("import m::*\ntype C = Color").ok
+        assert s.eval_entry("import n::*").ok
+
+        value = s.eval_entry("let x = C::Red\nx")
+        assert value.ok, value.diagnostics
+
+        tested = s.eval_entry("let c: C = m::Color::Green\nc is C::Green")
+        assert tested.value == BoolValue(True)
+
+
+def test_an_indirect_alias_keeps_its_declaration_time_members_once_its_target_is_retired() -> None:
+    """A retained alias reached through a ``use`` route falls back to its
+    declaration-time members once the route it was declared through no
+    longer exists: redeclaring the enum that owned the alias's target member
+    scope retires that scope, but the alias -- declared before the
+    retirement -- must keep resolving exactly as it did at declaration time,
+    rather than crashing for lack of a current target owner.
+    """
+    s = ReplSession()
+    for decl in (
+        "enum Foo | Old",
+        "enum Foo::Old::E = A | B",
+        "use Foo::Old::*",
+        "type C = E",
+    ):
+        assert s.eval_entry(decl).ok
+
+    before = s.eval_entry("let v = C::A\nv")
+    assert before.ok, before.diagnostics
+
+    assert s.eval_entry("enum Foo | New").ok
+
+    after = s.eval_entry("let v = C::A\nv")
+    assert after.ok, after.diagnostics
+    assert after.value == before.value
+
+
+def test_an_enum_referenced_member_through_an_alias_with_a_retired_target_is_a_static_error() -> (
+    None
+):
+    """An enum's referenced member spelled through an alias whose target has
+    been retired is rejected statically, not crashed: following the alias
+    chain finds no current owner for the retired link, so the checker treats
+    the spelling as naming no record, exactly as an unrelated bad spelling
+    would.
+    """
+    s = ReplSession(default_stdlib=False)
+    for decl in (
+        "enum Foo | Old",
+        "enum Foo::Old::E = A | B",
+        "use Foo::Old::*",
+        "type C = E",
+        "enum Foo | New",
+    ):
+        assert s.eval_entry(decl).ok
+
+    result = s.eval_entry("enum N\n  | ::C\n  | Own")
+    assert not result.ok
+    assert result.diagnostics
+    assert result.error is None
+
+
 @pytest.mark.parametrize(
     "use",
     (
@@ -1686,6 +1796,92 @@ def test_retained_alias_does_not_reach_a_member_its_import_hides(tmp_path: Path,
     with pytest.raises(AglTypeError):
         s.type_of(use)
     assert s.eval_entry("c is C::Green").value == BoolValue(True)
+
+
+@pytest.mark.parametrize(
+    "sizes",
+    ((3,), (2, 1), (1, 2), (1, 1, 1)),
+    ids=("3", "2+1", "1+2", "1+1+1"),
+)
+def test_retained_alias_hidden_set_is_recomputed_against_a_later_import(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """A later import that lifts an earlier ``hiding`` must reach a retained alias too.
+
+    A retained alias's ``hidden`` set must not stay frozen at the state its
+    declaring entry saw: once a later, unrestricted import of the same module
+    also contributes ``Color::Red``, the alias must reach it exactly as a
+    direct qualified reference does, regardless of how the declarations were
+    split into entries.
+    """
+    (tmp_path / "m.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    decls = ("import m::* hiding Color::Red", "type C = Color", "import m::{Color}")
+    start = 0
+    for size in sizes:
+        entry = s.eval_entry("\n".join(decls[start : start + size]))
+        assert entry.ok, entry.diagnostics
+        start += size
+
+    value = s.eval_entry("let v = C::Red\nv")
+    assert value.ok, value.diagnostics
+    assert value.value == s.eval_entry("Color::Red").value
+    assert s.eval_entry("fn(r: C::Red) => 1").ok
+    matched = s.eval_entry("let c: C = Color::Red\ncase c of | C::Red => 1 | _ => 2")
+    assert matched.value == IntValue(1)
+    assert s.eval_entry("let c: C = Color::Red\nc is C::Red").value == BoolValue(True)
+
+
+@pytest.mark.parametrize(
+    "sizes",
+    ((3,), (2, 1), (1, 2), (1, 1, 1)),
+    ids=("3", "2+1", "1+2", "1+1+1"),
+)
+def test_retained_alias_of_an_imported_alias_reaches_members(
+    tmp_path: Path, sizes: tuple[int, ...]
+) -> None:
+    """An alias of an alias imported wholesale must reach the enum's members.
+
+    ``m2`` re-exports ``base::Color`` under its own alias ``K``; a REPL alias
+    ``C`` of that imported alias must reach ``Color``'s members exactly as
+    file mode does (see ``TestAliasOfAliasReachesEveryMember`` in
+    ``test_agl_alias_owner_reachability.py``), regardless of how the
+    declarations are split into entries.
+    """
+    (tmp_path / "base.agl").write_text("enum Color = Red | Green\n", encoding="utf-8")
+    (tmp_path / "m2.agl").write_text("import base\ntype K = base::Color\n", encoding="utf-8")
+    s = ReplSession(cwd=tmp_path)
+    decls = ("import m2::*", "type C = K", "let x: C = C::Green")
+    start = 0
+    for size in sizes:
+        entry = s.eval_entry("\n".join(decls[start : start + size]))
+        assert entry.ok, entry.diagnostics
+        start += size
+
+    assert s.eval_entry("x").ok
+    assert s.eval_entry("fn(g: C::Green) => 1").ok
+    matched = s.eval_entry("case x of\n  | C::Green => 1\n  | _ => 2")
+    assert matched.value == IntValue(1)
+
+
+def test_a_narrowing_local_use_hides_an_alias_member_declared_between_two_uses() -> None:
+    """A local ``use ... hiding`` that narrows an earlier glob ``use`` must be
+    honoured through an alias exactly as it is directly, in both value and
+    type position, matching file mode (the scope/typecheck mismatch fix 2
+    addresses).
+    """
+    s = ReplSession()
+    for decl in (
+        "scope s\n  enum E = A | B\nend s",
+        "use s::*",
+        "type C = E",
+        "use s::* hiding E::A",
+    ):
+        entry = s.eval_entry(decl)
+        assert entry.ok, entry.diagnostics
+
+    assert not s.eval_entry("let d = C::A\nd").ok
+    assert not s.eval_entry("fn(x: C::A) => 1").ok
 
 
 # ---------------------------------------------------------------------------
@@ -2277,24 +2473,33 @@ class TestBuiltinIdentityAcrossEntries:
         assert result.ok, result.diagnostics
         assert result.error is None
 
-    def test_imported_builtin_override_leaves_the_session_one_the_bare_name(
-        self, tmp_path: Path
+    @pytest.mark.parametrize(
+        "grouping", (pytest.param("single-entry"), pytest.param("two-entries"))
+    )
+    def test_root_builtin_declared_across_repl_entries_and_an_import_is_rejected(
+        self, tmp_path: Path, grouping: str
     ) -> None:
-        """A module's override of a builtin the session already overrides joins
-        it without displacing it: the bare spelling keeps selecting the
-        session's declaration, the qualified one reaches the module's."""
+        """A session's own root builtin conflicts with an imported module's
+        same-scoped one exactly as it would in one module (see
+        ``test_root_builtin_declared_in_two_modules_is_rejected``), whether the
+        session's own declaration and the import land in the same entry or an
+        earlier one: the session's declaration owns no source in a later
+        entry's own module graph for the whole-program check to find there, so
+        this rejection must not depend on how the two are grouped into entries.
+        """
         declaration = f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
         (tmp_path / "lib.agl").write_text(declaration, encoding="utf-8")
-        value = 'ExecResult(stdout = "", exit-code = 0, stderr = "", timed-out = false)'
         session = ReplSession(cwd=tmp_path, default_stdlib=False)
         assert not session.open()
-        assert session.eval_entry(declaration).ok
-        assert session.eval_entry(f"let mine = {value}").ok
-        assert session.eval_entry("import lib::{ExecResult}").ok
 
-        again = session.eval_entry(f"{value} == mine")
-        assert again.ok, again.diagnostics
-        assert not session.eval_entry(f"lib::{value} == mine").ok
+        if grouping == "single-entry":
+            result = session.eval_entry(f"{declaration}\nimport lib::{{ExecResult}}")
+        else:
+            assert session.eval_entry(declaration).ok
+            result = session.eval_entry("import lib::{ExecResult}")
+
+        assert not result.ok
+        assert result.diagnostics
 
     def test_unpromoted_builtin_record_declaration_does_not_displace_the_live_one(
         self,
@@ -2343,6 +2548,104 @@ class TestBuiltinIdentityAcrossEntries:
         equal = s.eval_entry("a == b")
         assert equal.ok, equal.diagnostics
         assert equal.value == BoolValue(True)
+
+
+class TestBuiltinDeclarationSupersessionAcrossEntries:
+    """The session's builtin-uniqueness bookkeeping tracks only the current
+    declarations: a later promoted declaration at the same scoped name
+    supersedes an earlier one instead of clashing with it, every kind of
+    ``builtin`` bare declaration participates (not only types), and a plain
+    (non-``builtin``) declaration is never mistaken for one.
+    """
+
+    def test_a_root_builtin_def_redeclared_across_entries_supersedes_the_earlier_one(
+        self,
+    ) -> None:
+        s = open_session(default_stdlib=False)
+        first = s.eval_entry("builtin def print[T](value: T) -> unit")
+        second = s.eval_entry("builtin def print[T](value: T) -> unit")
+
+        assert first.ok, first.diagnostics
+        assert second.ok, second.diagnostics
+        assert s.eval_entry("print(1)").ok
+
+    def test_a_builtin_structural_alias_declared_in_an_entry_and_an_import_still_clash(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "libp.agl").write_text("builtin type path = text", encoding="utf-8")
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+        assert session.eval_entry("builtin type path = text").ok
+
+        result = session.eval_entry("import libp")
+
+        assert not result.ok
+        assert result.diagnostics
+
+    def test_a_scoped_builtin_def_declared_in_an_entry_and_an_import_still_clash(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "libs.agl").write_text(
+            "scope S\n  builtin def print[T](value: T) -> unit\nend S", encoding="utf-8"
+        )
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+        assert session.eval_entry("scope S\n  builtin def print[T](value: T) -> unit\nend S").ok
+
+        result = session.eval_entry("import libs")
+
+        assert not result.ok
+        assert result.diagnostics
+
+    def test_a_plain_alias_of_a_scoped_builtin_enum_does_not_clash_with_an_unrelated_import(
+        self, tmp_path: Path
+    ) -> None:
+        """A plain (non-``builtin``) alias of a ``builtin enum`` must not itself
+        be counted as a builtin identity: importing an unrelated module that
+        declares the SAME builtin enum under a DIFFERENT scope must not be
+        rejected as though the alias's scope had redeclared it."""
+        agent_variants = (
+            "\n    | AgentCommand(command: text)"
+            "\n    | AgentClaude(model: text, thinking: text)"
+            "\n    | AgentCodex(model: text, thinking: text)"
+            "\n    | AgentPi(provider: text, model: text, thinking: text)"
+        )
+        (tmp_path / "libeb.agl").write_text(
+            f"scope B\n  builtin enum Agent{agent_variants}\nend B", encoding="utf-8"
+        )
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+        assert session.eval_entry(f"scope A\n  builtin enum Agent{agent_variants}\nend A").ok
+        assert session.eval_entry("scope B\n  type Agent = A::Agent\nend B").ok
+
+        result = session.eval_entry("import libeb")
+
+        assert result.ok, result.diagnostics
+
+    def test_a_builtin_declared_under_a_retired_enum_member_scope_no_longer_clashes(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``builtin`` declared under an enum member's own nested scope path
+        is retired along with that member scope: once a later entry
+        redeclares the owning enum without that member, the session's
+        builtin-uniqueness bookkeeping must drop the retired scoped name, so
+        importing a module that declares the SAME scoped builtin afterward is
+        accepted rather than rejected as a clash with a name the session no
+        longer holds."""
+        fields = "  stdout: text\n  exit-code: int\n  stderr: text\n  timed-out: bool\n"
+        (tmp_path / "lib.agl").write_text(
+            f"builtin record Color::Old::ExecResult\n{fields}", encoding="utf-8"
+        )
+        session = ReplSession(cwd=tmp_path, default_stdlib=False)
+        assert not session.open()
+
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry(f"builtin record Color::Old::ExecResult\n{fields}").ok
+        assert session.eval_entry("enum Color | New").ok
+
+        result = session.eval_entry("import lib")
+
+        assert result.ok, result.diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -3865,6 +4168,61 @@ enum Agent
         fresh = session.eval_entry("Color::New")
         assert not retired.ok
         assert fresh.ok, fresh.diagnostics
+
+    def test_redeclaring_an_enum_retires_a_type_nested_under_an_old_member(self) -> None:
+        """A retired member scope's record is also gone as a type, not only as a constructor."""
+        session = open_session()
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry("record Color::Old::Meta\n  value: int").ok
+
+        assert session.eval_entry("enum Color | New").ok
+
+        retired = session.eval_entry("fn(x: Color::Old::Meta) => 1")
+        assert not retired.ok
+        assert retired.diagnostics
+
+    def test_a_runtime_failed_redeclaration_does_not_retire_an_unpromoted_members_scope(
+        self,
+    ) -> None:
+        """A partially-promoted entry retires only the member scopes of a type
+        path it actually replaced: when an enum redeclaration itself fails at
+        runtime and is never promoted, an earlier member's own nested type
+        must stay resolvable and constructible exactly as before."""
+        session = open_session()
+        assert session.eval_entry("enum Color | Old").ok
+        assert session.eval_entry("record Color::Old::Meta\n  value: int").ok
+
+        failed = session.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\nenum Color | New'
+        )
+        assert not failed.ok
+        assert failed.error is not None
+
+        kept_type = session.eval_entry("fn(x: Color::Old::Meta) => 1")
+        assert kept_type.ok, kept_type.diagnostics
+
+        kept_value = session.eval_entry("let q = Color::Old::Meta(value = 2)\nq")
+        assert kept_value.ok, kept_value.diagnostics
+
+    def test_redeclaring_an_enum_as_a_record_retires_its_members_as_types(self) -> None:
+        """A record replacing an enum also retires the enum's members as types.
+
+        A same-name enum-to-enum redeclaration already rejects a superseded
+        member's type; a record redeclaration must reject it exactly the same
+        way, rather than leaving the superseded enum's member spellable as a
+        type merely because the redeclaration is not itself an enum.
+        """
+        session = open_session()
+        assert session.eval_entry("enum E\n  | A(v: int)\n  | B").ok
+
+        assert session.eval_entry("record E\n  x: int").ok
+
+        as_type = session.eval_entry("E::A")
+        as_param = session.eval_entry("fn(a: E::A) => 1")
+        assert not as_type.ok
+        assert as_type.diagnostics
+        assert not as_param.ok
+        assert as_param.diagnostics
 
     def test_redeclaring_a_used_enum_drops_its_stale_bare_variant(self) -> None:
         """A local use recorded before the enum is redeclared must not

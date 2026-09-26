@@ -9630,9 +9630,6 @@ def test_nullary_candidate_defers_duplicate_pattern_binder_until_typecheck_selec
             default_capabilities(),
             parent_scope=prior.resolved.root_scope,
             retained_type_owners=prior.resolved.type_owners,
-            ambient_type_names=frozenset(
-                path[0] for path in prior.resolved.declared_type_paths if len(path) == 1
-            ),
             seed_env=prior.type_env,
         )
 

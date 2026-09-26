@@ -580,14 +580,20 @@ written after the redeclaration does not apply to an earlier value. A pattern
 or `is` test spells a superseded member only through an alias declared before
 the redeclaration: after `type OldTint = A::Tint` and `type OldA = A`,
 `OldTint(level)` and `tinted is OldA::Tint` still match. An earlier value also
-matches `_`, renders, and casts to such an alias.
+matches `_`, renders, and casts to such an alias. An alias's own declaration
+fixes which target it names, permanently: a later redeclaration or import
+that would otherwise select something else there never retargets it, though
+a member the alias's own imports hide, or later stop hiding, is hidden or
+reachable through the alias exactly as it is written directly.
 
 A failed entry that would have redeclared the type changes nothing — the
 previous declaration, its methods, and every binding built from it remain in
 effect. Redeclaring a record referenced by an existing enum, or the enum
 declaring a referenced member, does not change that enum's member set, but the
 superseded member is no longer injected as a bare name; redeclaring an enum
-creates new identities for its inline member records.
+creates new identities for its inline member records, and a named scope
+nested under a superseded member goes with it: its types can no longer be
+spelled, though values already built from them are unaffected.
 
 ## Record types
 

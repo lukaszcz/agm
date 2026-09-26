@@ -251,7 +251,6 @@ def resolve_entry(
     *,
     parent_scope: ScopeNode | None = None,
     retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
     default_stdlib: bool = True,
 ) -> ModuleResolution:
@@ -265,11 +264,9 @@ def resolve_entry(
     the module docstring) — so it always mirrors the source the test wrote.
 
     Parameters mirror the entry-scoped parameters of ``resolve_program``:
-    *parent_scope*, *retained_type_owners*, and *ambient_type_names* forward
-    to that function's ``entry_parent_scope``,
-    ``entry_repl_session_type_paths`` and ``entry_ambient_type_names``
-    respectively; *origin_path* forwards to
-    ``build_repl_graph``'s ``path``.
+    *parent_scope* and *retained_type_owners* forward to that function's
+    ``entry_parent_scope`` and ``entry_repl_session_type_paths``
+    respectively; *origin_path* forwards to ``build_repl_graph``'s ``path``.
 
     *default_stdlib* controls whether ``std/prelude`` is imported into the
     entry, matching real program execution — this is ``True`` by default
@@ -287,7 +284,6 @@ def resolve_entry(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
     resolved = resolved_program.modules[graph.entry_id].resolved
@@ -299,7 +295,6 @@ def resolve_inline_entry(
     *,
     parent_scope: ScopeNode | None = None,
     retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
     default_stdlib: bool = True,
 ) -> ModuleResolution:
@@ -320,7 +315,6 @@ def resolve_inline_entry(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
     resolved = _without_synthetic_import(
@@ -386,7 +380,6 @@ def resolve_and_check_inline_entry(
     *,
     parent_scope: ScopeNode | None = None,
     retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
     seed_env: TypeEnvironment | None = None,
     default_stdlib: bool = True,
@@ -403,7 +396,6 @@ def resolve_and_check_inline_entry(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
@@ -421,7 +413,6 @@ def resolve_and_check_entry(
     *,
     parent_scope: ScopeNode | None = None,
     retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
     seed_env: TypeEnvironment | None = None,
     default_stdlib: bool = True,
@@ -447,7 +438,6 @@ def resolve_and_check_entry(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
@@ -551,7 +541,6 @@ def resolve_program_ast(
     origin_path: Path | None = None,
     parent_scope: ScopeNode | None = None,
     retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
 ) -> ModuleResolution:
     """Resolve an already-parsed *program* as the entry of a real, single-module graph.
 
@@ -564,7 +553,6 @@ def resolve_program_ast(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
     return resolved_program.modules[graph.entry_id].resolved
@@ -577,7 +565,6 @@ def resolve_inline_program_ast(
     origin_path: Path | None = None,
     parent_scope: ScopeNode | None = None,
     retained_type_owners: Mapping[ScopePath, TypeOwner] | None = None,
-    ambient_type_names: frozenset[str] = frozenset(),
 ) -> ModuleResolution:
     """Resolve test-only hand-built inline AST with the command entry transform."""
     wrapped, _ = wrap_inline_program(program, next_node_id=next_node_id)
@@ -585,7 +572,6 @@ def resolve_inline_program_ast(
     resolved_program = resolve_program(
         graph,
         entry_repl_session_type_paths=retained_type_owners,
-        entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
     )
     return resolved_program.modules[graph.entry_id].resolved

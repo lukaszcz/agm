@@ -26,4 +26,11 @@ program def main(mode: int) -> unit =
         print(os::cwd() != directory)
         print(env::environ.get("OLDPWD") == directory)
         print(env::environ.get("PWD") == os::cwd())
+    | 4 =>
+        let launch-env = env::environ.extended({"EDITOR": "printf ' world' >>"})
+        print(os::edit-text("hello", ".txt", launch-env))
+    | 5 =>
+        let launch-env = env::environ.extended({"EDITOR": "false"})
+        let _ = os::edit-text("hello", ".txt", launch-env)
+        ()
     | _ => os::exit(mode)

@@ -597,6 +597,14 @@ def enum_type(
     return typedef.handle(type_args), typedef
 
 
+NONE_FIELD: dict[str, object] = {"$case": "None"}
+
+
+def some_field(value: object) -> dict[str, object]:
+    """A raised exception's ``Option`` field holding *value*, as ``RunError.fields`` shows it."""
+    return {"$case": "Some", "value": value}
+
+
 def option_nominal_descriptors(
     option: NominalId, none: NominalId, some: NominalId
 ) -> dict[NominalId, NominalDescriptor]:

@@ -16,6 +16,21 @@
       "expect": {"stdout": "true\ntrue\ntrue\n", "calls": {}}
     },
     {
+      "name": "os_edit_text_round_trips_through_a_real_shell_and_editor_command",
+      "params": {"mode": 4},
+      "expect": {"stdout": "hello world\n", "calls": {}}
+    },
+    {
+      "name": "os_edit_text_raises_launch_error_when_the_editor_exits_non_zero",
+      "params": {"mode": 5},
+      "expect": {
+        "raises": {
+          "type": "LaunchError",
+          "fields": {"command": "false", "exit-code": {"$case": "Some", "value": 1}}
+        }
+      }
+    },
+    {
       "name": "os_exit_allows_the_portable_lower_bound",
       "params": {"mode": 0},
       "expect": {"exit_code": 0, "calls": {}}

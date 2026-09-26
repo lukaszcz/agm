@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import pwd
+import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -17,7 +19,8 @@ import pytest
 from agm.agl import PipelineDriver
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import RunResult
-from tests._agl_helpers import agl_roots
+from tests._agl_helpers import NONE_FIELD, agl_roots, repl_session, some_field
+from tests._proc_helpers import wait_for_signal_ignored_script
 
 
 def _roots() -> RootSet:
@@ -32,6 +35,12 @@ def _run(source: str, *, trace_file: Path | None = None) -> RunResult:
 
 def _exit_program(call: str) -> str:
     return f"import std/os\nprogram def main() -> unit = os::exit({call})\n"
+
+
+def _write_fake_executable(path: Path, body: str) -> None:
+    """Write an executable shell script at *path* with *body* as its script."""
+    path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
 @pytest.mark.parametrize((("call", "expected_code")), [("", 0), ("0", 0), ("255", 255)])
@@ -499,3 +508,408 @@ def test_os_user_raises_encoding_error_when_the_name_is_not_valid_unicode(
     assert not result.ok
     assert result.error is not None
     assert result.error.type_name == "EncodingError"
+
+
+# ---------------------------------------------------------------------------
+# std/os::edit, std/os::edit-text, std/os::open, std/os::LaunchError
+# ---------------------------------------------------------------------------
+
+
+def _launch_program(call: str, target: str, env_literal: str) -> str:
+    return (
+        "import std/env::Environ\n"
+        "import std/os\n"
+        "program def main() -> unit =\n"
+        f"  let env = {env_literal}\n"
+        f'  os::{call}("{target}", env)\n'
+    )
+
+
+def _edit_program(file: Path, env_literal: str) -> str:
+    return _launch_program("edit", str(file), env_literal)
+
+
+def _open_program(target: str, env_literal: str) -> str:
+    return _launch_program("open", target, env_literal)
+
+
+def test_os_edit_prefers_visual_over_editor(tmp_path: Path) -> None:
+    visual = tmp_path / "visual.sh"
+    editor = tmp_path / "editor.sh"
+    marker = tmp_path / "marker"
+    _write_fake_executable(visual, f'printf visual > "{marker}"')
+    _write_fake_executable(editor, f'printf editor > "{marker}"')
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+
+    result = _run(_edit_program(file, f'Environ({{"VISUAL": "{visual}", "EDITOR": "{editor}"}})'))
+
+    assert result.ok
+    assert marker.read_text(encoding="utf-8") == "visual"
+
+
+@pytest.mark.parametrize(
+    ("visual", "editor_is_set", "expected"),
+    [
+        ("", True, "editor"),
+        ("", False, "micro"),
+        (None, False, "micro"),
+    ],
+)
+def test_os_edit_falls_through_empty_visual_and_editor_to_the_next_candidate(
+    tmp_path: Path, visual: str | None, editor_is_set: bool, expected: str
+) -> None:
+    """`VISUAL`/`EDITOR` set to `""` is treated the same as being unset."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "marker"
+    editor = tmp_path / "editor.sh"
+    _write_fake_executable(editor, f'printf editor > "{marker}"')
+    _write_fake_executable(bin_dir / "micro", f'printf micro > "{marker}"')
+    sh_path = shutil.which("sh")
+    assert sh_path is not None
+    (bin_dir / "sh").symlink_to(sh_path)
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+
+    env_vars = {"EDITOR": str(editor) if editor_is_set else "", "PATH": str(bin_dir)}
+    if visual is not None:
+        env_vars["VISUAL"] = visual
+    env_literal = "Environ({" + ", ".join(f'"{k}": "{v}"' for k, v in env_vars.items()) + "})"
+
+    result = _run(_edit_program(file, env_literal))
+
+    assert result.ok
+    assert marker.read_text(encoding="utf-8") == expected
+
+
+def test_os_edit_supports_an_editor_value_with_arguments(tmp_path: Path) -> None:
+    """`EDITOR`/`VISUAL` is a shell snippet; extra words become leading arguments."""
+    editor = tmp_path / "editor.sh"
+    marker = tmp_path / "marker"
+    _write_fake_executable(editor, f'printf "%s %s" "$1" "$2" > "{marker}"')
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+
+    result = _run(_edit_program(file, f'Environ({{"EDITOR": "{editor} --flag"}})'))
+
+    assert result.ok
+    assert marker.read_text(encoding="utf-8") == f"--flag {file}"
+
+
+def test_os_edit_falls_back_to_micro_then_vi_found_on_path(tmp_path: Path) -> None:
+    """Hermetic: `PATH` names only `bin_dir` (plus a symlinked `sh`), so this can never
+    resolve and launch a real editor installed on the host."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "marker"
+    _write_fake_executable(bin_dir / "micro", f'printf micro > "{marker}"')
+    _write_fake_executable(bin_dir / "vi", f'printf vi > "{marker}"')
+    sh_path = shutil.which("sh")
+    assert sh_path is not None
+    (bin_dir / "sh").symlink_to(sh_path)
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+    path = str(bin_dir)
+
+    result = _run(_edit_program(file, f'Environ({{"PATH": "{path}"}})'))
+
+    assert result.ok
+    assert marker.read_text(encoding="utf-8") == "micro"
+
+    (bin_dir / "micro").unlink()
+    result = _run(_edit_program(file, f'Environ({{"PATH": "{path}"}})'))
+
+    assert result.ok
+    assert marker.read_text(encoding="utf-8") == "vi"
+
+
+def test_os_edit_raises_launch_error_when_no_editor_is_found(tmp_path: Path) -> None:
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+
+    result = _run(_edit_program(file, f'Environ({{"PATH": "{empty_bin}"}})'))
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "LaunchError"
+    assert result.error.fields["command"] == "vi"
+    assert result.error.fields["exit-code"] == NONE_FIELD
+
+
+def test_os_edit_raises_launch_error_when_the_editor_exits_non_zero(tmp_path: Path) -> None:
+    editor = tmp_path / "editor.sh"
+    _write_fake_executable(editor, "exit 3")
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+
+    result = _run(_edit_program(file, f'Environ({{"EDITOR": "{editor}"}})'))
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "LaunchError"
+    assert result.error.fields["command"] == str(editor)
+    assert result.error.fields["exit-code"] == some_field(3)
+
+
+def test_os_edit_raises_launch_error_with_no_exit_code_when_the_shell_reports_not_found(
+    tmp_path: Path,
+) -> None:
+    """`sh -c` exits 127 for a command it cannot find; that means nothing was launched,
+    not that the editor itself exited with status 127."""
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+    missing_editor = str(tmp_path / "no-such-editor")
+
+    result = _run(_edit_program(file, f'Environ({{"EDITOR": "{missing_editor}"}})'))
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "LaunchError"
+    assert result.error.fields["command"] == missing_editor
+    assert result.error.fields["exit-code"] == NONE_FIELD
+
+
+def test_os_edit_raises_launch_error_when_sh_is_absent_from_the_given_path(
+    tmp_path: Path,
+) -> None:
+    """A `PATH` with no `sh` on it must map to `LaunchError`, not an uncaught error."""
+    editor = tmp_path / "editor.sh"
+    _write_fake_executable(editor, "exit 0")
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+
+    result = _run(_edit_program(file, f'Environ({{"EDITOR": "{editor}", "PATH": "{empty_bin}"}})'))
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "LaunchError"
+    assert result.error.fields["command"] == "sh"
+    assert result.error.fields["exit-code"] == NONE_FIELD
+
+
+def test_os_edit_gets_exactly_env_as_the_child_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The child sees only `env`'s variables — never the AGM process environment."""
+    monkeypatch.setenv("AGM_TEST_PARENT_ONLY", "leak")
+    editor = tmp_path / "editor.sh"
+    marker = tmp_path / "marker"
+    _write_fake_executable(
+        editor,
+        f'if [ "$AGM_TEST_CHILD_ONLY" = "present" ] && [ -z "$AGM_TEST_PARENT_ONLY" ]; then\n'
+        f'  printf ok > "{marker}"\n'
+        "else\n"
+        f'  printf bad > "{marker}"\n'
+        "fi\n",
+    )
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+
+    result = _run(
+        _edit_program(file, f'Environ({{"EDITOR": "{editor}", "AGM_TEST_CHILD_ONLY": "present"}})')
+    )
+
+    assert result.ok
+    assert marker.read_text(encoding="utf-8") == "ok"
+
+
+def test_os_edit_passes_a_file_path_containing_spaces(tmp_path: Path) -> None:
+    editor = tmp_path / "editor.sh"
+    marker = tmp_path / "marker"
+    _write_fake_executable(editor, f'printf "%s" "$1" > "{marker}"')
+    file = tmp_path / "my note.txt"
+    file.write_text("x", encoding="utf-8")
+
+    result = _run(_edit_program(file, f'Environ({{"EDITOR": "{editor}"}})'))
+
+    assert result.ok
+    assert marker.read_text(encoding="utf-8") == str(file)
+
+
+def test_os_edit_passes_an_absolute_path_for_a_dash_or_plus_prefixed_relative_file_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative name starting with `-`/`+` must never be parsed as an editor option."""
+    monkeypatch.chdir(tmp_path)
+    editor = tmp_path / "editor.sh"
+    marker = tmp_path / "marker"
+    _write_fake_executable(editor, f'printf "%s" "$1" > "{marker}"')
+    relative = "-note.txt"
+    (tmp_path / relative).write_text("x", encoding="utf-8")
+
+    result = _run(_edit_program(Path(relative), f'Environ({{"EDITOR": "{editor}"}})'))
+
+    assert result.ok
+    assert marker.read_text(encoding="utf-8") == str(tmp_path / relative)
+
+
+def test_os_edit_ignores_sigint_while_waiting_and_restores_the_handler_after(
+    tmp_path: Path, default_sigint: None
+) -> None:
+    """The editor waits for the parent's ignore to actually be installed (see B1's
+    `wait_for_signal_ignored_script`) before signalling it, avoiding a race with the
+    ignore only starting once the editor itself has been spawned."""
+    editor = tmp_path / "editor.sh"
+    _write_fake_executable(
+        editor,
+        wait_for_signal_ignored_script("$AGM_TEST_SIGINT_TARGET", signal.SIGINT)
+        + 'kill -INT "$AGM_TEST_SIGINT_TARGET"\nexit 0\n',
+    )
+    file = tmp_path / "note.txt"
+    file.write_text("x", encoding="utf-8")
+    previous_handler = signal.getsignal(signal.SIGINT)
+
+    result = _run(
+        _edit_program(
+            file,
+            f'Environ({{"EDITOR": "{editor}", "AGM_TEST_SIGINT_TARGET": "{os.getpid()}"}})',
+        )
+    )
+
+    assert result.ok
+    assert signal.getsignal(signal.SIGINT) is previous_handler
+
+
+def test_os_edit_text_round_trips_through_the_editor_and_removes_the_temp_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    editor = tmp_path / "editor.sh"
+    path_marker = tmp_path / "path-marker"
+    _write_fake_executable(
+        editor,
+        f'printf "%s" "$1" > "{path_marker}"\nprintf " world" >> "$1"\n',
+    )
+    source = (
+        "import std/env::Environ\n"
+        "import std/os\n"
+        "program def main() -> unit =\n"
+        f'  let env = Environ({{"EDITOR": "{editor}"}})\n'
+        '  print(os::edit-text("hello", ".txt", env))\n'
+    )
+
+    result = _run(source)
+
+    assert result.ok
+    assert capsys.readouterr().out == "hello world\n"
+    temp_file = Path(path_marker.read_text(encoding="utf-8"))
+    assert temp_file.name.endswith(".txt")
+    assert not temp_file.exists()
+
+
+def test_os_edit_text_uses_the_default_suffix_when_omitted(tmp_path: Path) -> None:
+    editor = tmp_path / "editor.sh"
+    path_marker = tmp_path / "path-marker"
+    _write_fake_executable(editor, f'printf "%s" "$1" > "{path_marker}"')
+    source = (
+        "import std/env::Environ\n"
+        "import std/os\n"
+        "program def main() -> unit =\n"
+        f'  let env = Environ({{"EDITOR": "{editor}"}})\n'
+        '  let _ = os::edit-text("hello", env = env)\n'
+        "  ()\n"
+    )
+
+    result = _run(source)
+
+    assert result.ok
+    temp_file = Path(path_marker.read_text(encoding="utf-8"))
+    assert temp_file.name.endswith(".md")
+
+
+def test_os_edit_text_leaves_the_temp_file_for_the_host_session_when_the_editor_fails(
+    tmp_path: Path,
+) -> None:
+    """A failed `edit` leaves the temp file for the host session's own close to remove --
+    observable only while the session stays open (a one-shot run's session ends, and
+    removes it, the instant the run itself does)."""
+    editor = tmp_path / "editor.sh"
+    path_marker = tmp_path / "path-marker"
+    _write_fake_executable(editor, f'printf "%s" "$1" > "{path_marker}"\nexit 5\n')
+    session = repl_session()
+    assert session.eval_entry("import std/env").ok
+    assert session.eval_entry("import std/os").ok
+
+    entry = session.eval_entry(
+        f'let env = env::Environ({{"EDITOR": "{editor}"}})\n'
+        'let _ = os::edit-text("hello", ".txt", env)\n'
+    )
+
+    assert not entry.ok
+    temp_file = Path(path_marker.read_text(encoding="utf-8"))
+    assert temp_file.exists()
+
+    session.close()
+
+    assert not temp_file.exists()
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_os_open_uses_the_platform_default_opener(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
+    opener_name = "open" if platform == "darwin" else "xdg-open"
+    opener = tmp_path / opener_name
+    marker = tmp_path / "marker"
+    _write_fake_executable(opener, f'printf "%s" "$1" > "{marker}"')
+    target = tmp_path / "doc.txt"
+    target.write_text("x", encoding="utf-8")
+
+    result = _run(_open_program(str(target), f'Environ({{"PATH": "{tmp_path}"}})'))
+
+    assert result.ok
+    assert marker.read_text(encoding="utf-8") == str(target)
+
+
+def test_os_open_raises_launch_error_when_the_opener_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+
+    result = _run(_open_program("target.txt", f'Environ({{"PATH": "{empty_bin}"}})'))
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "LaunchError"
+    assert result.error.fields["command"] == "xdg-open"
+    assert result.error.fields["exit-code"] == NONE_FIELD
+
+
+def test_os_open_raises_launch_error_when_the_opener_exits_non_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    opener = tmp_path / "xdg-open"
+    _write_fake_executable(opener, "exit 7")
+
+    result = _run(_open_program("target.txt", f'Environ({{"PATH": "{tmp_path}"}})'))
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "LaunchError"
+    assert result.error.fields["command"] == "xdg-open"
+    assert result.error.fields["exit-code"] == some_field(7)
+
+
+def test_os_open_raises_launch_error_when_the_resolved_opener_vanishes_before_exec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A which-then-exec race (the opener resolves, then is gone by the time it is spawned)
+    must map to `LaunchError`, not an uncaught `FileNotFoundError`."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: str(tmp_path / "vanished-opener"))
+
+    result = _run(_open_program("target.txt", f'Environ({{"PATH": "{tmp_path}"}})'))
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.type_name == "LaunchError"
+    assert result.error.fields["command"] == "xdg-open"
+    assert result.error.fields["exit-code"] == NONE_FIELD

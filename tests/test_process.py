@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,9 @@ from agm.core.process import (
     run_capture,
     run_capture_result,
     run_foreground,
+    run_foreground_ignoring_signals,
 )
+from tests._proc_helpers import wait_for_signal_ignored_script
 
 
 @pytest.mark.parametrize("boundary", ["spawn", "unmask", "reader", "reader-failure"])
@@ -649,8 +652,87 @@ class TestRunCaptureNullByteReraise:
 
 
 def test_capture_can_run_from_a_worker_thread() -> None:
-    from concurrent.futures import ThreadPoolExecutor
-
     with ThreadPoolExecutor(max_workers=1) as executor:
         result = executor.submit(run_capture, [sys.executable, "-c", "print(42)"]).result(timeout=5)
     assert result == (0, "42\n", "")
+
+
+# ---------------------------------------------------------------------------
+# run_foreground_ignoring_signals
+# ---------------------------------------------------------------------------
+
+
+def test_run_foreground_ignoring_signals_ignores_a_signal_the_child_sends_the_parent(
+    tmp_path: Path, default_sigint: None
+) -> None:
+    """A child that signals the parent mid-wait must not interrupt it; the handler restores.
+
+    The child waits for the parent's ignore to actually be installed before
+    signalling it -- ignoring begins only after the child is spawned (B1), so
+    signalling immediately on exec would race the parent's own startup.
+    """
+    script = tmp_path / "signal-parent.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        + wait_for_signal_ignored_script(os.getpid(), signal.SIGINT)
+        + f"kill -INT {os.getpid()}\nexit 0\n",
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | 0o111)
+
+    returncode = run_foreground_ignoring_signals([str(script)])
+
+    assert returncode == 0
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+def test_run_foreground_ignoring_signals_restores_a_custom_previous_handler() -> None:
+    def custom_handler(_signum: int, _frame: object) -> None:
+        return None
+
+    previous = signal.signal(signal.SIGINT, custom_handler)
+    try:
+        returncode = run_foreground_ignoring_signals(["true"])
+
+        assert returncode == 0
+        assert signal.getsignal(signal.SIGINT) is custom_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_run_foreground_ignoring_signals_is_a_no_op_off_the_main_thread() -> None:
+    """Off the main thread, signal handling is skipped; the command still runs."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        returncode = executor.submit(run_foreground_ignoring_signals, ["true"]).result(timeout=5)
+
+    assert returncode == 0
+
+
+def test_run_foreground_ignoring_signals_does_not_ignore_before_the_child_is_spawned(
+    default_sigint: None,
+) -> None:
+    """SIG_IGN survives exec, so installing it before spawn would leave the child ignoring
+    SIGINT/SIGQUIT too (regression for B1: the ignore must start only after spawn)."""
+    previous_sigquit = signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+    try:
+        returncode = run_foreground_ignoring_signals(
+            [
+                sys.executable,
+                "-c",
+                "import signal, sys\n"
+                "sys.exit(signal.SIG_IGN in "
+                "(signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGQUIT)))",
+            ]
+        )
+        assert returncode == 0
+    finally:
+        signal.signal(signal.SIGQUIT, previous_sigquit)
+
+
+def test_run_foreground_ignoring_signals_child_can_still_be_interrupted_by_sigint(
+    default_sigint: None,
+) -> None:
+    """The child's own SIGINT disposition is unaffected by the parent's ignore."""
+    returncode = run_foreground_ignoring_signals(["sh", "-c", "kill -INT $$"])
+
+    assert returncode == -signal.SIGINT

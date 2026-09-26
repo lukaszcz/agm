@@ -605,6 +605,55 @@ def run_foreground(
     return result.returncode
 
 
+@contextlib.contextmanager
+def _signals_ignored(signals: tuple[int, ...]) -> Iterator[None]:
+    """Ignore *signals* inside the block, restoring their previous handlers after.
+
+    A no-op off the main thread: ``signal.signal`` only works there, and
+    process-wide disposition is never a non-main thread's to change.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = {number: signal.signal(number, signal.SIG_IGN) for number in signals}
+    try:
+        yield
+    finally:
+        for number, restored in previous.items():
+            signal.signal(number, restored)
+
+
+_IGNORED_WHILE_WAITING = (signal.SIGINT, signal.SIGQUIT)
+
+
+def run_foreground_ignoring_signals(
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+) -> int:
+    """Run a command inheriting stdio; this process ignores SIGINT/SIGQUIT while waiting.
+
+    Git's editor behavior: Ctrl-C reaches the child but cannot end this run. The
+    ignore starts only after spawn, since SIG_IGN would survive the child's exec;
+    an interrupt before then stops the child via ``_running_process``.
+    """
+    with (
+        _running_process(
+            cmd,
+            cwd=None,
+            env=env,
+            capture_output=False,
+            stdout_callback=None,
+            stderr_callback=None,
+            isolate_process_group=False,
+            stdin_text=None,
+            interrupt_cleanup_cmd=None,
+        ) as (process, _readers, _queue),
+        _signals_ignored(_IGNORED_WHILE_WAITING),
+    ):
+        return process.wait()
+
+
 def run_capture(
     cmd: list[str],
     *,

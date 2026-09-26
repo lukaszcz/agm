@@ -22,7 +22,7 @@ from agm.cli_support.program_options import (
     build_program_command,
 )
 from agm.core.parse import parse_timeout
-from tests._agl_helpers import prepare_inline_code, run_inline_code
+from tests._agl_helpers import NONE_FIELD, prepare_inline_code, run_inline_code, some_field
 from tests._jev_helpers import (
     JEV_MODULE,
     SYSONE_ROOT,
@@ -340,14 +340,6 @@ def _run_jev(
     return result, mount
 
 
-_NONE = {"$case": "None"}
-
-
-def _some(value: object) -> dict[str, object]:
-    """A raised exception's ``Option`` field holding *value*, as ``RunError.fields`` shows it."""
-    return {"$case": "Some", "value": value}
-
-
 def _printed(capsys: pytest.CaptureFixture[str]) -> list[str]:
     return capsys.readouterr().out.splitlines()
 
@@ -529,7 +521,7 @@ def test_a_missing_or_mistyped_answer_raises_a_traced_jev_response_error(
     assert result.error is not None
     assert result.error.type_name == "JevResponseError"
     assert result.error.fields["field-path"] == "answers.question"
-    assert result.error.fields["request-id"] == _some("req-3")
+    assert result.error.fields["request-id"] == some_field("req-3")
     mount.transport.assert_complete()
     failures = [r for r in _trace_records(trace_path) if r["kind"] == "jev_failure"]
     assert [(r["error_type"], r["status"], r["request_id"]) for r in failures] == [
@@ -825,8 +817,13 @@ _ERROR_BODY = {"error": "scripted failure detail"}
         (400, {}, "JevRequestError", {}),
         (404, {}, "JevRequestError", {}),
         (422, {}, "JevRequestError", {}),
-        (429, {"retry-after-ms": "1500"}, "JevRateLimitError", {"retry-after-ms": _some(1500)}),
-        (429, {}, "JevRateLimitError", {"retry-after-ms": _NONE}),
+        (
+            429,
+            {"retry-after-ms": "1500"},
+            "JevRateLimitError",
+            {"retry-after-ms": some_field(1500)},
+        ),
+        (429, {}, "JevRateLimitError", {"retry-after-ms": NONE_FIELD}),
         (500, {}, "JevServerError", {}),
         (529, {}, "JevServerError", {}),
         (409, {}, "JevApiError", {}),
@@ -850,7 +847,7 @@ def test_an_unsuccessful_response_raises_its_jev_api_error(
     assert result.error is not None
     assert result.error.type_name == type_name
     assert result.error.fields["status"] == status
-    assert result.error.fields["request-id"] == _some("req-9")
+    assert result.error.fields["request-id"] == some_field("req-9")
     assert result.error.fields["body"] == _ERROR_BODY
     assert "scripted failure detail" in str(result.error.fields["message"])
     for name, value in fields.items():
@@ -884,7 +881,7 @@ def test_a_request_without_a_response_raises_its_jev_error(
 
     assert result.error is not None
     assert result.error.type_name == type_name
-    assert result.error.fields["request-id"] == _NONE
+    assert result.error.fields["request-id"] == NONE_FIELD
     assert result.error.fields[field]
     mount.transport.assert_complete()
 
@@ -919,7 +916,7 @@ def test_a_structurally_invalid_success_body_raises_jev_response_error(
     assert result.error is not None
     assert result.error.type_name == "JevResponseError"
     assert result.error.fields["field-path"] == field_path
-    assert result.error.fields["request-id"] == _some("req-4")
+    assert result.error.fields["request-id"] == some_field("req-4")
     mount.transport.assert_complete()
 
 
@@ -945,7 +942,7 @@ def test_an_sdk_error_of_no_specific_class_raises_plain_jev_error(
 
     assert result.error is not None
     assert result.error.type_name == "JevError"
-    assert result.error.fields["request-id"] == _NONE
+    assert result.error.fields["request-id"] == NONE_FIELD
     assert mount.transport.requests == []
 
 
@@ -1552,5 +1549,5 @@ def test_an_answer_outside_the_target_raises_jev_response_error(
     assert result.error is not None
     assert result.error.type_name == "JevResponseError"
     assert result.error.fields["field-path"] == field_path
-    assert result.error.fields["request-id"] == _some("req-5")
+    assert result.error.fields["request-id"] == some_field("req-5")
     mount.transport.assert_complete()

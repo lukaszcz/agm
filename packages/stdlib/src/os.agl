@@ -38,3 +38,39 @@ extern def cpu-count() -> int
 # The real user's passwd name; `None` when it has none. Raises `EncodingError`
 # if the name is not valid Unicode.
 extern def user() -> Option[text]
+
+# Raised by `edit` and `open`. `exit-code` is `Some(code)` for a non-zero
+# exit, or `None` when there was nothing to launch (`command` is then the
+# last fallback/opener tried).
+exception LaunchError extends Exception
+  command: text
+  exit-code: Option[int]
+
+# Opens `file` for editing: the first non-empty `VISUAL`, then `EDITOR`, from
+# `env`, else the first of `micro`, `vi` found on `env`'s `PATH`. Blocks until
+# the editor exits, inheriting stdio; the editor value is a shell snippet
+# (`code --wait` works). `env` is the child's complete environment, not an
+# overlay on AGM's own. While waiting, AGM ignores SIGINT and SIGQUIT (git's
+# editor behavior) and restores them once the editor exits. Raises
+# `LaunchError`: `exit-code = None` when the editor command itself could not
+# be found (including a shell "command not found"), `Some(code)` for any
+# other non-zero exit.
+extern def edit(file: path, env: Environ = std/env::environ) -> unit
+
+# Round-trips `initial` through the editor: writes it to a fresh
+# `std/fs::temp-file(suffix)`, calls `edit`, reads back the result, and
+# removes the temporary file. A failed `edit` (raised `LaunchError`) leaves
+# the temporary file for `std/fs::temp-file`'s own host-session-end cleanup.
+def edit-text(initial: text, suffix: text = ".md", env: Environ = std/env::environ) -> text =
+  let file = std/fs::temp-file(suffix)
+  std/fs::write(file, initial)
+  edit(file, env)
+  let content = std/fs::read(file)
+  std/fs::remove(file)
+  content
+
+# Opens `target` (a file or URL) with the desktop default application:
+# `open` on darwin, `xdg-open` otherwise, found on `env`'s `PATH`. `env` is
+# the child's complete environment, not an overlay on AGM's own. Waits for
+# the opener, not the launched application, to exit. Raises `LaunchError`.
+extern def open(target: text, env: Environ = std/env::environ) -> unit

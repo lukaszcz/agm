@@ -332,6 +332,18 @@ host returns text that is not valid Unicode.
 raw: text   # the host text, with its undecodable bytes escaped
 ```
 
+### `LaunchError`
+
+`std/os::edit` and `std/os::open` raise `LaunchError` when nothing could be
+launched (`exit-code = None`, `command` the last fallback/opener tried —
+including an editor command that a shell reports as not found) or the
+launched process exited non-zero (`exit-code = Some(code)`).
+
+```text
+command: text
+exit-code: Option[int]
+```
+
 ## Built-in exception catalog
 
 Field lists below are in addition to the base `message`.
@@ -650,6 +662,7 @@ how equality and tracing treat one.
 | `std/json` parsing — input is not well-formed JSON, including a lone surrogate escape | `JsonParseError` |
 | `std/fs` directory entry, match, or temporary directory that is not valid Unicode | `FsError` |
 | `std/path` or `std/os` host text that is not valid Unicode | `EncodingError` |
+| `std/os::edit`/`std/os::open` — nothing to launch, or the launched process exited non-zero | `LaunchError` |
 | `std/http` response whose declared charset is outside the supported text encodings, or whose body does not decode under it | `HttpDecodeError` |
 | `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
 | `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |

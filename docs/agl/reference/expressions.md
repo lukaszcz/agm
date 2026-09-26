@@ -661,8 +661,10 @@ see [Parsing values](types.md#parsing-values).
 
 `==` is **equality** (a single `=` is never a comparison — it is a
 binder/named-argument separator). Both operands must have the same type after
-`int → decimal` widening. Equality is full value equality
-([Types](types.md)).
+`int → decimal` widening, or one operand's type must widen nominally to the
+other's (an enum member or narrower enum against an enum, a derived exception
+against an ancestor), so `opt == None` checks. Equality is full value equality
+([Types](types.md#assignability-and-coercion)).
 
 Operands whose type is, or transitively contains, a function or `unit` value
 are a static error — this applies to bare values as well as to

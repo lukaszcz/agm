@@ -1909,11 +1909,13 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     """Return ``True`` if ``left`` and ``right`` may be compared.
 
     Equality (``=``, ``!=``) and ordering comparisons require both operands to
-    have the **same** type after the single ``int → decimal`` widening.  Unlike
+    have the **same** type after the single ``int → decimal`` widening, or one
+    operand's type to widen nominally to the other's (:func:`_nominal_widens`,
+    either direction): an enum compares with its members and with a wider
+    enum, an exception with its ancestors. Unlike
     :func:`~agm.agl.semantics.types.is_assignable`, ``json`` does **not** absorb
     JSON-shaped scalars here: ``json = json`` is allowed but ``json`` vs any
-    non-``json`` type is a static error.  Records/enums/exceptions compare only
-    with their own exact type.
+    non-``json`` type is a static error.
 
     ``FunctionType`` and ``UnitType`` operands are
     NON-comparable — using ``=``/``!=``/``<`` on them is a static error.
@@ -1934,9 +1936,10 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
         return False
     if left == right:
         return True
-    # The only cross-type comparison is numeric int↔decimal (either direction).
     numeric = (IntType, DecimalType)
-    return isinstance(left, numeric) and isinstance(right, numeric)
+    if isinstance(left, numeric) and isinstance(right, numeric):
+        return True
+    return _nominal_widens(table, left, right) or _nominal_widens(table, right, left)
 
 
 # ---------------------------------------------------------------------------
@@ -2000,8 +2003,11 @@ def is_assignable_in(table: TypeTable, value_type: Type, target_type: Type) -> b
     directed relation: containers remain invariant. An enum is assignable to
     another enum exactly when its constructor set is a subset of the target's.
     """
-    if is_assignable(value_type, target_type):
-        return True
+    return is_assignable(value_type, target_type) or _nominal_widens(table, value_type, target_type)
+
+
+def _nominal_widens(table: TypeTable, value_type: Type, target_type: Type) -> bool:
+    """Return whether *value_type* widens to *target_type* as a member, sub-enum, or subtype."""
     if (
         isinstance(value_type, RecordType)
         and isinstance(target_type, EnumType)

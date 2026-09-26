@@ -182,6 +182,68 @@ class TestMembershipAssignable:
         )
 
 
+class TestNominalWideningComparable:
+    def test_enum_compares_with_its_members_either_way(self) -> None:
+        table, _node, leaf, _other, _tree = _member_assignability_table()
+        node_int = RecordType("Node", (IntType(),), scope_path=("Tree",), decl_id=1)
+        tree_int = EnumType("Tree", (IntType(),), decl_id=4)
+
+        assert comparable_types(tree_int, node_int, table)
+        assert comparable_types(leaf, tree_int, table)
+
+    def test_non_members_and_sibling_members_stay_incomparable(self) -> None:
+        table, _node, leaf, other, _tree = _member_assignability_table()
+        node_int = RecordType("Node", (IntType(),), scope_path=("Tree",), decl_id=1)
+        node_text = RecordType("Node", (TextType(),), scope_path=("Tree",), decl_id=1)
+        tree_int = EnumType("Tree", (IntType(),), decl_id=4)
+
+        assert not comparable_types(other, tree_int, table)
+        assert not comparable_types(node_text, tree_int, table)
+        assert not comparable_types(node_int, leaf, table)
+        assert not comparable_types(ArrayType(leaf), ArrayType(tree_int), table)
+
+    def test_enum_compares_with_a_wider_enum_either_way(self) -> None:
+        table, node, leaf, other, _tree = _member_assignability_table()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Wide",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                members=(node, leaf, other),
+                decl_node_id=5,
+            )
+        )
+        tree_int = EnumType("Tree", (IntType(),), decl_id=4)
+        wide_int = EnumType("Wide", (IntType(),), decl_id=5)
+        wide_text = EnumType("Wide", (TextType(),), decl_id=5)
+
+        assert comparable_types(tree_int, wide_int, table)
+        assert comparable_types(wide_int, tree_int, table)
+        assert not comparable_types(tree_int, wide_text, table)
+
+    def test_exception_compares_with_an_ancestor_either_way(self) -> None:
+        table = TypeTable()
+        base = ExceptionType("Base", decl_id=10)
+        derived = ExceptionType("Derived", decl_id=11)
+        sibling = ExceptionType("Sibling", decl_id=12)
+        table.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=10))
+        for name, decl_id in (("Derived", 11), ("Sibling", 12)):
+            table.register(
+                TypeDef(
+                    kind="exception", name=name, module_id=ENTRY_ID, base=10, decl_node_id=decl_id
+                )
+            )
+
+        assert comparable_types(derived, base, table)
+        assert comparable_types(base, derived, table)
+        assert not comparable_types(derived, sibling, table)
+
+    def test_json_still_rejects_absorbable_scalars(self) -> None:
+        assert not comparable_types(TextType(), JsonType(), _EMPTY_TABLE)
+        assert not comparable_types(JsonType(), IntType(), _EMPTY_TABLE)
+
+
 # ---------------------------------------------------------------------------
 # UnitType
 # ---------------------------------------------------------------------------

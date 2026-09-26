@@ -1,0 +1,8 @@
+{
+  "diagnostic": {
+    "message_contains": [
+      "Equality operands"
+    ],
+    "line": 4
+  }
+}

@@ -1057,7 +1057,11 @@ Typing is exact nominal matching with these implicit coercions:
    converting a container to `json` builds one. Use an explicit `as json`
    cast (see [Casts and convertibility](#casts-and-convertibility) below).
 7. Equality (`==`, `!=`) and ordering comparisons require both operands to
-   have the *same* type after rule 1. Operands whose type is, or transitively
+   have the *same* type after rule 1. Equality also accepts operands where
+   either one's type widens to the other's by rules 3–5, so
+   `opt == None`, `Some(1) == opt`, and a derived exception against an
+   ancestor-typed value all check; two distinct members (`Some(1) == None`)
+   do not. Operands whose type is, or transitively
    contains, a function, `unit`, or opaque `Session` value are a static error — see
    [Values and equality](#values-and-equality) below.
 8. All branches of a `case` expression must have the same type after rule 1.
@@ -1293,7 +1297,8 @@ Every **data** type has full value equality (`==` / `!=`):
 - Arrays compare element-wise; dictionaries compare by key set and per-key
   values.
 - Records compare by nominal type and field values; enum values compare by
-  their member-record nominal type and field values.
+  their member-record nominal type and field values, so an enum-typed value
+  compares with a member-typed one by value.
 - `json` values compare structurally.
 
 Equality is cycle-safe: cyclic values, including cycles closed through `var`

@@ -27,7 +27,12 @@ from agm.core.process import (
     ("mode", "isolate"), [("foreground", True), ("capture", True), ("stdin", False)]
 )
 def test_startup_interrupt_reaps_child_and_runs_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, mode: str, isolate: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    default_sigint: None,
+    boundary: str,
+    mode: str,
+    isolate: bool,
 ) -> None:
     """An interrupt before waiting must release the child and external resources."""
     children: list[subprocess.Popen[bytes]] = []

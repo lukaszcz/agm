@@ -573,10 +573,7 @@ class EntryPipeline:
                 else Diagnostic(message=str(exc), line=1)
             )
             return self._ctx._fail([diagnostic], warnings)
-        host_contracts, contract_errors = materialize_ir_contracts(lowered.program, host_env.codecs)
-        if contract_errors:
-            self._ctx._link_image.restore_state(link_snapshot)
-            return self._ctx._fail(contract_errors, warnings)
+        host_contracts = materialize_ir_contracts(lowered.program, host_env.codecs)
         from agm.agl.runtime.arguments import bind_param_values, diagnose_process_environment
 
         pending_raw_param_values = {

@@ -12,9 +12,16 @@ class UnexpectedInput(LarkError):
     column: int
     pos_in_stream: int
 
+class _ParserState:
+    value_stack: list[Tree | Token]
+
+class _InteractiveParser:
+    parser_state: _ParserState
+
 class UnexpectedToken(UnexpectedInput):
     token: Token
     expected: set[str]
+    interactive_parser: _InteractiveParser
 
 class UnexpectedCharacters(UnexpectedInput):
     char: str

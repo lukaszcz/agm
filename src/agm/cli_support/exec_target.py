@@ -36,6 +36,8 @@ def is_installed_reference(file: str | None, *, command: str | None) -> bool:
 class InlineSource:
     """The exec argument is inline ``-c/--command`` source."""
 
+    source: str
+
 
 @dataclass(frozen=True, slots=True)
 class FileEntry:
@@ -96,7 +98,7 @@ def resolve_installed_reference(
         packages = select_active_packages(
             home=home, proj_dir=proj_dir, cwd=cwd, fallback_to_manifest_commands=True
         )
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         return ExecTargetError(f"cannot resolve active packages: {exc}")
     name = module_id.segments[0] if package_name is None else package_name
     package = next((candidate for candidate in packages if candidate.manifest.name == name), None)
@@ -129,7 +131,7 @@ def resolve_exec_target(
 ) -> ExecTarget | ExecTargetError:
     """Classify an ``agm exec`` argument and resolve it if it names an installed reference."""
     if command is not None:
-        return InlineSource()
+        return InlineSource(command)
     if file is None:
         return ExecTargetError("exec requires either a FILE or -c/--command")
     if not is_installed_reference(file, command=command):

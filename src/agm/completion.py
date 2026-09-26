@@ -46,22 +46,33 @@ class _ContextWithMetadata(Protocol):
     meta: dict[str, object]
 
 
+def _advisory[T](compute: Callable[[], T], fallback: T) -> T:
+    """Return ``compute()``, or *fallback* when it fails.
+
+    Completion runs inside the user's shell while they are typing and executes
+    config, git, and user AgL, so a project that cannot be read, a command that
+    exits, or any other failure has to leave the prompt alone rather than print
+    over it. Under the test-gated self-validation switch a failure other than
+    ``SystemExit`` is re-raised, so a completion bug fails the suite.
+    """
+    try:
+        return compute()
+    except (Exception, SystemExit) as error:
+        from agm.agl.self_validation import self_validation_enabled
+
+        if not isinstance(error, SystemExit) and self_validation_enabled():
+            raise
+        return fallback
+
+
 def _completes_quietly(
     complete: Callable[_P, list[_CandidateT]],
 ) -> Callable[_P, list[_CandidateT]]:
-    """Return *complete* with every failure answered as no candidates.
-
-    A completer runs inside the user's shell while they are typing, so a
-    project that cannot be read, a command that exits, or any other failure
-    has to leave the prompt alone rather than print over it.
-    """
+    """Return *complete* with every failure answered as no candidates (see :func:`_advisory`)."""
 
     @wraps(complete)
     def guarded(*args: _P.args, **kwargs: _P.kwargs) -> list[_CandidateT]:
-        try:
-            return complete(*args, **kwargs)
-        except (Exception, SystemExit):
-            return []
+        return _advisory(lambda: complete(*args, **kwargs), [])
 
     return guarded
 
@@ -269,7 +280,8 @@ def registered_command_completion(
     command_path: Sequence[str], incomplete: str, ctx: click.Context
 ) -> tuple[list[str], bool]:
     """Return next path segments and whether the path resolves to a registered command."""
-    try:
+
+    def complete() -> tuple[list[str], bool]:
         from agm.cli_dispatch import resolve_registered_command
 
         index = _registered_index(ctx)[1]
@@ -283,8 +295,9 @@ def registered_command_completion(
         return _match(candidates, incomplete), resolve_registered_command(
             command_path, index.commands
         ) is not None
-    except (Exception, SystemExit):
-        return [], False
+
+    unresolved: tuple[list[str], bool] = ([], False)
+    return _advisory(complete, unresolved)
 
 
 _REGISTERED_PROGRAM_META_KEY = "registered_completion_program"
@@ -829,7 +842,8 @@ class ExecCommand(TyperCommand):
         if not incomplete.startswith("-"):
             return base
         discovery, tail = _exec_selection_inputs(ctx)
-        try:
+
+        def complete() -> list[CompletionItem]:
             selection = discovery.selection(tail.file)
             if selection.selected is None:
                 return base
@@ -842,11 +856,10 @@ class ExecCommand(TyperCommand):
             for item in (*base, *extra):
                 items_by_value[cast(str, item.value)] = item
             return list(items_by_value.values())
-        except (Exception, SystemExit):
-            # Completion is advisory: any failure past the shared discovery
-            # (option-map projection, item building) degrades to the built-in
-            # exec options rather than breaking the user's shell.
-            return base
+
+        # A failure past the shared discovery (option-map projection, item
+        # building) degrades to the built-in exec options.
+        return _advisory(complete, base)
 
 
 @_completes_quietly

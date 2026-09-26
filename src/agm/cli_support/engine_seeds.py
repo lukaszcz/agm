@@ -43,7 +43,6 @@ def _configured_value(
     fallback_table: "Mapping[str, object]",
 ) -> object | None:
     """Return one configured engine value, preserving raw ``Option[text]`` spelling."""
-    assert spec.config_attr is not None
     configured_value = cast(object | None, getattr(config, spec.config_attr))
     if configured_value is None:
         return None

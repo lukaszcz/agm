@@ -559,41 +559,13 @@ class EnumOwnerForm:
     that spelling is variant-level data carried alongside forms, not on them.
     """
 
-    owner_name: str | None
+    owner_name: str
     module_qualifier: tuple[str, ...] | None
-    bare: bool = False
+    kind: EnumOwnerFormKind = field(compare=False)
+    source_module_id: ModuleId = field(compare=False, repr=False)
+    source_name: str = field(compare=False, repr=False)
+    type_template: TypeTemplate = field(compare=False, repr=False)
     qualifier_anchored: bool = False
-    kind: EnumOwnerFormKind | None = field(default=None, compare=False)
-    source_module_id: ModuleId | None = field(default=None, compare=False, repr=False)
-    source_name: str | None = field(default=None, compare=False, repr=False)
-    type_template: TypeTemplate | None = field(default=None, compare=False, repr=False)
-
-    def __post_init__(self) -> None:
-        if self.owner_name is None and self.module_qualifier is not None:
-            raise ValueError("a bare constructor spelling cannot have a module qualifier")
-        if self.bare and self.owner_name is not None:
-            raise ValueError("a type-qualified constructor spelling cannot be bare")
-        if self.owner_name is None:
-            return
-        kind = self.kind
-        if kind is None:
-            if self.module_qualifier is None:
-                kind = EnumOwnerFormKind.LOCAL
-            elif self.module_qualifier:
-                kind = EnumOwnerFormKind.QUALIFIED_IMPORT
-            else:
-                kind = EnumOwnerFormKind.SELF
-            object.__setattr__(self, "kind", kind)
-        if kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
-            if self.module_qualifier is not None:
-                raise ValueError("an unqualified enum owner form cannot have an import handle")
-        elif kind is EnumOwnerFormKind.SELF:
-            if self.module_qualifier != ():
-                raise ValueError("a self-qualified enum owner form requires an empty qualifier")
-        elif not self.module_qualifier:
-            raise ValueError("a qualified-import enum owner form requires an import handle")
-        if self.qualifier_anchored and not self.module_qualifier:
-            raise ValueError("only a non-empty module qualifier can be anchored")
 
     def match(self, concrete: Type) -> TypeTemplateMatch | None:
         """Match this checked owner form against one concrete semantic type.
@@ -601,8 +573,6 @@ class EnumOwnerForm:
         Enum-owner aliases may carry phantom parameters, which cannot be
         inferred from a scrutinee but do not affect the enum they denote.
         """
-        if self.type_template is None:
-            return None
         return match_nominal_owner_template(self.type_template, concrete)
 
 

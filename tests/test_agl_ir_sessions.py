@@ -41,7 +41,6 @@ from agm.agl.semantics.type_table import MethodDef
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     FunctionType,
-    IntType,
     RecordType,
     UnitType,
 )
@@ -230,8 +229,6 @@ def test_session_ask_lowers_a_formatted_strict_json_contract_with_retries() -> N
                 "Do not include Markdown, prose, or code fences.\n\n"
                 '```json\n{\n  "type": "integer"\n}\n```'
             ),
-            target_type_kind="int",
-            target_type=IntType(),
         )
     }
 

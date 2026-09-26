@@ -616,8 +616,6 @@ class TextContractRequest:
     structured_exec: bool
     format_instructions: str
     codec_name: Literal["text"] = "text"
-    target_type_kind: str = ""
-    target_type: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -636,13 +634,6 @@ class JsonContractRequest:
     ``decode``              — typeless ``DecodeSchema`` walk for the target type.
     ``target_type_label``   — ``repr(target_type)`` stored for ``AgentParseError``
                               field text and failure-message formatting.
-    ``target_type_kind``    — semantic kind string (``int``, ``record``, …) kept
-                              as typeless compatibility metadata for legacy
-                              custom-codec parse hooks.
-    ``target_type``         — opaque checker type retained only for legacy custom
-                              codecs whose ``parse`` hook still accepts a
-                              positional target type. Runtime-neutral code must
-                              not inspect it.
     ``structured_exec``     — ``True`` for structured exec; ``False`` for ``ask``.
     ``format_instructions`` — pre-computed format instructions string.
     ``defs``                — ``$defs`` table for a recursive target type (empty
@@ -656,8 +647,6 @@ class JsonContractRequest:
     structured_exec: bool
     format_instructions: str
     codec_name: Literal["json"] = "json"
-    target_type_kind: str = ""
-    target_type: object | None = None
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
 
 
@@ -671,6 +660,9 @@ class CustomContractRequest:
     so unlike ``JsonContractRequest`` these stay optional. The evaluator never
     parses output through this descriptor directly -- it dispatches to the
     codec's own ``parse`` hook (see ``eval.ir_interpreter._call_custom_codec_parse``).
+    ``target_type`` is the opaque checker type, retained only for legacy
+    custom codecs whose ``parse`` hook accepts a positional target type;
+    runtime-neutral code must not inspect it.
     """
 
     codec_name: str
@@ -680,8 +672,7 @@ class CustomContractRequest:
     target_type_label: str
     structured_exec: bool
     format_instructions: str
-    target_type_kind: str = ""
-    target_type: object | None = None
+    target_type: object
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
 
 

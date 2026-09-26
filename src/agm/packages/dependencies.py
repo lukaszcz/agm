@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import semver
+
 from agm.packages.activation import (
     ActivationIndex,
     PackageActivationError,
@@ -72,7 +74,9 @@ def _validate_package_dependencies(package: PackageInfo, state: _CheckState) -> 
             if selected is not None:
                 _validate_package_dependencies(selected, state)
             if selected is None and requirement.path is not None:
-                selected = _path_package(package, name, requirement, state)
+                selected = _path_package(
+                    package.root / requirement.path, name, requirement.version, state
+                )
             if selected is None and requirement.url is not None:
                 continue
             if selected is None or (
@@ -122,10 +126,8 @@ def _selected_satisfying(
 
 
 def _path_package(
-    package: PackageInfo, name: str, requirement: DependencySpec, state: _CheckState
+    root: Path, name: str, minimum: semver.Version, state: _CheckState
 ) -> PackageInfo:
-    assert requirement.path is not None
-    root = package.root / requirement.path
     if root.is_symlink():
         raise DependencyError(f"cannot use symbolic-link package dependency {root}")
     try:
@@ -135,7 +137,7 @@ def _path_package(
         validate_package_structure(selected)
     except (DisciplineError, ManifestError) as exc:
         raise DependencyError(f"cannot validate path dependency {name!r}: {exc}") from exc
-    if selected.manifest.name != name or selected.manifest.version < requirement.version:
-        raise DependencyError(f"unsatisfied package requirement {name!r} >= {requirement.version}")
+    if selected.manifest.name != name or selected.manifest.version < minimum:
+        raise DependencyError(f"unsatisfied package requirement {name!r} >= {minimum}")
     _validate_package_dependencies(selected, state)
     return selected

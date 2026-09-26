@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 
 from agm.agl.parser import parse_type_expr
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import DictT, IntT, TextT, TypeExpr, render_type_expr
+from agm.agl.syntax.types import DictT, IntT, TextT, render_type_expr
 
 
 @pytest.mark.parametrize(
@@ -46,11 +44,6 @@ from agm.agl.syntax.types import DictT, IntT, TextT, TypeExpr, render_type_expr
 )
 def test_render_type_expr_uses_a_canonical_source_spelling(source: str, expected: str) -> None:
     assert render_type_expr(parse_type_expr(source)) == expected
-
-
-def test_render_type_expr_rejects_unknown_ast_nodes() -> None:
-    with pytest.raises(AssertionError, match="unexpected type expression"):
-        render_type_expr(cast(TypeExpr, object()))
 
 
 def _span() -> SourceSpan:

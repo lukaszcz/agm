@@ -934,25 +934,16 @@ def _fetch_archive_install(
     except OSError as exc:
         error = FetchError(f"fetch failed for {requirement}: {exc}")
         raise PackageInstallError(str(error)) from error
-    selected: PackageInfo | None = None
-
-    def handoff(archive: Path) -> None:
-        nonlocal selected
-        selected = _install_archive(archive, state=state, shadow=False)
-
     try:
-        fetch_archive(
+        return fetch_archive(
             requirement=requirement,
             url=url,
             expected_hash=expected_hash,
-            handoff=handoff,
+            handoff=lambda archive: _install_archive(archive, state=state, shadow=False),
             scratch_dir=scratch if scratch.is_dir() else None,
         )
     except (FetchError, PackageInstallError) as exc:
         raise PackageInstallError(str(exc)) from exc
-    if selected is None:
-        raise PackageInstallError(f"fetch failed for {requirement}: archive was not installed")
-    return selected
 
 
 def _verify_existing_install(

@@ -1518,7 +1518,7 @@ class TestErrorsCarrySpan:
 
         # Not the entry-parse wrapper: the entry itself parsed fine.
         assert not isinstance(exc_info.value, EntryParseSyntaxError)
-        assert exc_info.value.source_span.source.label == str(broken.resolve())
+        assert exc_info.value.span.source.label == str(broken.resolve())
         assert exc_info.value.to_diagnostic().source_label == str(broken.resolve())
 
     def test_import_entry_error_has_span(self, tmp_path: Path) -> None:

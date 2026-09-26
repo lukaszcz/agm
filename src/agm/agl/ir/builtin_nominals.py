@@ -18,7 +18,7 @@ that layer.
 from __future__ import annotations
 
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 
 from agm.agl.ir.ids import NominalId
@@ -32,6 +32,7 @@ __all__ = [
     "BuiltinNominals",
     "DeclaredNominal",
     "resolve_standard_member_name",
+    "standard_member_name",
 ]
 
 
@@ -116,6 +117,19 @@ NO_BUILTIN_DECLARATIONS = BuiltinNominals(
 )
 
 
+def _members_matching(
+    nominal: NominalId,
+    enum_name: str,
+    member_names: Iterable[str],
+    nominals: BuiltinNominals,
+) -> Iterator[str]:
+    return (
+        name
+        for name in member_names
+        if nominal == nominals.resolve_standard_member(enum_name, name).nominal
+    )
+
+
 def resolve_standard_member_name(
     nominal: NominalId,
     enum_name: str,
@@ -130,7 +144,14 @@ def resolve_standard_member_name(
     *nominals* before reaching here. Returns ``None`` when *nominal* matches
     none of *member_names*.
     """
-    for name in member_names:
-        if nominal == nominals.resolve_standard_member(enum_name, name).nominal:
-            return name
-    return None
+    return next(_members_matching(nominal, enum_name, member_names, nominals), None)
+
+
+def standard_member_name(
+    nominal: NominalId,
+    enum_name: str,
+    member_names: Iterable[str],
+    nominals: BuiltinNominals,
+) -> str:
+    """:func:`resolve_standard_member_name` for a *nominal* statically among *member_names*."""
+    return next(_members_matching(nominal, enum_name, member_names, nominals))

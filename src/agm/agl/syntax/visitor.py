@@ -2,8 +2,8 @@
 
 ``walk(node, callback)`` is a recursive traversal that calls *callback* for
 every node in the tree in pre-order (parent before children). It is a
-closed-set dispatcher, so adding a new node class without updating ``walk`` is
-immediately visible as a ``TypeError``.
+closed-set dispatcher over :data:`SyntaxNode`, so a node class added to that
+union without a ``walk`` branch fails type checking.
 
 Usage::
 
@@ -19,6 +19,7 @@ Usage::
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import assert_never
 
 from agm.agl.syntax.nodes import (
     ArrayLit,
@@ -32,6 +33,7 @@ from agm.agl.syntax.nodes import (
     Break,
     BuiltinVarDecl,
     Call,
+    CallArg,
     Case,
     CaseBranch,
     Cast,
@@ -115,6 +117,100 @@ from agm.agl.syntax.types import (
     UnitT,
 )
 
+# Every node class ``walk`` visits.
+type SyntaxNode = (
+    Program
+    | Attribute
+    | AttributeKeyedArg
+    | TextT
+    | JsonT
+    | BoolT
+    | IntT
+    | DecimalT
+    | NameT
+    | ArrayT
+    | DictT
+    | UnitT
+    | FuncT
+    | AppliedT
+    | QualifierSegment
+    | QualifierChain
+    | ImportItem
+    | ImportDecl
+    | ExportItem
+    | ExportDecl
+    | UseDecl
+    | ScopeSegment
+    | RecordDef
+    | VariantDef
+    | VariantRef
+    | EnumDef
+    | ExceptionDef
+    | TypeAlias
+    | FuncDef
+    | Constraint
+    | BuiltinVarDecl
+    | InfixDecl
+    | ScopeRegion
+    | LetDecl
+    | VarDecl
+    | AssignStmt
+    | NameTarget
+    | IndexTarget
+    | FieldTarget
+    | UnitLit
+    | IntLit
+    | DecimalLit
+    | BoolLit
+    | NullLit
+    | StringLit
+    | ArrayLit
+    | DictEntry
+    | DictLit
+    | TextSegment
+    | InterpSegment
+    | Template
+    | VarRef
+    | FieldAccess
+    | IndexAccess
+    | NamedArg[CallArg]
+    | Placeholder
+    | OperatorRef
+    | BinaryOp
+    | UnaryNot
+    | UnaryNeg
+    | Cast
+    | IsTest
+    | TypeApply
+    | Call
+    | RecordUpdate
+    | Param
+    | Lambda
+    | Block
+    | IfBranch
+    | If
+    | CaseBranch
+    | Case
+    | Loop
+    | CatchClause
+    | Try
+    | Raise
+    | Return
+    | RawInfixChain
+    | RawInfixOperand
+    | RawInfixOperator
+    | RawPrefixNot
+    | Break
+    | Continue
+    | WildcardPattern
+    | LiteralPattern
+    | VarPattern
+    | AsPattern
+    | PatternField
+    | ConstructorPattern
+    | ElseSentinel
+)
+
 # ---------------------------------------------------------------------------
 # walk() — closed-set pre-order traversal
 # ---------------------------------------------------------------------------
@@ -126,11 +222,8 @@ def _walk_attributes(attributes: tuple[Attribute, ...], callback: Callable[[obje
         walk(attribute, callback)
 
 
-def walk(node: object, callback: Callable[[object], None]) -> None:
-    """Pre-order traversal: call ``callback`` with *node*, then recurse.
-
-    Raises ``TypeError`` if *node* is not a known AST node type.
-    """
+def walk(node: SyntaxNode, callback: Callable[[object], None]) -> None:
+    """Pre-order traversal: call ``callback`` with *node*, then recurse."""
     callback(node)
 
     if isinstance(node, Program):
@@ -502,10 +595,5 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, ElseSentinel):
         pass  # leaf sentinel
 
-    else:
-        # Fail loudly rather than silently dropping the node's children: the
-        # dispatch above is the closed set of node classes walk() understands.
-        raise TypeError(
-            f"walk() encountered unknown node type {type(node)!r}. "
-            "Add an isinstance branch for it in agm.agl.syntax.visitor.walk()."
-        )
+    else:  # pragma: no cover
+        assert_never(node)

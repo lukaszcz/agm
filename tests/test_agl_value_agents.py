@@ -56,17 +56,6 @@ def test_decode_accepts_every_declared_agent_variant() -> None:
         assert isinstance(decode_agent_value(value, NO_BUILTIN_DECLARATIONS), AGENT_SPECS[variant])
 
 
-def test_decode_rejects_declared_variant_without_a_host_spec(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    catalog = dict(AGENT_SPECS)
-    del catalog["AgentCommand"]
-    monkeypatch.setattr("agm.agent.spec.AGENT_SPECS", catalog)
-
-    with pytest.raises(ValueError):
-        decode_agent_value(agent_value("AgentCommand", command="runner"), NO_BUILTIN_DECLARATIONS)
-
-
 def test_agent_value_encodes_the_inverse_of_decode_agent_value() -> None:
     """``agent_value`` round-trips every declared ``Agent`` variant's host spec."""
     for variant, payload in _agent_member_fields().items():

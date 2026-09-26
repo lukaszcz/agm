@@ -28,7 +28,12 @@ from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.parser import AglSyntaxError, parse_program_seeded
 from agm.agl.repl import ReplSession
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
-from agm.agl.scope.symbols import AglScopeError, BinderKind, ReceiverOwner
+from agm.agl.scope.symbols import (
+    AglScopeError,
+    BinderKind,
+    ImmutableAssignmentError,
+    ReceiverOwner,
+)
 from agm.agl.semantics.values import IntValue
 from agm.agl.syntax.nodes import AssignStmt, Case, ConstructorPattern, FuncDef, VarPattern, VarRef
 from agm.agl.typecheck import AglTypeError
@@ -1999,6 +2004,22 @@ class TestAssignStmtModuleId:
         )
         with pytest.raises(AglScopeError):
             resolve_program(graph)
+
+    def test_qualified_assign_to_an_imported_enum_member_names_its_constructor(
+        self, tmp_path: Path
+    ) -> None:
+        """The rejection classifies an imported enum member by its own declaration."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import lib\nlib::Color::Red := lib::Color::Blue",
+                "lib": "enum Color =\n  | Red\n  | Blue",
+            },
+        )
+        with pytest.raises(ImmutableAssignmentError) as caught:
+            resolve_program(graph)
+
+        assert caught.value.binder_kind is BinderKind.constructor_binding
 
 
 # ---------------------------------------------------------------------------

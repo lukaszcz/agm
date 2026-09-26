@@ -49,11 +49,10 @@ Key rules
 
 from __future__ import annotations
 
-from typing import Iterator
+from typing import Iterator, cast
 
 from lark.lexer import Token
 
-from agm.agl.diagnostics import SourceSpan
 from agm.agl.keywords import (
     KW_CATCH,
     KW_DO,
@@ -66,6 +65,7 @@ from agm.agl.keywords import (
 )
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.operators import opens_suite, stands_as_operator
+from agm.agl.lexer.positions import token_span
 from agm.agl.lexer.tokens import (
     ARROW,
     DEDENT,
@@ -119,7 +119,7 @@ def _synthetic(typ: str, value: str, ref: Token) -> Token:
     that introduces the next line — i.e. they borrow the full
     line/column/start_pos/end_pos of the originating ``_NEWLINE`` ``ref`` token
     (which the scanner positions at the ``\\n`` character itself).  At EOF the
-    ``ref`` is a synthetic newline anchored at ``len(text)``.
+    ``ref`` is the last real token.
     """
     return Token(
         typ,
@@ -195,7 +195,7 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
         Parameters
         ----------
         ref:
-            The _NEWLINE (or synthetic EOF) token used for position borrowing.
+            The _NEWLINE (or, at EOF, the last real) token used for position borrowing.
         triggering_tok:
             The first significant token that caused the pop (peeked but not consumed),
             or None at EOF.  Used to determine whether this pop is caused by an
@@ -212,7 +212,7 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
             is_explicit_terminator = (
                 triggering_tok is not None
                 and triggering_tok.type in (KW_UNTIL, KW_DONE)
-                and (triggering_tok.column or 1) - 1 == enclosing_col
+                and token_span(triggering_tok).start_col - 1 == enclosing_col
             )
             if not is_explicit_terminator:
                 yield _synthetic(KW_DONE, KW_DONE, ref)
@@ -317,7 +317,7 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
             # Continuation rule: suppress the _NEWLINE and emit only the DEDENTs
             # needed to pop the stack to levels strictly greater than the
             # token's column.  These lines never push an indent.
-            kw_col = (sig.column or 1) - 1  # convert 1-based column to 0-based
+            kw_col = token_span(sig).start_col - 1  # convert 1-based column to 0-based
 
             while len(indent_stack) > 1 and indent_stack[-1] > kw_col:
                 yield from _pop_level(tok, sig)
@@ -366,44 +366,17 @@ def layout(tokens: Iterator[Token]) -> Iterator[Token]:
                 # Use the lookahead token (``sig``) to position the diagnostic
                 # on the *offending* line rather than the preceding ``_NEWLINE``
                 # (which sits on the line before the misaligned content).
-                err_ref = sig if sig is not None else tok
-                start_off = err_ref.start_pos if err_ref.start_pos is not None else 0
-                end_off = err_ref.end_pos if err_ref.end_pos is not None else start_off
-                span = SourceSpan(
-                    start_line=err_ref.line or 1,
-                    start_col=err_ref.column or 1,
-                    end_line=err_ref.end_line or err_ref.line or 1,
-                    end_col=err_ref.end_column or err_ref.column or 1,
-                    start_offset=start_off,
-                    end_offset=end_off,
-                )
                 raise LexError(
                     f"Misaligned dedent: expected indentation {indent_stack[-1]}, "
                     f"got {indent_width}",
-                    span=span,
+                    span=token_span(sig if sig is not None else tok),
                 )
             # Emit _NEWLINE at the restored level
             _pending_loop_body = False
             line_start = None
             yield tok
 
-    # EOF: unwind remaining indent levels with _DEDENT tokens.  ``last_real`` is
-    # always set here in practice (reaching this loop body requires a pushed
-    # indent, which requires a real token); the fallback only guards the
-    # impossible empty-stream case and still carries concrete EOF positions.
-    ref = (
-        last_real
-        if last_real is not None
-        else Token(
-            NEWLINE,
-            "0",
-            start_pos=0,
-            line=1,
-            column=1,
-            end_line=1,
-            end_column=1,
-            end_pos=0,
-        )
-    )
+    # EOF: unwind remaining indent levels with _DEDENT tokens anchored at the
+    # last real token, which any pushed indent follows.
     while len(indent_stack) > 1:
-        yield from _pop_level(ref, None)
+        yield from _pop_level(cast(Token, last_real), None)

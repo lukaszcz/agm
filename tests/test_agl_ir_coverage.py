@@ -125,6 +125,6 @@ result
 
 def test_structured_exec_contract_uses_passthrough_codec() -> None:
     contract = materialize_contract(
-        OutputContractSpec(UnitType(), "unused", None, structured_exec=True), {}
+        OutputContractSpec(UnitType(), "unused", None, structured_exec=True), {}, type_table_for()
     )
     assert contract.structured_exec

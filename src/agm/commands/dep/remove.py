@@ -115,7 +115,7 @@ def run(args: DepRemoveArgs) -> None:
 
     repo_path = main_dep_repo(dep_dir)
     linked_worktrees = _linked_worktrees(repo_path=repo_path)
-    if args.all:
+    if ref is None:
         for worktree in linked_worktrees:
             _require_descendant(
                 dep_dir,
@@ -134,7 +134,6 @@ def run(args: DepRemoveArgs) -> None:
         _remove_dep_dir(dep_dir)
         return
 
-    assert ref is not None
     target_path = _resolve_dependency_path(dep_dir, ref)
     if ref == "repo" or target_path.resolve(strict=False) == repo_path.resolve(strict=False):
         if linked_worktrees:

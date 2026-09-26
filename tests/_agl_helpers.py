@@ -293,7 +293,6 @@ def program_config_engine_seeds(
     folds them into ``param_seeds``.
     """
     executable = argument_preflight.executable
-    assert executable is not None
     return {
         key: restamp_engine_setting(
             key[2],
@@ -711,3 +710,26 @@ def agl_std_package_roots(*paths: Path) -> RootSet:
     from tests._package_helpers import package_info
 
     return package_roots(package_info(REPO_STDLIB_ROOT), cwd=REPO_STDLIB_ROOT, paths=paths)
+
+
+def discover_program_declarations_from_source(
+    source: str,
+    *,
+    inline_source: bool = False,
+    entry_path: Path | None = None,
+    roots: RootSet | None = None,
+    default_stdlib: bool = True,
+) -> tuple[ProgramDeclInfo, ...]:
+    """Discover the ``program def`` declarations of *source*; ``()`` when it has errors.
+
+    *inline_source* applies ``agm exec -c``'s synthetic-main wrapper.
+    """
+    runtime = PipelineDriver()
+    if inline_source:
+        parsed = runtime.parse_entry(source, inline_command=True)
+        prepared = runtime.prepare_parsed_entry(parsed, roots=roots, default_stdlib=default_stdlib)
+    else:
+        prepared = runtime.prepare_program(
+            source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
+        )
+    return runtime.discover_programs(prepared).programs

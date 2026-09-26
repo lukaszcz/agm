@@ -1015,8 +1015,7 @@ class TestCleanup:
             resolved_progress_file=tmp_path / "PROGRESS.md",
             env={},
             resolved_runner_command=["fake-runner"],
-            selector=None,
-            loop_prompt=PreparedPrompt(
+            step=PreparedPrompt(
                 label="loop",
                 source_file=tmp_path / "loop.md",
                 effective_file=tmp_path / "loop.md",

@@ -659,11 +659,6 @@ def test_array_contains_returns_false_for_an_undecodable_probe() -> None:
 #: silently inherit (or clobber) another's synthesized class.
 _next_test_nominal = itertools.count(9_000_000)
 
-#: An identity nothing ever registers a class for, at the top of this module's
-#: range. Kept out of ``_next_test_nominal``'s reach so "unregistered" stays
-#: true however many nominals the tests below synthesize, in any order.
-_UNREGISTERED_NOMINAL = NominalId(9_999_999)
-
 
 def _fresh_nominal() -> NominalId:
     """Return an identity no other test in this module uses."""
@@ -784,42 +779,6 @@ def test_decode_boundary_value_returns_the_dict_views_wrapped_value() -> None:
     view = AglDictView(dict_value, _NO_DESCRIPTORS)
 
     assert decode_boundary_value(view) is dict_value
-
-
-def test_encode_boundary_value_rejects_an_unregistered_nominal() -> None:
-    """An identity with no synthesized class cannot cross, whatever else was synthesized.
-
-    Regression test: the synthesized class registry is process-global and
-    keyed by the now-opaque ``NominalId``, so a nominal that reuses another
-    test's identity silently inherits its class and encodes instead of being
-    rejected. Synthesizing the module's other shapes first pins that this
-    identity stays unregistered regardless of test order.
-    """
-    _synthesize_box_class()
-    _synthesize_choice_classes()
-    _synthesize_problem_class()
-    with pytest.raises(BoundaryViolation):
-        encode_boundary_value(RecordValue(_UNREGISTERED_NOMINAL, {}), _NO_DESCRIPTORS)
-
-
-def test_encode_boundary_value_names_a_known_but_unsynthesized_nominal_in_its_message() -> None:
-    """A descriptor view can name the nominal even when no class was ever synthesized for it."""
-    known_descriptors = ValueDescriptors(
-        nominals={
-            _UNREGISTERED_NOMINAL: NominalDescriptor(
-                nominal=_UNREGISTERED_NOMINAL,
-                module_id=ENTRY_ID,
-                scope_path=(),
-                declared_name="Ghost",
-                kind=NominalKind.RECORD,
-                fields=(),
-            )
-        },
-        functions={},
-        exception_field_encodes={},
-    )
-    with pytest.raises(BoundaryViolation, match="Ghost"):
-        encode_boundary_value(RecordValue(_UNREGISTERED_NOMINAL, {}), known_descriptors)
 
 
 def test_encode_boundary_value_rejects_a_constructor_value() -> None:

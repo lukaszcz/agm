@@ -1707,12 +1707,7 @@ class TypeEnvironment:
     def _is_program_type_candidate(self, qname: QName) -> bool:
         """Return whether a program-qualified name denotes any type-namespace declaration."""
         key = self._qname_decl_key(qname)
-        return (
-            key in self._program_type_table
-            or key in self._program_generic_table
-            or key in self._program_alias_table
-            or key in self._program_alias_keys
-        )
+        return self._in_program_type_tables(key) or key in self._program_alias_keys
 
     def _ensure_program_alias_resolved(self, key: DeclKey, span: SourceSpan | None) -> Type | None:
         """Resolve a program alias lazily while retaining its declaration path."""
@@ -2614,27 +2609,56 @@ class TypeEnvironment:
     ) -> TypeTemplate | None:
         """Return immutable checked template data for one source type QName."""
         key = (module_id, scope_path, name)
+        if self._in_program_type_tables(key):
+            return self._program_table_template(key)
+        local_name = "::".join((*scope_path, name))
+        if module_id != self._module_id or not self._declares_local_type(local_name):
+            return None
+        return self._own_local_template(local_name)
+
+    def declared_type_template(
+        self, module_id: ModuleId, name: str, *, scope_path: ScopePath = ()
+    ) -> TypeTemplate:
+        """Return the template of a declared source type, forcing a lazy program alias first."""
+        key = (module_id, scope_path, name)
+        self._ensure_program_alias_resolved(key, None)
+        if self._in_program_type_tables(key):
+            return self._program_table_template(key)
+        return self._own_local_template("::".join((*scope_path, name)))
+
+    def _in_program_type_tables(self, key: DeclKey) -> bool:
+        return (
+            key in self._program_alias_table
+            or key in self._program_generic_table
+            or key in self._program_type_table
+        )
+
+    def _program_table_template(self, key: DeclKey) -> TypeTemplate:
+        """Return the template of *key*, an entry of the program type tables."""
         alias_def = self._program_alias_table.get(key)
         if alias_def is not None:
             return TypeTemplate(alias_def.template, alias_def.type_params)
         generic_def = self._program_generic_table.get(key)
         if generic_def is not None:
             return TypeTemplate(generic_def.template, generic_def.type_params)
-        resolved = self._program_type_table.get(key)
-        if resolved is not None:
-            return TypeTemplate(resolved)
-        if module_id != self._module_id:
-            return None
-        local_name = "::".join((*scope_path, name))
+        return TypeTemplate(self._program_type_table[key])
+
+    def _declares_local_type(self, local_name: str) -> bool:
+        return (
+            local_name in self._generic_types
+            or local_name in self._resolved_aliases
+            or local_name in self._alias_targets
+            or local_name in self._types
+        )
+
+    def _own_local_template(self, local_name: str) -> TypeTemplate:
+        """Return the template of *local_name*, a type this module declares locally."""
         local_generic = self._generic_types.get(local_name)
         if local_generic is not None:
             return TypeTemplate(local_generic.template, local_generic.type_params)
         if local_name in self._resolved_aliases or local_name in self._alias_targets:
             return self._own_alias_template(local_name)
-        resolved = self._types.get(local_name)
-        if resolved is None:
-            return None
-        return TypeTemplate(self._selected_builtin_type(local_name, resolved, None))
+        return TypeTemplate(self._selected_builtin_type(local_name, self._types[local_name], None))
 
     def _own_alias_template(self, local_name: str) -> TypeTemplate:
         """Return the template of this module's alias *local_name* over its parameters."""
@@ -2696,6 +2720,15 @@ class TypeEnvironment:
             return self._enum_owner_form(kind, owner_name, module_qualifier, None, key)
         if owner_name not in self._own_source_type_names():
             return None
+        return self._own_enum_owner_form(kind, owner_name, module_qualifier)
+
+    def _own_enum_owner_form(
+        self,
+        kind: Literal[EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF],
+        owner_name: str,
+        module_qualifier: QualifierChain | None = None,
+    ) -> EnumOwnerForm:
+        """Build the owner form of *owner_name*, a type this module declares."""
         expected_qualifier = None if kind is EnumOwnerFormKind.LOCAL else ()
         key = (self._module_id, (), owner_name)
         return self._enum_owner_form(kind, owner_name, module_qualifier, expected_qualifier, key)
@@ -2734,7 +2767,7 @@ class TypeEnvironment:
             kind=kind,
             source_module_id=source_module_id,
             source_name=source_name,
-            type_template=self.source_type_template_qname(
+            type_template=self.declared_type_template(
                 source_module_id, source_name, scope_path=source_scope_path
             ),
             qualifier_anchored=(
@@ -2749,18 +2782,17 @@ class TypeEnvironment:
         are the only kinds writable as a bare ``owner_name`` qualifier, which
         is exactly the qualifier a same-named module route also competes for.
         """
-        template = form.type_template
+        template = form.type_template.template
         if (
             self._import_env is None
             or form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT)
-            or template is None
-            or not isinstance(template.template, EnumType)
+            or not isinstance(template, EnumType)
         ):
             return frozenset()
-        owner_qualifier = (form.owner_name or "",)
+        owner_qualifier = (form.owner_name,)
         return frozenset(
             variant
-            for variant in self.type_table.enum_member_names(template.template)
+            for variant in self.type_table.enum_member_names(template)
             if qualifier_contributes(self._import_env, owner_qualifier, variant)
         )
 
@@ -2775,9 +2807,8 @@ class TypeEnvironment:
             return cached
         forms: set[EnumOwnerForm] = set()
         for owner_name in self._own_source_type_names():
-            for kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
-                own_form = cast(EnumOwnerForm, self.resolve_enum_owner_form(kind, owner_name))
-                forms.add(own_form)
+            forms.add(self._own_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name))
+            forms.add(self._own_enum_owner_form(EnumOwnerFormKind.SELF, owner_name))
         if self._import_env is not None:
             for exposed_name in self._import_env.unqualified:
                 if not isinstance(exposed_name, str):
@@ -2794,11 +2825,8 @@ class TypeEnvironment:
                     ):
                         continue
                     _, source_scope_path, source_name = self._qname_decl_key(qname)
-                    template = cast(
-                        TypeTemplate,
-                        self.source_type_template_qname(
-                            qname[0], source_name, scope_path=source_scope_path
-                        ),
+                    template = self.declared_type_template(
+                        qname[0], source_name, scope_path=source_scope_path
                     )
                     for qualifier, anchored in routes:
                         resolved = resolve_qualified(
@@ -2819,12 +2847,11 @@ class TypeEnvironment:
                         )
 
         def form_key(form: EnumOwnerForm) -> tuple[str, tuple[str, ...], bool, str]:
-            # Every form here names an owner, so its kind is set.
             return (
-                form.owner_name or "",
+                form.owner_name,
                 form.module_qualifier or (),
                 form.qualifier_anchored,
-                cast(EnumOwnerFormKind, form.kind).value,
+                form.kind.value,
             )
 
         ordered = tuple(sorted(forms, key=form_key))
@@ -2854,7 +2881,7 @@ class TypeEnvironment:
                 continue
             variants = self._blocked_short_variants(form)
             if variants:
-                blocked[(form.owner_name or "",)] = variants
+                blocked[(form.owner_name,)] = variants
         result: Mapping[tuple[str, ...], frozenset[str]] = MappingProxyType(blocked)
         if self._sealed:
             self._sealed_blocked_enum_variants = result

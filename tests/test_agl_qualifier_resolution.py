@@ -47,6 +47,7 @@ def _import_env(
         (decl,),
         {decl.node_id: SingleTarget(module)},
         {module: {atom: (module, atom) for atom in public_atoms}},
+        {module: {}},
     )
 
 

@@ -2,42 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
+from agm.agent.spec import AgentSpec, SessionTransport
 from agm.agent.transport import AgentCallInfo, AgentTransportError
 
 
 class SessionOperation(StrEnum):
-    """Operations a session backend can advertise as supported."""
+    """Session operations, as named in lifecycle errors."""
 
     ASK = "ask"
     COMPACT = "compact"
     FORK = "fork"
     SET_NAME = "set-name"
     STATS = "stats"
-
-
-@dataclass(frozen=True, slots=True)
-class SessionCapabilities:
-    """The optional operations implemented natively by a session backend."""
-
-    operations: frozenset[SessionOperation]
-
-    @classmethod
-    def all(cls) -> SessionCapabilities:
-        """Return capabilities for a backend implementing every optional operation."""
-        return cls(frozenset(SessionOperation))
-
-    def supports(self, operation: SessionOperation) -> bool:
-        """Whether this backend supports *operation*."""
-        return operation in self.operations
-
-    def __sub__(self, operations: set[SessionOperation]) -> SessionCapabilities:
-        """Return these capabilities without *operations*."""
-        return SessionCapabilities(self.operations - operations)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +31,8 @@ class SessionOpenRequest:
     lifetime is owned separately by the session service.
     """
 
-    agent: object
-    transport: str
+    agent: AgentSpec
+    transport: SessionTransport
     name: str = ""
     single_prompt: bool = False
 
@@ -103,31 +85,28 @@ class SessionAskError(AgentTransportError):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class SessionOperations:
+    """The optional operations a backend implements natively; ``None`` is unsupported."""
+
+    compact: Callable[[str], None] | None = None
+    fork: Callable[[], SessionBackend] | None = None
+    set_name: Callable[[str], None] | None = None
+    stats: Callable[[], SessionStats] | None = None
+
+
 class SessionBackend(Protocol):
-    """One native session implementation selected for an agent transport."""
+    """One open native session implementation selected for an agent transport."""
 
-    capabilities: SessionCapabilities
-
-    def open(self, request: SessionOpenRequest) -> None:
-        """Open the backend's underlying session."""
+    @property
+    def operations(self) -> SessionOperations:
+        """The optional operations this session supports."""
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Send a prompt and return the backend response."""
 
-    def compact(self, instructions: str) -> None:
-        """Compact the conversation using optional instructions."""
-
     def reset(self) -> None:
         """Discard conversation history while retaining this backend object."""
-
-    def fork(self) -> SessionBackend:
-        """Return a new backend whose history starts from this session."""
-
-    def set_name(self, name: str) -> None:
-        """Assign a backend-visible session name."""
-
-    def stats(self) -> SessionStats:
-        """Return the backend's current usage statistics."""
 
     def close(self) -> None:
         """Release the backend's resources."""

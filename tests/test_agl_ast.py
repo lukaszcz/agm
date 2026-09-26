@@ -2238,16 +2238,6 @@ class TestWalk:
         walk(prog, visited.append)
         assert [node for node in visited if isinstance(node, Call)] == [call]
 
-    def test_walk_unknown_type_raises(self) -> None:
-        """walk() on an unknown type should raise TypeError."""
-        from agm.agl.syntax.visitor import walk
-
-        class NotANode:
-            pass
-
-        with pytest.raises(TypeError):
-            walk(NotANode(), lambda n: None)
-
     def test_walk_qual_var_ref_visits_qualifier_chain(self) -> None:
         """walk() on a slash-qualified VarRef visits its qualifier chain."""
         from agm.agl.parser import parse_program

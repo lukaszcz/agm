@@ -135,7 +135,7 @@ class EntryParseSyntaxError(AglSyntaxError):
     def __init__(
         self, error: AglSyntaxError, spaced_qualifiers: tuple[SpacedQualifier, ...]
     ) -> None:
-        super().__init__(str(error), span=error.source_span)
+        super().__init__(str(error), span=error.span)
         self.spaced_qualifiers = spaced_qualifiers
 
 
@@ -525,9 +525,7 @@ def _operator_export_maps(
         for mid, loaded in graph.modules.items():
             for decl in loaded.export_decls:
                 for target in _dependency_targets(decl, graph):
-                    for path, origins in _forwarded_operator_exports(
-                        decl, exports.get(target, {})
-                    ).items():
+                    for path, origins in _forwarded_operator_exports(decl, exports[target]).items():
                         before = len(exports[mid].setdefault(path, set()))
                         exports[mid][path].update(origins)
                         if len(exports[mid][path]) != before:
@@ -619,7 +617,7 @@ def _used_operator_surface(
     """
     requested_path = tuple(segment.name for segment in decl.target)
     if decl.anchored or _has_local_use_target(local_scopes, scope_path, requested_path):
-        return _relative_operator_members(exports.get(module_id, {}), requested_path)
+        return _relative_operator_members(exports[module_id], requested_path)
 
     members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
 
@@ -634,7 +632,7 @@ def _used_operator_surface(
         tail = import_decl.tail
         bare_here = tail is not None and scope_path[: len(decl_scope)] == decl_scope
         for target in _dependency_targets(import_decl, graph):
-            surface = _imported_operator_surface(import_decl, exports.get(target, {}))
+            surface = _imported_operator_surface(import_decl, exports[target])
             if route in _operator_import_routes(import_decl, target):
                 absorb(surface, routed_path)
             if tail is not None and bare_here:
@@ -684,7 +682,7 @@ def _operator_bare_layers(
             continue
         members: dict[_OperatorPath, set[_OperatorOrigin]] = {}
         for target in _dependency_targets(decl, graph):
-            surface = _imported_operator_surface(decl, exports.get(target, {}))
+            surface = _imported_operator_surface(decl, exports[target])
             for path, origins in _bare_operator_members(tail, surface).items():
                 members.setdefault(path, set()).update(origins)
         contribute(_operator_decl_scope_path(decl), members)
@@ -717,7 +715,7 @@ def _raw_chain_scope_paths(program: syntax.Program) -> dict[int, _OperatorPath]:
     """Map every raw infix chain to the named scope that lexically owns it."""
     paths: dict[int, _OperatorPath] = {}
 
-    def collect(item: object, scope_path: _OperatorPath) -> None:
+    def collect(item: syntax.Item, scope_path: _OperatorPath) -> None:
         if isinstance(item, syntax.ScopeRegion):
             nested_path = (*scope_path, item.segment.name)
             for child in item.items:

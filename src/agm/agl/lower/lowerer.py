@@ -764,8 +764,6 @@ class _Lowerer:
                 target_type_label=repr(target),
                 structured_exec=structured_exec,
                 format_instructions=build_format_instructions(schema),
-                target_type_kind=target.kind,
-                target_type=target,
                 defs=decode_plan.defs,
             )
         if spec.codec_name == "text":
@@ -776,8 +774,6 @@ class _Lowerer:
                 target_type_label=repr(target),
                 structured_exec=structured_exec,
                 format_instructions="",
-                target_type_kind=target.kind,
-                target_type=target,
             )
         payload = self._contract_payloads[node_id]
         return CustomContractRequest(
@@ -788,7 +784,6 @@ class _Lowerer:
             target_type_label=repr(target),
             structured_exec=structured_exec,
             format_instructions=payload.format_instructions,
-            target_type_kind=target.kind,
             target_type=target,
             defs=payload.defs,
         )

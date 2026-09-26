@@ -265,9 +265,6 @@ class CaseSite:
 MatchSiteSource: TypeAlias = CaseSite
 
 
-EnumConstructorSpelling: TypeAlias = EnumOwnerForm
-
-
 @dataclass(frozen=True, slots=True)
 class MatrixRow:
     """One source-priority row in a canonical pattern matrix."""
@@ -438,7 +435,6 @@ __all__ = [
     "DecisionFail",
     "DecisionLeaf",
     "DecisionSwitch",
-    "EnumConstructorSpelling",
     "FieldOccurrenceProvenance",
     "LiteralConstructor",
     "LiteralKind",

@@ -7,14 +7,10 @@ from pathlib import Path
 import pytest
 
 from agm.agl import PipelineDriver
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program
+from agm.agl.pipeline import RunResult
 from agm.agl.scope import AglScopeError
-from agm.agl.scope.imports import ImportEnv, SingleTarget, build_import_env
-from agm.agl.scope.resolver import _Resolver
-from agm.agl.scope.symbols import ModuleResolution
-from agm.agl.scope.type_owners import TypeOwnerIndex
 from agm.agl.syntax import (
     BuiltinVarDecl,
     EnumDef,
@@ -24,7 +20,6 @@ from agm.agl.syntax import (
     ImportDecl,
     Item,
     LetDecl,
-    Program,
     RecordDef,
     ScopeRegion,
     ScopeSegment,
@@ -34,26 +29,6 @@ from agm.agl.syntax import (
 from tests._agl_helpers import run_inline_command
 from tests.agl.ir_harness import write_module_file
 from tests.agl.module_graph import resolve_entry, resolve_inline_entry
-
-
-def _resolve_alone(
-    program: Program, import_env: ImportEnv, *, allow_root_statements: bool = False
-) -> ModuleResolution:
-    """Resolve *program* as the entry of a program with no declared types."""
-    resolver = _Resolver(
-        module_id=ENTRY_ID,
-        import_env=import_env,
-        all_public_types={},
-        type_owners=TypeOwnerIndex(
-            all_public_types={},
-            constructor_refs={},
-            import_envs={ENTRY_ID: import_env},
-            contributions=lambda *_: None,
-        ),
-        allow_root_statements=allow_root_statements,
-    )
-    resolver.prepare(program)
-    return resolver.resolve()
 
 
 def _declaration(source: str) -> Item:
@@ -484,46 +459,54 @@ def test_used_scope_members_clash_at_their_use_site() -> None:
         resolve_inline_entry(source)
 
 
-def test_use_reaches_a_scope_made_nameable_by_an_import_tail() -> None:
+def _run_with_modules(tmp_path: Path, modules: dict[str, str], entry: str) -> RunResult:
+    root = tmp_path / "modules"
+    root.mkdir()
+    for name, source in modules.items():
+        write_module_file(root, name, source)
+    return run_inline_command(
+        PipelineDriver(), entry, roots=RootSet(roots=frozenset({root})), default_stdlib=False
+    )
+
+
+def test_use_reaches_a_scope_made_nameable_by_an_import_tail(tmp_path: Path) -> None:
     """A use target follows the same bare contribution a qualifier follows."""
-    program = parse_program("import library::{Scope}\nuse Scope::*\nvisible")
-    import_decl, _use_decl, _visible = program.body.items
-    assert isinstance(import_decl, ImportDecl)
-    library = ModuleId.from_path("library")
-    scope_member = ("Scope", "visible")
-    import_env = build_import_env(
-        (import_decl,),
-        {import_decl.node_id: SingleTarget(library)},
-        {library: {scope_member: (library, scope_member)}},
+    result = _run_with_modules(
+        tmp_path,
+        {"library": "scope Scope\n  def visible() -> int = 1\nend Scope"},
+        "import library::{Scope}\nuse Scope::*\nlet x: int = visible()\n()",
     )
 
-    resolved = _resolve_alone(program, import_env, allow_root_statements=True)
-
-    assert any(ref.name == "visible" for ref in resolved.resolution.values())
+    assert result.ok
 
 
-def test_use_keeps_equally_nameable_bare_scope_targets_ambiguous() -> None:
-    program = parse_program("import one::{Scope}\nimport two::{Scope}\nuse Scope::*")
-    first_import, second_import, _use_decl = program.body.items
-    assert isinstance(first_import, ImportDecl)
-    assert isinstance(second_import, ImportDecl)
-    one = ModuleId.from_path("one")
-    two = ModuleId.from_path("two")
-    scope_member = ("Scope", "visible")
-    import_env = build_import_env(
-        (first_import, second_import),
+def test_use_keeps_equally_nameable_bare_scope_targets_ambiguous(tmp_path: Path) -> None:
+    result = _run_with_modules(
+        tmp_path,
         {
-            first_import.node_id: SingleTarget(one),
-            second_import.node_id: SingleTarget(two),
+            "one": "scope Scope\n  def visible() -> int = 1\nend Scope",
+            "two": "scope Scope\n  def visible() -> int = 2\nend Scope",
         },
-        {
-            one: {scope_member: (one, scope_member)},
-            two: {scope_member: (two, scope_member)},
-        },
+        "import one::{Scope}\nimport two::{Scope}\nuse Scope::*\n()",
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
-        _resolve_alone(program, import_env)
+    assert not result.ok
+    assert len(result.diagnostics) == 1
+
+
+@pytest.mark.parametrize(("member", "ok"), (("Idle", True), ("Saved", False)))
+def test_use_of_an_enum_reaches_only_its_inline_members(
+    tmp_path: Path, member: str, ok: bool
+) -> None:
+    """A referenced member stays at its own path, outside the used enum's scope."""
+    result = _run_with_modules(
+        tmp_path,
+        {"library": "record Saved\n\nenum Status =\n  | ::Saved\n  | Idle"},
+        f"import library\nuse library::Status\nlet x = Status::{member}\n()",
+    )
+
+    assert result.ok is ok
+    assert len(result.diagnostics) == (0 if ok else 1)
 
 
 @pytest.mark.parametrize(

@@ -66,6 +66,7 @@ def _build(decls: list[ImportDecl], exports: dict[ModuleId, dict[NameAtom, QName
         tuple(decls),
         {decl.node_id: SingleTarget(_module("/".join(decl.module_path))) for decl in decls},
         exports,
+        {module: {} for module in exports},
     )
 
 

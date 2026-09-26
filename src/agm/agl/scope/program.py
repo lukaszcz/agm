@@ -26,7 +26,7 @@ Design
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
@@ -229,7 +229,7 @@ def _build_cross_module_constructor_candidates(
                 if variant_ref is not None:
                     add_candidate(exposed_name, variant_ref)
                 continue
-            src_path = (src_name,) if isinstance(src_name, str) else src_name
+            src_path = _path(src_name)
             owner_path = src_path[:-1]
             if isinstance(decl, (RecordDef, ExceptionDef)):
                 cref = cross_module_constructor_refs[key]
@@ -272,6 +272,13 @@ def _item_atom(
     item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | BuiltinVarDecl,
 ) -> NameAtom:
     return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
+
+
+def _inline_members(enum: EnumDef, path: ScopePath) -> Iterator[tuple[VariantDef, NameAtom]]:
+    """Yield each inline member of *enum*, declared at *path*, with its name atom."""
+    for member in enum.members:
+        if isinstance(member, VariantDef):
+            yield member, _atom((*path, member.name))
 
 
 def _static_binding_atom(item: LetDecl | VarDecl) -> NameAtom | None:
@@ -327,16 +334,7 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
             if isinstance(item, EnumDef):
-                for member in item.members:
-                    if not isinstance(member, VariantDef):
-                        continue
-                    variant_atom = _atom(
-                        (
-                            *tuple(segment.name for segment in item.scope_path),
-                            item.name,
-                            member.name,
-                        )
-                    )
+                for _member, variant_atom in _inline_members(item, _path(atom)):
                     result[variant_atom] = (self_id, variant_atom)
         elif isinstance(item, BuiltinVarDecl):
             atom = _item_atom(item)
@@ -358,10 +356,8 @@ def _public_type_owners(
         if isinstance(declaration, (RecordDef, EnumDef, ExceptionDef)):
             result[module_id, atom] = ReceiverOwner(module_id, path)
         if isinstance(declaration, EnumDef):
-            for member in declaration.members:
-                if isinstance(member, VariantDef):
-                    member_atom = _atom((*path, member.name))
-                    result[module_id, member_atom] = ReceiverOwner(module_id, (*path, member.name))
+            for member, member_atom in _inline_members(declaration, path):
+                result[module_id, member_atom] = ReceiverOwner(module_id, (*path, member.name))
     return result
 
 
@@ -377,7 +373,7 @@ def _member_record_constructor_refs(
     """
     result: dict[QName, ConstructorRef] = {}
     for (module_id, atom), declaration in all_public_types.items():
-        path = (atom,) if isinstance(atom, str) else atom
+        path = _path(atom)
         if isinstance(declaration, (RecordDef, ExceptionDef)):
             result[(module_id, atom)] = ConstructorRef(
                 owner_name=declaration.name,
@@ -390,11 +386,7 @@ def _member_record_constructor_refs(
                 is_builtin=declaration.is_builtin,
             )
         elif isinstance(declaration, EnumDef):
-            for member in declaration.members:
-                if not isinstance(member, VariantDef):
-                    continue
-                variant_path = (*path, member.name)
-                variant_atom = _atom(variant_path)
+            for member, variant_atom in _inline_members(declaration, path):
                 result[(module_id, variant_atom)] = ConstructorRef(
                     owner_name=member.name,
                     owner_decl_node_id=source_enum_member_decl_id(
@@ -491,8 +483,8 @@ def _resolve_reexports(
                 for target_mid in target_mids:
                     additions, scope_additions = _compute_reexport_additions(
                         decl,
-                        export_maps.get(target_mid, {}),
-                        scope_export_maps.get(target_mid, {}),
+                        export_maps[target_mid],
+                        scope_export_maps[target_mid],
                         allow_missing=True,
                     )
                     for exposed, qname in additions.items():
@@ -544,8 +536,8 @@ def _resolve_reexports(
             for target_mid in validation_targets:
                 _compute_reexport_additions(
                     decl,
-                    export_maps.get(target_mid, {}),
-                    scope_export_maps.get(target_mid, {}),
+                    export_maps[target_mid],
+                    scope_export_maps[target_mid],
                 )
 
 
@@ -833,6 +825,13 @@ def resolve_program(
                     decl_span=item.span,
                     kind=BinderKind.constructor_binding,
                 )
+                if isinstance(item, EnumDef):
+                    for member, member_atom in _inline_members(item, _path(key[1])):
+                        decl_info[(mid, member_atom)] = DeclInfo(
+                            decl_node_id=member.node_id,
+                            decl_span=member.span,
+                            kind=BinderKind.constructor_binding,
+                        )
             elif isinstance(item, BuiltinVarDecl):
                 key = (mid, _item_atom(item))
                 decl_info[key] = DeclInfo(
@@ -879,7 +878,7 @@ def resolve_program(
         return None if nearest is None else contributed_declarations(*nearest)
 
     # The index answers from prepared headers, so it is only asked once every
-    # module below is prepared.
+    # module below is constructed.
     type_owners = TypeOwnerIndex(
         all_public_types=all_public_types,
         constructor_refs=cross_module_constructor_refs,
@@ -893,7 +892,9 @@ def resolve_program(
             resolved_modules[mid] = cached
             continue
         is_entry = mid == graph.entry_id
-        resolver = _Resolver(
+        type_names = _import_tail_type_names(import_envs[mid], all_public_types)
+        resolvers[mid] = _Resolver(
+            loaded.program,
             module_id=mid,
             import_env=import_envs[mid],
             decl_info=decl_info,
@@ -913,14 +914,9 @@ def resolve_program(
             repl_session_type_paths=entry_repl_session_type_paths if is_entry else None,
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
-        )
-        type_names = _import_tail_type_names(import_envs[mid], all_public_types)
-        resolver.prepare(
-            loaded.program,
             parent_scope=entry_parent_scope if is_entry else None,
             ambient_type_names=entry_ambient_type_names | type_names if is_entry else type_names,
         )
-        resolvers[mid] = resolver
 
     for mid, resolver in resolvers.items():
         is_entry = mid == graph.entry_id

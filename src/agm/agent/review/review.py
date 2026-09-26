@@ -70,8 +70,8 @@ def prepare_review(
             prompt_file=args.prompt_file,
             config_prompt=config.prompt,
             config_prompt_file=config.prompt_file,
-            default_prompt_file=default_prompt_file,
         ),
+        default_prompt_file=default_prompt_file,
         extra=PromptSourceOptions(
             prompt=args.extra_prompt,
             prompt_file=args.extra_prompt_file,

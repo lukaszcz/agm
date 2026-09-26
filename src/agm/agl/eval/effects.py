@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import ContextManager, NoReturn, Protocol, assert_never, cast
 
 from agm.agent.spec import AgentSpec, SessionTransport
-from agm.agl.ir.builtin_nominals import resolve_standard_member_name
+from agm.agl.ir.builtin_nominals import resolve_standard_member_name, standard_member_name
 from agm.agl.ir.contracts import (
     ContractRequest,
     CustomContractRequest,
@@ -389,14 +389,11 @@ class EffectHandlers:
 
     def _transport_name(self, value: RecordValue) -> str:
         """Return the bare ``SessionTransport`` member name *value* projects onto."""
-        return cast(
-            str,
-            resolve_standard_member_name(
-                value.nominal,
-                "SessionTransport",
-                self._SESSION_TRANSPORT_MEMBERS,
-                self._ctx._program.builtin_nominals,
-            ),
+        return standard_member_name(
+            value.nominal,
+            "SessionTransport",
+            self._SESSION_TRANSPORT_MEMBERS,
+            self._ctx._program.builtin_nominals,
         )
 
     def _session_value(self, handle: str, agent: RecordValue, transport: str) -> RecordValue:
@@ -424,17 +421,8 @@ class EffectHandlers:
         )
 
     def _decode_agent_spec(self, agent: RecordValue) -> AgentSpec:
-        """Decode *agent* into its host specification, or raise ``SessionAgentError``.
-
-        The interpreter decodes an ``Agent`` value to its host specification
-        exactly once, here, before any session host sees it; an invalid value
-        surfaces as the same AgL-visible ``SessionAgentError`` a session
-        ``open`` reports.
-        """
-        try:
-            return decode_agent_value(agent, self._ctx._program.builtin_nominals)
-        except ValueError as error:
-            raise SessionAgentError(str(error), "open") from error
+        """Decode *agent* into its host specification, once, before any session host sees it."""
+        return decode_agent_value(agent, self._ctx._program.builtin_nominals)
 
     def _resolve_session_transport(self, spec: AgentSpec, transport: Value | None) -> str:
         """Resolve the transport for an already-decoded *spec*.
@@ -571,10 +559,7 @@ class EffectHandlers:
         once the call completes or fails.
         """
         contract = self._ctx._program.contracts[contract_id]
-        try:
-            spec = self._decode_agent_spec(agent)
-        except SessionAgentError as error:
-            self._invalid_agent_error(agent, error)
+        spec = self._decode_agent_spec(agent)
         transport = self._resolve_session_transport(spec, None)
 
         def ask_in_session(handle: str) -> Value:
@@ -618,10 +603,7 @@ class EffectHandlers:
         prompt = self._text_of(self._ctx._eval(node.prompt))
         contract = self._ctx._program.contracts[node.contract_id]
         output_contract, json_schema = self._contract_carriers(node.contract_id)
-        try:
-            spec = self._decode_agent_spec(agent)
-        except SessionHostError as error:
-            self._session_error(error)
+        spec = self._decode_agent_spec(agent)
         return self._eval_session_ask_attempts(
             agent=agent,
             spec=spec,

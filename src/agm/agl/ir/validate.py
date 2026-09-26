@@ -66,7 +66,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TypeVar, assert_never
+from typing import TypeVar, assert_never, cast
 
 from agm.agl.ir.builtin_vars import BuiltinVarKey, is_engine_builtin_var_key
 from agm.agl.ir.contracts import (
@@ -1163,8 +1163,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
         case IrDirectCall(function_id=fn_id, arguments=arguments):
             _validate_location(node.location, ctx)
             targets = _leading_contract_count(fn_id, arguments, ctx)
-            for contract in arguments[:targets]:
-                assert isinstance(contract, IrContract)
+            for contract in cast("tuple[IrContract, ...]", arguments[:targets]):
                 _validate_location(contract.location, ctx)
                 if ctx.deep and contract.contract_id not in ctx.program.target_contracts:
                     raise InvalidIrError(

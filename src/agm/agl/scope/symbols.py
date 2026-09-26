@@ -308,23 +308,17 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
 }
 
 
-def immutable_binder_phrase(kind: BinderKind) -> str:
-    """Return the ``:=``-rejection phrase naming *kind*'s binder."""
-    return _IMMUTABLE_BINDER_PHRASES[kind]
-
-
 def immutable_assignment_message(name: str, kind: BinderKind, *, cross_module: bool = False) -> str:
     """Return the canonical ``:=``-on-immutable rejection message for *name*.
 
-    Type checking is the only caller: a field-directed pattern slot's final
-    binding is selected there, so only it can judge an unqualified target.
-    The wording lives here beside :func:`immutable_binder_phrase`, which the
-    resolver also uses for the cross-module qualified-assignment rejection.
-    *cross_module* drops the "declare with 'var'" hint: an importer cannot
-    change how another module declared its own binding.
+    Scope judges a qualified target (:class:`ImmutableAssignmentError`); type
+    checking judges an unqualified one, since a field-directed pattern slot's
+    final binding is selected there. *cross_module* drops the "declare with
+    'var'" hint: an importer cannot change how another module declared its
+    own binding.
     """
     hint = "" if cross_module else " Declare with 'var' to make the variable mutable."
-    return f"Cannot assign to '{name}': {immutable_binder_phrase(kind)} (immutable).{hint}"
+    return f"Cannot assign to '{name}': {_IMMUTABLE_BINDER_PHRASES[kind]} (immutable).{hint}"
 
 
 def undefined_name_message(name: str, *, in_module: bool = False) -> str:
@@ -501,10 +495,9 @@ class SlotCandidate:
 class PatternSlot:
     """Parallel metadata for candidates owned by one pattern match site.
 
-    ``match_site_node_id`` identifies the owning case branch or ``let``
-    declaration. ``binder_kind`` records the binding kind requested by that
-    site when checking selects a candidate. ``alternative`` is an enclosing
-    ordinary binding or an outer pattern-slot binding, if one is visible.
+    ``match_site_node_id`` identifies the owning case branch.
+    ``alternative`` is an enclosing ordinary binding or an outer pattern-slot
+    binding, if one is visible.
     """
 
     slot_id: int
@@ -512,7 +505,6 @@ class PatternSlot:
     candidates: tuple[SlotCandidate, ...]
     alternative: BindingRef | None
     match_site_node_id: int
-    binder_kind: BinderKind
 
 
 # ---------------------------------------------------------------------------
@@ -880,8 +872,8 @@ class ModuleResolution:
     ``pattern_constructor_candidates`` / ``pattern_constructor_spellings``
         Map bare ``VarPattern`` and constructor-pattern node ids to viable
         candidates. Constructor patterns retain an empty tuple when their
-        named owner is unavailable, preventing fallback to an unqualified
-        spelling. Candidates are independent of ordinary value bindings; the
+        named owner is unavailable, so an unqualified spelling never
+        substitutes for it. Candidates are independent of ordinary value bindings; the
         checker selects a bare name's final interpretation from the matched
         occurrence's type and field name. The spelling table preserves each
         immutable occurrence's source name alongside those candidates.
@@ -976,3 +968,15 @@ class AglScopeError(AglError):
     (first-error abort policy).  Carries an optional ``SourceSpan`` for
     precise source location.
     """
+
+
+class ImmutableAssignmentError(AglScopeError):
+    """A qualified ``:=`` whose target resolves to an immutable *binder_kind* binding."""
+
+    def __init__(
+        self, name: str, binder_kind: BinderKind, *, cross_module: bool, span: SourceSpan
+    ) -> None:
+        super().__init__(
+            immutable_assignment_message(name, binder_kind, cross_module=cross_module), span=span
+        )
+        self.binder_kind = binder_kind

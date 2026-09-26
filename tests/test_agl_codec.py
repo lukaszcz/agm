@@ -71,7 +71,6 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
     TypeVarType,
-    UnitType,
 )
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -336,8 +335,7 @@ def _run_with_json_codec(
     json_codec = JsonCodec()
     codecs: dict[str, OutputCodec] = {text_codec.name: text_codec, json_codec.name: json_codec}
     executable = lower_compiled_module(compile_checked_module(checked), source_text="<direct-ast>")
-    contracts, errors = materialize_ir_contracts(executable, codecs)
-    assert errors == []
+    contracts = materialize_ir_contracts(executable, codecs)
     bindings = _Bindings(
         IrInterpreter(
             executable,
@@ -1589,11 +1587,6 @@ class TestLenientParsing:
         result = _parse_typed(codec, "maybe true or maybe false", BoolType(), strict_json=False)
         assert result.ok is False
         assert "multiple" in result.error_msg
-
-    def test_ref_decode_without_defs_raises_clear_value_error(self) -> None:
-        codec = self._codec()
-        with pytest.raises(ValueError, match="defs.*RefDecode"):
-            codec.parse("{}", schema={}, decode=RefDecode("Node"))
 
     def test_lone_surrogate_escape_rejected(self) -> None:
         codec = self._codec()
@@ -3173,8 +3166,8 @@ class TestMakeContractNoTypeEnv:
 
     def test_text_codec_make_contract_no_env(self) -> None:
         codec = TextCodec()
-        # make_contract takes only type_ref — no env argument.
-        contract = codec.make_contract(TextType())
+        # make_contract takes a type table, never a type environment.
+        contract = codec.make_contract(TextType(), _DEFAULT_TABLE)
         assert contract.codec is codec
 
     def test_json_codec_make_contract_no_env(self) -> None:
@@ -3312,28 +3305,6 @@ class TestSchemaPrecomputedInParse:
         )
 
         assert result.ok is True
-
-    def test_parse_without_schema_raises(self) -> None:
-        """parse() with schema=None raises: no derivation fallback from a Type."""
-        codec = JsonCodec()
-        with pytest.raises(ValueError, match="schema and decode"):
-            codec.parse(
-                "42",
-                strict_json=False,
-                schema=None,
-                decode=build_decode_schema(IntType(), type_table_for()).root,
-            )
-
-    def test_parse_without_decode_raises(self) -> None:
-        """parse() with decode=None raises: no derivation fallback from a Type."""
-        codec = JsonCodec()
-        with pytest.raises(ValueError, match="schema and decode"):
-            codec.parse(
-                "42",
-                strict_json=False,
-                schema=derive_schema(IntType(), type_table_for()),
-                decode=None,
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -3582,6 +3553,7 @@ class TestRegisterCodec:
         materialize_contract(
             OutputContractSpec(IntType(), "legacy-int", strict_json=None),
             {"legacy-int": LegacyCodec()},
+            _DEFAULT_TABLE,
         )
 
         assert result.ok is True
@@ -3851,6 +3823,7 @@ class TestRegisterCodec:
         contract = materialize_contract(
             OutputContractSpec(IntType(), "fallback-contract", strict_json=None),
             {"fallback-contract": codec},
+            _DEFAULT_TABLE,
         )
 
         assert contract.format_instructions == "fallback"
@@ -3982,35 +3955,6 @@ class TestRegisterCodec:
         assert seen_contract_fields == [{"value": IntType()}]
         assert seen_parse_type_tables == [None]
 
-    def test_custom_codec_ir_placeholder_targets_are_kind_correct(self) -> None:
-        """Legacy custom-codec placeholders reconstruct their public data types."""
-        from agm.agl.runtime.contract import _target_type_for_request
-
-        cases = [
-            ("text", "text", TextType),
-            ("int", "int", IntType),
-            ("decimal", "decimal", DecimalType),
-            ("bool", "bool", BoolType),
-            ("json", "json", JsonType),
-            ("array", "array[int]", ArrayType),
-            ("dict", "dict[text, int]", DictType),
-            ("record", "Issue", RecordType),
-            ("enum", "Result", EnumType),
-            ("", "unit", UnitType),
-        ]
-        for kind, label, expected_type in cases:
-            request = CustomContractRequest(
-                codec_name="capture",
-                strict_json=None,
-                json_schema=None,
-                decode=None,
-                target_type_label=label,
-                structured_exec=False,
-                format_instructions="",
-                target_type_kind=kind,
-            )
-            assert isinstance(_target_type_for_request(request), expected_type)
-
     def test_custom_codec_ir_materialization_uses_request_payload_only(self) -> None:
         """IR contract materialization does not call custom make_contract hooks."""
 
@@ -4061,7 +4005,7 @@ class TestRegisterCodec:
             target_type_label="int",
             structured_exec=False,
             format_instructions="compiled",
-            target_type_kind="int",
+            target_type=IntType(),
         )
 
         contract = materialize_ir_contract(request, {"capture": CaptureCodec()})
@@ -4113,7 +4057,7 @@ class TestRegisterCodec:
             target_type_label="Node",
             structured_exec=False,
             format_instructions="json",
-            target_type_kind="record",
+            target_type=RecordType("Node"),
         )
 
         contract = materialize_ir_contract(request, {"schema-less": SchemaLessCodec()})
@@ -4158,7 +4102,7 @@ class TestRegisterCodec:
             target_type_label="Node",
             structured_exec=False,
             format_instructions="recursive",
-            target_type_kind="record",
+            target_type=RecordType("Node"),
             defs=(("Node", ScalarDecode(ScalarKind.JSON)),),
         )
 
@@ -4218,7 +4162,7 @@ class TestRegisterCodec:
             target_type_label="Node",
             structured_exec=False,
             format_instructions="",
-            target_type_kind="record",
+            target_type=RecordType("Node"),
         )
         defs = (("Node", ScalarDecode(ScalarKind.JSON)),)
         host_contract = OutputContract(
@@ -4288,7 +4232,7 @@ class TestRegisterCodec:
             target_type_label="text",
             structured_exec=False,
             format_instructions="",
-            target_type_kind="text",
+            target_type=TextType(),
         )
         host_contract = OutputContract(
             target_type_label="text",
@@ -4358,7 +4302,7 @@ class TestRegisterCodec:
             target_type_label="Node",
             structured_exec=False,
             format_instructions="",
-            target_type_kind="record",
+            target_type=RecordType("Node"),
         )
         host_contract = OutputContract(
             target_type_label="Node",

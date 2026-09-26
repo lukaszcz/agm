@@ -7097,26 +7097,6 @@ class TestImports:
         assert not r.ok
         assert any("bad contract" in d.message for d in r.diagnostics)
 
-    def test_unmaterializable_linked_contract_fails_the_entry_cleanly(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # A linked contract the host cannot materialize rejects the entry before
-        # it runs; the session stays usable afterwards.
-        import agm.agl.runtime.contract as contract_mod
-
-        def unmaterializable(request: object, codecs: object) -> object:
-            raise ValueError("unmaterializable")
-
-        s = repl_session_with_root(tmp_path)
-        with monkeypatch.context() as patched:
-            patched.setattr(contract_mod, "materialize_ir_contract", unmaterializable)
-            failed = s.eval_entry('let n = 1\nexec("true")\nn')
-        assert not failed.ok
-        assert failed.diagnostics
-        retried = s.eval_entry("let n = 2\nn")
-        assert retried.ok, retried.diagnostics
-        assert _int(retried.value) == 2
-
     def test_parse_error_in_imported_module_has_source_label(self, tmp_path: Path) -> None:
         # Regression: parse error in an imported module must surface
         # with source_label pointing to the module file, not a bare line-1 diagnostic

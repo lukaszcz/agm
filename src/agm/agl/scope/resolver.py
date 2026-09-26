@@ -47,7 +47,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, assert_never
 
 from agm.agl.attributes import CONFIG_ATTRIBUTE, is_param_declaration
 from agm.agl.constraints import ConstraintKind, close_constraints
@@ -85,6 +85,7 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     DeclarationKey,
     DeclInfo,
+    ImmutableAssignmentError,
     ImportedUseContribution,
     LocalUseContribution,
     ModuleResolution,
@@ -99,7 +100,6 @@ from agm.agl.scope.symbols import (
     builtin_type_static_kind,
     contributed_declarations,
     duplicate_binder_message,
-    immutable_binder_phrase,
     is_builtin_type_static_owner,
     is_qualified_function_member,
     undefined_name_message,
@@ -119,8 +119,6 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     EnumType,
-    ExceptionType,
-    RecordType,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
 
@@ -207,7 +205,7 @@ from agm.agl.syntax.types import (
     render_qualifier_path,
     render_type_expr,
 )
-from agm.agl.syntax.visitor import walk
+from agm.agl.syntax.visitor import SyntaxNode, walk
 
 _T = TypeVar("_T")
 _RootDeclItem = TypeVar(
@@ -262,19 +260,6 @@ def _keyed_bare_route(item: tuple[BareRoute, object]) -> tuple[str, ScopePath]:
 # ---------------------------------------------------------------------------
 # Built-in names and reserved-name enforcement
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class _PatternResolutionPolicy:
-    """Name-resolution policy for one pattern-owning syntax site."""
-
-    root_bare_binds: bool
-    binder_kind: BinderKind
-
-
-_CASE_PATTERN_POLICY = _PatternResolutionPolicy(
-    root_bare_binds=False, binder_kind=BinderKind.pattern_binding
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,21 +348,42 @@ class _Resolver:
     Implements explicit ``isinstance`` dispatch for each node kind.
     Use ``resolve_program`` — the public whole-program entry point — rather
     than instantiating this class directly.
+
+    Resolution has two phases. Construction collects *program*'s
+    declarations and resolves its header contributions: what ``use`` and
+    region-import headers contribute is what type names written in any module
+    see, so every module of a program is constructed before any is resolved,
+    and this phase never asks the type-owner index. A header's contributed
+    constructors depend on type owners, so they are completed by
+    :meth:`resolve`. Header diagnostics of every module therefore precede
+    body diagnostics of any module.
+
+    When *parent_scope* is given, the entry's root scope is parented to it so
+    name lookups fall through to session bindings (incremental REPL
+    sessions). New declarations live in the entry's own root scope and shadow
+    parent bindings without a duplicate-declaration error.
+
+    *ambient_type_names* carries type names from prior entries so that
+    qualified constructor access (``Owner::variant``) resolves for types
+    declared in earlier REPL entries.
     """
 
     def __init__(
         self,
+        program: Program,
         module_id: ModuleId,
         import_env: ImportEnv,
         all_public_types: dict[
             tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
         ],
         type_owners: TypeOwnerIndex,
-        decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo] | None = None,
-        cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
-        | None = None,
+        decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo],
+        cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef],
+        cross_module_type_owners: Mapping[QName, ReceiverOwner],
+        *,
+        parent_scope: ScopeNode | None = None,
+        ambient_type_names: frozenset[str] = frozenset(),
         builtin_static_decl_node_ids: frozenset[int] = frozenset(),
-        cross_module_type_owners: Mapping[QName, ReceiverOwner] | None = None,
         allow_root_statements: bool = False,
         is_standard_library_module: bool = False,
         repl_session_scope: ScopeNode | None = None,
@@ -394,11 +400,9 @@ class _Resolver:
         self._module_id: ModuleId = module_id
         self._import_env: ImportEnv = import_env
         # Declaration metadata used to build cross-module references.
-        self._decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo] = (
-            decl_info if decl_info is not None else {}
-        )
+        self._decl_info: dict[tuple[ModuleId, NameAtom], DeclInfo] = decl_info
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
-            cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
+            cross_module_constructor_refs
         )
         self._builtin_static_decl_node_ids = builtin_static_decl_node_ids
         # One canonical metadata object represents each member-record
@@ -427,9 +431,7 @@ class _Resolver:
                     ] = constructor
         # Public nominal declarations and inline enum members establish scope
         # paths even when they have no separately public child members.
-        self._cross_module_type_owners: Mapping[QName, ReceiverOwner] = (
-            cross_module_type_owners or {}
-        )
+        self._cross_module_type_owners: Mapping[QName, ReceiverOwner] = cross_module_type_owners
         # Whole-program public-type table, used to follow a type alias's
         # target across an import when deciding whether the alias has a
         # variant-less constructor.
@@ -446,8 +448,8 @@ class _Resolver:
         # statements. File and inline exec entries use static roots.
         self._allow_root_statements = allow_root_statements
         self._is_standard_library_module = is_standard_library_module
-        # Optional REPL session scope for ``::name`` self-ref fallback.
-        # When set, ``_lookup_own_root`` falls back to this scope for names not
+        # Optional REPL session scope for ``::name`` self-references.
+        # When set, ``_lookup_own_root`` consults this scope for names not
         # in the entry's own root scope, allowing ``::name`` to resolve to a
         # prior session binding.
         self._repl_session_scope: ScopeNode | None = repl_session_scope
@@ -486,11 +488,12 @@ class _Resolver:
         self._use_targets: dict[int, ResolvedUseTarget] = {}
         self._superseded_use_targets: set[ResolvedUseTarget] = set()
         self._current_use_declaration_ids: set[int] = set()
-        # Scope stack — top is the current scope.
-        self._scope: ScopeNode | None = None
-        # The module's root ScopeNode (set in prepare()); used by _lookup_own_root
-        # to bypass lexical shadows introduced by nested scopes for ::name.
-        self._root_scope: ScopeNode | None = None
+        self._program = program
+        # The module's root ScopeNode; used by _lookup_own_root to bypass
+        # lexical shadows introduced by nested scopes for ::name.
+        self._root_scope = ScopeNode(node_id=program.node_id, parent=parent_scope, scope_path=())
+        # The current lexical scope.
+        self._scope = self._root_scope
         # Whether we are at the program root (for root-only checks).
         self._at_root: bool = False
         # Top-level function defs.
@@ -578,9 +581,6 @@ class _Resolver:
         # The checker selects its final target after the branch is classified.
         self._pattern_slots: dict[int, PatternSlot] = {}
         self._match_site_pattern_slots_by_node: dict[int, tuple[int, ...]] = {}
-        self._active_match_site_pattern_slots: dict[str, int] | None = None
-        self._active_match_site_node_id: int | None = None
-        self._active_match_site_binder_kind: BinderKind | None = None
         self._next_pattern_slot_id: int = 0
         # Loop-context flag: True when resolving inside a loop body (while_cond,
         # body, or until_cond). Reset to False across fn/def boundaries so that
@@ -599,44 +599,19 @@ class _Resolver:
         self._synthetic_entry_items: tuple[Item, ...] | None = None
         # Whether this module declares a ``program def`` of its own, which
         # decides how a static-root rejection is explained.
-        self._declares_program_entry: bool = False
+        self._declares_program_entry = declares_source_entry(program.body.items)
+        self._prepare(program, ambient_type_names)
 
     # ------------------------------------------------------------------
-    # Public entry point
+    # Phases
     # ------------------------------------------------------------------
 
-    def prepare(
-        self,
-        program: Program,
-        *,
-        parent_scope: ScopeNode | None = None,
-        ambient_type_names: frozenset[str] = frozenset(),
-    ) -> None:
-        """Collect *program*'s declarations and resolve its header contributions.
-
-        The first of two phases: what ``use`` and region-import headers
-        contribute is what type names written in any module see, so every
-        module of a program is prepared before any is resolved, and this phase
-        never asks the type-owner index. A header's contributed constructors
-        depend on type owners, so they are completed by :meth:`resolve`.
-        Header diagnostics of every module therefore precede body diagnostics
-        of any module.
-
-        When *parent_scope* is given, the entry's root scope is parented to it
-        so name lookups fall through to session bindings (incremental REPL
-        sessions).  New declarations live in the entry's own root scope and
-        shadow parent bindings without a duplicate-declaration error.
-
-        *ambient_type_names* carries type names from prior entries so that
-        qualified constructor access (``Owner::variant``) resolves for types
-        declared in earlier REPL entries.
-        """
-        self._program = program
+    def _prepare(self, program: Program, ambient_type_names: frozenset[str]) -> None:
+        """Collect *program*'s declarations and resolve its header contributions."""
         if ambient_type_names:
             self._declared_type_names.update(ambient_type_names)
             self._type_paths.update((name,) for name in ambient_type_names)
 
-        self._declares_program_entry = declares_source_entry(program.body.items)
         # Published on the returned ModuleResolution as ``static_root``: true
         # for every importable module and for a loose file with its own
         # program def, false for the REPL and for a synthetic
@@ -651,14 +626,11 @@ class _Resolver:
         self._collect_declarations(program)
 
         # Pre-pass 2: collect top-level def names for mutual recursion.
-        self._collect_func_decls(program)
+        self._collect_func_decls()
         # Pre-pass 3: collect type-declaration names and validate type_params.
-        self._collect_type_decl_names(program)
+        self._collect_type_decl_names()
 
-        root = ScopeNode(node_id=program.node_id, parent=parent_scope, scope_path=())
-        self._push_scope(root)
-        self._root_scope = root
-        self._scope_nodes = self._build_scope_nodes(root)
+        self._scope_nodes = self._build_scope_nodes(self._root_scope)
         self._at_root = True
         self._resolve_headers(program.body.items)
 
@@ -670,10 +642,10 @@ class _Resolver:
     ) -> ModuleResolution:
         """Resolve the prepared program's constructors and bodies; the second phase.
 
-        Runs once every module of the program is prepared (:meth:`prepare`),
-        since the type-owner index answers from all of their headers. It
-        first completes the prepared headers' constructors, then collects
-        this module's own, then walks the bodies.
+        Runs once every module of the program is constructed, since the
+        type-owner index answers from all of their headers. It first completes
+        the prepared headers' constructors, then collects this module's own,
+        then walks the bodies.
 
         *ambient_constructor_candidates* carries constructor candidates from
         prior REPL entries so that constructor references to types declared in
@@ -690,7 +662,7 @@ class _Resolver:
         one.
         """
         program = self._program
-        root = self._current_scope()
+        root = self._root_scope
         for complete in self._deferred_constructors:
             complete()
         # Seed ambient constructor candidates (from prior REPL entries) before
@@ -720,7 +692,7 @@ class _Resolver:
                     else:
                         self._add_constructor_candidate(cname, cref)
         # Pre-pass 4: collect constructor candidates from RecordDef/EnumDef.
-        self._collect_constructor_candidates(program)
+        self._collect_constructor_candidates()
 
         # Define root functions as value bindings; scoped members are already
         # present in their named-scope layers.
@@ -743,9 +715,6 @@ class _Resolver:
         self._validate_extern_backing()
         self._validate_local_use_contributions()
         self._validate_retained_imported_use_routes()
-
-        self._at_root = False
-        self._pop_scope()
 
         return ModuleResolution(
             program=program,
@@ -913,12 +882,11 @@ class _Resolver:
         self._validate_type_params(item)
         if isinstance(item, FuncDef):
             self._validate_constraints(item)
-        if not is_type:
+        if isinstance(item, FuncDef):
             return
 
-        type_item = cast(RecordDef | EnumDef | ExceptionDef | TypeAlias, item)
-        self._type_declarations.append((type_item, path))
-        self._type_declarations_by_path.setdefault(path, []).append(type_item)
+        self._type_declarations.append((item, path))
+        self._type_declarations_by_path.setdefault(path, []).append(item)
         type_scope = path + (item.name,)
         self._scope_paths.add(type_scope)
         self._scope_node_ids.setdefault(type_scope, item.node_id)
@@ -1132,11 +1100,10 @@ class _Resolver:
         selected_layer: ScopeNode | None = None
         if nearest is not None:
             selected_layer, refs = nearest
-        assert self._root_scope is not None
         imported_refs = {
             ref
             for qname in self._import_env.unqualified.get(atom, frozenset())
-            if is_type(ref := self._cross_module_binding_ref(atom, qname, span))
+            if is_type(ref := self._cross_module_binding_ref(qname))
         }
         if selected_layer is None:
             refs = imported_refs
@@ -1297,7 +1264,7 @@ class _Resolver:
             if module_id == self._module_id and not path and isinstance(item, declaration_type):
                 yield item
 
-    def _collect_func_decls(self, program: Program) -> None:
+    def _collect_func_decls(self) -> None:
         """Populate the legacy function table from root-path declarations only."""
         for item in self._root_declaration_items(FuncDef):
             self._declared_functions[item.name] = item
@@ -1387,7 +1354,7 @@ class _Resolver:
                 span=extern.span,
             )
 
-    def _collect_type_decl_names(self, program: Program) -> None:
+    def _collect_type_decl_names(self) -> None:
         """Collect root type names for the existing constructor resolver.
 
         Duplicate declarations and type parameters were already validated by
@@ -1530,7 +1497,6 @@ class _Resolver:
                             ),
                         )
             else:
-                assert isinstance(type_val, (RecordType, ExceptionType))
                 self._add_constructor_candidate(
                     type_name,
                     self._canonical_constructor_ref(
@@ -1669,7 +1635,7 @@ class _Resolver:
                 return [*existing[:index], cref, *existing[index + 1 :]]
         return [*existing, cref]
 
-    def _collect_constructor_candidates(self, program: Program) -> None:
+    def _collect_constructor_candidates(self) -> None:
         """Build constructor candidates for every collected declaration path."""
         self._seed_builtin_constructor_candidates()
         for item, path in self._type_declarations:
@@ -1745,7 +1711,7 @@ class _Resolver:
           duplicate declaration, because no qualified spelling could tell the
           two apart afterwards.
         """
-        scope = self._current_scope()
+        scope = self._scope
         for name, crefs in self._constructor_candidates.items():
             if name in scope.bindings:
                 # Path-keyed collection has already rejected same-module
@@ -1803,7 +1769,7 @@ class _Resolver:
                 is_builtin=decl.is_builtin,
                 is_method=decl.is_method,
             )
-            self._current_scope().define(name, ref)
+            self._scope.define(name, ref)
 
     def _define_static_binding_bindings(self) -> None:
         """Define each collected root static let/var as a value binding.
@@ -1817,9 +1783,9 @@ class _Resolver:
             return
         for let_item in self._root_declaration_items(LetDecl):
             name = static_binding_name(let_item)
-            self._current_scope().define(name, self._declarations[(self._module_id, (), name)])
+            self._scope.define(name, self._declarations[(self._module_id, (), name)])
         for var_item in self._root_declaration_items(VarDecl):
-            self._current_scope().define(
+            self._scope.define(
                 var_item.name, self._declarations[(self._module_id, (), var_item.name)]
             )
 
@@ -1831,9 +1797,7 @@ class _Resolver:
         ``_declarations`` instead of rebuilding it.
         """
         for item in self._root_declaration_items(BuiltinVarDecl):
-            self._current_scope().define(
-                item.name, self._declarations[(self._module_id, (), item.name)]
-            )
+            self._scope.define(item.name, self._declarations[(self._module_id, (), item.name)])
 
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
         """Resolve a standard-library host-backed mutable binding.
@@ -1872,27 +1836,16 @@ class _Resolver:
     # Scope helpers
     # ------------------------------------------------------------------
 
-    def _push_scope(self, scope: ScopeNode) -> None:
-        self._scope = scope
-
-    def _pop_scope(self) -> None:
-        assert self._scope is not None
-        self._scope = self._scope.parent
-
-    def _current_scope(self) -> ScopeNode:
-        assert self._scope is not None, "resolver used before prepare()"
-        return self._scope
-
     @contextmanager
     def _named_scope(self, path: ScopePath) -> Iterator[ScopeNode]:
         """Resolve a region or shorthand body in its named lexical layer."""
         named = self._scope_nodes[path]
-        previous = self._current_scope()
-        self._push_scope(named)
+        previous = self._scope
+        self._scope = named
         try:
             yield named
         finally:
-            self._push_scope(previous)
+            self._scope = previous
 
     @contextmanager
     def _child_scope(self, node_id: int) -> Iterator[ScopeNode]:
@@ -1901,15 +1854,16 @@ class _Resolver:
         Clears the root flag for its lifetime (only the program root is
         ``_at_root``) and restores on exit.
         """
-        child = ScopeNode(node_id=node_id, parent=self._current_scope())
-        self._push_scope(child)
+        previous = self._scope
+        child = ScopeNode(node_id=node_id, parent=previous)
+        self._scope = child
         was_root = self._at_root
         self._at_root = False
         try:
             yield child
         finally:
             self._at_root = was_root
-            self._pop_scope()
+            self._scope = previous
 
     @contextmanager
     def _resolution_flags_ctx(
@@ -1955,7 +1909,7 @@ class _Resolver:
         those.  A same-module record, exception, or alias constructor
         declares the bare name itself, so it collides.
         """
-        scope = self._current_scope()
+        scope = self._scope
         if scope.scope_path:
             # The pre-pass already claimed this key for this exact binder
             # (see the docstring); install the member it pre-claimed.
@@ -1978,14 +1932,13 @@ class _Resolver:
             )
         scope.define(name, ref)
 
-    def _check_not_reserved(self, name: str, span: object) -> None:
+    def _check_not_reserved(self, name: str, span: SourceSpan) -> None:
         """Raise if *name* is a built-in contextual name."""
         if name in _RESERVED_NAMES:
-            sp = span if isinstance(span, SourceSpan) else None
             raise AglScopeError(
                 f"'{name}' is a reserved contextual keyword and cannot be "
                 "used as a binding or parameter name.",
-                span=sp,
+                span=span,
             )
 
     # ------------------------------------------------------------------
@@ -2044,7 +1997,7 @@ class _Resolver:
                 # region-scoped import's contribution is resolved with the headers.
                 continue
             if isinstance(item, InfixDecl):
-                if not self._at_root or self._current_scope().scope_path:
+                if not self._at_root:
                     raise AglScopeError(
                         "infix declarations are only allowed at the program root.",
                         span=item.span,
@@ -2119,28 +2072,25 @@ class _Resolver:
             elif not isinstance(item, ExportDecl):
                 in_header = False
                 if isinstance(item, ScopeRegion):
-                    path = self._current_scope().scope_path + (item.segment.name,)
+                    path = self._scope.scope_path + (item.segment.name,)
                     with self._named_scope(path):
-                        self._resolve_headers(cast(tuple[Item, ...], item.items))
+                        self._resolve_headers(item.items)
 
     # ------------------------------------------------------------------
     # Declaration handlers
     # ------------------------------------------------------------------
 
-    def _cross_module_binding_ref(
-        self, atom: NameAtom, qname: QName, span: SourceSpan
-    ) -> BindingRef:
+    def _cross_module_binding_ref(self, qname: QName) -> BindingRef:
         """Build a bare/member ``BindingRef`` for one exposed atom's origin ``QName``.
 
-        Shared by every site that turns a (atom, origin) pair reached through
+        Shared by every site that turns an origin reached through
         an import into a reference: promotes the ordinary cross-module
         ``BindingRef`` to a constructor binding -- with the constructor's own
         declaration id, kind, and owner path -- whenever *qname* names a
         record, exception, or enum variant. An alias's binding already is its
         constructor binding, whether or not the alias constructs.
         """
-        module, source = qname
-        ref = self._make_cross_module_ref(module, _bare_path(atom)[-1], source, span)
+        ref = self._make_cross_module_ref(qname)
         constructor = self._cross_module_constructor_refs.get(qname)
         if constructor is None:
             return ref
@@ -2194,10 +2144,10 @@ class _Resolver:
         rather than raising here.
         """
         bare = self._import_env.decl_bare.get(decl.node_id, {})
-        scope = self._current_scope()
+        scope = self._scope
         for atom, qnames in bare.items():
             for qname in qnames:
-                scope.contribute_bare(atom, self._cross_module_binding_ref(atom, qname, decl.span))
+                scope.contribute_bare(atom, self._cross_module_binding_ref(qname))
                 self._deferred_constructors.append(
                     partial(self._contribute_bare_constructor, scope, atom, qname)
                 )
@@ -2220,7 +2170,7 @@ class _Resolver:
             return
         module, source = qname
         owner_path = _bare_path(source)
-        scope = self._current_scope()
+        scope = self._scope
         selected_qnames = frozenset(qname for qnames in exposures.values() for qname in qnames)
         for member in declaration.members:
             if isinstance(member, VariantRef):
@@ -2235,9 +2185,7 @@ class _Resolver:
             variant_qname = (module, _bare_atom((*owner_path, member.name)))
             if variant_qname not in selected_qnames:
                 continue
-            scope.contribute_bare(
-                member.name, self._cross_module_binding_ref(member.name, variant_qname, span)
-            )
+            scope.contribute_bare(member.name, self._cross_module_binding_ref(variant_qname))
             scope.contribute_bare_constructor(
                 member.name, self._cross_module_constructor_refs[variant_qname]
             )
@@ -2270,7 +2218,7 @@ class _Resolver:
 
     def _validate_retained_imported_use_routes(self) -> None:
         """Reject a retained imported use whose current import replacement hides its route."""
-        scope = self._root_scope.parent if self._root_scope is not None else None
+        scope = self._root_scope.parent
         while scope is not None:
             for contribution in scope.imported_use_contributions:
                 if contribution.target.wildcard_facade_origin_node_id is not None:
@@ -2441,7 +2389,7 @@ class _Resolver:
             )
         if local is not None:
             self._use_targets[decl.node_id] = ResolvedUseTarget(local_path=local)
-            self._current_scope().contribute_local_use(
+            self._scope.contribute_local_use(
                 LocalUseContribution(
                     declaration=decl,
                     source=self._scope_nodes[local],
@@ -2527,7 +2475,7 @@ class _Resolver:
             *(
                 routes
                 for _node_id, routes in self._reachable_decl_contributions(
-                    self._import_env.decl_bare_scope_routes, self._current_scope().scope_path
+                    self._import_env.decl_bare_scope_routes, self._scope.scope_path
                 )
             ),
         )
@@ -2542,7 +2490,7 @@ class _Resolver:
             *(
                 (bare, self._import_env.decl_bare_routes.get(node_id, {}))
                 for node_id, bare in self._reachable_decl_contributions(
-                    self._import_env.decl_bare, self._current_scope().scope_path
+                    self._import_env.decl_bare, self._scope.scope_path
                 )
             ),
         )
@@ -2602,7 +2550,7 @@ class _Resolver:
         self, target: ScopePath
     ) -> tuple[tuple[BareRoute, Mapping[NameAtom, QName]], ...]:
         """Find imported scopes exposed by an earlier ``use`` in the nearest region."""
-        layer: ScopeNode | None = self._current_scope()
+        layer: ScopeNode | None = self._scope
         exposed_target = _bare_atom(target)
         while layer is not None:
             candidates: list[tuple[BareRoute, Mapping[NameAtom, QName]]] = []
@@ -2626,7 +2574,7 @@ class _Resolver:
         self, target: ScopePath, imported_route: BareRoute
     ) -> dict[NameAtom, frozenset[BareRoute]]:
         """Return relative identities from the earlier use that exposed *target*."""
-        layer: ScopeNode | None = self._current_scope()
+        layer: ScopeNode | None = self._scope
         exposed_target = _bare_atom(target)
         while layer is not None:
             contributions = layer.imported_use_contributions
@@ -2675,7 +2623,7 @@ class _Resolver:
     def _lexical_scope_bases(self) -> list[ScopePath]:
         """Return the scope paths enclosing the current one, innermost first."""
         bases: list[ScopePath] = []
-        scope: ScopeNode | None = self._current_scope()
+        scope: ScopeNode | None = self._scope
         while scope is not None:
             if scope.scope_path not in bases:
                 bases.append(scope.scope_path)
@@ -2713,7 +2661,7 @@ class _Resolver:
         self, target: ScopePath, span: SourceSpan
     ) -> ScopePath | None:
         """Resolve a scope route exposed by an earlier local ``use``."""
-        layer: ScopeNode | None = self._current_scope()
+        layer: ScopeNode | None = self._scope
         while layer is not None:
             candidates: set[ScopePath] = set()
             for local_contribution in layer.local_use_contributions:
@@ -2863,7 +2811,7 @@ class _Resolver:
             validate=False,
             merge=lambda left, right: left | right,
         )
-        scope = self._current_scope()
+        scope = self._scope
         exposed_scope_routes = {
             atom: route for atom, route in selected_scope_routes.items() if _bare_path(atom)
         }
@@ -2871,7 +2819,7 @@ class _Resolver:
         contributed_sources: list[tuple[NameAtom, QName]] = []
 
         def contribute(exposed: NameAtom, source: QName) -> None:
-            ref = self._cross_module_binding_ref(exposed, source, decl.span)
+            ref = self._cross_module_binding_ref(source)
             scope.contribute_bare(exposed, ref)
             contributed_bindings.setdefault(exposed, set()).add(ref)
             contributed_sources.append((exposed, source))
@@ -2956,10 +2904,10 @@ class _Resolver:
             else:
                 selected[atom] = source
 
-        if decl.tail == ():
+        if not decl.tail:
             selected.update(members)
         else:
-            for item in cast(tuple[ImportItem, ...], decl.tail):
+            for item in decl.tail:
                 for atom in matching(item):
                     add(atom, members[atom])
                     if item.rename is not None:
@@ -2972,9 +2920,9 @@ class _Resolver:
 
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
         """Resolve a named region in its member layer."""
-        path = self._current_scope().scope_path + (region.segment.name,)
+        path = self._scope.scope_path + (region.segment.name,)
         with self._named_scope(path):
-            self._resolve_block_items(cast(tuple[Item, ...], region.items))
+            self._resolve_block_items(region.items)
 
     def _resolve_funcdef(self, node: FuncDef) -> None:
         """Resolve a ``def`` declaration (body + params).
@@ -3156,13 +3104,13 @@ class _Resolver:
             self._resolve_expr(node.value)
             return
         if target.qualifier is not None:
-            self._resolve_qualified_assign(node, target)
+            self._resolve_qualified_assign(node, target.name, target.qualifier)
             return
         name = target.name
         ref = self._lookup_value(name)
         if ref is None:
             ref = self._lookup_bare_contribution(name, node.span, self._is_value_contribution)
-            # Try structured bare import contributions as a fallback, so a bare target
+            # Structured bare import contributions come next, so a bare target
             # reaches an imported mutable binding just like a read.
             if ref is None:
                 ref = self._lookup_import_env_unqualified(
@@ -3180,7 +3128,9 @@ class _Resolver:
         self._resolution[node.node_id] = ref
         self._resolve_expr(node.value)
 
-    def _resolve_qualified_assign(self, node: AssignStmt, target: NameTarget) -> None:
+    def _resolve_qualified_assign(
+        self, node: AssignStmt, name: str, qualifier: QualifierChain
+    ) -> None:
         """Resolve a qualified assignment target (``PATH::name := expr``).
 
         A local scope path is consulted first, through the same per-path
@@ -3195,33 +3145,29 @@ class _Resolver:
         ``builtin var`` -- is assignable across a module boundary (a
         cross-module ``let`` reuses the immutable-binder diagnostic too).
         """
-        assert target.qualifier is not None
-        qualifier = target.qualifier
         local_path = self._validate_local_scope_chain(qualifier)
         if local_path is not None:
-            ref = self._scope_nodes[local_path].members.get(target.name)
+            ref = self._scope_nodes[local_path].members.get(name)
             if ref is None:
                 raise AglScopeError(
-                    f"Unknown member '{target.name}' in scope path '{'::'.join(local_path)}'.",
+                    f"Unknown member '{name}' in scope path '{'::'.join(local_path)}'.",
                     span=node.span,
                 )
-            self._check_local_scope_route_ambiguity(qualifier, target.name, local_path)
+            self._check_local_scope_route_ambiguity(qualifier, name, local_path)
         else:
-            ref = self._lookup_qualified_use_contribution(qualifier, target.name, node.span)
+            ref = self._lookup_qualified_use_contribution(qualifier, name, node.span)
             if ref is None:
                 if not qualifier.route_segments:
                     raise AglScopeError(
-                        f"'{target.name}' is not declared; assignment requires an existing "
+                        f"'{name}' is not declared; assignment requires an existing "
                         f"mutable binding.",
                         span=node.span,
                     )
-                ref = self._lookup_qualified_binding(qualifier, target.name, node.span)
+                ref = self._lookup_qualified_binding(qualifier, name, node.span)
         self._require_textually_visible(ref, node.span)
         if not ref.mutable:
-            raise AglScopeError(
-                f"Cannot assign to '{target.name}': "
-                f"{immutable_binder_phrase(ref.kind)} (immutable).",
-                span=node.span,
+            raise ImmutableAssignmentError(
+                name, ref.kind, cross_module=ref.module_id != self._module_id, span=node.span
             )
         self._resolution[node.node_id] = ref
         self._resolve_expr(node.value)
@@ -3245,108 +3191,108 @@ class _Resolver:
 
     def _resolve_expr(self, expr: Expr) -> None:
         """Recursively resolve all names in *expr*."""
-        if isinstance(expr, VarRef):
-            self._resolve_varref(expr)
-        elif isinstance(expr, Call):
-            self._resolve_call(expr)
-        elif isinstance(expr, Template):
-            self._resolve_template(expr)
-        elif isinstance(expr, Block):
-            with self._child_scope(expr.node_id):
-                self._resolve_block_items(expr.items)
-        elif isinstance(expr, If):
-            self._resolve_if(expr)
-        elif isinstance(expr, Case):
-            self._resolve_case(expr)
-        elif isinstance(expr, Loop):
-            self._resolve_loop(expr)
-        elif isinstance(expr, Try):
-            self._resolve_try(expr)
-        elif isinstance(expr, Lambda):
-            self._resolve_lambda(expr)
-        elif isinstance(expr, Raise):
-            self._resolve_expr(expr.exc)
-        elif isinstance(expr, Return):
-            if not self._in_function:
-                raise AglScopeError(
-                    "'return' used outside a function.",
-                    span=expr.span,
-                )
-            if expr.value is not None:
-                self._resolve_expr(expr.value)
-        elif isinstance(expr, Break):
-            if not self._in_loop:
-                raise AglScopeError(
-                    "'break' used outside a loop.",
-                    span=expr.span,
-                )
-        elif isinstance(expr, Continue):
-            if not self._in_loop:
-                raise AglScopeError(
-                    "'continue' used outside a loop.",
-                    span=expr.span,
-                )
-        elif isinstance(expr, FieldAccess):
-            self._resolve_field_access(expr)
-        elif isinstance(expr, RecordUpdate):
-            self._resolve_expr(expr.target)
-            for update in expr.updates:
-                self._resolve_expr(update.value)
-        elif isinstance(expr, IndexAccess):
-            self._resolve_expr(expr.obj)
-            self._resolve_expr(expr.index)
-        elif isinstance(expr, BinaryOp):
-            self._resolve_expr(expr.left)
-            self._resolve_expr(expr.right)
-        elif isinstance(expr, UnaryNot):
-            self._resolve_expr(expr.operand)
-        elif isinstance(expr, UnaryNeg):
-            self._resolve_expr(expr.operand)
-        elif isinstance(expr, IsTest):
-            if expr.qualifier is None:
-                candidates = self._bare_constructor_candidates(expr.variant)
-                self._is_test_constructor_candidates[expr.node_id] = candidates
-                if len(candidates) == 1:
-                    self._constructor_refs[expr.node_id] = candidates[0]
-            else:
-                resolved = self._resolve_constructor_chain(
-                    expr.node_id, expr.qualifier, expr.variant, defer_diagnostics=True
-                )
-                local_path = self._validate_local_scope_chain(expr.qualifier)
-                if local_path is not None:
-                    self._note_scope_qualified_spelling(
-                        expr.node_id, expr.qualifier, local_path, expr.variant
+        match expr:
+            case VarRef():
+                self._resolve_varref(expr)
+            case Call():
+                self._resolve_call(expr)
+            case Template():
+                self._resolve_template(expr)
+            case Block():
+                with self._child_scope(expr.node_id):
+                    self._resolve_block_items(expr.items)
+            case If():
+                self._resolve_if(expr)
+            case Case():
+                self._resolve_case(expr)
+            case Loop():
+                self._resolve_loop(expr)
+            case Try():
+                self._resolve_try(expr)
+            case Lambda():
+                self._resolve_lambda(expr)
+            case Raise():
+                self._resolve_expr(expr.exc)
+            case Return():
+                if not self._in_function:
+                    raise AglScopeError(
+                        "'return' used outside a function.",
+                        span=expr.span,
                     )
-                elif not resolved:
-                    # A module route naming a root record or exception, e.g. `mod::Child`.
-                    imported = self._imported_atom_constructor(expr.qualifier, expr.variant)
-                    if imported is not None:
-                        self._constructor_refs[expr.node_id] = imported
-            self._resolve_expr(expr.expr)
-        elif isinstance(expr, Cast):
-            self._resolve_expr(expr.expr)
-        elif isinstance(expr, TypeApply):
-            self._resolve_expr(expr.expr)
-        elif isinstance(expr, ArrayLit):
-            for elem in expr.elements:
-                self._resolve_expr(elem)
-        elif isinstance(expr, DictLit):
-            for entry in expr.entries:
-                self._resolve_expr(entry.key)
-                self._resolve_expr(entry.value)
-        else:
-            assert isinstance(
-                expr,
-                (
-                    IntLit,
-                    DecimalLit,
-                    BoolLit,
-                    NullLit,
-                    StringLit,
-                    UnitLit,
-                    OperatorRef,
-                ),
-            ), f"unhandled expr node: {type(expr)}"  # pragma: no cover
+                if expr.value is not None:
+                    self._resolve_expr(expr.value)
+            case Break():
+                if not self._in_loop:
+                    raise AglScopeError(
+                        "'break' used outside a loop.",
+                        span=expr.span,
+                    )
+            case Continue():
+                if not self._in_loop:
+                    raise AglScopeError(
+                        "'continue' used outside a loop.",
+                        span=expr.span,
+                    )
+            case FieldAccess():
+                self._resolve_field_access(expr)
+            case RecordUpdate():
+                self._resolve_expr(expr.target)
+                for update in expr.updates:
+                    self._resolve_expr(update.value)
+            case IndexAccess():
+                self._resolve_expr(expr.obj)
+                self._resolve_expr(expr.index)
+            case BinaryOp():
+                self._resolve_expr(expr.left)
+                self._resolve_expr(expr.right)
+            case UnaryNot():
+                self._resolve_expr(expr.operand)
+            case UnaryNeg():
+                self._resolve_expr(expr.operand)
+            case IsTest():
+                if expr.qualifier is None:
+                    candidates = self._bare_constructor_candidates(expr.variant)
+                    self._is_test_constructor_candidates[expr.node_id] = candidates
+                    if len(candidates) == 1:
+                        self._constructor_refs[expr.node_id] = candidates[0]
+                else:
+                    resolved = self._resolve_constructor_chain(
+                        expr.node_id, expr.qualifier, expr.variant, defer_diagnostics=True
+                    )
+                    local_path = self._validate_local_scope_chain(expr.qualifier)
+                    if local_path is not None:
+                        self._note_scope_qualified_spelling(
+                            expr.node_id, expr.qualifier, local_path, expr.variant
+                        )
+                    elif not resolved:
+                        # A module route naming a root record or exception, e.g. `mod::Child`.
+                        imported = self._imported_atom_constructor(expr.qualifier, expr.variant)
+                        if imported is not None:
+                            self._constructor_refs[expr.node_id] = imported
+                self._resolve_expr(expr.expr)
+            case Cast():
+                self._resolve_expr(expr.expr)
+            case TypeApply():
+                self._resolve_expr(expr.expr)
+            case ArrayLit():
+                for elem in expr.elements:
+                    self._resolve_expr(elem)
+            case DictLit():
+                for entry in expr.entries:
+                    self._resolve_expr(entry.key)
+                    self._resolve_expr(entry.value)
+            case (
+                UnitLit()
+                | IntLit()
+                | DecimalLit()
+                | BoolLit()
+                | NullLit()
+                | StringLit()
+                | OperatorRef()
+            ):
+                pass  # Literals and operator references name nothing.
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
 
     def _resolve_varref(self, node: VarRef, *, is_call_target: bool = False) -> None:
         """Resolve a name reference.
@@ -3368,31 +3314,23 @@ class _Resolver:
         """
         if node.name == "_":
             raise AglScopeError(undefined_name_message("_"), span=node.span)
-        if (
-            node.qualifier is not None
-            and node.qualifier.anchor is QualifierAnchor.CURRENT_MODULE
-            and not node.qualifier.segments
-        ):
-            ref = self._lookup_own_root(node.name)
-            if ref is None:
-                self._reject_type_name_value(node)
-                raise self._spaced_qualifier_repair(
-                    self._spaced_qualifier_at(node.qualifier.span), node.qualifier.span
-                ) or AglScopeError(
-                    undefined_name_message(node.name, in_module=True), span=node.span
-                )
-            self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
-            self._record_varref_binding(node, ref)
-            return
-        if self._resolve_local_scope_member(node):
-            self._raise_unrecognized_builtin_static(node)
-            self._reject_builtin_value_ref(
-                node, self._resolution.get(node.node_id), is_call_target=is_call_target
-            )
-            return
-        if node.qualifier is not None:
-            self._resolve_qualified_chain(node)
-            self._raise_unrecognized_builtin_static(node)
+        qualifier = node.qualifier
+        if qualifier is not None:
+            if qualifier.anchor is QualifierAnchor.CURRENT_MODULE and not qualifier.segments:
+                ref = self._lookup_own_root(node.name)
+                if ref is None:
+                    self._reject_type_name_value(node)
+                    raise self._spaced_qualifier_repair(
+                        self._spaced_qualifier_at(qualifier.span), qualifier.span
+                    ) or AglScopeError(
+                        undefined_name_message(node.name, in_module=True), span=node.span
+                    )
+                self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
+                self._record_varref_binding(node, ref)
+                return
+            if not self._resolve_local_scope_member(node, qualifier):
+                self._resolve_qualified_chain(node, qualifier)
+            self._raise_unrecognized_builtin_static(node, qualifier)
             self._reject_builtin_value_ref(
                 node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
@@ -3405,7 +3343,7 @@ class _Resolver:
             ref is None
             or (ref.kind is BinderKind.function_binding and not self._is_builtin_function_ref(ref))
         ):
-            builtin_ref = self._bare_builtin_ref(node.name, node.span)
+            builtin_ref = self._bare_builtin_ref(node.name)
             if builtin_ref is not None:
                 self._reject_builtin_value_ref(node, builtin_ref, is_call_target=is_call_target)
                 self._record_varref_binding(node, builtin_ref)
@@ -3430,7 +3368,7 @@ class _Resolver:
             if contributed is not None:
                 ref = contributed
         if ref is None:
-            # Try structured bare import contributions as a fallback.
+            # Structured bare import contributions come next.
             ref = self._lookup_import_env_unqualified(
                 node.name, node.span, self._is_value_contribution
             )
@@ -3449,11 +3387,8 @@ class _Resolver:
             candidates=self._regional_constructor_candidates(node.name),
         )
 
-    def _qualifier_denotes_builtin_static_owner(self, node: VarRef) -> bool:
-        """Return whether the resolved qualifier is a host static's nominal owner."""
-        if node.qualifier is None:
-            return False
-        chain = node.qualifier
+    def _qualifier_denotes_builtin_static_owner(self, chain: QualifierChain) -> bool:
+        """Return whether the resolved qualifier *chain* is a host static's nominal owner."""
         relative_path = tuple(segment.name for segment in chain.segments)
         if self._validate_local_scope_chain(chain) is not None:
             return False
@@ -3484,16 +3419,15 @@ class _Resolver:
         owner_path = (*constructor.owner_path, constructor.owner_name)
         return is_builtin_type_static_owner(constructor.owner_module_id, owner_path)
 
-    def _raise_unrecognized_builtin_static(self, node: VarRef) -> None:
+    def _raise_unrecognized_builtin_static(self, node: VarRef, qualifier: QualifierChain) -> None:
         """Raise when a resolved prelude owner does not declare the requested static."""
         if self._is_unrecognized_builtin_static(node):
-            raise self._unknown_static_error(node)
+            raise self._unknown_static_error(node, qualifier)
 
     @staticmethod
-    def _unknown_static_error(node: VarRef) -> AglScopeError:
+    def _unknown_static_error(node: VarRef, qualifier: QualifierChain) -> AglScopeError:
         """Build the diagnostic for a prelude owner that lacks the requested static."""
-        assert node.qualifier is not None
-        owner = node.qualifier.render()
+        owner = qualifier.render()
         return AglScopeError(
             f"Unknown static '{owner}::{node.name}' on prelude type '{owner}'.",
             span=node.span,
@@ -3532,7 +3466,7 @@ class _Resolver:
         A named-scope type with no constructor of its own binds no value, so it
         never hides an outer, imported, or builtin value of the same spelling.
         """
-        start = self._current_scope() if scope is None else scope
+        start = self._scope if scope is None else scope
         return start.lookup(name, member_predicate=self._is_value_member)
 
     def _is_value_member(self, ref: BindingRef) -> bool:
@@ -3607,7 +3541,7 @@ class _Resolver:
             return self._prefer_local_constructor_candidates(candidates)
         return tuple(self._constructor_candidates.get(name, ()))
 
-    def _validate_qualifier_chains(self, program: object) -> None:
+    def _validate_qualifier_chains(self, root: SyntaxNode) -> None:
         """Validate qualifier syntax in the current lexical scope layer."""
 
         def validate(node: object) -> None:
@@ -3631,7 +3565,7 @@ class _Resolver:
                 )
             self._validate_local_scope_chain(chain)
 
-        walk(program, validate)
+        walk(root, validate)
 
     def _scope_bases(self, chain: QualifierChain) -> list[ScopePath]:
         """Return lexical bases from which an unanchored scope path may start."""
@@ -3639,23 +3573,18 @@ class _Resolver:
             return [()]
         return self._lexical_scope_bases()
 
-    def _validate_local_scope_chain(
-        self, chain: QualifierChain | None, *, bases: list[ScopePath] | None = None
-    ) -> ScopePath | None:
+    def _validate_local_scope_chain(self, chain: QualifierChain) -> ScopePath | None:
         """Find a local scope path and reject applications to plain scopes.
 
-        The caller supplies lexical bases when one is meaningful.  The
-        declaration pre-pass uses the module root, while expression and
-        ``is`` resolution use the active lexical layers.  A non-local chain is
+        The chain starts from the active lexical layers. A non-local chain is
         deliberately left for module-route and constructor compatibility
         resolution.
         """
-        if chain is None or chain.anchor is QualifierAnchor.MODULE or not chain.segments:
+        if chain.anchor is QualifierAnchor.MODULE or not chain.segments:
             return None
         relative_path = tuple(segment.name for segment in chain.segments)
-        paths = [base + relative_path for base in (bases or self._scope_bases(chain))]
-        known_paths = self._scope_nodes if hasattr(self, "_scope_nodes") else self._scope_paths
-        path = next((candidate for candidate in paths if candidate in known_paths), None)
+        paths = [base + relative_path for base in self._scope_bases(chain)]
+        path = next((candidate for candidate in paths if candidate in self._scope_paths), None)
         if path is None:
             return None
         prefix_length = len(path) - len(relative_path)
@@ -3713,7 +3642,7 @@ class _Resolver:
             span=chain.span,
         )
 
-    def _resolve_local_scope_member(self, node: VarRef) -> bool:
+    def _resolve_local_scope_member(self, node: VarRef, chain: QualifierChain) -> bool:
         """Resolve a scoped member through ordered lexical scope layers.
 
         Local paths are considered before import routes. A member absent from
@@ -3722,8 +3651,7 @@ class _Resolver:
         diagnostics. A type member with no constructor of its own is a type
         name, not a value.
         """
-        chain = node.qualifier
-        if chain is None or chain.anchor is QualifierAnchor.MODULE or not chain.segments:
+        if chain.anchor is QualifierAnchor.MODULE or not chain.segments:
             return False
 
         relative_path = tuple(segment.name for segment in chain.segments)
@@ -3787,7 +3715,7 @@ class _Resolver:
         self._resolution[node.node_id] = ref
         return True
 
-    def _resolve_qualified_chain(self, node: VarRef) -> None:
+    def _resolve_qualified_chain(self, node: VarRef, chain: QualifierChain) -> None:
         """Resolve a qualified value through one ordered scope-or-route chain.
 
         An imported route owns the complete requested path atom. Resolving it
@@ -3795,8 +3723,6 @@ class _Resolver:
         variants and record construction, while also ensuring selection filters
         apply to the final atom rather than only its type owner.
         """
-        chain = node.qualifier
-        assert chain is not None
         atom = _bare_atom((*tuple(segment.name for segment in chain.segments), node.name))
         ref = self._lookup_qualified_use_contribution(chain, node.name, node.span)
         if ref is not None:
@@ -3883,7 +3809,7 @@ class _Resolver:
                 span=span,
             )
         if isinstance(imported, QualResolutionFound):
-            imported_ref = self._cross_module_binding_ref(name, imported.qname, span)
+            imported_ref = self._cross_module_binding_ref(imported.qname)
             opened_identity = (
                 opened.module_id,
                 opened.scope_path,
@@ -4116,7 +4042,7 @@ class _Resolver:
         self, read: Callable[[ScopeNode], set[T]], start: ScopeNode | None = None
     ) -> tuple[ScopeNode, set[T]] | None:
         """Return the nearest layer, from *start* or the current scope, where *read* finds any."""
-        layer: ScopeNode | None = self._current_scope() if start is None else start
+        layer: ScopeNode | None = self._scope if start is None else start
         while layer is not None:
             found = read(layer)
             if found:
@@ -4153,9 +4079,7 @@ class _Resolver:
             if refresh is not None:
                 stale, qnames, span = refresh
                 bindings.difference_update(stale)
-                bindings.update(
-                    self._cross_module_binding_ref(name, qname, span) for qname in qnames
-                )
+                bindings.update(self._cross_module_binding_ref(qname) for qname in qnames)
         for local_contribution in layer.local_use_contributions:
             # The static read above carries this contribution's snapshot,
             # taken before a later REPL entry may have redeclared one of its
@@ -4315,7 +4239,7 @@ class _Resolver:
             resolved.update(
                 ref
                 for qname in self._import_env.unqualified.get(name, frozenset())
-                if binding_predicate(ref := self._cross_module_binding_ref(name, qname, span))
+                if binding_predicate(ref := self._cross_module_binding_ref(qname))
             )
         distinct = {
             (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind): ref for ref in resolved
@@ -4351,7 +4275,7 @@ class _Resolver:
         qnames = {
             qname
             for qname in self._import_env.unqualified.get(name, frozenset())
-            if binding_predicate(self._cross_module_binding_ref(name, qname, span))
+            if binding_predicate(self._cross_module_binding_ref(qname))
         }
         if not qnames:
             return None
@@ -4369,7 +4293,7 @@ class _Resolver:
             )
         # Exactly one QName.
         qname = next(iter(qnames))
-        return self._make_cross_module_ref(qname[0], name, qname[1], span)
+        return self._make_cross_module_ref(qname)
 
     def _resolve_varref_qualified(self, node: VarRef, module_qualifier: QualifierChain) -> None:
         """Resolve an imported qualified VarRef."""
@@ -4382,16 +4306,14 @@ class _Resolver:
             raise type_name_not_a_value(
                 render_qualified_name(module_qualifier, node.name), node.span
             )
-        self._resolution[node.node_id] = self._make_cross_module_ref(
-            qname[0], node.name, qname[1], node.span
-        )
+        self._resolution[node.node_id] = self._make_cross_module_ref(qname)
 
     def _lookup_qualified_binding(
         self, qualifier: QualifierChain, name: str, span: SourceSpan
     ) -> BindingRef:
         """Resolve a qualified value or assignment target through the shared resolver."""
         qname = self._resolve_qualified_qname(qualifier, name, span)
-        return self._make_cross_module_ref(qname[0], name, qname[1], span)
+        return self._make_cross_module_ref(qname)
 
     def _resolve_qualified_qname(
         self, qualifier: QualifierChain, name: str, span: SourceSpan
@@ -4447,36 +4369,15 @@ class _Resolver:
         we fall back to the session scope (``_repl_session_scope``) so that
         ``::name`` can resolve to a prior session binding.
         """
-        assert self._root_scope is not None, "_lookup_own_root called before prepare()"
         ref = self._root_scope.bindings.get(name)
         if ref is None and self._repl_session_scope is not None:
             ref = self._repl_session_scope.bindings.get(name)
         return ref
 
-    def _make_cross_module_ref(
-        self,
-        owning_module: ModuleId,
-        exposed_name: str,
-        src_name: NameAtom,
-        span: SourceSpan,
-    ) -> BindingRef:
-        """Build a ``BindingRef`` for a cross-module name resolution.
-
-        Parameters
-        ----------
-        owning_module:
-            The ``ModuleId`` of the module that declares the name.
-        exposed_name:
-            The name as written in this module (after any rename).
-        src_name:
-            The original name in the owning module.
-        span:
-            Source span of the reference site (for synthetic decl_span).
-        """
-        key = (owning_module, src_name)
-        info = self._decl_info.get(
-            key, DeclInfo(decl_node_id=-1, decl_span=span, kind=BinderKind.function_binding)
-        )
+    def _make_cross_module_ref(self, qname: QName) -> BindingRef:
+        """Build a ``BindingRef`` for the declaration *qname* names in its owning module."""
+        owning_module, src_name = qname
+        info = self._decl_info[qname]
         path = (src_name,) if isinstance(src_name, str) else src_name
         return BindingRef(
             name=path[-1],
@@ -4532,7 +4433,7 @@ class _Resolver:
 
     def _reject_type_name_value(self, node: VarRef) -> None:
         """Raise when *node*, naming no value, spells a type visible at its use."""
-        scope: ScopeNode | None = self._current_scope()
+        scope: ScopeNode | None = self._scope
         while scope is not None and not scope.scope_path:
             scope = scope.parent
         site = self._type_owners.site(self._module_id, () if scope is None else scope.scope_path)
@@ -4560,15 +4461,13 @@ class _Resolver:
         """Return whether *ref* names an actual ``builtin def`` declaration."""
         return ref is not None and ref.kind is BinderKind.function_binding and ref.is_builtin
 
-    def _bare_builtin_ref(self, name: str, span: SourceSpan) -> BindingRef | None:
+    def _bare_builtin_ref(self, name: str) -> BindingRef | None:
         """Find the host builtin made visible by the standard-library prelude."""
         qnames = self._import_env.unqualified.get(name, frozenset())
         builtin_refs = [
             ref
             for qname in qnames
-            if self._is_builtin_function_ref(
-                ref := self._cross_module_binding_ref(name, qname, span)
-            )
+            if self._is_builtin_function_ref(ref := self._cross_module_binding_ref(qname))
         ]
         if len(builtin_refs) == 1:
             return builtin_refs[0]
@@ -4592,9 +4491,10 @@ class _Resolver:
             try:
                 self._resolve_varref(callee, is_call_target=True)
             except AglScopeError:
-                if not self._qualifier_denotes_builtin_static_owner(callee):
+                qualifier = callee.qualifier
+                if qualifier is None or not self._qualifier_denotes_builtin_static_owner(qualifier):
                     raise
-                raise self._unknown_static_error(callee) from None
+                raise self._unknown_static_error(callee, qualifier) from None
             ref = self._resolution.get(callee.node_id)
             static_kind = self._builtin_static_kind(ref)
             if static_kind is not None:
@@ -4654,8 +4554,7 @@ class _Resolver:
         self._resolve_expr(node.subject)
         for branch in node.branches:
             with self._child_scope(branch.node_id) as branch_scope:
-                with self._match_site_pattern_slots(branch.node_id, _CASE_PATTERN_POLICY):
-                    self._bind_pattern_vars(branch.pattern, branch_scope, _CASE_PATTERN_POLICY)
+                self._bind_pattern_vars(branch.pattern, branch_scope, branch.node_id)
                 self._resolve_expr_or_block(branch.body)
 
     def _resolve_loop(self, node: Loop) -> None:
@@ -4892,7 +4791,7 @@ class _Resolver:
         regional = self._regional_constructor_candidates(name)
         if regional is not None:
             return tuple(regional)
-        scope: ScopeNode | None = self._current_scope()
+        scope: ScopeNode | None = self._scope
         while scope is not None:
             if scope.scope_path:
                 owned = self._owned_scope_constructor_candidates(scope.scope_path, name)
@@ -4924,14 +4823,15 @@ class _Resolver:
         return tuple(candidates)
 
     def _bind_pattern_vars(
-        self, pattern: Pattern, scope: ScopeNode, policy: _PatternResolutionPolicy
+        self, pattern: Pattern, scope: ScopeNode, match_site_node_id: int
     ) -> None:
-        """Bind candidates according to a case or let match-site policy.
+        """Bind one case branch's pattern names into slots owned by *match_site_node_id*.
 
-        The syntax helper is the sole pattern walker. Case roots remain
-        constructor-only, let roots always bind, nested bare names remain
-        field-directed, and ``as`` names always bind.
+        The syntax helper is the sole pattern walker. Root bare names remain
+        constructor-only, nested bare names remain field-directed, and ``as``
+        names always bind.
         """
+        match_site_slots: dict[str, int] = {}
 
         def record_constructor_candidates(node: object) -> None:
             if not isinstance(node, ConstructorPattern):
@@ -4960,7 +4860,7 @@ class _Resolver:
             if constructor_candidates:
                 self._pattern_constructor_candidates[candidate.node_id] = constructor_candidates
                 self._pattern_constructor_spellings[candidate.node_id] = candidate.name
-            binds = candidate.is_as_pattern or candidate.nested or policy.root_bare_binds
+            binds = candidate.is_as_pattern or candidate.nested
             if not binds:
                 if not constructor_candidates:
                     raise AglScopeError(
@@ -4974,32 +4874,15 @@ class _Resolver:
                 candidate.span,
                 candidate.node_id,
                 scope,
+                match_site_slots,
+                match_site_node_id,
                 can_match_bare_pattern=any(
                     constructor.can_match_bare_pattern for constructor in constructor_candidates
                 ),
             )
-
-    @contextmanager
-    def _match_site_pattern_slots(
-        self, match_site_node_id: int, policy: _PatternResolutionPolicy
-    ) -> Iterator[None]:
-        """Collect slots owned by one case branch or let declaration."""
-        parent_slots = self._active_match_site_pattern_slots
-        parent_node_id = self._active_match_site_node_id
-        parent_binder_kind = self._active_match_site_binder_kind
-        self._active_match_site_pattern_slots = {}
-        self._active_match_site_node_id = match_site_node_id
-        self._active_match_site_binder_kind = policy.binder_kind
-        try:
-            yield
-        finally:
-            assert self._active_match_site_pattern_slots is not None
-            self._match_site_pattern_slots_by_node[match_site_node_id] = tuple(
-                sorted(self._active_match_site_pattern_slots.values())
-            )
-            self._active_match_site_pattern_slots = parent_slots
-            self._active_match_site_node_id = parent_node_id
-            self._active_match_site_binder_kind = parent_binder_kind
+        self._match_site_pattern_slots_by_node[match_site_node_id] = tuple(
+            sorted(match_site_slots.values())
+        )
 
     def _add_pattern_slot_candidate(
         self,
@@ -5007,6 +4890,8 @@ class _Resolver:
         span: SourceSpan,
         pattern_node_id: int,
         scope: ScopeNode,
+        match_site_slots: dict[str, int],
+        match_site_node_id: int,
         *,
         can_match_bare_pattern: bool,
     ) -> None:
@@ -5016,12 +4901,6 @@ class _Resolver:
         candidate nor any prior slot candidate can match a bare pattern.
         """
         self._check_not_reserved(name, span)
-        match_site_slots = self._active_match_site_pattern_slots
-        match_site_node_id = self._active_match_site_node_id
-        binder_kind = self._active_match_site_binder_kind
-        assert match_site_slots is not None
-        assert match_site_node_id is not None
-        assert binder_kind is not None
         slot_id = match_site_slots.get(name)
         if slot_id is None:
             slot_id = self._next_pattern_slot_id
@@ -5036,7 +4915,6 @@ class _Resolver:
                 candidates=(),
                 alternative=alternative,
                 match_site_node_id=match_site_node_id,
-                binder_kind=binder_kind,
             )
             self._define(
                 name,

@@ -30,8 +30,6 @@ from collections.abc import Callable
 from unittest.mock import patch
 
 import pytest
-from lark.exceptions import UnexpectedToken
-from lark.lexer import Token
 
 import agm.agl.syntax as syntax
 from agm.agl.parser import (
@@ -44,7 +42,8 @@ from agm.agl.parser import (
     parse_type_expr,
     resolve_infix_chains,
 )
-from agm.agl.parser.errors import syntax_error_from_lark
+from agm.agl.parser.transform import AstBuilder
+from agm.agl.recursion import NestingTooDeepError, frontend_recursion_boundary
 from agm.agl.syntax import (
     ArrayLit,
     AsPattern,
@@ -279,6 +278,36 @@ class TestProgramRoot:
         id_list: list[int] = []
         _collect_node_ids(prog, id_list)
         assert len(id_list) == len(set(id_list)), "duplicate node_ids detected in parsed tree"
+
+
+class TestBuilderFailures:
+    """A non-syntax exception raised while building the AST surfaces as itself."""
+
+    @pytest.fixture
+    def failing_builder(self, monkeypatch: pytest.MonkeyPatch) -> Callable[[BaseException], None]:
+        def install(error: BaseException) -> None:
+            def fail(*_args: object) -> object:
+                raise error
+
+            monkeypatch.setattr(AstBuilder, "start", fail)
+
+        return install
+
+    def test_stack_exhaustion_reaches_the_frontend_recursion_boundary(
+        self, failing_builder: Callable[[BaseException], None]
+    ) -> None:
+        failing_builder(RecursionError())
+        with pytest.raises(NestingTooDeepError):
+            with frontend_recursion_boundary():
+                parse("1")
+
+    def test_other_exception_is_reraised_unwrapped(
+        self, failing_builder: Callable[[BaseException], None]
+    ) -> None:
+        failing_builder(ValueError())
+        with pytest.raises(ValueError) as excinfo:
+            parse("1")
+        assert type(excinfo.value) is ValueError
 
 
 # ---------------------------------------------------------------------------
@@ -3449,21 +3478,6 @@ class TestReplSeam:
         """Input the lexer rejects is a real error, not a continuation prompt."""
         assert not is_incomplete_source("~~~")
 
-    def test_is_incomplete_source_unexpected_parser_failure(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Unexpected residual Lark errors are complete so the REPL shows them."""
-        from lark.exceptions import LarkError
-
-        import agm.agl.parser.parser as parser_mod
-
-        def fail_parse(_text: str) -> object:
-            raise LarkError("synthetic parser failure")
-
-        monkeypatch.setattr(parser_mod, "_incomplete_cache", None)
-        monkeypatch.setattr(parser_mod._PARSER, "parse", fail_parse)
-        assert not is_incomplete_source("synthetic lark fallback")
-
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_is_incomplete_source_unterminated_triple_quote(self, quote: str) -> None:
         """Triple-quoted string EOF is incomplete for REPL continuation."""
@@ -3555,7 +3569,7 @@ class TestDollarSpacingHint:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("ask$ let x = 1")
         assert "ask $" in str(exc_info.value)
-        assert exc_info.value.source_span.start_offset == 5
+        assert exc_info.value.span.start_offset == 5
 
     def test_offending_token_later_on_the_dollar_suffixed_names_own_line_gets_a_hint(
         self,
@@ -3615,33 +3629,6 @@ class TestDollarSpacingHint:
             parse_program("1 2 3")
         assert "$ …" not in str(exc_info.value)
 
-    def test_layout_token_with_no_preceding_real_token_gets_no_hint(self) -> None:
-        """A layout token's anchor search finds nothing before it: no crash, no hint.
-
-        Not reachable through ``parse_program`` (a stray indent always has
-        something real before it); call the mapping helper directly with a
-        materialized token list that starts after the offending position.
-        """
-        offending = Token("_INDENT", "", start_pos=5, line=2, column=1)
-        far_name = Token("NAME", "ask$", start_pos=10, line=2, column=6)
-        err = syntax_error_from_lark(
-            UnexpectedToken(offending, expected={"NAME"}), tokens=[far_name]
-        )
-        assert "$ …" not in str(err)
-
-    def test_layout_anchor_search_skips_a_materialized_token_with_no_line(self) -> None:
-        """A token missing its own line cannot anchor the layout-token hint search.
-
-        Not reachable through ``parse_program`` (the lexer always sets a real
-        token's line); call the mapping helper directly.
-        """
-        offending = Token("_INDENT", "", start_pos=5, line=2, column=1)
-        lineless = Token("NAME", "ask$", start_pos=0, line=None, column=None)
-        err = syntax_error_from_lark(
-            UnexpectedToken(offending, expected={"NAME"}), tokens=[lineless]
-        )
-        assert "$ …" not in str(err)
-
 
 class TestPipingHint:
     """Juxtaposition takes one argument; a further `$` literal gets a piping hint."""
@@ -3678,21 +3665,11 @@ class TestPipingHint:
             parse_program("f x y")
         assert "pipe" not in str(exc_info.value)
 
-    def test_missing_tokens_gets_no_piping_hint(self) -> None:
-        """No materialized token pass: nothing to inspect, no hint, no crash."""
-        offending = Token("VERBATIM_START", "$", start_pos=5, line=1, column=6)
-        err = syntax_error_from_lark(UnexpectedToken(offending, expected={"NAME"}))
-        assert "pipe" not in str(err)
-
     def test_dollar_literal_opener_preceded_by_a_non_operand_token_gets_no_hint(self) -> None:
-        """Two tokens precede the `$` opener, but the nearer one is not operand-ending."""
-        name = Token("NAME", "x", start_pos=1, line=1, column=2)
-        op = Token("EQ", "=", start_pos=5, line=1, column=6)
-        offending = Token("VERBATIM_START", "$", start_pos=10, line=1, column=11)
-        err = syntax_error_from_lark(
-            UnexpectedToken(offending, expected={"NAME"}), tokens=[name, op, offending]
-        )
-        assert "pipe" not in str(err)
+        """`x. $ y`: two tokens precede the `$` opener, but `.` is not operand-ending."""
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("x. $ y")
+        assert "pipe" not in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -3757,17 +3734,10 @@ class TestFullPrograms:
 class TestSyntaxErrorSpans:
     """A syntax error locates itself with a 1-based span."""
 
-    def test_source_span_is_the_error_span(self) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("x = y")
-        err = exc_info.value
-        assert err.span is not None
-        assert err.source_span is err.span
-
-    def test_source_span_points_at_the_offending_source(self) -> None:
+    def test_span_points_at_the_offending_source(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let a = 1\nx = y")
-        span = exc_info.value.source_span
+        span = exc_info.value.span
         assert span.start_line == 2
         assert span.start_col >= 1
 
@@ -3789,55 +3759,7 @@ class TestInlineCompoundInExpressionPosition:
 
 
 class TestLarkErrorMapping:
-    """Lark exceptions map to AgL syntax errors with usable spans.
-
-    The custom AglLexer pre-empts Lark's character-level lexer, so
-    UnexpectedCharacters, UnexpectedEOF, and generic LarkError are never
-    raised through the normal parse path.  We call the pure mapping helper
-    directly with minimally-constructed Lark exception instances.
-    """
-
-    def test_unexpected_characters_message(self) -> None:
-        """UnexpectedCharacters maps to 'Unexpected character.' with a 1-based span."""
-        from lark.exceptions import UnexpectedCharacters
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        # seq='hello', lex_pos=2, line=3, column=5
-        exc = UnexpectedCharacters("hello", 2, 3, 5)
-        err = syntax_error_from_lark(exc)
-        assert str(err) == "Unexpected character."
-        assert err.span is not None
-        assert err.span.start_line == 3
-        assert err.span.start_col == 5
-
-    def test_unexpected_characters_span_width_one(self) -> None:
-        """The span produced for UnexpectedCharacters is exactly one character wide."""
-        from lark.exceptions import UnexpectedCharacters
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        exc = UnexpectedCharacters("abc", 1, 1, 2)
-        err = syntax_error_from_lark(exc)
-        span = err.span
-        assert span is not None
-        assert span.end_col == span.start_col + 1
-        assert span.end_offset == span.start_offset + 1
-
-    def test_unexpected_eof_message(self) -> None:
-        """UnexpectedEOF maps to 'Unexpected end of input.' with (1,1) fallback span."""
-        from lark.exceptions import UnexpectedEOF
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        exc = UnexpectedEOF([])
-        err = syntax_error_from_lark(exc)
-        assert str(err) == "Unexpected end of input."
-        span = err.span
-        assert span is not None
-        assert span.start_line == 1
-        assert span.start_col == 1
-        assert span.start_offset == 0
+    """Lark parse failures map to AgL syntax errors with usable spans."""
 
     @pytest.mark.parametrize(
         "source",
@@ -3894,7 +3816,7 @@ class TestLarkErrorMapping:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(source)
 
-        span = exc_info.value.source_span
+        span = exc_info.value.span
         assert span.start_line == expected_line
         assert span.start_offset != 0
         assert span.start_offset == len(source)
@@ -3924,21 +3846,6 @@ class TestLarkErrorMapping:
             parse_program("let x = raise\n\n  1\n")
 
         assert str(exc_info.value) == "Unexpected indentation."
-
-    def test_generic_lark_error_fallback(self) -> None:
-        """A plain LarkError falls back to str(exc) as the message with (1,1) span."""
-        from lark.exceptions import LarkError
-
-        from agm.agl.parser.errors import syntax_error_from_lark
-
-        message = "some unexpected grammar state"
-        exc = LarkError(message)
-        err = syntax_error_from_lark(exc)
-        assert str(err) == message
-        span = err.span
-        assert span is not None
-        assert span.start_line == 1
-        assert span.start_col == 1
 
 
 # ---------------------------------------------------------------------------
@@ -4999,17 +4906,6 @@ class TestFieldAssignmentSyntax:
         with pytest.raises(AglSyntaxError):
             parse("let same = (x = 3)")
 
-    def test_lark_chained_comparison_error_adapter(self) -> None:
-        tok = Token("LT", "<")
-        tok.line = 1
-        tok.column = 7
-        tok.start_pos = 6
-        tok.end_line = 1
-        tok.end_column = 8
-        tok.end_pos = 7
-        err = syntax_error_from_lark(UnexpectedToken(tok, expected={"PLUS"}))
-        assert "Comparisons are non-associative" in str(err)
-
 
 class TestModifierDecoratorNewline:
     """`builtin` acts as a decorator: a newline may follow it.
@@ -5128,7 +5024,7 @@ class TestVerbatimTextLiteral:
     def test_juxtaposition_does_not_chain(self, source: str) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program(source)
-        assert exc_info.value.source_span.start_offset == 10
+        assert exc_info.value.span.start_offset == 10
 
     @pytest.mark.parametrize(
         ("verbatim_source", "quoted_source"),

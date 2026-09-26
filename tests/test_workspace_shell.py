@@ -615,6 +615,44 @@ class TestSelfHealE2E:
         assert (shell_dir / "zsh" / ".zshrc").exists()
         assert (shell_dir / "sh" / "shrc").exists()
 
+    def test_self_heal_restores_rc_files_for_path_with_heredoc_delimiter_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sh = shutil.which("sh")
+        if sh is None:
+            pytest.skip("sh is required")
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        project_dir = tmp_path / "odd\nAGM_EOF\nproject"
+        workspace_dir = project_dir / "repo"
+        shell_dir = workspace_shell_dir("s")
+        wrapper = ensure_workspace_shell(
+            "s", project_dir=project_dir, workspace_dir=workspace_dir, env={"SHELL": sh}
+        )
+        rc_paths = (
+            shell_dir / "zsh" / ".zshrc",
+            shell_dir / "bash" / "bashrc",
+            shell_dir / "sh" / "shrc",
+        )
+        written = [path.read_text(encoding="utf-8").rstrip("\n") for path in rc_paths]
+        for subdir in ("zsh", "bash", "sh"):
+            shutil.rmtree(shell_dir / subdir)
+        home = tmp_path / "home"
+        home.mkdir()
+
+        subprocess.run(
+            [str(wrapper)],
+            input="exit\n",
+            cwd=tmp_path,
+            env={**os.environ, "HOME": str(home), "SHELL": sh, "ENV": ""},
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+        assert [path.read_text(encoding="utf-8").rstrip("\n") for path in rc_paths] == written
+
 
 class TestCommandArguments:
     """A wrapper invoked with arguments must run them, not an interactive shell.

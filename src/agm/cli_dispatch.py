@@ -13,6 +13,7 @@ from click.shell_completion import CompletionItem
 from typer.core import TyperCommand, TyperGroup, TyperOption
 
 from agm.cli_support.args import ExecArgs
+from agm.command_catalog import has_subcommands, is_subcommand_path
 from agm.config.context import current_config_context
 from agm.core import dry_run
 from agm.util.text import first_paragraph
@@ -190,12 +191,11 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
         return False
     path_name = " ".join(command_path)
     registration = index.commands.get(path_name)
-    group_help = registered_group_help(path_name, index.commands)
-    if group_help is not None:
-        print(group_help)
-        return True
     if registration is None or registration.program is None:
-        return False
+        if not has_subcommands(path_name, index.commands):
+            return False
+        print(registered_group_help(path_name, index.commands))
+        return True
     from agm.cli_support.program_discovery import registered_program_command
 
     program, command = registered_program_command(registration.program, registration.package)
@@ -212,21 +212,14 @@ def print_registered_command_help(command_path: Sequence[str]) -> bool:
     return True
 
 
-def registered_group_help(
-    path_name: str, commands: Mapping[str, CommandRegistration]
-) -> str | None:
-    """Render a command group's own prose, if it states any, and a generated listing."""
+def registered_group_help(path_name: str, commands: Mapping[str, CommandRegistration]) -> str:
+    """Render group *path_name*'s own prose, if it states any, and a listing of its commands."""
     registration = commands.get(path_name)
-    if registration is not None and registration.program is not None:
-        return None
     descendants = {
         path[len(path_name) + 1 :]: command
         for path, command in sorted(commands.items())
-        if path.startswith(path_name + " ")
+        if is_subcommand_path(path, path_name)
     }
-    if not descendants:
-        return None
-
     listed_commands = {
         path: click.Command(path, help=_command_summary(path, command))
         for path, command in descendants.items()
@@ -289,6 +282,7 @@ class RegisteredProgramCommand(TyperCommand):
     def __init__(
         self,
         path_name: str,
+        program: str,
         registration: CommandRegistration,
         run_options: Sequence[TyperOption],
     ) -> None:
@@ -303,8 +297,7 @@ class RegisteredProgramCommand(TyperCommand):
         self._run_options = tuple(run_options)
         self._path_name = path_name
         self._registration = registration
-        assert registration.program is not None
-        self._program = registration.program
+        self._program = program
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         """Parse *args*, keeping the reader's end-of-options marker in the tail.
@@ -532,12 +525,12 @@ class RegisteredCommandGroup(TyperGroup):
             if resolution is None:
                 raise
             path_name = " ".join(args[: len(args) - len(resolution.trailing_args)])
-            group_help = registered_group_help(path_name, index.commands)
+            registration = resolution.registration
             command = (
-                RegisteredHelpCommand(group_help)
-                if group_help is not None
+                RegisteredHelpCommand(registered_group_help(path_name, index.commands))
+                if registration.program is None
                 else RegisteredProgramCommand(
-                    path_name, resolution.registration, registered_run_options(ctx)
+                    path_name, registration.program, registration, registered_run_options(ctx)
                 )
             )
             return (

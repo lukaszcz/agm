@@ -17,13 +17,14 @@ from agm.agent.session import (
     SessionAskError,
     SessionAskRequest,
     SessionHostError,
-    SessionOpenRequest,
     SessionService,
     SessionStats,
+    create_agl_session_host,
     rpc,
 )
 from agm.agent.session.rpc import PiRpcSessionBackend
-from agm.agent.spec import AgentPi
+from agm.agent.spec import AgentPi, SessionTransport
+from agm.agl.runtime.sessions import SessionHostError as AglSessionHostError
 
 _STUB = r"""#!{python}
 import json, os, sys, time
@@ -153,9 +154,9 @@ class RpcStub:
 
 
 def open_backend(*, timeout: float | None = None) -> PiRpcSessionBackend:
-    backend = PiRpcSessionBackend(idle_timeout=timeout)
-    backend.open(SessionOpenRequest(AgentPi("provider", "model", "high"), "rpc", "named"))
-    return backend
+    return PiRpcSessionBackend.open(
+        AgentPi("provider", "model", "high"), name="named", idle_timeout=timeout
+    )
 
 
 def option_value(argv: object, option: str) -> str | None:
@@ -646,8 +647,8 @@ def test_close_and_close_all_terminate_children(
     backend.close()
     backend.close()
     assert_exited(pid)
-    service = SessionService(lambda _agent, _transport: PiRpcSessionBackend())
-    handle = service.open(AgentPi("", "", ""), "rpc")
+    service = SessionService(lambda _request: PiRpcSessionBackend.open(AgentPi("", "", "")))
+    handle = service.open(AgentPi("", "", ""), SessionTransport.RPC)
     child_pid = stub.wait_for("starts.jsonl", 2)[1]["pid"]
     service.close_all()
     service.close_all()
@@ -655,6 +656,36 @@ def test_close_and_close_all_terminate_children(
     assert_exited(child_pid)
     with pytest.raises(SessionHostError):
         service.ask(handle, SessionAskRequest("no"))
+
+
+def test_production_host_routes_every_rpc_lifecycle_operation_natively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = RpcStub(tmp_path, monkeypatch)
+    host = create_agl_session_host(idle_timeout=None)
+    handle = host.open(AgentPi("provider", "model", "high"), "Rpc")
+
+    host.compact(handle, "retain")
+    host.set_name(handle, "renamed")
+    host.stats(handle)
+    child = host.fork(handle)
+    host.close_all()
+
+    assert command_types(stub) == [
+        "compact",
+        "set_session_name",
+        "get_session_stats",
+        "get_state",
+        "get_state",
+        "clone",
+        "get_state",
+    ]
+    for start in stub.records("starts.jsonl"):
+        pid = start["pid"]
+        assert isinstance(pid, int)
+        assert_exited(pid)
+    with pytest.raises(AglSessionHostError):
+        host.ask(child, "closed")
 
 
 def test_close_terminates_rpc_process_descendants(

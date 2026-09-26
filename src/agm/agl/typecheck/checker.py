@@ -5377,8 +5377,7 @@ class _Checker:
     ) -> None:
         """Require one checked owner form to match the concrete subject enum."""
         if form.match(enum_type) is None:
-            template = form.type_template
-            resolved = None if template is None else template.template
+            resolved = form.type_template.template
             if not isinstance(resolved, EnumType):
                 raise _not_an_enum_type(rendered_owner, span)
             raise _enum_owner_mismatch(rendered_owner, resolved, enum_type, span)
@@ -6789,7 +6788,7 @@ class _Checker:
                 mutable=False,
                 decl_span=binders[0].span,
                 decl_node_id=binders[0].pattern_node_id,
-                kind=slot.binder_kind,
+                kind=BinderKind.pattern_binding,
                 module_id=self._module_id,
             )
             constructor = None

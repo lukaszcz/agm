@@ -13,6 +13,8 @@ IR; plus the extern registry's check that an already-synthesized nominal
 identity is never re-registered under a different shape. None of these checks
 change a result — they only assert that a
 correct compiler stayed correct — so they are disabled during normal execution.
+Shell completion reads the same toggle to re-raise, rather than degrade, a
+failure other than ``SystemExit``.
 
 Every call site guards its check with ``if self_validation_enabled():``, so that
 a disabled check costs one global read: neither the check nor any state recorded

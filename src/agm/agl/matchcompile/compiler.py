@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypeAlias, cast
+from typing import Literal, TypeAlias, cast
 
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind, EnumType
@@ -49,7 +49,6 @@ from .model import (
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
-    EnumConstructorSpelling,
     FieldOccurrenceProvenance,
     LiteralConstructor,
     MatchCaseContext,
@@ -399,7 +398,7 @@ def _witness_for_occurrence(
     if isinstance(constructor, LiteralConstructor):
         return LiteralWitness(constructor.kind, constructor.value)
     spelling = _source_spelling(constructor, occurrence.type, case_context)
-    if isinstance(occurrence.type, EnumType) and spelling.owner_name is None and not spelling.bare:
+    if isinstance(occurrence.type, EnumType) and spelling is None:
         return WildcardWitness()
     children_by_index = {
         child.provenance.field_index: child
@@ -419,14 +418,14 @@ def _witness_for_occurrence(
         )
         for index, field in enumerate(constructor.fields)
     )
-    if spelling.bare or spelling.owner_name is None:
-        qualification = None
-    else:
+    if isinstance(spelling, EnumOwnerForm):
         qualification = EnumWitnessQualification(
             owner_name=spelling.owner_name,
             module_qualifier=spelling.module_qualifier,
             qualifier_anchored=spelling.qualifier_anchored,
         )
+    else:
+        qualification = None
     if isinstance(occurrence.type, EnumType):
         return EnumWitness(
             occurrence.type,
@@ -448,21 +447,23 @@ def _short_spelling_blocked(
     """
     if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
         return False
-    return variant in case_context.blocked_enum_variants.get(
-        (cast(str, form.owner_name),), frozenset()
-    )
+    return variant in case_context.blocked_enum_variants.get((form.owner_name,), frozenset())
 
 
 def _source_spelling(
     constructor: NominalConstructor, subject_type: object, case_context: MatchCaseContext
-) -> EnumConstructorSpelling:
-    """Select the shortest valid source owner for a concrete nominal constructor."""
+) -> EnumOwnerForm | Literal["bare"] | None:
+    """Select the shortest valid source owner for a concrete nominal constructor.
+
+    ``"bare"`` marks a constructor written without an owner; ``None`` means no
+    visible owner spells it.
+    """
     nominal_type = subject_type if isinstance(subject_type, EnumType) else constructor.record_type
     variant = constructor.record_type.name
     if isinstance(subject_type, EnumType):
         declaration_identity = (subject_type.module_id, subject_type.name, variant)
         if declaration_identity in case_context.bare_enum_constructors:
-            return EnumConstructorSpelling(None, None, bare=True)
+            return "bare"
 
     matches = tuple(
         form
@@ -474,14 +475,13 @@ def _source_spelling(
         )
     )
     if not matches:
-        return EnumConstructorSpelling(None, None)
+        return None
 
     def candidate_key(
         candidate: EnumOwnerForm,
     ) -> tuple[int, str, bool]:
-        # Only owner-named forms carry the type template a match requires.
         text = qualified_owner_name(
-            cast(str, candidate.owner_name),
+            candidate.owner_name,
             candidate.module_qualifier,
             anchored=candidate.qualifier_anchored,
         )

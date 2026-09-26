@@ -11,29 +11,24 @@ string to ``_PARSER``, passes the resulting Lark tree to ``AstBuilder`` to
 produce a raw ``syntax.Program``, then resolves its infix chains before
 returning it. ``parse_program_unresolved(text)`` exposes the preceding
 parser-stage boundary for code that must supply its own operator table; callers
-must resolve that result before passing it to scope. All Lark exceptions and
-``LexError``s are wrapped into ``AglSyntaxError``.
+must resolve that result before passing it to scope. Lark's ``UnexpectedToken``
+and ``LexError``s are wrapped into ``AglSyntaxError``.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import replace as dc_replace
-from typing import Mapping, NoReturn
+from typing import Mapping, NoReturn, cast
 
 from lark import Lark, Tree
-from lark.exceptions import (
-    LarkError,
-    UnexpectedCharacters,
-    UnexpectedEOF,
-    UnexpectedToken,
-    VisitError,
-)
+from lark.exceptions import UnexpectedToken, VisitError
 
 import agm.agl.syntax as syntax
 from agm.agl.lexer import token_collector, tokenize
 from agm.agl.lexer.errors import IncompleteInputError, LexError, UnterminatedTripleQuotedStringError
 from agm.agl.lexer.lexer import build_parser
+from agm.agl.lexer.positions import token_span
 from agm.agl.lexer.tokens import VERBATIM_END, VERBATIM_START
 from agm.agl.parser.errors import AglSyntaxError, syntax_error_from_lark
 from agm.agl.parser.transform import AstBuilder, resolve_program_infix
@@ -41,16 +36,8 @@ from agm.agl.syntax.spans import SourceId
 
 
 def _reraise_stamped(err: AglSyntaxError, source: SourceId | None) -> NoReturn:
-    """Re-raise *err*, stamping its span with *source* when both are present.
-
-    When *source* is not ``None`` and *err* carries a span, a new
-    ``AglSyntaxError`` is raised with the span's ``source`` field replaced by
-    *source*.  Otherwise *err* is re-raised unchanged.
-
-    This helper consolidates the repeated stamp-then-re-raise pattern that
-    appears in every ``except`` arm of :func:`_parse_to_program`.
-    """
-    if source is not None and err.span is not None:
+    """Re-raise *err*, stamping its span with *source* when one is supplied."""
+    if source is not None:
         raise AglSyntaxError(str(err), span=dc_replace(err.span, source=source)) from err
     raise err
 
@@ -82,7 +69,7 @@ def has_unterminated_triple_quoted_string(text: str) -> bool:
         _PARSER.parse(text)
     except LexError as exc:
         return isinstance(exc, UnterminatedTripleQuotedStringError)
-    except LarkError:
+    except UnexpectedToken:
         return False
     return False
 
@@ -109,7 +96,7 @@ def has_open_verbatim_block(text: str) -> bool:
     payload_starts: list[int] = []
     for token in tokens:
         if token.type == VERBATIM_START:
-            payload_starts.append(token.end_pos if token.end_pos is not None else 0)
+            payload_starts.append(token_span(token).end_offset)
         elif token.type == VERBATIM_END and token.end_pos == len(text) and payload_starts:
             line_end = text.find("\n", payload_starts[-1])
             header_tail = text[payload_starts[-1] : len(text) if line_end < 0 else line_end]
@@ -117,18 +104,12 @@ def has_open_verbatim_block(text: str) -> bool:
     return False
 
 
-def _parse_tree(
-    parser: Lark,
-    text: str,
-    *,
-    filename: str,
-    source: SourceId | None,
-) -> Tree:
+def _parse_tree(parser: Lark, text: str, *, source: SourceId | None) -> Tree:
     """Parse *text* with *parser*, mapping any lex/parse error to ``AglSyntaxError``.
 
     Shared by the program parser and the ``type_expr`` parser so the error
-    wrapping (and its ``# pragma: no cover`` fallback) exists in one place.
-    Returns the raw Lark tree; the caller transforms it.
+    wrapping exists in one place. Returns the raw Lark tree; the caller
+    transforms it.
 
     Installs :func:`~agm.agl.lexer.token_collector` around the parse so a
     Lark-derived error can be diagnosed against the parse's own materialized
@@ -138,29 +119,15 @@ def _parse_tree(
         try:
             return parser.parse(text)
         except LexError as exc:
-            _reraise_stamped(
-                syntax_error_from_lark(exc, filename=filename, source_text=text), source
-            )
-        except (UnexpectedToken, UnexpectedCharacters, UnexpectedEOF) as exc:
-            _reraise_stamped(
-                syntax_error_from_lark(exc, filename=filename, source_text=text, tokens=tokens),
-                source,
-            )
-        except LarkError as exc:  # pragma: no cover
-            # Any other lark-level error (ParseError, GrammarError, etc.) is a
-            # genuine syntax/parse problem.  Narrowing to LarkError lets internal
-            # bugs (AssertionError and the like) surface instead of being masked.
-            _reraise_stamped(
-                syntax_error_from_lark(exc, filename=filename, source_text=text, tokens=tokens),
-                source,
-            )
+            _reraise_stamped(AglSyntaxError(str(exc), span=exc.span), source)
+        except UnexpectedToken as exc:
+            _reraise_stamped(syntax_error_from_lark(exc, source_text=text, tokens=tokens), source)
 
 
 def _transform_tree(
     tree: Tree,
     *,
     start_id: int,
-    filename: str,
     source: SourceId | None,
     allow_late_uses: bool = False,
 ) -> tuple[object, int]:
@@ -173,19 +140,19 @@ def _transform_tree(
     try:
         result = builder.transform(tree)
     except VisitError as exc:
-        # Lark wraps transformer exceptions in VisitError.  If the original
-        # exception is already an AglSyntaxError, unwrap and re-raise it,
-        # stamping the source so transformer-raised errors carry the module path.
+        # Lark wraps transformer exceptions in VisitError.  A syntax error is
+        # re-raised with the source stamped so it carries the module path;
+        # stack exhaustion on deeply nested source is re-raised for the
+        # frontend recursion boundary.
         if isinstance(exc.orig_exc, AglSyntaxError):
             _reraise_stamped(exc.orig_exc, source)
-        raise syntax_error_from_lark(exc, filename=filename) from exc  # pragma: no cover
+        raise exc.orig_exc from None
     return result, builder.next_node_id
 
 
 def _parse_to_unresolved_program(
     text: str,
     *,
-    filename: str,
     start_id: int,
     source: SourceId | None = None,
     allow_late_uses: bool = False,
@@ -196,22 +163,16 @@ def _parse_to_unresolved_program(
     resolution. Its result may contain ``RawInfixChain`` nodes and must not be
     passed to scope until ``resolve_infix_chains`` has rewritten them.
     """
-    tree = _parse_tree(_PARSER, text, filename=filename, source=source)
+    tree = _parse_tree(_PARSER, text, source=source)
     result, next_id = _transform_tree(
-        tree,
-        start_id=start_id,
-        filename=filename,
-        source=source,
-        allow_late_uses=allow_late_uses,
+        tree, start_id=start_id, source=source, allow_late_uses=allow_late_uses
     )
-    assert isinstance(result, syntax.Program)
-    return result, next_id
+    return cast(syntax.Program, result), next_id
 
 
 def _parse_to_program(
     text: str,
     *,
-    filename: str,
     start_id: int,
     source: SourceId | None = None,
     ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
@@ -229,9 +190,7 @@ def _parse_to_program(
     ``AglSyntaxError`` raised during parsing. *ambient_infix* supplies fixities
     declared in a prior context, such as earlier REPL entries.
     """
-    result, next_id = _parse_to_unresolved_program(
-        text, filename=filename, start_id=start_id, source=source
-    )
+    result, next_id = _parse_to_unresolved_program(text, start_id=start_id, source=source)
     return (resolve_program_infix(result, ambient_infix) if resolve_infix else result), next_id
 
 
@@ -271,8 +230,7 @@ def is_incomplete_source(text: str) -> bool:
       empty `$` verbatim literal running to end of input) → incomplete. Other
       lexical failures remain complete so the REPL submits and the user sees the
       genuine error instead of being trapped in a continuation prompt.
-    - Any other failure (``UnexpectedCharacters``, a wrong token mid-line such
-      as ``let = 5``) → complete.
+    - Any other failure (a wrong token mid-line such as ``let = 5``) → complete.
 
     Results are memoized for the most recently seen text so that the Enter-key
     check and the immediately following eval-path parse do not trigger two full
@@ -301,11 +259,6 @@ def is_incomplete_source(text: str) -> bool:
             result = "_INDENT" in exc.expected
     except LexError as exc:
         result = isinstance(exc, IncompleteInputError)
-    except LarkError:
-        # Any other parse failure (``UnexpectedCharacters`` and the residual
-        # ``LarkError`` family) is a real error the user should see immediately,
-        # not a continuation.
-        result = False
 
     _incomplete_cache = (text, result)
     return result
@@ -318,8 +271,7 @@ _BODYLESS_CAPABLE_DECLARATIONS = frozenset(
 
 def _ends_with_bodyless_declaration(tree: Tree) -> bool:
     """Return ``True`` when the module's final child is a body-less record/exception."""
-    module_block = tree.children[0]
-    assert isinstance(module_block, Tree)
+    module_block = cast(Tree, tree.children[0])
     last = module_block.children[-1] if module_block.children else None
     return (
         isinstance(last, Tree)
@@ -333,7 +285,6 @@ def _ends_with_bodyless_declaration(tree: Tree) -> bool:
 def parse_program_unresolved(
     text: str,
     *,
-    filename: str = "<agl>",
     start_id: int = 0,
     source: SourceId | None = None,
 ) -> syntax.Program:
@@ -344,16 +295,13 @@ def parse_program_unresolved(
     ``resolve_infix_chains`` before scope resolution. Most callers should
     use :func:`parse_program`, which performs that resolution automatically.
     """
-    program, _next_id = _parse_to_unresolved_program(
-        text, filename=filename, start_id=start_id, source=source
-    )
+    program, _next_id = _parse_to_unresolved_program(text, start_id=start_id, source=source)
     return program
 
 
 def parse_program(
     text: str,
     *,
-    filename: str = "<agl>",
     start_id: int = 0,
     source: SourceId | None = None,
     ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
@@ -364,8 +312,6 @@ def parse_program(
     ----------
     text:
         The source code to parse.
-    filename:
-        The logical filename for error messages (default ``"<agl>"``).
     start_id:
         The first ``node_id`` to assign (default ``0`` → unchanged behaviour).
         Used by incremental sessions to keep node ids globally unique across
@@ -395,12 +341,12 @@ def parse_program(
         the error span is stamped with that ``SourceId``.
     """
     program, _next_id = _parse_to_program(
-        text, filename=filename, start_id=start_id, source=source, ambient_infix=ambient_infix
+        text, start_id=start_id, source=source, ambient_infix=ambient_infix
     )
     return program
 
 
-def parse_repl_transcript(text: str, *, filename: str = "<agl>") -> syntax.Program:
+def parse_repl_transcript(text: str) -> syntax.Program:
     """Parse a saved REPL transcript for top-level entry boundary discovery.
 
     Header ordering is deferred because each top-level item is subsequently
@@ -408,9 +354,7 @@ def parse_repl_transcript(text: str, *, filename: str = "<agl>") -> syntax.Progr
     is unresolved for the same reason: only the item spans are consumed.
     """
 
-    program, _next_id = _parse_to_unresolved_program(
-        text, filename=filename, start_id=0, allow_late_uses=True
-    )
+    program, _next_id = _parse_to_unresolved_program(text, start_id=0, allow_late_uses=True)
     return program
 
 
@@ -418,7 +362,6 @@ def parse_program_seeded(
     text: str,
     *,
     start_id: int,
-    filename: str = "<agl>",
     source: SourceId | None = None,
     ambient_infix: "Mapping[str, tuple[int, syntax.InfixAssoc]] | None" = None,
     resolve_infix: bool = True,
@@ -436,8 +379,6 @@ def parse_program_seeded(
         The source code to parse.
     start_id:
         The first ``node_id`` to assign.
-    filename:
-        The logical filename for error messages (default ``"<agl>"``).
     source:
         Optional :class:`~agm.agl.syntax.spans.SourceId` stamped on every span.
         See :func:`parse_program` for details.
@@ -459,7 +400,6 @@ def parse_program_seeded(
     """
     return _parse_to_program(
         text,
-        filename=filename,
         start_id=start_id,
         source=source,
         ambient_infix=ambient_infix,
@@ -471,7 +411,6 @@ def parse_type_expr(
     text: str,
     *,
     start_id: int = 0,
-    filename: str = "<agl>",
     source: SourceId | None = None,
 ) -> syntax.TypeExpr:
     """Parse *text* as a single AgL type expression and return a ``TypeExpr``.
@@ -491,8 +430,6 @@ def parse_type_expr(
     start_id:
         The first ``node_id`` to assign (default ``0``).  Throwaway for the
         REPL fallback, which never promotes; passed for symmetry.
-    filename:
-        The logical filename for error messages (default ``"<agl>"``).
     source:
         Optional :class:`~agm.agl.syntax.spans.SourceId` stamped on spans.
 
@@ -506,7 +443,6 @@ def parse_type_expr(
     AglSyntaxError
         On any lex or parse error.
     """
-    tree = _parse_tree(_type_parser(), text, filename=filename, source=source)
-    result, _next_id = _transform_tree(tree, start_id=start_id, filename=filename, source=source)
-    assert isinstance(result, syntax.TypeExpr)
-    return result
+    tree = _parse_tree(_type_parser(), text, source=source)
+    result, _next_id = _transform_tree(tree, start_id=start_id, source=source)
+    return cast(syntax.TypeExpr, result)

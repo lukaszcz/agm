@@ -35,10 +35,15 @@ def tok(source: str) -> list[tuple[str, str]]:
     return [(t.type, str(t)) for t in tokenize(source)]
 
 
+def lexer_state(source: str) -> LexerState:
+    """Return the lexer state Lark hands the lexer for a parse of *source*."""
+    return LexerState(TextSlice.cast_from(source))
+
+
 def lark_tok(source: str) -> list[tuple[str, str]]:
     """Return parser-facing ``(type, value)`` pairs for every token in *source*."""
     lexer = AglLexer(None)
-    state = LexerState(source)
+    state = lexer_state(source)
     return [(t.type, str(t)) for t in lexer.lex(state, None)]
 
 
@@ -1891,24 +1896,13 @@ class TestAglLexerClass:
         # remapped to their uppercase grammar terminal names (e.g. "let" →
         # "LET") so the LALR parse table can resolve them.
         lexer = AglLexer(None)
-        state = LexerState("let x = 1")
+        state = lexer_state("let x = 1")
         result = list(lexer.lex(state, None))
         types = [t.type for t in result]
         assert "LET" in types
         assert "NAME" in types
         assert "EQ" in types
         assert "INT" in types
-
-    def test_agl_lexer_accepts_text_slice_state(self) -> None:
-        lexer = AglLexer(None)
-        state = LexerState(TextSlice("let x = 1", 0, 9))
-        result = list(lexer.lex(state, None))
-        assert [(t.type, str(t)) for t in result] == [
-            ("LET", "let"),
-            ("NAME", "x"),
-            ("EQ", "="),
-            ("INT", "1"),
-        ]
 
     def test_speculative_use_parse_does_not_duplicate_tab_warning(self) -> None:
         from agm.agl.parser import parse_program
@@ -1921,7 +1915,7 @@ class TestAglLexerClass:
 
     def test_tab_warning_collector_receives_lexer_warnings(self) -> None:
         lexer = AglLexer(None)
-        state = LexerState("let\tx = 1")
+        state = lexer_state("let\tx = 1")
         with tab_warning_collector() as warnings:
             list(lexer.lex(state, None))
         assert len(warnings) == 1
@@ -2686,7 +2680,7 @@ class TestKeywordReservation:
     def test_def_remapped_to_uppercase_in_lark_interface(self) -> None:
         # AglLexer.lex() remaps lowercase "def" → "DEF" for the grammar.
         lexer = AglLexer(None)
-        state = LexerState("def")
+        state = lexer_state("def")
         result = list(lexer.lex(state, None))
         assert len(result) == 1
         assert result[0].type == "DEF"
@@ -2710,7 +2704,7 @@ class TestKeywordReservation:
 
     def test_fn_remapped_to_uppercase_in_lark_interface(self) -> None:
         lexer = AglLexer(None)
-        state = LexerState("fn")
+        state = lexer_state("fn")
         result = list(lexer.lex(state, None))
         assert len(result) == 1
         assert result[0].type == "FN"
@@ -2870,7 +2864,7 @@ class TestThinArrow:
         # THIN_ARROW must appear in the Lark interface stream unchanged
         # (it's not a keyword remap, it's a punctuation token — already uppercase).
         lexer = AglLexer(None)
-        state = LexerState("->")
+        state = lexer_state("->")
         result = list(lexer.lex(state, None))
         assert len(result) == 1
         assert result[0].type == "THIN_ARROW"
@@ -2893,7 +2887,7 @@ class TestLoopBoundBrackets:
     def _lex(self, source: str) -> list[tuple[str, str]]:
         """Lex via AglLexer (Lark interface)."""
         lexer = AglLexer(None)
-        state = LexerState(source)
+        state = lexer_state(source)
         return [(t.type, str(t)) for t in lexer.lex(state, None)]
 
     def test_do_loop_bound_merge_preserved(self) -> None:

@@ -29,12 +29,9 @@ import io
 from contextlib import redirect_stdout
 
 import pytest
-from lark.exceptions import UnexpectedToken
-from lark.lexer import Token
 
 from agm.agl import PipelineDriver
 from agm.agl.parser import AglSyntaxError, parse_program
-from agm.agl.parser.errors import syntax_error_from_lark
 from agm.agl.syntax import FuncDef, VarRef
 from tests._agl_helpers import run_inline_command
 
@@ -171,7 +168,7 @@ case 1 of
         message = str(error)
         assert "let" in message, "the diagnostic names the binder keyword"
         assert "inline" in message, "the diagnostic is the inline-body rejection"
-        assert (error.source_span.start_line, error.source_span.start_col) == (2, 10), (
+        assert (error.span.start_line, error.span.start_col) == (2, 10), (
             "diagnostic anchors on the binder"
         )
 
@@ -230,7 +227,7 @@ case 1 of
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let k = 1\nif k == 1 => 1 else => 2 | k == 2 => 3")
         assert "inline" not in str(exc_info.value)
-        assert exc_info.value.source_span.start_line == 2
+        assert exc_info.value.span.start_line == 2
 
     def test_binder_outside_an_inline_body_keeps_its_own_diagnostic(self) -> None:
         """A `let` not opening an inline `=>` body takes the generic path."""
@@ -245,18 +242,6 @@ case 1 of
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let k = if true => 1 + let a = 2 else => 3\n")
         message = str(exc_info.value)
-        assert "let" in message, "the generic path still names the offending token"
-        assert "inline" not in message
-
-    def test_binder_diagnosis_needs_source_text(self) -> None:
-        """Without source text the binder shape cannot be confirmed.
-
-        The custom AglLexer means this state is not reachable through
-        ``parse_program``; call the mapping helper directly.
-        """
-        token = Token("LET", "let", start_pos=0, line=1, column=1)
-        err = syntax_error_from_lark(UnexpectedToken(token, expected={"NAME"}))
-        message = str(err)
         assert "let" in message, "the generic path still names the offending token"
         assert "inline" not in message
 
@@ -346,16 +331,6 @@ print v
         with pytest.raises(AglSyntaxError) as exc_info:
             parse_program("let v = try try 1 catch _ => 2 catch _ => 3\nprint v\n")
         assert "nested" in str(exc_info.value)
-
-    def test_nested_try_diagnosis_needs_the_parser_state(self) -> None:
-        """Without a parse stack the completed rule is unknown; fall back.
-
-        Reachable only by synthesising the exception — a real parse always
-        carries the state.
-        """
-        token = Token("_NEWLINE", "0", start_pos=0, line=1, column=1)
-        err = syntax_error_from_lark(UnexpectedToken(token, expected={"SEMICOLON"}))
-        assert "nested" not in str(err)
 
     def test_nested_try_as_the_final_item_works_parenthesized(self) -> None:
         ok, out, diags = _run("let v = try (try 1 catch _ => 2) catch _ => 3\nprint v\n")

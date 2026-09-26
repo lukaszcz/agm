@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from types import MappingProxyType
-from typing import Generic, NoReturn, Protocol, TypeVar, cast
+from typing import Generic, Self, TypeVar, assert_never, cast
 from uuid import uuid4
 
 from agm.agent import runner
@@ -24,11 +22,10 @@ from agm.agent.session.protocol import (
     SessionAskRequest,
     SessionAskResponse,
     SessionBackend,
-    SessionCapabilities,
     SessionHostError,
     SessionOpenRequest,
     SessionOperation,
-    SessionStats,
+    SessionOperations,
 )
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
 from agm.agent.transport import AgentCallInfo, AgentTransportFailureCause, stderr_tail
@@ -36,12 +33,6 @@ from agm.core.cleanup import preserve_primary_error
 from agm.core.env import clone_env
 from agm.util.interp import InterpolationError
 from agm.util.unicode import loads_json
-
-
-class SessionBackendConstructor(Protocol):
-    """Construct one CLI session backend bound to an idle timeout."""
-
-    def __call__(self, *, idle_timeout: float | None = None) -> SessionBackend: ...
 
 
 @dataclass(slots=True)
@@ -81,11 +72,44 @@ def _creation_not_launched(error: SessionAskError) -> bool:
     return error.cause in {"spawn_failure", "interpolation_failure"}
 
 
+def open_cli_session(request: SessionOpenRequest, *, idle_timeout: float | None) -> SessionBackend:
+    """Open the CLI session backend for *request*'s agent variant."""
+    name = request.name
+    single_prompt = request.single_prompt
+    match request.agent:
+        case AgentCommand() as command:
+            return AgentCommandSessionBackend.open(
+                command, name=name, single_prompt=single_prompt, idle_timeout=idle_timeout
+            )
+        case AgentClaude() as claude:
+            return ClaudeCliSessionBackend.open(
+                claude, name=name, single_prompt=single_prompt, idle_timeout=idle_timeout
+            )
+        case AgentCodex() as codex:
+            return CodexCliSessionBackend.open(
+                codex, name=name, single_prompt=single_prompt, idle_timeout=idle_timeout
+            )
+        case AgentPi() as pi:
+            return PiCliSessionBackend.open(
+                pi, name=name, single_prompt=single_prompt, idle_timeout=idle_timeout
+            )
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
 class _CliPromptBackend:
     """Shared prepared-runner boundary for CLI session implementations."""
 
-    def __init__(self, *, idle_timeout: float | None = None) -> None:
+    def __init__(self, *, idle_timeout: float | None) -> None:
         self._idle_timeout = idle_timeout
+
+    @property
+    def operations(self) -> SessionOperations:
+        """No optional operations; backends that implement some override this."""
+        return SessionOperations()
+
+    def close(self) -> None:
+        """Nothing to release: a CLI session holds only local state between prompts."""
 
     def _run_prompt(
         self,
@@ -154,114 +178,85 @@ class _CliPromptBackend:
                 ),
             )
 
-    def compact(self, instructions: str) -> None:
-        """Reject compaction; backends that implement it override this."""
-        self._unsupported(SessionOperation.COMPACT)
-
-    def fork(self) -> SessionBackend:
-        """Reject forking; backends that implement it override this."""
-        self._unsupported(SessionOperation.FORK)
-
-    def set_name(self, name: str) -> None:
-        """Reject naming; backends that implement it override this."""
-        self._unsupported(SessionOperation.SET_NAME)
-
-    def stats(self) -> SessionStats:
-        """Reject usage reporting; backends that implement it override this."""
-        self._unsupported(SessionOperation.STATS)
-
-    @staticmethod
-    def _unsupported(operation: SessionOperation) -> NoReturn:
-        raise SessionHostError(
-            f"CLI session backend does not support {operation.value}", operation.value
-        )
-
 
 class AgentCommandSessionBackend(_CliPromptBackend):
     """Run an ``AgentCommand`` repeatedly with its generated session id."""
 
-    capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
-
-    def __init__(self, *, idle_timeout: float | None = None) -> None:
+    def __init__(self, session: _CommandSession, *, idle_timeout: float | None) -> None:
         super().__init__(idle_timeout=idle_timeout)
-        self._session: _CommandSession | None = None
+        self._session = session
 
-    def open(self, request: SessionOpenRequest) -> None:
-        """Validate and initialize a command session."""
-        if request.name:
+    @classmethod
+    def open(
+        cls,
+        agent: AgentCommand,
+        *,
+        name: str = "",
+        single_prompt: bool = False,
+        idle_timeout: float | None = None,
+    ) -> Self:
+        """Validate *agent*'s command and open a session over it."""
+        if name:
             raise SessionHostError("command sessions do not support names", "open")
-        if not isinstance(request.agent, AgentCommand):
-            raise SessionHostError("command session requires an AgentCommand", "open")
         try:
-            command = request.agent.argv()
+            command = agent.argv()
         except ValueError as exc:
             raise SessionAgentError(str(exc), "open") from exc
         try:
             targets_session_id = command_targets_session_id(command)
         except InterpolationError as exc:
             raise SessionAgentError(str(exc), "open") from exc
-        if not targets_session_id and not request.single_prompt:
+        if not targets_session_id and not single_prompt:
             raise SessionHostError(
                 "command session requires a %{SESSION_ID} placeholder; "
                 "use a single-attempt AgentCommand.ask instead",
                 "open",
             )
-        self._session = _CommandSession(command=command, session_id=str(uuid4()))
+        return cls(
+            _CommandSession(command=command, session_id=str(uuid4())), idle_timeout=idle_timeout
+        )
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Run the command with this session's id and the rendered prompt."""
-        session = self._session_for("ask")
         return self._run_prompt(
             request.prompt,
-            session.command,
+            self._session.command,
             delivery=PromptDelivery.FILE,
-            session_id=session.session_id,
+            session_id=self._session.session_id,
         )
 
     def reset(self) -> None:
         """Replace the underlying id while retaining this backend instance."""
-        session = self._session_for("reset")
-        session.session_id = str(uuid4())
-
-    def close(self) -> None:
-        """Drop the command and underlying id."""
-        self._session = None
-
-    def _session_for(self, operation: str) -> _CommandSession:
-        session = self._session
-        if session is None:
-            raise SessionHostError("command session is not open", operation)
-        return session
+        self._session.session_id = str(uuid4())
 
 
 class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
     """Common lifecycle for CLI backends that generate and retain a session id."""
 
     def __init__(
-        self,
-        *,
-        idle_timeout: float | None,
-        agent_type: type[_SessionAgentT],
-        backend_name: str,
+        self, session: _SessionIdCliState[_SessionAgentT], *, idle_timeout: float | None
     ) -> None:
         super().__init__(idle_timeout=idle_timeout)
-        self._agent_type: type[_SessionAgentT] = agent_type
-        self._backend_name = backend_name
-        self._session: _SessionIdCliState[_SessionAgentT] | None = None
+        self._session: _SessionIdCliState[_SessionAgentT] = session
 
-    def open(self, request: SessionOpenRequest) -> None:
+    @classmethod
+    def open(
+        cls,
+        agent: _SessionAgentT,
+        *,
+        name: str = "",
+        single_prompt: bool = False,
+        idle_timeout: float | None = None,
+    ) -> Self:
         """Allocate the id used by the backend's first prompt."""
-        agent = request.agent
-        if not isinstance(agent, self._agent_type):
-            raise SessionHostError(
-                f"{self._backend_name} CLI session requires an {self._agent_type.__name__}",
-                "open",
-            )
-        self._session = _SessionIdCliState(agent, str(uuid4()), request.name, request.single_prompt)
+        return cls(
+            _SessionIdCliState(agent, str(uuid4()), name, single_prompt),
+            idle_timeout=idle_timeout,
+        )
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Start or resume this backend's transcript for one prompt."""
-        session = self._session_for(SessionOperation.ASK.value)
+        session = self._session
         command = self._prompt_command(session)
         was_started = session.started
         session.started = True
@@ -274,48 +269,38 @@ class _SessionIdCliBackend(_CliPromptBackend, Generic[_SessionAgentT], ABC):
 
     def reset(self) -> None:
         """Discard the transcript while retaining this backend instance."""
-        session = self._session_for("reset")
-        session.session_id = str(uuid4())
-        session.started = False
-
-    def close(self) -> None:
-        """Drop the locally held transcript state."""
-        self._session = None
+        self._session.session_id = str(uuid4())
+        self._session.started = False
 
     @abstractmethod
     def _prompt_command(self, session: _SessionIdCliState[_SessionAgentT]) -> list[str]:
         """Build the backend-specific command for the current session state."""
 
-    def _session_for(self, operation: str) -> _SessionIdCliState[_SessionAgentT]:
-        session = self._session
-        if session is None:
-            raise SessionHostError(f"{self._backend_name} CLI session is not open", operation)
-        return session
+    def _forked(self, session_id: str) -> Self:
+        """Return a backend for an already-created native fork of this transcript."""
+        return type(self)(
+            _SessionIdCliState(self._session.agent, session_id, "", False, started=True),
+            idle_timeout=self._idle_timeout,
+        )
 
-    def _initialize_fork(
-        self, child: _SessionIdCliBackend[_SessionAgentT], session_id: str
-    ) -> None:
-        """Give a freshly created child the live state from a native fork."""
-        session = self._session_for(SessionOperation.FORK.value)
-        child._session = _SessionIdCliState(session.agent, session_id, "", False, started=True)
-
-    def _initialize_unstarted_fork(self, child: _SessionIdCliBackend[_SessionAgentT]) -> None:
+    def _unstarted_fork(self) -> Self:
         """Fork deferred local state before either transcript exists natively."""
-        session = self._session_for(SessionOperation.FORK.value)
-        child._session = _SessionIdCliState(
-            session.agent, str(uuid4()), "", session.single_prompt, started=False
+        session = self._session
+        return type(self)(
+            _SessionIdCliState(
+                session.agent, str(uuid4()), "", session.single_prompt, started=False
+            ),
+            idle_timeout=self._idle_timeout,
         )
 
 
 class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
     """Continue Claude conversations through its CLI session flags."""
 
-    capabilities = SessionCapabilities(
-        frozenset({SessionOperation.ASK, SessionOperation.COMPACT, SessionOperation.FORK})
-    )
-
-    def __init__(self, *, idle_timeout: float | None = None) -> None:
-        super().__init__(idle_timeout=idle_timeout, agent_type=AgentClaude, backend_name="Claude")
+    @property
+    def operations(self) -> SessionOperations:
+        """Claude compacts and forks natively."""
+        return SessionOperations(compact=self.compact, fork=self.fork)
 
     def _prompt_command(self, session: _SessionIdCliState[AgentClaude]) -> list[str]:
         return (
@@ -330,7 +315,7 @@ class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
 
     def compact(self, instructions: str) -> None:
         """Ask Claude to compact the current transcript and confirm the result."""
-        session = self._session_for(SessionOperation.COMPACT.value)
+        session = self._session
         if not session.started:
             return
         prompt = "/compact" if not instructions else f"/compact {instructions}"
@@ -344,11 +329,9 @@ class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
 
     def fork(self) -> ClaudeCliSessionBackend:
         """Fork the current Claude transcript and return its child backend."""
-        session = self._session_for(SessionOperation.FORK.value)
+        session = self._session
         if not session.started:
-            child = ClaudeCliSessionBackend(idle_timeout=self._idle_timeout)
-            self._initialize_unstarted_fork(child)
-            return child
+            return self._unstarted_fork()
         response = self._run_prompt(
             "",
             session.agent.session_argv(
@@ -358,29 +341,27 @@ class ClaudeCliSessionBackend(_SessionIdCliBackend[AgentClaude]):
         )
         return self._forked(_require_claude_session_id(response.content))
 
-    def _forked(self, session_id: str) -> ClaudeCliSessionBackend:
-        """Return a backend for an already-created forked Claude transcript."""
-        child = ClaudeCliSessionBackend(idle_timeout=self._idle_timeout)
-        self._initialize_fork(child, session_id)
-        return child
-
 
 class CodexCliSessionBackend(_CliPromptBackend):
     """Start Codex threads from JSONL, then resume them through plaintext output."""
 
-    capabilities = SessionCapabilities(frozenset({SessionOperation.ASK}))
-
-    def __init__(self, *, idle_timeout: float | None = None) -> None:
+    def __init__(self, session: _CodexSession, *, idle_timeout: float | None) -> None:
         super().__init__(idle_timeout=idle_timeout)
-        self._session: _CodexSession | None = None
+        self._session = session
 
-    def open(self, request: SessionOpenRequest) -> None:
-        """Allocate a deferred Codex session handle without starting a thread."""
-        if request.name:
+    @classmethod
+    def open(
+        cls,
+        agent: AgentCodex,
+        *,
+        name: str = "",
+        single_prompt: bool = False,
+        idle_timeout: float | None = None,
+    ) -> Self:
+        """Allocate a deferred Codex session without starting a thread."""
+        if name:
             raise SessionHostError("Codex CLI sessions do not support names", "open")
-        if not isinstance(request.agent, AgentCodex):
-            raise SessionHostError("Codex CLI session requires an AgentCodex", "open")
-        self._session = _CodexSession(request.agent, request.single_prompt)
+        return cls(_CodexSession(agent, single_prompt), idle_timeout=idle_timeout)
 
     def ask(self, request: SessionAskRequest) -> SessionAskResponse:
         """Start a Codex thread once, then resume its captured id.
@@ -389,7 +370,7 @@ class CodexCliSessionBackend(_CliPromptBackend):
         the session stays usable, resuming the announced thread when the stream
         named one and otherwise starting a fresh thread on the next ask.
         """
-        session = self._session_for("ask")
+        session = self._session
         if session.single_prompt:
             return self._run_prompt(
                 request.prompt, session.agent.argv(), delivery=PromptDelivery.STDIN
@@ -427,28 +408,17 @@ class CodexCliSessionBackend(_CliPromptBackend):
 
     def reset(self) -> None:
         """Forget the captured thread so the next prompt starts a new one."""
-        session = self._session_for("reset")
-        session.session_id = None
-        session.started = False
-
-    def close(self) -> None:
-        """Drop the locally held Codex thread state."""
-        self._session = None
-
-    def _session_for(self, operation: str) -> _CodexSession:
-        session = self._session
-        if session is None:
-            raise SessionHostError("Codex CLI session is not open", operation)
-        return session
+        self._session.session_id = None
+        self._session.started = False
 
 
 class PiCliSessionBackend(_SessionIdCliBackend[AgentPi]):
     """Continue Pi conversations through its CLI session flags."""
 
-    capabilities = SessionCapabilities(frozenset({SessionOperation.ASK, SessionOperation.FORK}))
-
-    def __init__(self, *, idle_timeout: float | None = None) -> None:
-        super().__init__(idle_timeout=idle_timeout, agent_type=AgentPi, backend_name="Pi")
+    @property
+    def operations(self) -> SessionOperations:
+        """Pi's CLI forks natively."""
+        return SessionOperations(fork=self.fork)
 
     def _prompt_command(self, session: _SessionIdCliState[AgentPi]) -> list[str]:
         return (
@@ -462,32 +432,16 @@ class PiCliSessionBackend(_SessionIdCliBackend[AgentPi]):
 
     def fork(self) -> PiCliSessionBackend:
         """Snapshot this transcript natively and return the live child backend."""
-        session = self._session_for(SessionOperation.FORK.value)
+        session = self._session
         if not session.started:
-            child = PiCliSessionBackend(idle_timeout=self._idle_timeout)
-            self._initialize_unstarted_fork(child)
-            return child
+            return self._unstarted_fork()
         child_id = str(uuid4())
         self._run_prompt(
             "",
             session.agent.session_argv(child_id, fork_from=session.session_id),
             delivery=PromptDelivery.NONE,
         )
-        child = PiCliSessionBackend(idle_timeout=self._idle_timeout)
-        self._initialize_fork(child, child_id)
-        return child
-
-
-#: CLI session backend per checked ``Agent`` variant name.
-_CLI_SESSION_BACKENDS: dict[str, SessionBackendConstructor] = {
-    AgentCommand.__name__: AgentCommandSessionBackend,
-    AgentClaude.__name__: ClaudeCliSessionBackend,
-    AgentCodex.__name__: CodexCliSessionBackend,
-    AgentPi.__name__: PiCliSessionBackend,
-}
-CLI_SESSION_BACKENDS: Mapping[str, SessionBackendConstructor] = MappingProxyType(
-    _CLI_SESSION_BACKENDS
-)
+        return self._forked(child_id)
 
 
 def _require_claude_compaction_confirmation(output: str) -> None:

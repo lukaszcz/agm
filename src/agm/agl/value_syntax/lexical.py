@@ -188,6 +188,11 @@ def scan_name(source: str, offset: int) -> int | None:
     """
     if offset >= len(source) or not is_identifier_start(source[offset]):
         return None
+    return identifier_end(source, offset)
+
+
+def identifier_end(source: str, offset: int) -> int:
+    """Return the end offset of the identifier known to start at *offset*."""
     end = offset + 1
     while end < len(source) and source[end] not in IDENT_STOP:
         end += 1
@@ -210,6 +215,7 @@ __all__ = [
     "ESCAPE_ENCODE",
     "decode_escape",
     "environment_hole_name",
+    "identifier_end",
     "is_ascii_digit",
     "quote_text",
     "scalar_text",

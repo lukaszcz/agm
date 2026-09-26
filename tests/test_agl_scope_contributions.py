@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
+    ImportEnv,
+    ImportTarget,
     NameAtom,
     QName,
     QualResolutionFound,
@@ -76,11 +78,19 @@ def _exports(path: str, *names: str) -> dict[NameAtom, QName]:
     return {name: (module, name) for name in names}
 
 
+def _build(
+    decls: tuple[ImportDecl, ...],
+    targets: dict[int, ImportTarget],
+    exports: dict[ModuleId, dict[NameAtom, QName]],
+) -> ImportEnv:
+    return build_import_env(decls, targets, exports, {module: {} for module in exports})
+
+
 def test_region_tailed_import_keeps_its_bare_contribution_regional() -> None:
     decl = _decl("lib/api", tail=(_item("one"),), scope_path=_region("A"))
     module = _module("lib/api")
 
-    env = build_import_env(
+    env = _build(
         (decl,),
         {decl.node_id: SingleTarget(module)},
         {module: _exports("lib/api", "one", "two")},
@@ -95,7 +105,7 @@ def test_alias_route_retains_full_surface_except_its_own_hiding() -> None:
     decl = _decl("std/config", alias="settings", hidden=(_item("debug"),))
     module = _module("std/config")
 
-    env = build_import_env(
+    env = _build(
         (decl,),
         {decl.node_id: SingleTarget(module)},
         {module: _exports("std/config", "timeout", "debug")},
@@ -111,7 +121,7 @@ def test_alias_route_does_not_also_contribute_the_module_suffix() -> None:
     decl = _decl("std/config", alias="settings")
     module = _module("std/config")
 
-    env = build_import_env(
+    env = _build(
         (decl,),
         {decl.node_id: SingleTarget(module)},
         {module: _exports("std/config", "timeout")},
@@ -130,7 +140,7 @@ def test_alias_hiding_remains_limited_to_the_alias_declaration() -> None:
     plain = _decl("std/config")
     module = _module("std/config")
 
-    env = build_import_env(
+    env = _build(
         (alias, plain),
         {alias.node_id: SingleTarget(module), plain.node_id: SingleTarget(module)},
         {module: _exports("std/config", "timeout", "debug")},
@@ -147,7 +157,7 @@ def test_regional_tail_bare_contributions_narrow_at_the_scope_seam() -> None:
     right_decl = _decl("right/api", tail=(_item("selected"),), scope_path=_region("Right"))
     left_module = _module("left/api")
     right_module = _module("right/api")
-    env = build_import_env(
+    env = _build(
         (left_decl, right_decl),
         {
             left_decl.node_id: SingleTarget(left_module),
@@ -214,7 +224,7 @@ def test_wildcard_tails_apply_bare_contributions_per_module() -> None:
     left = _module("pkg/left")
     right = _module("pkg/right")
 
-    env = build_import_env(
+    env = _build(
         (decl,),
         {decl.node_id: WildcardTarget(frozenset({left, right}))},
         {

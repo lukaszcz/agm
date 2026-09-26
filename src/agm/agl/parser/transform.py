@@ -36,6 +36,7 @@ from lark.tree import Meta
 import agm.agl.syntax as syntax
 from agm.agl.constraints import CONSTRAINT_SPELLINGS
 from agm.agl.diagnostics import dollar_spacing_hint
+from agm.agl.lexer.positions import token_span
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
@@ -463,24 +464,6 @@ class AstBuilder(Transformer):
             source=self._source,
         )
 
-    def _span_from_token(self, tok: Token) -> SourceSpan:
-        """Build a SourceSpan from a Lark Token's position fields, stamped with self._source."""
-        line = tok.line if tok.line is not None else 1
-        col = tok.column if tok.column is not None else 1
-        pos = tok.start_pos if tok.start_pos is not None else 0
-        end_line = tok.end_line if tok.end_line is not None else line
-        end_col = tok.end_column if tok.end_column is not None else col + len(str(tok))
-        end_pos = tok.end_pos if tok.end_pos is not None else pos + len(str(tok))
-        return SourceSpan(
-            start_line=line,
-            start_col=col,
-            end_line=end_line,
-            end_col=end_col,
-            start_offset=pos,
-            end_offset=end_pos,
-            source=self._source,
-        )
-
     def _next_id(self) -> int:
         nid = next(self._counter)
         self._next_unused = nid + 1
@@ -501,8 +484,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def start(self, meta: Meta, args: _Args) -> syntax.Program:
-        (block,) = args
-        assert isinstance(block, syntax.Block)
+        block = cast(syntax.Block, args[0])
         stray_end = next((item for item in block.items if _is_stray_scope_end(item)), None)
         if stray_end is not None:
             raise AglSyntaxError("stray 'end'; no scope region is open.", span=stray_end.span)
@@ -580,7 +562,7 @@ class AstBuilder(Transformer):
             if _is_typed_token(arg, "MODQUAL"):
                 segments.append(self._scope_segment(arg))
             else:
-                segments.append((str(arg), self._span_from_token(arg)))
+                segments.append((str(arg), token_span(arg, self._source)))
         return _ScopePath(segments=tuple(segments))
 
     def scope_path(self, meta: Meta, args: _Args) -> _ScopePath:
@@ -603,7 +585,6 @@ class AstBuilder(Transformer):
 
     def _declaration_head(self, args: _Args) -> tuple[str, tuple[syntax.ScopeSegment, ...]]:
         path = next(arg for arg in args if isinstance(arg, _ScopePath))
-        assert path.segments
         name, _span = path.segments[-1]
         return name, self._scope_segments(_ScopePath(path.segments[:-1]))
 
@@ -674,15 +655,15 @@ class AstBuilder(Transformer):
             )
 
         segments = self._scope_segments(header)
-        region: syntax.ScopeRegion | None = None
-        for segment in reversed(segments):
+        *outer, innermost = segments
+        span = self._span_from_meta(meta)
+        region = syntax.ScopeRegion(
+            segment=innermost, items=items, span=span, node_id=self._next_id()
+        )
+        for segment in reversed(outer):
             region = syntax.ScopeRegion(
-                segment=segment,
-                items=items if region is None else (region,),
-                span=self._span_from_meta(meta),
-                node_id=self._next_id(),
+                segment=segment, items=(region,), span=span, node_id=self._next_id()
             )
-        assert region is not None
         return cast(syntax.ScopeRegion, _prefix_scope_path(region, segments))
 
     # ------------------------------------------------------------------
@@ -858,11 +839,7 @@ class AstBuilder(Transformer):
 
     def variant_def(self, meta: Meta, args: _Args) -> syntax.VariantDef:
         # Grammar: PIPE? attributes? name variant_payload?
-        name_tok = next(
-            (a for a in args if _is_name_token(a)),
-            None,
-        )
-        assert name_tok is not None, "variant_def: no name token"
+        name_tok = next(a for a in args if _is_name_token(a))
         fields: tuple[syntax.Param, ...] = ()
         for a in args:
             if _is_field_tuple(a):
@@ -987,9 +964,11 @@ class AstBuilder(Transformer):
         def`` share the same shape but declare a return type in place of one.
         """
         name, scope_path, receiver_type = self._function_declaration_head(args)
-        params, return_type, body = self._split_params_type_body(args)
+        params, return_type = self._split_params_and_type(args)
         _check_function_param_annotations(params)
-        assert body is not None or return_type is not None, "func def: no body and no return type"
+        # ``builtin``/``extern`` forms end at their return type; the others at a body.
+        last = args[-1]
+        body = None if isinstance(last, _ALL_TYPE_EXPRS) else cast(syntax.Expr, last)
         return syntax.FuncDef(
             name=name,
             params=params,
@@ -1024,8 +1003,7 @@ class AstBuilder(Transformer):
         """Build an applied builtin receiver declaration head."""
         segment = next(arg for arg in args if isinstance(arg, _QualifierChainSegment)).segment
         name = str(next(arg for arg in args if _is_name_token(arg)))
-        type_args = segment.type_args
-        assert type_args is not None
+        type_args = cast(tuple[TypeExpr, ...], segment.type_args)
         if segment.name == "array" and len(type_args) == 1:
             receiver_type: TypeExpr = ArrayT(
                 elem=type_args[0], span=segment.span, node_id=self._next_id()
@@ -1200,9 +1178,6 @@ class AstBuilder(Transformer):
         chain = ref.qualifier
         if chain is None:
             return None
-        if not chain.segments:
-            assert chain.anchor is syntax.QualifierAnchor.CURRENT_MODULE
-            return chain
         if any(segment.type_args is not None for segment in chain.segments):
             raise AglSyntaxError(
                 "a qualified assignment target cannot apply type arguments to a qualifier "
@@ -1225,9 +1200,7 @@ class AstBuilder(Transformer):
 
     def prim_or_name(self, meta: Meta, args: _Args) -> TypeExpr:
         """name in type position — map NAME to primitive or NameT."""
-        tok = args[0]
-        assert isinstance(tok, Token)
-        name = str(tok)
+        name = str(args[0])
         span = self._span_from_meta(meta)
         nid = self._next_id()
         if name == "text":
@@ -1302,8 +1275,7 @@ class AstBuilder(Transformer):
 
     def constraint(self, meta: Meta, args: _Args) -> syntax.Constraint:
         """constraint: NAME name — the first NAME must spell a known constraint kind."""
-        kind_tok, param_tok = args[0], args[1]
-        assert isinstance(kind_tok, Token) and isinstance(param_tok, Token)
+        kind_tok, param_tok = args
         kind_name = str(kind_tok)
         kind = CONSTRAINT_SPELLINGS.get(kind_name)
         if kind is None:
@@ -1321,35 +1293,20 @@ class AstBuilder(Transformer):
 
     def func_type(self, meta: Meta, args: _Args) -> FuncT:
         """LPAR type_list? RPAR THIN_ARROW type_expr — function type (A, B) -> C."""
-        # All TypeExpr nodes in args; the last one is the result type.
-        # The type_list (if present) produces a tuple of TypeExprs as a tuple.
-        # With maybe_placeholders=True, absent type_list is None.
-        param_types: tuple[TypeExpr, ...] = ()
-        result_type: TypeExpr | None = None
-        for a in args:
-            if isinstance(a, tuple) and all(isinstance(x, _ALL_TYPE_EXPRS) for x in a):
-                # type_list result
-                param_types = cast(tuple[TypeExpr, ...], a)
-            elif isinstance(a, _ALL_TYPE_EXPRS):
-                # The result type (last TypeExpr child after THIN_ARROW)
-                result_type = a
-            # None (placeholder for absent type_list) and Tokens are skipped
-        assert result_type is not None, "func_type: no result type"
+        param_types = next((a for a in args if isinstance(a, tuple)), ())
         return FuncT(
-            params=param_types,
-            result=result_type,
+            params=cast(tuple[TypeExpr, ...], param_types),
+            result=cast(TypeExpr, args[-1]),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
     def unary_func_type(self, meta: Meta, args: _Args) -> FuncT:
         """type_atom THIN_ARROW type_expr — function type A -> B."""
-        type_nodes = [a for a in args if isinstance(a, _ALL_TYPE_EXPRS)]
-        assert len(type_nodes) == 2, "unary_func_type: expected parameter and result types"
-        param_type, result_type = type_nodes
+        param_type, _arrow, result_type = args
         return FuncT(
-            params=(param_type,),
-            result=result_type,
+            params=(cast(TypeExpr, param_type),),
+            result=cast(TypeExpr, result_type),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -1366,40 +1323,20 @@ class AstBuilder(Transformer):
         return syntax.UnitLit(span=self._span_from_meta(meta), node_id=self._next_id())
 
     def paren_expr(self, meta: Meta, args: _Args) -> syntax.Expr | _RawInfixChain:
-        # args: LPAR, expr, RPAR — find the expr (non-Token)
-        for a in args:
-            if not isinstance(a, Token) and a is not None:
-                return cast(syntax.Expr, a)
-        raise AssertionError("paren_expr: no inner expression found")  # pragma: no cover
+        """LPAR expr RPAR — the inner expression."""
+        return cast(syntax.Expr | _RawInfixChain, args[1])
 
     # ------------------------------------------------------------------
     # Lambda expression
     # ------------------------------------------------------------------
 
-    def _split_params_type_body(
+    def _split_params_and_type(
         self, args: _Args
-    ) -> tuple[tuple[syntax.Param, ...], TypeExpr | None, syntax.Expr | None]:
-        """Classify a func/lambda arg list into ``(params, return_type, body)``.
-
-        Shared by ``func_def``/``program_func_def`` (return type required) and
-        ``lambda_expr`` (return type optional); callers assert on the parts
-        they require.
-        """
-        params: tuple[syntax.Param, ...] = ()
-        return_type: TypeExpr | None = None
-        body: syntax.Expr | None = None
-        for a in args:
-            if _is_str_tuple(a) or _is_attribute_tuple(a) or _is_constraint_tuple(a):
-                pass  # type_params / attribute prefix / constraint block — skip
-            elif _is_field_tuple(a):
-                params = cast(tuple[syntax.Param, ...], a)
-            elif isinstance(a, _ALL_TYPE_EXPRS):
-                return_type = a
-            elif a is not None and not isinstance(
-                a, (Token, tuple, _ScopePath, _BuiltinReceiverHead)
-            ):
-                body = cast(syntax.Expr, a)
-        return params, return_type, body
+    ) -> tuple[tuple[syntax.Param, ...], TypeExpr | None]:
+        """Return a func/lambda arg list's parameters and optional return type."""
+        params = next((a for a in args if _is_field_tuple(a)), ())
+        return_type = next((a for a in args if isinstance(a, _ALL_TYPE_EXPRS)), None)
+        return cast(tuple[syntax.Param, ...], params), return_type
 
     def parenthesized_lambda_params(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
         """Return the optional parameter list inside a lambda's parentheses."""
@@ -1420,12 +1357,11 @@ class AstBuilder(Transformer):
 
     def lambda_expr(self, meta: Meta, args: _Args) -> syntax.Lambda:
         """Build an anonymous function with parenthesized or bare unary parameters."""
-        params, return_type, body = self._split_params_type_body(args)
-        assert body is not None, "lambda_expr: no body"
+        params, return_type = self._split_params_and_type(args)
         return syntax.Lambda(
             params=params,
             return_type=return_type,
-            body=body,
+            body=cast(syntax.Expr, args[-1]),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -1434,7 +1370,7 @@ class AstBuilder(Transformer):
         """Desugar ``.method(args)`` to a unary lambda over contextual ``self``."""
         span = self._span_from_meta(meta)
         name_token = _find_name_token(args)
-        self_span = self._span_from_token(name_token)
+        self_span = token_span(name_token, self._source)
         param = syntax.Param(
             name="self",
             type_expr=None,
@@ -1472,8 +1408,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def lit_int(self, meta: Meta, args: _Args) -> syntax.IntLit:
-        tok = args[0]
-        assert isinstance(tok, Token)
+        tok = cast(Token, args[0])
         return syntax.IntLit(
             value=int(str(tok)),
             span=self._span_from_meta(meta),
@@ -1499,8 +1434,7 @@ class AstBuilder(Transformer):
         return syntax.DecimalLit(value=value, span=span, node_id=self._next_id())
 
     def lit_decimal(self, meta: Meta, args: _Args) -> syntax.DecimalLit:
-        tok = args[0]
-        assert isinstance(tok, Token)
+        tok = cast(Token, args[0])
         return self._build_decimal_lit(tok, meta)
 
     def lit_true(self, meta: Meta, args: _Args) -> syntax.BoolLit:
@@ -1517,8 +1451,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
-        tok = args[0]
-        assert isinstance(tok, Token)
+        tok = cast(Token, args[0])
         return syntax.VarRef(
             name=str(tok), span=self._span_from_meta(meta), node_id=self._next_id()
         )
@@ -1575,18 +1508,12 @@ class AstBuilder(Transformer):
     # Juxtaposition (single-arg sugar)
     # ------------------------------------------------------------------
 
-    def juxt(self, meta: Meta, args: _Args) -> syntax.Call | syntax.Expr:
-        """juxt: postfix juxt_arg -> juxt_call | postfix
+    def juxt(self, meta: Meta, args: _Args) -> syntax.Expr:
+        """juxt: postfix — the unaliased alternative passes the postfix expr through.
 
-        The postfix-only alternative wraps nothing — just returns the postfix expr.
-        The juxt_call alternative builds a Call with one positional arg.
-        This method is never called directly because both alternatives have
-        explicit aliases; see juxt_call below and the transparent postfix passthrough.
+        The ``postfix juxt_arg`` alternative is aliased to :meth:`juxt_call`.
         """
-        # This method is called for the `postfix` alternative (no alias).
-        # The `postfix juxt_arg` alternative uses `-> juxt_call` alias.
-        (inner,) = [a for a in args if a is not None and not isinstance(a, Token)]
-        return cast(syntax.Expr, inner)
+        return cast(syntax.Expr, args[0])
 
     def juxt_call(self, meta: Meta, args: _Args) -> syntax.Call:
         """Single-arg call sugar: ``juxt: postfix juxt_arg -> juxt_call``.
@@ -1621,12 +1548,9 @@ class AstBuilder(Transformer):
         such as ``print res.stdout``, ``print xs[0]``, and
         ``f Opt::Some(x = 1)`` and ``f Opt[int]::None()``.
         """
-        non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
-        assert len(non_tokens) == 2, "juxt_arg: expected a base atom and suffixes"
+        base, suffixes = args
         return self._apply_juxt_suffixes(
-            cast(syntax.Expr, non_tokens[0]),
-            cast(tuple[_JuxtSuffix, ...], non_tokens[1]),
-            meta,
+            cast(syntax.Expr, base), cast(tuple[_JuxtSuffix, ...], suffixes), meta
         )
 
     def juxt_suffixes_empty(self, meta: Meta, args: _Args) -> tuple[_JuxtSuffix, ...]:
@@ -1645,7 +1569,7 @@ class AstBuilder(Transformer):
         del meta
         field = _find_name_token(args)
         return _JuxtField(
-            name=str(field), span=self._span_from_token(field), node_id=self._next_id()
+            name=str(field), span=token_span(field, self._source), node_id=self._next_id()
         )
 
     def juxt_field_tail(self, meta: Meta, args: _Args) -> tuple[_JuxtSuffix, ...]:
@@ -1796,38 +1720,29 @@ class AstBuilder(Transformer):
 
         bare = [placeholder for placeholder in placeholders if placeholder.raw_digits is None]
         numbered = [
-            placeholder for placeholder in placeholders if placeholder.raw_digits is not None
+            (digits, placeholder.span)
+            for placeholder in placeholders
+            if (digits := placeholder.raw_digits) is not None
         ]
-        for placeholder in numbered:
-            assert placeholder.raw_digits is not None
-            if placeholder.raw_digits == "0":
-                raise AglSyntaxError(
-                    "placeholder index must be positive.",
-                    span=placeholder.span,
-                )
-            if placeholder.raw_digits.startswith("0"):
-                raise AglSyntaxError(
-                    "placeholder index must not have a leading zero.",
-                    span=placeholder.span,
-                )
+        for digits, span in numbered:
+            if digits == "0":
+                raise AglSyntaxError("placeholder index must be positive.", span=span)
+            if digits.startswith("0"):
+                raise AglSyntaxError("placeholder index must not have a leading zero.", span=span)
         if bare and numbered:
             raise AglSyntaxError(
                 "placeholder arguments cannot mix bare and numbered forms in one call.",
-                span=numbered[0].span,
+                span=numbered[0][1],
             )
         if not numbered:
             return
 
         seen: dict[int, SourceSpan] = {}
-        for placeholder in numbered:
-            assert placeholder.raw_digits is not None
-            index = int(placeholder.raw_digits)
+        for digits, span in numbered:
+            index = int(digits)
             if index in seen:
-                raise AglSyntaxError(
-                    f"placeholder numbered index ?{index} is repeated.",
-                    span=placeholder.span,
-                )
-            seen[index] = placeholder.span
+                raise AglSyntaxError(f"placeholder numbered index ?{index} is repeated.", span=span)
+            seen[index] = span
         expected = set(range(1, len(numbered) + 1))
         actual = set(seen)
         if actual != expected:
@@ -2044,10 +1959,8 @@ class AstBuilder(Transformer):
     def infix_chain(self, meta: Meta, args: _Args) -> syntax.Expr | _RawInfixChain:
         operands = tuple(a for a in args if isinstance(a, _InfixOperand))
         operators = tuple(a for a in args if isinstance(a, _InfixOperator))
-        if not operators:
-            assert len(operands) == 1
-            if not operands[0].prefix_nots:
-                return operands[0].expr
+        if not operators and not operands[0].prefix_nots:
+            return operands[0].expr
         return _RawInfixChain(
             operands=operands,
             operators=operators,
@@ -2090,19 +2003,13 @@ class AstBuilder(Transformer):
     # is / is not tests
     # ------------------------------------------------------------------
 
-    def _make_is_test(
-        self, meta: Meta, args: _Args, *, qualified: bool, negated: bool
-    ) -> syntax.IsTest:
-        left = cast(syntax.Expr, args[0])
-        qualifier = next((a for a in args if isinstance(a, syntax.QualifierChain)), None)
-        if qualified:
-            assert qualifier is not None
-            variant = qualifier.member
-        else:
-            variant = str(next(a for a in args if _is_name_token(a)))
+    def _make_is_test(self, meta: Meta, args: _Args, *, negated: bool) -> syntax.IsTest:
+        """cast "is" "not"? (qual_ref_chain | name) — a qualified or simple variant test."""
+        target = args[-1]
+        qualifier = target if isinstance(target, syntax.QualifierChain) else None
         return syntax.IsTest(
-            expr=left,
-            variant=variant,
+            expr=cast(syntax.Expr, args[0]),
+            variant=str(target) if qualifier is None else qualifier.member,
             negated=negated,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -2110,16 +2017,13 @@ class AstBuilder(Transformer):
         )
 
     def is_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        return self._make_is_test(meta, args, qualified=False, negated=False)
-
-    def is_test_qualified(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        return self._make_is_test(meta, args, qualified=True, negated=False)
+        return self._make_is_test(meta, args, negated=False)
 
     def is_not_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        return self._make_is_test(meta, args, qualified=False, negated=True)
+        return self._make_is_test(meta, args, negated=True)
 
-    def is_not_test_qualified(self, meta: Meta, args: _Args) -> syntax.IsTest:
-        return self._make_is_test(meta, args, qualified=True, negated=True)
+    is_test_qualified = is_test_simple
+    is_not_test_qualified = is_not_test_simple
 
     # ------------------------------------------------------------------
     # Control flow: if_expr
@@ -2160,12 +2064,10 @@ class AstBuilder(Transformer):
 
     def case_branch(self, meta: Meta, args: _Args) -> syntax.CaseBranch:
         """case_branch: pattern ARROW branch_body"""
-        pat = next(a for a in args if isinstance(a, _PATTERN_NODE_TYPES))
-        body = _find_expr([a for a in args if not isinstance(a, _PATTERN_NODE_TYPES)])
-        assert isinstance(pat, _PATTERN_NODE_TYPES)
+        pat, _arrow, body = args
         return syntax.CaseBranch(
-            pattern=pat,
-            body=body,
+            pattern=cast(syntax.Pattern, pat),
+            body=cast(syntax.Expr, body),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -2230,16 +2132,10 @@ class AstBuilder(Transformer):
         """range_tail: range_dir or_expr range_step?
 
         Returns (is_downto, to_bound_expr, by_step_expr_or_None).
-        The grammar guarantees exactly: one bool (range_dir result) followed by
-        one or two Exprs (bound from or_expr, then optional step from range_step).
         """
-        # Separate the direction flag from the expression arguments.
-        is_down: bool = next(a for a in args if isinstance(a, bool))
-        exprs = [cast(syntax.Expr, a) for a in args if _is_expr_node(a)]
-        assert len(exprs) in (1, 2), f"range_tail: unexpected expr count {len(exprs)}"
-        to_bound = exprs[0]
-        by_step: syntax.Expr | None = exprs[1] if len(exprs) == 2 else None
-        return (is_down, to_bound, by_step)
+        is_down, to_bound, *step = args
+        by_step = cast(syntax.Expr, step[0]) if step else None
+        return (cast(bool, is_down), cast(syntax.Expr, to_bound), by_step)
 
     def for_clause(
         self, meta: Meta, args: _Args
@@ -2358,8 +2254,6 @@ class AstBuilder(Transformer):
         # filter on isinstance(Token).  Only the terminal tokens (DO_LSQB, RSQB
         # etc.) inside sub-rules are filtered by *those* rules' transformers.
         children = [a for a in args if not isinstance(a, Token)]
-        # Invariant: 3 or 4 children (loop_bound? is the variable one).
-        assert len(children) in (3, 4), f"loop_expr: unexpected children count {len(children)}"
 
         clauses = cast(
             "tuple["
@@ -2376,14 +2270,6 @@ class AstBuilder(Transformer):
         if clauses[0] is not None:
             for_var, for_iter, for_range_to, for_range_down, for_range_step = clauses[0]
         while_cond: syntax.Expr | None = clauses[1]
-
-        # Invariants: range for requires var + start + bound; collection for has no bound.
-        if for_range_to is not None:
-            assert for_var is not None, "loop_expr: range for missing var"
-            assert for_iter is not None, "loop_expr: range for missing start expression"
-        else:
-            assert not for_range_down, "loop_expr: range_down set without range_to"
-            assert for_range_step is None, "loop_expr: range_step set without range_to"
 
         # loop_end is always the last child; do_body is second-to-last.
         until_cond: syntax.Expr | None = cast("syntax.Expr | None", children[-1])
@@ -2429,16 +2315,8 @@ class AstBuilder(Transformer):
 
         Handles any NAME. Wildcard is "_" (NAME).
         """
-        name_toks = [a for a in args if _is_name_token(a)]
-        if not name_toks:  # pragma: no cover
-            return (None, None)
-        first_name = str(name_toks[0])
-        binding: str | None = str(name_toks[1]) if len(name_toks) >= 2 else None
-        if first_name == "_":
-            exc_type: str | None = None
-        else:
-            exc_type = first_name
-        return (exc_type, binding)
+        first, *binding = (str(a) for a in args)
+        return (None if first == "_" else first, binding[0] if binding else None)
 
     def catch_body(self, meta: Meta, args: _Args) -> syntax.Expr:
         """catch_body: suite_expr | closed_item."""
@@ -2446,29 +2324,12 @@ class AstBuilder(Transformer):
 
     def catch_clause(self, meta: Meta, args: _Args) -> syntax.CatchClause:
         """catch_clause: "catch" catch_pattern ARROW catch_body"""
-        exc_type: str | None = None
-        binding: str | None = None
-        body: syntax.Expr | None = None
-        for a in args:
-            if isinstance(a, tuple):
-                if (
-                    len(a) == 2
-                    and (a[0] is None or isinstance(a[0], str))
-                    and (a[1] is None or isinstance(a[1], str))
-                ):
-                    exc_type, binding = cast(tuple[str | None, str | None], a)
-                elif a is not None:  # pragma: no cover
-                    # Grammar guarantees tuples in catch_clause come only from
-                    # catch_pattern (a (str|None, str|None) pair); no other
-                    # tuple-valued child is possible.
-                    body = cast(syntax.Expr, a)
-            elif a is not None and not isinstance(a, Token):
-                body = cast(syntax.Expr, a)
-        assert body is not None, "catch_clause: no body"
+        pattern, _arrow, body = args
+        exc_type, binding = cast(tuple[str | None, str | None], pattern)
         return syntax.CatchClause(
             exc_type=exc_type,
             binding=binding,
-            body=body,
+            body=cast(syntax.Expr, body),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -2544,8 +2405,7 @@ class AstBuilder(Transformer):
         self, meta: Meta, args: _Args
     ) -> syntax.WildcardPattern | syntax.VarPattern:
         """name → WildcardPattern (when value is "_") or VarPattern."""
-        tok = args[0]
-        assert isinstance(tok, Token)
+        tok = cast(Token, args[0])
         if str(tok) == "_":
             return syntax.WildcardPattern(span=self._span_from_meta(meta), node_id=self._next_id())
         return syntax.VarPattern(
@@ -2554,10 +2414,8 @@ class AstBuilder(Transformer):
 
     def pat_as(self, meta: Meta, args: _Args) -> syntax.Pattern:
         """pattern: pattern_atom ("as" name)* — build left-associated binders."""
-        pattern = next((a for a in args if isinstance(a, _PATTERN_NODE_TYPES)), None)
-        assert pattern is not None
-        assert isinstance(pattern, _PATTERN_NODE_TYPES)
-        for name_tok in (a for a in args if _is_name_token(a)):
+        pattern = cast(syntax.Pattern, args[0])
+        for name_tok in args[1:]:
             name = str(name_tok)
             if name == "_":
                 raise AglSyntaxError(
@@ -2573,9 +2431,7 @@ class AstBuilder(Transformer):
 
     def pat_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
         """pat_constructor: name LPAR pattern_fields? RPAR"""
-        name_toks = [a for a in args if _is_name_token(a)]
-        assert len(name_toks) >= 1, "pat_constructor: expected name token"
-        name = str(name_toks[0])
+        name = str(args[0])
         positional, named = _pattern_fields(args)
         return syntax.ConstructorPattern(
             qualifier=None,
@@ -2600,16 +2456,14 @@ class AstBuilder(Transformer):
         )
 
     def pat_lit_int(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
-        tok = args[0]
-        assert isinstance(tok, Token)
+        tok = cast(Token, args[0])
         lit = syntax.IntLit(
             value=int(str(tok)), span=self._span_from_meta(meta), node_id=self._next_id()
         )
         return self._literal_pattern(lit, meta)
 
     def pat_lit_decimal(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
-        tok = args[0]
-        assert isinstance(tok, Token)
+        tok = cast(Token, args[0])
         lit = self._build_decimal_lit(tok, meta)
         return self._literal_pattern(lit, meta)
 
@@ -2627,7 +2481,8 @@ class AstBuilder(Transformer):
 
     def pat_lit_str(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
         tmpl = _require_literal_string(
-            args[0], "Pattern string literals cannot contain interpolation."
+            cast(syntax.StringLit | syntax.Template, args[0]),
+            "Pattern string literals cannot contain interpolation.",
         )
         return self._literal_pattern(tmpl, meta)
 
@@ -2650,24 +2505,17 @@ class AstBuilder(Transformer):
         return _PatternFieldsSplit(positional=tuple(positional), named=tuple(named))
 
     def pat_field_named(self, meta: Meta, args: _Args) -> syntax.PatternField:
-        """pat_field_named: name EQ pattern"""
-        name_tok = _find_name_token(args)
-        pat = next((a for a in args if isinstance(a, _PATTERN_NODE_TYPES)), None)
-        assert pat is not None
-        assert isinstance(pat, _PATTERN_NODE_TYPES)
+        """pat_field_named: field_name EQ pattern"""
         return syntax.PatternField(
-            name=str(name_tok),
-            pattern=pat,
+            name=str(args[0]),
+            pattern=cast(syntax.Pattern, args[-1]),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
     def pat_field_positional(self, meta: Meta, args: _Args) -> syntax.Pattern:
         """pat_field_positional: pattern — return the sub-pattern directly."""
-        pat = next((a for a in args if isinstance(a, _PATTERN_NODE_TYPES)), None)
-        assert pat is not None
-        assert isinstance(pat, _PATTERN_NODE_TYPES)
-        return pat
+        return cast(syntax.Pattern, args[0])
 
     # ------------------------------------------------------------------
     # Module declarations
@@ -2740,7 +2588,7 @@ class AstBuilder(Transformer):
 
     def _trim_token_span(self, token: Token, *, start: int = 0, end: int = 0) -> SourceSpan:
         """Return a token span without synthetic use-target delimiters."""
-        span = self._span_from_token(token)
+        span = token_span(token, self._source)
         return SourceSpan(
             start_line=span.start_line,
             start_col=span.start_col + start,
@@ -2760,7 +2608,7 @@ class AstBuilder(Transformer):
         never resolve.
         """
         if _ROUTE_SEPARATOR in str(token):
-            raise AglSyntaxError(_MODULE_ROUTE_MESSAGE, span=self._span_from_token(token))
+            raise AglSyntaxError(_MODULE_ROUTE_MESSAGE, span=token_span(token, self._source))
         route = self._route_token(token)
         return route.name, route.span
 
@@ -2816,12 +2664,11 @@ class AstBuilder(Transformer):
         self, selection: _Selection, span: SourceSpan
     ) -> tuple[_SelectedAtom, ...]:
         """Return normalized tail atoms, using an empty tuple for a glob."""
-        if selection.glob:
-            return ()
         if selection.braces is not None:
             return self._brace_atoms(selection.braces, span)
-        assert selection.atom is not None
-        return (selection.atom,)
+        if selection.atom is not None:
+            return (selection.atom,)
+        return ()
 
     def import_decl(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
         """Build an import declaration and enforce its tail and hiding rules."""
@@ -2881,9 +2728,9 @@ class AstBuilder(Transformer):
         prefixes = _typed_tokens(args, "MODQUAL")
         target = _required_token(args, "NAME")
         atom = _SelectedAtom(
-            path=_ScopePath(((str(target), self._span_from_token(target)),)),
+            path=_ScopePath(((str(target), token_span(target, self._source)),)),
             rename=None,
-            span=self._span_from_token(target),
+            span=token_span(target, self._source),
         )
         return prefixes, None, None, _Selection(atom=atom)
 
@@ -2932,7 +2779,7 @@ class AstBuilder(Transformer):
         for token in prefixes:
             target_segments.append(self._scope_segment(token))
         if final_target is not None:
-            target_segments.append((str(final_target), self._span_from_token(final_target)))
+            target_segments.append((str(final_target), token_span(final_target, self._source)))
         hidden_paths = cast(
             tuple[_ScopePath, ...],
             next(
@@ -3021,8 +2868,7 @@ class AstBuilder(Transformer):
 
     def qualifier_mod_segment(self, meta: Meta, args: _Args) -> _QualifierChainSegment:
         """Build one chain segment from a lexer-merged qualifier token."""
-        token = args[0]
-        assert isinstance(token, Token)
+        token = cast(Token, args[0])
         route = self._route_token(token)
         return _QualifierChainSegment(
             segment=syntax.QualifierSegment(
@@ -3049,8 +2895,8 @@ class AstBuilder(Transformer):
         end_token = next(
             arg for arg in reversed(args) if isinstance(arg, Token) and arg.type == "RSQB"
         )
-        type_start = self._span_from_token(name_tok)
-        type_end = self._span_from_token(end_token)
+        type_start = token_span(name_tok, self._source)
+        type_end = token_span(end_token, self._source)
         return _QualifierChainSegment(
             segment=syntax.QualifierSegment(
                 name=str(name_tok),
@@ -3177,8 +3023,7 @@ class AstBuilder(Transformer):
         return _find_type_args(args)
 
     def tmpl_text(self, meta: Meta, args: _Args) -> syntax.TextSegment:
-        tok = args[0]
-        assert isinstance(tok, Token)
+        tok = cast(Token, args[0])
         return syntax.TextSegment(
             text=str(tok),
             span=self._span_from_meta(meta),
@@ -3186,9 +3031,7 @@ class AstBuilder(Transformer):
         )
 
     def tmpl_interp(self, meta: Meta, args: _Args) -> syntax.InterpSegment:
-        (seg,) = args
-        assert isinstance(seg, syntax.InterpSegment)
-        return seg
+        return cast(syntax.InterpSegment, args[0])
 
     def interp(self, meta: Meta, args: _Args) -> syntax.InterpSegment:
         # Grammar: INTERP_START expr INTERP_END
@@ -3207,9 +3050,8 @@ class AstBuilder(Transformer):
         in its place, and its diagnostics stay on the hole.
         """
         del meta
-        token = args[0]
-        assert isinstance(token, Token)
-        span = self._span_from_token(token)
+        token = cast(Token, args[0])
+        span = token_span(token, self._source)
         qualifier = syntax.QualifierChain(
             anchor=None,
             segments=(
@@ -3264,13 +3106,10 @@ class AstBuilder(Transformer):
 
     def dict_entry(self, meta: Meta, args: _Args) -> syntax.DictEntry:
         """dict_entry: arg_expr COLON arg_expr — key and value are both ordinary expressions."""
-        non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
-        assert len(non_tokens) == 2, f"dict_entry: expected key + value expr, got {args!r}"
-        key_expr = cast(syntax.Expr, non_tokens[0])
-        val_expr = cast(syntax.Expr, non_tokens[1])
+        key, _colon, value = args
         return syntax.DictEntry(
-            key=key_expr,
-            value=val_expr,
+            key=cast(syntax.Expr, key),
+            value=cast(syntax.Expr, value),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -3283,10 +3122,7 @@ class AstBuilder(Transformer):
 
 def _find_type_expr(args: _Args) -> TypeExpr:
     """Return the first element that is a TypeExpr instance."""
-    for a in args:
-        if isinstance(a, _ALL_TYPE_EXPRS):
-            return a
-    raise AssertionError(f"_find_type_expr: no TypeExpr found in {args!r}")  # pragma: no cover
+    return next(a for a in args if isinstance(a, _ALL_TYPE_EXPRS))
 
 
 def _find_type_args(args: _Args) -> tuple[TypeExpr, ...]:
@@ -3308,16 +3144,8 @@ def _find_type_args(args: _Args) -> tuple[TypeExpr, ...]:
 
 
 def _find_name_token(args: _Args) -> Token:
-    """Return the field/key name Token from a ``field_name``-bearing rule.
-
-    ``name`` matches ``NAME`` or ``OP_NAME``. ``field_name`` also admits a few
-    keyword tokens: ``TO``, ``DOWNTO``, ``BY``. All arrive here as
-    plain Tokens; callers treat ``str(token)`` as the name string.
-    """
-    for a in args:
-        if _is_name_token(a) or (isinstance(a, Token) and a.type in ("TO", "DOWNTO", "BY")):
-            return a
-    raise AssertionError(f"_find_name_token: no name token found in {args!r}")  # pragma: no cover
+    """Return the first ``name``/``field_name`` Token (``NAME`` or ``OP_NAME``) in *args*."""
+    return next(a for a in args if _is_name_token(a))
 
 
 def _is_name_token(value: object) -> TypeGuard[Token]:
@@ -3445,10 +3273,10 @@ def _is_member_tuple(a: object) -> bool:
 
 
 def _find_member_tuple(args: _Args) -> tuple[syntax.VariantDef | syntax.VariantRef, ...]:
-    result = next((a for a in args if _is_member_tuple(a)), None)
-    if result is None:  # pragma: no cover
-        raise AssertionError(f"_find_member_tuple: no member tuple found in {args!r}")
-    return cast(tuple[syntax.VariantDef | syntax.VariantRef, ...], result)
+    return cast(
+        tuple[syntax.VariantDef | syntax.VariantRef, ...],
+        next(a for a in args if _is_member_tuple(a)),
+    )
 
 
 def _is_case_branch_tuple(a: object) -> bool:
@@ -3456,19 +3284,15 @@ def _is_case_branch_tuple(a: object) -> bool:
 
 
 def _find_case_branch_tuple(args: _Args) -> tuple[syntax.CaseBranch, ...]:
-    result = next((a for a in args if _is_case_branch_tuple(a)), None)
-    if result is None:  # pragma: no cover
-        raise AssertionError(f"_find_case_branch_tuple: no case branch tuple found in {args!r}")
-    return cast(tuple[syntax.CaseBranch, ...], result)
+    return cast(tuple[syntax.CaseBranch, ...], next(a for a in args if _is_case_branch_tuple(a)))
 
 
-def _require_literal_string(node: object, message: str) -> syntax.StringLit:
+def _require_literal_string(
+    node: syntax.StringLit | syntax.Template, message: str
+) -> syntax.StringLit:
     """Return *node* as a ``StringLit``, rejecting an interpolated ``Template``."""
     if isinstance(node, syntax.StringLit):
         return node
-    assert isinstance(node, syntax.Template), (
-        f"_require_literal_string: expected StringLit or Template, got {type(node)}"
-    )
     raise AglSyntaxError(message, span=node.span)
 
 
@@ -3496,13 +3320,7 @@ def _reject_positional_after_keyed(pos_arg_span: SourceSpan, *, seen_keyed: bool
 
 def _find_non_token(args: _Args) -> object:
     """Return the first non-None, non-Token element in args."""
-    result = next(
-        (a for a in args if a is not None and not isinstance(a, Token)),
-        None,
-    )
-    if result is None:  # pragma: no cover
-        raise AssertionError(f"_find_non_token: no non-token found in {args!r}")
-    return result
+    return next(a for a in args if a is not None and not isinstance(a, Token))
 
 
 def _find_expr(args: _Args) -> syntax.Expr:
@@ -4055,8 +3873,7 @@ def _resolve_infix_chain(
             op_index = next_operand_index - 1
         return left, next_operand_index
 
-    result, final_index = parse_at(0, 0)
-    assert final_index == len(operands)
+    result, _final_index = parse_at(0, 0)
     return result
 
 
@@ -4130,10 +3947,9 @@ def _extract_ann_and_optional_expr(
 def _extract_ann_and_value(
     tail: _Args,
 ) -> tuple[TypeExpr | None, syntax.Expr]:
-    """Extract (type_ann, value) from a tail whose value the grammar requires."""
-    ann, value = _extract_ann_and_optional_expr(tail)
-    assert value is not None, f"_extract_ann_and_value: no Expr found in {tail!r}"
-    return ann, value
+    """Extract (type_ann, value) from a ``type_ann? EQ value`` tail."""
+    ann = next((a for a in tail if isinstance(a, _ALL_TYPE_EXPRS)), None)
+    return ann, cast(syntax.Expr, tail[-1])
 
 
 def syntax_error_from_meta(meta: Meta, message: str) -> AglSyntaxError:

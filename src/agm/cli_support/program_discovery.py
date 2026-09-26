@@ -1,10 +1,5 @@
 """``program def`` declaration discovery and entry-program selection.
 
-:func:`discover_program_declarations_from_source` and
-:func:`discover_program_declarations_from_installed_reference` run
-``PipelineDriver.discover_programs`` (:class:`~agm.agl.pipeline.ProgramDiscovery`)
-as their own standalone pipeline pass.
-
 :func:`select_entry_program` matches a requested ``-p``/``--program`` name
 against the entry module's own ``program def`` declarations, shared by
 ``commands.exec_program.run`` (which turns an unresolved selection into a host
@@ -20,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, assert_never
 
 from agm.agl.modules.roots import RootSet
 from agm.agl.runtime.request import AgentResponse
@@ -28,7 +23,7 @@ from agm.agl.runtime.request import AgentResponse
 if TYPE_CHECKING:
     from agm.agl.pipeline import ParsedEntry, PreparedProgram, ProgramDiscovery
     from agm.agl.runtime.types import ParamBindingInfo, ProgramDeclInfo
-    from agm.cli_support.exec_target import ExecTarget, PackageProgramReference
+    from agm.cli_support.exec_target import ExecTarget
     from agm.cli_support.program_options import ProgramCommand
     from agm.config.context import ConfigContext
 
@@ -39,8 +34,6 @@ __all__ = [
     "ProgramDiscoveryArtifacts",
     "ProgramSelection",
     "select_declared_program",
-    "discover_program_declarations_from_installed_reference",
-    "discover_program_declarations_from_source",
     "discover_programs_for_target",
     "program_candidates",
     "registered_command_for",
@@ -64,77 +57,6 @@ class ProgramDiscoveryArtifacts:
     referenced_program: str | None = None
 
 
-def discover_program_declarations_from_source(
-    source: str,
-    *,
-    inline_source: bool = False,
-    entry_path: Path | None = None,
-    roots: RootSet | None = None,
-    default_stdlib: bool = True,
-) -> "tuple[ProgramDeclInfo, ...]":
-    """Discover declared ``program def`` signatures from AgL *source*, degrading to ``()`` on error.
-
-    Shared by the help and shell-completion paths, which both need only the
-    discovered programs and must tolerate unreadable/unparsable sources.
-    Inline sources receive the same pure synthetic-main wrapper as ``agm exec
-    -c``; file sources retain their ordinary unwrapped behavior. Supplying
-    their *entry_path* lets the loader discover imports relative to that
-    file.
-    """
-    try:
-        from agm.agl import PipelineDriver
-
-        runtime = PipelineDriver(agent_dispatcher=lambda request: AgentResponse(content=""))
-        if inline_source:
-            parsed = runtime.parse_entry(source, inline_command=True)
-            prepared = runtime.prepare_parsed_entry(
-                parsed, roots=roots, default_stdlib=default_stdlib
-            )
-        else:
-            prepared = runtime.prepare_program(
-                source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
-            )
-        return runtime.discover_programs(prepared).programs
-    except (Exception, SystemExit):
-        return ()
-
-
-def discover_program_declarations_from_installed_reference(
-    resolved: "PackageProgramReference",
-    *,
-    home: Path,
-    proj_dir: Path | None,
-    cwd: Path,
-    default_stdlib: bool = True,
-) -> "tuple[ProgramDeclInfo, ...]":
-    """Discover ``program def`` signatures for an already-resolved installed program reference.
-
-    Help and completion resolve ``PACKAGE/MODULE::PROGRAM`` through the same
-    active package selection as execution, then pass the result here. They
-    are advisory surfaces, so an unreadable entry or a program that no
-    longer parses degrades to no programs.
-    """
-    try:
-        from agm.cli_support.exec_roots import effective_exec_roots
-
-        source = resolved.entry_path.read_text(encoding="utf-8")
-        exec_roots = effective_exec_roots(
-            entry_path=resolved.entry_path,
-            module_paths=[],
-            cwd=cwd,
-            home=home,
-            proj_dir=proj_dir,
-        )
-        return discover_program_declarations_from_source(
-            source,
-            entry_path=resolved.entry_path,
-            roots=exec_roots.roots,
-            default_stdlib=default_stdlib,
-        )
-    except (Exception, SystemExit):
-        return ()
-
-
 def discover_programs_for_target(
     *,
     file: str | None,
@@ -149,18 +71,17 @@ def discover_programs_for_target(
     resolves the same target the execution path would
     (``exec_target.resolve_exec_target``), assembles the same module roots
     (``exec_roots.effective_exec_roots``), and runs
-    :func:`discover_program_declarations_from_source` or
-    :func:`discover_program_declarations_from_installed_reference` for it. A
-    single implementation is what keeps help and completion from disagreeing
-    about which programs a given selector offers.
+    ``PipelineDriver.discover_programs`` for it. A single implementation is
+    what keeps help and completion from disagreeing about which programs a
+    given selector offers.
 
     Returns the discovered programs and, for an installed
     ``PACKAGE/MODULE::PROGRAM`` reference, the declaration path that reference
     already names — the implicit ``-p``/``--program`` selection a caller
-    applies when none was given explicitly. Every failure degrades to
-    ``((), None)``: these are advisory surfaces, so an unreadable entry, an
-    unresolvable target, or a source that no longer parses shows no program
-    arguments rather than failing the command.
+    applies when none was given explicitly. These are advisory surfaces, so
+    an unreadable entry, an unresolvable target or module-root configuration,
+    or a source that no longer parses degrades to ``((), None)`` rather than
+    failing the command.
     """
     artifacts = discover_program_artifacts_for_target(
         file=file,
@@ -192,6 +113,7 @@ def discover_program_artifacts_for_target(
     from agm.agl import PipelineDriver
     from agm.cli_support.exec_roots import effective_exec_roots
     from agm.cli_support.exec_target import (
+        ExecTargetError,
         FileEntry,
         InlineSource,
         PackageProgramReference,
@@ -199,6 +121,7 @@ def discover_program_artifacts_for_target(
     )
     from agm.config.context import current_config_context
     from agm.core.fs import read_text
+    from agm.packages.stdlib import StdlibResolutionError
 
     try:
         if context is None:
@@ -214,21 +137,24 @@ def discover_program_artifacts_for_target(
             if resolved_target is None
             else resolved_target
         )
-        source: str | None
-        entry_path: Path | None
-        referenced_program: str | None
-        if isinstance(target, PackageProgramReference):
-            source = target.entry_path.read_text(encoding="utf-8")
-            entry_path = target.entry_path
-            referenced_program = target.declaration_path
-            inline_source = False
-        if isinstance(target, (InlineSource, FileEntry)):
-            source = command if isinstance(target, InlineSource) else read_text(target.path)
-            entry_path = target.path if isinstance(target, FileEntry) else None
-            referenced_program = None
-            inline_source = isinstance(target, InlineSource)
-        if not isinstance(target, (PackageProgramReference, InlineSource, FileEntry)):
-            return None
+        entry_path: Path | None = None
+        referenced_program: str | None = None
+        inline_source = False
+        match target:
+            case ExecTargetError():
+                return None
+            case PackageProgramReference():
+                source = target.entry_path.read_text(encoding="utf-8")
+                entry_path = target.entry_path
+                referenced_program = target.declaration_path
+            case FileEntry():
+                source = read_text(target.path)
+                entry_path = target.path
+            case InlineSource():
+                source = target.source
+                inline_source = True
+            case _ as unreachable:  # pragma: no cover
+                assert_never(unreachable)
         exec_roots = effective_exec_roots(
             entry_path=entry_path,
             module_paths=[] if module_paths is None else module_paths,
@@ -236,7 +162,6 @@ def discover_program_artifacts_for_target(
             home=context.home,
             proj_dir=context.proj_dir,
         )
-        assert source is not None
         runtime = PipelineDriver(agent_dispatcher=lambda request: AgentResponse(content=""))
         parsed = runtime.parse_entry(source, entry_path=entry_path, inline_command=inline_source)
         prepared = runtime.prepare_parsed_entry(
@@ -253,7 +178,7 @@ def discover_program_artifacts_for_target(
             discovery=discovery,
             referenced_program=referenced_program,
         )
-    except (Exception, SystemExit):
+    except (OSError, ValueError, StdlibResolutionError):
         return None
 
 

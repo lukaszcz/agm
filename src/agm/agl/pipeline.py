@@ -139,20 +139,18 @@ class ProgramDiscovery:
 
 @dataclass(frozen=True, slots=True)
 class ArgumentPreflight:
-    """Result of ``PipelineDriver.preflight_arguments``.
+    """Successful result of ``PipelineDriver.preflight_arguments``.
 
     ``result``
-        The check-only run result: ``ok`` iff the static pipeline succeeded
-        and every argument bound and decoded against the program's signature.
+        The check-only run result of the static pipeline.
     ``executable``
-        The lowered program *arguments* were checked against, or ``None``
-        when a pass before lowering failed. Hand it back to
+        The lowered program *arguments* were checked against. Hand it back to
         ``PipelineDriver.run_prepared`` as ``executable`` (with this same
         ``arguments``) to execute it without lowering it a second time.
     ``arguments``
         The bound, decoded arguments, ready for ``run_prepared``'s own
         ``arguments`` — one entry per declared parameter, in declaration
-        order — or ``()`` when the static pipeline or binding failed.
+        order.
     ``param_seeds``
         The decoded module-parameter values, ready for ``run_prepared``.
         Already folds in any ``@config`` entry targeting a ``@param``
@@ -170,10 +168,17 @@ class ArgumentPreflight:
     """
 
     result: "RunResult"
-    executable: "ExecutableProgram | None"
-    arguments: "tuple[Value | UseDefault, ...]" = ()
-    param_seeds: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
-    program_config: "Mapping[StaticBindingKey, Value]" = field(default_factory=dict)
+    executable: "ExecutableProgram"
+    arguments: "tuple[Value | UseDefault, ...]"
+    param_seeds: "Mapping[StaticBindingKey, Value]"
+    program_config: "Mapping[StaticBindingKey, Value]"
+
+
+@dataclass(frozen=True, slots=True)
+class ArgumentPreflightFailure:
+    """Failed result of ``PipelineDriver.preflight_arguments``; ``result`` holds the diagnostics."""
+
+    result: "RunResult"
 
 
 @dataclass(frozen=True, slots=True)
@@ -552,14 +557,7 @@ class PipelineDriver:
         check_only = options.check_only
         program_symbol = options.program_symbol
         arguments = options.arguments
-        host_contracts, contract_errors = materialize_ir_contracts(executable, host_env.codecs)
-        if contract_errors:
-            return RunResult(
-                ok=False,
-                diagnostics=contract_errors,
-                error=None,
-                warnings=list(warnings),
-            )
+        host_contracts = materialize_ir_contracts(executable, host_env.codecs)
 
         if options.select_default_program and program_symbol is None:
             entry_programs = tuple(
@@ -1265,7 +1263,7 @@ class PipelineDriver:
         compiled: "MatchCompiledProgram | None" = None,
         param_values: "Mapping[StaticBindingKey, object] | None" = None,
         param_values_lower: "Mapping[StaticBindingKey, object] | None" = None,
-    ) -> ArgumentPreflight:
+    ) -> "ArgumentPreflight | ArgumentPreflightFailure":
         """Validate program arguments and module parameter values before execution.
 
         Runs the static pipeline exactly as :meth:`run_prepared` does under
@@ -1289,7 +1287,7 @@ class PipelineDriver:
 
         result, executable = self._lower_and_record(prepared, program, compiled=compiled)
         if executable is None or not result.ok:
-            return ArgumentPreflight(result=result, executable=executable)
+            return ArgumentPreflightFailure(result=result)
 
         bound, argument_diagnostics = bind_program_arguments_for(executable, program, arguments)
         program_config = self._evaluate_program_config(executable, program)
@@ -1307,14 +1305,13 @@ class PipelineDriver:
         param_seeds = {**decoded_lower, **config_param_values, **decoded_upper}
         diagnostics = (*argument_diagnostics, *lower_diagnostics, *upper_diagnostics)
         if diagnostics:
-            return ArgumentPreflight(
+            return ArgumentPreflightFailure(
                 result=RunResult(
                     ok=False,
                     diagnostics=list(diagnostics),
                     error=None,
                     warnings=result.warnings,
-                ),
-                executable=executable,
+                )
             )
         return ArgumentPreflight(
             result=result,

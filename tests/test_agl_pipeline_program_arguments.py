@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.attributes import ProgramOptionSpec
-from agm.agl.pipeline import PipelineDriver, PreparedProgram
+from agm.agl.pipeline import ArgumentPreflightFailure, PipelineDriver, PreparedProgram
 from agm.agl.runtime.arguments import ProgramArguments
 from agm.agl.semantics.types import BoolType, IntType, TextType
 from agm.agl.zones import ParamZone
@@ -205,8 +205,8 @@ class TestPreflightArgumentsFailures:
         preflight = runtime.preflight_arguments(
             bad_prepared, program, ProgramArguments(positional=(), named={"value": 1})
         )
+        assert isinstance(preflight, ArgumentPreflightFailure)
         assert not preflight.result.ok
-        assert preflight.executable is None
 
 
 class TestRunFacadeDerivesArgumentsFromTheProgramSignature:

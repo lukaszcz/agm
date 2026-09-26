@@ -1784,6 +1784,12 @@ class TestHelp:
         assert result.exit_code != 0
         assert "unknown command" in result.output
 
+    def test_help_with_unknown_multi_segment_path(self, runner: CliRunner) -> None:
+        result = invoke(runner, ["help", "nonexistent", "sub"])
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert result.stderr != ""
+
     def test_run_help_mentions_agm_home_relocation(self, runner: CliRunner) -> None:
         result = invoke(runner, ["help", "run"])
         assert result.exit_code == 0
@@ -2176,19 +2182,6 @@ class TestParserHelpers:
         parser_helpers.print_command_help("open", file=output)
         result = output.getvalue()
         assert "agm open" in result
-
-
-class TestHelpTextForPathValueError:
-    def test_unknown_multi_segment_command_path_raises_value_error(self) -> None:
-        with pytest.raises(ValueError, match="unknown command path"):
-            parser_helpers._help_text_for_path(["unknown", "sub"])
-
-
-class TestHelpTextForPathUnknownMultiElement:
-    def test_raises_value_error_for_unknown_multi_element_path(self) -> None:
-        """_help_text_for_path raises ValueError for unknown multi-element paths."""
-        with pytest.raises(ValueError, match="unknown command path"):
-            parser_helpers._help_text_for_path(["nonexistent", "subcommand"])
 
 
 class TestParseLoopSelectArgsMisc:

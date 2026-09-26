@@ -36,7 +36,7 @@ from typing import Iterator, TypeVar
 from lark import Lark
 from lark.lexer import Lexer, LexerState, Token
 
-from agm.agl.diagnostics import Diagnostic, SourceSpan
+from agm.agl.diagnostics import Diagnostic
 from agm.agl.keywords import (
     KW_AS,
     KW_END,
@@ -56,6 +56,7 @@ from agm.agl.lexer.operators import (
     promotes_as_operator,
     scanner_token_type,
 )
+from agm.agl.lexer.positions import token_span
 from agm.agl.lexer.scanner import _Scanner
 from agm.agl.lexer.tokens import (
     CALL_LBRACE,
@@ -524,25 +525,6 @@ def _member_reference(
     return member, source[start:end], type_qualified
 
 
-def _token_span(tok: Token) -> SourceSpan:
-    """Build a :class:`SourceSpan` from a token's position fields.
-
-    The span carries no ``SourceId``; consumers stamp their own module identity
-    onto it, since the lexer never learns which source it is scanning.
-    """
-    line = tok.line if tok.line is not None else 1
-    col = tok.column if tok.column is not None else 1
-    start = tok.start_pos if tok.start_pos is not None else 0
-    return SourceSpan(
-        start_line=line,
-        start_col=col,
-        end_line=tok.end_line if tok.end_line is not None else line,
-        end_col=tok.end_column if tok.end_column is not None else col + len(str(tok)),
-        start_offset=start,
-        end_offset=tok.end_pos if tok.end_pos is not None else start + len(str(tok)),
-    )
-
-
 def _record_spaced_qualifier(
     tokens: list[Token],
     dcolon_index: int,
@@ -559,9 +541,8 @@ def _record_spaced_qualifier(
     route rather than one of its suffixes.
     """
     sink = _SPACED_QUALIFIER_SINK.get()
-    dcolon = tokens[dcolon_index]
-    dcolon_offset = dcolon.start_pos
-    assert dcolon_offset is not None
+    dcolon_span = token_span(tokens[dcolon_index])
+    dcolon_offset = dcolon_span.start_offset
     if sink is None or dcolon_offset in seen:
         return
     reference = _member_reference(tokens, dcolon_index, source)
@@ -569,14 +550,12 @@ def _record_spaced_qualifier(
         return
     member, member_text, type_qualified = reference
     seen.add(dcolon_offset)
-    run_start_offset = run_start.start_pos
-    assert run_start_offset is not None
     sink.append(
         SpacedQualifier(
             segments=tuple(segments),
             anchored=run_start.type == SLASH,
-            run_start_offset=run_start_offset,
-            dcolon_span=_token_span(dcolon),
+            run_start_offset=token_span(run_start).start_offset,
+            dcolon_span=dcolon_span,
             member=member,
             member_text=member_text,
             type_qualified=type_qualified,
@@ -720,7 +699,7 @@ def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
         if tight_left or tight_right:
             raise LexError(
                 "'/' is a module path separator here; write ' / ' with spaces to divide",
-                span=_token_span(tok),
+                span=token_span(tok),
             )
     return tokens
 
@@ -732,8 +711,11 @@ def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     return _reject_clinging_slash(merged)
 
 
-def unclosed_scope_path(source: str) -> str | None:
-    """Return the innermost promoted scope path still open at end of *source*."""
+def unclosed_scope_path(source: str) -> str:
+    """Return the innermost promoted scope path still open at end of *source*.
+
+    *source* must end inside a scope region.
+    """
     tokens = apply_module_passes(list(layout(_Scanner(source).scan())), source)
     open_paths: list[str] = []
     index = 0
@@ -751,7 +733,7 @@ def unclosed_scope_path(source: str) -> str | None:
             open_paths.append("::".join(names))
         else:
             open_paths.pop()
-    return open_paths[-1] if open_paths else None
+    return open_paths[-1]
 
 
 def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
@@ -848,14 +830,8 @@ class AglLexer(Lexer):
         Keyword token types are remapped from lowercase (scanner convention)
         to the uppercase names expected by the Lark grammar.
         """
-        # lexer_state.text may be a str or a lark.lexer.TextSlice; extract
-        # the raw string for the scanner.
-        raw = lexer_state.text
-        if isinstance(raw, str):
-            source = raw
-        else:
-            # TextSlice: use the underlying .text attribute.
-            source = str(raw.text) if hasattr(raw, "text") else str(raw)
+        # Lark wraps the parsed string in a whole-text ``TextSlice``.
+        source = lexer_state.text.text
         # Drive the scan to completion up front (materialized) so the single
         # lex pass records EVERY TAB advisory before the grammar is consulted —
         # the advisories are then complete even if the parse later fails.  The

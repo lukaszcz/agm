@@ -128,17 +128,14 @@ def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, 
     ``builtin var`` initializer supply the latter.  A present value of
     ``None`` remains meaningful for ``Option`` settings such as ``timeout``.
     """
-    from agm.agl.semantics.engine_keys import get_engine_key_type
+    from agm.agl.semantics.engine_keys import ENGINE_KEY_TYPES
     from agm.agl.semantics.type_table import create_seeded_type_table
 
     type_table = create_seeded_type_table()
-    result: dict[str, Value] = {}
-    for key_name, raw in raw_values.items():
-        key_type = get_engine_key_type(key_name)
-        if key_type is None:
-            raise ValueError(f"unknown engine key: {key_name!r}")
-        result[key_name] = convert_config_value(key_name, raw, key_type, type_table)
-    return result
+    return {
+        key_name: convert_config_value(key_name, raw, ENGINE_KEY_TYPES[key_name], type_table)
+        for key_name, raw in raw_values.items()
+    }
 
 
 def engine_default_settings() -> "dict[str, Value]":

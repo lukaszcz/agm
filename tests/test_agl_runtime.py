@@ -1901,41 +1901,12 @@ class TestSerialize:
 
 
 # ---------------------------------------------------------------------------
-# Output contracts: codec resolution
-# ---------------------------------------------------------------------------
-
-
-class TestMaterializeContractMissingCodec:
-    """A contract naming an unregistered codec cannot be materialized."""
-
-    def test_missing_codec_raises_value_error(self) -> None:
-        from agm.agl.runtime.codec import TextCodec
-        from agm.agl.runtime.contract import materialize_contract
-        from agm.agl.semantics.types import TextType
-        from agm.agl.typecheck.env import OutputContractSpec
-
-        spec = OutputContractSpec(
-            target_type=TextType(),
-            codec_name="nonexistent_codec",
-            strict_json=None,
-        )
-        with pytest.raises(ValueError, match="nonexistent_codec"):
-            materialize_contract(spec, {"text": TextCodec()})
-
-
-# ---------------------------------------------------------------------------
 # engine_config.py — host engine seeds and engine-key defaults
 # ---------------------------------------------------------------------------
 
 
 class TestEngineSettingDefaults:
     """The host side owns defaults only for the keys it can actually decode."""
-
-    def test_unknown_engine_seed_is_rejected(self) -> None:
-        from agm.agl.runtime.engine_config import build_engine_config_seeds
-
-        with pytest.raises(ValueError, match="engine key"):
-            build_engine_config_seeds({"unknown": True})
 
     def test_engine_default_settings_has_no_default_agent_floor(self) -> None:
         """``default-agent`` is declared by ``std/config``, not fabricated by the host."""
@@ -1963,23 +1934,6 @@ class TestRuntimeErrorPaths:
         tab_warns = [w for w in result.warnings if w.severity == "warning"]
         assert len(tab_warns) == 1
         assert tab_warns[0].line == 1
-
-    def test_contract_error_returns_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Contract materialization error → ok=False with contract error diagnostic."""
-        import agm.agl.pipeline as runtime_mod
-
-        monkeypatch.setattr(
-            runtime_mod,
-            "materialize_ir_contracts",
-            lambda executable, codecs: (
-                {},
-                [Diagnostic(message="Contract error: bad contract", line=1)],
-            ),
-        )
-        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
-        result = run_inline_command(rt, 'ask "hi"')
-        assert result.ok is False
-        assert any("bad contract" in d.message for d in result.diagnostics)
 
     def test_uncaught_agl_raise_in_run(self) -> None:
         """AglRaise propagating from the interpreter → RunResult with error."""
@@ -2867,34 +2821,6 @@ class TestIrHostMetadata:
         )
         assert not json_result.ok
         assert "JSON" in json_result.diagnostics[0].message
-
-    def test_missing_ir_codec_materialization_is_diagnostic(self) -> None:
-        from agm.agl.ir.contracts import CustomContractRequest
-        from agm.agl.ir.ids import ContractId
-        from agm.agl.ir.program import ExecutableProgram
-        from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.runtime.contract import materialize_ir_contracts
-
-        request = CustomContractRequest(
-            codec_name="missing",
-            strict_json=None,
-            json_schema=None,
-            decode=None,
-            target_type_label="text",
-            structured_exec=False,
-            format_instructions="",
-        )
-        executable = ExecutableProgram(
-            entry_module=ENTRY_ID,
-            modules={},
-            symbols={},
-            nominals={},
-            sources={},
-            contracts={ContractId(0): request},
-        )
-        contracts, errors = materialize_ir_contracts(executable, {})
-        assert contracts == {}
-        assert "missing" in errors[0].message
 
     def test_integral_decimal_decodes_to_int(self) -> None:
         from decimal import Decimal

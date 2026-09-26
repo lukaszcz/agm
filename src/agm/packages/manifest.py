@@ -11,7 +11,7 @@ from tomlkit.exceptions import TOMLKitError
 
 from agm.agl.keywords import is_plain_name
 from agm.agl.modules.ids import ModuleId
-from agm.command_catalog import invalid_command_path
+from agm.command_catalog import has_subcommands, invalid_command_path, is_subcommand_path
 from agm.core.toml import TomlDict, load_toml_file, parse_toml_doc, toml_dict
 from agm.packages.record import is_sha256_hex
 
@@ -128,7 +128,7 @@ def _alias_additions(
     additions.update(
         (alias + path[len(target) :], spec)
         for path, spec in commands.items()
-        if path.startswith(target + " ")
+        if is_subcommand_path(path, target)
     )
     return additions
 
@@ -149,7 +149,7 @@ def validate_command_set(manifest: PackageManifest) -> None:
     """
     commands = manifest.commands
     for path, spec in commands.items():
-        if spec.program is None and not any(child.startswith(path + " ") for child in commands):
+        if spec.program is None and not has_subcommands(path, commands):
             raise ManifestError(f"command group {path!r} requires subcommands")
     if not manifest.aliases:
         return

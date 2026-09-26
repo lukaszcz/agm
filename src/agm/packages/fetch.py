@@ -22,15 +22,15 @@ _FETCH_TIMEOUT_SECONDS = 30.0
 MAX_ARCHIVE_DOWNLOAD_SIZE = 128 * 1024 * 1024
 
 
-def fetch_archive(
+def fetch_archive[T](
     *,
     requirement: str,
     url: str,
     expected_hash: str,
-    handoff: Callable[[Path], None],
+    handoff: Callable[[Path], T],
     scratch_dir: Path | None = None,
-) -> None:
-    """Fetch, hash-verify, and hand an archive to the installer.
+) -> T:
+    """Fetch, hash-verify, and hand an archive to the installer, returning its result.
 
     Transport, streaming, digesting and the size cap are the shared HTTP seam's
     (:mod:`agm.core.http`); this boundary adds the temporary archive, the digest
@@ -53,7 +53,7 @@ def fetch_archive(
             digest = _download(requirement, url, archive, on_headers=connected)
         if digest != expected_digest:
             raise FetchError(f"hash mismatch for {requirement}")
-        handoff(archive)
+        return handoff(archive)
     except BaseException:
         primary_failure = True
         raise

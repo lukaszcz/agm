@@ -425,13 +425,6 @@ class ReplSession:
         self._accumulated_infix: dict[str, tuple[int, "InfixAssoc"]] = {}
         self._entry_pipeline = EntryPipeline(self)
 
-    @staticmethod
-    def _assert_checked_state_closed(checked: "CheckedModule") -> None:
-        """Assert that a checked entry satisfies the shared lowering boundary."""
-        from agm.agl.typecheck.env import assert_checked_module_closed
-
-        assert_checked_module_closed(checked)
-
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec (shares ``PipelineDriver`` validation)."""
         self._runtime.register_codec(codec)
@@ -1073,11 +1066,11 @@ class ReplSession:
             VariantDef,
             static_items,
         )
-        from agm.agl.typecheck.env import TypeEnvironment
+        from agm.agl.typecheck.env import TypeEnvironment, assert_checked_module_closed
 
         entry_declarations = tuple(static_items(program.body.items))
         if self_validation_enabled():
-            self._assert_checked_state_closed(checked)
+            assert_checked_module_closed(checked)
         entry_root = checked.resolved.root_scope
         named_declarations = (
             EnumDef,

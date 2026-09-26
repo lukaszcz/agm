@@ -36,8 +36,9 @@ from tests._package_helpers import PythonInstaller
 # does not put the repository root on ``sys.path`` (plain ``uv run pytest``).
 __all__ = ["pytest_runtest_protocol", "pytest_sessionfinish", "pytest_testnodedown"]
 
-# Enable AgL's optional invariant self-checks — match-compilation self-checks and
-# IR structural validation — for the whole test suite.  They are disabled in
+# Enable the optional invariant self-checks — match-compilation self-checks, IR
+# structural validation, and completion's re-raising of the failures it would
+# degrade — for the whole test suite.  They are disabled in
 # normal execution (zero production cost); turning them on here makes every case
 # compiled and every program lowered anywhere in the suite double as an invariant
 # oracle.  Individual tests may disable them to exercise the production path (see
@@ -103,10 +104,11 @@ def isolated_compiler_cache(
 
 @pytest.fixture()
 def self_validation_disabled() -> Generator[None, None, None]:
-    """Run the body with AgL's optional self-checks off, as in normal execution.
+    """Run the body with the optional self-checks off, as in normal execution.
 
     The suite enables them globally; tests that pin the production path — where a
-    compile or lowering is trusted without being re-verified — take this fixture.
+    compile or lowering is trusted without being re-verified, or a completer
+    degrades a failure to no suggestions — take this fixture.
     """
     previous = self_validation_enabled()
     set_self_validation_enabled(False)

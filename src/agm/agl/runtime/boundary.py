@@ -789,19 +789,11 @@ class AglDictView(MutableMapping[str, object]):
         return render_value(self._value, self._descriptors)
 
 
-def _unknown_nominal_message(nominal: NominalId, descriptors: ValueDescriptors) -> str:
-    """Report an unregistered nominal identity without printing its raw id."""
-    known = descriptors.nominals.get(nominal)
-    if known is not None:
-        return f"unknown AgL nominal {known.display_name!r}"
-    return "unknown AgL nominal: no companion class was synthesized for this identity"
-
-
 def encode_boundary_value(value: Value, descriptors: ValueDescriptors) -> object:
     """Encode an AgL value by its runtime subclass.
 
     *descriptors* resolves nominal/function spellings for anything this
-    crossing renders (an unknown-nominal message, a view's own ``repr``) and
+    crossing renders (a view's own ``repr``) and
     is stored on any array/dict/mutable-record view this mints, so the view
     keeps rendering correctly after the call that built it returns. An
     ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
@@ -857,10 +849,7 @@ def _encode_boundary_value(
     encoded = memo.get(id(value))
     if encoded is not None:
         return encoded
-    try:
-        cls = _NOMINAL_CLASSES[value.nominal]
-    except KeyError as exc:
-        raise BoundaryViolation(_unknown_nominal_message(value.nominal, descriptors)) from exc
+    cls = _NOMINAL_CLASSES[value.nominal]
     encoded = cast("type[_AglNominalShape]", cls)._agl_encode(value, descriptors, memo)
     memo[id(value)] = encoded
     return encoded

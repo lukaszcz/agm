@@ -210,14 +210,12 @@ def render_type_expr(type_expr: TypeExpr, *, parenthesize_function: bool = False
             params = f"({', '.join(render_type_expr(param) for param in type_expr.params)})"
         rendered = f"{params} -> {render_type_expr(type_expr.result)}"
         return f"({rendered})" if parenthesize_function else rendered
-    if isinstance(type_expr, (NameT, AppliedT)):
-        args = (
-            "[" + ", ".join(render_type_expr(arg) for arg in type_expr.args) + "]"
-            if isinstance(type_expr, AppliedT)
-            else ""
-        )
-        return render_qualified_name(type_expr.qualifier, type_expr.name) + args
-    raise AssertionError(f"unexpected type expression: {type_expr!r}")
+    args = (
+        "[" + ", ".join(render_type_expr(arg) for arg in type_expr.args) + "]"
+        if isinstance(type_expr, AppliedT)
+        else ""
+    )
+    return render_qualified_name(type_expr.qualifier, type_expr.name) + args
 
 
 def render_qualifier_path(qualifier: QualifierChain) -> str:

@@ -23,7 +23,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
-from types import CodeType, ModuleType
+from types import CodeType, MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.artifact_storage import artifact_entry, read_payload, write_payload
@@ -442,6 +442,12 @@ class ExternCallable(Protocol):
     def __call__(self, *args: object) -> object: ...
 
 
+_NO_FUNCTIONS: Mapping[FunctionId, FunctionDescriptor] = MappingProxyType({})
+_NO_EXCEPTION_FIELD_ENCODES: Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] = (
+    MappingProxyType({})
+)
+
+
 class ExternRegistry:
     """Imports extern companions, resolves their callables, and invokes them.
 
@@ -474,8 +480,10 @@ class ExternRegistry:
         self,
         descriptors: dict[NominalId, NominalDescriptor],
         *,
-        functions: Mapping[FunctionId, FunctionDescriptor] | None = None,
-        exception_field_encodes: Mapping[NominalId, tuple[ExceptionFieldEncode, ...]] | None = None,
+        functions: Mapping[FunctionId, FunctionDescriptor] = _NO_FUNCTIONS,
+        exception_field_encodes: Mapping[
+            NominalId, tuple[ExceptionFieldEncode, ...]
+        ] = _NO_EXCEPTION_FIELD_ENCODES,
     ) -> None:
         """Materialize this program's companion-visible nominal classes, insert-only.
 
@@ -517,10 +525,8 @@ class ExternRegistry:
             )
             self._nominal_classes.update(classes)
         self._nominal_by_id.update(descriptors)
-        if functions is not None:
-            self._function_by_id.update(functions)
-        if exception_field_encodes is not None:
-            self._exception_field_encodes.update(exception_field_encodes)
+        self._function_by_id.update(functions)
+        self._exception_field_encodes.update(exception_field_encodes)
 
     def _program_descriptors(self) -> ValueDescriptors:
         """The program descriptor view accumulated by :meth:`set_nominals`.

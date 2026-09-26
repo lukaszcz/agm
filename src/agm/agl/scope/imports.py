@@ -416,7 +416,7 @@ def build_import_env(
     decls: tuple[ImportDecl, ...],
     targets: Mapping[int, ImportTarget],
     exports: Mapping[ModuleId, Mapping[NameAtom, QName]],
-    scope_exports: Mapping[ModuleId, Mapping[NameAtom, ScopeOrigins]] | None = None,
+    scope_exports: Mapping[ModuleId, Mapping[NameAtom, ScopeOrigins]],
 ) -> ImportEnv:
     """Build route and implicit-tail contributions for import declarations.
 
@@ -435,7 +435,6 @@ def build_import_env(
     canonical_wildcard_node_ids: dict[ImportDecl, int] = {}
     scope_origins_by_route: dict[BareRoute, ScopeOrigins] = {}
     decl_spans: dict[ModuleId, SourceSpan] = {}
-    public_scopes = scope_exports or {}
     for decl in decls:
         target = targets[decl.node_id]
         modules = _targets(target)
@@ -450,8 +449,8 @@ def build_import_env(
             ).update(modules)
         for module in modules:
             decl_spans.setdefault(module, decl.span)
-            module_exports = exports.get(module, {})
-            module_scopes = public_scopes.get(module, {})
+            module_exports = exports[module]
+            module_scopes = scope_exports[module]
             hidden_exports, hidden_scopes = _selected_public_atoms(
                 decl.hidden, module, module_exports, module_scopes, decl.span
             )

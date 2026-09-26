@@ -2603,6 +2603,7 @@ class TestIrExecValidation:
         )
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
+        from agm.agl.semantics.types import TextType
 
         cid = ContractId(value=0)
         contract = CustomContractRequest(
@@ -2613,6 +2614,7 @@ class TestIrExecValidation:
             target_type_label="text",
             structured_exec=False,
             format_instructions="",
+            target_type=TextType(),
             defs=(("A", ScalarDecode(ScalarKind.INT)),),
         )
         node = IrExec(
@@ -2633,6 +2635,7 @@ class TestIrExecValidation:
         from agm.agl.ir.contracts import CustomContractRequest
         from agm.agl.ir.ids import ContractId
         from agm.agl.ir.nodes import IrExec
+        from agm.agl.semantics.types import IntType
 
         cid = ContractId(value=0)
         contract = CustomContractRequest(
@@ -2643,6 +2646,7 @@ class TestIrExecValidation:
             target_type_label="int",
             structured_exec=False,
             format_instructions="",
+            target_type=IntType(),
         )
         node = IrExec(
             location=LOC,

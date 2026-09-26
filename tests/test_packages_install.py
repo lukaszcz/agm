@@ -2536,11 +2536,11 @@ def test_url_dependency_hands_verified_archive_to_the_installer(
     )
     fetched: list[str] = []
 
-    def fake_fetch(**kwargs: object) -> None:
+    def fake_fetch(**kwargs: object) -> object:
         fetched.append(str(kwargs["requirement"]))
         handoff = kwargs["handoff"]
         assert callable(handoff)
-        handoff(archive)
+        return handoff(archive)
 
     monkeypatch.setattr(package_fetch, "fetch_archive", fake_fetch)
     installed = install_directory(source, home=tmp_path / "home", env={})
@@ -3044,22 +3044,6 @@ def test_dry_run_url_dependency_never_fetches_or_creates_scratch(
 
     assert not fetched
     assert not (tmp_path / "dry-home").exists()
-
-
-def test_url_fetch_refuses_when_the_fetch_handoff_does_not_install(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    source = _package(
-        tmp_path / "source",
-        "alpha",
-        "1.0.0",
-        '\n[dependencies]\nbravo = { version = "1", url = "https://example.test/bravo.agmpkg", '
-        'hash = "sha256=' + "0" * 64 + '" }\n',
-    )
-    monkeypatch.setattr(package_fetch, "fetch_archive", lambda **_: None)
-
-    with pytest.raises(PackageInstallError, match=r"bravo >= 1\.0\.0"):
-        install_directory(source, home=tmp_path / "home", env={})
 
 
 def test_url_fetch_scratch_creation_failure_names_the_requirement(

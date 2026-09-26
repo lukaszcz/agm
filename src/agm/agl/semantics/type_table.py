@@ -1190,10 +1190,8 @@ class TypeTable:
         (:attr:`TypeDef.field_kinds`) — declaration-level, like
         :meth:`record_mutable_fields`, so every instantiation of a generic
         record shares the same zones regardless of ``type_args`` and no
-        memoization is needed. ``field_kinds`` must have one entry per field,
-        in order — a builder that leaves it unset for a non-empty ``fields``
-        is a bug, caught by the strict zip below rather than silently
-        defaulted.
+        memoization is needed. ``field_kinds`` has one entry per field, in
+        order.
 
         For an exception, mirrors :meth:`exception_fields`'s base-chain
         flattening (base fields first, in declaration order, then the

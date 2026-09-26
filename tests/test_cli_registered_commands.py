@@ -259,7 +259,7 @@ def test_registered_command_preserves_a_host_looking_program_option_value(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import agm.commands.exec_program as exec_program
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
     index = ActivationIndex(
@@ -289,7 +289,7 @@ def _record_registered_exec_args(
 ) -> list[ExecArgs | None]:
     """Register ``tools lint`` (``level: text``) and record the execution arguments it runs with."""
     import agm.commands.exec_program as exec_program
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
     index = ActivationIndex(
@@ -506,7 +506,7 @@ def test_registered_command_help_does_not_dispatch_program(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import agm.commands.exec_program as exec_program
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
     index = ActivationIndex(
@@ -550,7 +550,7 @@ def test_registered_command_help_recognizes_program_value_argument_flags(
     value-taking flag's own VALUE is not.
     """
     import agm.commands.exec_program as exec_program
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     context = ConfigContext(home=tmp_path / "home", proj_dir=None, cwd=tmp_path)
     index = ActivationIndex(
@@ -604,7 +604,7 @@ def test_registered_command_help_degrades_when_program_discovery_fails() -> None
     assert "Run the registered AgL program." in text
     assert "--level" not in text
 
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         "program def main(level: text) -> unit = ()"
@@ -622,7 +622,7 @@ def test_registered_command_help_omits_program_arguments_on_a_reservation_collis
     no parameter entries at all: ``program_command_for`` degrades the whole
     command to ``None`` on a collision.
     """
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         "program def main(help: text) -> unit = print help"
@@ -637,7 +637,7 @@ def test_registered_command_help_omits_program_arguments_on_a_reservation_collis
 
 def test_registered_command_help_shows_the_program_documentation() -> None:
     """A command's prose is the ``@doc`` of the program behind it."""
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         '@doc("Program prose.")\nprogram def main() -> unit = ()'
@@ -662,7 +662,7 @@ def test_registered_command_help_falls_back_to_the_indexed_documentation() -> No
 
 
 def test_registered_command_help_omits_a_hidden_parameter() -> None:
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         'program def main(level: text = "a", @opt-hidden debug-mode: bool = false) -> unit = ()'
@@ -681,7 +681,7 @@ def test_registered_command_help_usage_line_reflects_the_program_signature() -> 
     own positional slots and options, not the raw ``program def`` declaration
     path.
     """
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source(
         'program def main(@arg-pos name: text, @arg-std tag: text = "default") -> unit = ()'
@@ -706,7 +706,7 @@ def test_registered_command_help_renders_no_contentless_sections_for_a_parameter
     """A registered command backed by a parameterless ``program def`` renders a
     plain usage line and no positional slots.
     """
-    from agm.cli_support.program_discovery import discover_program_declarations_from_source
+    from tests._agl_helpers import discover_program_declarations_from_source
 
     (program,) = discover_program_declarations_from_source("program def main() -> unit = ()")
 
@@ -1981,6 +1981,22 @@ def test_registered_declaration_ignores_a_program_owned_by_another_package(tmp_p
     assert registered_program_declaration("tools/main::main", "other", context=context) is None
 
 
+def test_registered_declaration_degrades_when_the_active_packages_are_unreadable(
+    tmp_path: Path,
+) -> None:
+    """An unreadable config layer leaves a registered command undescribed, never crashes."""
+    from agm.commands.exec_program import registered_program_declaration
+
+    write_installed_package(tmp_path, "tools")
+    config = tmp_path / "work" / ".agm" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("", encoding="utf-8")
+    config.chmod(0)
+    context = ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path / "work")
+
+    assert registered_program_declaration("tools/main::main", "tools", context=context) is None
+
+
 def test_registered_declaration_selects_the_active_packages_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -2095,7 +2111,7 @@ def test_registered_program_declaration_degrades_when_selection_fails(
     monkeypatch.setattr(
         exec_target,
         "select_active_packages",
-        lambda **_: (_ for _ in ()).throw(RuntimeError("unavailable")),
+        lambda **_: (_ for _ in ()).throw(PackageActivationError("unavailable")),
     )
 
     assert registered_program_declaration("tools/lint::main", "tools", context=context) is None

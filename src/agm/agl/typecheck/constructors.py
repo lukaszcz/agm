@@ -103,11 +103,8 @@ def constructed_template(env: TypeEnvironment, ctor_ref: ConstructorRef) -> Type
             typedef.type_params,
         )
     # Scope publishes an alias constructor only for a declared, checked alias.
-    source = cast(
-        TypeTemplate,
-        env.source_type_template_qname(
-            ctor_ref.owner_module_id, ctor_ref.owner_name, scope_path=ctor_ref.owner_path
-        ),
+    source = env.declared_type_template(
+        ctor_ref.owner_module_id, ctor_ref.owner_name, scope_path=ctor_ref.owner_path
     )
     template = source.template
     if ctor_ref.member is not None:

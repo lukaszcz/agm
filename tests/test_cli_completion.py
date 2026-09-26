@@ -412,6 +412,7 @@ def test_completion_treats_an_unreadable_colon_named_file_as_a_file_not_a_refere
         unreadable.chmod(0o644)
 
 
+@pytest.mark.usefixtures("self_validation_disabled")
 def test_registered_param_completion_degrades_on_unknown_or_unavailable_commands(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -530,6 +531,7 @@ def test_registered_parameter_fixture_completion_offers_qualified_module_flags(
     assert "--level" not in values
 
 
+@pytest.mark.usefixtures("self_validation_disabled")
 def test_complete_registered_commands_silently_degrades_on_bad_index(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -584,6 +586,7 @@ def test_complete_open_target_includes_repo_and_branches(
     assert suggestions == ["feat/a", "feat/b", "feature/local", "feature/remote"]
 
 
+@pytest.mark.usefixtures("self_validation_disabled")
 def test_complete_open_target_swallows_helper_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -831,6 +834,7 @@ def test_complete_tmux_session_reads_tmux_output(monkeypatch: pytest.MonkeyPatch
     assert completion.complete_tmux_session("a") == ["alpha"]
 
 
+@pytest.mark.usefixtures("self_validation_disabled")
 def test_complete_tmux_session_ignores_missing_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         del args, kwargs
@@ -839,6 +843,19 @@ def test_complete_tmux_session_ignores_missing_tmux(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert completion.complete_tmux_session("a") == []
+
+
+def test_completion_failure_surfaces_under_self_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        raise FileNotFoundError("tmux")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(FileNotFoundError):
+        completion.complete_tmux_session("a")
 
 
 def test_complete_tmux_window_reads_tmux_output(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -856,6 +873,7 @@ def test_complete_tmux_window_reads_tmux_output(monkeypatch: pytest.MonkeyPatch)
     assert completion.complete_tmux_window("@") == ["@1", "@2"]
 
 
+@pytest.mark.usefixtures("self_validation_disabled")
 def test_complete_tmux_window_ignores_missing_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         del args, kwargs
@@ -1207,6 +1225,7 @@ class TestCompleteCloseBranch:
         monkeypatch.setattr(completion, "discover_current_project_dir", lambda: None)
         assert completion.complete_close_branch("") == []
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             completion,
@@ -1250,6 +1269,7 @@ class TestCompleteDepName:
         monkeypatch.setattr(completion, "_resolve_project_deps_dir", lambda: deps_file)
         assert completion.complete_dep_name("") == []
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             completion,
@@ -1269,6 +1289,7 @@ class TestCompleteDepBranch:
         monkeypatch.setattr(completion, "_resolve_dep_repo", lambda name: None)
         assert completion.complete_dep_branch(_make_ctx(dep="mylib"), "") == []
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             completion,
@@ -1326,6 +1347,7 @@ class TestCompleteDepTarget:
         # but mylib/repo should NOT be there since repo is None
         assert "mylib/repo" not in result
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             completion,
@@ -1417,6 +1439,7 @@ class TestCompleteRunCommand:
         result = completion.complete_run_command(_make_ctx(), "")
         assert result == []
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_path_iteration_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("PATH", "/broken")
         monkeypatch.setattr(
@@ -1471,6 +1494,7 @@ class TestCompletePathArgument:
         result = completion.complete_path_argument(ctx, [], "my")
         assert "mydir/" in result
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_exception(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1576,6 +1600,7 @@ class TestCompleteReviseCommandOrReviewFile:
 
         assert result == ["frontend"]
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_config_errors(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1610,6 +1635,7 @@ class TestCompleteReviseCommandOrReviewFile:
 
 
 class TestBranchCandidatesExceptionHandling:
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_skips_current_branch_on_runtime_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1679,6 +1705,7 @@ class TestCompleteDepTargetExceptionHandling:
 
 
 class TestCompletePaneCountExceptionHandling:
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             completion,
@@ -1713,6 +1740,7 @@ class TestCompleteDepTargetRepoSuffix:
 
 
 class TestCompletePaneCountException:
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """complete_pane_count returns [] when _match raises."""
 
@@ -1776,6 +1804,7 @@ class TestPathCandidatesWithParentComponent:
 
 
 class TestCompleteHelpPathExceptionHandler:
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_runtime_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """complete_help_path returns [] when _match raises RuntimeError."""
         monkeypatch.setattr(
@@ -1827,6 +1856,7 @@ class TestCompleteRunCommandCtx:
 
 
 class TestCompleteDepTargetExceptionHandler:
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_runtime_error_in_branch_candidates(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1852,6 +1882,7 @@ class TestCompleteDepTargetExceptionHandler:
 
 
 class TestCompleteWorktreeBranchExceptionHandler:
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_when_branch_candidates_raises(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1907,6 +1938,7 @@ class TestCompleteAglFile:
         assert "other.py" not in result
         assert "subdir/" in result
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_exception(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1995,10 +2027,8 @@ class TestProgramArgumentCompletionItems:
 
     def _values(self, source: str, requested: str | None, incomplete: str) -> list[str]:
         """Return the flags completion offers for *source*'s selected program."""
-        from agm.cli_support.program_discovery import (
-            discover_program_declarations_from_source,
-            select_entry_program,
-        )
+        from agm.cli_support.program_discovery import select_entry_program
+        from tests._agl_helpers import discover_program_declarations_from_source
 
         programs = discover_program_declarations_from_source(source)
         selected = select_entry_program(programs, requested=requested).selected
@@ -2125,6 +2155,7 @@ class TestExecCommandShellCompleteEdgeCases:
 
         assert any(item.value == "--msg" for item in result)
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_exception_in_program_argument_discovery_degrades_to_base(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2172,6 +2203,7 @@ class TestCompleteDirArgument:
         assert "somedir/" in result
         assert "somefile.agl" not in result
 
+    @pytest.mark.usefixtures("self_validation_disabled")
     def test_returns_empty_on_exception(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -2208,6 +2240,7 @@ def test_pkg_install_completion_includes_directories_and_archives(
     assert "package.agmpkg" in candidates
 
 
+@pytest.mark.usefixtures("self_validation_disabled")
 def test_complete_package_source_degrades_on_path_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         completion,

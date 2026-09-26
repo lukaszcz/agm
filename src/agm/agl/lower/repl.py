@@ -34,7 +34,7 @@ from agm.agl.syntax.nodes import (
 
 if TYPE_CHECKING:
     from agm.agl.semantics.type_table import TypeDef
-    from agm.agl.semantics.types import Type, TypeTemplate
+    from agm.agl.semantics.types import Type
     from agm.agl.typecheck.env import CheckedModule
 
 __all__ = [
@@ -354,13 +354,10 @@ def _declaration_dependencies(
             ):
                 dependencies.add(nominal_dependency_ids[base_typedef.decl_node_id])
     if isinstance(item, TypeAlias):
-        alias_template = cast(
-            "TypeTemplate",
-            checked.type_env.source_type_template_qname(
-                checked.module_id,
-                item.name,
-                scope_path=tuple(segment.name for segment in item.scope_path),
-            ),
+        alias_template = checked.type_env.declared_type_template(
+            checked.module_id,
+            item.name,
+            scope_path=tuple(segment.name for segment in item.scope_path),
         )
         dependencies.update(
             _nominal_dependencies(

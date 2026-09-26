@@ -1,7 +1,8 @@
 """AglSyntaxError: parse-layer error with SourceSpan and friendly message.
 
-This module maps Lark ``UnexpectedInput`` family and lexer ``LexError`` to
-``AglSyntaxError`` carrying a ``SourceSpan`` and a user-facing message.
+This module maps Lark's ``UnexpectedToken`` (the only error the LALR parser
+raises over the AgL lexer) and lexer ``LexError`` to ``AglSyntaxError``
+carrying a ``SourceSpan`` and a user-facing message.
 
 Special cases:
 - If the unexpected token is any comparison operator (``==``, ``!=``, ``<``,
@@ -28,8 +29,11 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Sequence
 
+from lark import Tree
+
 from agm.agl.diagnostics import AglError, dollar_spacing_hint, piping_hint
 from agm.agl.lexer.operators import OPERAND_END_TYPES, scanner_token_type
+from agm.agl.lexer.positions import token_span
 from agm.agl.lexer.tokens import NAME, VERBATIM_END, VERBATIM_START
 from agm.agl.syntax.spans import SourceSpan
 
@@ -108,44 +112,14 @@ class AglSyntaxError(AglError):
     """A syntax error produced by the parser layer.
 
     Carries a :class:`~agm.agl.syntax.spans.SourceSpan` pinpointing the
-    offending location in the source.  The ``span`` attribute is guaranteed
-    non-None (unlike the base ``AglError``).
+    offending location in the source (never ``None``, unlike the base
+    ``AglError``).
     """
+
+    span: SourceSpan
 
     def __init__(self, message: str, *, span: SourceSpan) -> None:
         super().__init__(message, span=span)
-
-    @property
-    def source_span(self) -> SourceSpan:
-        """Always-non-None span; avoids repeated ``assert span is not None``."""
-        assert self.span is not None
-        return self.span
-
-
-def _span_from_token(
-    token_line: int,
-    token_col: int,
-    token_pos: int,
-    token_end_line: int | None,
-    token_end_col: int | None,
-    token_end_pos: int | None,
-) -> SourceSpan:
-    """Build a SourceSpan from Lark Token position fields.
-
-    Falls back to single-character synthetic positions when optional fields
-    are absent.
-    """
-    end_line = token_end_line if token_end_line is not None else token_line
-    end_col = token_end_col if token_end_col is not None else token_col + 1
-    end_pos = token_end_pos if token_end_pos is not None else token_pos + 1
-    return SourceSpan(
-        start_line=token_line,
-        start_col=token_col,
-        end_line=end_line,
-        end_col=end_col,
-        start_offset=token_pos,
-        end_offset=end_pos,
-    )
 
 
 def _end_of_source_span(source_text: str) -> SourceSpan:
@@ -207,33 +181,23 @@ def _make_inline_compound_error(
     return AglSyntaxError(guidance, span=span)
 
 
-def _completed_rule(exc: UnexpectedToken) -> str | None:
-    """Name of the grammar rule just completed on the parse stack, if exposed.
+def _completed_try(exc: UnexpectedToken) -> bool:
+    """Whether the parser had just completed a ``try`` expression.
 
     Lets a diagnostic ask the parser what it had just finished reading rather
-    than guessing from source text.  Returns ``None`` when the parser state is
-    unavailable (a synthesised exception, or a lark version that stops
-    exposing it), so callers fall back to the generic message.
+    than guessing from source text.
     """
-    parser: object = getattr(exc, "interactive_parser", None)
-    state: object = getattr(parser, "parser_state", None)
-    stack: object = getattr(state, "value_stack", None)
-    if not isinstance(stack, list):
-        return None
-    items: list[object] = stack
-    data: object = getattr(items[-1], "data", None)
-    return data if isinstance(data, str) else None
+    top = exc.interactive_parser.parser_state.value_stack[-1]
+    return isinstance(top, Tree) and top.data == "try_expr"
 
 
-def _inline_body_guidance(value: str, source_text: str | None, token_pos: int) -> str | None:
+def _inline_body_guidance(value: str, source_text: str, token_pos: int) -> str | None:
     """Guidance for a binder opening an inline ``=>`` body, which takes one item.
 
     Returns ``None`` unless the binder really does open the body introduced by
     the nearest preceding ``=>`` on the same line, so that a stray ``let``
     elsewhere still takes the generic path.
     """
-    if source_text is None:
-        return None
     arrow = source_text.rfind("=>", 0, token_pos)
     if arrow < 0 or "\n" in source_text[arrow:token_pos]:
         return None
@@ -256,22 +220,16 @@ def _make_placeholder_position_error(span: SourceSpan) -> AglSyntaxError:
     )
 
 
-def _is_missing_arrow_after_else(
-    *, source_text: str | None, token_pos: int, expected: set[str]
-) -> bool:
+def _is_missing_arrow_after_else(*, source_text: str, token_pos: int, expected: set[str]) -> bool:
     return (
-        source_text is not None
-        and expected == {"ARROW"}
-        and _ELSE_BEFORE_TOKEN_RE.search(source_text[:token_pos]) is not None
+        expected == {"ARROW"} and _ELSE_BEFORE_TOKEN_RE.search(source_text[:token_pos]) is not None
     )
 
 
-def _is_placeholder_position_error(
-    *, token_type: str, source_text: str | None, token_pos: int
-) -> bool:
-    return token_type in {"PLACEHOLDER", "PLACEHOLDER_NUM"} or (
-        source_text is not None
-        and _PLACEHOLDER_BEFORE_TOKEN_RE.search(source_text[:token_pos]) is not None
+def _is_placeholder_position_error(*, token_type: str, source_text: str, token_pos: int) -> bool:
+    return (
+        token_type in {"PLACEHOLDER", "PLACEHOLDER_NUM"}
+        or _PLACEHOLDER_BEFORE_TOKEN_RE.search(source_text[:token_pos]) is not None
     )
 
 
@@ -282,40 +240,31 @@ _LAYOUT_TOKEN_TYPES: frozenset[str] = frozenset({"_INDENT", "_DEDENT", "_NEWLINE
 
 
 def _dollar_spacing_hint(
-    tokens: Sequence[Token] | None,
+    tokens: Sequence[Token],
     *,
-    offending_type: str | None,
+    offending_type: str,
     line: int,
     pos: int,
 ) -> str:
     """Hint suffix when a ``$``-suffixed NAME precedes the error on its anchor line.
 
     *tokens* is the parse's single materialized token pass (see
-    :func:`~agm.agl.lexer.token_collector`); ``None``/empty when none was
-    captured (a lex error, so no tokens were ever produced). The anchor line
-    is *line* (the offending token's own line), except for a zero-width
-    layout/end token — ``_INDENT``/``_DEDENT``/``_NEWLINE``/``$END`` have no
-    line of their own, so their anchor is the line of the last real token
-    strictly before *pos*. Reports the first ``$``-suffixed NAME on the anchor
-    line before *pos*, delegating the stem check to
-    :func:`~agm.agl.diagnostics.dollar_spacing_hint`.
+    :func:`~agm.agl.lexer.token_collector`). The anchor line is *line* (the
+    offending token's own line), except for a zero-width layout/end token —
+    ``_INDENT``/``_DEDENT``/``_NEWLINE``/``$END`` have no line of their own, so
+    their anchor is the line of the last real token strictly before *pos*.
+    Reports the first ``$``-suffixed NAME on the anchor line before *pos*,
+    delegating the stem check to :func:`~agm.agl.diagnostics.dollar_spacing_hint`.
     """
-    if not tokens:
-        return ""
+    spans = [(tok, token_span(tok)) for tok in tokens]
     anchor_line = line
     if offending_type in _LAYOUT_TOKEN_TYPES:
         anchor_line = 0
-        for tok in tokens:
-            if tok.type in _LAYOUT_TOKEN_TYPES or tok.start_pos is None or tok.start_pos >= pos:
-                continue
-            if tok.line is not None:
-                anchor_line = tok.line
-        if not anchor_line:
-            return ""
-    for tok in tokens:
-        if tok.type != NAME or tok.line != anchor_line:
-            continue
-        if tok.start_pos is None or tok.start_pos >= pos:
+        for tok, span in spans:
+            if tok.type not in _LAYOUT_TOKEN_TYPES and span.start_offset < pos:
+                anchor_line = span.start_line
+    for tok, span in spans:
+        if tok.type != NAME or span.start_line != anchor_line or span.start_offset >= pos:
             continue
         hint = dollar_spacing_hint(str(tok))
         if hint:
@@ -335,9 +284,9 @@ _OPERAND_ENDING_TOKEN_TYPES: frozenset[str] = OPERAND_END_TYPES | {VERBATIM_END}
 
 
 def _piping_hint(
-    tokens: Sequence[Token] | None,
+    tokens: Sequence[Token],
     *,
-    offending_type: str | None,
+    offending_type: str,
     line: int,
     pos: int,
 ) -> str:
@@ -350,12 +299,12 @@ def _piping_hint(
     application and the `$` literal was meant as a further, piped argument.
     Delegates the wording to :func:`~agm.agl.diagnostics.piping_hint`.
     """
-    if offending_type != VERBATIM_START or not tokens:
+    if offending_type != VERBATIM_START:
         return ""
     preceding = [
         tok
         for tok in tokens
-        if tok.start_pos is not None and tok.start_pos < pos and tok.line == line
+        if (span := token_span(tok)).start_offset < pos and span.start_line == line
     ]
     if len(preceding) < 2:
         return ""
@@ -368,188 +317,110 @@ def _piping_hint(
 
 
 def syntax_error_from_lark(
-    exc: Exception,
-    *,
-    filename: str = "<agl>",
-    source_text: str | None = None,
-    tokens: Sequence[Token] | None = None,
+    exc: UnexpectedToken, *, source_text: str, tokens: Sequence[Token]
 ) -> AglSyntaxError:
-    """Convert a Lark parse exception to ``AglSyntaxError``.
-
-    Handles:
-    - ``lark.exceptions.UnexpectedToken`` (token type mismatch)
-    - ``lark.exceptions.UnexpectedCharacters`` (lexer-level character error)
-    - ``lark.exceptions.UnexpectedEOF`` (premature end-of-file)
-    - ``agm.agl.lexer.errors.LexError`` (custom lexer error)
-    - Generic fallback for any other exception.
+    """Convert the parser's ``UnexpectedToken`` on *source_text* to ``AglSyntaxError``.
 
     *tokens* is the parse's materialized token pass (see
-    :func:`~agm.agl.lexer.token_collector`); when supplied, every message
-    built from a Lark exception (everything but the ``LexError`` path) gets
-    one uniform final pass appending :func:`_dollar_spacing_hint`.
+    :func:`~agm.agl.lexer.token_collector`); every message gets one uniform
+    final pass appending :func:`_dollar_spacing_hint` or :func:`_piping_hint`.
     """
-    from lark.exceptions import UnexpectedToken
-
-    from agm.agl.lexer.errors import LexError
-
-    if isinstance(exc, LexError):
-        return AglSyntaxError(str(exc), span=exc.span)
-
-    error = _lark_error_message(exc, filename=filename, source_text=source_text)
-    offending_type = exc.token.type if isinstance(exc, UnexpectedToken) else None
+    error = _unexpected_token_error(exc, source_text=source_text)
+    offending_type = exc.token.type
     hint = _dollar_spacing_hint(
         tokens,
         offending_type=offending_type,
-        line=error.source_span.start_line,
-        pos=error.source_span.start_offset,
+        line=error.span.start_line,
+        pos=error.span.start_offset,
     ) or _piping_hint(
         tokens,
         offending_type=offending_type,
-        line=error.source_span.start_line,
-        pos=error.source_span.start_offset,
+        line=error.span.start_line,
+        pos=error.span.start_offset,
     )
     if not hint:
         return error
-    return AglSyntaxError(f"{error}{hint}", span=error.source_span)
+    return AglSyntaxError(f"{error}{hint}", span=error.span)
 
 
-def _lark_error_message(
-    exc: Exception,
-    *,
-    filename: str,
-    source_text: str | None,
-) -> AglSyntaxError:
-    """Build the syntax-error message for a Lark exception, without the spacing hint."""
-    from lark.exceptions import UnexpectedCharacters, UnexpectedEOF, UnexpectedToken
+def _unexpected_token_error(exc: UnexpectedToken, *, source_text: str) -> AglSyntaxError:
+    """Build the syntax error for an unexpected token, without the spacing hint."""
+    tok = exc.token
+    if tok.type == "$END" and tok.end_pos is None:
+        # Lark borrows $END's position from the last token unless that
+        # token is falsy (zero-width, e.g. VERBATIM_END); its synthetic
+        # (1, 1) fallback has no end position.
+        span = _end_of_source_span(source_text)
+    else:
+        span = token_span(tok)
+    pos = span.start_offset
+    if _is_missing_arrow_after_else(
+        source_text=source_text, token_pos=pos, expected=set(exc.expected)
+    ):
+        return _make_missing_else_arrow_error(span)
+    if tok.type == "$END" and "END" in exc.expected:
+        from agm.agl.lexer import unclosed_scope_path
 
-    if isinstance(exc, UnexpectedToken):
-        tok = exc.token
-        line = tok.line if tok.line is not None else 1
-        col = tok.column if tok.column is not None else 1
-        pos = tok.start_pos if tok.start_pos is not None else 0
-        if tok.type == "$END" and tok.end_pos is None and source_text is not None:
-            # Lark borrows $END's position from the last token unless that
-            # token is falsy (zero-width, e.g. VERBATIM_END); its synthetic
-            # (1, 1) fallback has no end_pos.
-            span = _end_of_source_span(source_text)
-            pos = span.start_offset
-        else:
-            span = _span_from_token(line, col, pos, tok.end_line, tok.end_column, tok.end_pos)
-        if _is_missing_arrow_after_else(
-            source_text=source_text, token_pos=pos, expected=set(exc.expected)
-        ):
-            return _make_missing_else_arrow_error(span)
-        if tok.type == "$END" and "END" in exc.expected and source_text is not None:
-            from agm.agl.lexer import unclosed_scope_path
-
-            scope_path = unclosed_scope_path(source_text)
-            assert scope_path is not None
-            return AglSyntaxError(f"Missing scope closer; expected 'end {scope_path}'.", span=span)
-        if _is_placeholder_position_error(
-            token_type=tok.type, source_text=source_text, token_pos=pos
-        ):
-            return _make_placeholder_position_error(span)
-        # Chained comparison detection: the unexpected token is
-        # a comparison operator AND that operator is NOT in the expected set.
-        # When the operator IS expected, we are still before the first comparison
-        # (valid start of, e.g., ``x == y``); when it is absent, a full comparison
-        # expression was already consumed and the parser cannot continue — the
-        # user chained comparisons such as ``x == y == z``, ``1 < 2 < 3``, or
-        # ``a <= b != c``.
-        if tok.type in _CMP_OPS and tok.type not in exc.expected:
-            return _make_chained_comparison_error(span)
-        # Bar-safe inline-form rejections: a
-        # nested ``if`` / ``case`` / ``try`` appears where the grammar's inline
-        # forms forbid it (inline ``=>``/``catch`` body, after ``until``, or a
-        # ``case`` expression branch).  Differentiate "needs a suite" (a
-        # statement position) from "needs parentheses" (an expression position)
-        # by whether the expected set contains any statement starter.
-        if tok.type in _INLINE_BLOCKED:
-            stmt_context = bool(_STMT_STARTERS & set(exc.expected))
-            return _make_inline_compound_error(tok.value, span, stmt_context=stmt_context)
-        # A binder written directly in an inline `=>` body, which takes a
-        # single item.  It is legal parenthesized or as an indented block.
-        if tok.value in _INLINE_BODY_OPENERS:
-            guidance = _inline_body_guidance(str(tok.value), source_text, pos)
-            if guidance is not None:
-                return AglSyntaxError(guidance, span=span)
-        # The `try` body ended while a `catch` was still expected.
-        if tok.type in _TRY_BODY_ENDERS and "CATCH" in exc.expected:
-            return AglSyntaxError(
-                "a `try` expression requires at least one `catch` clause.",
-                span=span,
-            )
-        # A nested `try` closed a marked body's final item: it consumed every
-        # `catch`, so the enclosing `try` has none and the body has no value.
-        if (
-            tok.type in _TRY_BODY_ENDERS
-            and "SEMICOLON" in exc.expected
-            and _completed_rule(exc) == "try_expr"
-        ):
-            return AglSyntaxError(
-                "a nested `try` at the end of a `try` body takes the enclosing "
-                "`catch` clauses; parenthesize it.",
-                span=span,
-            )
-        if tok.type == "_INDENT" and bool(_ITEM_ENDERS & set(exc.expected)):
-            # A complete item was already in hand (its terminators are expected),
-            # so this indentation is stray — never a misplaced `$` literal,
-            # whose payload the lexer would have consumed on the header line.
-            return AglSyntaxError(
-                "Unexpected indentation; this line is more indented than its block.",
-                span=span,
-            )
-        if tok.type == "_NEWLINE":
-            if "_INDENT" in exc.expected:
-                return AglSyntaxError(
-                    "Expected an indented block or inline expression after this line.",
-                    span=span,
-                )
-            return AglSyntaxError("Unexpected newline.", span=span)
-        zero_width = _ZERO_WIDTH_TOKEN_NAMES.get(tok.type)
-        if zero_width is not None:
-            return AglSyntaxError(f"Unexpected {zero_width}.", span=span)
         return AglSyntaxError(
-            f"Unexpected {tok.value!r}.",
+            f"Missing scope closer; expected 'end {unclosed_scope_path(source_text)}'.",
             span=span,
         )
-
-    if isinstance(exc, UnexpectedCharacters):
-        line = exc.line if exc.line is not None else 1
-        col = exc.column if exc.column is not None else 1
-        pos = exc.pos_in_stream if exc.pos_in_stream is not None else 0
-        span = SourceSpan(
-            start_line=line,
-            start_col=col,
-            end_line=line,
-            end_col=col + 1,
-            start_offset=pos,
-            end_offset=pos + 1,
-        )
+    if _is_placeholder_position_error(token_type=tok.type, source_text=source_text, token_pos=pos):
+        return _make_placeholder_position_error(span)
+    # Chained comparison detection: the unexpected token is
+    # a comparison operator AND that operator is NOT in the expected set.
+    # When the operator IS expected, we are still before the first comparison
+    # (valid start of, e.g., ``x == y``); when it is absent, a full comparison
+    # expression was already consumed and the parser cannot continue — the
+    # user chained comparisons such as ``x == y == z``, ``1 < 2 < 3``, or
+    # ``a <= b != c``.
+    if tok.type in _CMP_OPS and tok.type not in exc.expected:
+        return _make_chained_comparison_error(span)
+    # Bar-safe inline-form rejections: a
+    # nested ``if`` / ``case`` / ``try`` appears where the grammar's inline
+    # forms forbid it (inline ``=>``/``catch`` body, after ``until``, or a
+    # ``case`` expression branch).  Differentiate "needs a suite" (a
+    # statement position) from "needs parentheses" (an expression position)
+    # by whether the expected set contains any statement starter.
+    if tok.type in _INLINE_BLOCKED:
+        stmt_context = bool(_STMT_STARTERS & set(exc.expected))
+        return _make_inline_compound_error(tok.value, span, stmt_context=stmt_context)
+    # A binder written directly in an inline `=>` body, which takes a
+    # single item.  It is legal parenthesized or as an indented block.
+    if tok.value in _INLINE_BODY_OPENERS:
+        guidance = _inline_body_guidance(str(tok.value), source_text, pos)
+        if guidance is not None:
+            return AglSyntaxError(guidance, span=span)
+    # The `try` body ended while a `catch` was still expected.
+    if tok.type in _TRY_BODY_ENDERS and "CATCH" in exc.expected:
         return AglSyntaxError(
-            "Unexpected character.",
+            "a `try` expression requires at least one `catch` clause.",
             span=span,
         )
-
-    if isinstance(exc, UnexpectedEOF):
-        # No position info; use (1, 1) as a fallback.
-        span = SourceSpan(
-            start_line=1,
-            start_col=1,
-            end_line=1,
-            end_col=1,
-            start_offset=0,
-            end_offset=0,
+    # A nested `try` closed a marked body's final item: it consumed every
+    # `catch`, so the enclosing `try` has none and the body has no value.
+    if tok.type in _TRY_BODY_ENDERS and "SEMICOLON" in exc.expected and _completed_try(exc):
+        return AglSyntaxError(
+            "a nested `try` at the end of a `try` body takes the enclosing "
+            "`catch` clauses; parenthesize it.",
+            span=span,
         )
-        return AglSyntaxError("Unexpected end of input.", span=span)
-
-    # Generic fallback.
-    span = SourceSpan(
-        start_line=1,
-        start_col=1,
-        end_line=1,
-        end_col=1,
-        start_offset=0,
-        end_offset=0,
-    )
-    return AglSyntaxError(str(exc), span=span)
+    if tok.type == "_INDENT" and bool(_ITEM_ENDERS & set(exc.expected)):
+        # A complete item was already in hand (its terminators are expected),
+        # so this indentation is stray — never a misplaced `$` literal,
+        # whose payload the lexer would have consumed on the header line.
+        return AglSyntaxError(
+            "Unexpected indentation; this line is more indented than its block.",
+            span=span,
+        )
+    if tok.type == "_NEWLINE":
+        if "_INDENT" in exc.expected:
+            return AglSyntaxError(
+                "Expected an indented block or inline expression after this line.",
+                span=span,
+            )
+        return AglSyntaxError("Unexpected newline.", span=span)
+    zero_width = _ZERO_WIDTH_TOKEN_NAMES.get(tok.type)
+    if zero_width is not None:
+        return AglSyntaxError(f"Unexpected {zero_width}.", span=span)
+    return AglSyntaxError(f"Unexpected {tok.value!r}.", span=span)

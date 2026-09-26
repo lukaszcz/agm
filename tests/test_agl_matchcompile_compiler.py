@@ -48,7 +48,6 @@ from agm.agl.matchcompile.model import (
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
-    EnumConstructorSpelling,
     FieldOccurrenceProvenance,
     LiteralKind,
     MatchCaseContext,
@@ -65,13 +64,12 @@ from agm.agl.matchcompile.normalize import (
 from agm.agl.modules.ids import ENTRY_ID, STD_PRELUDE_ID
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumType, IntType, RecordType, Type, TypeTemplate
+from agm.agl.semantics.types import EnumType, IntType, RecordType, Type
 from agm.agl.semantics.values import BoolValue, RecordValue, Value
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import (
     CheckedModule,
-    EnumOwnerForm,
     EnumOwnerFormKind,
     check_program,
 )
@@ -2253,45 +2251,6 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
                 case_context=replace(normalized.case_context, module_id=STD_PRELUDE_ID),
             ),
         )
-
-
-def test_source_spelling_model_rejects_inconsistent_structures() -> None:
-    with pytest.raises(ValueError, match="bare constructor"):
-        EnumConstructorSpelling(None, ("module",))
-    with pytest.raises(ValueError, match="type-qualified"):
-        EnumConstructorSpelling("Choice", None, bare=True)
-    with pytest.raises(ValueError, match="import handle"):
-        EnumOwnerForm(
-            "Choice",
-            None,
-            kind=EnumOwnerFormKind.QUALIFIED_IMPORT,
-            type_template=TypeTemplate(EnumType("Choice")),
-        )
-    with pytest.raises(ValueError, match="unqualified enum owner"):
-        EnumOwnerForm(
-            "Choice",
-            ("module",),
-            kind=EnumOwnerFormKind.OPEN_IMPORT,
-            type_template=TypeTemplate(EnumType("Choice")),
-        )
-    with pytest.raises(ValueError, match="self-qualified"):
-        EnumOwnerForm(
-            "Choice",
-            None,
-            kind=EnumOwnerFormKind.SELF,
-            type_template=TypeTemplate(EnumType("Choice")),
-        )
-    with pytest.raises(ValueError, match="non-empty module qualifier"):
-        EnumOwnerForm(
-            "Choice",
-            (),
-            kind=EnumOwnerFormKind.SELF,
-            qualifier_anchored=True,
-            type_template=TypeTemplate(EnumType("Choice")),
-        )
-    assert EnumOwnerForm("Choice", None).match(EnumType("Choice")) is None
-    assert EnumOwnerForm("Choice", ("module",)).kind is EnumOwnerFormKind.QUALIFIED_IMPORT
-    assert EnumOwnerForm("Choice", ()).kind is EnumOwnerFormKind.SELF
 
 
 def test_normalization_uses_checked_pattern_metadata_without_scope_provenance() -> None:

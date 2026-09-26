@@ -975,9 +975,11 @@ class TestExecDynamicHelp:
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("program def main(msg: text) -> unit = print msg\n")
+        from agm.packages.stdlib import StdlibResolutionError
+
         monkeypatch.setattr(
             "agm.cli_support.exec_roots.effective_exec_roots",
-            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("unavailable roots")),
+            lambda **_kwargs: (_ for _ in ()).throw(StdlibResolutionError("unavailable roots")),
         )
 
         assert print_exec_help(tokens=["--help"], file=str(agl_file), command=None)

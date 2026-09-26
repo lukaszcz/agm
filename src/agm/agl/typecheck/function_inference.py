@@ -307,7 +307,7 @@ def _function_dependencies(
 ) -> dict[int, tuple[int, ...]]:
     """Collect candidate references from bodies and their top-level bindings."""
     methods_by_name = _candidate_methods_by_name(functions)
-    binding_values: dict[int, tuple[CandidateModule, object]] = {}
+    binding_values: dict[int, tuple[CandidateModule, Expr]] = {}
     modules = {function.module.module_id: function.module for function in functions.values()}
     for module in modules.values():
         program = module.resolved.program
@@ -322,7 +322,7 @@ def _function_dependencies(
         referenced: set[int] = set()
         visited_bindings: set[int] = set()
 
-        def visit_from(owner: CandidateModule, value: object) -> None:
+        def visit_from(owner: CandidateModule, value: Expr) -> None:
             def visit(item: object) -> None:
                 if isinstance(item, VarRef):
                     reference = owner.resolved.resolution.get(item.node_id)
@@ -433,7 +433,7 @@ def _register_signature(
 
 def _references_tainted_binding(
     module: CandidateModule,
-    item: object,
+    item: Expr | LetDecl | VarDecl,
     tainted: set[int],
     candidate_methods: Mapping[str, Sequence[int]],
     checker: "_Checker",

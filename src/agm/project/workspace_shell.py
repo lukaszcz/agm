@@ -223,11 +223,13 @@ def _heredoc_lines(path: str, body: str) -> list[str]:
     """Return sh lines that write *body* to *path* (regenerating a rc file).
 
     Uses a quoted heredoc so the body is written verbatim.  The delimiter is
-    chosen to never appear inside *body*.
+    chosen to never appear as a line of *body*, which embeds workspace paths.
     """
 
     delimiter = "AGM_EOF"
-    assert delimiter not in body
+    lines = body.splitlines()
+    while delimiter in lines:
+        delimiter += "_"
     return [
         f'mkdir -p "$(dirname {path})"',
         f"cat > {path} <<'{delimiter}'",

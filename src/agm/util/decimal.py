@@ -1,6 +1,6 @@
 """Pure, context-free ``decimal.Decimal`` helpers: the pinned context and its range.
 
-Agm-import-free leaf: only ``decimal``/``math`` from the standard library.
+Agm-import-free leaf: only ``decimal``/``math``/``typing`` from the standard library.
 Every AgL decimal value, at every point it is created, is
 finite and lies within :data:`AGL_DECIMAL_CONTEXT`'s exponent range --
 :func:`decimal_in_range` (or, for an ``int`` not yet converted,
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import decimal
 import math
+from typing import cast
 
 __all__ = [
     "AGL_DECIMAL_CONTEXT",
@@ -113,8 +114,9 @@ def strip_trailing_zeros(value: decimal.Decimal) -> decimal.Decimal:
     :func:`decimal_in_range`, whose Etiny test is about the value's true
     least-significant digit, not merely how it happened to be spelled.
     """
-    sign, digits, exponent = value.as_tuple()
-    assert isinstance(exponent, int)  # value is always finite
+    sign, digits, raw_exponent = value.as_tuple()
+    # Finite: only NaN and infinity carry a letter exponent.
+    exponent = cast(int, raw_exponent)
     if digits == (0,):
         return decimal.Decimal((sign, (0,), 0))
     stripped = list(digits)
@@ -141,8 +143,8 @@ def decimal_in_range(value: decimal.Decimal) -> bool:
     if value.is_zero():
         return True
     stripped = strip_trailing_zeros(value)
-    exponent = stripped.as_tuple().exponent
-    assert isinstance(exponent, int)  # value is finite
+    # Finite: only NaN and infinity carry a letter exponent.
+    exponent = cast(int, stripped.as_tuple().exponent)
     return stripped.adjusted() <= AGL_DECIMAL_CONTEXT.Emax and exponent >= _ETINY
 
 

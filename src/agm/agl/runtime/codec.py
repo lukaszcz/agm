@@ -126,8 +126,7 @@ class OutputCodec(Protocol):
     - ``make_contract(type_ref, type_table)`` — build an ``OutputContract``.
       Runs at check time (or REPL contract-preview time), when a real checker
       ``Type`` is in hand.  ``type_table`` resolves record/enum field/variant
-      shapes for *type_ref* (or one nested inside it); ``None`` is only valid
-      when *type_ref* carries no nominal type.
+      shapes for *type_ref* (or one nested inside it).
     - ``parse(raw, *, strict_json, schema, decode, defs)`` — parse a raw string.
       Runs at execution time against the typeless contract data the lowerer
       already compiled (``schema`` is the JSON Schema dict, ``decode`` the
@@ -142,9 +141,7 @@ class OutputCodec(Protocol):
     @property
     def supported_kinds(self) -> frozenset[str]: ...
 
-    def make_contract(
-        self, type_ref: Type, type_table: TypeTable | None = None
-    ) -> "OutputContract": ...
+    def make_contract(self, type_ref: Type, type_table: TypeTable) -> "OutputContract": ...
 
     def parse(
         self,
@@ -191,9 +188,7 @@ class TextCodec:
         """
         return frozenset({"text"})
 
-    def make_contract(
-        self, type_ref: Type, type_table: TypeTable | None = None
-    ) -> "OutputContract":
+    def make_contract(self, type_ref: Type, type_table: TypeTable) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
 
         For ``text`` targets ``format_instructions`` is left empty (absent):
@@ -417,25 +412,6 @@ def _resolve_ref(decode: DecodeSchema, defs: Mapping[str, DecodeSchema]) -> Deco
     while isinstance(decode, RefDecode):
         decode = defs[decode.key]
     return decode
-
-
-def _decode_contains_ref(decode: DecodeSchema) -> bool:
-    """Return whether *decode* contains any ``RefDecode`` node."""
-    if isinstance(decode, RefDecode):
-        return True
-    if isinstance(decode, ArrayDecode):
-        return _decode_contains_ref(decode.elem)
-    if isinstance(decode, DictDecode):
-        return _decode_contains_ref(decode.value)
-    if isinstance(decode, RecordDecode):
-        return any(_decode_contains_ref(rfield.schema) for rfield in decode.fields)
-    if isinstance(decode, EnumDecode):
-        return any(
-            _decode_contains_ref(vfield.schema)
-            for variant in decode.variants
-            for vfield in variant.fields
-        )
-    return False
 
 
 def _coerce_decode_defs(defs: DecodeDefsInput | None) -> Mapping[str, DecodeSchema]:
@@ -722,9 +698,7 @@ class JsonCodec:
         """
         return _JSON_CODEC_KINDS
 
-    def make_contract(
-        self, type_ref: Type, type_table: TypeTable | None = None
-    ) -> "OutputContract":
+    def make_contract(self, type_ref: Type, type_table: TypeTable) -> "OutputContract":
         """Build an ``OutputContract`` for *type_ref*.
 
         Derives the JSON Schema, format instructions, and typeless decode
@@ -733,16 +707,11 @@ class JsonCodec:
         it uses the ``json_schema``/``decode`` the lowerer already compiled
         into the IR contract request.
 
-        *type_table* resolves record/enum field/variant shapes.  ``None`` is
-        only valid when *type_ref* carries no nominal type: passing ``None``
-        for a record/enum target is an internal error, surfaced as the
-        ``KeyError`` an empty table's lookup naturally raises rather than a
-        user-facing diagnostic.
+        *type_table* resolves record/enum field/variant shapes.
         """
         from agm.agl.runtime.contract import OutputContract
 
-        table = type_table if type_table is not None else TypeTable()
-        schema, decode_plan = derive_schema_and_decode(type_ref, table)
+        schema, decode_plan = derive_schema_and_decode(type_ref, type_table)
         instructions = build_format_instructions(schema)
         return OutputContract(
             target_type_label=repr(type_ref),
@@ -777,29 +746,21 @@ class JsonCodec:
           2. Validate and convert as in lenient mode.
 
         *schema* and *decode* are the JSON Schema dict and typeless
-        ``DecodeSchema`` walk for the target type — both required.  *defs* is
-        *decode*'s ``$defs`` table for a recursive target type; absent (or
-        ``None``) for a non-recursive one.  Callers (the IR evaluator, or a
-        test exercising this codec directly) must supply *schema*/*decode*
-        explicitly; this method never derives them from a checker ``Type``,
-        so there is no re-derivation cost per parse attempt.
+        ``DecodeSchema`` walk for the target type; the protocol types them as
+        optional for custom codecs, but a ``json`` contract always carries
+        both.  *defs* is *decode*'s ``$defs`` table for a recursive target
+        type; absent (or ``None``) for a non-recursive one.  This method never
+        derives them from a checker ``Type``.
 
         Decimal exactness: ``json-repair`` always produces a
         JSON *string* (not Python objects), which is then re-parsed via
         ``json.loads(parse_float=Decimal)``.  Decimal values are never
         routed through Python ``float``.
-
-        :raises ValueError: if *schema* or *decode* is ``None``.
         """
-        if schema is None or decode is None:
-            raise ValueError(
-                "JsonCodec.parse requires an explicit schema and decode walk; "
-                "it does not derive them from a checker Type. Pass the "
-                "contract-carried json_schema/decode (see ContractRequest)."
-            )
-        effective_defs = _coerce_decode_defs(defs)
-        if not effective_defs and _decode_contains_ref(decode):
-            raise ValueError(
-                "JsonCodec.parse requires defs when the decode walk contains RefDecode nodes."
-            )
-        return _parse_json_core(raw, schema, decode, effective_defs, strict=strict_json)
+        return _parse_json_core(
+            raw,
+            cast("dict[str, object]", schema),
+            cast(DecodeSchema, decode),
+            _coerce_decode_defs(defs),
+            strict=strict_json,
+        )

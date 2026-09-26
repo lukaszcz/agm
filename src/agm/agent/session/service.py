@@ -24,13 +24,16 @@ from agm.agent.session.protocol import (
     SessionHostError,
     SessionOpenRequest,
     SessionOperation,
+    SessionOperations,
     SessionStats,
 )
+from agm.agent.spec import SessionTransport
 from agm.core.cleanup import preserve_primary_error
 
 _T = TypeVar("_T")
 
-SessionBackendFactory = Callable[[object, str], SessionBackend]
+#: Open one backend session for a request.
+SessionBackendFactory = Callable[[SessionOpenRequest], SessionBackend]
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +82,7 @@ class AglSessionHost:
         return self._call_host(
             lambda: self._service.with_ephemeral(
                 agent,
-                transport.lower(),
+                SessionTransport(transport),
                 register,
                 on_closed=self._retire_ephemeral,
                 single_prompt=single_prompt,
@@ -98,7 +101,7 @@ class AglSessionHost:
         return self._call_host(
             lambda: self._service.open(
                 agent,
-                transport.lower(),
+                SessionTransport(transport),
                 name=name,
                 ephemeral=ephemeral,
                 single_prompt=single_prompt,
@@ -106,7 +109,9 @@ class AglSessionHost:
         )
 
     def default(self, agent: "AgentSpec", transport: str, *, name: str = "") -> str:
-        handle = self._call_host(lambda: self._service.default(agent, transport.lower(), name=name))
+        handle = self._call_host(
+            lambda: self._service.default(agent, SessionTransport(transport), name=name)
+        )
         self._sessions.setdefault(handle, _HostSession(agent, transport))
         return handle
 
@@ -232,18 +237,16 @@ class AglSessionHost:
 
 def create_agl_session_host(*, idle_timeout: float | None) -> AglSessionHost:
     """Create the production AgL session host with transport-aware backends."""
-    from agm.agent.session.cli_adapters import CLI_SESSION_BACKENDS
+    from agm.agent.session.cli_adapters import open_cli_session
     from agm.agent.session.rpc import PiRpcSessionBackend
     from agm.agent.spec import AgentPi
 
-    def backend_for(agent: object, transport: str) -> SessionBackend:
-        if transport == "rpc":
-            if isinstance(agent, AgentPi):
-                return PiRpcSessionBackend(idle_timeout=idle_timeout)
+    def backend_for(request: SessionOpenRequest) -> SessionBackend:
+        if request.transport is SessionTransport.CLI:
+            return open_cli_session(request, idle_timeout=idle_timeout)
+        if not isinstance(request.agent, AgentPi):
             raise SessionHostError("RPC transport is only supported by AgentPi", "open")
-        if transport != "cli":
-            raise SessionHostError(f"unsupported session transport {transport!r}", "open")
-        return CLI_SESSION_BACKENDS[type(agent).__name__](idle_timeout=idle_timeout)
+        return PiRpcSessionBackend.open(request.agent, name=request.name, idle_timeout=idle_timeout)
 
     return AglSessionHost(SessionService(backend_for))
 
@@ -253,8 +256,8 @@ class _SessionEntry:
     """The host state associated with one opaque session handle."""
 
     backend: SessionBackend
-    agent: object
-    transport: str
+    agent: "AgentSpec"
+    transport: SessionTransport
     ephemeral: bool
     closed: bool = False
 
@@ -269,16 +272,15 @@ class SessionService:
 
     def open(
         self,
-        agent: object,
-        transport: str,
+        agent: "AgentSpec",
+        transport: SessionTransport,
         *,
         name: str = "",
         ephemeral: bool = False,
         single_prompt: bool = False,
     ) -> str:
         """Open a backend session and return its host-generated handle id."""
-        backend = self._backend_factory(agent, transport)
-        backend.open(
+        backend = self._backend_factory(
             SessionOpenRequest(
                 agent=agent, transport=transport, name=name, single_prompt=single_prompt
             )
@@ -292,7 +294,7 @@ class SessionService:
         )
         return handle
 
-    def default(self, agent: object, transport: str, *, name: str = "") -> str:
+    def default(self, agent: "AgentSpec", transport: SessionTransport, *, name: str = "") -> str:
         """Return the lazily opened default session, snapshotting its first agent."""
         if self._default_handle is None:
             self._default_handle = self.open(agent, transport, name=name)
@@ -300,15 +302,14 @@ class SessionService:
 
     def ask(self, handle: str, request: SessionAskRequest) -> SessionAskResponse:
         """Send *request* through a live session."""
-        entry = self._entry_for(handle, SessionOperation.ASK)
-        self._require_capability(entry, SessionOperation.ASK)
-        return entry.backend.ask(request)
+        return self._entry_for(handle, SessionOperation.ASK).backend.ask(request)
 
     def compact(self, handle: str, instructions: str = "") -> None:
         """Compact a live session when its backend supports compaction."""
-        entry = self._entry_for(handle, SessionOperation.COMPACT)
-        self._require_capability(entry, SessionOperation.COMPACT)
-        self._run_lifecycle(SessionOperation.COMPACT, lambda: entry.backend.compact(instructions))
+        _entry, compact = self._native(
+            handle, SessionOperation.COMPACT, lambda operations: operations.compact
+        )
+        self._run_lifecycle(SessionOperation.COMPACT, lambda: compact(instructions))
 
     def reset(self, handle: str) -> None:
         """Reset a live session while retaining its handle, agent, and transport."""
@@ -317,9 +318,10 @@ class SessionService:
 
     def fork(self, handle: str) -> str:
         """Fork a live session, returning a distinct host handle for the child."""
-        entry = self._entry_for(handle, SessionOperation.FORK)
-        self._require_capability(entry, SessionOperation.FORK)
-        forked_backend = self._run_lifecycle(SessionOperation.FORK, entry.backend.fork)
+        entry, fork = self._native(
+            handle, SessionOperation.FORK, lambda operations: operations.fork
+        )
+        forked_backend = self._run_lifecycle(SessionOperation.FORK, fork)
         forked_handle = str(uuid4())
         self._entries[forked_handle] = _SessionEntry(
             backend=forked_backend,
@@ -331,15 +333,17 @@ class SessionService:
 
     def set_name(self, handle: str, name: str) -> None:
         """Set a live session's backend-visible name."""
-        entry = self._entry_for(handle, SessionOperation.SET_NAME)
-        self._require_capability(entry, SessionOperation.SET_NAME)
-        self._run_lifecycle(SessionOperation.SET_NAME, lambda: entry.backend.set_name(name))
+        _entry, set_name = self._native(
+            handle, SessionOperation.SET_NAME, lambda operations: operations.set_name
+        )
+        self._run_lifecycle(SessionOperation.SET_NAME, lambda: set_name(name))
 
     def stats(self, handle: str) -> SessionStats:
         """Return usage statistics for a live session."""
-        entry = self._entry_for(handle, SessionOperation.STATS)
-        self._require_capability(entry, SessionOperation.STATS)
-        return self._run_lifecycle(SessionOperation.STATS, entry.backend.stats)
+        _entry, stats = self._native(
+            handle, SessionOperation.STATS, lambda operations: operations.stats
+        )
+        return self._run_lifecycle(SessionOperation.STATS, stats)
 
     def close(self, handle: str) -> None:
         """Close a live session; closing an already closed known handle is a no-op."""
@@ -396,8 +400,8 @@ class SessionService:
 
     def with_ephemeral(
         self,
-        agent: object,
-        transport: str,
+        agent: "AgentSpec",
+        transport: SessionTransport,
         action: Callable[[str], _T],
         *,
         name: str = "",
@@ -434,9 +438,18 @@ class SessionService:
             raise SessionHostError(f"session handle {handle!r} is closed", operation)
         return entry
 
-    def _require_capability(self, entry: _SessionEntry, operation: SessionOperation) -> None:
-        if not entry.backend.capabilities.supports(operation):
+    def _native[T](
+        self,
+        handle: str,
+        operation: SessionOperation,
+        select: Callable[[SessionOperations], T | None],
+    ) -> tuple[_SessionEntry, T]:
+        """Return the live entry *handle* names and its native *operation*, or raise unsupported."""
+        entry = self._entry_for(handle, operation)
+        native = select(entry.backend.operations)
+        if native is None:
             raise SessionHostError(f"session backend does not support {operation}", operation)
+        return entry, native
 
     @staticmethod
     def _unknown_handle_error(handle: str, operation: str) -> SessionHostError:

@@ -1007,6 +1007,7 @@ def test_wildcard_import_tail_keeps_the_qualified_enum_owner_reachable() -> None
         (declaration,),
         {declaration.node_id: SingleTarget(module)},
         {module: {"Color": (module, "Color"), ("Color", "Red"): (module, ("Color", "Red"))}},
+        {module: {}},
     )
 
     assert env.unqualified["Color"] == frozenset({(module, "Color")})

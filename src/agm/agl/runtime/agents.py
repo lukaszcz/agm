@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from agm.agent.transport import AgentCallInfo, stderr_tail
-from agm.agl.ir.builtin_nominals import BuiltinNominals, resolve_standard_member_name
+from agm.agl.ir.builtin_nominals import BuiltinNominals, standard_member_name
 from agm.agl.runtime.request import AgentCallHostError, AgentRequest, AgentResponse
 from agm.agl.semantics.values import RecordValue, TextValue, Value
 from agm.core.env import clone_env
@@ -89,10 +89,7 @@ def agent_member_name(value: RecordValue, nominals: BuiltinNominals) -> str:
     """
     from agm.agent.spec import AGENT_SPECS
 
-    name = resolve_standard_member_name(value.nominal, "Agent", AGENT_SPECS, nominals)
-    if name is None:
-        raise ValueError("value is not a recognized Agent member")
-    return name
+    return standard_member_name(value.nominal, "Agent", AGENT_SPECS, nominals)
 
 
 def agent_spec_type(value: RecordValue, nominals: BuiltinNominals) -> type[AgentSpec]:

@@ -1,0 +1,29 @@
+# Host process and environment operations are available through std/os.
+import std/env
+import std/fs
+import std/os
+
+program def main(mode: int) -> unit =
+  let directory = os::cwd()
+  let process-id = os::pid()
+  let host = os::hostname()
+  case mode of
+    | 1 =>
+        print(directory.size() > 0)
+        print(process-id > 0)
+        print(host.size() > 0)
+        print(os::platform().size() > 0)
+        print(os::cpu-count() >= 1)
+        print(os::temp-dir().size() > 0)
+    | 2 =>
+        print(directory == directory)
+        print(process-id == process-id)
+        print(host == host)
+        print(os::which("definitely-not-a-real-binary-xyz").is-none())
+    | 3 =>
+        fs::mkdir("sub")
+        os::chdir("sub")
+        print(os::cwd() != directory)
+        print(env::environ.get("OLDPWD") == directory)
+        print(env::environ.get("PWD") == os::cwd())
+    | _ => os::exit(mode)

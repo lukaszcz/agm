@@ -10,6 +10,7 @@ exactly-once agent dispatch, the ``:set`` param flow, ``reset``, ``load_file``,
 from __future__ import annotations
 
 import dataclasses
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from shutil import copyfile, copytree
@@ -4853,7 +4854,7 @@ class TestTraceLogging:
         assert responses[-1]["reason"]
 
     @pytest.mark.parametrize((("code", "trace_ok")), [(0, True), (255, False)])
-    def test_process_exit_finalizes_trace_and_propagates_status(
+    def test_os_exit_finalizes_trace_and_propagates_status(
         self, tmp_path: Path, code: int, trace_ok: bool
     ) -> None:
         import json
@@ -4865,7 +4866,7 @@ class TestTraceLogging:
         )
 
         with pytest.raises(SystemExit) as raised:
-            session.eval_entry(f"import std/process\nprocess::exit({code})")
+            session.eval_entry(f"import std/os\nos::exit({code})")
 
         assert raised.value.code == code
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -8572,3 +8573,63 @@ class TestTempPathsAcrossEntries:
         session.close()
 
         assert len(list(os_temp.iterdir())) == 1
+
+
+class TestChdirAcrossEntries:
+    """``os::chdir`` mutates ambient ``environ`` and both undo on ``reset``."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_start_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        start = tmp_path / "start"
+        start.mkdir()
+        monkeypatch.chdir(start)
+        # A real ``OLDPWD``/``PWD`` in the test process environment would
+        # make "gone after reset" ambiguous with "restored to the host's own
+        # value"; clear them so the only source is ``os::chdir`` itself.
+        monkeypatch.delenv("OLDPWD", raising=False)
+        monkeypatch.delenv("PWD", raising=False)
+        return start
+
+    def test_reset_restores_the_starting_directory_and_environ(
+        self, tmp_path: Path, _isolated_start_directory: Path
+    ) -> None:
+        start = _isolated_start_directory
+        target = tmp_path / "target"
+        target.mkdir()
+        session = open_session()
+        assert session.eval_entry("import std/env").ok
+        assert session.eval_entry("import std/os").ok
+
+        assert session.eval_entry(f'os::chdir("{target}")').ok
+        assert Path(os.getcwd()) == target
+        after_chdir = session.eval_entry('env::environ.get("OLDPWD")')
+        assert after_chdir.ok
+        assert _text(after_chdir.value) == str(start)
+
+        session.reset()
+
+        assert Path(os.getcwd()) == start
+        assert session.eval_entry("import std/env").ok
+        has_oldpwd = session.eval_entry('env::environ.contains("OLDPWD")')
+        assert has_oldpwd.ok
+        assert has_oldpwd.value == BoolValue(False)
+        has_pwd = session.eval_entry('env::environ.contains("PWD")')
+        assert has_pwd.ok
+        assert has_pwd.value == BoolValue(False)
+        session.close()
+
+    def test_close_restores_the_starting_directory(
+        self, tmp_path: Path, _isolated_start_directory: Path
+    ) -> None:
+        start = _isolated_start_directory
+        target = tmp_path / "target"
+        target.mkdir()
+        session = open_session()
+        assert session.eval_entry("import std/os").ok
+
+        assert session.eval_entry(f'os::chdir("{target}")').ok
+        assert Path(os.getcwd()) == target
+
+        session.close()
+
+        assert Path(os.getcwd()) == start

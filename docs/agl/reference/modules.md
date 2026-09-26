@@ -314,7 +314,7 @@ rows, `std/path`'s `path` type alone, `std/url`'s `url` type alone, and
 | `std/http` | HTTP requests, headers, responses, and the http-timeout setting |
 | `std/fs` | UTF-8 filesystem and directory operations |
 | `std/env` | the ambient environment snapshot and its helpers |
-| `std/process` | process metadata and termination |
+| `std/os` | process metadata, termination, working directory (`chdir` raises `std/fs::FsError`), and host lookups |
 
 A few conventions run through all of them. Every name the library exposes —
 functions, fields, and named arguments alike — is spelled in kebab-case, with

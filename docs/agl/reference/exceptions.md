@@ -313,19 +313,20 @@ called on `Err`. It carries only the inherited `message` field.
 ### `FsError`
 
 `std/fs` raises `FsError` for a failed filesystem operation. In addition to
-`message`, it carries `path: text` and `operation: text`.
+`message`, it carries `path: text` and `operation: text`. `std/os::chdir` also
+raises it, with `path` the directory that could not be entered.
 
 `fs::list` and `fs::glob` also raise it when a directory entry or match is not
-valid Unicode, and `fs::os-temp-dir`, `fs::temp-file`, and `fs::temp-dir` when
-the host's temporary directory is; `path` is then the directory or pattern that was asked for, and the message
-names the offending entry with its undecodable bytes escaped. The whole call
-fails rather than the entry being skipped.
+valid Unicode, and `fs::temp-file` and `fs::temp-dir` when the host's
+temporary directory is; `path` is then the directory or pattern that was
+asked for, and the message names the offending entry with its undecodable
+bytes escaped. The whole call fails rather than the entry being skipped.
 
 ### `EncodingError`
 
-`std/path` (`absolute`, `relative`, `expand-user`, `home`) and `std/process`
-(`cwd`, `hostname`) raise `EncodingError` when the host returns text that is
-not valid Unicode.
+`std/path` (`absolute`, `relative`, `expand-user`, `home`) and `std/os`
+(`cwd`, `hostname`, `temp-dir`, `chdir`, `user`) raise `EncodingError` when the
+host returns text that is not valid Unicode.
 
 ```text
 raw: text   # the host text, with its undecodable bytes escaped
@@ -648,7 +649,7 @@ how equality and tracing treat one.
 | `std/value::parse` — input is neither strict JSON nor an AgL value-syntax literal, or does not conform to the target type | `ValueParseError` |
 | `std/json` parsing — input is not well-formed JSON, including a lone surrogate escape | `JsonParseError` |
 | `std/fs` directory entry, match, or temporary directory that is not valid Unicode | `FsError` |
-| `std/path` or `std/process` host text that is not valid Unicode | `EncodingError` |
+| `std/path` or `std/os` host text that is not valid Unicode | `EncodingError` |
 | `std/http` response whose declared charset is outside the supported text encodings, or whose body does not decode under it | `HttpDecodeError` |
 | `std/toml` parsing — input is not well-formed TOML | `TomlParseError` |
 | `std/toml` rendering — root is not an object, a value is `null`, an integer is outside signed 64-bit range, or a `decimal` NaN is signaling/payload | `TomlRenderError` |

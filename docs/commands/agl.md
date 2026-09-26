@@ -411,13 +411,13 @@ drives shell execution.
 
 | Code | Meaning |
 |------|---------|
-| `0` | The workflow completed successfully, or `std/process::exit(0)` requested success |
-| `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error, or program-argument validation failure; it can also be requested with `std/process::exit(1)` |
-| `2` | The workflow executed but ended with an uncaught AgL exception; it can also be requested with `std/process::exit(2)` |
-| `3`–`255` | Requested by `std/process::exit(code)` |
+| `0` | The workflow completed successfully, or `std/os::exit(0)` requested success |
+| `1` | Pre-execution failure: unreadable file, static language diagnostics (including invalid `case` coverage), host configuration error, or program-argument validation failure; it can also be requested with `std/os::exit(1)` |
+| `2` | The workflow executed but ended with an uncaught AgL exception; it can also be requested with `std/os::exit(2)` |
+| `3`–`255` | Requested by `std/os::exit(code)` |
 | `128+N` | Terminated by signal `N` (SIGTERM → `143`, SIGHUP → `129`), after the run's cleanup |
 
-`std/process::exit` accepts only the portable range `0..255`, so every supported host preserves
+`std/os::exit` accepts only the portable range `0..255`, so every supported host preserves
 the status; an out-of-range value is a runtime error, not a termination.
 
 ### Diagnostics and warnings
@@ -566,7 +566,9 @@ An imported module's `extern def` companion ([Python FFI](../agl/reference/ffi.m
 once per session, so its module globals last for the session; `:reset` discards the cached
 companion and a later import creates new globals. A value from `runtime.state(...)` instead
 belongs to the session: it survives across entries and is closed at `:reset` or exit, so
-`std/fs` temporary paths stay usable until then (or are kept, with `std/config::debug` set). A direct entry has no backing file, so it cannot declare `extern def` or
+`std/fs` temporary paths stay usable until then (or are kept, with `std/config::debug` set), and
+a directory entered with `os::chdir` persists across entries and is restored at `:reset` or exit.
+A direct entry has no backing file, so it cannot declare `extern def` or
 call `resource`/`resource-dir`; imported file-backed modules use them normally.
 
 ### Entry editing
@@ -658,7 +660,7 @@ Meta-commands start with `:`, which never collides with AgL syntax:
 ### Exit codes
 
 Per-entry errors are reported inline and never exit; the REPL fails only before the loop starts.
-The exception is `std/process::exit(code)`, which ends the REPL with its `0..255` status after
+The exception is `std/os::exit(code)`, which ends the REPL with its `0..255` status after
 finalizing the entry's trace. SIGTERM and SIGHUP end it with `128+N` after the session's cleanup.
 
 `--default-agent`/`[exec] default-agent` and `--default-sandbox`/`[exec] default-sandbox` are

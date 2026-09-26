@@ -487,9 +487,7 @@ def test_runtime_state_closer_runs_once_when_process_exit_raises_system_exit(
     closed_log = tmp_path / "closed.log"
     companion = _counting_state_companion(created_log, closed_log)
     entry_path = tmp_path / "entry.agl"
-    source = file_program(
-        "import std/process\nextern def get() -> int\nlet _ = get()\nprocess::exit(0)\n"
-    )
+    source = file_program("import std/os\nextern def get() -> int\nlet _ = get()\nos::exit(0)\n")
     entry_path.write_text(source)
     (tmp_path / "entry.py").write_text(companion)
 

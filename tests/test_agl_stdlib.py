@@ -77,6 +77,11 @@ def test_no_stdlib_still_allows_explicit_std_prelude_import() -> None:
     )
 
 
+def test_std_os_module_resolves_without_the_default_standard_library() -> None:
+    """Every name `std/os` uses (e.g. `Option`) must be its own explicit import."""
+    _check("import std/os\n()\n", default_stdlib=False)
+
+
 def test_unknown_builtin_function_is_rejected() -> None:
     with pytest.raises(AglTypeError, match="Unknown builtin function 'mystery'"):
         _check("builtin def mystery() -> unit\n()\n")

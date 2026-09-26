@@ -11,9 +11,9 @@ from urllib.parse import urlencode
 from agl import AglException, nominals, runtime
 from agl import dict as agl_dict
 
+from agm.agl.runtime.host_fs import raise_fs_error
 from agm.agl.runtime.serialize import dumps_exact
 from agm.core import http as core_http
-from agm.core.fs import fs_error_message
 from agm.core.parse import parse_positive_timeout
 
 Option = nominals.std.option.Option
@@ -258,11 +258,7 @@ def request(
     except core_http.SaveFailure as exc:
         destination = str(exc.path)
         _trace_failure("FsError", str(exc.error), time.monotonic() - started)
-        raise AglException(
-            FsError(
-                message=fs_error_message("write", destination), path=destination, operation="write"
-            )
-        ) from exc
+        raise_fs_error(FsError, destination, "write")
 
     if runtime.tracing():
         save_path = receive_spec.path if isinstance(receive_spec, core_http.Save) else None

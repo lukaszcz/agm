@@ -239,7 +239,7 @@ Field notes:
   its keys, recursively — useful for asserting part of a nested field (e.g. a
   status and body) while ignoring a nondeterministic one (e.g. elapsed time).
 - `expect.exit_code` — the program must terminate through `SystemExit` with this
-  status; it is used for host-termination workflows such as `std/process::exit`.
+  status; it is used for host-termination workflows such as `std/os::exit`.
 - `expect.host_error` — the run must fail pre-execution (program argument
   binding or decode failure): no agent is called, no AgL exception is
   raised, and the diagnostics mention the fragments.

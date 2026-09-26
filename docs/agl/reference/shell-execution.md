@@ -47,12 +47,15 @@ exec(
 ```
 
 `env` is the complete environment given to the shell; it replaces rather than
-merges with the AGM process environment. The default is the startup ambient
-`std/env::environ` snapshot. Use `environ.extended(overrides)` when a command
-needs an explicit overlay. `cwd` is an optional working directory the command
-runs in; it never affects which sandbox configuration applies (see `sandbox`
-below). `timeout` is an optional idle timeout duration. The single-argument
-sugar below supplies only the command, so it uses all four defaults.
+merges with the AGM process environment. The default is the current ambient
+`std/env::environ`, which carries `PWD`/`OLDPWD` as `std/os::chdir` updates
+them. Use `environ.extended(overrides)` when a command needs an explicit
+overlay. `cwd` is an optional working directory the command runs in; `None`
+(the default) means the process working directory — the same directory
+`std/os::chdir` changes — and it never affects which sandbox configuration
+applies (see `sandbox` below). `timeout` is an optional idle timeout
+duration. The single-argument sugar below supplies only the command, so it
+uses all four defaults.
 
 `sandbox` selects the command's sandboxing, a `Sandbox` record
 ([Types](types.md#sandbox)) naming resource limits, or `None` (the default)

@@ -106,7 +106,7 @@ across its entries until `:reset` or exit.
 
 A value that owns a resource passes a `close` callable receiving that value,
 run once when the host session ends — on a clean return, an escaping exception,
-`std/process::exit`, an interrupt, or a SIGTERM/SIGHUP alike. `close` is
+`std/os::exit`, an interrupt, or a SIGTERM/SIGHUP alike. `close` is
 recorded only on the creating call:
 
 ```python

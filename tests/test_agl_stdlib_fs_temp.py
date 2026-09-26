@@ -47,6 +47,7 @@ def test_temp_paths_are_created_unique_in_the_os_temp_dir_and_removed_after_the_
 ) -> None:
     result = _run(
         """import std/fs
+import std/os
 import std/path
 program def main() -> unit =
   let first = fs::temp-file()
@@ -57,9 +58,9 @@ program def main() -> unit =
   print(fs::read(first) == "")
   print(second.ends-with(".json"))
   print(fs::is-dir(dir))
-  print(path::dirname(first) == fs::os-temp-dir())
-  print(path::dirname(dir) == fs::os-temp-dir())
-  print(fs::list(fs::os-temp-dir()).size())
+  print(path::dirname(first) == os::temp-dir())
+  print(path::dirname(dir) == os::temp-dir())
+  print(fs::list(os::temp-dir()).size())
 """,
         os_temp.parent / "main.agl",
     )
@@ -88,10 +89,10 @@ def test_temp_paths_are_removed_when_the_program_exits(os_temp: Path) -> None:
     with pytest.raises(SystemExit):
         _run(
             """import std/fs
-import std/process
+import std/os
 program def main() -> unit =
   let _ = fs::temp-file()
-  process::exit(3)
+  os::exit(3)
 """,
             os_temp.parent / "main.agl",
         )

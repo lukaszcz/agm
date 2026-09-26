@@ -1,0 +1,40 @@
+import std/env::Environ
+# `chdir` raises `FsError`; imported so the companion can construct it.
+import std/fs::FsError
+import std/option::Option
+import std/path::path
+
+extern def exit(code: int = 0) -> unit
+# Raises `EncodingError` if the working directory is not valid Unicode.
+extern def cwd() -> path
+extern def pid() -> int
+# Raises `EncodingError` if the host name is not valid Unicode.
+extern def hostname() -> text
+# The host's temporary directory. Raises `EncodingError` if it is not valid Unicode.
+@extern-name("temp_dir")
+extern def temp-dir() -> path
+
+scope ChdirInternals
+  @extern-name("chdir")
+  extern def raw-chdir(dir: path, vars: dict[text, text]) -> unit
+end ChdirInternals
+
+# Changes the host process working directory, recording `OLDPWD` (the
+# directory before) and `PWD` (`cwd()` after) into `std/env::environ`.
+# Raises `std/fs::FsError(path = dir, operation = "chdir")` on failure, or
+# `EncodingError` if the directory before or after is not valid Unicode,
+# leaving the directory unchanged.
+def chdir(dir: path) -> unit = ChdirInternals::raw-chdir(dir, std/env::environ.vars)
+
+# Whether standard input and output are both connected to a terminal.
+@extern-name("is_interactive")
+extern def is-interactive() -> bool
+# Executable lookup on `env`'s `PATH` (the host default `PATH` when absent).
+extern def which(name: text, env: Environ = std/env::environ) -> Option[path]
+extern def platform() -> text
+# Usable CPU count; at least 1.
+@extern-name("cpu_count")
+extern def cpu-count() -> int
+# The real user's passwd name; `None` when it has none. Raises `EncodingError`
+# if the name is not valid Unicode.
+extern def user() -> Option[text]

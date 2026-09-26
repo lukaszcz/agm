@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -172,28 +171,6 @@ program def main() -> unit =
     assert result.error.type_name == "FsError"
     assert result.error.fields["path"] == "*"
     assert result.error.fields["operation"] == "glob"
-
-
-def test_fs_os_temp_dir_raises_fs_error_when_tmpdir_is_not_valid_unicode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # ``tempfile.gettempdir`` caches its first result process-wide, so ``TMPDIR``
-    # alone is not reliable across the test session; patch it directly instead.
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: os.fsdecode(b"/tmp/h\xffome"))
-
-    result = _run_file(
-        """import std/fs
-program def main() -> unit =
-  let _ = fs::os-temp-dir()
-""",
-        tmp_path / "main.agl",
-        roots=agl_roots(),
-    )
-
-    assert not result.ok
-    assert result.error is not None
-    assert result.error.type_name == "FsError"
-    assert result.error.fields["operation"] == "os-temp-dir"
 
 
 def test_fs_try_read_of_an_invalid_path_returns_an_error(

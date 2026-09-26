@@ -1,6 +1,7 @@
 # An imported enum's scope holds only its inline members; a referenced member
 # stays reachable at its own declaration path and by its injected bare name. A
-# module route qualifies an inline member's bare constructor directly.
+# module route qualifies an inline member's bare constructor directly, alike in
+# values, patterns and `is` tests.
 import library
 import library::Status
 import library::{Status::Fresh}
@@ -58,11 +59,13 @@ program def main(pick: int) -> unit =
   print(mixed-label(mixed))
   print(mixed is other::Shared)
   print(mixed is middle::Own)
+  let fail: text -> review::Review = review::Fail
   let verdict: review::Review =
-    if pick > 0 => review::Review::Pass
-    else => review::Review::Fail(reason = "late")
+    if pick > 0 => review::Pass
+    else => fail("late")
   print(review-label(verdict))
   print(verdict is review::Pass)
+  print(review-label(review::Fail(reason = "early")))
   let scoped-status: scoped::shapes::Status =
     if pick > 0 => scoped::shapes::Status::Fresh(n = pick)
     else => scoped::shapes::Saved(id = 2)

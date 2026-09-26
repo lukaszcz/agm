@@ -272,10 +272,12 @@ class ReferencedMemberError(AglTypeError):
     """An enum owner spelling that selects a member the enum only references.
 
     Only an enum's inline members are in its scope; a referenced member keeps
-    its own declaration path, so ``Owner::member`` names nothing. Raised
-    wherever owner selection fails -- by scope for values and method
-    receivers, by typecheck for types, patterns, and ``is`` tests. ``owner``
-    is the owner as spelled and ``member`` the referenced member's name.
+    its own declaration path, so ``Owner::member`` or a module qualifier
+    (``mylib::member``) names nothing. Raised wherever owner selection fails
+    -- by scope for values, patterns, ``is`` tests, and method receivers, by
+    typecheck for type annotations and applied owners it resolves itself.
+    ``owner`` is the owner as spelled and ``member`` the referenced member's
+    name.
     """
 
     def __init__(self, owner: str, member: str, *, span: SourceSpan | None) -> None:

@@ -241,12 +241,15 @@ class _TypeBuilder:
         module_id: ModuleId = ENTRY_ID,
         *,
         attributes: AttributeFacts,
+        referenced_member_names: Mapping[int, frozenset[str]],
     ) -> None:
         self._env = env
         self._module_id = module_id
         # Scope's recognized declaration attribute facts for the module being
         # built: parameter/field zones and field/member/record external names.
         self._attributes = attributes
+        # Scope's names spelling each enum's referenced members, by enum node id.
+        self._referenced_member_names = referenced_member_names
         # Track user-declared names → declaration span (excludes built-ins).
         self._declared: dict[str, SourceSpan] = {}
         # Index of record/enum/exception definitions, for phase-2 body
@@ -349,12 +352,7 @@ class _TypeBuilder:
                     if isinstance(member, VariantDef):
                         self._register_inline_member_handle(item, member)
                 self._env.type_table.declare_referenced_members(
-                    self._enum_identity(item),
-                    frozenset(
-                        member.chain.member
-                        for member in item.members
-                        if isinstance(member, VariantRef)
-                    ),
+                    self._enum_identity(item), self._referenced_member_names[item.node_id]
                 )
                 self._enum_defs[item.name] = item
             elif isinstance(item, ExceptionDef):

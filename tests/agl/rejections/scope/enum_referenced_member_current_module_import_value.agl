@@ -1,0 +1,5 @@
+import other::{Shared}
+
+program def main() -> unit =
+  let shared = ::Shared(id = 1)
+  print(shared)

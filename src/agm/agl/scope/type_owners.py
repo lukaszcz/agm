@@ -98,9 +98,26 @@ class TypeOwnerIndex:
         """Whether *qname* names a type or an inline enum member."""
         return (
             qname in self._all_public_types
-            or qname in self._constructor_refs
-            or (qname[0] == self._retained_module and _path(qname[1]) in self._retained)
+            or self._retained_owner(qname) is not None
+            or self._member_constructor(qname) is not None
         )
+
+    def _retained_owner(self, qname: QName) -> TypeOwner | None:
+        """Return the owner an earlier REPL entry resolved for *qname*, if it declared it."""
+        return self._retained.get(_path(qname[1])) if qname[0] == self._retained_module else None
+
+    def _member_constructor(self, qname: QName) -> ConstructorRef | None:
+        """Return the constructor of the record, exception, or inline member at *qname*.
+
+        An inline member of an enum an earlier REPL entry declared is read from
+        that enum's retained owner.
+        """
+        constructor = self._constructor_refs.get(qname)
+        if constructor is not None or qname[0] != self._retained_module:
+            return constructor
+        path = _path(qname[1])
+        enum = self._retained.get(path[:-1])
+        return None if enum is None else enum.members.get(path[-1])
 
     def site(
         self, module_id: ModuleId, scope_path: ScopePath, type_params: Iterable[str] = ()
@@ -132,10 +149,10 @@ class TypeOwnerIndex:
         declaration = self._all_public_types.get(qname)
         if declaration is not None:
             return self.declared_owner(qname, declaration)
-        path = _path(qname[1])
-        if qname[0] == self._retained_module and path in self._retained:
-            return self._retained[path]
-        member = self._constructor_refs.get(qname)
+        retained = self._retained_owner(qname)
+        if retained is not None:
+            return retained
+        member = self._member_constructor(qname)
         return None if member is None else TypeOwner(member, frozenset({member.owner_name}))
 
     def declared_owner(
@@ -218,7 +235,7 @@ class TypeOwnerIndex:
         chain = member.chain
         local = (module_id, _atom((*chain.route_segments, chain.member)))
         qnames: tuple[QName, ...] = ()
-        if local in self._all_public_types or local in self._constructor_refs:
+        if self.is_declared(local):
             qnames = (local,)
         elif chain.segments and chain.anchor is not QualifierAnchor.CURRENT_MODULE:
             qname = try_resolve_qualified_member(
@@ -234,15 +251,23 @@ class TypeOwnerIndex:
         )
 
     def _constructors_through(self, qname: QName) -> tuple[ConstructorRef, ...]:
-        """Follow aliases from *qname* to the record constructor at the end of the chain."""
+        """Follow aliases from *qname* to the record constructor at the end of the chain.
+
+        A retained path reads the owner an earlier REPL entry resolved for it.
+        """
         seen: set[QName] = set()
         current: QName | None = qname
         while current is not None and current not in seen:
             seen.add(current)
-            constructor = self._constructor_refs.get(current)
+            constructor = self._member_constructor(current)
             if constructor is not None:
                 return (constructor,)
             declaration = self._all_public_types.get(current)
+            retained = self._retained_owner(current) if declaration is None else None
+            if retained is not None and retained.alias is None:
+                return () if retained.constructor is None else (retained.constructor,)
+            if retained is not None:
+                declaration = retained.alias
             if not isinstance(declaration, TypeAlias):
                 return ()
             targets = self._alias_selection(current, declaration)

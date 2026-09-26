@@ -8,6 +8,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import Case, ConstructorPattern, FuncDef, LetDecl
 from agm.agl.typecheck import AglTypeError, CheckedProgram, check_program
@@ -306,32 +307,18 @@ def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> Non
     )
 
 
-def test_self_qualified_pattern_reaches_a_prelude_constructor() -> None:
-    """``::Retry`` names the prelude variant the current module can see."""
-    checked = accept(
-        "let policy: ParsePolicy = Retry(n = 2)\ncase policy of | ::Retry(n) => n | _ => 0\n"
-    )
-
-    case = checked.resolved.program.body.items[-1]
-    assert isinstance(case, Case)
-    pattern = case.branches[0].pattern
-    assert isinstance(pattern, ConstructorPattern)
-    selected = checked.pattern_constructor_refs.get(pattern.node_id)
-    assert selected is not None
-    assert selected.owner_name == "Retry"
-
-
 def test_route_qualified_pattern_naming_a_non_constructor_is_rejected(tmp_path: Path) -> None:
     """``lib::helper(x)`` reaches a function, not a constructor, so it cannot match."""
-    reject_graph(
-        tmp_path,
-        {
-            "lib": "def helper(x: int) -> int = x\nrecord R\n  x: int\n",
-            "entry": (
-                "import lib\nlet r = lib::R(x = 1)\ncase r of | lib::helper(x) => 0 | _ => 1\n"
-            ),
-        },
-    )
+    with pytest.raises(AglScopeError):
+        accept_graph(
+            tmp_path,
+            {
+                "lib": "def helper(x: int) -> int = x\nrecord R\n  x: int\n",
+                "entry": (
+                    "import lib\nlet r = lib::R(x = 1)\ncase r of | lib::helper(x) => 0 | _ => 1\n"
+                ),
+            },
+        )
 
 
 def test_scoped_pattern_naming_a_non_constructor_member_is_rejected() -> None:

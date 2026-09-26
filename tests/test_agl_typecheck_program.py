@@ -18,7 +18,6 @@ from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import (
-    EnumOwnerFormKind,
     InferenceVarType,
     contains_inference_var,
 )
@@ -1516,16 +1515,18 @@ _OWNER_TYPES = "enum Col\n  | Red\n  | Paint(n: int)\n\ntype C = Col\n"
 
 
 @pytest.mark.parametrize(
-    "use",
+    ("use", "name"),
     (
-        "case c of | %sC => 1 | _ => 2",
-        "case c of | %sC() => 1 | _ => 2",
-        "c is %sC",
-        "c is %sCol",
+        ("case c of | %sC => 1 | _ => 2", "C"),
+        ("case c of | %sC() => 1 | _ => 2", "C"),
+        ("c is %sC", "C"),
+        ("c is %sCol", "Col"),
     ),
 )
-def test_local_type_owner_test_reads_like_an_imported_one(tmp_path: Path, use: str) -> None:
-    """A type name tested or matched as a member is diagnosed alike, local or imported."""
+def test_local_type_owner_test_reads_like_an_imported_one(
+    tmp_path: Path, use: str, name: str
+) -> None:
+    """A type name tested or matched as a member is a type name, local or imported."""
     with pytest.raises(AglError) as local:
         check_agl_program(
             tmp_path / "local",
@@ -1540,8 +1541,8 @@ def test_local_type_owner_test_reads_like_an_imported_one(tmp_path: Path, use: s
             },
         )
 
-    assert type(local.value) is type(imported.value)
-    assert local.value.to_diagnostic().message == imported.value.to_diagnostic().message
+    assert str(local.value) == str(type_name_not_a_value(f"::{name}", _ANY_SPAN))
+    assert str(imported.value) == str(type_name_not_a_value(f"lib::{name}", _ANY_SPAN))
 
 
 _TYPE_PARAMETER_ALIASES = (
@@ -2041,12 +2042,9 @@ def test_is_test_uses_local_enum_when_alias_route_has_another_owner(tmp_path: Pa
 def test_unknown_enum_owner_form_is_not_visible(tmp_path: Path) -> None:
     checked = check_agl_program(tmp_path, {"entry": "enum Color | Red\n0"})
 
-    assert (
-        checked.modules[ENTRY_ID].type_env.resolve_enum_owner_form(
-            EnumOwnerFormKind.SELF, "Missing"
-        )
-        is None
-    )
+    owners = {form.owner_name for form in checked.modules[ENTRY_ID].type_env.enum_owner_forms()}
+    assert "Color" in owners
+    assert "Missing" not in owners
 
 
 @pytest.mark.parametrize(

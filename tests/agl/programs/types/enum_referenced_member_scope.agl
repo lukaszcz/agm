@@ -1,4 +1,5 @@
 # An enum's scope holds only its inline members; referenced members keep their own paths.
+# `::` alone selects an inline member of a root enum by its bare name.
 record Saved
   id: int
 
@@ -35,8 +36,9 @@ def area(shape: shapes::Shape) -> int =
 def fresh-count(fresh: Status::Fresh) -> int = fresh.n
 
 program def main(pick: int) -> unit =
+  let fresh: int -> Status = ::Fresh
   let status: Status =
-    if pick > 0 => Status::Fresh(n = pick)
+    if pick > 0 => ::Fresh(n = pick)
     else => Saved(id = 0 - pick)
   let aliased: Current =
     if pick > 0 => Current::Fresh(n = pick)
@@ -50,6 +52,8 @@ program def main(pick: int) -> unit =
   print(area(shape))
   print(status is Saved)
   print(status is Status::Fresh)
+  print(status is ::Fresh)
   print(shape is shapes::Circle)
   print(shape is shapes::Shape::Square)
   print(fresh-count(Status::Fresh(n = 4)))
+  print(describe(fresh(8)))

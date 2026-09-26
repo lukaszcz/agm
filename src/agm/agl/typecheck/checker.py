@@ -100,8 +100,6 @@ from agm.agl.semantics.types import (
     CastSpec,
     DecimalType,
     DictType,
-    EnumOwnerForm,
-    EnumOwnerFormKind,
     EnumType,
     ExceptionType,
     FunctionType,
@@ -200,7 +198,6 @@ from agm.agl.syntax.types import (
     AppliedT,
     TypeExpr,
     render_qualified_name,
-    render_qualifier_path,
 )
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.arguments import bind_call_args, bind_constructor_args, bind_pattern_args
@@ -5167,12 +5164,6 @@ class _Checker:
                     matching,
                     subject="'is' member",
                 )
-                if constructor is None:
-                    direct_member = self._env.type_table.enum_member_names(enum_type).get(
-                        node.variant
-                    )
-                    if direct_member is not None:
-                        constructor = ConstructorRef.for_nominal(direct_member)
             if constructor is None:
                 unpublished = self._unpublished_enum_member(
                     node.node_id, node.qualifier, node.variant, enum_type, (), node.span
@@ -5273,68 +5264,68 @@ class _Checker:
             span=span,
         )
 
-    def _check_variant_qualification(
+    def _variant_qualification_error(
         self,
-        *,
-        qualifier: QualifierChain | None,
+        qualifier: QualifierChain,
         variant: str,
         enum_type: EnumType,
         span: SourceSpan,
-    ) -> None:
-        """Validate the optional enum-type qualifier on a variant reference.
+    ) -> AglTypeError:
+        """Return why owner-qualified ``qualifier::variant`` selects no member of *enum_type*.
 
-        An owner qualifier selects from the enum's scope, and a module route
-        alone qualifies the terminal name the enum injects; either way only an
-        inline member qualifies, since a referenced member keeps its own
-        declaration path.
+        Scope selects every member a module qualifier or a matching owner
+        names, so the owner here is a clash with a module route, no enum,
+        another enum or other arguments of it, or an enum declaring no inline
+        member *variant*: a referenced member keeps its own declaration path.
         """
-        if qualifier is None:
-            return
         local_match = self._local_qualified_owner(qualifier, span)
-        if local_match is not None:
-            local_owner, resolved_enum, type_params = local_match
-            if qualifier.anchor is None and self._env.has_qualified_import_member(
-                qualifier, variant
-            ):
-                raise AglTypeError(
-                    f"Qualifier '{local_owner}' is both a type name and a module route for "
-                    f"'{variant}'. {qualification_repair_guidance()}",
-                    span=span,
-                )
-            if not isinstance(resolved_enum, EnumType):
-                raise _not_an_enum_type(local_owner, span)
-            # Identity is the declaration, never the name: two declarations
-            # sharing one name path (a REPL redeclaration) are unrelated enums.
-            # Within one declaration the owner selects the member at its own
-            # arguments, inferring the parameters an unapplied owner leaves open.
-            if resolved_enum.decl_id != enum_type.decl_id:
-                raise _enum_owner_mismatch(local_owner, resolved_enum, enum_type, span)
-            member = self._owner_inline_member(
-                render_qualifier_path(qualifier), variant, enum_type, span
-            )
-            if not self._env.type_table.inline_member_matches_owner(
-                resolved_enum, type_params, member
-            ):
-                raise _enum_owner_mismatch(local_owner, resolved_enum, enum_type, span)
-            return
-        if len(qualifier.segments) >= 2:
+        if local_match is None:
             # A module route, then the owning enum's path within that module.
-            module_qualifier = replace(qualifier, segments=qualifier.segments[:-1])
+            route = replace(qualifier, segments=qualifier.segments[:-1])
             enum_name = qualifier.segments[-1].name
-        elif qualifier.anchor is QualifierAnchor.CURRENT_MODULE and qualifier.segments:
-            module_qualifier = replace(qualifier, segments=())
-            enum_name = qualifier.segments[0].name
-        else:
-            module_qualifier = qualifier
-            enum_name = enum_type.name
-        owner = self._check_module_qualified_variant(module_qualifier, enum_name, enum_type, span)
-        self._owner_inline_member(owner, variant, enum_type, span)
+            owner = f"{route.render()}::{enum_name}"
+            form = self._env.resolve_imported_enum_owner_form(route, enum_name, span=span)
+            if form is None:
+                return AglTypeError(f"'{owner}' is not a known enum type.", span=span)
+            mismatch = self._enum_owner_error(form.type_template.template, enum_type, owner, span)
+            if form.match(enum_type) is None:
+                return mismatch
+            return self._inline_member_error(variant, enum_type, mismatch, span)
+        local_owner, resolved, _type_params = local_match
+        if qualifier.anchor is None and self._env.has_qualified_import_member(qualifier, variant):
+            return AglTypeError(
+                f"Qualifier '{local_owner}' is both a type name and a module route for "
+                f"'{variant}'. {qualification_repair_guidance()}",
+                span=span,
+            )
+        # Identity is the declaration, never the name: two declarations sharing
+        # one name path (a REPL redeclaration) are unrelated enums. Within one
+        # declaration the owner selected no member only at other arguments.
+        mismatch = self._enum_owner_error(resolved, enum_type, local_owner, span)
+        if not isinstance(resolved, EnumType) or resolved.decl_id != enum_type.decl_id:
+            return mismatch
+        return self._inline_member_error(variant, enum_type, mismatch, span)
+
+    def _inline_member_error(
+        self, variant: str, enum_type: EnumType, mismatch: AglTypeError, span: SourceSpan
+    ) -> AglTypeError:
+        """Return *mismatch* when *enum_type* declares inline member *variant*.
+
+        Otherwise it declares no such member; scope reports an owner spelling a
+        referenced one.
+        """
+        if self._env.type_table.inline_member(enum_type, variant) is None:
+            return _variant_not_in_enum(variant, enum_type, span)
+        return mismatch
 
     def _owner_inline_member(
-        self, owner: str, variant: str, enum_type: EnumType, span: SourceSpan
+        self, variant: str, enum_type: EnumType, span: SourceSpan
     ) -> RecordType:
-        """Return the inline member *variant* of *enum_type* that owner spelling *owner* selects."""
-        member = self._env.owner_inline_member(enum_type, owner, variant, span=span)
+        """Return the inline member *variant* of *enum_type*, which its owner selects.
+
+        Scope reports an owner spelling a referenced member.
+        """
+        member = self._env.type_table.inline_member(enum_type, variant)
         if member is None:
             raise _variant_not_in_enum(variant, enum_type, span)
         return member
@@ -5375,46 +5366,14 @@ class _Checker:
             type_params = tuple(sorted(free_type_vars(owner)))
         return local_owner, owner, type_params
 
-    def _require_enum_owner_match(
-        self,
-        form: EnumOwnerForm,
-        enum_type: EnumType,
-        rendered_owner: str,
-        span: SourceSpan,
-    ) -> None:
-        """Require one checked owner form to match the concrete subject enum."""
-        if form.match(enum_type) is None:
-            resolved = form.type_template.template
-            if not isinstance(resolved, EnumType):
-                raise _not_an_enum_type(rendered_owner, span)
-            raise _enum_owner_mismatch(rendered_owner, resolved, enum_type, span)
-
-    def _check_module_qualified_variant(
-        self,
-        module_qualifier: QualifierChain,
-        enum_name: str,
-        enum_type: EnumType,
-        span: SourceSpan,
-    ) -> str:
-        """Validate a module-qualified enum qualifier (``mylib::Color``); return its spelling."""
-        form = (
-            self._env.resolve_imported_enum_owner_form(module_qualifier, enum_name, span=span)
-            if module_qualifier.route_segments
-            else self._env.resolve_enum_owner_form(
-                EnumOwnerFormKind.SELF, enum_name, module_qualifier
-            )
-        )
-        if form is not None:
-            rendered = module_qualifier.render()
-            owner = (
-                f"::{enum_name}"
-                if not module_qualifier.route_segments
-                else f"{rendered}::{enum_name}"
-            )
-            self._require_enum_owner_match(form, enum_type, owner, span)
-            return owner
-        rendered = module_qualifier.render()
-        raise AglTypeError(f"'{rendered}::{enum_name}' is not a known enum type.", span=span)
+    @staticmethod
+    def _enum_owner_error(
+        owner_type: Type, enum_type: EnumType, rendered_owner: str, span: SourceSpan
+    ) -> AglTypeError:
+        """Return the error for owner *rendered_owner*, of *owner_type*, not owning *enum_type*."""
+        if not isinstance(owner_type, EnumType):
+            return _not_an_enum_type(rendered_owner, span)
+        return _enum_owner_mismatch(rendered_owner, owner_type, enum_type, span)
 
     # --- member access ---
 
@@ -6411,22 +6370,6 @@ class _Checker:
         if isinstance(subj_type, EnumType):
             selected = self._enum_constructor_pattern_ref(pattern, subj_type)
             constructor_ref = None if selected is None else selected[0]
-            if (
-                constructor_ref is not None
-                and pattern.qualifier is not None
-                and pattern.qualifier.anchor is None
-            ):
-                local_owner = "::".join(segment.name for segment in pattern.qualifier.segments)
-                if self._env.resolve_named_type(
-                    local_owner, span=pattern.span
-                ) is not None and self._env.has_qualified_import_member(
-                    pattern.qualifier, pattern.name
-                ):
-                    raise AglTypeError(
-                        f"Qualifier '{local_owner}' is both a type name and a module route for "
-                        f"'{pattern.name}'. {qualification_repair_guidance()}",
-                        span=pattern.span,
-                    )
             if selected is None:
                 selected_member = self._unpublished_enum_member(
                     pattern.node_id,
@@ -6436,8 +6379,6 @@ class _Checker:
                     self._pattern_constructor_candidates(pattern),
                     pattern.span,
                 )
-                if pattern.qualifier is not None:
-                    constructor_ref = ConstructorRef.for_nominal(selected_member)
             else:
                 constructor_ref, selected_member = selected
                 self._validate_enum_constructor_qualification(
@@ -6461,12 +6402,7 @@ class _Checker:
                     if not self._env.type_table.record_matches_enum_member(
                         enum_type, type_params, pattern.name, subj_type
                     ):
-                        named = self._owner_inline_member(
-                            render_qualifier_path(pattern.qualifier),
-                            pattern.name,
-                            enum_type,
-                            pattern.span,
-                        )
+                        named = self._owner_inline_member(pattern.name, enum_type, pattern.span)
                         self._require_selected_member(pattern.name, named, subj_type, pattern.span)
                 elif (
                     applied_member := self._applied_member(
@@ -6478,15 +6414,14 @@ class _Checker:
                     )
                 # A constructor scope resolved for this record already names it.
                 elif constructor_ref is None:
-                    if pattern.node_id not in self._resolved.scope_qualified_spellings:
-                        # An owning enum's qualifier check reports why the route fails.
-                        for enum_owner in enum_owners:
-                            self._check_variant_qualification(
-                                qualifier=pattern.qualifier,
-                                variant=pattern.name,
-                                enum_type=enum_owner,
-                                span=pattern.span,
-                            )
+                    if (
+                        enum_owners
+                        and pattern.node_id not in self._resolved.scope_qualified_spellings
+                    ):
+                        # An owning enum's qualifier reports why the route fails.
+                        raise self._variant_qualification_error(
+                            pattern.qualifier, pattern.name, enum_owners[0], pattern.span
+                        )
                     raise AglTypeError(
                         f"Qualified constructor pattern '{pattern.name}' does not belong to "
                         f"'{subj_type!r}'.",
@@ -6518,9 +6453,6 @@ class _Checker:
         self, pattern: ConstructorPattern | VarPattern
     ) -> tuple[ConstructorRef, ...]:
         """Return the scope-published constructor candidates of this pattern's spelling."""
-        recorded_spelling = self._resolved.pattern_constructor_spellings.get(pattern.node_id)
-        if recorded_spelling is not None and recorded_spelling != pattern.name:
-            return ()
         return self._resolved.pattern_constructor_candidates.get(pattern.node_id, ())
 
     def _enum_constructor_pattern_ref(
@@ -6655,17 +6587,17 @@ class _Checker:
         candidates: tuple[ConstructorRef, ...],
         span: SourceSpan,
     ) -> RecordType:
-        """Return the member of *enum_type* a spelling no published *candidates* select.
+        """Return the member of *enum_type* a bare spelling no published *candidates* select.
 
-        A module route or the current-module anchor may qualify the member
-        directly (``mylib::Red``). A local scope's candidates are all it
-        qualifies, so a spelling none of them fits names no member.
+        The bare spelling names the enum's member of that terminal name. Scope
+        selects every member a qualified spelling can name, so one none of
+        *candidates* fits names no member: a local scope's candidates are all
+        it qualifies, and an owner's failure is reported against it.
         """
         if node_id in self._resolved.scope_qualified_spellings:
             raise self._constructor_outside_enum(variant, enum_type, candidates, span)
-        self._check_variant_qualification(
-            qualifier=qualifier, variant=variant, enum_type=enum_type, span=span
-        )
+        if qualifier is not None:
+            raise self._variant_qualification_error(qualifier, variant, enum_type, span)
         member = self._env.type_table.enum_member_names(enum_type).get(variant)
         if member is None:
             raise _variant_not_in_enum(variant, enum_type, span)
@@ -7042,7 +6974,12 @@ def prepare_module_headers(
     module_id: ModuleId,
 ) -> None:
     """Build a module's type table and pre-register its function headers."""
-    _TypeBuilder(env, module_id=module_id, attributes=resolved.attributes).collect(resolved.program)
+    _TypeBuilder(
+        env,
+        module_id=module_id,
+        attributes=resolved.attributes,
+        referenced_member_names=resolved.referenced_member_names,
+    ).collect(resolved.program)
     header_checker = _Checker(
         env=env,
         resolved=resolved,

@@ -2733,41 +2733,13 @@ class TypeEnvironment:
             self._sealed_own_source_type_names = own_names
         return own_names
 
-    def resolve_enum_owner_form(
-        self,
-        kind: Literal[
-            EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF, EnumOwnerFormKind.OPEN_IMPORT
-        ],
-        owner_name: str,
-        module_qualifier: QualifierChain | None = None,
-    ) -> EnumOwnerForm | None:
-        """Resolve one exact unrouted enum-owner source form through checked visibility."""
-        if kind is EnumOwnerFormKind.OPEN_IMPORT:
-            if self._import_env is None or owner_name in self._own_source_type_names():
-                return None
-            type_qnames = tuple(
-                qname
-                for qname in self._import_env.unqualified.get(owner_name, frozenset())
-                if self._is_program_type_candidate(qname)
-            )
-            if len(type_qnames) != 1:
-                return None
-            key = self._qname_decl_key(type_qnames[0])
-            return self._enum_owner_form(kind, owner_name, module_qualifier, None, key)
-        if owner_name not in self._own_source_type_names():
-            return None
-        return self._own_enum_owner_form(kind, owner_name, module_qualifier)
-
     def _own_enum_owner_form(
-        self,
-        kind: Literal[EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF],
-        owner_name: str,
-        module_qualifier: QualifierChain | None = None,
+        self, kind: Literal[EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF], owner_name: str
     ) -> EnumOwnerForm:
         """Build the owner form of *owner_name*, a type this module declares."""
         expected_qualifier = None if kind is EnumOwnerFormKind.LOCAL else ()
         key = (self._module_id, (), owner_name)
-        return self._enum_owner_form(kind, owner_name, module_qualifier, expected_qualifier, key)
+        return self._enum_owner_form(kind, owner_name, expected_qualifier, key)
 
     def resolve_imported_enum_owner_form(
         self, module_qualifier: QualifierChain, owner_name: str, *, span: SourceSpan | None
@@ -2783,18 +2755,19 @@ class TypeEnvironment:
         return self._enum_owner_form(
             EnumOwnerFormKind.QUALIFIED_IMPORT,
             owner_name,
-            module_qualifier,
             module_qualifier.route_segments,
             self._qname_decl_key(qname),
+            qualifier_anchored=module_qualifier.anchored,
         )
 
     def _enum_owner_form(
         self,
         kind: EnumOwnerFormKind,
         owner_name: str,
-        module_qualifier: QualifierChain | None,
         expected_qualifier: tuple[str, ...] | None,
         key: DeclKey,
+        *,
+        qualifier_anchored: bool = False,
     ) -> EnumOwnerForm:
         source_module_id, source_scope_path, source_name = key
         return EnumOwnerForm(
@@ -2806,9 +2779,7 @@ class TypeEnvironment:
             type_template=self.declared_type_template(
                 source_module_id, source_name, scope_path=source_scope_path
             ),
-            qualifier_anchored=(
-                module_qualifier.anchored if module_qualifier is not None else False
-            ),
+            qualifier_anchored=qualifier_anchored,
         )
 
     def _blocked_short_variants(self, form: EnumOwnerForm) -> frozenset[str]:
@@ -2846,13 +2817,23 @@ class TypeEnvironment:
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name))
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.SELF, owner_name))
         if self._import_env is not None:
-            for exposed_name in self._import_env.unqualified:
-                if not isinstance(exposed_name, str):
+            own_names = self._own_source_type_names()
+            for exposed_name, qnames in self._import_env.unqualified.items():
+                # A bare imported enum owner, unless this module declares the name.
+                if not isinstance(exposed_name, str) or exposed_name in own_names:
                     continue
-                form = self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, exposed_name)
-                if form is None:
-                    continue
-                forms.add(form)
+                type_qnames = tuple(
+                    qname for qname in qnames if self._is_program_type_candidate(qname)
+                )
+                if len(type_qnames) == 1:
+                    forms.add(
+                        self._enum_owner_form(
+                            EnumOwnerFormKind.OPEN_IMPORT,
+                            exposed_name,
+                            None,
+                            self._qname_decl_key(type_qnames[0]),
+                        )
+                    )
             for contribution in self._import_env.contributions.values():
                 routes = contribution_routes(contribution)
                 for exposed_name, qname in contribution.members.items():

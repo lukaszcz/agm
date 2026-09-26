@@ -113,7 +113,7 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
             "enum Color\n  | Red\nlet value: Color = Color::Red\n"
             "case value of | Nope::Red => 1 | _ => 2",
             "scope",
-            "typecheck",
+            "scope",
         ),
         (
             "enum Color\n  | Red\n::Missing::Red",
@@ -122,7 +122,7 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
                 "case value of | ::Missing::Red => 1 | _ => 2"
             ),
             "scope",
-            "typecheck",
+            "scope",
         ),
         (
             "enum Color\n  | Red\nColor::Gone",

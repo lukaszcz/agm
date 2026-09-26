@@ -7489,20 +7489,20 @@ class TestExceptionIsTest:
         assert src[err.span.start_offset : err.span.end_offset] == "d is Lib::Unknown"
 
     def test_qualified_unknown_module_route_reports_route_cause(self) -> None:
-        """A qualifier naming no route at all raises before the generic relatedness check.
+        """A route owner naming no route at all raises before the generic relatedness check.
 
-        The resolver defers this route failure (``defer_route_diagnostics``);
-        the checker must surface it rather than falling back to the generic
-        "no exception related" message it uses for a resolvable, unrelated RHS
+        The resolver defers this owner route failure; the checker must surface
+        it rather than falling back to the generic "no exception related"
+        message it uses for a resolvable, unrelated RHS
         (``test_qualified_unrelated_rejected``).
         """
         src = _EXCEPTION_IS_HIERARCHY + (
-            'let d = Detailed(message = "m", code = 1, detail = "x")\nd is nosuch::X'
+            'let d = Detailed(message = "m", code = 1, detail = "x")\nd is nosuch::Owner::X'
         )
         err = reject_type(src)
         assert isinstance(err, AglTypeError)
         assert err.span is not None
-        assert src[err.span.start_offset : err.span.end_offset] == "d is nosuch::X"
+        assert src[err.span.start_offset : err.span.end_offset] == "d is nosuch::Owner::X"
 
     def test_is_not_exception(self) -> None:
         r = accept_type(
@@ -8122,107 +8122,21 @@ class TestConstructorRefDispatch:
 
         assert resolve_and_check_inline_entry(source, default_capabilities())
 
-    def test_bare_pattern_rejects_missing_or_stale_constructor_candidates(self) -> None:
-        # The corrupted-candidate variants below are checked directly via
-        # check_resolved (not resolve_and_check_entry), since each is a
-        # deliberately mutated copy of `resolved` that checking must reject.
-        resolved = resolve_inline_entry(
-            "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0",
-        )
-        case = resolved.program.body.items[-1]
-        assert isinstance(case, Case)
-        pattern = case.branches[0].pattern
-
-        missing_candidates = replace(resolved, pattern_constructor_candidates={})
-        with pytest.raises(AglTypeError, match="does not belong"):
-            check_resolved(missing_candidates)
-
-        stale_pattern = replace(pattern, name="missing")
-        stale_case = replace(
-            case,
-            branches=(replace(case.branches[0], pattern=stale_pattern),),
-        )
-        stale_program = replace(
-            resolved.program,
-            body=replace(
-                resolved.program.body,
-                items=(*resolved.program.body.items[:-1], stale_case),
-            ),
-        )
-        stale_resolved = replace(resolved, program=stale_program)
-        with pytest.raises(AglTypeError, match="does not belong"):
-            check_resolved(stale_resolved)
-
-        from agm.agl.scope.symbols import ConstructorRef
-
-        stale_candidate = ConstructorRef(
-            owner_name="Choice",
-            owner_decl_node_id=-1,
-            type_params=(),
-        )
-        malformed_candidates = replace(
-            stale_resolved,
-            pattern_constructor_candidates={pattern.node_id: (stale_candidate,)},
-        )
-        with pytest.raises(AglTypeError, match="does not belong"):
-            check_resolved(malformed_candidates)
-
-        precise_resolved = resolve_inline_entry(
-            "enum Precise\n  | none\nlet value = none\ncase value of | none => 0",
-        )
-        precise_case = precise_resolved.program.body.items[-1]
-        assert isinstance(precise_case, Case)
-        with pytest.raises(AglTypeError, match="does not belong"):
-            check_resolved(replace(precise_resolved, pattern_constructor_candidates={}))
-
-    def test_qualified_applied_patterns_recover_from_missing_scope_candidates(self) -> None:
-        enum_resolved = resolve_inline_entry(
-            "enum Option[T]\n  | some(value: T)\n"
-            "let value: Option[int] = some(value = 1)\n"
-            "case value of | Option[int]::some(value = _) => 1",
-        )
-        enum_case = enum_resolved.program.body.items[-1]
-        assert isinstance(enum_case, Case)
-        enum_pattern = enum_case.branches[0].pattern
-        assert isinstance(enum_pattern, ConstructorPattern)
-
-        enum_checked = check_resolved(replace(enum_resolved, pattern_constructor_candidates={}))
-        assert enum_checked.pattern_constructor_refs.get(enum_pattern.node_id) is not None
-
-        member_resolved = resolve_inline_entry(
-            "enum Option[T]\n  | some(value: T)\n"
-            "let value = some(value = 1)\n"
-            "case value of | Option::some(value = _) => 1",
-        )
-        member_case = member_resolved.program.body.items[-1]
-        assert isinstance(member_case, Case)
-        member_pattern = member_case.branches[0].pattern
-        assert isinstance(member_pattern, ConstructorPattern)
-
-        member_checked = check_resolved(replace(member_resolved, pattern_constructor_candidates={}))
-        assert member_checked.pattern_constructor_refs.get(member_pattern.node_id) is not None
-
-    def test_applied_pattern_rejects_a_stale_resolved_spelling(self) -> None:
-        resolved = resolve_inline_entry(
-            "enum Choice\n  | some(value: int)\n"
-            "let value: Choice = some(value = 1)\n"
-            "case value of | some(value = _) => 1",
-        )
-        case = resolved.program.body.items[-1]
-        assert isinstance(case, Case)
-        pattern = case.branches[0].pattern
-        assert isinstance(pattern, ConstructorPattern)
-        stale_pattern = replace(pattern, name="missing")
-        stale_case = replace(case, branches=(replace(case.branches[0], pattern=stale_pattern),))
-        stale_program = replace(
-            resolved.program,
-            body=replace(
-                resolved.program.body, items=(*resolved.program.body.items[:-1], stale_case)
-            ),
-        )
-
-        with pytest.raises(AglTypeError, match="does not belong"):
-            check_resolved(replace(resolved, program=stale_program))
+    @pytest.mark.parametrize(
+        "declaration",
+        ["record Other", "enum Choice\n  | Other\n  | Rest"],
+        ids=["record", "enum-member"],
+    )
+    def test_bare_pattern_naming_another_nominal_rejects_a_record_scrutinee(
+        self, declaration: str
+    ) -> None:
+        with pytest.raises(AglTypeError):
+            resolve_and_check_inline_entry(
+                f"record Box\n  v: int\n{declaration}\n"
+                "let box = Box(v = 1)\n"
+                "case box of | Other => 0",
+                default_capabilities(),
+            )
 
     def test_missing_field_still_errors(self) -> None:
         err = reject_type("record Box\n  value: int\nBox()")
@@ -8971,7 +8885,9 @@ class TestTypeDeclarations:
         program = parse_program("record A\n  x: int\nrecord A\n  y: int\nA(x = 1)")
         with pytest.raises(AglTypeError) as exc_info:
             _TypeBuilder(
-                TypeEnvironment(), attributes=_AttributeFacts(param_zones=_standard_zones(program))
+                TypeEnvironment(),
+                attributes=_AttributeFacts(param_zones=_standard_zones(program)),
+                referenced_member_names={},
             ).collect(program)
         assert "already declared" in str(exc_info.value).lower()
 
@@ -10627,7 +10543,11 @@ def _method_header(
     function = next(item for item in resolved.program.body.items if isinstance(item, FuncDef))
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
-    _TypeBuilder(env, attributes=resolved.attributes).collect(resolved.program)
+    _TypeBuilder(
+        env,
+        attributes=resolved.attributes,
+        referenced_member_names=resolved.referenced_member_names,
+    ).collect(resolved.program)
     with env.type_scope(owner.scope_path):
         signature, _type, _receiver = resolve_function_header(
             env,

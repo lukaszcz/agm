@@ -1174,8 +1174,8 @@ class TestLetBindingScope:
         scope = resolved.scope_nodes[("A",)]
         assert "_" not in scope.bindings
 
-    def test_unimported_qualified_constructor_pattern_stays_a_checker_concern(self) -> None:
-        parse_and_resolve("let value = 1\ncase value of | missing::packet(_) => 1")
+    def test_unimported_qualified_constructor_pattern_fails_as_its_value_does(self) -> None:
+        reject_scope("let value = 1\ncase value of | missing::packet(_) => 1")
 
 
 class TestWildcardBinders:

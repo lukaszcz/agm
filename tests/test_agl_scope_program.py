@@ -548,6 +548,30 @@ class TestQualifiedAccess:
         with pytest.raises(AglScopeError, match="both a local scope and a module route"):
             resolve_program(graph)
 
+    @pytest.mark.parametrize(
+        ("declaration", "use"),
+        [
+            ("record Box\n  v: int", "let b = ::mylib::Box(v = 1)\ncase b of | mylib::Box(v) => v"),
+            ("exception Oops", 'let e: Exception = ::mylib::Oops(message = "m")\ne is mylib::Oops'),
+        ],
+        ids=["pattern", "is-test"],
+    )
+    def test_local_scope_and_module_route_clash_is_rejected_in_patterns_and_is_tests(
+        self, tmp_path: Path, declaration: str, use: str
+    ) -> None:
+        """A pattern or ``is`` spelling both regions contribute is ambiguous, as its value is."""
+        local = "\n".join(f"  {line}" for line in declaration.splitlines())
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": f"import mylib\n\nscope mylib\n{local}\nend mylib\n\n{use}",
+                "mylib": declaration,
+            },
+        )
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
     def test_qualified_assign_to_local_scope_and_module_route_clash_requires_an_anchor(
         self, tmp_path: Path
     ) -> None:

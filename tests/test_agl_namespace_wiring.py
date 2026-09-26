@@ -1415,18 +1415,41 @@ def test_current_module_anchor_does_not_resolve_an_imported_constructor_owner(
     assert "not defined" in message
 
 
-def test_invalid_qualified_pattern_and_is_routes_reach_typecheck(tmp_path: Path) -> None:
-    for use in (
-        "case flag of | ::Unknown::On => 1 | _ => 2",
-        "flag is ::Unknown::On",
-        "flag is /Unknown::Flag::On",
-    ):
-        graph = make_graph_from_files(
-            tmp_path,
-            {"entry": f"enum Flag | On | Off\nlet flag: Flag = Flag::On\n{use}"},
-        )
-        with pytest.raises(AglTypeError):
-            check_program(resolve_program(graph), base_caps())
+@pytest.mark.parametrize("use", ["case u of | ::Unknown::On => 1 | _ => 0", "u is ::Unknown::On"])
+def test_current_module_anchor_does_not_qualify_an_imported_enum_owner_in_patterns(
+    tmp_path: Path, use: str
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": f"import library::*\nlet u: Unknown = On\n{use}",
+            "library": "enum Unknown | On | Off",
+        },
+    )
+
+    with pytest.raises(AglScopeError):
+        resolve_program(graph)
+
+
+@pytest.mark.parametrize(
+    ("use", "error"),
+    [
+        ("case flag of | ::Unknown::On => 1 | _ => 2", AglScopeError),
+        ("flag is ::Unknown::On", AglScopeError),
+        ("flag is ::Unknown::Deep::On", AglScopeError),
+        ("flag is /Unknown::Flag::On", AglTypeError),
+    ],
+)
+def test_invalid_qualified_pattern_and_is_routes_are_rejected(
+    tmp_path: Path, use: str, error: type[AglScopeError] | type[AglTypeError]
+) -> None:
+    """A current-module path naming nothing fails as its value does; a route owner is checked."""
+    graph = make_graph_from_files(
+        tmp_path,
+        {"entry": f"enum Flag | On | Off\nlet flag: Flag = Flag::On\n{use}"},
+    )
+    with pytest.raises(error):
+        check_program(resolve_program(graph), base_caps())
 
 
 def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(

@@ -873,24 +873,23 @@ class ModuleResolution:
         constructor ``VarRef``) to the single :class:`ConstructorRef` it
         resolved to (only present when the candidate set has exactly one entry
         and no nearer non-constructor binding shadows it).
-    ``pattern_constructor_candidates`` / ``pattern_constructor_spellings``
-        Map bare ``VarPattern`` and constructor-pattern node ids to viable
+    ``pattern_constructor_candidates``
+        Maps bare ``VarPattern`` and constructor-pattern node ids to viable
         candidates. Constructor patterns retain an empty tuple when their
         named owner is unavailable, so an unqualified spelling never
         substitutes for it. Candidates are independent of ordinary value bindings; the
         checker selects a bare name's final interpretation from the matched
-        occurrence's type and field name. The spelling table preserves each
-        immutable occurrence's source name alongside those candidates.
+        occurrence's type and field name.
     ``is_test_constructor_candidates``
         Maps unqualified ``is`` test node ids to every visible constructor
         candidate for their source spelling. Typecheck selects by the left
         operand's nominal enum type.
     ``scope_qualified_spellings``
         Qualified pattern and ``is`` test node ids whose qualifier names a
-        local plain scope. Their constructor selection is complete: typecheck
-        rejects a spelling no published constructor fits against the matched
-        type and never reads the qualifier as a module route. A local/module
-        route clash is left out, deferred to typecheck.
+        local plain scope or is a module qualifier. Their constructor
+        selection is complete: typecheck rejects a spelling no published
+        constructor fits against the matched type and never reads the
+        qualifier as a type owner or module route.
     ``pattern_slots``
         Scope-created field-directed pattern-slot metadata keyed by slot id.
         Branch-body references resolve directly to the shared slot binding.
@@ -916,6 +915,10 @@ class ModuleResolution:
     ``type_owners``
         For a REPL entry, the :class:`TypeOwner` each type it declares resolved
         to, keyed by type path; the session retains them for later entries.
+    ``referenced_member_names``
+        Maps each enum declaration's node id to :attr:`TypeOwner.referenced`:
+        the names spelling the members it only references. Typecheck records
+        these, so an owner spelling of one is rejected alike in every position.
     """
 
     program: Program
@@ -936,7 +939,6 @@ class ModuleResolution:
     pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = field(
         default_factory=dict
     )
-    pattern_constructor_spellings: dict[int, str] = field(default_factory=dict)
     is_test_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = field(
         default_factory=dict
     )
@@ -947,6 +949,7 @@ class ModuleResolution:
     reachable_declarations: frozenset[DeclarationKey] = frozenset()
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
     type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
+    referenced_member_names: dict[int, frozenset[str]] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

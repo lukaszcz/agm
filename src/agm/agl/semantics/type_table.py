@@ -1111,25 +1111,15 @@ class TypeTable:
         """Return whether *record* is the inline member *member_name* of *enum* over *type_params*.
 
         This is what the owner-qualified spelling ``Enum::member_name`` selects.
-        """
-        return (
-            record.name == member_name
-            and self.is_inline_member(enum, record)
-            and self.inline_member_matches_owner(enum, type_params, record)
-        )
-
-    def inline_member_matches_owner(
-        self, enum: EnumType, type_params: tuple[str, ...], member: RecordType
-    ) -> bool:
-        """Return whether *member*, inline in *enum*'s declaration, fits *enum*'s arguments.
-
         The owner's own *type_params* are inferred; every other owner argument
         must match exactly.
         """
-        template = TypeTemplate(
-            cast(RecordType, self.inline_member(enum, member.name)), type_params
+        member = self.inline_member(enum, member_name) if record.name == member_name else None
+        return (
+            member is not None
+            and member.decl_id == record.decl_id
+            and match_nominal_owner_template(TypeTemplate(member, type_params), record) is not None
         )
-        return match_nominal_owner_template(template, member) is not None
 
     def is_enum_member(self, handle: RecordType) -> bool:
         """Return whether *handle* names a declaration registered as an enum member.

@@ -192,6 +192,10 @@ Review::Fail(issues = ["missing tests"])
 let review: Review = Pass           # checked in an enum-typed slot
 ```
 
+A module qualifier also reaches an inline member of one of the module's root
+enums by its terminal name (`mylib::Pass`, `::Pass`); see
+[Module-qualified enum members](modules.md#module-qualified-enum-members).
+
 A member constructor produces its own record type. Assign it to an enum slot
 to widen it: `let pass = Pass` has type `Review::Pass`, while the annotated
 binding above has type `Review`. This is a directed check, not common-type

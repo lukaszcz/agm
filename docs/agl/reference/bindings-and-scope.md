@@ -430,8 +430,11 @@ ambiguity error**, even when an expected enum type contains one of the
 candidates: scope resolves the name before that type is used to check the
 expression. **Qualify** the reference with the member's owning enum or record
 to disambiguate. Enum-member patterns and `is` tests are different: their
-scrutinee's static enum type selects the member rather than using ordinary
-value-position scope selection.
+scrutinee's static enum type selects a bare member rather than using ordinary
+value-position scope selection. A module-qualified member spelling
+(`mylib::Tagged`, `::Tagged`) selects the same member in every position, unless
+a same-named declaration claims its value spelling as described below
+([Modules](modules.md#module-qualified-enum-members)).
 
 ```agl
 enum Holder[T]

@@ -165,12 +165,12 @@ case value of
 The prefix may name an owning enum type (`Color::Red`), a module and owning
 type (`mylib::Color::Red` or `mylib::Point`), or the current module
 (`::Color::Red` or `::Point`). An enum owner qualifies only its inline
-members. A module qualifies an enum-member constructor directly (`mylib::Red`)
-only for members declared inline in that module's enums. A referenced member
-keeps its own declaration path: when `mylib`'s `Color` references `Shared`
-from module `other`, write `other::Shared`, never `mylib::Color::Shared` or
-`mylib::Shared`. Spelling a referenced member through an owner is a static
-error. Qualification states the owner explicitly
+members: when `mylib`'s `Color` references `Shared` from module `other`, write
+`other::Shared`, never `mylib::Color::Shared`. A module qualifier alone
+(`mylib::Red`, `::Red`) selects an inline member of one of that module's root
+enums; see
+[Module-qualified enum members](modules.md#module-qualified-enum-members).
+Qualification states the owner explicitly
 but is not required when the scrutinee type selects a same-spelled constructor;
 when present, it must identify the scrutinee's exact nominal type. A module route uses slash segments,
 as in `company/colors::Color::Red` or `company/colors::Point`; constructor

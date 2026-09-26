@@ -537,9 +537,12 @@ def _build_program_type_table(
         # The builder is transient: it only collects headers into ``env``
         # (which bootstraps ``program_type_table`` below).  Body resolution
         # uses the cross-module builders built later, not this one.
-        _TypeBuilder(env, module_id=mid, attributes=rmod.resolved.attributes).collect_shells_only(
-            rmod.resolved.program
-        )
+        _TypeBuilder(
+            env,
+            module_id=mid,
+            attributes=rmod.resolved.attributes,
+            referenced_member_names=rmod.resolved.referenced_member_names,
+        ).collect_shells_only(rmod.resolved.program)
         per_module_envs[mid] = env
 
     # Collect record/enum handles into the shared program type table.
@@ -641,7 +644,12 @@ def _build_program_type_table(
         # Build a _TypeBuilder that uses the cross-module env and has the
         # headers and alias targets registered (for build_record/build_enum/
         # build_exception to work).
-        builder = _TypeBuilder(cross_env, module_id=mid, attributes=rmod.resolved.attributes)
+        builder = _TypeBuilder(
+            cross_env,
+            module_id=mid,
+            attributes=rmod.resolved.attributes,
+            referenced_member_names=rmod.resolved.referenced_member_names,
+        )
         builder.collect_shells_only(rmod.resolved.program)
         cross_builders[mid] = builder
 

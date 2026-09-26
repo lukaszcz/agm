@@ -25,6 +25,7 @@ from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.sessions import AgentDispatcherSessionHost
 from agm.agl.runtime.types import ParamBindingInfo
+from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS, create_seeded_type_table
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -3129,6 +3130,106 @@ enum Agent
 
         assert raised.value.member == "Saved"
         assert not s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "N::Top(id = 3)",
+            "case w of | N::Top(id) => id | _ => 0",
+            "w is N::Top",
+            "fn(t: N::Top) => t.id",
+        ],
+        ids=["value", "pattern", "is-test", "type"],
+    )
+    def test_retained_enum_referencing_a_retained_record_rejects_its_owner_spelling(
+        self, entry: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("record Top\n  id: int").ok
+        assert s.eval_entry("enum N = ::Top | Own2\nlet w: N = Top(id = 1)").ok
+
+        with pytest.raises(ReferencedMemberError) as raised:
+            s.type_of(entry)
+
+        assert raised.value.member == "Top"
+        assert not s.eval_entry("let t: N::Top = Top(id = 3)").ok
+
+    @pytest.mark.parametrize(
+        ("entry", "member"),
+        [
+            ("N::Top(id = 3)", "Top"),
+            ("N::Alias(id = 3)", "Alias"),
+            ("case w of | N::Top(id) => id | _ => 0", "Top"),
+            ("w is N::Alias", "Alias"),
+            ("fn(t: N::Top) => t.id", "Top"),
+            ("fn(t: N::Alias) => t.id", "Alias"),
+        ],
+    )
+    def test_retained_enum_referencing_a_retained_alias_rejects_both_spellings(
+        self, entry: str, member: str
+    ) -> None:
+        s = open_session()
+        assert s.eval_entry("record Top\n  id: int\ntype Alias = Top").ok
+        assert s.eval_entry("enum N = ::Alias | Own2\nlet w: N = Top(id = 1)").ok
+
+        with pytest.raises(ReferencedMemberError) as raised:
+            s.type_of(entry)
+
+        assert raised.value.member == member
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["::Top(id = 3).id", "w is ::Top", "case w of | ::Top(id) => id | _ => 0"],
+        ids=["value", "is-test", "pattern"],
+    )
+    def test_current_module_qualifier_names_a_retained_referenced_record(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("record Top\n  id: int").ok
+        assert s.eval_entry("enum N = ::Top | Own2\nlet w: N = Top(id = 1)").ok
+
+        assert s.eval_entry(entry).ok
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["::Red", "a is ::Red", "case a of | ::Red => 1 | _ => 0"],
+        ids=["value", "is-test", "pattern"],
+    )
+    def test_current_module_member_ambiguous_across_entries(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry("enum A = Red | Green").ok
+        assert s.eval_entry("enum B = Red | Blue\nlet a: A = A::Green").ok
+
+        with pytest.raises(AglScopeError):
+            s.type_of(entry)
+
+    def test_current_module_member_follows_enum_supersession(self) -> None:
+        s = open_session()
+        assert s.eval_entry("enum A = Red | Green").ok
+        assert s.eval_entry("enum A = Red | Blue\nlet a: A = A::Blue").ok
+
+        assert s.eval_entry("a is ::Red").value == BoolValue(False)
+        assert s.eval_entry("case ::Red as A of | ::Red => 1 | _ => 0").value == IntValue(1)
+        with pytest.raises(AglScopeError):
+            s.type_of("::Green")
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["::Pass", "verdict is ::Pass", "case verdict of | ::Pass => 1 | _ => 0"],
+        ids=["value", "is-test", "pattern"],
+    )
+    def test_current_module_member_referenced_by_a_retained_enum(self, entry: str) -> None:
+        s = open_session()
+        assert s.eval_entry(
+            "scope checks\n  enum Review = Pass | Fail(reason: text)\nend checks"
+        ).ok
+        assert s.eval_entry(
+            "enum Verdict = ::checks::Review::Pass | Maybe\nlet verdict: Verdict = Verdict::Maybe"
+        ).ok
+
+        with pytest.raises(ReferencedMemberError) as raised:
+            s.type_of(entry)
+
+        assert raised.value.member == "Pass"
 
     @pytest.mark.parametrize("name", ["Col", "C", "I"])
     def test_retained_type_name_is_not_a_value_in_a_later_entry(self, name: str) -> None:

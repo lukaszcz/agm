@@ -458,7 +458,11 @@ class TestExternCallSiteRecording:
             origin_path=_PATH,
         )
         env = TypeEnvironment()
-        _TypeBuilder(env, attributes=resolved.attributes).collect(resolved.program)
+        _TypeBuilder(
+            env,
+            attributes=resolved.attributes,
+            referenced_member_names=resolved.referenced_member_names,
+        ).collect(resolved.program)
         checker = _Checker(env, resolved, _CAPS)
         definitions = [item for item in resolved.program.body.items if isinstance(item, FuncDef)]
         for definition in definitions:

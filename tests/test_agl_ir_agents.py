@@ -2041,23 +2041,6 @@ target
     assert ir["target"].fields["value"] == TextValue("text")
 
 
-def test_lower_on_parse_error_self_qualified_retry() -> None:
-    """Self-qualified Retry parse policy produces the correct attempt count."""
-    source = """\
-let a = AgentCommand("a")
-let n: int = ask("?", agent = a, on-parse-error = ::Retry(n = 2))
-n
-"""
-    from tests.agl.ir_harness import evaluate_ir_with_agents
-
-    # First 2 responses are bad JSON, 3rd is valid.
-    ir = evaluate_ir_with_agents(
-        source,
-        scripts={"a": ["bad", "bad", "7"]},
-    )
-    assert ir["n"] == IntValue(7)
-
-
 @pytest.mark.parametrize("request_only", (False, True))
 def test_validate_ir_ask_shallow_does_not_check_contracts(request_only: bool) -> None:
     """validate_ir: shallow (deep=False) validation skips an ask node's contract checks."""

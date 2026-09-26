@@ -3323,17 +3323,16 @@ class _Resolver:
             case UnaryNeg():
                 self._resolve_expr(expr.operand)
             case IsTest():
-                if expr.qualifier is None:
-                    candidates = self._bare_constructor_candidates(expr.variant)
-                    self._is_test_constructor_candidates[expr.node_id] = candidates
-                    if len(candidates) == 1:
-                        self._constructor_refs[expr.node_id] = candidates[0]
-                else:
-                    qualified = self._qualified_constructor_candidates(
+                candidates = (
+                    self._bare_constructor_candidates(expr.variant)
+                    if expr.qualifier is None
+                    else self._qualified_constructor_candidates(
                         expr.node_id, expr.qualifier, expr.variant, expr.span
                     )
-                    if len(qualified) == 1:
-                        self._constructor_refs[expr.node_id] = qualified[0]
+                )
+                self._is_test_constructor_candidates[expr.node_id] = candidates
+                if len(candidates) == 1:
+                    self._constructor_refs[expr.node_id] = candidates[0]
                 self._resolve_expr(expr.expr)
             case Cast():
                 self._resolve_expr(expr.expr)

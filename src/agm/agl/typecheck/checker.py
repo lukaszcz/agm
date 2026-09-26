@@ -5144,41 +5144,14 @@ class _Checker:
                     f"got '{expr_type!r}'.",
                     span=node.span,
                 )
-            enum_type = expr_type
-            constructor = self._constructor_ref_for(node.node_id)
-            if node.qualifier is None:
-                matching = tuple(
-                    candidate
-                    for candidate in self._resolved.is_test_constructor_candidates.get(
-                        node.node_id, ()
-                    )
-                    if self._enum_member_for_constructor_candidate(enum_type, candidate) is not None
-                )
-                constructor = self._unique_constructor_candidate(
-                    node.variant,
-                    node.span,
-                    enum_type,
-                    matching,
-                    subject="'is' member",
-                )
-            if constructor is None:
-                raise self._unselected_member_error(
-                    node.node_id, node.qualifier, node.variant, enum_type, (), node.span
-                )
-
-            member = self._enum_member_for_constructor_candidate(enum_type, constructor)
-            if member is None:
-                raise self._constructor_outside_enum(
-                    node.variant, enum_type, (constructor,), node.span
-                )
-
-            self._validate_enum_constructor_qualification(
-                qualifier=node.qualifier,
-                variant=node.variant,
-                enum_type=enum_type,
-                constructor=constructor,
-                member=member,
-                span=node.span,
+            _constructor, member = self._select_enum_member(
+                node.node_id,
+                node.qualifier,
+                node.variant,
+                expr_type,
+                self._resolved.is_test_constructor_candidates.get(node.node_id, ()),
+                node.span,
+                subject="'is' member",
             )
             self._record_selected_constructor_ref(node.node_id, ConstructorRef.for_nominal(member))
             return BoolType()
@@ -6356,21 +6329,15 @@ class _Checker:
         context_desc: str
         constructor_ref: ConstructorRef | None
         if isinstance(subj_type, EnumType):
-            selected = self._enum_constructor_pattern_ref(pattern, subj_type)
-            constructor_ref = None if selected is None else selected[0]
-            if selected is None:
-                selected_member = self._unpublished_enum_member(pattern, subj_type)
-            else:
-                constructor_ref, selected_member = selected
-                self._validate_enum_constructor_qualification(
-                    qualifier=pattern.qualifier,
-                    variant=pattern.name,
-                    enum_type=subj_type,
-                    constructor=constructor_ref,
-                    member=selected_member,
-                    span=pattern.span,
-                )
-            owner_type = selected_member
+            constructor_ref, owner_type = self._select_enum_member(
+                pattern.node_id,
+                pattern.qualifier,
+                pattern.name,
+                subj_type,
+                self._pattern_constructor_candidates(pattern),
+                pattern.span,
+                subject="Constructor pattern",
+            )
             fields = self._env.type_table.record_fields(owner_type)
             context_desc = f"member '{subj_type.name}.{owner_type.name}'"
         elif isinstance(subj_type, RecordType):
@@ -6417,12 +6384,6 @@ class _Checker:
                 f"type '{subj_type!r}'.",
                 span=pattern.span,
             )
-        if (
-            constructor_ref is None
-            and pattern.name == owner_type.name
-            and self._env.type_table.is_enum_member(owner_type)
-        ):
-            constructor_ref = ConstructorRef.for_nominal(owner_type)
         if constructor_ref is None:
             raise AglTypeError(
                 f"Constructor pattern '{pattern.name}' does not belong to '{owner_type!r}'.",
@@ -6436,29 +6397,70 @@ class _Checker:
         """Return the scope-published constructor candidates of this pattern's spelling."""
         return self._resolved.pattern_constructor_candidates.get(pattern.node_id, ())
 
-    def _enum_constructor_pattern_ref(
-        self, pattern: ConstructorPattern | VarPattern, enum_type: EnumType
+    def _enum_member_candidate(
+        self,
+        variant: str,
+        span: SourceSpan,
+        enum_type: EnumType,
+        candidates: tuple[ConstructorRef, ...],
+        *,
+        subject: str,
     ) -> tuple[ConstructorRef, RecordType] | None:
-        """Select the unique scope-published constructor of a member of *enum_type*.
+        """Select the unique one of *candidates* constructing a member of *enum_type*.
 
-        Candidates match any member-record declaration of the concrete
-        scrutinee, so distinct members of one enum remain ambiguous when they
-        share a pattern spelling. The selected member accompanies the candidate.
+        Candidates match any member-record declaration of the concrete enum,
+        so distinct members of one enum remain ambiguous when they share a
+        spelling. The selected member accompanies the candidate.
         """
         members = {
             candidate.owner_decl_node_id: (candidate, member)
-            for candidate in self._pattern_constructor_candidates(pattern)
+            for candidate in candidates
             if (member := self._enum_member_for_constructor_candidate(enum_type, candidate))
             is not None
         }
         selected = self._unique_constructor_candidate(
-            pattern.name,
-            pattern.span,
+            variant,
+            span,
             enum_type,
             tuple(candidate for candidate, _member in members.values()),
-            subject="Constructor pattern",
+            subject=subject,
         )
         return None if selected is None else members[selected.owner_decl_node_id]
+
+    def _select_enum_member(
+        self,
+        node_id: int,
+        qualifier: QualifierChain | None,
+        variant: str,
+        enum_type: EnumType,
+        candidates: tuple[ConstructorRef, ...],
+        span: SourceSpan,
+        *,
+        subject: str,
+    ) -> tuple[ConstructorRef, RecordType]:
+        """Select the member of *enum_type* a pattern or ``is`` spelling names.
+
+        The enum directs selection only among the scope-published *candidates*
+        visible where *variant* is written; a spelling none of them fits names
+        no member, even one of that terminal name.
+        """
+        selected = self._enum_member_candidate(
+            variant, span, enum_type, candidates, subject=subject
+        )
+        if selected is None:
+            raise self._unselected_member_error(
+                node_id, qualifier, variant, enum_type, candidates, span
+            )
+        constructor, member = selected
+        self._validate_enum_constructor_qualification(
+            qualifier=qualifier,
+            variant=variant,
+            enum_type=enum_type,
+            constructor=constructor,
+            member=member,
+            span=span,
+        )
+        return selected
 
     def _record_constructor_pattern_ref(
         self, pattern: ConstructorPattern, record_type: RecordType
@@ -6559,32 +6561,6 @@ class _Checker:
                     return _type_argument_mismatch(variant, constructed, member, span)
         return _variant_not_in_enum(variant, enum_type, span)
 
-    def _unpublished_enum_member(
-        self, pattern: ConstructorPattern, enum_type: EnumType
-    ) -> RecordType:
-        """Return the member of *enum_type* an applied pattern no published candidate selects.
-
-        A bare applied spelling still destructures a member of the scrutinee's
-        own declaration by its terminal name, so a value built before its enum
-        was redeclared in the REPL stays matchable; a qualified one is
-        reported as :meth:`_unselected_member_error` explains.
-        """
-        member = (
-            self._env.type_table.enum_member_names(enum_type).get(pattern.name)
-            if pattern.qualifier is None
-            else None
-        )
-        if member is None:
-            raise self._unselected_member_error(
-                pattern.node_id,
-                pattern.qualifier,
-                pattern.name,
-                enum_type,
-                self._pattern_constructor_candidates(pattern),
-                pattern.span,
-            )
-        return member
-
     def _unselected_member_error(
         self,
         node_id: int,
@@ -6630,7 +6606,13 @@ class _Checker:
         """Return the unique candidate spelling that belongs to this enum field, with its member."""
         if not isinstance(field_type, EnumType):
             return None
-        return self._enum_constructor_pattern_ref(pattern, field_type)
+        return self._enum_member_candidate(
+            pattern.name,
+            pattern.span,
+            field_type,
+            self._pattern_constructor_candidates(pattern),
+            subject="Constructor pattern",
+        )
 
     def _check_top_level_bare_constructor(self, pattern: VarPattern, subj_type: Type) -> None:
         """Finalize a top-level bare pattern as a nullary constructor."""
@@ -6651,13 +6633,15 @@ class _Checker:
             self._record_pattern_classification(pattern.node_id, candidate)
             return
         enum_type = self._require_enum_scrutinee(pattern.name, subj_type, pattern.span)
-        selected = self._enum_constructor_pattern_ref(pattern, enum_type)
-        if selected is None:
-            # A visible constructor of the same spelling may belong to another
-            # enum; the bare name then names no constructor of this enum, even
-            # when this enum happens to declare a same-named variant.
-            raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
-        candidate, member = selected
+        candidate, member = self._select_enum_member(
+            pattern.node_id,
+            None,
+            pattern.name,
+            enum_type,
+            self._pattern_constructor_candidates(pattern),
+            pattern.span,
+            subject="Constructor pattern",
+        )
         self._require_nullary_bare_constructor(pattern, member)
         self._record_pattern_classification(pattern.node_id, candidate)
 

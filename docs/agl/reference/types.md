@@ -571,13 +571,13 @@ its own; declare them again to use them on values of the new declaration.
 The two declarations are unrelated types that happen to share a name, and
 they are written and displayed identically: neither is usable where the other
 is expected, and comparing values across them is a type error. Every spelling
-that names the type — a constructor call, a type annotation, a `catch`
-clause, a type-qualified constructor pattern — means the declaration in
-effect where it is written, so one written after the redeclaration does not
-apply to an earlier value. A bare member pattern with parentheses (`Red(shade)`,
-`Green()`) is directed by the value being matched instead, so an earlier value
-can still be destructured; a parenthesis-free bare pattern or bare `is` test
-selects only a visible constructor, never a superseded member.
+that names the type or one of its constructors — a constructor call, a type
+annotation, a `catch` clause, a constructor pattern or `is` test, bare or
+qualified — means the declaration in effect where it is written, so one
+written after the redeclaration does not apply to an earlier value: a
+superseded member is spellable in no pattern or `is` test. An earlier value
+still matches `_`, renders, and casts to an alias declared before the
+redeclaration.
 
 A failed entry that would have redeclared the type changes nothing — the
 previous declaration, its methods, and every binding built from it remain in

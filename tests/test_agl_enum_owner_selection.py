@@ -47,6 +47,12 @@ _LIBRARIES = {
     "palette": "enum P = Red | Green",
     "base": "enum Color = Red | Green",
     "mid": "import base\nexport base::{Color}\nenum Light = Red | Off",
+    "boxes": "enum Box[T] = Full(v: T) | Empty\ntype IntFull = Box[int]::Full",
+    "picker": (
+        "enum Color = Red | Green(shade: int)\n"
+        "def pick() -> Color = Green(shade = 1)\n"
+        "def green() -> Color::Green = Green(shade = 2)"
+    ),
     "scoped": (
         "scope shapes\n"
         "  record Saved\n"
@@ -1000,3 +1006,60 @@ def test_ambiguous_constructor_repair_resolves_where_written(
         _check(tmp_path / "ambiguous", f"{header}let probe = {spelling}\n()")
     repair = caught.value.repair
     _check(tmp_path / "repaired", f"{header}let probe: {subject} = {repair}\nprobe is {repair}")
+
+
+@pytest.mark.parametrize(
+    "use",
+    [
+        pytest.param("case pick() of | Red => 0 | _ => 1", id="bare-pattern"),
+        pytest.param("case pick() of | Red() => 0 | _ => 1", id="applied-pattern"),
+        pytest.param("case pick() of | Green(shade) => shade | _ => 0", id="binding-pattern"),
+        pytest.param("pick() is Red", id="is"),
+        pytest.param("case green() of | Green(shade) => shade", id="member-typed-pattern"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("header", "accepted"),
+    [
+        pytest.param("import picker::{pick, green}\n", False, id="function-only"),
+        pytest.param("import picker::*\n", True, id="members-visible"),
+    ],
+)
+def test_bare_member_spelling_needs_a_visible_constructor(
+    tmp_path: Path, use: str, header: str, accepted: bool
+) -> None:
+    """The scrutinee's type directs a bare spelling only among visible constructors."""
+    if accepted:
+        _check(tmp_path, header + use)
+        return
+    with pytest.raises(AglError):
+        _check(tmp_path, header + use)
+
+
+_SCOPED_INT_FULL = (
+    "enum Box[T] = Full(v: T) | Empty\n\n"
+    "scope s\n"
+    "  type IntFull = ::Box[int]::Full\n"
+    "end s\n\n"
+    'let b: Box[text] = Full(v = "x")\n'
+)
+_ROUTED_INT_FULL = 'import boxes\nlet b: boxes::Box[text] = boxes::Full(v = "x")\n'
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param(
+            _SCOPED_INT_FULL + "case b of | s::IntFull(v) => 0 | _ => 1", id="scope-pattern"
+        ),
+        pytest.param(_SCOPED_INT_FULL + "b is s::IntFull", id="scope-is"),
+        pytest.param(
+            _ROUTED_INT_FULL + "case b of | boxes::IntFull(v) => 0 | _ => 1", id="module-pattern"
+        ),
+        pytest.param(_ROUTED_INT_FULL + "b is boxes::IntFull", id="module-is"),
+    ],
+)
+def test_qualified_member_alias_at_other_arguments_is_rejected(tmp_path: Path, entry: str) -> None:
+    """A scope- or module-qualified alias selecting a member at other arguments matches nothing."""
+    with pytest.raises(AglTypeError):
+        _check(tmp_path, entry)

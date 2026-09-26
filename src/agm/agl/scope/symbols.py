@@ -884,9 +884,10 @@ class ModuleResolution:
         checker selects a bare name's final interpretation from the matched
         occurrence's type and field name.
     ``is_test_constructor_candidates``
-        Maps unqualified ``is`` test node ids to every visible constructor
-        candidate for their source spelling. Typecheck selects by the left
-        operand's nominal enum type.
+        Maps ``is`` test node ids to every visible constructor candidate for
+        their source spelling, empty as for constructor patterns when a
+        qualified owner is unavailable. Typecheck selects by the left
+        operand's nominal type.
     ``scope_qualified_spellings``
         Qualified pattern and ``is`` test node ids whose qualifier names a
         local plain scope or is a module qualifier. Their constructor

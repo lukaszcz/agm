@@ -2871,8 +2871,8 @@ enum Agent
     ) -> None:
         """A retained enum selects its member by handle, not its record's current name.
 
-        A bare ``is`` test selects only a visible constructor, which the
-        superseding record now is.
+        A bare pattern or ``is`` test selects only a visible constructor, which
+        the superseding record now is.
         """
         session = open_session()
         assert session.eval_entry("record R\n  old: int").ok
@@ -2886,8 +2886,7 @@ enum Agent
         narrowed = session.eval_entry("(old as OldR).old")
         not_a_member = session.eval_entry('let fresh: E = R(fresh = "new")')
 
-        assert matched.ok, matched.diagnostics
-        assert matched.value == IntValue(1)
+        assert not matched.ok
         assert not tested.ok
         assert narrowed.ok, narrowed.diagnostics
         assert narrowed.value == IntValue(1)
@@ -2922,10 +2921,10 @@ enum Agent
         assert decoded.value.fields == {"value": IntValue(1)}
 
     def test_enum_supersession_remints_inline_members_without_invalidating_old_ones(self) -> None:
-        """Old and new enum-member handles remain independently matchable and castable.
+        """Old and new enum-member handles remain independently castable.
 
-        A bare ``is`` test selects only a visible constructor, so it names no
-        superseded member.
+        A bare pattern or ``is`` test selects only a visible constructor, so it
+        names no superseded member.
         """
         session = open_session()
         assert session.eval_entry("enum E\n  | A(old: int)").ok
@@ -2942,8 +2941,7 @@ enum Agent
         new_cast = session.eval_entry("(new as E::B).fresh")
         current_member_on_old_value = session.eval_entry("old as E::B")
 
-        assert old_case.ok, old_case.diagnostics
-        assert old_case.value == IntValue(1)
+        assert not old_case.ok
         assert not old_is.ok
         assert old_cast.ok, old_cast.diagnostics
         assert old_cast.value == IntValue(1)
@@ -2955,15 +2953,46 @@ enum Agent
         assert new_cast.value == TextValue("new")
         assert not current_member_on_old_value.ok
 
-    def test_superseded_enum_member_is_no_visible_bare_constructor(self) -> None:
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "old is Green",
+            "case old of\n  | Green => 1\n  | _ => 2",
+            "case old of\n  | Green() => 1\n  | _ => 2",
+            "tinted is Tint",
+            "case tinted of\n  | Tint() => 1\n  | _ => 2",
+            "case tinted of\n  | Tint(level) => level\n  | _ => 0",
+        ),
+    )
+    def test_superseded_enum_member_is_no_visible_bare_constructor(self, use: str) -> None:
         """Bare patterns and ``is`` tests select only visible constructors."""
         session = open_session()
-        assert session.eval_entry("enum A\n  | Red\n  | Green").ok
+        assert session.eval_entry("enum A\n  | Red\n  | Green\n  | Tint(level: int)").ok
+        assert session.eval_entry("type OldTint = A::Tint").ok
         assert session.eval_entry("let old: A = A::Green").ok
+        assert session.eval_entry("let tinted: A = A::Tint(level = 3)").ok
         assert session.eval_entry("enum A\n  | Red\n  | Blue").ok
 
-        assert not session.eval_entry("old is Green").ok
-        assert not session.eval_entry("case old of\n  | Green => 1\n  | _ => 2").ok
+        assert not session.eval_entry(use).ok
+
+    def test_superseded_enum_member_values_survive_without_bare_spellings(self) -> None:
+        """A superseded member's value still matches ``_``, casts, and renders."""
+        from agm.agl.repl.render import render_entry_result
+
+        session = open_session()
+        assert session.eval_entry("enum A\n  | Red\n  | Tint(level: int)").ok
+        assert session.eval_entry("type OldTint = A::Tint").ok
+        assert session.eval_entry("let tinted: A = A::Tint(level = 3)").ok
+        assert session.eval_entry("enum A\n  | Red\n  | Blue").ok
+
+        wildcard = session.eval_entry("case tinted of\n  | _ => 1")
+        field = session.eval_entry("(tinted as OldTint).level")
+        echoed = session.eval_entry("tinted")
+
+        assert wildcard.value == IntValue(1), wildcard.diagnostics
+        assert field.value == IntValue(3), field.diagnostics
+        assert echoed.ok, echoed.diagnostics
+        assert render_entry_result(echoed, echo=True) == "A::Tint(\n  level = 3\n)"
 
     def test_same_spelling_enum_member_supersession_keeps_old_and_new_identities_incompatible(
         self,
@@ -3933,7 +3962,7 @@ class TestRecursiveTypesAcrossEntries:
         assert still_catches_old.ok, still_catches_old.diagnostics
         assert still_catches_old.value == TextValue("caught-old")
 
-    def test_enum_variant_on_an_old_typed_value_survives_redeclaration(self) -> None:
+    def test_enum_variant_on_an_old_typed_value_is_no_visible_constructor(self) -> None:
         s = open_session()
         assert s.eval_entry("enum Color\n  | Red(shade: int)\n  | Green").ok
         assert s.eval_entry("let old: Color = Color::Red(shade = 1)").ok
@@ -3942,23 +3971,25 @@ class TestRecursiveTypesAcrossEntries:
         old_match = s.eval_entry("case old of\n  | Red(shade) => shade\n  | Green() => 0")
         fresh = s.eval_entry("Color::Blue")
         cross_match = s.eval_entry("case old of\n  | Blue() => 1\n  | Green() => 0")
+        wildcard = s.eval_entry("case old of\n  | _ => 1")
 
-        assert old_match.ok, old_match.diagnostics
-        assert old_match.value == IntValue(1)
+        assert not old_match.ok
         assert fresh.ok, fresh.diagnostics
         assert not cross_match.ok
+        assert wildcard.value == IntValue(1), wildcard.diagnostics
 
     def test_phantom_generic_member_on_a_retained_value_survives_enum_redeclaration(self) -> None:
-        """A fieldless member remains matchable without recovering its enum arguments."""
+        """A retained member value stays usable, but its superseded constructor is not visible."""
         s = open_session()
         assert s.eval_entry("enum E[T]\n  | A").ok
         assert s.eval_entry("let old = A").ok
         assert s.eval_entry("enum E[T]\n  | B").ok
 
         matched = s.eval_entry("case old of\n  | A() => 1")
+        wildcard = s.eval_entry("case old of\n  | _ => 1")
 
-        assert matched.ok, matched.diagnostics
-        assert matched.value == IntValue(1)
+        assert not matched.ok
+        assert wildcard.value == IntValue(1), wildcard.diagnostics
 
     def test_superseded_enum_members_do_not_suggest_the_reused_enum_annotation(self) -> None:
         """An old enum's members cannot be joined through its reused name."""
@@ -3983,10 +4014,9 @@ class TestRecursiveTypesAcrossEntries:
     def test_type_qualified_variant_pattern_names_the_newest_enum_declaration(self) -> None:
         """A qualifier is a type name, so it names the newest declaration.
 
-        A bare constructor pattern follows the subject's own declaration and
-        keeps destructuring a value built before the redeclaration, but a
-        pattern that spells the enum out qualifies against the enum the name
-        means now — which is not the subject's — and is rejected.
+        A pattern that spells the enum out qualifies against the enum the name
+        means now — which is not the subject's — and is rejected; a bare
+        pattern selects only the visible constructor, likewise the newest one.
         """
         s = open_session()
         assert s.eval_entry("enum E\n  | A(x: int)").ok
@@ -3997,8 +4027,7 @@ class TestRecursiveTypesAcrossEntries:
         qualified = s.eval_entry("case old of\n  | E::A(x) => x")
         fresh = s.eval_entry("let fresh: E = E::A(x = 2)\ncase fresh of\n  | E::A(x) => x")
 
-        assert bare.ok, bare.diagnostics
-        assert bare.value == IntValue(1)
+        assert not bare.ok
         assert not qualified.ok
         assert fresh.ok, fresh.diagnostics
         assert fresh.value == IntValue(2)

@@ -142,10 +142,13 @@ declaration the alias denotes, at the alias's type arguments (see
 [Type aliases](types.md#type-aliases)).
 
 Constructor ownership in patterns is directed by the scrutinee's static
-nominal type. When two enums contribute the same unqualified member spelling,
-or a record constructor spelling collides with an injected member name, the
-scrutinee type selects the intended constructor, so the pattern needs no
-qualification.
+nominal type, among the constructors visible where the pattern is written. A
+spelling no visible constructor of that type shares is a static error, even
+when the type has a member of that name — for instance when only a function
+returning the type was imported. When two enums contribute the same
+unqualified member spelling, or a record constructor spelling collides with an
+injected member name, the scrutinee type selects the intended constructor, so
+the pattern needs no qualification.
 
 #### Module-qualified constructor patterns
 

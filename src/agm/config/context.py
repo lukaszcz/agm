@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from agm.core.env import resolve_env
+from agm.core.env import resolve_env, resolve_home
 from agm.project.layout import discover_current_project_dir
 
 
@@ -30,7 +30,7 @@ def current_config_context(
 
     resolved_env = resolve_env(env)
     resolved_cwd = Path.cwd().resolve() if cwd is None else cwd.resolve()
-    home = Path(resolved_env.get("HOME", "~"))
+    home = resolve_home(resolved_env)
 
     try:
         proj_dir = discover_current_project_dir(resolved_cwd, env=resolved_env)

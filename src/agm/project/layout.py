@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import agm.vcs.git as git_helpers
+from agm.config.home import agm_home_dir
 from agm.core.dotenv import write_dotenv_values
-from agm.core.env import load_config_dotenv_files, resolve_env
+from agm.core.env import load_config_dotenv_files, resolve_env, resolve_home
 from agm.core.process import require_success
 from agm.core.toml import TomlDict, load_toml_file, toml_dict
 
@@ -74,9 +75,14 @@ def _resolved_cwd(cwd: Path | None = None) -> Path:
     return Path.cwd() if cwd is None else cwd.resolve()
 
 
-def _project_dir_from_workspace(workspace_dir: Path) -> Path | None:
-    if (workspace_dir / ".agm").is_dir():
-        return workspace_dir / ".agm"
+def _project_dir_from_workspace(
+    workspace_dir: Path, *, env: Mapping[str, str] | None = None
+) -> Path | None:
+    candidate_agm_dir = workspace_dir / ".agm"
+    if candidate_agm_dir.is_dir() and candidate_agm_dir != agm_home_dir(
+        home=resolve_home(env), env=env
+    ):
+        return candidate_agm_dir
     if (workspace_dir / "repo").is_dir():
         return workspace_dir
     if workspace_dir.name == "repo" and (
@@ -101,9 +107,9 @@ def _project_dir_from_env(env: Mapping[str, str] | None = None) -> Path | None:
     return Path(raw_project_dir)
 
 
-def _valid_project_dir_from_cwd(cwd: Path) -> Path | None:
+def _valid_project_dir_from_cwd(cwd: Path, *, env: Mapping[str, str] | None = None) -> Path | None:
     for candidate in (cwd, *cwd.parents):
-        project_dir = _project_dir_from_workspace(candidate)
+        project_dir = _project_dir_from_workspace(candidate, env=env)
         if project_dir is not None and is_project_dir(project_dir):
             return project_dir
     return None
@@ -115,7 +121,7 @@ def current_workspace_or_project_root(
     """Return the current AGM project, Git checkout root, or current directory."""
 
     current = _resolved_cwd(cwd)
-    cwd_project_dir = _valid_project_dir_from_cwd(current)
+    cwd_project_dir = _valid_project_dir_from_cwd(current, env=env)
     if cwd_project_dir is not None:
         return cwd_project_dir
 
@@ -124,7 +130,7 @@ def current_workspace_or_project_root(
         return env_project_dir
 
     for candidate in (current, *current.parents):
-        project_dir = _project_dir_from_workspace(candidate)
+        project_dir = _project_dir_from_workspace(candidate, env=env)
         if project_dir is not None:
             return project_dir
     if not git_helpers.is_git_repo(current):
@@ -141,7 +147,7 @@ def discover_current_project_dir(
     """Return the current valid AGM project directory, if one can be discovered."""
 
     current = _resolved_cwd(cwd)
-    cwd_project_dir = _valid_project_dir_from_cwd(current)
+    cwd_project_dir = _valid_project_dir_from_cwd(current, env=env)
     if cwd_project_dir is not None:
         return cwd_project_dir
 

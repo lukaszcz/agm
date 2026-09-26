@@ -186,7 +186,7 @@ def test_prompt_file_prefers_home_over_install_prefix(
     home_prompt.write_text("home prompt\n", encoding="utf-8")
 
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+    monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: prefix)
 
     assert prompt_file("loop.md") == home_prompt
 

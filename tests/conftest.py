@@ -281,20 +281,25 @@ def isolate_host_environment(
 def fence_project_discovery_at_temp_root(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Hide project markers above the suite's temporary root from project discovery.
+    """Stop ancestor-walking project discovery at the suite's temporary root.
 
-    Discovery walks every ancestor of its starting directory, so a ``.agm``
-    directory above ``TMPDIR`` -- such as the developer's own AGM home -- would
-    otherwise decide what a test's temporary tree resolves to.  Every directory
-    above the base temporary directory belongs to the host, never to a test.
+    Discovery walks every ancestor of its starting directory. ``isolate_host_environment``
+    already keeps ``HOME`` (and so the AGM home) out of the way, but ``TMPDIR`` itself is
+    host-controlled -- an agent sandbox routinely confines writable paths to somewhere
+    under the invoking user's real home -- so a real AGM project sitting above the
+    temporary root would otherwise decide what a test's temporary tree resolves to.
+    Every directory above the base temporary directory belongs to the host, never to a
+    test.
     """
     host_dirs = frozenset(tmp_path_factory.getbasetemp().resolve().parents)
     discover = project_layout._project_dir_from_workspace
-    monkeypatch.setattr(
-        project_layout,
-        "_project_dir_from_workspace",
-        lambda workspace_dir: None if workspace_dir in host_dirs else discover(workspace_dir),
-    )
+
+    def fenced_discover(
+        workspace_dir: Path, *, env: Mapping[str, str] | None = None
+    ) -> Path | None:
+        return None if workspace_dir in host_dirs else discover(workspace_dir, env=env)
+
+    monkeypatch.setattr(project_layout, "_project_dir_from_workspace", fenced_discover)
 
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parent.parent / "packages" / "stdlib"
@@ -319,33 +324,18 @@ def pin_agm_stdlib_to_repo(
 def detach_installed_agm_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     """Hide any AGM installed at the test runner's own prefix from the suite.
 
-    ``agm_home_dir`` falls back to ``<installation prefix>/.agm`` whenever that
-    prefix holds a package activation index, and the prefix is derived from
-    ``sys.argv[0]``.  Launched as ``uv run pytest`` that prefix is the project's
-    ``.venv``, so a developer who had run ``uv run agm pkg install`` would make
-    the suite read — and write — a real installed package store instead of its
-    own temporary one.  ``AGM_HOME`` cannot prevent this, because most tests
-    pass an explicit ``env`` mapping that never sees the process environment.
-
-    Report no installation prefix instead, so an installed tree is invisible
-    regardless of how the suite was launched.  Tests that exercise the fallback
-    take the ``installed_agm_prefix`` fixture.
+    Tests that exercise the installation-prefix fallback take the
+    ``installed_agm_prefix`` fixture instead.
     """
-    monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
+    monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: None)
 
 
 @pytest.fixture()
 def installed_agm_prefix(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path], None]:
-    """Opt out of ``detach_installed_agm_prefix`` for one test.
-
-    Call the returned function with a staged temporary prefix to restore the
-    installed-prefix fallback for the rest of the test.  This is the documented
-    escape hatch for the tests that assert the fallback itself; it points at a
-    temporary directory, never at a real installation.
-    """
+    """Opt out of ``detach_installed_agm_prefix`` for one test by pinning a staged prefix."""
 
     def pin(prefix: Path) -> None:
-        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+        monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: prefix)
 
     return pin
 

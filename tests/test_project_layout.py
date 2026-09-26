@@ -1021,6 +1021,54 @@ def test_current_project_root_candidate_falls_back_when_no_markers_and_not_git(
     assert current_workspace_or_project_root(plain) == plain
 
 
+# ---------------------------------------------------------------------------
+# discovery must never treat the AGM home directory as an embedded project
+# ---------------------------------------------------------------------------
+
+
+def test_current_workspace_or_project_root_falls_back_to_cwd_under_agm_home(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    """A plain, non-git directory under HOME resolves to itself, not to ``~/.agm``."""
+    home = Path(env["HOME"])
+    (home / ".agm").mkdir()
+    plain = home / "scratch" / "plain"
+    plain.mkdir(parents=True)
+
+    assert current_workspace_or_project_root(plain, env=env) == plain
+    assert discover_current_project_dir(plain, env=env) is None
+
+
+def test_current_workspace_or_project_root_falls_back_to_checkout_root_under_agm_home(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    """A plain git repo under HOME resolves to its own checkout root, not to ``~/.agm``."""
+    home = Path(env["HOME"])
+    (home / ".agm").mkdir()
+    repo = home / "code" / "plain-repo"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, env=env, check=True)
+
+    assert current_workspace_or_project_root(repo, env=env) == repo
+    assert discover_current_project_dir(repo, env=env) is None
+
+
+def test_current_workspace_or_project_root_still_finds_real_embedded_project_under_agm_home(
+    tmp_path: Path, env: dict[str, str]
+) -> None:
+    """A real embedded project elsewhere under HOME is unaffected by excluding ``~/.agm``."""
+    home = Path(env["HOME"])
+    (home / ".agm").mkdir()
+    project = home / "projects" / "myproj"
+    project.mkdir(parents=True)
+    agm_dir = project / ".agm"
+    agm_dir.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
+
+    assert current_workspace_or_project_root(project, env=env) == agm_dir
+    assert discover_current_project_dir(project, env=env) == agm_dir
+
+
 def test_current_workspace_or_project_root_uses_proj_dir_env(tmp_path: Path) -> None:
     project = tmp_path / "project"
 

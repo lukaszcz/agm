@@ -14,10 +14,10 @@ from tomlkit.exceptions import TOMLKitError
 from agm.command_catalog import has_subcommands, invalid_command_path
 from agm.config.context import content_stamp, context_cached, invalidate_context_cache
 from agm.config.general import (
-    agm_home_dir,
     config_file_candidates,
     load_merged_config,
 )
+from agm.config.home import agm_home_dir
 from agm.core.fs import mkdir, write_text_atomic
 from agm.core.toml import TomlDict, dumps_toml, empty_toml_doc, load_toml_file, toml_dict
 from agm.packages.layout import MODULE_TREE_DIRNAME

@@ -16,7 +16,7 @@ import httpx2
 import pytest
 
 from agm.config.context import current_config_context
-from agm.config.general import agm_home_dir
+from agm.config.home import agm_home_dir
 from agm.packages.activation import load_activation_index
 from tests.conftest import LAUNCH_ENVIRONMENT
 

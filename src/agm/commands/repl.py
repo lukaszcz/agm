@@ -46,12 +46,12 @@ from agm.cli_support.param_config import resolve_module_param_values
 from agm.config.context import current_config_context
 from agm.config.general import (
     GeneralConfig,
-    agm_home_dir,
     exec_config_from_merged,
     load_general_config,
     load_repl_config,
     save_repl_setting,
 )
+from agm.config.home import agm_home_dir
 from agm.config.module_roots import (
     StdlibResolutionError,
     load_module_roots,

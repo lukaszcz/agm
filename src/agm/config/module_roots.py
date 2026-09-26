@@ -27,7 +27,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from agm.config.general import agm_home_dir, config_file_candidates, expand_env_root
+from agm.config.general import config_file_candidates
+from agm.config.home import agm_home_dir, expand_env_root
 from agm.core.env import resolve_env
 from agm.core.toml import load_toml_file, toml_dict
 from agm.packages.stdlib import StdlibResolutionError as StdlibResolutionError

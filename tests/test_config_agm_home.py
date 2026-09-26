@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import semver
 
-from agm.config.general import agm_home_dir, agm_path_candidates
+from agm.config.home import _unique_paths, agm_home_dir, agm_path_candidates
 from agm.config.module_roots import ModuleRootsConfig, resolve_lib_root, resolve_stdlib_root
 from agm.packages.activation import ActivationIndex, ActivePackage, write_activation_index
 from agm.packages.record import write_record
@@ -65,9 +65,18 @@ class TestAgmHomeDir:
         activation_index = prefix / ".agm" / "packages" / "index.toml"
         activation_index.parent.mkdir(parents=True)
         activation_index.write_text("")
-        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+        monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: prefix)
 
         assert agm_home_dir(home=home, env={}) == prefix / ".agm"
+
+    def test_installation_prefix_without_activation_index_falls_back_to_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        prefix = tmp_path / "prefix"
+        monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: prefix)
+
+        assert agm_home_dir(home=home, env={}) == home / ".agm"
 
     def test_agm_home_override_wins_over_installation_prefix(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -78,7 +87,7 @@ class TestAgmHomeDir:
         activation_index = prefix / ".agm" / "packages" / "index.toml"
         activation_index.parent.mkdir(parents=True)
         activation_index.write_text("")
-        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: prefix)
+        monkeypatch.setattr("agm.config.home.agm_installation_prefix", lambda: prefix)
 
         assert agm_home_dir(home=home, env={"AGM_HOME": str(override)}) == override
 
@@ -100,6 +109,20 @@ class TestAgmPathCandidatesHonorHomeOverride:
         )
         assert override / "config.toml" in candidates
         assert home / ".agm" / "config.toml" not in candidates
+
+
+class TestUniquePaths:
+    def test_deduplicates_paths(self, tmp_path: Path) -> None:
+        p1 = tmp_path / "a"
+        p2 = tmp_path / "b"
+        p3 = tmp_path / "a"  # duplicate
+        result = _unique_paths([p1, p2, p3])
+        assert result == [p1, p2]
+
+    def test_preserves_order(self, tmp_path: Path) -> None:
+        paths = [tmp_path / name for name in ["c", "a", "b", "a"]]
+        result = _unique_paths(paths)
+        assert result == [tmp_path / "c", tmp_path / "a", tmp_path / "b"]
 
 
 class TestResolveLibRootEnvOverride:

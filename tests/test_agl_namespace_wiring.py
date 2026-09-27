@@ -1468,12 +1468,13 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
 
 
 @pytest.mark.parametrize(
-    ("source", "modules", "expected"),
+    ("source", "modules", "expected", "error"),
     [
         (
             "enum Flag | On | Off\nlet flag: Flag = Flag::On\nflag is unknown::Flag::On",
             {},
             "Unknown module",
+            AglTypeError,
         ),
         (
             "import remote/config hiding Flag\nenum Flag | On | Off\n"
@@ -1484,12 +1485,17 @@ def test_local_enum_owner_and_route_injecting_its_member_are_ambiguous(
             "result",
             {"remote/config": "enum Flag | On | Off"},
             "not accessible",
+            AglTypeError,
         ),
         (
+            # A qualifier ambiguous across two imported modules is scope's
+            # decision, the same class as the identical value-position
+            # ambiguity: AglScopeError, never AglTypeError.
             "import one/config\nimport two/config\nenum Local | On\n"
             "let flag: Local = Local::On\nflag is config::Flag::On",
             {"one/config": "enum Flag | On", "two/config": "enum Flag | On"},
             "ambiguous",
+            AglScopeError,
         ),
     ],
 )
@@ -1498,10 +1504,11 @@ def test_qualified_enum_patterns_and_is_tests_keep_resolution_verdicts(
     source: str,
     modules: dict[str, str],
     expected: str,
+    error: type[AglScopeError] | type[AglTypeError],
 ) -> None:
     graph = make_graph_from_files(tmp_path, {"entry": source, **modules})
 
-    with pytest.raises(AglTypeError) as exc_info:
+    with pytest.raises(error) as exc_info:
         check_program(resolve_program(graph), base_caps())
 
     assert expected in str(exc_info.value)

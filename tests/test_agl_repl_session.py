@@ -8645,6 +8645,11 @@ class TestImports:
         assert kept_valued.ok, kept_valued.diagnostics
         assert not lost_typed.ok
         assert not lost_valued.ok
+        with pytest.raises(AglTypeError) as typed_error:
+            session.type_of("fn(x: Outer::Second) => 1")
+        assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
+        with pytest.raises(AglScopeError):
+            session.type_of("Outer::Second(n = 1)")
 
     def test_wildcard_facade_use_type_position_survives_alias_replacement(
         self, tmp_path: Path
@@ -8704,6 +8709,11 @@ class TestImports:
         assert new_valued.ok, new_valued.diagnostics
         assert not old_typed.ok
         assert not old_valued.ok
+        with pytest.raises(AglTypeError) as typed_error:
+            session.type_of("fn(x: Outer::Old) => 1")
+        assert not isinstance(typed_error.value, (HiddenMemberError, ReferencedMemberError))
+        with pytest.raises(AglScopeError):
+            session.type_of("Outer::Old(n = 1)")
 
     def test_local_and_current_module_use_spellings_replace_each_other(self) -> None:
         session = open_session()
@@ -9607,6 +9617,44 @@ class TestImports:
 
         assert r.ok, r.diagnostics
         assert _int(r.value) == 3
+
+
+# ---------------------------------------------------------------------------
+# A qualifier ambiguous across two facade-imported modules (both matching the
+# same route) is one condition -- ``QualResolutionAmbiguous`` -- regardless of
+# where it is written. Every position reports it alike: ``AglScopeError``,
+# never a position-specific class.
+# ---------------------------------------------------------------------------
+
+
+class TestAmbiguousQualifierClassAgreement:
+    def _session(self, tmp_path: Path) -> ReplSession:
+        package = tmp_path / "pkg"
+        package.mkdir()
+        (package / "a.agl").write_text("enum Thing\n  | Red\n  | Blue\n", encoding="utf-8")
+        (package / "b.agl").write_text("enum Thing\n  | Red\n  | Yellow\n", encoding="utf-8")
+        session = repl_session_with_root(tmp_path)
+        setup = session.eval_entry(
+            "import pkg/* as Facade\nimport pkg/a\nlet v: pkg/a::Thing = pkg/a::Thing::Red"
+        )
+        assert setup.ok, setup.diagnostics
+        return session
+
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            pytest.param("fn(x: Facade::Thing) => 1", id="type-annotation"),
+            pytest.param("case v of | Facade::Thing::Red => 1 | _ => 0", id="pattern"),
+            pytest.param("v is Facade::Thing::Red", id="is-test"),
+            pytest.param("Facade::Thing", id="bare-repl-type-entry"),
+        ],
+    )
+    def test_ambiguous_qualifier_reports_scope_error_at_every_position(
+        self, tmp_path: Path, expr: str
+    ) -> None:
+        session = self._session(tmp_path)
+        with pytest.raises(AglScopeError):
+            session.type_of(expr)
 
 
 # ---------------------------------------------------------------------------

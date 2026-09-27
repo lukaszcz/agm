@@ -226,7 +226,7 @@ def test_import_hiding_removes_a_qualified_owner_at_the_route_seam() -> None:
     )
 
 
-def test_ambiguous_qualified_owner_is_rejected_by_typecheck_in_an_is_test(
+def test_ambiguous_qualified_owner_is_rejected_by_scope_in_an_is_test(
     tmp_path: Path,
 ) -> None:
     modules = {
@@ -242,4 +242,4 @@ def test_ambiguous_qualified_owner_is_rejected_by_typecheck_in_an_is_test(
         "two/types": "enum Color\n  | Red",
     }
 
-    assert _program_outcome(tmp_path, modules) == "typecheck"
+    assert _program_outcome(tmp_path, modules) == "scope"

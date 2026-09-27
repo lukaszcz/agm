@@ -48,6 +48,7 @@ from agm.agl.scope.imports import (
     try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import (
+    AglScopeError,
     BindingRef,
     ConstructorRef,
     ModuleResolution,
@@ -304,6 +305,20 @@ class GenericAliasDef(_Record):
 
     type_params: tuple[str, ...]
     template: Type
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramAliasResolution:
+    """A program's lazily-resolvable cross-module alias identities, bundled with their resolver.
+
+    Bundled as one unit -- never two independently optional parameters --
+    so a declared alias key is never present without a live callable to
+    resolve it: ``_ensure_program_alias_resolved`` trusts every key in
+    ``keys`` to always have ``resolver`` available.
+    """
+
+    keys: frozenset[DeclKey]
+    resolver: Callable[[DeclKey, SourceSpan | None], Type | None]
 
 
 @_pickles_by_name
@@ -1063,9 +1078,8 @@ class TypeEnvironment:
       across all per-module envs.
     - ``program_generic_table`` and ``program_alias_table`` carry cross-module
       templates for applied nominal types and parameterized aliases; during
-      program type-table construction, ``program_alias_keys`` and
-      ``program_alias_resolver`` let transparent cross-module aliases resolve
-      lazily before their sorted body-resolution turn.
+      program type-table construction, ``program_aliases`` lets transparent
+      cross-module aliases resolve lazily before their sorted body-resolution turn.
     - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
       produced by program scope resolution. Used to resolve qualified and
       import-tail-exposed type names.
@@ -1086,9 +1100,8 @@ class TypeEnvironment:
         program_type_table: Mapping[DeclKey, Type] | None = None,
         program_generic_table: Mapping[DeclKey, GenericTypeDef] | None = None,
         program_alias_table: Mapping[DeclKey, GenericAliasDef] | None = None,
-        program_alias_keys: frozenset[DeclKey] | None = None,
-        program_alias_resolver: Callable[[DeclKey, SourceSpan | None], Type | None] | None = None,
-        import_env: ImportEnv | None = None,
+        program_aliases: ProgramAliasResolution | None = None,
+        import_env: ImportEnv = EMPTY_IMPORT_ENV,
         local_scope_paths: frozenset[ScopePath] = frozenset(),
         scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         module_id: ModuleId = ENTRY_ID,
@@ -1152,13 +1165,8 @@ class TypeEnvironment:
         self._program_alias_table: Mapping[DeclKey, GenericAliasDef] = (
             {} if program_alias_table is None else program_alias_table
         )
-        self._program_alias_keys: frozenset[DeclKey] = (
-            program_alias_keys if program_alias_keys is not None else frozenset()
-        )
-        self._program_alias_resolver: Callable[[DeclKey, SourceSpan | None], Type | None] | None = (
-            program_alias_resolver
-        )
-        self._import_env: ImportEnv | None = import_env
+        self._program_aliases: ProgramAliasResolution | None = program_aliases
+        self._import_env: ImportEnv = import_env
         self._module_id: ModuleId = module_id
         # Scope resolution supplies every local path, including regions with no
         # type declarations, so failed qualified type references retain their
@@ -1313,8 +1321,6 @@ class TypeEnvironment:
 
     def _has_qualified_import_member(self, qualifier: QualifierChain, name: str) -> bool:
         """Return whether a qualifier route contributes *name* after filtering."""
-        if self._import_env is None:
-            return False
         route = tuple(part for part in qualifier.segments[0].name.split("/"))
         atom_path = (*tuple(segment.name for segment in qualifier.segments[1:]), name)
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
@@ -1345,7 +1351,7 @@ class TypeEnvironment:
         self, qualifier: QualifierChain, name: str
     ) -> tuple[ImportEnv, tuple[str, ...], NameAtom]:
         """Split a module-route qualifier and type path for import resolution."""
-        import_env = cast(ImportEnv, self._import_env)
+        import_env = self._import_env
         route = tuple(part for part in qualifier.segments[0].name.split("/"))
         atom_path = (*tuple(segment.name for segment in qualifier.segments[1:]), name)
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
@@ -1374,7 +1380,10 @@ class TypeEnvironment:
             missing_member=lambda rendered: AglTypeError(
                 f"Type '{name}' is not accessible via qualifier '{rendered}::'.", span=span
             ),
-            ambiguous=lambda message: AglTypeError(message, span=span),
+            # An ambiguous qualifier is scope's decision, not typecheck's: every
+            # position (value, pattern, ``is``, annotation) reports the same
+            # class for the identical ``QualResolutionAmbiguous`` condition.
+            ambiguous=lambda message: AglScopeError(message, span=span),
         )
 
     def resolve_owner_applied_inline_member_type(
@@ -1679,7 +1688,7 @@ class TypeEnvironment:
         except AglTypeError:
             return None
 
-    def _program_named_type(self, key: DeclKey, name: str, span: SourceSpan | None) -> Type | None:
+    def _program_named_type(self, key: DeclKey, name: str, span: SourceSpan | None) -> Type:
         """Resolve a contributed declaration, not an own alias; a generic one to its template."""
         generic = self._program_generic_table.get(key)
         if generic is not None:
@@ -1713,16 +1722,20 @@ class TypeEnvironment:
         path = (atom,) if isinstance(atom, str) else atom
         return (qname[0], path[:-1], path[-1])
 
+    def _is_program_alias_key(self, key: DeclKey) -> bool:
+        """Whether *key* is a declared alias this program can lazily resolve."""
+        return self._program_aliases is not None and key in self._program_aliases.keys
+
     def _is_program_type_candidate(self, qname: QName) -> bool:
         """Return whether a program-qualified name denotes any type-namespace declaration."""
         key = self._qname_decl_key(qname)
-        return self._in_program_type_tables(key) or key in self._program_alias_keys
+        return self._in_program_type_tables(key) or self._is_program_alias_key(key)
 
     def _ensure_program_alias_resolved(self, key: DeclKey, span: SourceSpan | None) -> Type | None:
         """Resolve a program alias lazily while retaining its declaration path."""
-        if key not in self._program_alias_keys or self._program_alias_resolver is None:
+        if self._program_aliases is None or key not in self._program_aliases.keys:
             return None
-        return self._program_alias_resolver(key, span)
+        return self._program_aliases.resolver(key, span)
 
     def _resolve_program_qname_as_bare_type(
         self, qname: QName, exposed_name: str, *, span: SourceSpan | None
@@ -1932,7 +1945,7 @@ class TypeEnvironment:
         return TypeNameSite(
             module_id=self._module_id,
             scope_path=self._type_scope,
-            import_env=EMPTY_IMPORT_ENV if self._import_env is None else self._import_env,
+            import_env=self._import_env,
             declares=lambda path: self._has_own_type_name("::".join(path)),
             contributions=self._type_contributions,
             is_type=self._is_program_type_candidate,
@@ -1976,7 +1989,7 @@ class TypeEnvironment:
         key = (ref.module_id, ref.scope_path, ref.name)
         if key in self._program_type_table or key in self._program_generic_table:
             return True
-        if key in self._program_alias_keys or key in self._program_alias_table:
+        if self._is_program_alias_key(key) or key in self._program_alias_table:
             return True
         local_name = "::".join((*ref.scope_path, ref.name))
         return ref.module_id == self._module_id and (
@@ -1995,16 +2008,20 @@ class TypeEnvironment:
 
     def _resolve_type_key_as_bare(
         self, key: DeclKey, exposed_name: str, *, span: SourceSpan | None
-    ) -> Type | None:
-        """Resolve one deduplicated declaration identity as a bare type."""
+    ) -> Type:
+        """Resolve one deduplicated declaration identity as a bare type.
+
+        A selected identity is always either program-tracked or, when it is
+        this env's own module, an own alias -- candidate selection and
+        program-table population share one set of conditions, so it is never
+        neither.
+        """
         module, path, source_name = key
         qname: QName = (module, source_name if not path else (*path, source_name))
         resolved = self._resolve_program_qname_as_bare_type(qname, exposed_name, span=span)
         if resolved is not None:
             return resolved
-        alias_name = self._own_alias_name_for_key(key)
-        if alias_name is None:
-            return None
+        alias_name = cast(str, self._own_alias_name_for_key(key))
         return self._resolve_name_type(alias_name, span=span, _resolving=frozenset(), lexical=False)
 
     def _resolve_type_key_unapplied(
@@ -2014,7 +2031,7 @@ class TypeEnvironment:
         generic = self._program_generic_table.get(key)
         if generic is not None:
             raise UnappliedGenericTypeError(_render_type_atom(name), generic, span=span)
-        return cast(Type, self._resolve_type_key_as_bare(key, _render_type_atom(name), span=span))
+        return self._resolve_type_key_as_bare(key, _render_type_atom(name), span=span)
 
     def _resolve_bare_type(self, name: str, span: SourceSpan | None) -> Type | None:
         """Resolve a bare type across root uses and import tails at the same rank."""
@@ -2178,12 +2195,11 @@ class TypeEnvironment:
         """Whether an unresolved qualifier belongs to a local scope, not a route."""
         if qualifier.anchor is QualifierAnchor.CURRENT_MODULE:
             return True
-        has_import_route = self._import_env is not None and qualifier_candidates(
+        has_import_route = qualifier_candidates(
             self._import_env, qualifier.route_segments, anchored=qualifier.anchored
         )
         has_bare_import = (
-            self._import_env is not None
-            and not qualifier.anchored
+            not qualifier.anchored
             and to_bare_atom((*qualifier.route_segments, name)) in self._import_env.unqualified
         )
         return self._has_local_scope_prefix(qualifier) and not (has_import_route or has_bare_import)
@@ -2401,11 +2417,6 @@ class TypeEnvironment:
         rendered = qualifier.render()
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
-        if self._import_env is None:
-            raise AglTypeError(
-                f"Module qualifier '{rendered}::' cannot be resolved outside of a module graph.",
-                span=span,
-            )
         qname = self._resolve_import_qname(qualifier, name, span=span)
         key = self._qname_decl_key(qname)
         source_name = key[2]
@@ -2413,7 +2424,7 @@ class TypeEnvironment:
         if gdef is not None:
             return self.instantiate_from_gdef(source_name, gdef, args, span=span)
         alias_def = self._program_alias_table.get(key)
-        if alias_def is None and key in self._program_alias_keys:
+        if alias_def is None and self._is_program_alias_key(key):
             self._ensure_program_alias_resolved(key, span)
             alias_def = self._program_alias_table.get(key)
         if alias_def is not None:
@@ -2538,19 +2549,15 @@ class TypeEnvironment:
                 return self._resolve_type_key_unapplied(opened_key, opened_atom, span)
         if self._is_missing_local_scoped_type(qualifier, name):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
-        if self._import_env is None:
-            raise AglTypeError(
-                f"Module qualifier '{rendered}::' cannot be resolved outside of a module graph.",
-                span=span,
-            )
 
         qname = self._resolve_import_qname(qualifier, name, span=span)
         if not self._is_program_type_candidate(qname):
             raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
-        typ = self._resolve_program_qname_as_bare_type(qname, f"{rendered}::{name}", span=span)
-        if typ is not None:
-            return typ
-        raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
+        # A program-type candidate always resolves here: candidate selection
+        # and program-table population share one set of conditions.
+        return cast(
+            Type, self._resolve_program_qname_as_bare_type(qname, f"{rendered}::{name}", span=span)
+        )
 
     def non_builtin_type_items(self) -> list[tuple[str, Type]]:
         """Return source-owned ``(name, type)`` pairs from the type namespace.
@@ -2746,11 +2753,10 @@ class TypeEnvironment:
         is exactly the qualifier a same-named module route also competes for.
         """
         template = form.type_template.template
-        if (
-            self._import_env is None
-            or form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT)
-            or not isinstance(template, EnumType)
-        ):
+        if form.kind not in (
+            EnumOwnerFormKind.LOCAL,
+            EnumOwnerFormKind.OPEN_IMPORT,
+        ) or not isinstance(template, EnumType):
             return frozenset()
         owner_qualifier = (form.owner_name,)
         return frozenset(
@@ -2772,52 +2778,47 @@ class TypeEnvironment:
         for owner_name in self._own_source_type_names():
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name))
             forms.add(self._own_enum_owner_form(EnumOwnerFormKind.SELF, owner_name))
-        if self._import_env is not None:
-            own_names = self._own_source_type_names()
-            for exposed_name, qnames in self._import_env.unqualified.items():
-                # A bare imported enum owner, unless this module declares the name.
-                if not isinstance(exposed_name, str) or exposed_name in own_names:
-                    continue
-                type_qnames = tuple(
-                    qname for qname in qnames if self._is_program_type_candidate(qname)
+        own_names = self._own_source_type_names()
+        for exposed_name, qnames in self._import_env.unqualified.items():
+            # A bare imported enum owner, unless this module declares the name.
+            if not isinstance(exposed_name, str) or exposed_name in own_names:
+                continue
+            type_qnames = tuple(qname for qname in qnames if self._is_program_type_candidate(qname))
+            if len(type_qnames) == 1:
+                forms.add(
+                    self._enum_owner_form(
+                        EnumOwnerFormKind.OPEN_IMPORT,
+                        exposed_name,
+                        None,
+                        self._qname_decl_key(type_qnames[0]),
+                    )
                 )
-                if len(type_qnames) == 1:
-                    forms.add(
-                        self._enum_owner_form(
-                            EnumOwnerFormKind.OPEN_IMPORT,
-                            exposed_name,
-                            None,
-                            self._qname_decl_key(type_qnames[0]),
-                        )
+        for contribution in self._import_env.contributions.values():
+            routes = contribution_routes(contribution)
+            for exposed_name, qname in contribution.members.items():
+                if not isinstance(exposed_name, str) or not self._is_program_type_candidate(qname):
+                    continue
+                _, source_scope_path, source_name = self._qname_decl_key(qname)
+                template = self.declared_type_template(
+                    qname[0], source_name, scope_path=source_scope_path
+                )
+                for qualifier, anchored in routes:
+                    resolved = resolve_qualified(
+                        self._import_env, qualifier, exposed_name, anchored=anchored
                     )
-            for contribution in self._import_env.contributions.values():
-                routes = contribution_routes(contribution)
-                for exposed_name, qname in contribution.members.items():
-                    if not isinstance(exposed_name, str) or not self._is_program_type_candidate(
-                        qname
-                    ):
+                    if not isinstance(resolved, QualResolutionFound) or resolved.qname != qname:
                         continue
-                    _, source_scope_path, source_name = self._qname_decl_key(qname)
-                    template = self.declared_type_template(
-                        qname[0], source_name, scope_path=source_scope_path
+                    forms.add(
+                        EnumOwnerForm(
+                            exposed_name,
+                            qualifier,
+                            kind=EnumOwnerFormKind.QUALIFIED_IMPORT,
+                            source_module_id=qname[0],
+                            source_name=source_name,
+                            type_template=template,
+                            qualifier_anchored=anchored,
+                        )
                     )
-                    for qualifier, anchored in routes:
-                        resolved = resolve_qualified(
-                            self._import_env, qualifier, exposed_name, anchored=anchored
-                        )
-                        if not isinstance(resolved, QualResolutionFound) or resolved.qname != qname:
-                            continue
-                        forms.add(
-                            EnumOwnerForm(
-                                exposed_name,
-                                qualifier,
-                                kind=EnumOwnerFormKind.QUALIFIED_IMPORT,
-                                source_module_id=qname[0],
-                                source_name=source_name,
-                                type_template=template,
-                                qualifier_anchored=anchored,
-                            )
-                        )
 
         def form_key(form: EnumOwnerForm) -> tuple[str, tuple[str, ...], bool, str]:
             return (

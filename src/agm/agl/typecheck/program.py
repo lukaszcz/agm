@@ -155,6 +155,7 @@ from agm.agl.typecheck.env import (
     GenericAliasDef,
     GenericTypeDef,
     ModuleTypeInterface,
+    ProgramAliasResolution,
     PublishedModuleSurface,
     TypeEnvironment,
     _assert_checked_types_closed,
@@ -619,6 +620,9 @@ def _build_program_type_table(
         finally:
             resolving_aliases.remove(key)
 
+    program_aliases = ProgramAliasResolution(
+        keys=program_alias_keys, resolver=_resolve_program_alias
+    )
     for mid, rmod in resolved.modules.items():
         if mid in interfaces:
             continue
@@ -627,8 +631,7 @@ def _build_program_type_table(
             program_type_table=tables.types,
             program_generic_table=tables.generics,
             program_alias_table=tables.aliases,
-            program_alias_keys=program_alias_keys,
-            program_alias_resolver=_resolve_program_alias,
+            program_aliases=program_aliases,
             import_env=import_env,
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,

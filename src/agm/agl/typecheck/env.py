@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Protocol
 
 if TYPE_CHECKING:
     from agm.agl.scope.program import ResolvedModule
@@ -1107,6 +1107,7 @@ class TypeEnvironment:
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
         declared_seed: DeclaredHeaderSeed | None = None,
+        owner_declarations: Mapping[int, DeclKey] | None = None,
     ) -> None:
         # Shared nominal type-declaration table (dual-write target alongside
         # ``_types``): defaults to a fresh table seeded with built-in prelude
@@ -1179,6 +1180,11 @@ class TypeEnvironment:
         # value references.  Scoped declarations remain stored under their
         # full path; this frame only maps a bare source spelling to that path.
         self._type_scope: tuple[str, ...] = ()
+        # Qualified type-owner chains: scope's recorded resolution of every
+        # ``owner::member`` path (see ``ModuleResolution.owner_declarations``).
+        self._owner_declarations: Mapping[int, DeclKey] = (
+            {} if owner_declarations is None else owner_declarations
+        )
         self._sealed = False
         # Mutation journal, recording from begin_facts() until end_facts() takes
         # it; seal() leaves it in place, where no further mutator can reach it,
@@ -1442,7 +1448,7 @@ class TypeEnvironment:
                 return None
             selected = self.owner_inline_member(enum_template, member)
             return None if selected is None else OwnerMember(selected, type_params)
-        key = self._owner_declaration_key(qualifier, member, span)
+        key = self._owner_declaration_key(qualifier)
         if key is None:
             return None
         resolved_args = tuple(
@@ -1468,13 +1474,11 @@ class TypeEnvironment:
     ) -> tuple[EnumType, tuple[str, ...], DeclKey | None] | None:
         """Return the enum template *qualifier*'s owner names, its parameters, and its naming alias.
 
-        The owner is derived from the full ``owner::member`` path, not the
-        bare owner spelling alone: scope has already rejected an ambiguous
-        path there, so an owner spelling that is only ambiguous in isolation
-        (two same-named imports) still selects the one module *member*
-        belongs to.
+        The owner is the identity scope recorded for *qualifier* (see
+        :meth:`_owner_declaration_key`), not the bare owner spelling
+        re-resolved here.
         """
-        key = self._owner_declaration_key(qualifier, member, span)
+        key = self._owner_declaration_key(qualifier)
         if key is None:
             return None
         module_id, scope_path, name = key
@@ -1731,33 +1735,32 @@ class TypeEnvironment:
             type_expr.name, {self._qname_decl_key(qname) for qname in selected}, span
         )
 
-    def _owner_declaration_key(
-        self, qualifier: QualifierChain, member: str, span: SourceSpan | None
-    ) -> DeclKey | None:
-        """Return the declaration identity *qualifier*'s owner selects, by its own spelling.
+    def _owner_declaration_key(self, qualifier: QualifierChain) -> DeclKey | None:
+        """Return the declaration identity *qualifier*'s owner selects, scope already recorded.
 
-        A lexical or uniquely imported owner selects by that spelling alone,
-        exactly as any other type name does -- a local alias or enum is never
-        reachable through the import machinery a routed selection walks. An
-        owner spelling ambiguous in isolation, always an import collision
-        (same-module duplicates are rejected at declaration), instead
-        resolves by its full ``::member`` path: scope has already rejected an
-        ambiguous one, so the one module contributing *member* through it is
-        the owner to use.
+        Peels the trailing member off the full ``owner::member`` path scope
+        recorded for this qualifier (see ``ModuleResolution.owner_declarations``).
+        ``None`` when scope recorded no separate owner -- the qualifier names
+        no such inline-member relationship at all (a module route straight to
+        a plain type, or an unrecognized qualifier typecheck's ordinary
+        diagnostics handle).
         """
-        site = self._type_name_site()
-        owner_expr = owner_type_expr(qualifier)
-        owner_selected = type_name_selection(site, owner_expr)
-        if len(owner_selected) == 1:
-            return self._qname_decl_key(next(iter(owner_selected)))
-        if not owner_selected:
+        full_key = self._owner_declarations.get(qualifier.node_id)
+        if full_key is None:
             return None
-        synthetic = NameT(member, qualifier.span, qualifier.node_id, qualifier=qualifier)
-        full_selection = type_name_selection(site, synthetic)
-        if len(full_selection) != 1:
-            return None
-        module_id, path, name = self._qname_decl_key(next(iter(full_selection)))
-        return None if not path else (module_id, path[:-1], path[-1])
+        module_id, scope_path, _name = full_key
+        return None if not scope_path else (module_id, scope_path[:-1], scope_path[-1])
+
+    def register_owner_declarations(self, entries: Mapping[int, DeclKey]) -> None:
+        """Merge *entries* into this environment's owner-declaration table.
+
+        A retained environment is built from an earlier entry's own scope
+        resolution; an ad-hoc parse resolved separately against it (REPL
+        introspection) records its own qualifiers' identities under its own
+        node ids, which this environment does not otherwise hold.
+        """
+        if entries:
+            self._owner_declarations = {**self._owner_declarations, **entries}
 
     @staticmethod
     def _qname_decl_key(qname: QName) -> DeclKey:
@@ -2064,7 +2067,9 @@ class TypeEnvironment:
         resolved = self._resolve_program_qname_as_bare_type(qname, exposed_name, span=span)
         if resolved is not None:
             return resolved
-        alias_name = cast(str, self._own_alias_name_for_key(key))
+        # Not program-tracked, so by this method's invariant *key* names this
+        # module's own alias directly -- its stored name, not a re-derivation.
+        alias_name = "::".join((*path, source_name))
         return self._resolve_name_type(alias_name, span=span, _resolving=frozenset(), lexical=False)
 
     def _resolve_type_key_unapplied(

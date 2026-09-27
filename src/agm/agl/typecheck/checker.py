@@ -310,14 +310,6 @@ def _no_type_var_members(obj_type: TypeVarType, members: str, span: SourceSpan) 
     )
 
 
-def _variant_not_in_enum(variant: str, enum_type: EnumType, span: SourceSpan) -> AglTypeError:
-    """Return the diagnostic for a variant spelling the matched enum lacks."""
-    return AglTypeError(
-        f"Variant '{variant}' does not belong to enum '{enum_type.name}'.",
-        span=span,
-    )
-
-
 def _pattern_outside_owner(name: str, owner: RecordType, span: SourceSpan) -> AglTypeError:
     """Return the diagnostic for a constructor pattern *name* no candidate of *owner* has."""
     return AglTypeError(f"Constructor pattern '{name}' does not belong to '{owner!r}'.", span=span)
@@ -335,11 +327,6 @@ def _type_argument_mismatch(
         f"but the value has type '{actual!r}'.",
         span=span,
     )
-
-
-def _not_an_enum_type(owner: str, span: SourceSpan) -> AglTypeError:
-    """Return the diagnostic for an enum-owner qualifier naming no enum."""
-    return AglTypeError(f"'{owner}' is not a known enum type.", span=span)
 
 
 def _enum_owner_mismatch(
@@ -5238,7 +5225,6 @@ class _Checker:
     def _variant_qualification_error(
         self,
         qualifier: QualifierChain,
-        variant: str,
         enum_type: EnumType,
         span: SourceSpan,
     ) -> AglTypeError:
@@ -5246,9 +5232,9 @@ class _Checker:
 
         Scope selects every member a module qualifier or a matching owner
         names and rejects an owner that is also a module route, so the owner
-        here is no enum, another enum or other arguments of it, or an enum
-        declaring no inline member *variant*: a referenced member keeps its own
-        declaration path.
+        here is no enum, or another enum or other arguments of it: identity
+        is the declaration, never the name, so two declarations sharing one
+        name path (a REPL redeclaration) are unrelated enums.
         """
         local_match = self._local_qualified_owner(qualifier, span)
         if local_match is None:
@@ -5259,41 +5245,19 @@ class _Checker:
             form = self._env.resolve_imported_enum_owner_form(route, enum_name, span=span)
             if form is None:
                 return AglTypeError(f"'{owner}' is not a known enum type.", span=span)
-            mismatch = self._enum_owner_error(form.type_template.template, enum_type, owner, span)
-            if form.match(enum_type) is None:
-                return mismatch
-            return self._inline_member_error(variant, enum_type, mismatch, span)
+            return self._enum_owner_error(form.type_template.template, enum_type, owner, span)
         local_owner, resolved, _type_params = local_match
-        # Identity is the declaration, never the name: two declarations sharing
-        # one name path (a REPL redeclaration) are unrelated enums. Within one
-        # declaration the owner selected no member only at other arguments.
-        mismatch = self._enum_owner_error(resolved, enum_type, local_owner, span)
-        if not isinstance(resolved, EnumType) or resolved.decl_id != enum_type.decl_id:
-            return mismatch
-        return self._inline_member_error(variant, enum_type, mismatch, span)
+        return self._enum_owner_error(resolved, enum_type, local_owner, span)
 
-    def _inline_member_error(
-        self, variant: str, enum_type: EnumType, mismatch: AglTypeError, span: SourceSpan
-    ) -> AglTypeError:
-        """Return *mismatch* when *enum_type* declares inline member *variant*.
-
-        Otherwise it declares no such member; scope reports an owner spelling a
-        referenced one.
-        """
-        if self._env.type_table.inline_member(enum_type, variant) is None:
-            return _variant_not_in_enum(variant, enum_type, span)
-        return mismatch
-
-    def _owner_inline_member(
-        self, variant: str, enum_type: EnumType, span: SourceSpan
-    ) -> RecordType:
+    def _owner_inline_member(self, variant: str, enum_type: EnumType) -> RecordType:
         """Return the inline member *variant* of *enum_type*, which its owner selects.
 
-        Scope reports an owner spelling a referenced member.
+        Scope's unified verdict accepts only a genuine ``owner::variant``
+        path, so a resolved local owner reaching here always declares
+        *variant* inline.
         """
         member = self._env.type_table.inline_member(enum_type, variant)
-        if member is None:
-            raise _variant_not_in_enum(variant, enum_type, span)
+        assert member is not None
         return member
 
     def _local_qualified_enum(
@@ -5336,9 +5300,12 @@ class _Checker:
     def _enum_owner_error(
         owner_type: Type, enum_type: EnumType, rendered_owner: str, span: SourceSpan
     ) -> AglTypeError:
-        """Return the error for owner *rendered_owner*, of *owner_type*, not owning *enum_type*."""
-        if not isinstance(owner_type, EnumType):
-            return _not_an_enum_type(rendered_owner, span)
+        """Return the error for owner *rendered_owner*, of *owner_type*, not owning *enum_type*.
+
+        A qualifier reaching here always names an enum: scope's unified
+        verdict accepts only an owner declaring the qualified member somewhere.
+        """
+        assert isinstance(owner_type, EnumType)
         return _enum_owner_mismatch(rendered_owner, owner_type, enum_type, span)
 
     # --- member access ---
@@ -6347,7 +6314,6 @@ class _Checker:
             context_desc = f"member '{subj_type.name}.{owner_type.name}'"
         elif isinstance(subj_type, RecordType):
             constructor_ref = self._record_constructor_pattern_ref(pattern, subj_type)
-            enum_owners = self._env.type_table.enum_owners_for_member(subj_type)
             if pattern.qualifier is not None:
                 local_enum = self._local_qualified_enum(pattern.qualifier, pattern.span)
                 if local_enum is not None:
@@ -6355,7 +6321,7 @@ class _Checker:
                     if not self._env.type_table.record_matches_enum_member(
                         enum_type, type_params, pattern.name, subj_type
                     ):
-                        named = self._owner_inline_member(pattern.name, enum_type, pattern.span)
+                        named = self._owner_inline_member(pattern.name, enum_type)
                         self._require_selected_member(pattern.name, named, subj_type, pattern.span)
                 elif (
                     applied_member := self._applied_member(
@@ -6367,14 +6333,6 @@ class _Checker:
                     )
                 # A constructor scope resolved for this record already names it.
                 elif constructor_ref is None:
-                    if (
-                        enum_owners
-                        and pattern.node_id not in self._resolved.scope_qualified_spellings
-                    ):
-                        # An owning enum's qualifier reports why the route fails.
-                        raise self._variant_qualification_error(
-                            pattern.qualifier, pattern.name, enum_owners[0], pattern.span
-                        )
                     raise AglTypeError(
                         f"Qualified constructor pattern '{pattern.name}' does not belong to "
                         f"'{subj_type!r}'.",
@@ -6584,7 +6542,7 @@ class _Checker:
         a local scope spelling naming no member of the scope.
         """
         if qualifier is not None and node_id not in self._resolved.scope_qualified_spellings:
-            return self._variant_qualification_error(qualifier, variant, enum_type, span)
+            return self._variant_qualification_error(qualifier, enum_type, span)
         return self._constructor_outside_enum(variant, enum_type, candidates, span)
 
     @staticmethod

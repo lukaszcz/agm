@@ -132,27 +132,8 @@ def test_builtin_member_identity_falls_back_for_non_enum_prelude_types() -> None
     )
 
 
-def test_enum_owners_for_member_recovers_only_captured_type_arguments() -> None:
-    table = TypeTable()
-    outcome = TypeDef(
-        kind="enum",
-        name="Outcome",
-        module_id=ENTRY_ID,
-        type_params=("T", "E"),
-        members=(
-            RecordType("ok", (TypeVarType("T"),), scope_path=("Outcome",), decl_id=1),
-            RecordType("fixed", (IntType(),), scope_path=("Outcome",), decl_id=2),
-        ),
-        decl_node_id=2,
-    )
-    table.register(outcome)
-    members = table.enum_members(outcome.handle((IntType(), TextType())))
-
-    assert table.enum_owners_for_member(members[0]) == ()
-    assert table.enum_owners_for_member(members[1]) == ()
-
-
-def test_enum_owners_for_referenced_member_require_its_full_type_template() -> None:
+def test_record_matches_enum_member_rejects_a_different_named_member() -> None:
+    """A member-name mismatch short-circuits ``record_matches_enum_member`` to False directly."""
     table = TypeTable()
     box = TypeDef(
         kind="record",
@@ -172,12 +153,30 @@ def test_enum_owners_for_referenced_member_require_its_full_type_template() -> N
     table.register(box)
     table.register(enum)
 
-    assert table.enum_owners_for_member(RecordType("Box", (IntType(),), decl_id=10)) == (
-        enum.handle(),
-    )
-    assert table.enum_owners_for_member(RecordType("Box", (TextType(),), decl_id=10)) == ()
     assert not table.record_matches_enum_member(
         enum.handle(), (), "Missing", RecordType("Box", (IntType(),), decl_id=10)
+    )
+
+
+def test_record_matches_enum_member_rejects_a_same_named_unrelated_record() -> None:
+    """A record whose own name coincides with a different enum's member name is no match.
+
+    ``record_matches_enum_member``'s name check only short-circuits absence;
+    a coinciding name still requires the owner to declare *that* record
+    inline, exercising ``inline_member``'s own miss instead.
+    """
+    table = TypeTable()
+    other_enum = TypeDef(
+        kind="enum",
+        name="Other",
+        module_id=ENTRY_ID,
+        members=(RecordType("Q", (), module_id=ENTRY_ID, decl_id=20),),
+        decl_node_id=12,
+    )
+    table.register(other_enum)
+
+    assert not table.record_matches_enum_member(
+        other_enum.handle(), (), "Box", RecordType("Box", (IntType(),), decl_id=10)
     )
 
 

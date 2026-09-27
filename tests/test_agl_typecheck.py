@@ -5328,10 +5328,12 @@ class TestPartialConstructorAndValueCalls:
 
     def test_ambiguous_bare_owner_missing_member_is_rejected(self, tmp_path: object) -> None:
         """A bare owner ambiguous across two wildcard imports still resolves by its full
-        ``owner::member`` path; neither module declares this member, so this fails
-        distinctly from an ambiguous-owner error."""
+        ``owner::member`` path; neither module declares this member, so no
+        candidate could ever supply it -- scope's unified unknown-member
+        verdict, not a further ambiguity."""
         from pathlib import Path
 
+        from agm.agl.scope import AglScopeError
         from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck.program import check_program
         from tests.agl.ir_harness import make_graph_from_files
@@ -5341,7 +5343,7 @@ class TestPartialConstructorAndValueCalls:
             "one/owner": "enum Owner = A | B",
             "two/owner": "enum Owner = A | B",
         }
-        with pytest.raises(AglTypeError):
+        with pytest.raises(AglScopeError):
             check_program(
                 resolve_program(make_graph_from_files(Path(tmp_path), modules)),
                 default_capabilities(),
@@ -5865,7 +5867,7 @@ class TestPatternTyping:
     def test_constructor_pattern_wrong_variant_raises(self) -> None:
         # Exercises the error when a constructor pattern variant is not found in the enum.
         err = reject_type("enum E\n  | A\n  | B\nlet e: E = A()\ncase e of | E::C() => 1 | _ => 0")
-        assert "variant" in str(err).lower()
+        assert isinstance(err, AglScopeError)
 
     def test_constructor_pattern_without_qualifier(self) -> None:
         # Exercises a constructor pattern without a qualifier.
@@ -7269,7 +7271,7 @@ class TestIsTest:
         err = reject_type(
             "enum Status\n  | Pass\n  | Fail\nlet s: Status = Pass()\ns is Status::Gone"
         )
-        assert "variant" in str(err).lower()
+        assert isinstance(err, AglScopeError)
 
     def test_is_test_wrong_qualifier_raises(self) -> None:
         err = reject_type("enum A\n  | X\nenum B\n  | X\nlet a = A::X()\na is B::X")
@@ -7372,7 +7374,7 @@ class TestIsTest:
     def test_is_test_qualifier_not_enum_raises(self) -> None:
         # Exercises the error path when the qualifier resolves to a non-enum type.
         err = reject_type("enum A\n  | X\nrecord R\n  x: int\nlet a = A::X()\na is R::X")
-        assert "not a known enum" in str(err).lower() or "enum" in str(err).lower()
+        assert isinstance(err, AglScopeError)
 
     def test_is_test_unknown_qualifier_raises(self) -> None:
         # Exercises the error path when the qualifier name is not a known enum.
@@ -7619,7 +7621,7 @@ class TestConstructors:
 
     def test_enum_variant_unknown_raises(self) -> None:
         err = reject_type("enum Status\n  | Pass\nStatus::Gone()")
-        assert "variant" in str(err).lower()
+        assert isinstance(err, AglScopeError)
 
     def test_exception_constructor(self) -> None:
         r = accept_type('Abort(message = "error")')
@@ -7667,11 +7669,11 @@ class TestConstructors:
 
     def test_qualified_constructor_wrong_enum_raises(self) -> None:
         err = reject_type("enum A\n  | X\nenum B\n  | Y\nA::Y()")
-        assert "variant" in str(err).lower()
+        assert isinstance(err, AglScopeError)
 
     def test_qualified_constructor_not_enum_raises(self) -> None:
         err = reject_type("record R\n  x: int\nR::Something()")
-        assert "enum" in str(err).lower()
+        assert isinstance(err, AglScopeError)
 
 
 # ---------------------------------------------------------------------------
@@ -8187,7 +8189,7 @@ class TestConstructorRefDispatch:
 
     def test_qualified_variant_not_found_errors(self) -> None:
         err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus::Missing()")
-        assert "variant" in str(err).lower()
+        assert isinstance(err, AglScopeError)
 
     def test_positional_arg_on_unqualified_constructor_rejected(self) -> None:
         # Constructors only accept named args; positional arg must be rejected.
@@ -8311,8 +8313,10 @@ class TestBareConstructorTypeApply:
         assert binding_type == option_type
 
     def test_owner_apply_requires_an_enum_owner(self) -> None:
+        """A record owner has no inline-member namespace at all: a type-kind
+        error typecheck reports, not a name scope ever selects among."""
         error = reject_type("record Box[T]\n  value: T\nBox[int]::Box")
-        assert "generic enum" in str(error).lower()
+        assert isinstance(error, AglTypeError)
 
     def test_applied_unknown_owner_member_is_rejected(self) -> None:
         error = reject_type("let v: Missing[int]::Bar = 1\nv")

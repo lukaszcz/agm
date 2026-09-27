@@ -123,7 +123,6 @@ from agm.agl.scope.type_names import (
     MemberReferenced,
     OwnerRoute,
     TypeNameSite,
-    is_nominal_type_expr,
     owner_member_selection,
     owner_type_expr,
     routed_qualifier_and_member,
@@ -600,6 +599,9 @@ class _Resolver:
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
         # Resolved single-candidate constructor refs: VarRef.node_id -> ConstructorRef.
         self._constructor_refs: dict[int, ConstructorRef] = {}
+        # Qualified type-owner chains: QualifierChain.node_id -> the full
+        # owner::member path's declaration identity, by suffix resolution.
+        self._owner_declarations: dict[int, DeclarationKey] = {}
         # Scope records constructor candidates for bare pattern names. The
         # checker classifies them after constructor fields have been mapped;
         # candidates do not depend on ordinary lexical value bindings.
@@ -754,6 +756,7 @@ class _Resolver:
             reachable_declarations=self._reachable_declarations(),
             attributes=attribute_facts,
             type_owners=type_owners if self._allow_root_statements else {},
+            owner_declarations=dict(self._owner_declarations),
         )
 
     # ------------------------------------------------------------------
@@ -1063,6 +1066,46 @@ class _Resolver:
             raise ReferencedMemberError(spelling, member, span=span)
         if isinstance(selection, MemberHidden):
             raise HiddenMemberError(f"{spelling}::{member}", span=span)
+
+    @staticmethod
+    def _unknown_owner_member(spelling: str, member: str, span: SourceSpan | None) -> AglScopeError:
+        """The one verdict for a resolved owner declaring no ``member`` at all, in any position."""
+        return AglScopeError(f"'{member}' is not a member of '{spelling}'.", span=span)
+
+    def _select_owner_member_or_raise(
+        self,
+        owner: TypeOwner,
+        spelling: str,
+        member: str,
+        written: str,
+        span: SourceSpan | None,
+        route: OwnerRoute | None,
+    ) -> ConstructorRef:
+        """Return the constructor ``spelling::member`` selects from *owner*, already resolved.
+
+        Runs the hiding/referenced check, then raises the one unknown-member
+        verdict when *owner* declares no such *member* at all -- in every
+        position that resolves an owner this way (value, pattern, ``is``,
+        annotation, alias target, applied type).
+        """
+        self._select_owner_member(owner, spelling, member, span, route)
+        constructor = owner.select(member, written)
+        if constructor is None:
+            raise self._unknown_owner_member(spelling, member, span)
+        return constructor
+
+    @staticmethod
+    def _owner_member_key(owner_qname: QName, member: str) -> DeclarationKey:
+        """Return the declaration identity ``owner_qname::member`` names, by nested path."""
+        module_id, atom = owner_qname
+        return (module_id, _bare_path(atom), member)
+
+    @staticmethod
+    def _qname_decl_key(qname: QName) -> DeclarationKey:
+        """Return the declaration identity a full path *qname* names directly."""
+        module_id, atom = qname
+        path = _bare_path(atom)
+        return (module_id, path[:-1], path[-1])
 
     def _alias_receiver_paths(self) -> Mapping[ScopePath, TypeAlias]:
         """Return the module's alias scope paths with their declarations, computed once.
@@ -3552,9 +3595,12 @@ class _Resolver:
         """Validate qualifier syntax in the current lexical scope layer.
 
         *type_params* are the enclosing declaration's type parameters, which
-        shadow every type-path owner: ``def f[E](x: E::A)`` leaves ``E::A``
-        to typecheck, since ``E`` denotes no fixed declaration here.
+        shadow every qualifier's leading segment, exactly as they shadow a
+        bare name: ``def f[E](x: E::A)`` and ``def f[types](x: types::Color)``
+        both name the type parameter, which qualifies nothing, so both are
+        rejected here rather than left to fall through to a module route.
         """
+        type_param_set = frozenset(type_params)
 
         def validate(node: object) -> None:
             chain = (
@@ -3575,14 +3621,20 @@ class _Resolver:
                 raise AglScopeError(
                     "Only the leading qualifier segment may name a module route.", span=chain.span
                 )
+            if (
+                chain.anchor is None
+                and chain.segments
+                and chain.segments[0].name.split("/")[0] in type_param_set
+            ):
+                raise AglScopeError(
+                    f"'{chain.segments[0].name}' is a type parameter here and cannot be used "
+                    "as a qualifier route.",
+                    span=chain.segments[0].span,
+                )
             self._validate_local_scope_chain(chain)
             if isinstance(node, (NameT, AppliedT, ConstructorPattern, IsTest)) and chain.segments:
                 site = self._type_owners.site(self._module_id, self._scope.scope_path, type_params)
                 owner_expr = owner_type_expr(chain)
-                if not is_nominal_type_expr(owner_expr, site):
-                    # A type parameter shadows any declaration this owner spelling
-                    # could otherwise name; typecheck resolves it instead.
-                    return
                 # The owner selects by its own spelling first -- a local alias
                 # or enum is never reachable through the import machinery a
                 # routed selection walks. A uniquely selected owner is used
@@ -3593,11 +3645,11 @@ class _Resolver:
                 # the type it names -- instead resolves by the full
                 # ``owner::member`` path, exactly as a module route does.
                 owner_selection = type_name_selection(site, owner_expr)
-                if len(owner_selection) == 1:
-                    self._select_chain_owner_member(
-                        next(iter(owner_selection)), chain, owner_expr, site
-                    )
-                    return
+                # The full path also settles whether *chain.member* exists at
+                # all: an inline member the owner alone would not find (a
+                # scope-region member, or a referenced member declared at the
+                # owner's own nested path) still names a real declaration
+                # there, exactly as a module route's full path does.
                 full_selection = type_name_selection(
                     site, NameT(chain.member, chain.span, chain.node_id, qualifier=chain)
                 )
@@ -3616,10 +3668,38 @@ class _Resolver:
                         ),
                         span=chain.span,
                     )
+                if len(owner_selection) == 1:
+                    self._select_chain_owner_member(
+                        next(iter(owner_selection)),
+                        chain,
+                        owner_expr,
+                        site,
+                        exists=bool(full_selection),
+                    )
+                    return
                 if len(full_selection) == 1:
-                    owner_qname = self._owner_of_member_qname(next(iter(full_selection)))
-                    if owner_qname is not None:
-                        self._select_chain_owner_member(owner_qname, chain, owner_expr, site)
+                    (only,) = full_selection
+                    owner_qname = self._owner_of_member_qname(only)
+                    if owner_qname is None:
+                        # No separate owner: the full path names a plain
+                        # declaration directly (a module route to a top-level
+                        # or nested type), which typecheck resolves by this
+                        # identity rather than the qualifier's spelling.
+                        self._owner_declarations[chain.node_id] = self._qname_decl_key(only)
+                    else:
+                        self._select_chain_owner_member(
+                            owner_qname, chain, owner_expr, site, exists=True
+                        )
+                elif len(owner_selection) > 1:
+                    # An owner ambiguous in isolation, and a full path that
+                    # names no declaration at all through any candidate: no
+                    # single candidate could ever supply *chain.member*, so
+                    # this is the one unknown-member verdict, not a further
+                    # ambiguity -- the same builder every other owner-member
+                    # miss above uses.
+                    raise self._unknown_owner_member(
+                        render_qualifier_path(chain), chain.member, chain.span
+                    )
 
         walk(root, validate)
 
@@ -3629,17 +3709,32 @@ class _Resolver:
         chain: QualifierChain,
         owner_expr: NameT | AppliedT,
         site: TypeNameSite,
+        *,
+        exists: bool,
     ) -> None:
-        """Run the hiding/referenced check for ``chain``'s owner, resolved to *owner_qname*."""
+        """Validate ``chain``'s owner, resolved to *owner_qname*, and record its identity.
+
+        *exists* reports whether the full path independently names a
+        declaration (a scope-region member, or a referenced member declared
+        at the owner's own nested path): true there needs no further check.
+        Otherwise *owner*'s own alias-aware projection (:meth:`TypeOwner.select`)
+        decides -- an alias's reachable members never show up as a separately
+        declared path. Raises the one unknown-member verdict when neither
+        finds *chain.member*. Records the full ``owner::member`` path's
+        declaration identity in ``owner_declarations`` (keyed by the chain's
+        node id) so typecheck reads the resolved owner directly instead of
+        re-resolving the qualifier.
+        """
         owner = self._type_owners.owner(owner_qname)
-        if owner is not None:
-            self._select_owner_member(
-                owner,
-                render_qualifier_path(chain),
-                chain.member,
-                chain.span,
-                OwnerRoute(site, owner_expr),
-            )
+        if owner is None:
+            return
+        rendered = render_qualifier_path(chain)
+        self._select_owner_member(
+            owner, rendered, chain.member, chain.span, OwnerRoute(site, owner_expr)
+        )
+        if not exists and owner.select(chain.member, chain.segments[-1].name) is None:
+            raise self._unknown_owner_member(rendered, chain.member, chain.span)
+        self._owner_declarations[chain.node_id] = self._owner_member_key(owner_qname, chain.member)
 
     @staticmethod
     def _owner_of_member_qname(qname: QName) -> QName | None:
@@ -3774,6 +3869,8 @@ class _Resolver:
             if not candidates:
                 raise type_name_not_a_value(render_qualified_name(chain, node.name), node.span)
             self._constructor_refs[node.node_id] = candidates[0]
+            owner_qname = (self._module_id, _bare_atom(path))
+            self._owner_declarations[chain.node_id] = self._owner_member_key(owner_qname, node.name)
             return True
         self._resolution[node.node_id] = ref
         return True
@@ -3907,14 +4004,9 @@ class _Resolver:
         local_path = self._validate_local_scope_chain(chain)
         if local_path in self._type_paths:
             self._check_local_scope_route_ambiguity(chain, variant, local_path)
-            constructor = self._local_owner_constructor(chain, local_path, variant)
-            if constructor is None:
-                raise AglScopeError(
-                    f"Variant '{variant}' does not exist in enum or record "
-                    f"'{'::'.join(local_path)}'.",
-                    span=chain.span,
-                )
-            self._constructor_refs[node_id] = constructor
+            self._constructor_refs[node_id] = self._local_owner_constructor(
+                chain, local_path, variant
+            )
             return True
         constructor = self._routed_owner_constructor(chain, variant, defer_diagnostics=False)
         if constructor is None:
@@ -3931,20 +4023,21 @@ class _Resolver:
         checker can assess it against the type being matched.
         """
         try:
-            owner = self._imported_chain_owner(chain, variant)
+            resolved = self._imported_chain_owner(chain, variant)
         except AglScopeError:
             if defer_diagnostics:
                 return None
             raise
-        if owner is not None:
-            return self._owner_constructor(owner, chain, variant)
+        if resolved is not None:
+            decl_key, owner = resolved
+            return self._owner_constructor(decl_key, owner, chain, variant)
         if (
             chain.anchor is not QualifierAnchor.MODULE
             and len(chain.segments) == 1
             and chain.segments[0].name in self._declared_type_names
         ):
             type_name = chain.segments[0].name
-            return next(
+            candidate = next(
                 (
                     candidate
                     for candidate in self._constructor_candidates.get(variant, ())
@@ -3956,6 +4049,13 @@ class _Resolver:
                 ),
                 None,
             )
+            if candidate is not None:
+                self._owner_declarations[chain.node_id] = (
+                    candidate.owner_module_id,
+                    candidate.owner_path,
+                    candidate.owner_name,
+                )
+            return candidate
         return None
 
     def _use_constructor_candidates(
@@ -4012,9 +4112,7 @@ class _Resolver:
             return set()
         constructor = None if type_owner is None else type_owner.select(variant, relative_path[-1])
         if constructor is None:
-            raise AglScopeError(
-                f"'{variant}' is not a member of '{'::'.join(relative_path)}'.", span=chain.span
-            )
+            raise self._unknown_owner_member("::".join(relative_path), variant, chain.span)
         return {constructor}
 
     def _owner_route(self, chain: QualifierChain) -> OwnerRoute:
@@ -4058,46 +4156,69 @@ class _Resolver:
 
     def _local_owner_constructor(
         self, chain: QualifierChain, path: ScopePath, variant: str
-    ) -> ConstructorRef | None:
+    ) -> ConstructorRef:
         """Return the constructor *chain*, naming this module's type *path*, selects as *variant*.
 
-        Raises when the type qualifies no constructor at all.
+        Raises when the type qualifies no constructor at all, or none named *variant*.
         """
-        owner = self._constructible_owner((self._module_id, _bare_atom(path)))
+        owner_qname = (self._module_id, _bare_atom(path))
+        owner = self._constructible_owner(owner_qname)
         if owner is None:
             raise type_name_not_a_value(render_qualifier_path(chain), chain.span)
+        decl_key = self._owner_member_key(owner_qname, variant)
         scoped = self._scoped_constructor_candidates.get((path, variant), ())
         if scoped:
+            self._owner_declarations[chain.node_id] = decl_key
             return scoped[0]
-        return self._owner_constructor(owner, chain, variant)
+        return self._owner_constructor(decl_key, owner, chain, variant)
 
     def _owner_constructor(
-        self, owner: TypeOwner, chain: QualifierChain, variant: str
-    ) -> ConstructorRef | None:
+        self, decl_key: DeclarationKey, owner: TypeOwner, chain: QualifierChain, variant: str
+    ) -> ConstructorRef:
         """Return the constructor ``chain::variant`` selects from *owner*, already resolved.
 
         *owner* is resolved by declaration identity, each alias on its chain
         where that alias is declared; *chain* is the owner's spelling at the
         use. Every caller already confirmed *owner* qualifies constructors
-        (see :meth:`_constructible_owner`).
+        (see :meth:`_constructible_owner`). Raises the one unknown-member
+        verdict when *owner* declares no such *variant*, in every position
+        that reaches an owner this way (value, pattern, ``is``). Records
+        *decl_key* -- the resolved declaration identity a caller already
+        computed for ``chain``'s spelling -- in ``owner_declarations`` (keyed
+        by the chain's node id), exactly as the type-position walk does, so
+        typecheck reads it back directly instead of re-resolving the
+        qualifier.
         """
-        # Only the raise matters here: an alias's own constructor identity --
-        # not the target's raw member -- must reach the caller, so the
-        # returned reference always comes from `select`, which folds the
-        # alias's own type parameters back in (see `TypeOwner.select`).
-        self._select_owner_member(
-            owner, render_qualifier_path(chain), variant, chain.span, self._owner_route(chain)
+        rendered = render_qualifier_path(chain)
+        # An alias's own constructor identity -- not the target's raw member --
+        # must reach the caller, so the returned reference always comes from
+        # `select`, which folds the alias's own type parameters back in (see
+        # `TypeOwner.select`).
+        constructor = self._select_owner_member_or_raise(
+            owner,
+            rendered,
+            variant,
+            chain.segments[-1].name,
+            chain.span,
+            self._owner_route(chain),
         )
-        return owner.select(variant, chain.segments[-1].name)
+        self._owner_declarations[chain.node_id] = decl_key
+        return constructor
 
-    def _imported_chain_owner(self, chain: QualifierChain, variant: str) -> TypeOwner | None:
-        """Resolve a constructible type owner reached through imports.
+    def _imported_chain_owner(
+        self, chain: QualifierChain, variant: str
+    ) -> tuple[DeclarationKey, TypeOwner] | None:
+        """Resolve a constructible type owner reached through imports, with its declaration key.
 
         The final chain segment is selected as a normal imported member; any
         preceding segments are its route.  A one-segment chain may instead
         name a type exposed by an import tail. This is the same chain walk used for
         ordinary qualified values, with only the resulting member kind
-        determining whether it owns a constructor.
+        determining whether it owns a constructor. The returned key is
+        already the full ``owner::variant`` declaration identity to record in
+        ``owner_declarations`` -- the ambiguous-bare-owner fallback below
+        resolves *variant* directly, so its own qname already names that
+        identity, unlike the other branches' separately named owner.
         """
         if chain.anchor is QualifierAnchor.CURRENT_MODULE or not chain.segments:
             return None
@@ -4120,7 +4241,8 @@ class _Resolver:
                     self._import_env, (), _bare_atom((segment.name, variant)), anchored=False
                 )
                 if isinstance(result, QualResolutionFound):
-                    return self._constructible_owner(result.qname)
+                    owner = self._constructible_owner(result.qname)
+                    return None if owner is None else (self._qname_decl_key(result.qname), owner)
                 if isinstance(result, QualResolutionAmbiguous):
                     raise AglScopeError(
                         ambiguous_qualification_message(
@@ -4128,8 +4250,18 @@ class _Resolver:
                         ),
                         span=chain.span,
                     ) from None
+                # No candidate declares *variant* either: the same unknown-member
+                # verdict every other owner-member miss raises, not the bare
+                # owner's own ambiguity (already caught above) nor a bogus
+                # module-route diagnostic.
+                raise self._unknown_owner_member(
+                    render_qualifier_path(chain), variant, chain.span
+                ) from None
+            if owner_ref is None:
                 return None
-            return None if owner_ref is None else self._constructible_owner(_ref_qname(owner_ref))
+            owner_qname = _ref_qname(owner_ref)
+            owner = self._constructible_owner(owner_qname)
+            return None if owner is None else (self._owner_member_key(owner_qname, variant), owner)
         if len(chain.segments) > 1:
             route = QualifierChain(
                 anchor=chain.anchor,
@@ -4154,7 +4286,7 @@ class _Resolver:
                 if self._type_owners.is_declared(owner_qname):
                     raise type_name_not_a_value(rendered, chain.span)
                 raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
-            return owner
+            return self._owner_member_key(owner_qname, variant), owner
         return None
 
     def _nearest_layer[T](
@@ -4594,6 +4726,10 @@ class _Resolver:
         constructor = self._cross_module_constructor(qname)
         if constructor is not None:
             self._constructor_refs[node.node_id] = constructor
+            # *qname* already names the constructor's own full declaration
+            # path (route segments plus the constructed member), exactly as
+            # the type-position walk's no-separate-owner case does.
+            self._owner_declarations[module_qualifier.node_id] = self._qname_decl_key(qname)
             return
         if self._type_owners.is_declared(qname):
             # A type bearing no constructor leaves the name to the module surface.
@@ -5008,10 +5144,10 @@ class _Resolver:
         a local scope member is considered before an import route owning the
         complete atom, and only then is the chain read as a type owner with
         *name* as its variant, else as a module qualifier. A local scope's
-        selection is complete; a local scope lacking *name*, or a module
-        qualifier selecting nothing, fails as the same value spelling does. A
-        type owner selecting nothing yields an empty tuple, deferring the
-        diagnostic to type checking against the matched type.
+        selection is complete; a local scope lacking *name*, a local or
+        imported type owner declaring no such member, or a module qualifier
+        selecting nothing, all fail with the one unknown-member verdict, as
+        the same value spelling does.
         """
         opened = self._use_constructor_candidates(chain, name)
         if opened is not None:
@@ -5026,8 +5162,7 @@ class _Resolver:
         if local_path is not None:
             self._check_local_scope_route_ambiguity(chain, name, local_path)
         if local_path in self._type_paths:
-            constructor = self._local_owner_constructor(chain, local_path, name)
-            return () if constructor is None else (constructor,)
+            return (self._local_owner_constructor(chain, local_path, name),)
         if local_path is not None:
             if name not in self._scope_nodes[local_path].members:
                 raise _unknown_scope_member(name, local_path, span)

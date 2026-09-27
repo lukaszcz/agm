@@ -70,30 +70,51 @@ def _qualifier(*segments: str, member: str = "") -> QualifierChain:
 
 
 def _module_outcome(source: str) -> Outcome:
+    """A phase-accurate verdict: which of the two calls raised, not which class.
+
+    Resolves *source* once for its own scope-phase verdict, then separately
+    for the full type-checked verdict -- a second, independent parse and
+    resolve of the same tiny inline snippet, since :func:`resolve_and_check_inline_entry`
+    does not expose its intermediate resolution for reuse. A class alone
+    cannot tell the phases apart: typecheck's few remaining unreachable
+    ``AglScopeError`` constructions would otherwise mislabel a typecheck-phase
+    raise as scope-phase.
+    """
     from agm.agl.typecheck import AglTypeError
     from tests.agl.ir_harness import base_caps
-    from tests.agl.module_graph import resolve_and_check_inline_entry
+    from tests.agl.module_graph import resolve_and_check_inline_entry, resolve_inline_entry
 
     try:
-        resolve_and_check_inline_entry(source, base_caps())
+        resolve_inline_entry(source)
     except AglScopeError:
         return "scope"
-    except AglTypeError:
+    try:
+        resolve_and_check_inline_entry(source, base_caps())
+    except (AglScopeError, AglTypeError):
         return "typecheck"
     return "accepted"
 
 
 def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
+    """A phase-accurate verdict: which call raised, not which class.
+
+    Reuses scope's own resolution for the type-check call, so nothing here
+    re-resolves the program -- an ``AglScopeError`` from ``check_program``
+    (typecheck's few remaining unreachable constructions) still counts as
+    typecheck-phase, since scope itself already passed.
+    """
     from agm.agl.typecheck import AglTypeError
     from agm.agl.typecheck.program import check_program
     from tests.agl.ir_harness import base_caps, make_graph_from_files
 
+    graph = make_graph_from_files(tmp_path, modules)
     try:
-        resolved = resolve_program(make_graph_from_files(tmp_path, modules))
-        check_program(resolved, base_caps())
+        resolved = resolve_program(graph)
     except AglScopeError:
         return "scope"
-    except AglTypeError:
+    try:
+        check_program(resolved, base_caps())
+    except (AglScopeError, AglTypeError):
         return "typecheck"
     return "accepted"
 
@@ -130,7 +151,7 @@ def _program_outcome(tmp_path: Path, modules: dict[str, str]) -> Outcome:
                 "case value of | Color::Gone => 1 | _ => 2"
             ),
             "scope",
-            "typecheck",
+            "scope",
         ),
     ],
 )
@@ -164,6 +185,31 @@ def test_type_name_and_module_route_clash_stays_rejected_in_both_positions(
 
     assert _program_outcome(tmp_path / "expression", expression) == "scope"
     assert _program_outcome(tmp_path / "pattern", pattern) == "scope"
+
+
+@pytest.mark.parametrize(
+    ("annotation", "member"),
+    (
+        ("types::Color", "enum Color = Red | Green"),
+        ("types::Box[int]", "enum Box[T] = Box(value: T)"),
+    ),
+    ids=("bare-owner", "applied-owner"),
+)
+def test_type_parameter_shadowing_a_real_module_route_is_rejected(
+    tmp_path: Path, annotation: str, member: str
+) -> None:
+    """A type parameter's name can coincide with an actually-imported module's.
+
+    ``def f[types](x: types::Color)`` names the type parameter, not the
+    ``types`` module, exactly as a type parameter shadowing a purely local
+    name does -- the module import makes no difference to the verdict.
+    """
+    modules = {
+        "entry": f"import types\ndef f[types](x: {annotation}) -> int = 1",
+        "types": member,
+    }
+
+    assert _program_outcome(tmp_path, modules) == "scope"
 
 
 def test_import_tail_keeps_an_unselected_qualified_owner_reachable() -> None:
@@ -334,3 +380,40 @@ def test_applied_generic_owner_ambiguity_resolves_by_full_member_path(tmp_path: 
     )
     assert _program_outcome(tmp_path / "value-ambiguous", program("Box[int]::Full(1)")) == "scope"
     assert _program_outcome(tmp_path / "value-unique", program("Box[int]::Empty")) == "accepted"
+
+
+def _ambiguity_span(tmp_path: Path, modules: dict[str, str]) -> SourceSpan:
+    from agm.agl.typecheck.program import check_program
+    from tests.agl.ir_harness import base_caps, make_graph_from_files
+
+    graph = make_graph_from_files(tmp_path, modules)
+    with pytest.raises(AglScopeError) as excinfo:
+        check_program(resolve_program(graph), base_caps())
+    span = excinfo.value.span
+    assert span is not None
+    return span
+
+
+@pytest.mark.parametrize(
+    ("position", "entry"),
+    (
+        ("annotation", "fn(x: Color::Red) => 1"),
+        ("is", "let v: m::Color = Color::Green\nv is Color::Red"),
+        ("pattern", "let v: m::Color = Color::Green\ncase v of | Color::Red => 1 | _ => 2"),
+    ),
+)
+def test_ambiguous_qualifier_span_is_the_chain_alone(
+    tmp_path: Path, position: str, entry: str
+) -> None:
+    """An ambiguity's span is the qualified chain itself, never the whole
+    annotation, ``is`` expression, or pattern it appears in."""
+    modules = {
+        "m": "enum Color\n  | Red\n  | Green",
+        "n": "enum Color\n  | Red\n  | Blue",
+    }
+    span = _ambiguity_span(
+        tmp_path / position, {"entry": f"import m::*\nimport n::*\n{entry}", **modules}
+    )
+    line = entry.count("\n") + 3
+    start_col = entry.splitlines()[-1].index("Color::Red") + 1
+    assert (span.start_line, span.start_col, span.end_col) == (line, start_col, start_col + 10)

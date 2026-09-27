@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglError, AglTypeError, HiddenMemberError
+from agm.agl.diagnostics import AglError, HiddenMemberError
+from agm.agl.scope import AglScopeError
 from tests._agl_helpers import check_agl_program
 
 _LIBRARIES = {
@@ -139,7 +140,7 @@ class TestUseHidingThroughAliasIsHonouredLocally:
         ``E`` is reached the same way as the hidden-member case above (opened by
         ``use``, unreachable as a module route), but no ``hiding`` clause and no
         inline declaration excludes ``Zzz``, so this stays the plain
-        unknown-qualifier error rather than :class:`HiddenMemberError`.
+        unknown-member verdict rather than :class:`HiddenMemberError`.
         """
         source = (
             "use s::* hiding E::A\n"
@@ -150,7 +151,7 @@ class TestUseHidingThroughAliasIsHonouredLocally:
             "\n"
             "program def main() -> unit\n  print(1)\n"
         )
-        with pytest.raises(AglTypeError) as excinfo:
+        with pytest.raises(AglScopeError) as excinfo:
             check_agl_program(tmp_path, {"entry": source})
         assert not isinstance(excinfo.value, HiddenMemberError)
 
@@ -267,10 +268,11 @@ class TestTypePositionInsideDeclarations:
             check_agl_program(tmp_path, {"entry": source})
 
 
-class TestTypeParameterOwnerStaysTypechecksToReport:
+class TestTypeParameterOwnerIsRejectedByScope:
     """A function's own type parameter shadows a same-named hidden enum: the
-    qualifier's owner is then the type variable, which typecheck -- not
-    scope -- reports, so it is never mistaken for a hidden member.
+    qualifier's owner is then the type variable itself, which scope rejects
+    as an illegal qualifier route, never as a hidden member of the enum it
+    shadows.
     """
 
     def test_type_parameter_owner_is_not_reported_as_hidden(self, tmp_path: Path) -> None:
@@ -278,6 +280,6 @@ class TestTypeParameterOwnerStaysTypechecksToReport:
             "use s::* hiding E::A\n\nscope s\n  enum E = A | B\nend s\n\n"
             "def f[E](x: E::A) -> int = 1"
         )
-        with pytest.raises(AglError) as excinfo:
+        with pytest.raises(AglScopeError) as excinfo:
             check_agl_program(tmp_path, {"entry": source})
         assert not isinstance(excinfo.value, HiddenMemberError)

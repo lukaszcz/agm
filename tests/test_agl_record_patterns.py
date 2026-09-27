@@ -192,23 +192,27 @@ def test_module_qualified_record_pattern_rejects_a_referencing_enum_owner(
 def test_module_qualified_record_pattern_rejects_an_unrelated_enum_owner(
     tmp_path: Path,
 ) -> None:
-    reject_graph(
-        tmp_path,
-        {
-            "lib": (
-                "record Shared\n"
-                "  value: int\n"
-                "enum First = ::Shared\n"
-                "enum Second = ::Shared\n"
-                "enum Unrelated | Other\n"
-            ),
-            "entry": (
-                "import lib\n"
-                "let shared: lib::Shared = lib::Shared(value = 1)\n"
-                "case shared of | lib::Unrelated::Shared(value) => value\n"
-            ),
-        },
-    )
+    """``Unrelated`` declares no ``Shared`` member at all, so this is the plain
+    unknown-member verdict scope reports for every position, not a
+    subject/pattern type mismatch typecheck would report."""
+    with pytest.raises(AglScopeError):
+        accept_graph(
+            tmp_path,
+            {
+                "lib": (
+                    "record Shared\n"
+                    "  value: int\n"
+                    "enum First = ::Shared\n"
+                    "enum Second = ::Shared\n"
+                    "enum Unrelated | Other\n"
+                ),
+                "entry": (
+                    "import lib\n"
+                    "let shared: lib::Shared = lib::Shared(value = 1)\n"
+                    "case shared of | lib::Unrelated::Shared(value) => value\n"
+                ),
+            },
+        )
 
 
 def test_record_and_enum_constructor_spelling_collision_is_scrutinee_directed() -> None:

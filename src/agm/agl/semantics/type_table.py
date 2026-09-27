@@ -1185,22 +1185,6 @@ class TypeTable:
                 return True
         return False
 
-    def enum_owners_for_member(self, handle: RecordType) -> tuple[EnumType, ...]:
-        """Return every concrete enum containing *handle* with known arguments.
-
-        Referenced records may belong to several enums.  The result therefore
-        preserves the full relation instead of making registration order part
-        of semantic validation.
-        """
-        owners: list[EnumType] = []
-        for typedef, match in self._enum_membership_matches(self._enum_defs_owning(handle), handle):
-            bindings = dict(match.bindings)
-            if len(bindings) != len(typedef.type_params):
-                continue
-            args = tuple(bindings[param] for param in typedef.type_params)
-            owners.append(typedef.enum_handle(args))
-        return tuple(owners)
-
     def record_matches_enum_member(
         self, enum: EnumType, type_params: tuple[str, ...], member_name: str, record: RecordType
     ) -> bool:

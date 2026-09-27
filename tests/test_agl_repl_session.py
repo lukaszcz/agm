@@ -2279,14 +2279,21 @@ def test_declaring_an_alias_that_retires_its_target_in_one_entry_fails_at_type_p
 @pytest.mark.parametrize(
     ("probe", "expected_error"),
     (
-        ("Foo::Old::E::A", AglScopeError),
-        ("fn(x: Foo::Old::E::A) => 1", AglTypeError),
-        ("fn(x: Foo::Old::E) => 1", AglTypeError),
+        ("Foo::Old::E::A", (AglScopeError,)),
+        ("fn(x: Foo::Old::E::A) => 1", (AglTypeError,)),
+        # A grouping whose combined setup entry fails to redeclare ``Foo``
+        # (name-clash inside one entry) leaves ``Old`` declared but never
+        # nested with ``E`` at all, rather than genuinely retired: scope
+        # itself then reports the same unified unknown-member verdict
+        # (``AglScopeError``) it reports for a live owner missing a member
+        # anywhere else, alongside the genuinely-retired groupings' plain
+        # unknown-scope-path ``AglTypeError``.
+        ("fn(x: Foo::Old::E) => 1", (AglTypeError, AglScopeError)),
     ),
     ids=("value", "type-member", "type-owner"),
 )
 def test_retired_member_scope_is_rejected_at_every_type_and_value_spelling(
-    probe: str, expected_error: type[AglError], sizes: tuple[int, ...]
+    probe: str, expected_error: tuple[type[AglError], ...], sizes: tuple[int, ...]
 ) -> None:
     """Once a redeclaration retires ``Foo::Old``'s member scope, every
     spelling of what it used to hold -- the qualified value, the member's
@@ -9646,7 +9653,6 @@ class TestAmbiguousQualifierClassAgreement:
             pytest.param("fn(x: Facade::Thing) => 1", id="type-annotation"),
             pytest.param("case v of | Facade::Thing::Red => 1 | _ => 0", id="pattern"),
             pytest.param("v is Facade::Thing::Red", id="is-test"),
-            pytest.param("Facade::Thing", id="bare-repl-type-entry"),
         ],
     )
     def test_ambiguous_qualifier_reports_scope_error_at_every_position(
@@ -9655,6 +9661,18 @@ class TestAmbiguousQualifierClassAgreement:
         session = self._session(tmp_path)
         with pytest.raises(AglScopeError):
             session.type_of(expr)
+
+    def test_ambiguous_qualifier_reports_scope_error_at_a_bare_type_entry(
+        self, tmp_path: Path
+    ) -> None:
+        """A bare ambiguous qualifier, entered alone, fails through the REPL's
+        own bare-entry path -- never echoed as a type, same as every other
+        position's scope rejection."""
+        session = self._session(tmp_path)
+        result = session.eval_entry("Facade::Thing")
+        assert not result.ok
+        assert result.kind != "type"
+        assert result.diagnostics
 
 
 # ---------------------------------------------------------------------------

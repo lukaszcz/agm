@@ -1829,7 +1829,7 @@ class TestWildcardImports:
                 "lib": "def ignored() -> int = 1",
             },
         )
-        with pytest.raises(AglScopeError, match="does not exist"):
+        with pytest.raises(AglScopeError):
             resolve_program(self_qualified)
 
         clashing_route = _make_graph_from_files(

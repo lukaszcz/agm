@@ -1045,6 +1045,14 @@ class ModuleResolution:
     ``type_owners``
         For a REPL entry, the :class:`TypeOwner` each type it declares resolved
         to, keyed by type path; the session retains them for later entries.
+    ``owner_declarations``
+        Maps a qualified type-owner chain's node id (the ``QualifierChain`` on
+        a ``NameT``/``AppliedT``/``ConstructorPattern``/``IsTest``) to the
+        declaration identity its full ``owner::member`` path selects, by
+        suffix resolution -- the same one verdict every position shares.
+        Typecheck reads the owner from here (peeling the trailing name off
+        when it names no separate owner) instead of re-resolving the
+        qualifier.
     """
 
     program: Program
@@ -1075,6 +1083,7 @@ class ModuleResolution:
     reachable_declarations: frozenset[DeclarationKey] = frozenset()
     attributes: AttributeFacts = field(default_factory=AttributeFacts)
     type_owners: dict[ScopePath, TypeOwner] = field(default_factory=dict)
+    owner_declarations: dict[int, DeclarationKey] = field(default_factory=dict)
 
     def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ReceiverOwner | None:
         """Return scope's receiver classification for *node*, if it has one.

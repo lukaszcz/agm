@@ -1091,10 +1091,16 @@ def test_owner_applied_inline_member_rejects_a_second_type_application() -> None
 
 
 def test_owner_applied_inline_member_rejects_non_enum_owners_and_unknown_members() -> None:
-    """Owner application uses the enum member namespace rather than a raw path."""
-    with pytest.raises(AglTypeError, match="'Source'"):
+    """Owner application uses the enum member namespace rather than a raw path.
+
+    A record owner declares no inline member at all, and an enum owner that
+    declares a different member than the one applied both select zero
+    candidates for the applied path: scope's unknown-member verdict, in
+    every position.
+    """
+    with pytest.raises(AglScopeError):
         _check("record Source[T]\n  value: T\ntype Invalid = Source[text]::Member\n()")
-    with pytest.raises(AglTypeError, match="'Source::Member'"):
+    with pytest.raises(AglScopeError):
         _check("enum Source[T]\n  | Known(value: T)\ntype Invalid = Source[text]::Member\n()")
 
 
@@ -1578,17 +1584,44 @@ _TYPE_PARAMETER_ALIASES = (
     (
         "%sG::Red",
         "%sG::Paint(n = 1)",
-        "c is %sG::Red",
-        "case c of | %sG::Red => 1 | _ => 2",
         "%sH(x = 1)",
         "%sH::Pt(x = 1)",
     ),
 )
 def test_alias_of_its_own_type_parameter_is_a_type_name(tmp_path: Path, use: str) -> None:
-    """An alias whose target is its own type parameter qualifies no constructor."""
+    """An alias whose target is its own type parameter qualifies no constructor.
+
+    In value position this names a type, not a value or constructor.
+    """
     with pytest.raises(AglTypeError):
         check_agl_program(tmp_path / "local", {"entry": f"{_TYPE_PARAMETER_ALIASES}\n{use % ''}"})
     with pytest.raises(AglTypeError):
+        check_agl_program(
+            tmp_path / "imported",
+            {
+                "entry": f"import lib\nlet c: lib::Col = lib::Col::Red\n{use % 'lib::'}",
+                "lib": _TYPE_PARAMETER_ALIASES,
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "use",
+    (
+        "c is %sG::Red",
+        "case c of | %sG::Red => 1 | _ => 2",
+    ),
+)
+def test_alias_of_its_own_type_parameter_has_no_pattern_member(tmp_path: Path, use: str) -> None:
+    """A pattern/``is`` owner chain into an alias of its own type parameter selects no member.
+
+    Its target is an unresolved type parameter, so no owner ever declares
+    ``Red``: the same unknown-member verdict scope reports for every
+    position, not a type-name-as-value misuse.
+    """
+    with pytest.raises(AglScopeError):
+        check_agl_program(tmp_path / "local", {"entry": f"{_TYPE_PARAMETER_ALIASES}\n{use % ''}"})
+    with pytest.raises(AglScopeError):
         check_agl_program(
             tmp_path / "imported",
             {
@@ -2139,7 +2172,13 @@ def test_qualified_type_is_nameable_when_the_import_tail_omits_it(tmp_path: Path
 
 
 def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
-    "In a case pattern, 'mylib::Point::Red' where Point is a record → type error."
+    """A record owner declares no ``Red`` member: scope's unknown-member verdict.
+
+    ``mylib::Point::Red`` names a real record ``Point``, but a record
+    declares no inline member namespace to select from, so the qualified
+    path selects zero candidates -- the same verdict scope reports for
+    every position, not a subject/pattern type mismatch.
+    """
     modules = {
         "entry": (
             "import mylib\n"
@@ -2150,7 +2189,7 @@ def test_module_qualified_variant_qualifier_is_not_enum(tmp_path: Path) -> None:
         ),
         "mylib": ("record Point\n  x: int\nenum Color\n  | Red\n  | Blue"),
     }
-    with pytest.raises(AglTypeError, match="enum type"):
+    with pytest.raises(AglScopeError):
         check_agl_program(tmp_path, modules)
 
 

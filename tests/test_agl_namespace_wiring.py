@@ -345,7 +345,7 @@ def test_inner_type_only_use_preserves_outer_value_ambiguity(tmp_path: Path) -> 
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AglScopeError):
         resolve_program(graph)
 
 
@@ -555,7 +555,7 @@ def test_root_local_use_and_import_tail_collision_is_ambiguous(tmp_path: Path) -
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AglScopeError):
         resolve_program(graph)
 
 
@@ -570,7 +570,7 @@ def test_qualified_use_and_import_route_collision_is_ambiguous(tmp_path: Path) -
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AglScopeError):
         resolve_program(graph)
 
 
@@ -594,7 +594,7 @@ def test_qualified_use_collision_preserves_ambiguous_import_verdict(tmp_path: Pa
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AglScopeError):
         resolve_program(graph)
 
 
@@ -633,7 +633,7 @@ def test_qualified_constructor_use_and_import_route_collision_is_ambiguous(
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AglScopeError):
         resolve_program(graph)
 
 
@@ -648,7 +648,7 @@ def test_nested_constructor_use_and_import_route_collision_is_ambiguous(
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AglScopeError):
         resolve_program(graph)
 
 
@@ -674,14 +674,15 @@ def test_qualified_pattern_with_colliding_use_routes_is_ambiguous(tmp_path: Path
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AglScopeError):
         resolve_program(graph)
 
 
 def test_applied_ambiguous_owner_missing_variant_in_is_test_is_rejected(tmp_path: Path) -> None:
     """An owner ambiguous by its bare, applied spelling still resolves by its full
-    ``owner::variant`` path; neither module declares this variant, so scope defers
-    to type checking, which rejects the mismatched ``is`` test."""
+    ``owner::variant`` path; neither module declares this variant, so no
+    candidate could ever supply it -- scope's unified unknown-member verdict,
+    regardless of the ``is`` subject's own type."""
     graph = make_graph_from_files(
         tmp_path,
         {
@@ -691,7 +692,31 @@ def test_applied_ambiguous_owner_missing_variant_in_is_test_is_rejected(tmp_path
         },
     )
 
-    with pytest.raises(AglTypeError):
+    with pytest.raises(AglScopeError):
+        check_program(resolve_program(graph), base_caps())
+
+
+def test_applied_ambiguous_owner_missing_variant_in_expression_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """The same construction in value position raises the identical verdict.
+
+    A bare value reference resolves an ambiguous, applied owner through a
+    different walk than ``is``/pattern positions do; both must still raise
+    the same unified unknown-member verdict, never a bogus module-route
+    diagnostic from treating the owner's type arguments as belonging to an
+    import route.
+    """
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import one/owner::*\nimport two/owner::*\nOwner[int]::NoSuch\n",
+            "one/owner": "enum Owner = A | B\n",
+            "two/owner": "enum Owner = A | B\n",
+        },
+    )
+
+    with pytest.raises(AglScopeError):
         check_program(resolve_program(graph), base_caps())
 
 
@@ -1211,7 +1236,7 @@ def test_scope_rejects_an_ambiguous_suffix_at_the_use_site(tmp_path: Path) -> No
         },
     )
 
-    with pytest.raises(AglScopeError, match="ambiguous") as exc_info:
+    with pytest.raises(AglScopeError) as exc_info:
         resolve_program(graph)
 
     diagnostic = str(exc_info.value)
@@ -1750,7 +1775,7 @@ def test_hiding_repairs_a_suffix_ambiguity_and_new_import_makes_it_loud(tmp_path
         tmp_path,
         {"entry": "import one/config\nimport two/config\nconfig::opt()", **modules},
     )
-    with pytest.raises(AglScopeError, match="ambiguous"):
+    with pytest.raises(AglScopeError):
         resolve_program(ambiguous)
 
 

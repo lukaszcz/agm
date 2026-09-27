@@ -1064,9 +1064,11 @@ def test_module_qualified_declared_record_constructs_the_record(tmp_path: Path) 
     ("use", "error"),
     [
         pytest.param(
-            "case p of | /review::Review::Missing => 0 | _ => 1", AglTypeError, id="missing-pattern"
+            "case p of | /review::Review::Missing => 0 | _ => 1",
+            AglScopeError,
+            id="missing-pattern",
         ),
-        pytest.param("p is /review::Review::Missing", AglTypeError, id="missing-is"),
+        pytest.param("p is /review::Review::Missing", AglScopeError, id="missing-is"),
         pytest.param(
             "case p of | /dup::B::Red => 0 | _ => 1", AglTypeError, id="other-enum-pattern"
         ),

@@ -1751,6 +1751,11 @@ class ReplSession:
             entry = resolved.modules[resolved.entry_id].resolved
             binding = entry.resolution.get(reference.node_id)
             constructor = entry.constructor_refs.get(reference.node_id)
+            # This ad-hoc parse's own qualifiers resolved against this fresh
+            # scope pass, not the retained entry the session's type env was
+            # built from; merge them in so an applied owner's signature
+            # (below) reads the same identity typecheck would.
+            self._type_env.register_owner_declarations(entry.owner_declarations)
         return _InfoReference(
             binding=binding,
             constructor=constructor,

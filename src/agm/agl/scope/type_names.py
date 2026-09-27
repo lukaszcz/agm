@@ -34,7 +34,6 @@ from agm.agl.syntax.types import AppliedT, NameT, TypeExpr
 __all__ = [
     "MemberHidden",
     "MemberReferenced",
-    "MemberSelected",
     "MemberSelection",
     "OwnerRoute",
     "TypeContributions",
@@ -238,15 +237,6 @@ class OwnerRoute:
 
 
 @dataclass(frozen=True, slots=True)
-class MemberSelected:
-    """``owner::member`` is reachable, or *owner* declares no such member at all.
-
-    Neither raises a route diagnostic here: an absent member is left to
-    typecheck's own "unknown member" reporting.
-    """
-
-
-@dataclass(frozen=True, slots=True)
 class MemberReferenced:
     """*owner*'s enum only references ``member``; it selects nothing at *owner*'s own path."""
 
@@ -256,8 +246,15 @@ class MemberHidden:
     """*owner* declares ``member``, but no route at the site currently reaches it."""
 
 
-MemberSelection = MemberSelected | MemberReferenced | MemberHidden
-"""The verdict for ``owner::member``: reachable (or absent), referenced-only, or hidden."""
+MemberSelection = MemberReferenced | MemberHidden | None
+"""The verdict for ``owner::member``: referenced-only, hidden, or ``None`` (reachable or absent).
+
+An absent member raises no route diagnostic here: it is left to the
+caller's own "unknown member" reporting, which already needs a second,
+identity-based lookup (``TypeOwner.select`` or ``members.get``) to build the
+actual result or reject it, so this function would gain nothing by
+repeating that lookup only to relabel it.
+"""
 
 
 def owner_member_selection(
@@ -281,13 +278,13 @@ def owner_member_selection(
     """
     if member in owner.referenced:
         if member in owner.own_path_referenced:
-            return MemberSelected()
+            return None
         return MemberReferenced()
     if member in owner.hidden:
         return MemberHidden()
     constructor = owner.members.get(member)
     if constructor is None:
-        return MemberSelected()
+        return None
     if route is not None and owner.alias is None:
         reached = nominal_selection(route.site, route.owner_expr)
         if (
@@ -297,4 +294,4 @@ def owner_member_selection(
             not in imported_member_selection(route.site, route.owner_expr, member)
         ):
             return MemberHidden()
-    return MemberSelected()
+    return None

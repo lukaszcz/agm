@@ -229,13 +229,20 @@ def test_qualified_is_tests_keep_segment_spans_and_type_arguments() -> None:
     "source",
     (
         "let value: First::Second::Third::member = null",
-        "let value: Option[int]::Result = null",
         "let value = 1\ncase value of | First::Second::Third::member => 1",
         "let value = 1\nvalue is First::Second::Third::member",
     ),
 )
 def test_long_qualifier_chains_are_not_rejected_by_legacy_shape_validation(source: str) -> None:
     resolve_inline_entry(source)
+
+
+def test_long_qualifier_chain_with_a_resolved_owner_reports_unknown_member() -> None:
+    """An applied owner that does resolve (stdlib's ``Option``) still validates its
+    member, so a long chain's shape is never itself the reason for rejection --
+    an actually unknown member is."""
+    with pytest.raises(AglScopeError):
+        resolve_inline_entry("let value: Option[int]::Result = null")
 
 
 @pytest.mark.parametrize(

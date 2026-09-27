@@ -14,6 +14,8 @@ Coverage:
 - seed_from: does not duplicate/clobber prelude types, but carries a
   program's own ``builtin`` declaration of one forward across entries.
 - unregister_name: leaves prelude + exception names intact.
+- select_owner_inline_member: falls through to None when scope's recorded
+  owner names a declaration that is not a type.
 """
 
 from __future__ import annotations
@@ -53,6 +55,8 @@ from agm.agl.semantics.types import (
     match_type_template,
     substitute,
 )
+from agm.agl.syntax.nodes import QualifierChain, QualifierSegment
+from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.typecheck.env import TypeEnvironment
 from tests.agl.module_graph import resolve_and_check_inline_entry
 
@@ -1206,6 +1210,30 @@ class TestHelpers:
     def test_contains_type_var_enum_type_args(self) -> None:
         assert contains_type_var(EnumType("Option", type_args=(TypeVarType("T"),))) is True
         assert contains_type_var(EnumType("Option", type_args=(IntType(),))) is False
+
+
+# ---------------------------------------------------------------------------
+# select_owner_inline_member — falls through when the recorded owner is not a
+# type (scope's owner_declarations table records any declaration a qualifier
+# names, not only type declarations)
+# ---------------------------------------------------------------------------
+
+
+class TestSelectOwnerInlineMember:
+    def test_returns_none_when_the_recorded_owner_is_not_a_type(self) -> None:
+        span = SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+        qualifier = QualifierChain(
+            anchor=None,
+            segments=(QualifierSegment(name="NotAType", type_args=None, span=span, node_id=0),),
+            member="Member",
+            span=span,
+            node_id=1,
+        )
+        env = TypeEnvironment(owner_declarations={1: (ENTRY_ID, ("NotAType",), "Member")})
+        assert (
+            env.select_owner_inline_member(qualifier, "Member", type_vars=frozenset(), span=None)
+            is None
+        )
 
 
 # ---------------------------------------------------------------------------

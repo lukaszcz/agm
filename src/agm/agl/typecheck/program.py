@@ -533,6 +533,7 @@ def _build_program_type_table(
             module_id=mid,
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,
+            owner_declarations=rmod.resolved.owner_declarations,
         )
         if mid == resolved.entry_id and entry_seed_env is not None:
             env.seed_from(entry_seed_env, retired_member_scopes=resolved.retired_member_scopes)
@@ -637,6 +638,7 @@ def _build_program_type_table(
             scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
             type_table=shared_type_table,
+            owner_declarations=rmod.resolved.owner_declarations,
         )
         if mid == resolved.entry_id and entry_seed_env is not None:
             cross_env.seed_from(
@@ -756,6 +758,7 @@ def _build_program_func_sig_table(
             scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
             type_table=type_table,
+            owner_declarations=rmod.resolved.owner_declarations,
         )
         # The shared table already holds the session's declarations beneath
         # this entry's own (see ``TypeEnvironment.seed_from``).
@@ -1083,6 +1086,7 @@ def _prepare_module_environment(
         module_id=mid,
         type_table=type_table,
         declared_seed=declared_seed,
+        owner_declarations=resolved.owner_declarations,
     )
 
     # Seed from the REPL session type env first (for the entry module in REPL
